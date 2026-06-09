@@ -511,6 +511,12 @@ pub fn redundant_send_r_from_len(len: usize) -> u8 {
 
 #[cfg(test)]
 mod prf_collectors_tests {
+    use std::collections::BTreeSet;
+
+    use iroha_config::parameters::actual::ConsensusMode;
+
+    use crate::sumeragi::collectors::deterministic_collectors;
+
     use super::*;
 
     #[test]
@@ -544,6 +550,664 @@ mod prf_collectors_tests {
         assert_eq!(set.len(), idxs.len());
         // Excludes leader 0
         assert!(idxs.iter().all(|&i| i != 0));
+    }
+
+    #[test]
+    fn collector_selection_formal_gate_matrix() {
+        struct Case {
+            name: &'static str,
+            len: usize,
+            requested_k: usize,
+            mode: ConsensusMode,
+            seed: Option<[u8; 32]>,
+            expected_quorum: usize,
+            expected_proxy_tail: usize,
+            expected_effective_k: usize,
+            expected_default: &'static [usize],
+            expected_fallback: &'static [usize],
+        }
+
+        fn peer_indices(peers: &[PeerId], selected: &[PeerId]) -> Vec<usize> {
+            selected
+                .iter()
+                .map(|peer| {
+                    peers
+                        .iter()
+                        .position(|candidate| candidate == peer)
+                        .expect("selected peer must come from topology")
+                })
+                .collect()
+        }
+
+        fn assert_prf_contract(indices: &[usize], len: usize, case_name: &str) {
+            let distinct: BTreeSet<_> = indices.iter().copied().collect();
+            assert_eq!(distinct.len(), indices.len(), "{case_name} PRF distinct");
+            assert!(
+                indices.iter().all(|idx| *idx < len),
+                "{case_name} PRF in range"
+            );
+            if len > 1 {
+                assert!(
+                    indices.iter().all(|idx| *idx != 0),
+                    "{case_name} PRF excludes leader"
+                );
+            }
+        }
+
+        let seed = [0x35; 32];
+        let cases = [
+            Case {
+                name: "empty_k_positive",
+                len: 0,
+                requested_k: 1,
+                mode: ConsensusMode::Permissioned,
+                seed: None,
+                expected_quorum: 0,
+                expected_proxy_tail: 0,
+                expected_effective_k: 0,
+                expected_default: &[],
+                expected_fallback: &[],
+            },
+            Case {
+                name: "multi_zero_k",
+                len: 4,
+                requested_k: 0,
+                mode: ConsensusMode::Permissioned,
+                seed: None,
+                expected_quorum: 3,
+                expected_proxy_tail: 2,
+                expected_effective_k: 0,
+                expected_default: &[],
+                expected_fallback: &[],
+            },
+            Case {
+                name: "single_k_zero",
+                len: 1,
+                requested_k: 0,
+                mode: ConsensusMode::Permissioned,
+                seed: None,
+                expected_quorum: 1,
+                expected_proxy_tail: 0,
+                expected_effective_k: 0,
+                expected_default: &[],
+                expected_fallback: &[],
+            },
+            Case {
+                name: "single_k_positive",
+                len: 1,
+                requested_k: 1,
+                mode: ConsensusMode::Permissioned,
+                seed: None,
+                expected_quorum: 1,
+                expected_proxy_tail: 0,
+                expected_effective_k: 1,
+                expected_default: &[0],
+                expected_fallback: &[0],
+            },
+            Case {
+                name: "len4_k1",
+                len: 4,
+                requested_k: 1,
+                mode: ConsensusMode::Permissioned,
+                seed: None,
+                expected_quorum: 3,
+                expected_proxy_tail: 2,
+                expected_effective_k: 3,
+                expected_default: &[2],
+                expected_fallback: &[2, 3, 1],
+            },
+            Case {
+                name: "len4_k10",
+                len: 4,
+                requested_k: 10,
+                mode: ConsensusMode::Permissioned,
+                seed: None,
+                expected_quorum: 3,
+                expected_proxy_tail: 2,
+                expected_effective_k: 3,
+                expected_default: &[2, 3],
+                expected_fallback: &[2, 3, 1],
+            },
+            Case {
+                name: "len6_k2",
+                len: 6,
+                requested_k: 2,
+                mode: ConsensusMode::Permissioned,
+                seed: None,
+                expected_quorum: 5,
+                expected_proxy_tail: 4,
+                expected_effective_k: 5,
+                expected_default: &[4, 5],
+                expected_fallback: &[4, 5, 1, 2, 3],
+            },
+            Case {
+                name: "len7_k2",
+                len: 7,
+                requested_k: 2,
+                mode: ConsensusMode::Permissioned,
+                seed: None,
+                expected_quorum: 5,
+                expected_proxy_tail: 4,
+                expected_effective_k: 5,
+                expected_default: &[4, 5],
+                expected_fallback: &[4, 5, 6, 1, 2],
+            },
+            Case {
+                name: "len7_k10",
+                len: 7,
+                requested_k: 10,
+                mode: ConsensusMode::Permissioned,
+                seed: None,
+                expected_quorum: 5,
+                expected_proxy_tail: 4,
+                expected_effective_k: 6,
+                expected_default: &[4, 5, 6],
+                expected_fallback: &[4, 5, 6, 1, 2, 3],
+            },
+            Case {
+                name: "perm_no_seed",
+                len: 4,
+                requested_k: 1,
+                mode: ConsensusMode::Permissioned,
+                seed: None,
+                expected_quorum: 3,
+                expected_proxy_tail: 2,
+                expected_effective_k: 3,
+                expected_default: &[2],
+                expected_fallback: &[2, 3, 1],
+            },
+            Case {
+                name: "perm_seed",
+                len: 4,
+                requested_k: 1,
+                mode: ConsensusMode::Permissioned,
+                seed: Some(seed),
+                expected_quorum: 3,
+                expected_proxy_tail: 2,
+                expected_effective_k: 3,
+                expected_default: &[2],
+                expected_fallback: &[2, 3, 1],
+            },
+            Case {
+                name: "npos_no_seed",
+                len: 4,
+                requested_k: 1,
+                mode: ConsensusMode::Npos,
+                seed: None,
+                expected_quorum: 3,
+                expected_proxy_tail: 2,
+                expected_effective_k: 3,
+                expected_default: &[2],
+                expected_fallback: &[2, 3, 1],
+            },
+            Case {
+                name: "npos_seed",
+                len: 4,
+                requested_k: 1,
+                mode: ConsensusMode::Npos,
+                seed: Some(seed),
+                expected_quorum: 3,
+                expected_proxy_tail: 2,
+                expected_effective_k: 3,
+                expected_default: &[2],
+                expected_fallback: &[2, 3, 1],
+            },
+        ];
+
+        for case in cases {
+            assert_eq!(
+                commit_quorum_from_len(case.len),
+                case.expected_quorum,
+                "{} quorum",
+                case.name
+            );
+
+            if case.len == 0 {
+                continue;
+            }
+
+            let peers = test_peers(case.len);
+            let topology = Topology::new(peers.clone());
+            assert_eq!(
+                topology.proxy_tail_index(),
+                case.expected_proxy_tail,
+                "{} proxy tail",
+                case.name
+            );
+            assert_eq!(
+                topology.collector_fanout_floor(case.requested_k),
+                case.expected_effective_k,
+                "{} effective k",
+                case.name
+            );
+            assert_eq!(
+                topology.collector_indices_k(case.requested_k).as_slice(),
+                case.expected_default,
+                "{} default collectors",
+                case.name
+            );
+
+            let fallback = topology.collector_indices_k_fallback(case.requested_k);
+            assert_eq!(
+                fallback.as_slice(),
+                case.expected_fallback,
+                "{} fallback collectors",
+                case.name
+            );
+            if case.len > 1 {
+                let distinct: BTreeSet<_> = fallback.iter().copied().collect();
+                assert_eq!(
+                    distinct.len(),
+                    fallback.len(),
+                    "{} fallback distinct",
+                    case.name
+                );
+                assert!(
+                    fallback.iter().all(|idx| *idx != topology.leader_index()),
+                    "{} fallback excludes leader",
+                    case.name
+                );
+            }
+
+            let prf = topology.collector_indices_k_prf(case.expected_effective_k, seed, 9, 2);
+            assert_eq!(
+                prf.len(),
+                case.expected_effective_k,
+                "{} PRF length",
+                case.name
+            );
+            assert_prf_contract(&prf, case.len, case.name);
+
+            let deterministic =
+                deterministic_collectors(&topology, case.mode, case.requested_k, case.seed, 9, 2);
+            let deterministic_indices = peer_indices(&peers, &deterministic);
+            let expected_deterministic = if case.seed.is_some() {
+                prf.as_slice()
+            } else {
+                fallback.as_slice()
+            };
+            assert_eq!(
+                deterministic_indices.as_slice(),
+                expected_deterministic,
+                "{} deterministic source",
+                case.name
+            );
+        }
+    }
+
+    #[test]
+    fn topology_mutation_formal_gate_matrix() {
+        fn topology_from_ids(base: &[PeerId], ids: &[usize], view: u64) -> Topology {
+            let mut topology = if ids.is_empty() {
+                Topology(Vec::new(), 0)
+            } else {
+                Topology::new(ids.iter().map(|idx| base[*idx].clone()))
+            };
+            topology.1 = view;
+            topology
+        }
+
+        fn ids(topology: &Topology, base: &[PeerId]) -> Vec<usize> {
+            topology
+                .as_ref()
+                .iter()
+                .map(|peer| {
+                    base.iter()
+                        .position(|candidate| candidate == peer)
+                        .expect("peer must come from abstract base")
+                })
+                .collect()
+        }
+
+        fn assert_topology(
+            name: &str,
+            topology: &Topology,
+            base: &[PeerId],
+            expected_ids: &[usize],
+            expected_view: u64,
+        ) {
+            let actual = ids(topology, base);
+            assert_eq!(actual.as_slice(), expected_ids, "{name} order");
+            assert_eq!(topology.view_change_index(), expected_view, "{name} view");
+            let distinct: BTreeSet<_> = actual.iter().copied().collect();
+            assert_eq!(distinct.len(), actual.len(), "{name} distinct");
+        }
+
+        fn prev_hash(seed: u64) -> HashOf<BlockHeader> {
+            let mut seed_bytes = [0u8; iroha_crypto::Hash::LENGTH];
+            seed_bytes[..8].copy_from_slice(&seed.to_be_bytes());
+            HashOf::<BlockHeader>::from_untyped_unchecked(iroha_crypto::Hash::prehashed(seed_bytes))
+        }
+
+        let base = test_peers(6);
+
+        let rotate_cases = [
+            ("rotate_empty", &[][..], 0_usize, &[][..]),
+            ("rotate_single_idx99", &[0][..], 99, &[0][..]),
+            ("rotate_len4_idx0", &[0, 1, 2, 3][..], 0, &[0, 1, 2, 3][..]),
+            ("rotate_len4_idx2", &[0, 1, 2, 3][..], 2, &[2, 3, 0, 1][..]),
+            ("rotate_len4_idx6", &[0, 1, 2, 3][..], 6, &[2, 3, 0, 1][..]),
+        ];
+        for (name, initial, idx, expected) in rotate_cases {
+            let mut topology = topology_from_ids(&base, initial, 7);
+            topology.rotate_preserve_view_to_front(idx);
+            assert_topology(name, &topology, &base, expected, 7);
+        }
+
+        let nth_cases = [
+            ("nth_same", 4_usize, 2_u64, 2_u64, 0_u64, &[0, 1, 2, 3][..]),
+            ("nth_forward_one", 4, 0, 1, 1, &[1, 2, 3, 0][..]),
+            ("nth_forward_three", 4, 1, 4, 3, &[3, 0, 1, 2][..]),
+            ("nth_full_cycle", 4, 0, 4, 4, &[0, 1, 2, 3][..]),
+            ("nth_large_mod", 4, 0, 10, 10, &[2, 3, 0, 1][..]),
+            ("nth_single_large", 1, 0, 10, 10, &[0][..]),
+            ("nth_empty_forward", 0, 0, 5, 5, &[][..]),
+        ];
+        for (name, len, current_view, target_view, expected_delta, expected) in nth_cases {
+            let initial: Vec<_> = (0..len).collect();
+            let mut topology = topology_from_ids(&base, &initial, current_view);
+            let rotations = topology.nth_rotation(target_view);
+            assert_eq!(rotations, expected_delta, "{name} rotations");
+            assert_topology(name, &topology, &base, expected, target_view);
+        }
+
+        let mut rewind_topology = topology_from_ids(&base, &[0, 1, 2, 3], 4);
+        let rewind_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            rewind_topology.nth_rotation(2);
+        }));
+        assert!(rewind_result.is_err(), "nth_rewind must reject view rewind");
+        assert_topology("nth_rewind", &rewind_topology, &base, &[0, 1, 2, 3], 4);
+
+        let new_cases = [
+            ("new_dedup_preserve", &[2, 1, 2, 0][..], &[2, 1, 0][..]),
+            ("new_all_duplicates", &[1, 1, 1][..], &[1][..]),
+            ("new_single", &[4][..], &[4][..]),
+        ];
+        for (name, input, expected) in new_cases {
+            let topology = Topology::new(input.iter().map(|idx| base[*idx].clone()));
+            assert_topology(name, &topology, &base, expected, 0);
+        }
+
+        let update_cases = [
+            (
+                "update_mixed",
+                &[0, 1, 3, 2][..],
+                &[5, 1, 3, 4][..],
+                &[1, 3, 5, 4][..],
+            ),
+            (
+                "update_keep_all_reordered_input",
+                &[0, 1, 2][..],
+                &[2, 0, 1][..],
+                &[0, 1, 2][..],
+            ),
+            (
+                "update_remove_all_add_two",
+                &[0, 1, 2][..],
+                &[4, 5][..],
+                &[4, 5][..],
+            ),
+            ("update_duplicates", &[1][..], &[1, 2, 2][..], &[1, 2][..]),
+        ];
+        for (name, initial, update, expected) in update_cases {
+            let mut topology = topology_from_ids(&base, initial, 9);
+            topology.update_peer_list(update.iter().map(|idx| base[*idx].clone()));
+            assert_topology(name, &topology, &base, expected, 9);
+        }
+
+        let block_cases = [
+            (
+                "block_mixed",
+                &[0, 1, 3, 2][..],
+                &[5, 1, 3, 4][..],
+                &[1, 3, 5, 4][..],
+            ),
+            (
+                "block_keep_all_reordered_input",
+                &[0, 1, 2][..],
+                &[2, 0, 1][..],
+                &[0, 1, 2][..],
+            ),
+            (
+                "block_remove_all_add_two",
+                &[0, 1, 2][..],
+                &[4, 5][..],
+                &[4, 5][..],
+            ),
+        ];
+        for (name, initial, update, expected) in block_cases {
+            let mut topology = topology_from_ids(&base, initial, 9);
+            topology.block_committed(update.iter().map(|idx| base[*idx].clone()), prev_hash(11));
+            assert_topology(name, &topology, &base, expected, 0);
+        }
+
+        let canon_cases = [
+            ("canon_reverse", vec![3, 2, 1, 0], vec![0, 1, 2, 3]),
+            ("canon_duplicates", vec![0, 1, 1, 2, 2], vec![0, 1, 2]),
+            ("canon_empty", Vec::new(), Vec::new()),
+        ];
+        for (name, initial, expected) in canon_cases {
+            let mut topology = if initial.is_empty() {
+                Topology(Vec::new(), 8)
+            } else {
+                Topology(
+                    initial
+                        .iter()
+                        .map(|idx| base[*idx].clone())
+                        .collect::<Vec<_>>(),
+                    8,
+                )
+            };
+            topology.canonicalize_order();
+            assert_topology(name, &topology, &base, &expected, 8);
+        }
+    }
+
+    #[test]
+    fn prf_leader_shuffle_formal_gate_matrix() {
+        fn ids(topology: &Topology, base: &[PeerId]) -> Vec<usize> {
+            topology
+                .as_ref()
+                .iter()
+                .map(|peer| {
+                    base.iter()
+                        .position(|candidate| candidate == peer)
+                        .expect("peer must come from abstract base")
+                })
+                .collect()
+        }
+
+        fn assert_permutation(name: &str, values: &[usize], len: usize) {
+            assert_eq!(values.len(), len, "{name} length");
+            let distinct: BTreeSet<_> = values.iter().copied().collect();
+            assert_eq!(distinct.len(), values.len(), "{name} distinct");
+            assert!(values.iter().all(|idx| *idx < len), "{name} in range");
+        }
+
+        fn height_with<F>(seed: [u8; 32], len: usize, predicate: F) -> u64
+        where
+            F: Fn(&[usize]) -> bool,
+        {
+            (0..256)
+                .find(|height| predicate(&Topology::prf_shuffled_indices(seed, *height, len)))
+                .expect("bounded PRF search should find a matching height")
+        }
+
+        let seed = [0x6D; 32];
+        let leader_height = height_with(seed, 4, |perm| perm[0] != 0);
+        let shuffle_height = height_with(seed, 4, |perm| perm != [0, 1, 2, 3]);
+        let wrapper_height = height_with(seed, 3, |perm| perm != [0, 1, 2]);
+        let alt_height = (0..256)
+            .find(|height| {
+                Topology::prf_shuffled_indices(seed, *height, 4)
+                    != Topology::prf_shuffled_indices(seed, shuffle_height, 4)
+            })
+            .expect("bounded PRF search should find a distinct alternate height");
+        let base = test_peers(5);
+
+        let empty_topology = Topology(Vec::new(), 0);
+        assert_eq!(
+            empty_topology.leader_index_prf(seed, leader_height, 0),
+            0,
+            "leader_empty"
+        );
+
+        let single_topology = Topology::new([base[0].clone()]);
+        assert_eq!(
+            single_topology.leader_index_prf(seed, leader_height, 9),
+            0,
+            "leader_single"
+        );
+
+        let topology = Topology::new(base[..4].iter().cloned());
+        let leader_perm = Topology::prf_shuffled_indices(seed, leader_height, 4);
+        assert_permutation("leader_len4_cycle", &leader_perm, 4);
+        for view in [0_u64, 3, 5] {
+            assert_eq!(
+                topology.leader_index_prf(seed, leader_height, view),
+                leader_perm[usize::try_from(view % 4).expect("view slot fits")],
+                "leader_len4_view{view}"
+            );
+        }
+        assert_eq!(
+            topology.leader_index_prf(seed, leader_height, 1),
+            topology.leader_index_prf(seed, leader_height, 5),
+            "leader_len4_periodic"
+        );
+        let leader_cycle: BTreeSet<_> = (0..4)
+            .map(|view| topology.leader_index_prf(seed, leader_height, view))
+            .collect();
+        assert_eq!(leader_cycle.len(), 4, "leader_len4_cycle_distinct");
+
+        let mut empty_shuffle = Topology(Vec::new(), 7);
+        empty_shuffle.shuffle_prf(seed, shuffle_height);
+        let empty_peers: &[PeerId] = &[];
+        assert_eq!(empty_shuffle.as_ref(), empty_peers, "shuffle_empty");
+        assert_eq!(empty_shuffle.view_change_index(), 7, "shuffle_empty view");
+
+        let mut single_shuffle = Topology::new([base[0].clone()]);
+        single_shuffle.1 = 7;
+        single_shuffle.shuffle_prf(seed, shuffle_height);
+        assert_eq!(ids(&single_shuffle, &base), vec![0], "shuffle_single");
+        assert_eq!(single_shuffle.view_change_index(), 7, "shuffle_single view");
+
+        let shuffle_perm = Topology::prf_shuffled_indices(seed, shuffle_height, 4);
+        assert_permutation("shuffle_len4", &shuffle_perm, 4);
+        let mut shuffled = Topology::new(base[..4].iter().cloned());
+        shuffled.1 = 7;
+        shuffled.shuffle_prf(seed, shuffle_height);
+        assert_eq!(ids(&shuffled, &base), shuffle_perm, "shuffle_len4");
+        assert_eq!(shuffled.view_change_index(), 7, "shuffle_len4 view");
+
+        let wrapper_perm = Topology::prf_shuffled_indices(seed, wrapper_height, 3);
+        assert_permutation("wrapper_canonical_dedup", &wrapper_perm, 3);
+        let canonical_ids = [1_usize, 2, 3];
+        let expected_wrapper: Vec<_> = wrapper_perm.iter().map(|idx| canonical_ids[*idx]).collect();
+        let wrapper = shuffled_for_prf_seed(
+            [3, 1, 3, 2].iter().map(|idx| base[*idx].clone()),
+            seed,
+            wrapper_height,
+        );
+        assert_eq!(
+            ids(&wrapper, &base),
+            expected_wrapper,
+            "wrapper_canonical_dedup"
+        );
+        assert_eq!(
+            wrapper.view_change_index(),
+            0,
+            "wrapper_canonical_dedup view"
+        );
+
+        let wrapper_single = shuffled_for_prf_seed(
+            [4, 4, 4].iter().map(|idx| base[*idx].clone()),
+            seed,
+            wrapper_height,
+        );
+        assert_eq!(ids(&wrapper_single, &base), vec![4], "wrapper_single_dedup");
+        assert_eq!(wrapper_single.view_change_index(), 0, "wrapper_single view");
+
+        let alt_perm = Topology::prf_shuffled_indices(seed, alt_height, 4);
+        assert_permutation("wrapper_alt_height", &alt_perm, 4);
+        let alt_wrapper = shuffled_for_prf_seed(base[..4].iter().cloned(), seed, alt_height);
+        assert_eq!(ids(&alt_wrapper, &base), alt_perm, "wrapper_alt_height");
+        assert_eq!(
+            alt_wrapper.view_change_index(),
+            0,
+            "wrapper_alt_height view"
+        );
+    }
+
+    #[test]
+    fn topology_fanout_formal_gate_matrix() {
+        let redundant_cases = [
+            (0_usize, 1_u8),
+            (1, 1),
+            (3, 1),
+            (4, 3),
+            (5, 3),
+            (7, 5),
+            (10, 7),
+            (1020, u8::MAX),
+        ];
+        for (len, expected) in redundant_cases {
+            assert_eq!(
+                redundant_send_r_from_len(len),
+                expected,
+                "redundant_len_{len}"
+            );
+        }
+
+        let view_cases = [(1_usize, 1_usize), (3, 1), (4, 2), (7, 3), (10, 4), (16, 6)];
+        for (len, expected) in view_cases {
+            let topology = Topology::new(test_peers(len));
+            assert_eq!(
+                topology.min_votes_for_view_change(),
+                expected,
+                "view_len_{len}"
+            );
+        }
+
+        let floor_cases = [
+            (1_usize, 0_u8, 1_u8),
+            (5, 2, 4),
+            (5, 6, 6),
+            (400, 1, u8::MAX),
+        ];
+        for (len, configured, expected) in floor_cases {
+            let topology = Topology::new(test_peers(len));
+            assert_eq!(
+                topology.redundant_send_r_floor(configured),
+                expected,
+                "floor_len_{len}_cfg_{configured}"
+            );
+        }
+
+        let fanout_cases = [
+            ("single_count_positive", 1_usize, 10_usize, &[][..]),
+            ("len4_count_zero", 4, 0, &[][..]),
+            ("len4_count_two", 4, 2, &[2, 3][..]),
+            ("len4_count_three", 4, 3, &[2, 3, 1][..]),
+            ("len4_count_ten", 4, 10, &[2, 3, 1][..]),
+            ("len7_count_two", 7, 2, &[4, 5][..]),
+            ("len7_count_five", 7, 5, &[4, 5, 6, 1, 2][..]),
+            ("len7_count_ten", 7, 10, &[4, 5, 6, 1, 2, 3][..]),
+        ];
+        for (name, len, count, expected) in fanout_cases {
+            let topology = Topology::new(test_peers(len));
+            let fanout = topology.topology_fanout_from_tail(count);
+            assert_eq!(fanout.as_slice(), expected, "{name}");
+            let distinct: BTreeSet<_> = fanout.iter().copied().collect();
+            assert_eq!(distinct.len(), fanout.len(), "{name} distinct");
+            assert!(
+                fanout.iter().all(|idx| *idx != topology.leader_index()),
+                "{name} excludes leader"
+            );
+            assert!(
+                fanout.len() <= len.saturating_sub(1),
+                "{name} bounded by non-leaders"
+            );
+        }
     }
 
     #[test]

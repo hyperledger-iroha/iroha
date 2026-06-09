@@ -2,7 +2,7 @@
 //! Used to recover in-flight data availability transfers across restarts.
 
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs,
     io::{self, Write},
     path::{Path, PathBuf},
@@ -423,7 +423,11 @@ impl ChunkStore {
         if tmp_bytes.is_none() && main_bytes.is_none() {
             return Ok(None);
         }
-        for (candidate_path, bytes) in [(&tmp_path, tmp_bytes), (&path, main_bytes)] {
+        let mut selected: Option<CandidateEntry> = None;
+        for (candidate_path, main_path, is_temp, bytes) in [
+            (&tmp_path, &path, true, tmp_bytes),
+            (&path, &path, false, main_bytes),
+        ] {
             let Some(bytes) = bytes.as_deref() else {
                 continue;
             };
@@ -439,12 +443,27 @@ impl ChunkStore {
             ) else {
                 continue;
             };
-            if candidate_path == &tmp_path {
-                let _ = promote_temp_session(&tmp_path, &path);
+            let candidate = CandidateEntry {
+                persisted,
+                path: candidate_path.to_path_buf(),
+                main_path: main_path.to_path_buf(),
+                is_temp,
+            };
+            if Self::candidate_newer_than_selected(&candidate, selected.as_ref()) {
+                selected = Some(candidate);
+            } else if candidate.is_temp {
+                let _ = Self::delete_path(&candidate.path);
             }
-            return Ok(Some(persisted));
         }
-        Ok(None)
+        let Some(selected) = selected else {
+            return Ok(None);
+        };
+        if selected.is_temp {
+            let _ = promote_temp_session(&selected.path, &selected.main_path);
+        } else {
+            let _ = Self::delete_path(&tmp_path);
+        }
+        Ok(Some(selected.persisted))
     }
 
     fn inspect_session_metadata_from_dir(
@@ -459,7 +478,11 @@ impl ChunkStore {
         if main_bytes.is_none() && tmp_bytes.is_none() {
             return Ok(None);
         }
-        for (candidate_path, bytes) in [(&path, main_bytes), (&tmp_path, tmp_bytes)] {
+        let mut selected: Option<CandidateEntry> = None;
+        for (candidate_path, main_path, is_temp, bytes) in [
+            (&path, &path, false, main_bytes),
+            (&tmp_path, &path, true, tmp_bytes),
+        ] {
             let Some(bytes) = bytes.as_deref() else {
                 continue;
             };
@@ -477,12 +500,26 @@ impl ChunkStore {
             if !persist_version_supported(persisted.format_version()) {
                 continue;
             }
+            let Some(updated_at) = persisted.updated_at() else {
+                continue;
+            };
+            if SystemTime::now().duration_since(updated_at).is_err() {
+                continue;
+            }
             if validate_chunks(&persisted).is_err() {
                 continue;
             }
-            return Ok(Some(persisted_session_metadata(&persisted)));
+            let candidate = CandidateEntry {
+                persisted,
+                path: candidate_path.to_path_buf(),
+                main_path: main_path.to_path_buf(),
+                is_temp,
+            };
+            if Self::candidate_newer_than_selected(&candidate, selected.as_ref()) {
+                selected = Some(candidate);
+            }
         }
-        Ok(None)
+        Ok(selected.map(|candidate| persisted_session_metadata(&candidate.persisted)))
     }
 
     fn scan_entries(
@@ -519,7 +556,7 @@ impl ChunkStore {
                 main_paths.push(path);
             }
         }
-        let mut seen = BTreeSet::new();
+        let mut candidates = BTreeMap::new();
         for path in temp_paths {
             match fs::read(&path) {
                 Ok(data) => {
@@ -536,17 +573,13 @@ impl ChunkStore {
                         continue;
                     };
                     let key = persisted.key();
-                    let mut effective_path = path.clone();
-                    let main_path = path.with_extension("");
-                    if promote_temp_session(&path, &main_path) {
-                        effective_path = main_path;
-                    }
-                    if seen.insert(key) {
-                        out.push(Entry {
-                            persisted,
-                            path: effective_path,
-                        });
-                    }
+                    let candidate = CandidateEntry {
+                        persisted,
+                        path: path.clone(),
+                        main_path: path.with_extension(""),
+                        is_temp: true,
+                    };
+                    Self::insert_newest_candidate(&mut candidates, key, candidate);
                 }
                 Err(err) if err.kind() == io::ErrorKind::NotFound => {
                     debug!(
@@ -575,9 +608,13 @@ impl ChunkStore {
                         continue;
                     };
                     let key = persisted.key();
-                    if seen.insert(key) {
-                        out.push(Entry { persisted, path });
-                    }
+                    let candidate = CandidateEntry {
+                        persisted,
+                        path: path.clone(),
+                        main_path: path.clone(),
+                        is_temp: false,
+                    };
+                    Self::insert_newest_candidate(&mut candidates, key, candidate);
                 }
                 Err(err) if err.kind() == io::ErrorKind::NotFound => {
                     debug!(
@@ -590,7 +627,60 @@ impl ChunkStore {
                 }
             }
         }
+        for (_, candidate) in candidates {
+            if candidate.is_temp {
+                let path = if promote_temp_session(&candidate.path, &candidate.main_path) {
+                    candidate.main_path
+                } else {
+                    candidate.path
+                };
+                out.push(Entry {
+                    persisted: candidate.persisted,
+                    path,
+                });
+            } else {
+                out.push(Entry {
+                    persisted: candidate.persisted,
+                    path: candidate.path,
+                });
+            }
+        }
         Ok(out)
+    }
+
+    fn insert_newest_candidate(
+        candidates: &mut BTreeMap<SessionKey, CandidateEntry>,
+        key: SessionKey,
+        candidate: CandidateEntry,
+    ) {
+        match candidates.entry(key) {
+            std::collections::btree_map::Entry::Vacant(slot) => {
+                slot.insert(candidate);
+            }
+            std::collections::btree_map::Entry::Occupied(mut slot) => {
+                if Self::candidate_newer_than_selected(&candidate, Some(slot.get())) {
+                    let previous = slot.insert(candidate);
+                    if previous.is_temp {
+                        let _ = Self::delete_path(&previous.path);
+                    }
+                } else if candidate.is_temp {
+                    let _ = Self::delete_path(&candidate.path);
+                }
+            }
+        }
+    }
+
+    fn candidate_newer_than_selected(
+        candidate: &CandidateEntry,
+        selected: Option<&CandidateEntry>,
+    ) -> bool {
+        let Some(selected) = selected else {
+            return true;
+        };
+        candidate.persisted.last_updated_ms > selected.persisted.last_updated_ms
+            || (candidate.persisted.last_updated_ms == selected.persisted.last_updated_ms
+                && !candidate.is_temp
+                && selected.is_temp)
     }
 
     fn validate_persisted_session(
@@ -615,6 +705,25 @@ impl ChunkStore {
                 version = persisted.format_version(),
                 supported = PERSIST_VERSION,
                 "Dropping RBC persisted session with unsupported format version"
+            );
+            let _ = Self::delete_path(path);
+            return None;
+        }
+        let Some(updated_at) = persisted.updated_at() else {
+            warn!(
+                ?path,
+                last_updated_ms = persisted.last_updated_ms,
+                "Dropping RBC persisted session with unrepresentable timestamp"
+            );
+            let _ = Self::delete_path(path);
+            return None;
+        };
+        if let Err(err) = SystemTime::now().duration_since(updated_at) {
+            warn!(
+                ?err,
+                ?path,
+                last_updated_ms = persisted.last_updated_ms,
+                "Dropping RBC persisted session with future timestamp"
             );
             let _ = Self::delete_path(path);
             return None;
@@ -742,7 +851,16 @@ impl ChunkStore {
             let now = SystemTime::now();
             let mut retained = Vec::with_capacity(entries.len());
             for entry in std::mem::take(&mut entries) {
-                let updated = entry.persisted.updated_at();
+                let Some(updated) = entry.persisted.updated_at() else {
+                    warn!(
+                        ?entry.path,
+                        last_updated_ms = entry.persisted.last_updated_ms,
+                        "dropping RBC persisted session with unrepresentable timestamp"
+                    );
+                    removed.push(entry.persisted.key());
+                    Self::delete_path(&entry.path)?;
+                    continue;
+                };
                 match now.duration_since(updated) {
                     Ok(age) => {
                         if age > self.ttl {
@@ -907,6 +1025,13 @@ struct Entry {
     path: PathBuf,
 }
 
+struct CandidateEntry {
+    persisted: PersistedSession,
+    path: PathBuf,
+    main_path: PathBuf,
+    is_temp: bool,
+}
+
 /// Persisted representation of an RBC session.
 #[derive(Clone, Debug, Encode, Decode)]
 pub(super) struct PersistedSession {
@@ -980,8 +1105,8 @@ impl PersistedSession {
             })
     }
 
-    /// Wall-clock `SystemTime` when the session was last updated.
-    pub fn updated_at(&self) -> SystemTime {
+    /// Wall-clock `SystemTime` when the session was last updated, if representable.
+    pub fn updated_at(&self) -> Option<SystemTime> {
         ms_to_system_time(self.last_updated_ms)
     }
 
@@ -1005,8 +1130,8 @@ pub(super) struct PersistedReady {
     pub(crate) signature: Vec<u8>,
 }
 
-fn ms_to_system_time(ms: u64) -> SystemTime {
-    UNIX_EPOCH + Duration::from_millis(ms)
+fn ms_to_system_time(ms: u64) -> Option<SystemTime> {
+    UNIX_EPOCH.checked_add(Duration::from_millis(ms))
 }
 
 fn persisted_payload_bytes(
@@ -1185,7 +1310,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::sumeragi::main_loop::RbcSession;
+    use crate::sumeragi::main_loop::{RbcProgressStage, RbcSession};
 
     fn session_key(id: u8) -> SessionKey {
         let hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([id; 32]));
@@ -1301,21 +1426,6 @@ mod tests {
         let mut session = RbcSession::test_new(1, None, None, 0);
         session.test_note_chunk(0, vec![byte; len], 0);
         session.to_persisted(key, chain_hash, manifest, &[])
-    }
-
-    /// Debug helper: set `RBC_SESSION_PATH` to a persisted session file to validate it.
-    /// Ignored by default so it does not run in CI.
-    #[test]
-    #[ignore = "debug helper for inspecting persisted sessions"]
-    fn debug_validate_external_session() {
-        let path = std::env::var("RBC_SESSION_PATH").expect("set RBC_SESSION_PATH");
-        let data = fs::read(&path).expect("read session file");
-        let persisted =
-            decode_from_bytes::<PersistedSession>(&data).expect("decode persisted session");
-        match validate_chunks(&persisted) {
-            Ok(()) => println!("validate_chunks: ok"),
-            Err(reason) => println!("validate_chunks failed: {reason}"),
-        }
     }
 
     #[test]
@@ -1489,6 +1599,67 @@ mod tests {
     }
 
     #[test]
+    fn load_session_from_dir_rejects_future_timestamp_session() {
+        let dir = tempdir().unwrap();
+        let key = session_key(45);
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let mut persisted = sample_persisted_session(key, chain_hash, manifest.clone());
+        let future_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+            .saturating_add(120_000);
+        persisted.last_updated_ms = u64::try_from(future_ms).unwrap_or(u64::MAX);
+
+        let path = ChunkStore::make_session_path(dir.path(), &key);
+        fs::write(
+            &path,
+            to_bytes(&persisted).expect("encode persisted session"),
+        )
+        .expect("write future-dated persisted session");
+
+        let loaded = ChunkStore::load_session_from_dir(dir.path(), &key, &chain_hash, &manifest)
+            .expect("load session from dir");
+        assert!(
+            loaded.is_none(),
+            "direct recovery must reject future-dated RBC snapshots"
+        );
+        assert!(
+            !path.exists(),
+            "future-dated RBC snapshots should be removed during direct recovery"
+        );
+    }
+
+    #[test]
+    fn load_session_from_dir_rejects_max_timestamp_session() {
+        let dir = tempdir().unwrap();
+        let key = session_key(48);
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let mut persisted = persisted_single_chunk_session(key, chain_hash, &manifest, 0xD0, 8);
+        persisted.last_updated_ms = u64::MAX;
+
+        let path = ChunkStore::make_session_path(dir.path(), &key);
+        fs::write(
+            &path,
+            to_bytes(&persisted).expect("encode persisted session"),
+        )
+        .expect("write max-timestamp persisted session");
+
+        let loaded = ChunkStore::load_session_from_dir(dir.path(), &key, &chain_hash, &manifest)
+            .expect("load session from dir");
+        assert!(
+            loaded.is_none(),
+            "direct recovery must reject adversarial max-timestamp RBC snapshots"
+        );
+        assert!(
+            !path.exists(),
+            "max-timestamp RBC snapshots should be removed during direct recovery"
+        );
+    }
+
+    #[test]
     fn load_session_from_dir_falls_back_to_main_when_temp_invalid() {
         let dir = tempdir().unwrap();
         let key = session_key(12);
@@ -1507,6 +1678,71 @@ mod tests {
         assert!(loaded.is_some(), "main session should load");
         assert!(path.exists(), "main session should remain");
         assert!(!tmp_path.exists(), "corrupt temp session should be removed");
+    }
+
+    #[test]
+    fn load_session_from_dir_prefers_newer_main_over_stale_temp() {
+        let dir = tempdir().unwrap();
+        let key = session_key(42);
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let mut main = sample_persisted_session(key, chain_hash, manifest.clone());
+        main.last_updated_ms = 20;
+        let mut temp = sample_persisted_session(key, chain_hash, manifest.clone());
+        temp.last_updated_ms = 10;
+
+        let path = ChunkStore::make_session_path(dir.path(), &key);
+        let tmp_path = temp_session_path(&path);
+        fs::write(&path, to_bytes(&main).expect("encode main session"))
+            .expect("write main session");
+        fs::write(&tmp_path, to_bytes(&temp).expect("encode temp session"))
+            .expect("write stale temp session");
+
+        let loaded = ChunkStore::load_session_from_dir(dir.path(), &key, &chain_hash, &manifest)
+            .expect("load session from dir")
+            .expect("main session should load");
+        assert_eq!(
+            loaded.last_updated_ms, main.last_updated_ms,
+            "newer main snapshot must not be shadowed by a stale temp file"
+        );
+        assert!(path.exists(), "main session should remain");
+        assert!(!tmp_path.exists(), "stale temp session should be removed");
+    }
+
+    #[test]
+    fn load_session_from_dir_promotes_newer_temp_over_main() {
+        let dir = tempdir().unwrap();
+        let key = session_key(43);
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let mut main = sample_persisted_session(key, chain_hash, manifest.clone());
+        main.last_updated_ms = 10;
+        let mut temp = sample_persisted_session(key, chain_hash, manifest.clone());
+        temp.last_updated_ms = 20;
+
+        let path = ChunkStore::make_session_path(dir.path(), &key);
+        let tmp_path = temp_session_path(&path);
+        fs::write(&path, to_bytes(&main).expect("encode main session"))
+            .expect("write older main session");
+        fs::write(&tmp_path, to_bytes(&temp).expect("encode temp session"))
+            .expect("write newer temp session");
+
+        let loaded = ChunkStore::load_session_from_dir(dir.path(), &key, &chain_hash, &manifest)
+            .expect("load session from dir")
+            .expect("temp session should load");
+        assert_eq!(
+            loaded.last_updated_ms, temp.last_updated_ms,
+            "newer temp snapshot should still recover after a crash before rename"
+        );
+        assert!(path.exists(), "newer temp session should be promoted");
+        assert!(
+            !tmp_path.exists(),
+            "promoted temp session should be removed"
+        );
+        let promoted = fs::read(&path).expect("read promoted main session");
+        let promoted =
+            decode_from_bytes::<PersistedSession>(&promoted).expect("decode promoted session");
+        assert_eq!(promoted.last_updated_ms, temp.last_updated_ms);
     }
 
     #[test]
@@ -1563,6 +1799,39 @@ mod tests {
         assert_eq!(load.sessions.len(), 1, "main session should load");
         assert!(path.exists(), "main session should remain");
         assert!(!tmp_path.exists(), "corrupt temp session should be removed");
+    }
+
+    #[test]
+    fn scan_entries_prefers_newer_main_over_stale_temp() {
+        let dir = tempdir().unwrap();
+        let store = ChunkStore::new(dir.path().to_path_buf(), Duration::ZERO, 4, 1024, 8, 4096)
+            .expect("chunk store init");
+
+        let key = session_key(44);
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let mut main = sample_persisted_session(key, chain_hash, manifest.clone());
+        main.last_updated_ms = 20;
+        let mut temp = sample_persisted_session(key, chain_hash, manifest.clone());
+        temp.last_updated_ms = 10;
+
+        let path = ChunkStore::make_session_path(dir.path(), &key);
+        let tmp_path = temp_session_path(&path);
+        fs::write(&path, to_bytes(&main).expect("encode main session"))
+            .expect("write main session");
+        fs::write(&tmp_path, to_bytes(&temp).expect("encode temp session"))
+            .expect("write stale temp session");
+
+        let load = store
+            .load(&chain_hash, &manifest)
+            .expect("load persisted sessions");
+        assert_eq!(load.sessions.len(), 1, "main session should load");
+        assert_eq!(
+            load.sessions[0].last_updated_ms, main.last_updated_ms,
+            "store scan must not let stale temp snapshots shadow newer main snapshots"
+        );
+        assert!(path.exists(), "main session should remain");
+        assert!(!tmp_path.exists(), "stale temp session should be removed");
     }
 
     #[test]
@@ -2241,6 +2510,28 @@ mod tests {
     }
 
     #[test]
+    fn from_persisted_rejects_zero_total_chunks() {
+        let mut session = RbcSession::test_new(1, None, None, 0);
+        session.test_note_chunk(0, vec![1, 2, 3], 0);
+        session.test_set_delivered(true);
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let key = session_key(14);
+        let mut persisted = session.to_persisted(key, chain_hash, &manifest, &[]);
+        persisted.total_chunks = 0;
+        persisted.chunks.clear();
+        persisted.chunk_digests.clear();
+        persisted.expected_chunk_root = None;
+        persisted.computed_chunk_root = None;
+
+        let err = RbcSession::from_persisted_unchecked(&persisted);
+        assert!(matches!(
+            err,
+            Err(crate::sumeragi::main_loop::PersistedLoadError::InvalidLayout("zero total chunks"))
+        ));
+    }
+
+    #[test]
     fn from_persisted_accepts_incomplete_chunk_set() {
         let mut session = RbcSession::test_new(2, None, None, 0);
         session.test_note_chunk(0, vec![7, 7, 7], 0);
@@ -2254,7 +2545,7 @@ mod tests {
     }
 
     #[test]
-    fn from_persisted_allows_delivered_without_chunk_bytes() {
+    fn from_persisted_demotes_delivered_without_chunk_bytes_for_repair() {
         let mut session = RbcSession::test_new(2, None, None, 0);
         session.test_note_chunk(0, vec![5, 5, 5], 0);
         session.test_note_chunk(1, vec![6, 6, 6], 0);
@@ -2266,9 +2557,56 @@ mod tests {
         let mut persisted = session.to_persisted(key, chain_hash, &manifest, &[]);
         persisted.chunks.clear();
         persisted.delivered = true;
-        let rebuilt = RbcSession::from_persisted_unchecked(&persisted).expect("rebuild session");
+        let mut rebuilt =
+            RbcSession::from_persisted_unchecked(&persisted).expect("rebuild session");
         assert_eq!(rebuilt.total_chunks(), 2);
         assert_eq!(rebuilt.received_chunks(), 0);
+        assert_eq!(
+            rebuilt.progress_stage(),
+            RbcProgressStage::LocalReadySent,
+            "payload-less recovered delivery must not re-enter as terminal DELIVER"
+        );
+        assert!(
+            rebuilt.allows_payload_recovery(),
+            "payload-less recovered delivery must remain eligible for payload repair"
+        );
+        assert_eq!(
+            rebuilt.take_delivered_payload_bytes_for_telemetry(),
+            None,
+            "payload-less recovered delivery must not consume delivered-byte telemetry"
+        );
+    }
+
+    #[test]
+    fn from_persisted_demotes_delivered_without_payload_hash() {
+        let mut session = RbcSession::test_new(2, None, None, 0);
+        session.test_note_chunk(0, vec![5, 5, 5], 0);
+        session.test_note_chunk(1, vec![6, 6, 6], 0);
+        session.test_set_delivered(true);
+        session.test_set_sent_ready(true);
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let key = session_key(16);
+        let persisted = session.to_persisted(key, chain_hash, &manifest, &[]);
+        let mut rebuilt =
+            RbcSession::from_persisted_unchecked(&persisted).expect("rebuild session");
+        assert_eq!(rebuilt.total_chunks(), 2);
+        assert_eq!(rebuilt.received_chunks(), 2);
+        assert_eq!(
+            rebuilt.progress_stage(),
+            RbcProgressStage::LocalReadySent,
+            "payload-hash-less recovered delivery must not re-enter as terminal DELIVER"
+        );
+        assert_eq!(
+            rebuilt.delivered_payload_bytes(),
+            None,
+            "complete chunks without an advertised payload hash must not be treated as verified delivered bytes"
+        );
+        assert_eq!(
+            rebuilt.take_delivered_payload_bytes_for_telemetry(),
+            None,
+            "payload-hash-less recovered delivery must not consume delivered-byte telemetry"
+        );
     }
 
     #[test]
@@ -2361,6 +2699,94 @@ mod tests {
         assert!(
             path.exists(),
             "non-destructive inspection must not remove snapshots owned by the peer process"
+        );
+    }
+
+    #[test]
+    fn inspect_session_metadata_from_dir_ignores_future_timestamp_without_deleting() {
+        let dir = tempdir().unwrap();
+        let key = session_key(46);
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let mut persisted = persisted_single_chunk_session(key, chain_hash, &manifest, 0xC0, 8);
+        let future_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+            .saturating_add(120_000);
+        persisted.last_updated_ms = u64::try_from(future_ms).unwrap_or(u64::MAX);
+        let path = write_persisted_session_at(dir.path(), &key, &persisted);
+
+        let metadata = inspect_session_metadata_from_dir(dir.path(), &key, &chain_hash)
+            .expect("inspect metadata");
+        assert!(
+            metadata.is_none(),
+            "non-destructive inspection must not report future-dated snapshots as evidence"
+        );
+        assert!(
+            path.exists(),
+            "non-destructive inspection must not delete peer-owned snapshots"
+        );
+    }
+
+    #[test]
+    fn inspect_session_metadata_from_dir_ignores_max_timestamp_without_deleting() {
+        let dir = tempdir().unwrap();
+        let key = session_key(49);
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let mut persisted = persisted_single_chunk_session(key, chain_hash, &manifest, 0xD1, 8);
+        persisted.last_updated_ms = u64::MAX;
+        let path = write_persisted_session_at(dir.path(), &key, &persisted);
+
+        let metadata = inspect_session_metadata_from_dir(dir.path(), &key, &chain_hash)
+            .expect("inspect metadata");
+        assert!(
+            metadata.is_none(),
+            "non-destructive inspection must not report max-timestamp snapshots as evidence"
+        );
+        assert!(
+            path.exists(),
+            "non-destructive inspection must not delete peer-owned snapshots"
+        );
+    }
+
+    #[test]
+    fn inspect_session_metadata_from_dir_prefers_newer_temp_without_promoting() {
+        let dir = tempdir().unwrap();
+        let key = session_key(47);
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let mut main = persisted_single_chunk_session(key, chain_hash, &manifest, 0xC1, 8);
+        main.last_updated_ms = 10;
+
+        let mut session = RbcSession::test_new(2, None, None, 0);
+        session.test_note_chunk(0, vec![0xC2; 8], 0);
+        session.test_note_chunk(1, vec![0xC3; 8], 0);
+        let mut temp = session.to_persisted(key, chain_hash, &manifest, &[]);
+        temp.last_updated_ms = 20;
+
+        let path = ChunkStore::make_session_path(dir.path(), &key);
+        let tmp_path = temp_session_path(&path);
+        fs::write(&path, to_bytes(&main).expect("encode main session"))
+            .expect("write older main session");
+        fs::write(&tmp_path, to_bytes(&temp).expect("encode temp session"))
+            .expect("write newer temp session");
+
+        let metadata = inspect_session_metadata_from_dir(dir.path(), &key, &chain_hash)
+            .expect("inspect metadata")
+            .expect("newer temp metadata should be visible");
+        assert_eq!(
+            metadata.persisted_chunk_count, 2,
+            "non-destructive inspection should report the newest valid temp/main snapshot"
+        );
+        assert!(
+            path.exists(),
+            "inspection should not replace the main snapshot"
+        );
+        assert!(
+            tmp_path.exists(),
+            "inspection should not promote or delete temp snapshots"
         );
     }
 

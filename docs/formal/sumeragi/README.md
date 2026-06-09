@@ -3936,11 +3936,12 @@ payload knowledge for progress:
 - invalid sessions, missing payload hashes, missing headers, missing leader
   signatures, and key/header mismatches are rejected before chunk or local
   fallback checks,
-- complete RBC chunks are authoritative only for the accepted zero-chunk,
-  expected-root match, and no-expected-root observed-root cases,
+- complete RBC chunks are authoritative only when positive chunk bytes verify
+  against the advertised payload hash and the expected/observed root rules
+  match,
 - incomplete chunks, root mismatches, missing observed roots, and zero-chunk
-  sessions without an expected root must fall back to local authoritative
-  payload bytes and require exact height, view, and payload hash.
+  sessions must fall back to local authoritative payload bytes and require exact
+  height, view, and payload hash.
 
 `SumeragiSlotAuthoritativePayloadGate.tla` captures slot-level authoritative
 payload knowledge:
@@ -10777,8 +10778,8 @@ implementation surfaces it abstracts:
 | `DaDisabled`, `TimeoutBoundary`, `LocalPayloadAvailable` | `rbc_availability_unresolved_for_reschedule(...)` fails open when DA is disabled, when a nonzero availability timeout has elapsed, or when the payload is already available locally. |
 | `TimeoutBelowPending`, `TimeoutZeroPending`, `PendingEntry` | Before the timeout, and indefinitely for a zero timeout, a pending RBC entry keeps quorum rescheduling blocked. |
 | `NoSession`, `InvalidSession`, `DeliveredSession` | Absent, invalid, and already-delivered RBC sessions do not block quorum rescheduling. |
-| `CompleteReady`, `MissingChunks`, `ZeroTotalReady`, `NotReady`, `CompleteButNotReady` | A usable session blocks only when nonzero chunks are still missing or READY quorum is not reached; zero-total complete sessions with READY quorum do not synthesize missing chunks. |
-| `RbcAvailabilityRescheduleExactness` | The aggregate invariant ties DA-disabled, timeout, local-payload, absent/invalid/delivered/complete fail-open paths with pending-entry, missing-chunk, and missing-READY blocking paths for every bounded case. |
+| `CompleteReady`, `MissingChunks`, `ZeroTotalReady`, `NotReady`, `CompleteButNotReady` | A usable session blocks when it has an impossible zero-total shape, nonzero chunks are still missing, or READY quorum is not reached; complete positive-chunk READY sessions fail open. |
+| `RbcAvailabilityRescheduleExactness` | The aggregate invariant ties DA-disabled, timeout, local-payload, absent/invalid/delivered/complete-positive fail-open paths with pending-entry, zero-total, missing-chunk, and missing-READY blocking paths for every bounded case. |
 
 The vote-backed reassembly stall model is intentionally finite. These are the
 implementation surfaces it abstracts:
@@ -14715,7 +14716,7 @@ projection, and reset cleanup.
 RBC message commitment and payload-refetch decisions, including stale/current
 message handling, Kura presence, future-message rejection, invalid-session
 suppression, delivered/complete session suppression, payload-hash mismatch
-fetches, missing-payload fetches, and zero-chunk completeness.
+fetches, missing-payload fetches, and zero-chunk recovery.
 `rbc-missing-block-recovery-fast` and `rbc-missing-block-recovery-bug-*`
 cross-check RBC-specific missing-block recovery: known-local bypass,
 BlockCreated metadata recovery, forced frontier body fetches, signer fallback
@@ -17803,7 +17804,7 @@ bash scripts/formal/sumeragi_apalache.sh rbc-recovery-helper-bug-needs-complete-
 bash scripts/formal/sumeragi_apalache.sh rbc-recovery-helper-bug-needs-wrong-payload-skips
 bash scripts/formal/sumeragi_apalache.sh rbc-recovery-helper-bug-needs-incomplete-match-skips
 bash scripts/formal/sumeragi_apalache.sh rbc-recovery-helper-bug-needs-missing-payload-skips
-bash scripts/formal/sumeragi_apalache.sh rbc-recovery-helper-bug-needs-zero-chunk-fetches
+bash scripts/formal/sumeragi_apalache.sh rbc-recovery-helper-bug-needs-zero-chunk-skips
 bash scripts/formal/sumeragi_apalache.sh rbc-missing-block-recovery-bug-needs-known-local-fetches
 bash scripts/formal/sumeragi_apalache.sh rbc-missing-block-recovery-bug-needs-missing-session-skips
 bash scripts/formal/sumeragi_apalache.sh rbc-missing-block-recovery-bug-needs-payload-hash-skips
@@ -23050,7 +23051,7 @@ bash scripts/formal/sumeragi_apalache.sh rbc-authoritative-payload-progress-bug-
 bash scripts/formal/sumeragi_apalache.sh rbc-authoritative-payload-progress-bug-accept-header-hash-mismatch
 bash scripts/formal/sumeragi_apalache.sh rbc-authoritative-payload-progress-bug-accept-header-height-mismatch
 bash scripts/formal/sumeragi_apalache.sh rbc-authoritative-payload-progress-bug-accept-header-view-mismatch
-bash scripts/formal/sumeragi_apalache.sh rbc-authoritative-payload-progress-bug-reject-zero-chunk-expected-root
+bash scripts/formal/sumeragi_apalache.sh rbc-authoritative-payload-progress-bug-accept-zero-chunk-expected-root
 bash scripts/formal/sumeragi_apalache.sh rbc-authoritative-payload-progress-bug-reject-expected-root-match
 bash scripts/formal/sumeragi_apalache.sh rbc-authoritative-payload-progress-bug-reject-no-expected-observed-root
 bash scripts/formal/sumeragi_apalache.sh rbc-authoritative-payload-progress-bug-accept-zero-missing-expected-root

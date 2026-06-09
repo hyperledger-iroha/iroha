@@ -6330,39 +6330,19 @@ impl Actor {
         signers: &[ValidatorIndex],
         topology: &super::network_topology::Topology,
     ) {
-        let Some(highest) = qc.highest_qc else {
-            warn!(
-                height = qc.height,
-                view = qc.view,
-                block = %qc.subject_block_hash,
-                "ignoring NEW_VIEW certificate missing highest certificate reference"
-            );
-            return;
+        let highest = match super::validate_new_view_qc_highest(qc) {
+            Ok(highest) => highest,
+            Err(err) => {
+                warn!(
+                    height = qc.height,
+                    view = qc.view,
+                    block = %qc.subject_block_hash,
+                    error = %err,
+                    "ignoring NEW_VIEW certificate with invalid highest certificate reference"
+                );
+                return;
+            }
         };
-        let valid_phase = matches!(highest.phase, crate::sumeragi::consensus::Phase::Commit)
-            || matches!(highest.phase, crate::sumeragi::consensus::Phase::Prepare);
-        if !valid_phase {
-            warn!(
-                height = qc.height,
-                view = qc.view,
-                highest_height = highest.height,
-                highest_view = highest.view,
-                phase = ?highest.phase,
-                "ignoring NEW_VIEW certificate with invalid highest certificate phase"
-            );
-            return;
-        }
-        let expected_height = highest.height.saturating_add(1);
-        if qc.height != expected_height {
-            warn!(
-                height = qc.height,
-                view = qc.view,
-                highest_height = highest.height,
-                expected_height,
-                "ignoring NEW_VIEW certificate with mismatched height"
-            );
-            return;
-        }
         let roster = topology.as_ref();
         for signer in signers {
             let Some(peer) = usize::try_from(*signer)

@@ -693,6 +693,96 @@ mod tests {
         block.commit();
     }
 
+    fn bls_keypairs(prefix: &str, count: usize) -> Vec<KeyPair> {
+        (0..count)
+            .map(|idx| {
+                KeyPair::from_seed(format!("{prefix}-{idx}").into_bytes(), Algorithm::BlsNormal)
+            })
+            .collect()
+    }
+
+    fn peer_ids(keypairs: &[KeyPair]) -> Vec<PeerId> {
+        keypairs
+            .iter()
+            .map(|kp| PeerId::new(kp.public_key().clone()))
+            .collect()
+    }
+
+    fn world_with_peers(peers: &[PeerId]) -> World {
+        let world = World::new();
+        {
+            let mut block = world.block();
+            let peers_cell = block.peers.get_mut();
+            for peer in peers {
+                let _ = peers_cell.push(peer.clone());
+            }
+            block.commit();
+        }
+        world
+    }
+
+    fn trusted_from_peers(
+        peers: &[PeerId],
+        port_base: u16,
+        pops: BTreeMap<iroha_crypto::PublicKey, Vec<u8>>,
+    ) -> iroha_config::parameters::actual::TrustedPeers {
+        assert!(!peers.is_empty());
+        iroha_config::parameters::actual::TrustedPeers {
+            myself: make_peer(peers[0].clone(), port_base),
+            others: peers
+                .iter()
+                .skip(1)
+                .enumerate()
+                .map(|(idx, peer_id)| {
+                    let port = port_base
+                        .saturating_add(1)
+                        .saturating_add(u16::try_from(idx).expect("peer index fits u16"));
+                    make_peer(peer_id.clone(), port)
+                })
+                .collect::<UniqueVec<_>>(),
+            pops,
+        }
+    }
+
+    fn valid_pops_for(
+        keypairs: &[KeyPair],
+        count: usize,
+    ) -> BTreeMap<iroha_crypto::PublicKey, Vec<u8>> {
+        keypairs
+            .iter()
+            .take(count)
+            .map(|kp| {
+                (
+                    kp.public_key().clone(),
+                    bls_normal_pop_prove(kp.private_key()).expect("pop"),
+                )
+            })
+            .collect()
+    }
+
+    fn complete_pops_with_valid_prefix(
+        keypairs: &[KeyPair],
+        valid_prefix_len: usize,
+    ) -> BTreeMap<iroha_crypto::PublicKey, Vec<u8>> {
+        keypairs
+            .iter()
+            .enumerate()
+            .map(|(idx, kp)| {
+                let pop = if idx < valid_prefix_len {
+                    bls_normal_pop_prove(kp.private_key()).expect("pop")
+                } else {
+                    vec![0_u8]
+                };
+                (kp.public_key().clone(), pop)
+            })
+            .collect()
+    }
+
+    fn sorted_roster(mut peers: Vec<PeerId>) -> Vec<PeerId> {
+        peers.sort();
+        peers
+    }
+
     #[test]
     fn canonicalize_roster_sorts_and_dedups() {
         let first = PeerId::new(
@@ -849,6 +939,148 @@ mod tests {
         let guarded = guard_pop_quorum(filtered.clone(), &peers, pops.len());
 
         assert_eq!(guarded, peers);
+    }
+
+    #[test]
+    fn active_topology_selection_formal_gate_matrix() {
+        let keys = bls_keypairs("active-topology-selection", 16);
+        let peers = peer_ids(&keys);
+        let non_bls_peer = PeerId::new(
+            KeyPair::from_seed(
+                b"active-topology-selection-non-bls".to_vec(),
+                Algorithm::Ed25519,
+            )
+            .public_key()
+            .clone(),
+        );
+
+        let empty_world = World::new();
+        let trusted = trusted_from_peers(&peers[8..12], 12_000, BTreeMap::new());
+        let commit_result = derive_active_topology_from_views(
+            &empty_world.view(),
+            &[peers[1].clone(), peers[0].clone(), peers[1].clone()],
+            &trusted,
+            &peers[8],
+        );
+        assert_eq!(
+            commit_result,
+            sorted_roster(vec![peers[0].clone(), peers[1].clone()])
+        );
+
+        let world = world_with_peers(&[peers[3].clone(), peers[2].clone()]);
+        let world_result =
+            derive_active_topology_from_views(&world.view(), &[], &trusted, &peers[8]);
+        assert_eq!(
+            world_result,
+            sorted_roster(vec![peers[2].clone(), peers[3].clone()])
+        );
+
+        let trusted_result =
+            derive_active_topology_from_views(&empty_world.view(), &[], &trusted, &peers[8]);
+        assert_eq!(trusted_result, sorted_roster(peers[8..12].to_vec()));
+
+        let bls_filtered = derive_active_topology_from_views(
+            &empty_world.view(),
+            &[
+                peers[5].clone(),
+                non_bls_peer.clone(),
+                peers[4].clone(),
+                peers[5].clone(),
+            ],
+            &trusted,
+            &peers[8],
+        );
+        assert_eq!(
+            bls_filtered,
+            sorted_roster(vec![peers[4].clone(), peers[5].clone()])
+        );
+
+        let commit_pops = trusted_from_peers(&peers[0..4], 13_000, valid_pops_for(&keys[0..4], 3));
+        let commit_missing_pops = derive_active_topology_from_views(
+            &empty_world.view(),
+            &peers[0..4],
+            &commit_pops,
+            &peers[0],
+        );
+        assert_eq!(commit_missing_pops, sorted_roster(peers[0..4].to_vec()));
+
+        let trusted_missing_pops =
+            derive_active_topology_from_views(&empty_world.view(), &[], &commit_pops, &peers[0]);
+        assert_eq!(trusted_missing_pops, sorted_roster(peers[0..3].to_vec()));
+
+        let subquorum_pops = trusted_from_peers(
+            &peers[0..4],
+            14_000,
+            complete_pops_with_valid_prefix(&keys[0..4], 2),
+        );
+        let subquorum_result = derive_active_topology_from_views(
+            &empty_world.view(),
+            &peers[0..4],
+            &subquorum_pops,
+            &peers[0],
+        );
+        assert_eq!(subquorum_result, sorted_roster(peers[0..4].to_vec()));
+
+        let quorum_pops = trusted_from_peers(
+            &peers[0..4],
+            15_000,
+            complete_pops_with_valid_prefix(&keys[0..4], 3),
+        );
+        let quorum_result = derive_active_topology_from_views(
+            &empty_world.view(),
+            &peers[0..4],
+            &quorum_pops,
+            &peers[0],
+        );
+        assert_eq!(quorum_result, sorted_roster(peers[0..3].to_vec()));
+
+        let fallback_result = derive_active_topology_from_views(
+            &empty_world.view(),
+            std::slice::from_ref(&non_bls_peer),
+            &trusted,
+            &peers[8],
+        );
+        assert_eq!(fallback_result, sorted_roster(peers[8..12].to_vec()));
+
+        let fallback_pops =
+            trusted_from_peers(&peers[8..12], 16_000, valid_pops_for(&keys[8..12], 2));
+        let fallback_pops_result = derive_active_topology_from_views(
+            &empty_world.view(),
+            std::slice::from_ref(&non_bls_peer),
+            &fallback_pops,
+            &peers[8],
+        );
+        assert_eq!(fallback_pops_result, sorted_roster(peers[8..10].to_vec()));
+
+        let empty_trusted =
+            trusted_from_peers(std::slice::from_ref(&non_bls_peer), 17_000, BTreeMap::new());
+        let empty_result = derive_active_topology_from_views(
+            &empty_world.view(),
+            &[],
+            &empty_trusted,
+            &non_bls_peer,
+        );
+        assert!(empty_result.is_empty());
+
+        let small_world = world_with_peers(&peers[0..3]);
+        let small_pops = trusted_from_peers(
+            &peers[0..3],
+            18_000,
+            complete_pops_with_valid_prefix(&keys[0..3], 2),
+        );
+        let small_result =
+            derive_active_topology_from_views(&small_world.view(), &[], &small_pops, &peers[0]);
+        assert_eq!(small_result, sorted_roster(peers[0..3].to_vec()));
+
+        let large_world = world_with_peers(&peers[0..4]);
+        let large_pops = trusted_from_peers(
+            &peers[0..4],
+            19_000,
+            complete_pops_with_valid_prefix(&keys[0..4], 3),
+        );
+        let large_result =
+            derive_active_topology_from_views(&large_world.view(), &[], &large_pops, &peers[0]);
+        assert_eq!(large_result, sorted_roster(peers[0..3].to_vec()));
     }
 
     #[test]

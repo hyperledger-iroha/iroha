@@ -131,8 +131,45 @@ impl ProposalCache {
     pub(super) fn prune_height_leq(&mut self, height: u64) {
         self.hints.retain(|(h, _), _| *h > height);
         self.proposals.retain(|(h, _), _| *h > height);
-        self.observed_at.retain(|(h, _), _| *h > height);
+        self.retain_observed_for_live_entries();
         self.debug_assert_shape();
+    }
+
+    pub(super) fn remove_height(&mut self, height: u64) -> (usize, usize) {
+        let hints_before = self.hints.len();
+        self.hints
+            .retain(|(entry_height, _), _| *entry_height != height);
+        let hints_removed = hints_before.saturating_sub(self.hints.len());
+
+        let proposals_before = self.proposals.len();
+        self.proposals
+            .retain(|(entry_height, _), _| *entry_height != height);
+        let proposals_removed = proposals_before.saturating_sub(self.proposals.len());
+
+        self.retain_observed_for_live_entries();
+        self.debug_assert_shape();
+        (hints_removed, proposals_removed)
+    }
+
+    pub(super) fn retain_height_leq(&mut self, keep_through_height: u64) -> (usize, usize) {
+        let hints_before = self.hints.len();
+        self.hints
+            .retain(|(entry_height, _), _| *entry_height <= keep_through_height);
+        let hints_removed = hints_before.saturating_sub(self.hints.len());
+
+        let proposals_before = self.proposals.len();
+        self.proposals
+            .retain(|(entry_height, _), _| *entry_height <= keep_through_height);
+        let proposals_removed = proposals_before.saturating_sub(self.proposals.len());
+
+        self.retain_observed_for_live_entries();
+        self.debug_assert_shape();
+        (hints_removed, proposals_removed)
+    }
+
+    fn retain_observed_for_live_entries(&mut self) {
+        self.observed_at
+            .retain(|key, _| self.hints.contains_key(key) || self.proposals.contains_key(key));
     }
 
     pub(super) fn shape(&self) -> ProposalCacheShape {

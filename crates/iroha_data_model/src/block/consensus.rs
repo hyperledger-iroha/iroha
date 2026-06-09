@@ -1541,7 +1541,7 @@ pub struct SumeragiViewChangeCauseStatus {
     /// Total view changes triggered after roster-unavailability recovery.
     #[norito(default)]
     pub roster_unavailable_total: u64,
-    /// Total view changes triggered after DA availability aborts (unused when DA is advisory).
+    /// Total view changes triggered after the DA availability gate remains unresolved.
     #[norito(default)]
     pub da_gate_total: u64,
     /// Total view changes triggered after censorship evidence reaches quorum.

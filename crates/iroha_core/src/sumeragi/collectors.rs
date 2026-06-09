@@ -149,11 +149,174 @@ mod tests {
 
     use super::*;
 
+    fn sample_peers(count: usize) -> Vec<PeerId> {
+        (0..count)
+            .map(|_| PeerId::new(KeyPair::random().public_key().clone()))
+            .collect()
+    }
+
+    #[test]
+    fn collector_plan_formal_gate_matrix() {
+        struct Case {
+            name: &'static str,
+            peers: Vec<PeerId>,
+            plan: CollectorPlan,
+            expected_sent: usize,
+            expected_peek_index: Option<usize>,
+            expected_next_index: Option<usize>,
+            expected_sent_after_next: usize,
+            expected_exhausted: bool,
+            expected_trigger: bool,
+        }
+
+        let empty = sample_peers(0);
+        let three = sample_peers(3);
+
+        let mut already_gossip_triggered = CollectorPlan::with_sent(three.clone(), 1);
+        assert!(already_gossip_triggered.trigger_gossip());
+
+        let cases = vec![
+            Case {
+                name: "new_empty",
+                peers: empty.clone(),
+                plan: CollectorPlan::new(empty.clone()),
+                expected_sent: 0,
+                expected_peek_index: None,
+                expected_next_index: None,
+                expected_sent_after_next: 0,
+                expected_exhausted: true,
+                expected_trigger: true,
+            },
+            Case {
+                name: "new_three",
+                peers: three.clone(),
+                plan: CollectorPlan::new(three.clone()),
+                expected_sent: 0,
+                expected_peek_index: Some(0),
+                expected_next_index: Some(0),
+                expected_sent_after_next: 1,
+                expected_exhausted: false,
+                expected_trigger: true,
+            },
+            Case {
+                name: "default_empty",
+                peers: empty.clone(),
+                plan: CollectorPlan::default(),
+                expected_sent: 0,
+                expected_peek_index: None,
+                expected_next_index: None,
+                expected_sent_after_next: 0,
+                expected_exhausted: true,
+                expected_trigger: true,
+            },
+            Case {
+                name: "with_sent_zero",
+                peers: three.clone(),
+                plan: CollectorPlan::with_sent(three.clone(), 0),
+                expected_sent: 0,
+                expected_peek_index: Some(0),
+                expected_next_index: Some(0),
+                expected_sent_after_next: 1,
+                expected_exhausted: false,
+                expected_trigger: true,
+            },
+            Case {
+                name: "with_sent_middle",
+                peers: three.clone(),
+                plan: CollectorPlan::with_sent(three.clone(), 1),
+                expected_sent: 1,
+                expected_peek_index: Some(1),
+                expected_next_index: Some(1),
+                expected_sent_after_next: 2,
+                expected_exhausted: false,
+                expected_trigger: true,
+            },
+            Case {
+                name: "with_sent_exact",
+                peers: three.clone(),
+                plan: CollectorPlan::with_sent(three.clone(), 3),
+                expected_sent: 3,
+                expected_peek_index: None,
+                expected_next_index: None,
+                expected_sent_after_next: 3,
+                expected_exhausted: true,
+                expected_trigger: true,
+            },
+            Case {
+                name: "with_sent_over",
+                peers: three.clone(),
+                plan: CollectorPlan::with_sent(three.clone(), 5),
+                expected_sent: 3,
+                expected_peek_index: None,
+                expected_next_index: None,
+                expected_sent_after_next: 3,
+                expected_exhausted: true,
+                expected_trigger: true,
+            },
+            Case {
+                name: "already_gossip_triggered",
+                peers: three,
+                plan: already_gossip_triggered,
+                expected_sent: 1,
+                expected_peek_index: Some(1),
+                expected_next_index: Some(1),
+                expected_sent_after_next: 2,
+                expected_exhausted: false,
+                expected_trigger: false,
+            },
+        ];
+
+        for case in cases {
+            let mut plan = case.plan;
+            assert_eq!(plan.targets(), case.peers, "{} targets", case.name);
+            assert_eq!(plan.sent_count(), case.expected_sent, "{} sent", case.name);
+
+            let peek_index = plan.peek().map(|peer| {
+                case.peers
+                    .iter()
+                    .position(|candidate| candidate == peer)
+                    .unwrap()
+            });
+            assert_eq!(peek_index, case.expected_peek_index, "{} peek", case.name);
+            assert_eq!(
+                plan.sent_count(),
+                case.expected_sent,
+                "{} peek should not advance",
+                case.name
+            );
+            assert_eq!(
+                plan.exhausted(),
+                case.expected_exhausted,
+                "{} exhausted",
+                case.name
+            );
+
+            let next_index = plan.next().map(|peer| {
+                case.peers
+                    .iter()
+                    .position(|candidate| candidate == &peer)
+                    .unwrap()
+            });
+            assert_eq!(next_index, case.expected_next_index, "{} next", case.name);
+            assert_eq!(
+                plan.sent_count(),
+                case.expected_sent_after_next,
+                "{} sent after next",
+                case.name
+            );
+            assert_eq!(
+                plan.trigger_gossip(),
+                case.expected_trigger,
+                "{} trigger",
+                case.name
+            );
+            assert!(plan.gossip_triggered(), "{} gossip flag", case.name);
+        }
+    }
+
     #[test]
     fn plan_advances_and_marks_gossip_once() {
-        let peers: Vec<PeerId> = (0..3)
-            .map(|_| PeerId::new(KeyPair::random().public_key().clone()))
-            .collect();
+        let peers = sample_peers(3);
         let mut plan = CollectorPlan::new(peers.clone());
 
         assert_eq!(plan.sent_count(), 0);
@@ -171,9 +334,7 @@ mod tests {
 
     #[test]
     fn plan_with_sent_preserves_remaining_targets() {
-        let peers: Vec<PeerId> = (0..4)
-            .map(|_| PeerId::new(KeyPair::random().public_key().clone()))
-            .collect();
+        let peers = sample_peers(4);
         let mut plan = CollectorPlan::with_sent(peers.clone(), 1);
 
         assert_eq!(plan.sent_count(), 1);

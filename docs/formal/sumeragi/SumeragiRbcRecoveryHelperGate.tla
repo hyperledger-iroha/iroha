@@ -58,7 +58,6 @@ SpecNeedsPayload(c) ==
   CASE c \in {"invalid_incomplete_match", "invalid_complete_match"} -> FALSE
     [] c = "delivered_complete_match" -> FALSE
     [] c = "complete_undelivered_match" -> FALSE
-    [] c = "zero_chunk_complete_match" -> FALSE
     [] OTHER -> TRUE
 
 ActualNeedsPayload(c) ==
@@ -80,8 +79,8 @@ ActualNeedsPayload(c) ==
        /\ c = "incomplete_undelivered_match" -> FALSE
     [] Bug = "needs_missing_payload_skips"
        /\ c = "missing_payload_complete" -> FALSE
-    [] Bug = "needs_zero_chunk_fetches"
-       /\ c = "zero_chunk_complete_match" -> TRUE
+    [] Bug = "needs_zero_chunk_skips"
+       /\ c = "zero_chunk_complete_match" -> FALSE
     [] OTHER -> SpecNeedsPayload(c)
 
 Init ==
@@ -109,7 +108,7 @@ TypeInvariant ==
        "needs_wrong_payload_skips",
        "needs_incomplete_match_skips",
        "needs_missing_payload_skips",
-       "needs_zero_chunk_fetches"
+       "needs_zero_chunk_skips"
      }
   /\ checked \in 0..14
 
@@ -138,7 +137,6 @@ PayloadSkipAnchors ==
   /\ ~ActualNeedsPayload("invalid_complete_match")
   /\ ~ActualNeedsPayload("delivered_complete_match")
   /\ ~ActualNeedsPayload("complete_undelivered_match")
-  /\ ~ActualNeedsPayload("zero_chunk_complete_match")
 
 PayloadFetchAnchors ==
   /\ ActualNeedsPayload("delivered_incomplete_match")
@@ -147,6 +145,7 @@ PayloadFetchAnchors ==
   /\ ActualNeedsPayload("incomplete_undelivered_match")
   /\ ActualNeedsPayload("missing_payload_complete")
   /\ ActualNeedsPayload("missing_payload_incomplete")
+  /\ ActualNeedsPayload("zero_chunk_complete_match")
 
 RecoveryHelperSafetyAnchors ==
   /\ AllCommittedMatches
