@@ -468,8 +468,8 @@ async fn npos_rbc_large_payload_delivers_and_commits() -> eyre::Result<()> {
         }
         DeliveredRbcProof::Persisted(metadata) => {
             ensure!(
-                metadata.delivered,
-                "persisted session metadata must record delivery: {:?}",
+                persisted_metadata_is_complete_delivered(&metadata, expected_height),
+                "persisted session metadata must prove complete retained delivery: {:?}",
                 metadata
             );
             ensure!(
@@ -761,10 +761,7 @@ fn persisted_rbc_session_metadata(
                 &manifest,
             ) {
                 Ok(Some(metadata))
-                    if metadata.height == expected_height
-                        && metadata.delivered
-                        && metadata.total_chunks > 0
-                        && !metadata.invalid =>
+                    if persisted_metadata_is_complete_delivered(&metadata, expected_height) =>
                 {
                     Some(metadata)
                 }
@@ -772,6 +769,17 @@ fn persisted_rbc_session_metadata(
             }
         })
     })
+}
+
+fn persisted_metadata_is_complete_delivered(
+    metadata: &PersistedSessionMetadata,
+    expected_height: u64,
+) -> bool {
+    metadata.height == expected_height
+        && metadata.delivered
+        && !metadata.invalid
+        && metadata.total_chunks > 0
+        && metadata.persisted_chunk_count == metadata.total_chunks
 }
 
 fn persisted_session_key(path: &Path) -> Option<SessionKey> {
@@ -906,33 +914,9 @@ async fn wait_for_rbc_delivery(
 }
 
 fn has_delivered_session(root: &Value, target_height: u64) -> eyre::Result<bool> {
-    let Some(items) = root
-        .as_object()
-        .and_then(|obj| obj.get("items"))
-        .and_then(Value::as_array)
-    else {
-        return Ok(false);
-    };
-    for item in items {
-        let Some(obj) = item.as_object() else {
-            continue;
-        };
-        let height = obj
-            .get("height")
-            .and_then(Value::as_u64)
-            .ok_or_else(|| eyre!("RBC session missing height field"))?;
-        if height < target_height {
-            continue;
-        }
-        let delivered = obj
-            .get("delivered")
-            .and_then(Value::as_bool)
-            .ok_or_else(|| eyre!("RBC session missing delivered field"))?;
-        if delivered {
-            return Ok(true);
-        }
-    }
-    Ok(false)
+    Ok(parse_rbc_sessions(root)?.into_iter().any(|session| {
+        session.height >= target_height && rbc_session_view_is_complete_delivered(&session)
+    }))
 }
 
 async fn ensure_metrics_within_bounds(
@@ -1259,12 +1243,15 @@ fn select_delivered_rbc_session(
     expected_height: u64,
 ) -> Option<RbcSessionView> {
     sessions.into_iter().find(|session| {
-        session.height == expected_height
-            && session.delivered
-            && session.received_chunks == session.total_chunks
-            && session.total_chunks > 0
-            && !session.invalid
+        session.height == expected_height && rbc_session_view_is_complete_delivered(session)
     })
+}
+
+fn rbc_session_view_is_complete_delivered(session: &RbcSessionView) -> bool {
+    session.delivered
+        && session.received_chunks == session.total_chunks
+        && session.total_chunks > 0
+        && !session.invalid
 }
 
 fn field_as_string(obj: &Map, field: &str) -> eyre::Result<String> {
@@ -1290,6 +1277,80 @@ fn field_as_bool(obj: &Map, field: &str) -> eyre::Result<bool> {
     obj.get(field)
         .and_then(Value::as_bool)
         .ok_or_else(|| eyre!("RBC session missing {field} field"))
+}
+
+#[test]
+fn has_delivered_session_requires_complete_valid_delivery() {
+    let incomplete_only = json::from_str(
+        r#"{
+            "items": [
+                {
+                    "block_hash": "old-complete",
+                    "height": 1,
+                    "total_chunks": 4,
+                    "received_chunks": 4,
+                    "delivered": true,
+                    "recovered": false,
+                    "invalid": false
+                },
+                {
+                    "block_hash": "incomplete",
+                    "height": 2,
+                    "total_chunks": 4,
+                    "received_chunks": 3,
+                    "delivered": true,
+                    "recovered": false,
+                    "invalid": false
+                },
+                {
+                    "block_hash": "zero-chunk",
+                    "height": 2,
+                    "total_chunks": 0,
+                    "received_chunks": 0,
+                    "delivered": true,
+                    "recovered": false,
+                    "invalid": false
+                },
+                {
+                    "block_hash": "invalid",
+                    "height": 2,
+                    "total_chunks": 4,
+                    "received_chunks": 4,
+                    "delivered": true,
+                    "recovered": false,
+                    "invalid": true
+                }
+            ]
+        }"#,
+    )
+    .expect("valid RBC sessions JSON");
+
+    assert!(
+        !has_delivered_session(&incomplete_only, 2).expect("delivery scan succeeds"),
+        "old, incomplete, zero-chunk, or invalid delivered rows must not satisfy the wait gate"
+    );
+
+    let complete = json::from_str(
+        r#"{
+            "items": [
+                {
+                    "block_hash": "complete",
+                    "height": 2,
+                    "total_chunks": 4,
+                    "received_chunks": 4,
+                    "delivered": true,
+                    "recovered": false,
+                    "invalid": false
+                }
+            ]
+        }"#,
+    )
+    .expect("valid complete RBC sessions JSON");
+
+    assert!(
+        has_delivered_session(&complete, 2).expect("delivery scan succeeds"),
+        "complete delivered rows at the target height should still satisfy the wait gate"
+    );
 }
 
 #[test]
@@ -1343,4 +1404,43 @@ fn select_delivered_rbc_session_requires_complete_valid_delivery() {
     assert!(selected.delivered);
     assert!(selected.recovered);
     assert!(!selected.invalid);
+}
+
+#[test]
+fn persisted_metadata_delivery_proof_requires_complete_retained_chunks() {
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x42; Hash::LENGTH]));
+    let mut metadata = PersistedSessionMetadata {
+        block_hash,
+        height: 7,
+        view: 0,
+        total_chunks: 4,
+        persisted_chunk_count: 3,
+        delivered: true,
+        invalid: false,
+    };
+
+    assert!(
+        !persisted_metadata_is_complete_delivered(&metadata, 7),
+        "metadata-only or partially retained delivered sessions must not satisfy delivered proof"
+    );
+
+    metadata.persisted_chunk_count = 4;
+    assert!(
+        persisted_metadata_is_complete_delivered(&metadata, 7),
+        "complete retained chunks should satisfy persisted delivered proof"
+    );
+
+    metadata.height = 8;
+    assert!(
+        !persisted_metadata_is_complete_delivered(&metadata, 7),
+        "wrong-height metadata must not satisfy the requested delivery proof"
+    );
+
+    metadata.height = 7;
+    metadata.invalid = true;
+    assert!(
+        !persisted_metadata_is_complete_delivered(&metadata, 7),
+        "invalid metadata must fail closed even when chunk counts are complete"
+    );
 }

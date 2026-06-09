@@ -1250,7 +1250,7 @@ pub struct RbcBacklogSnapshot {
     pub total_missing_chunks: u64,
     /// Maximum missing chunks within any single session.
     pub max_missing_chunks: u64,
-    /// Number of sessions that have not yet delivered.
+    /// Number of sessions whose local chunk delivery is still incomplete.
     pub pending_sessions: u64,
 }
 

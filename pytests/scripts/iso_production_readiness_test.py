@@ -5373,6 +5373,86 @@ class IsoProductionReadinessTest(unittest.TestCase):
                         if value_kind == "non-ascii":
                             self.assertNotIn("unsupported", stderr)
 
+    def test_overlong_compact_clean_strings_are_rejected_without_echo(self):
+        overlong = "M" * (READINESS.MAX_CLEAN_STRING_CHARS + 1)
+        cases = (
+            (
+                "required",
+                lambda: READINESS._require_string({"provider": overlong}, "provider", "summary"),
+                f"summary.provider must be no longer than {READINESS.MAX_CLEAN_STRING_CHARS} characters",
+            ),
+            (
+                "cli",
+                lambda: READINESS._require_cli_string(overlong, "--provider"),
+                f"--provider must be no longer than {READINESS.MAX_CLEAN_STRING_CHARS} characters",
+            ),
+        )
+        for name, call, expected in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(READINESS.ReadinessError) as caught:
+                    call()
+
+                message = str(caught.exception)
+                self.assertIn(expected, message)
+                self.assertNotIn(overlong, message)
+
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            cases = (
+                (
+                    "receipt-kind",
+                    lambda evidence: evidence["canary_summaries"][0]["receipt_summary"][
+                        "receipt_kind"
+                    ].__setitem__(0, overlong),
+                    lambda evidence: refresh_digest(
+                        evidence["canary_summaries"][0]["receipt_summary"]
+                    ),
+                    "receipt_kind[0] must be no longer",
+                ),
+                (
+                    "stage-name",
+                    lambda evidence: evidence["canary_summaries"][0]["stage_names"].__setitem__(
+                        0,
+                        overlong,
+                    ),
+                    lambda _evidence: None,
+                    "stage_names[0] must be no longer",
+                ),
+            )
+            for name, mutate, refresh_nested, expected in cases:
+                with self.subTest(name=name):
+                    evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+                    mutate(evidence)
+                    refresh_nested(evidence)
+                    refresh_digest(evidence)
+                    mutated_path = write_json(
+                        root / f"overlong-{name}.summary.json",
+                        evidence,
+                    )
+
+                    rc, stdout, stderr = run_readiness(
+                        [
+                            "--xsd-summary",
+                            str(xsd_summary),
+                            "--evidence-summary",
+                            str(mutated_path),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(expected, stderr)
+                    self.assertIn(
+                        f"{READINESS.MAX_CLEAN_STRING_CHARS} characters",
+                        stderr,
+                    )
+                    self.assertNotIn(overlong, stderr)
+                    self.assertNotIn("unsupported", stderr)
+
     def test_secret_or_non_ascii_compact_stage_names_are_rejected_without_echo(self):
         def set_nested(evidence, parts, value):
             target = evidence

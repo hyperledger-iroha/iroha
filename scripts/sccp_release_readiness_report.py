@@ -3651,6 +3651,28 @@ def _is_canonical_decimal_text(value: Any, *, positive: bool) -> bool:
     return True
 
 
+def _active_launch_source_record_hash_role_blockers(
+    lane_label: str,
+    source_hashes: dict[str, Any],
+    evidence_label: str,
+) -> list[str]:
+    """Return blockers for reused active-launch source record hash roles."""
+
+    source_verifier_material_hash = source_hashes.get("source_verifier_material_hash")
+    source_adapter_engine_deployment_hash = source_hashes.get(
+        "source_adapter_engine_deployment_hash"
+    )
+    if (
+        _is_nonzero_hex32(source_verifier_material_hash)
+        and _is_nonzero_hex32(source_adapter_engine_deployment_hash)
+        and source_verifier_material_hash == source_adapter_engine_deployment_hash
+    ):
+        return [
+            f"{lane_label}: {evidence_label} source verifier material hash must not reuse source adapter engine deployment hash"
+        ]
+    return []
+
+
 def _active_launch_route_canary_metadata_blockers(
     lane_label: str,
     canary: dict[str, Any],
@@ -3718,6 +3740,13 @@ def _active_launch_governed_deployment_metadata_blockers(
             blockers.append(
                 f"{lane_label}: governed deployment {label} must be a canonical non-zero bytes32 hex string"
             )
+    blockers.extend(
+        _active_launch_source_record_hash_role_blockers(
+            lane_label,
+            source_hashes,
+            "governed deployment",
+        )
+    )
 
     destination_binding = lane.get("destination_binding")
     if not isinstance(destination_binding, dict):
@@ -3830,6 +3859,13 @@ def _active_launch_route_allowlist_binding_blockers(
             blockers.append(
                 f"{lane_label}: route allowlist {label} must be a canonical non-zero bytes32 hex string"
             )
+    blockers.extend(
+        _active_launch_source_record_hash_role_blockers(
+            lane_label,
+            source_hashes,
+            "route allowlist",
+        )
+    )
     if not _is_nonzero_hex32(destination_binding.get("destination_binding_hash")):
         blockers.append(
             f"{lane_label}: route allowlist destination binding hash must be a canonical non-zero bytes32 hex string"

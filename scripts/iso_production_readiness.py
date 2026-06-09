@@ -54,6 +54,7 @@ MAX_SUMMARY_JSON_BYTES = 4 * 1024 * 1024
 MAX_TIMESTAMP_CHARS = 128
 MAX_SOURCE_URL_CHARS = 2048
 MAX_LOCAL_PATH_CHARS = 4096
+MAX_CLEAN_STRING_CHARS = 4096
 MAX_SOURCE_REPOSITORY_CHARS = 2048
 MAX_SOURCE_PATH_CHARS = 2048
 MAX_REVIEWED_GAP_REASON_CHARS = 1024
@@ -976,6 +977,8 @@ def _require_string(value: dict[str, Any], key: str, label: str) -> str:
     raw = value.get(key)
     if not isinstance(raw, str) or not raw.strip():
         raise ReadinessError(f"{label}.{key} must be a non-empty string")
+    if len(raw) > MAX_CLEAN_STRING_CHARS:
+        raise ReadinessError(f"{label}.{key} must be no longer than {MAX_CLEAN_STRING_CHARS} characters")
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
         raise ReadinessError(f"{label}.{key} must not contain control characters")
     if raw != raw.strip():
@@ -993,6 +996,8 @@ def _require_context_string(value: dict[str, Any], key: str, label: str) -> str:
 def _require_cli_string(value: str | None, label: str) -> str:
     if value is None or not value.strip():
         raise ReadinessError(f"provide {label}")
+    if len(value) > MAX_CLEAN_STRING_CHARS:
+        raise ReadinessError(f"{label} must be no longer than {MAX_CLEAN_STRING_CHARS} characters")
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value):
         raise ReadinessError(f"{label} must not contain control characters")
     if value != value.strip():
@@ -2749,6 +2754,10 @@ def _verify_receipt_summary(
     for offset, item in enumerate(receipt_kind_raw):
         if not isinstance(item, str) or not item.strip():
             raise ReadinessError(f"{label}.receipt_kind must contain strings")
+        if len(item) > MAX_CLEAN_STRING_CHARS:
+            raise ReadinessError(
+                f"{label}.receipt_kind[{offset}] must be no longer than {MAX_CLEAN_STRING_CHARS} characters"
+            )
         if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in item):
             raise ReadinessError(
                 f"{label}.receipt_kind[{offset}] must not contain control characters"
@@ -3407,6 +3416,10 @@ def _verify_canary(
     for offset, item in enumerate(stage_names_raw):
         if not isinstance(item, str) or not item.strip():
             raise ReadinessError(f"{label}.stage_names must contain non-empty strings")
+        if len(item) > MAX_CLEAN_STRING_CHARS:
+            raise ReadinessError(
+                f"{label}.stage_names[{offset}] must be no longer than {MAX_CLEAN_STRING_CHARS} characters"
+            )
         if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in item):
             raise ReadinessError(
                 f"{label}.stage_names[{offset}] must not contain control characters"

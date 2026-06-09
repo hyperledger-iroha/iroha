@@ -3044,7 +3044,6 @@ impl Actor {
             pending.mark_kura_persisted();
         }
         let gate = self.refresh_da_gate_status(&mut pending);
-        record_da_gate_telemetry(self.telemetry_handle(), &gate);
         if let Some(reason) = gate.reason {
             debug!(
                 ?reason,

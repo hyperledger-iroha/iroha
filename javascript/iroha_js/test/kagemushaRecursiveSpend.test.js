@@ -1461,6 +1461,63 @@ test("Kagemusha recursive spend compact projection verifier probes and delegates
         verifierRecordArchive,
         2,
       ]);
+      assert.equal(
+        kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection(
+          compactTokenArchive,
+          verifierRecordArchive,
+          2n,
+        ),
+        true,
+      );
+      assert.deepEqual(calls.at(-1), [
+        "verify-at-height",
+        compactTokenArchive,
+        verifierRecordArchive,
+        2n,
+      ]);
+      assert.equal(
+        kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection(
+          compactTokenArchive,
+          verifierRecordArchive,
+          0xffff_ffff_ffff_ffffn,
+        ),
+        true,
+      );
+      assert.deepEqual(calls.at(-1), [
+        "verify-at-height",
+        compactTokenArchive,
+        verifierRecordArchive,
+        0xffff_ffff_ffff_ffffn,
+      ]);
+      const callsBeforeInvalidHeights = calls.length;
+      const invalidBlockHeights = [
+        [true, /blockHeight must be a number or bigint/],
+        [false, /blockHeight must be a number or bigint/],
+        ["1", /blockHeight must be a number or bigint/],
+        [{ value: 1 }, /blockHeight must be a number or bigint/],
+        [1.5, /blockHeight must be an integer/],
+        [NaN, /blockHeight must be an integer/],
+        [Infinity, /blockHeight must be an integer/],
+        [-1, /blockHeight must be non-negative/],
+        [-1n, /blockHeight must be non-negative/],
+        [
+          Number.MAX_SAFE_INTEGER + 1,
+          /blockHeight number must be a safe integer; use bigint for larger u64 values/,
+        ],
+        [0x1_0000_0000_0000_0000n, /blockHeight must fit in u64/],
+      ];
+      for (const [badHeight, errorPattern] of invalidBlockHeights) {
+        assert.throws(
+          () =>
+            kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection(
+              compactTokenArchive,
+              verifierRecordArchive,
+              badHeight,
+            ),
+          errorPattern,
+        );
+        assert.equal(calls.length, callsBeforeInvalidHeights);
+      }
     },
   );
 

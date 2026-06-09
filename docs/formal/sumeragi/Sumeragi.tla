@@ -5496,6 +5496,60 @@ RbcDeliveryEntryMatchesReadyQuorumExitAndCommitBranchStep ==
           /\ commitEvidenceStake' = 0
           /\ commitView' = 0)
 
+RbcDeliveryEntryPendingInstallsCompleteWaitStateStep ==
+  (RbcDeliverGood /\ ~CanCommit(commitVotesHonest, commitVotesByz, stakeSigned, "Delivered")) =>
+    /\ RbcDeliverPendingGateMatchesMissingBufferedCommitEvidence
+    /\ RbcDeliveryEntryMatchesReadyQuorumExitAndCommitBranchStep
+    /\ RbcDeliverPendingStepKeepsDeliveredEvidenceWithoutFinality
+    /\ rbcState = "ReadyQuorum"
+    /\ rbcState' = "Delivered"
+    /\ readyVotes' = readyVotes
+    /\ readyVotes' >= CommitQuorum
+    /\ chunkCount' = chunkCount
+    /\ chunkCount' >= MaxChunks
+    /\ headerSeen' = headerSeen
+    /\ headerSeen'
+    /\ digestValid' = digestValid
+    /\ digestValid'
+    /\ phase' = phase
+    /\ view' = view
+    /\ gst' = gst
+    /\ ~committed
+    /\ ~committed'
+    /\ commitEvidenceVotes = 0
+    /\ commitEvidenceVotes' = 0
+    /\ commitEvidenceStake = 0
+    /\ commitEvidenceStake' = 0
+    /\ commitView = 0
+    /\ commitView' = 0
+    /\ ~FinalityCertificateStackPresent'
+    /\ FinalityCertificateStackComplete'
+    /\ FinalityCertificateStackMatchesFinality'
+    /\ CommitCertificateMatchesFinality'
+    /\ LiveCommitGateMatchesFinality'
+    /\ LiveCommitGateRbcEvidenceMatches'
+    /\ CommitDisablesProgressActions'
+    /\ RbcDeliveredWithoutFinalityHasNoCommitCertificate'
+    /\ DeliverImpliesEvidence'
+    /\ NoCommitEvidenceBeforeCommit'
+    /\ NoCommitViewBeforeCommit'
+    /\ ViewEvidenceIsCompleteOrEmpty'
+    /\ ~CanCommit(commitVotesHonest', commitVotesByz', stakeSigned', rbcState')
+    /\ \/ commitVotesHonest' + commitVotesByz' < CommitQuorum
+       \/ stakeSigned' < StakeQuorum
+    /\ ~RbcInitEnabled'
+    /\ ~RbcChunkGoodEnabled'
+    /\ ~RbcReadyGoodEnabled'
+    /\ ~RbcDeliverGoodEnabled'
+    /\ ~ByzantineFaultEnabled'
+    /\ (PostGstProgressEnabled' <=>
+          \/ HonestProposeEnabled'
+          \/ HonestPrepareVoteEnabled'
+          \/ HonestCommitVoteEnabled'
+          \/ HonestNewViewVoteEnabled')
+    /\ (GstElapsedEnabled' <=> ~gst')
+    /\ (TimeoutTickEnabled' <=> (~gst' \/ ~PostGstProgressEnabled'))
+
 RbcDeliveredEvidenceStableStep ==
   (rbcState = "Delivered") =>
     /\ rbcState' = "Delivered"
@@ -8331,6 +8385,61 @@ RbcDeliveredPendingSpecStepStableCommitArtifactsRbcSurfaceStep ==
                 \/ HonestCommitVoteEnabled'
                 \/ HonestNewViewVoteEnabled'))
 
+RbcDeliveredPendingSpecStepStableCommitArtifactsCompleteWaitStateStep ==
+  (/\ rbcState = "Delivered"
+   /\ ~committed
+   /\ RbcDeliveredWithoutFinalityWaitsForCommitEvidence
+   /\ [Next]_vars) =>
+    /\ RbcDeliveredPendingSpecStepStableCommitArtifactsRbcSurfaceStep
+    /\ (~(\/ commitEvidenceVotes' # commitEvidenceVotes
+          \/ commitEvidenceStake' # commitEvidenceStake
+          \/ commitView' # commitView) =>
+          /\ RbcDeliveredPendingSpecStepStableCommitArtifactsMatchNonFinalSourceStep
+          /\ RbcDeliveredPendingSpecStepStableCommitArtifactsCounterFootprintStep
+          /\ RbcDeliveredPendingSpecStepStableCommitArtifactsPhaseGateFootprintStep
+          /\ RbcDeliveredPendingSpecStepStableCommitArtifactsTimerFootprintStep
+          /\ RbcDeliveredPendingSpecStepStableCommitArtifactsViewFootprintStep
+          /\ RbcDeliveredPendingSpecStepStableCommitArtifactsFinalityFootprintStep
+          /\ RbcDeliveredPendingSpecStepStableCommitArtifactsRbcSurfaceStep
+          /\ ~committed'
+          /\ RbcDeliveredWithoutFinalityWaitsForCommitEvidence'
+          /\ RbcDeliveredWithoutFinalityHasNoCommitCertificate'
+          /\ DeliverImpliesEvidence'
+          /\ ViewEvidenceIsCompleteOrEmpty'
+          /\ phase' \in {"Propose", "Prepare", "CommitVote", "NewView"}
+          /\ rbcState' = "Delivered"
+          /\ commitEvidenceVotes' = 0
+          /\ commitEvidenceStake' = 0
+          /\ commitView' = 0
+          /\ ~FinalityCertificateStackPresent'
+          /\ FinalityCertificateStackComplete'
+          /\ FinalityCertificateStackMatchesFinality'
+          /\ CommitCertificateMatchesFinality'
+          /\ LiveCommitGateMatchesFinality'
+          /\ LiveCommitGateRbcEvidenceMatches'
+          /\ CommitDisablesProgressActions'
+          /\ ~CanCommit(commitVotesHonest', commitVotesByz', stakeSigned', rbcState')
+          /\ (Next <=>
+                \/ HonestPropose
+                \/ HonestPrepareVote
+                \/ HonestCommitVote
+                \/ ByzantineEquivocateCommit
+                \/ TimeoutTick
+                \/ HonestNewViewVote
+                \/ GstElapsed)
+          /\ (PostGstProgressEnabled' <=>
+                \/ HonestProposeEnabled'
+                \/ HonestPrepareVoteEnabled'
+                \/ HonestCommitVoteEnabled'
+                \/ HonestNewViewVoteEnabled')
+          /\ (GstElapsedEnabled' <=> ~gst')
+          /\ (TimeoutTickEnabled' <=> (~gst' \/ ~PostGstProgressEnabled'))
+          /\ ~RbcInitEnabled'
+          /\ ~RbcChunkGoodEnabled'
+          /\ ~RbcReadyGoodEnabled'
+          /\ ~RbcDeliverGoodEnabled'
+          /\ ~ByzantineFaultEnabled')
+
 RbcStateChangeMatchesLocalExitClassificationStep ==
   (rbcState' # rbcState) =>
     /\ RbcStateOnlyChangesByProtocolOrFaultStep
@@ -9176,11 +9285,17 @@ RbcDeliveredPendingSpecStepAlwaysMatchesFinalityFootprintOnStableCommitArtifacts
 RbcDeliveredPendingSpecStepAlwaysMatchesRbcSurfaceOnStableCommitArtifacts ==
   [] [RbcDeliveredPendingSpecStepStableCommitArtifactsRbcSurfaceStep]_vars
 
+RbcDeliveredPendingSpecStepAlwaysClosesCompleteWaitStateOnStableCommitArtifacts ==
+  [] [RbcDeliveredPendingSpecStepStableCommitArtifactsCompleteWaitStateStep]_vars
+
 RbcDeliveryEntryOnlyByDeliver ==
   [] [RbcDeliveryEntryOnlyByDeliverStep]_vars
 
 RbcDeliveryEntryAlwaysMatchesReadyQuorumExitAndCommitBranch ==
   [] [RbcDeliveryEntryMatchesReadyQuorumExitAndCommitBranchStep]_vars
+
+RbcDeliveryEntryPendingAlwaysInstallsCompleteWaitState ==
+  [] [RbcDeliveryEntryPendingInstallsCompleteWaitStateStep]_vars
 
 RbcProgressEvidenceNeverDiverges ==
   [] RbcProgressEvidenceMatchesState

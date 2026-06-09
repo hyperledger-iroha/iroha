@@ -40544,6 +40544,14 @@ export function buildSolanaSccpProofRequest(input) {
       sourceAdapterDeploymentReceiptHash:
         witness.sourceAdapterDeploymentReceiptHash,
     });
+  if (
+    sourceAdapterDeploymentBinding.sourceAdapterDeploymentHash ===
+    SCCP_ZERO_HASH_V1
+  ) {
+    throw new TypeError(
+      "Solana SCCP proof request requires non-zero source adapter deployment binding",
+    );
+  }
   const sourceAdapterDeploymentBindingHash =
     sccpSourceAdapterDeploymentBindingHash(sourceAdapterDeploymentBinding);
   return immutableSolanaProofRequest({

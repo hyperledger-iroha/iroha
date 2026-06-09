@@ -50,6 +50,11 @@ and completed history lives in [`status.md`](./status.md).
   and destination chain ids in readiness summaries are decimal-only (`1` for
   Ethereum mainnet, `56` for BSC mainnet), so JSON-RPC quantity spellings such
   as `0x1` and padded values such as `01` remain evidence blockers.
+- SCCP Solana UI prover requests must stay deployment-bound: JavaScript,
+  Python, Swift, Kotlin, and Java Android request builders reject zero/zero
+  source-adapter deployment bindings, while the low-level binding normalizers
+  keep zero/zero available only for diagnostic fixtures and canonical hashing
+  checks.
 - SCCP BSC TAIRA XOR route-config generation must reject contradictory
   post-deploy readiness: production-ready route manifests cannot carry non-empty
   `postDeployLiveEvidence` production blocker arrays, and malformed blocker
@@ -137,6 +142,12 @@ and completed history lives in [`status.md`](./status.md).
   Native EVM prover SDK artifact ids must follow the same canonical text policy:
   whitespace-padded SDK ids are rejected as malformed rows instead of being
   treated as unknown SDK names or hidden missing-SDK evidence.
+  Native EVM prover bundle generators must also keep route/deployment JSON and
+  every cryptographic or SDK artifact input regular-file-only, with symlinks and
+  out-of-root realpaths rejected before hashing or attaching production route
+  manifest material. Generated bundle artifact paths must reject raw,
+  percent-encoded, and recursively over-encoded parent-directory segments before
+  any path is published for browser runtime consumption.
   Portal/mobile runtime SDK selectors for direct byte verification,
   resolver-backed bundle loading, and native prover self-test preflights must
   follow the same canonical text policy before SDK artifact lookup or callbacks
@@ -3472,6 +3483,7 @@ and completed history lives in [`status.md`](./status.md).
 	  RBC DELIVER pending-branch missing-commit-evidence matching,
 	  RBC DELIVER pending-step commit-artifact preservation,
 	  RBC DELIVER pending-step delivered-evidence/no-finality handoff,
+	  RBC DELIVER pending-step complete wait-state entry,
 	  RBC DELIVER commit-evidence branch handoff,
 	  RBC delivered-pending commit-evidence wait-state handoff,
 	  RBC delivered-pending commit-vote preservation handoff,
@@ -3513,6 +3525,8 @@ and completed history lives in [`status.md`](./status.md).
 	  RBC delivered-pending spec-step stable-artifact timer footprint,
 	  RBC delivered-pending spec-step stable-artifact view/evidence footprint,
 	  RBC delivered-pending spec-step stable-artifact finality footprint,
+	  RBC delivered-pending spec-step stable-artifact RBC surface,
+	  RBC delivered-pending spec-step stable-artifact complete wait state,
 	  Byzantine fault corruptible-RBC gate matching,
 	  Byzantine fault digest-only corruption step,
 	  RBC INIT gate repairable-state matching,
@@ -7658,7 +7672,11 @@ operator-provided rollout bundles.
   required source-adapter gate hashes and expected audit hash roles, rejects
   duplicate or governed-hash-replayed source-gate audit roles, and rejects
   forged source-gate material on lanes whose policy does not require a
-  source-adapter gate.
+  source-adapter gate. The active-launch governed-deployment and
+  route-allowlist checklist items now reject source verifier material hashes
+  that reuse the same canonical bytes32 value as the source-adapter deployment
+  hash, keeping public readiness evidence role-separated before release-bundle
+  construction.
 - Keep live-network signing inputs runtime-only and continue using generated
   per-validator deployment bundles rather than hand-edited production configs.
 
@@ -7676,10 +7694,14 @@ fixtures behind explicit diagnostic `allow_unready` paths. Proof-byte job
 builders also require the bundle-derived counterparty domain, manifest
 counterparty domain, and supplied job counterparty domain to match even in
 diagnostic mode, so callers cannot combine another lane's manifest with
-otherwise valid proof bytes. Rust EVM/TRON Groth16 proof-request builders now
-reject non-canonical bundle bytes, bundle/public-input mismatches, and omitted
-source-proof witness bytes for non-SORA source bundles before local UI proving
-or wrapped proof-result submission. The Rust TON native-recursive
+otherwise valid proof bytes. Reusable transparent-statement, FastPQ proof-byte,
+and submission-package builders now apply the same bundle-to-manifest
+counterparty binding before deriving statements or relay envelopes, so inbound
+SORA-target messages cannot be packaged under another remote lane's manifest.
+Rust EVM/TRON Groth16 proof-request builders now reject non-canonical bundle
+bytes, bundle/public-input mismatches, and omitted source-proof witness bytes
+for non-SORA source bundles before local UI proving or wrapped proof-result
+submission. The Rust TON native-recursive
 proof-request builder and proof-result wrapper now apply the same canonical
 SCCP bundle/public-input/source-proof gate before local proof generation or
 wallet/liteserver packaging, and the JavaScript, Python, Swift, Kotlin/JVM, and
@@ -7691,6 +7713,10 @@ transparent-proof verification now reject source verifier material and
 source-adapter deployment context before deriving public inputs, so external
 source-adapter evidence cannot be spliced into Nexus-finality-backed outbound
 bundles.
+Material-only source-verifier evidence now has to keep both deployment fields
+zero under the material-only verifier; deployment-looking hashes are accepted
+only on the deployment-bound path that recomputes the configured
+source-adapter deployment hash and receipt hash.
 Transparent OpenVerify summary helpers now apply the same production-shaped
 wrapper policy before reporting proof metadata, so metadata-only or aux-bearing
 envelopes cannot be normalized into release/readiness summaries. The
@@ -9254,9 +9280,10 @@ or ABI behavior.
 								  coefficient rows as private witness rows, public deterministic padding
 								  rows, and the rule that transparent native proofs must not open unmasked
 								  private rows; Core's native BFV AIR boundary also validates opened
-								  public padding rows against canonical statement/slot/mode headers and
-								  rejects empty/all-zero AIR roots or unauthenticated optional
-								  composition-value commitments before the dedicated verifier fallback.
+									  public padding rows against canonical statement/slot/mode headers and
+									  rejects zero statement hashes, empty/all-zero AIR roots, or
+									  unauthenticated optional composition-value commitments before the
+									  dedicated verifier fallback.
 								  Release prover input now has a typed
 								  `BfvFullBootstrapMaterialProofInputMaterialV1` boundary for governed
 								  full-bootstrap material proofs that binds concrete artifact bundles
@@ -9268,9 +9295,13 @@ or ABI behavior.
 								  `BfvFullBootstrapExecutionProverInputMaterialV1` package that binds the
 								  proof input, canonical row-major arithmetic trace material/digest, and
 								  governed generated prover/verifier proof-key pair before the dedicated
-								  prover boundary. Crypto and Core reject stale trace digests, stale trace
-								  rows, and unrelated proof-key material or pair commitments before proof
-								  generation is attempted.
+									  prover boundary. Crypto and Core reject stale trace digests, stale trace
+									  rows, and unrelated proof-key material or pair commitments before proof
+									  generation is attempted, and the direct typed Core prover-input path now
+									  requires the caller-supplied verifier key to match the verifier proof key
+									  embedded in the release prover package. The proof public-input schema and
+									  Soracloud stable schema hash now also advertise that release-prover
+									  verifier-key binding.
 								  Core material and execution proof helpers now derive and validate typed
 								  material before crossing the fail-closed dedicated-prover boundary. The
 								  typed execution proof helper also derives and validates the canonical
@@ -9302,12 +9333,16 @@ or ABI behavior.
 									  public-key drift before hashing or proof-helper execution.
 									  BFV-shaped native AIR envelopes now preflight the canonical
 									  transcript label, statement-bound domain tag, STARK/FRI metadata,
-									  public digest binding, proof/commitment version tags,
-									  commitment/root shape, opened row/path shape, Merkle path-to-root
-									  binding, FRI query-chain Merkle/fold validation, optional
-									  composition-value final-layer root/value authentication, opened public
-									  padding-row semantics, and the no-unmasked-private-row-opening policy
-									  before the current dedicated verifier boundary is reported.
+										  public digest binding, proof/commitment version tags,
+										  commitment/root shape, opened row/path shape, Merkle path-to-root
+										  binding, FRI query-chain Merkle/fold validation, optional
+										  composition-value final-layer root/value authentication, AIR-to-FRI
+										  base value binding, execution public-padding context, opened public
+										  padding-row semantics, and the no-unmasked-private-row-opening policy
+										  before the current dedicated verifier boundary is reported;
+										  non-generic full-bootstrap native envelopes with missing, foreign, or
+										  contextless BFV AIR sections now fail before that unavailable-verifier
+										  boundary.
 								  Refresh-only proof and execution paths still reject `FullBootstrapV1`.
 										  Remaining work is the audited full-bootstrap arithmetic witness
 									  constraint/proof-producing backend plus release-grade generated
@@ -9321,8 +9356,8 @@ or ABI behavior.
 									  material runtime verifier-key payload preflight, canonical native
 									  proof-key circuit enforcement, governed material derivation from
 									  release artifacts, artifact-bound material prover input validation,
-									  typed execution prover input and proof-key-bound prover package
-									  validation, canonical row-major arithmetic trace material/digest
+									  typed execution prover input, proof-key-bound prover package
+									  validation, public schema verifier-key binding, caller verifier-key binding, canonical row-major arithmetic trace material/digest
 									  validation, native BFV AIR metadata/privacy-boundary preflight,
 									  typed execution witness material reconstruction,
 									  validation, and hashing, self-describing material and execution
@@ -10009,7 +10044,11 @@ fixture corridor into broader release validation.
   exact commit-vote source; any delivered-pending commit-certificate artifact
   delta must install the certified committed-delivery bundle with delivered
   RBC evidence, finality-stack witnesses, exact commit evidence, and closed
-  progress gates; that certified bundle must be attributed to the exact honest
+  progress gates; non-final RBC DELIVER entries from `ReadyQuorum` must install
+  the complete delivered-pending wait-state envelope immediately, preserving
+  delivered evidence, keeping commit artifacts and finality certificates absent,
+  and exposing only the consensus/GST timeout surface with RBC/fault gates
+  closed; that certified bundle must be attributed to the exact honest
   or Byzantine commit-vote source with the source-specific `CanCommit` witness
   and vote/stake deltas; delivered-pending spec steps that do not change commit
   artifacts must remain non-final handoff states with delivered RBC evidence,
@@ -10034,7 +10073,14 @@ fixture corridor into broader release validation.
   branches as view/evidence preserving; stable-artifact delivered-pending
   finality footprints must keep post-states outside `Committed`, without commit
   certificate artifacts, finality-certificate stacks, or live commit gates, while
-  preserving finality/certificate/gate matching invariants; nonzero
+  preserving finality/certificate/gate matching invariants; stable-artifact
+  delivered-pending RBC surfaces must preserve delivered RBC evidence exactly
+  and keep RBC INIT/CHUNK/READY/DELIVER plus Byzantine-fault gates closed;
+  stable-artifact delivered-pending complete wait states must compose the source,
+  counter, phase/gate, timer, view/evidence, finality, and RBC-surface
+  obligations into one non-final envelope with commit artifacts absent and only
+  consensus/GST/stutter actions exposed;
+  nonzero
   CHUNK/READY counters
   must retain digest validity unless they are in the explicit corrupted repair
   state, while invalid digests must remain confined to idle or corrupted repair
@@ -10259,6 +10305,41 @@ fixture corridor into broader release validation.
   clears, audit-only lanes only allow missing/read/spool-scan warnings, and
   manifest hash mismatches reject in every policy; `manifest_block_guard` and
   `manifest_gate` coverage pin those cases.
+  Sumeragi evidence tooling now uses the live operator route consistently:
+  MCP submit dispatch, MCP metadata, Torii handler comments, and evidence docs
+  agree on `POST /v1/sumeragi/evidence`, while list/count remain GET routes.
+  DA-gate finalize telemetry now avoids double-counting missing-local-payload
+  deferrals: `finalize_pending_block` relies on the refresh path's gate record,
+  and telemetry-enabled coverage pins exactly one `missing_local_data` block
+  event per held finalization attempt.
+  Pending-block validation priority now uses the same delivered-and-complete
+  chunk-shape invariant for both live RBC sessions and retained RBC status
+  summaries, so malformed `delivered=true` evidence with missing chunks cannot
+  schedule validation as `rbc_deliver`.
+  The Torii `/v1/sumeragi/rbc/delivered/{height}/{view}` operator endpoint now
+  applies that same non-invalid positive-complete chunk invariant to its
+  `delivered` flag while keeping incomplete matches visible as diagnostics.
+  NPoS happy-path persisted-delivery fallback proof now also requires complete
+  retained chunk metadata, so metadata-only delivered snapshots cannot mask a
+  DA/RBC delivery regression.
+  The NPoS RBC delivery wait gate now shares that complete-delivery predicate,
+  so the pre-metrics readiness poll also ignores older-height, incomplete,
+  zero-chunk, or invalid `delivered=true` snapshots.
+  DA/RBC repair paths now distinguish raw DELIVER markers from complete local
+  delivery as well: incomplete delivered sessions keep payload recovery,
+  RBC-aware missing-block retry widening, and near-tip backpressure-exempt
+  repair active until the advertised chunks are actually complete.
+  Proposal cached-slot and stale-pending reschedule availability gates now share
+  a complete-delivery-plus-READY-quorum check, so raw or partial DELIVER state
+  cannot unlock reduced timeouts while DA/RBC availability is still incomplete.
+  Operator RBC backlog snapshots now use the same complete local chunk-delivery
+  guard, so delivered-but-incomplete sessions remain visible in generic missing
+  chunk counters until local chunks are complete.
+  RBC rebroadcast scheduling now also requires complete local delivery before
+  using the DELIVER rebroadcast cadence, so incomplete delivered sessions keep
+  missing-chunk repair deadlines active. Authoritative roster refreshes use the
+  same complete-delivery guard before ignoring updates, so partial delivered
+  sessions clear stale READY/DELIVER evidence when the roster changes.
   Exact-frontier slot tracking no longer carries a
   compatibility mirror layer: callers now observe canonical nested candidate,
   body, timer, and repair state directly. The live vNext

@@ -44,7 +44,8 @@ class KagemushaInstructionArchivesTest {
             timeToLiveMs = 3_500L,
             nonce = 17,
             metadata = mapOf(
-                "mode" to JsonValue.string("kagemusha"),
+                "mode" to "kagemusha\n\"quoted\"",
+                "typed" to JsonValue.string("kagemusha"),
                 "legacy" to "string metadata",
                 "enabled" to true,
                 "attempt" to 3,
@@ -56,7 +57,8 @@ class KagemushaInstructionArchivesTest {
         val wire = assertIs<WirePayload>(box.payload)
         assertEquals("iroha_data_model::isi::offline::KagemushaTransfer", wire.wireName)
         assertContentEquals(archive, wire.payloadBytes)
-        assertEquals(JsonValue.string("kagemusha"), payload.metadata["mode"])
+        assertEquals(JsonValue.string("kagemusha\n\"quoted\""), payload.metadata["mode"])
+        assertEquals(JsonValue.string("kagemusha"), payload.metadata["typed"])
         assertEquals(JsonValue.string("string metadata"), payload.metadata["legacy"])
         assertEquals(JsonValue.bool(true), payload.metadata["enabled"])
         assertEquals(JsonValue.raw("3"), payload.metadata["attempt"])

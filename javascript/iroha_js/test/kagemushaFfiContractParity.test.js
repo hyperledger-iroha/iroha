@@ -3882,6 +3882,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-js-dts-recursive-compact-key-package",
     "--negative-control-python-recursive-compact-root-export",
     "--negative-control-recursive-spend-compact-projection-surface",
+    "--negative-control-js-compact-projection-block-height-validation",
     "--negative-control-python-recursive-spend-compact-projection-root-export",
     "--negative-control-native-bridge-zero-envelope-pallas-guard",
     "--negative-control-kagemusha-abi-probe-bounds",
@@ -4917,7 +4918,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const recursiveSpendCompactProjectionSurfaceBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-recursive-spend-compact-projection-surface":'),
-    guard.indexOf('if mode == "--negative-control-python-recursive-spend-compact-projection-root-export":'),
+    guard.indexOf('if mode == "--negative-control-js-compact-projection-block-height-validation":'),
   );
   assert.match(
     recursiveSpendCompactProjectionSurfaceBranch,
@@ -4938,6 +4939,30 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     recursiveSpendCompactProjectionSurfaceBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "recursive spend compact projection negative control must not unconditionally pass after run_checks",
+  );
+  const jsCompactProjectionBlockHeightValidationBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-js-compact-projection-block-height-validation":'),
+    guard.indexOf('if mode == "--negative-control-python-recursive-spend-compact-projection-root-export":'),
+  );
+  assert.match(
+    jsCompactProjectionBlockHeightValidationBranch,
+    /const checkedBlockHeight = normalizeKagemushaBlockHeight\(blockHeight\);[\s\S]*?const checkedBlockHeight = blockHeight;/u,
+    "JS compact projection block-height negative control must remove normalized-height dispatch",
+  );
+  assert.match(
+    jsCompactProjectionBlockHeightValidationBranch,
+    /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[target\]\s*=\s*mutated[\s\S]*?run_checks\(mutated_texts\)/u,
+    "JS compact projection block-height negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    jsCompactProjectionBlockHeightValidationBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: JavaScript compact projection block-height validation drift was not detected"\s*\)/u,
+    "JS compact projection block-height negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    jsCompactProjectionBlockHeightValidationBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "JS compact projection block-height negative control must not unconditionally pass after run_checks",
   );
   const pythonRecursiveSpendCompactProjectionRootExportBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-python-recursive-spend-compact-projection-root-export":'),

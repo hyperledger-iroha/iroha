@@ -9815,6 +9815,11 @@ Temporal properties:
   every first entry into `Delivered` is also classified as a `ReadyQuorum` exit
   with complete evidence preserved, and that the commit-artifact effects match
   exactly one of the finality-installing or pending-delivery branches.
+- `RbcDeliveryEntryPendingAlwaysInstallsCompleteWaitState` proves that a
+  non-final RBC DELIVER entry from `ReadyQuorum` installs the delivered-pending
+  complete wait-state envelope immediately: delivered evidence is preserved,
+  commit artifacts and finality certificates remain absent, and the post-state
+  exposes only the consensus/GST timeout surface with RBC/fault gates closed.
 - `RbcProgressEvidenceNeverDiverges` proves that every reachable RBC progress
   state keeps the evidence expected for that state: initialized states keep
   validated header/digest evidence, chunk-covered states keep full chunk
@@ -10375,6 +10380,16 @@ Temporal properties:
   excluded: they remain outside `Committed`, carry no commit certificate
   artifacts, expose no finality certificate stack or live commit gate, and keep
   the finality/certificate/gate matching invariants satisfied.
+- `RbcDeliveredPendingSpecStepAlwaysMatchesRbcSurfaceOnStableCommitArtifacts`
+  proves that the same stable-artifact post-states keep the delivered RBC
+  evidence exact and close every RBC/fault action surface: the delivered state,
+  READY count, chunk count, header evidence, and digest validity remain stable,
+  and RBC INIT/CHUNK/READY/DELIVER plus Byzantine corruption gates stay closed.
+- `RbcDeliveredPendingSpecStepAlwaysClosesCompleteWaitStateOnStableCommitArtifacts`
+  proves the complete stable-artifact wait-state envelope: the non-final
+  post-state simultaneously satisfies the source, counter, phase/gate, timer,
+  view/evidence, finality, and RBC-surface obligations with commit artifacts
+  absent and only the consensus/GST/stutter action surface exposed.
 - `PendingProtocolStepsNeverChangeGst` proves that non-final NewView,
   prepare-vote, honest commit-vote, Byzantine commit-vote, and RBC DELIVER
   pending branches preserve the GST observation flag; synchrony observation

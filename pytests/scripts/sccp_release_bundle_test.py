@@ -1034,6 +1034,28 @@ def test_release_bundle_verifier_guards_active_launch_checklist_schema_inventory
         for error in errors
     )
 
+    sparse_report = tmp_path / "sccp_release_readiness_report.py"
+    sparse_report.write_text(
+        "def _active_launch_release_checklist(evidence, native_prover_bundle):\n",
+        encoding="utf-8",
+    )
+    report_errors = verifier._active_launch_checklist_schema_inventory_errors(
+        (
+            (
+                sparse_report,
+                verifier.ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS[0][1],
+            ),
+        )
+    )
+
+    assert any(
+        "SCCP active-launch checklist schema source inventory" in error
+        and str(sparse_report) in error
+        and "missing marker: source verifier material hash must not reuse source adapter engine deployment hash"
+        in error
+        for error in report_errors
+    )
+
 
 def test_release_bundle_verifier_guards_release_manifest_readiness_flags_inventory(
     tmp_path: Path,

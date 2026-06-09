@@ -10,7 +10,14 @@
 // - A funded BSC testnet deployer key supplied only through an environment
 //   variable such as SCCP_BSC_DEPLOYER_PRIVATE_KEY.
 import { createRequire } from "node:module";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import {
+  lstat,
+  mkdir,
+  readFile,
+  realpath,
+  rename,
+  writeFile,
+} from "node:fs/promises";
 import { dirname, extname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { sha256 } from "../javascript/iroha_js/node_modules/@noble/hashes/sha256.js";
@@ -1399,8 +1406,16 @@ function requireOptionalPackage(name) {
 
 async function readJson(pathName, label = "JSON file") {
   let text;
+  const resolved = resolve(pathName);
   try {
-    text = await readFile(resolve(pathName), "utf8");
+    const info = await lstat(resolved);
+    if (info.isSymbolicLink()) {
+      throw new Error("path must not be a symbolic link");
+    }
+    if (!info.isFile()) {
+      throw new Error("path must be a regular file");
+    }
+    text = await readFile(resolved, "utf8");
   } catch (error) {
     throw new Error(`${label} could not be read: ${error.message}`);
   }
@@ -1412,8 +1427,16 @@ async function readJson(pathName, label = "JSON file") {
 }
 
 async function readText(pathName, label = "text file") {
+  const resolved = resolve(pathName);
   try {
-    return await readFile(resolve(pathName), "utf8");
+    const info = await lstat(resolved);
+    if (info.isSymbolicLink()) {
+      throw new Error("path must not be a symbolic link");
+    }
+    if (!info.isFile()) {
+      throw new Error("path must be a regular file");
+    }
+    return await readFile(resolved, "utf8");
   } catch (error) {
     throw new Error(`${label} could not be read: ${error.message}`);
   }
@@ -1478,13 +1501,56 @@ function relativePosixPath(root, target, label) {
   return relativePath.split(/[\\/]+/u).join("/");
 }
 
+function pathHasDecodedParentSegment(value) {
+  let normalized = String(value ?? "").replace(/\\/gu, "/");
+  for (let depth = 0; depth < 8; depth += 1) {
+    if (/(?:^|\/)\.\.(?:\/|$)/u.test(normalized)) {
+      return true;
+    }
+    let decoded;
+    try {
+      decoded = decodeURIComponent(normalized).replace(/\\/gu, "/");
+    } catch (_error) {
+      return true;
+    }
+    if (decoded === normalized) {
+      return false;
+    }
+    normalized = decoded;
+  }
+  // Still-changing values are over-encoded; fail closed rather than relying
+  // on a specific decode depth across downstream consumers.
+  return true;
+}
+
+function assertBundleArtifactPathSafe(pathName, label) {
+  if (pathHasDecodedParentSegment(pathName)) {
+    throw new Error(
+      `${label} must not use URL-encoded parent-directory segments.`,
+    );
+  }
+}
+
 async function readArtifactUnderRoot(root, value, label) {
   const text = normalizeNonEmptyText(value, label);
   const target = isAbsolute(text) ? resolve(text) : resolve(root, text);
   const pathName = relativePosixPath(root, target, label);
+  assertBundleArtifactPathSafe(pathName, label);
   let bytes;
   try {
-    bytes = await readFile(target);
+    const info = await lstat(target);
+    if (info.isSymbolicLink()) {
+      throw new Error("path must not be a symbolic link");
+    }
+    if (!info.isFile()) {
+      throw new Error("path must be a regular file");
+    }
+    const [rootRealPath, targetRealPath] = await Promise.all([
+      realpath(root),
+      realpath(target),
+    ]);
+    relativePosixPath(rootRealPath, targetRealPath, label);
+    bytes = await readFile(targetRealPath);
   } catch (error) {
     throw new Error(`${label} could not be read: ${error.message}`);
   }

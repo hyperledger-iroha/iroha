@@ -770,7 +770,10 @@ final class SccpSolanaProverTests: XCTestCase {
     }
 
     func testBuildsSolanaSccpProofRequest() throws {
-        let request = try buildSolanaSccpProofRequest(Self.sampleWitness())
+        let request = try buildSolanaSccpProofRequest(Self.sampleWitness(
+            sourceAdapterDeploymentHash: String(repeating: "ab", count: 32),
+            sourceAdapterDeploymentReceiptHash: String(repeating: "cd", count: 32)
+        ))
 
         XCTAssertEqual(request.version, 1)
         XCTAssertEqual(request.backend, sccpSolanaRecursiveProofBackendV1)
@@ -781,7 +784,11 @@ final class SccpSolanaProverTests: XCTestCase {
         XCTAssertEqual(request.witness.blockhash.count, 66)
         XCTAssertEqual(
             request.witnessHash,
-            try buildSolanaSccpProofRequest(Self.sampleWitness(blockhash: request.witness.blockhash)).witnessHash
+            try buildSolanaSccpProofRequest(Self.sampleWitness(
+                sourceAdapterDeploymentHash: String(repeating: "ab", count: 32),
+                sourceAdapterDeploymentReceiptHash: String(repeating: "cd", count: 32),
+                blockhash: request.witness.blockhash
+            )).witnessHash
         )
         XCTAssertEqual(request.publicInputs.messageId, "0x" + String(repeating: "dd", count: 32))
         XCTAssertEqual(request.publicInputs.bankHash, "0x" + String(repeating: "aa", count: 32))
@@ -813,8 +820,8 @@ final class SccpSolanaProverTests: XCTestCase {
         XCTAssertEqual(request.sourceStateVerifierHash, sccpZeroHashV1)
         XCTAssertEqual(request.publicInputs.sourceStateVerifierId, sccpSolanaMainnetAccountsDbVerifierIdV1)
         XCTAssertEqual(request.publicInputs.sourceStateVerifierHash, sccpZeroHashV1)
-        XCTAssertEqual(request.publicInputs.sourceAdapterDeploymentHash, sccpZeroHashV1)
-        XCTAssertEqual(request.publicInputs.sourceAdapterDeploymentReceiptHash, sccpZeroHashV1)
+        XCTAssertEqual(request.publicInputs.sourceAdapterDeploymentHash, "0x" + String(repeating: "ab", count: 32))
+        XCTAssertEqual(request.publicInputs.sourceAdapterDeploymentReceiptHash, "0x" + String(repeating: "cd", count: 32))
         XCTAssertEqual(
             request.sourceAdapterDeploymentBindingHash,
             try sccpSourceAdapterDeploymentBindingHash(request.sourceAdapterDeploymentBinding)
@@ -4595,7 +4602,7 @@ final class SccpSolanaProverTests: XCTestCase {
         let prover = SolanaSccpProver()
 
         do {
-            _ = try await prover.prove(Self.sampleWitness())
+            _ = try await prover.prove(Self.sampleProductionWitness())
             XCTFail("expected localProverUnavailable")
         } catch let error as SolanaSccpProverError {
             XCTAssertEqual(error, .localProverUnavailable)
@@ -4630,6 +4637,13 @@ final class SccpSolanaProverTests: XCTestCase {
     }
 
     func testBindsSourceAdapterDeploymentContextForUiProvers() throws {
+        let zeroBinding = try normalizeSccpSourceAdapterDeploymentBinding()
+        XCTAssertEqual(zeroBinding.sourceAdapterDeploymentHash, sccpZeroHashV1)
+        XCTAssertEqual(zeroBinding.sourceAdapterDeploymentReceiptHash, sccpZeroHashV1)
+        XCTAssertThrowsError(try buildSolanaSccpProofRequest(Self.sampleWitness())) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .sourceAdapterDeploymentBindingMismatch)
+        }
+
         let request = try buildSolanaSccpProofRequest(Self.sampleWitness(
             sourceAdapterDeploymentHash: String(repeating: "ab", count: 32),
             sourceAdapterDeploymentReceiptHash: String(repeating: "cd", count: 32)
@@ -5667,7 +5681,10 @@ final class SccpSolanaProverTests: XCTestCase {
             XCTAssertEqual(error, .invalidString("accountsLtHash"))
         }
         do {
-            _ = try await missingProductionBinding.prove(Self.sampleWitness())
+            _ = try await missingProductionBinding.prove(Self.sampleWitness(
+                sourceAdapterDeploymentHash: String(repeating: "ab", count: 32),
+                sourceAdapterDeploymentReceiptHash: String(repeating: "cd", count: 32)
+            ))
             XCTFail("expected invalid sourceStateVerifierHash")
         } catch let error as SolanaSccpProverError {
             XCTAssertEqual(error, .invalidHex32("sourceStateVerifierHash"))

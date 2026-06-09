@@ -57004,7 +57004,8 @@ pub async fn handle_v1_sumeragi_rbc_status(
 }
 
 /// GET /v1/sumeragi/rbc/delivered/{height}/{view} — delivery status for a specific (height, view)
-/// Returns a compact JSON with `delivered` boolean and a minimal summary when a session exists.
+/// Returns compact JSON with `delivered=true` only for non-invalid positive complete chunks.
+/// Matching incomplete or invalid sessions remain visible through the summary fields.
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_rbc_delivered_height_view(
     height_view: axum::extract::Path<(u64, u64)>,
@@ -57040,10 +57041,18 @@ pub async fn handle_v1_sumeragi_rbc_delivered_height_view(
         return Ok(resp);
     }
 
-    // If multiple sessions exist (conflicting proposals), report delivery as true if any reached DELIVER
-    let delivered_any = matches.iter().any(|s| s.delivered);
-    // Prefer a delivered session to report details; otherwise the first entry
-    matches.sort_by_key(|s| (!s.delivered, s.total_chunks));
+    // If multiple sessions exist (conflicting proposals), report delivery only when
+    // DELIVER is backed by internally consistent positive chunk accounting.
+    let delivered_any = matches.iter().any(rbc_status_summary_has_complete_delivery);
+    // Prefer a complete delivered session to report details; otherwise keep the
+    // most complete available diagnostic entry.
+    matches.sort_by_key(|s| {
+        (
+            !rbc_status_summary_has_complete_delivery(s),
+            Reverse(u64::from(s.received_chunks)),
+            Reverse(u64::from(s.total_chunks)),
+        )
+    });
     let pick = &matches[0];
     let payload = crate::json_object(vec![
         json_entry("height", height),
@@ -57066,6 +57075,13 @@ pub async fn handle_v1_sumeragi_rbc_delivered_height_view(
         axum::http::HeaderValue::from_static("application/json"),
     );
     Ok(resp)
+}
+
+fn rbc_status_summary_has_complete_delivery(summary: &rbc_status::Summary) -> bool {
+    summary.delivered
+        && !summary.invalid
+        && summary.total_chunks != 0
+        && summary.received_chunks == summary.total_chunks
 }
 
 /// GET /v1/sumeragi/commit_qc/{hash} — return full commit QC record for a block hash (if present)

@@ -285,6 +285,7 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-dts-recursive-compact-key-package
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-recursive-compact-root-export
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-recursive-spend-compact-projection-surface
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-compact-projection-block-height-validation
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-recursive-spend-compact-projection-root-export
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-native-bridge-zero-envelope-pallas-guard
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kagemusha-abi-probe-bounds

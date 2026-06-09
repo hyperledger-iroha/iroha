@@ -42,8 +42,9 @@ and `kagemushaVerifyRecursiveCompactPaymentToken`; gate them with
 recursive-spend compact projection verifier is exposed separately as
 `kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection(...)`; gate it with
 `isKagemushaRecursiveSpendCompactPaymentTokenProjectionVerifierNativeAvailable()`.
-It accepts raw Norito compact-token and verifier-record archives, rejects empty,
-malformed, oversized, or negative-height inputs before native dispatch, and
+  It accepts raw Norito compact-token and verifier-record archives, rejects empty,
+  malformed, oversized, non-integer, bool, negative-height, unsafe-number, or
+  out-of-u64 height inputs before native dispatch, and
 returns the native boolean receiver result. ABI 7 now
 carries the one-hop LEN=4 compact-token proof path when the native host includes
 the packaged compact one-hop proving-key archive and matching verifier-slice

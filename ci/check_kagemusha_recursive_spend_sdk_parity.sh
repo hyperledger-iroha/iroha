@@ -598,6 +598,10 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-recursive-spend-compact-projection-surface",
     ),
     (
+        "JavaScript compact projection block-height validation negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-compact-projection-block-height-validation",
+    ),
+    (
         "Python recursive spend compact projection root export negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-recursive-spend-compact-projection-root-export",
     ),
@@ -1860,6 +1864,14 @@ def check_recursive_compact_surface(texts, errors):
                 "native.kagemushaRecursiveSpendCompactPaymentTokenFromBundle(",
                 "native.kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection(",
                 "native.kagemushaVerifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(",
+                "const checkedBlockHeight = normalizeKagemushaBlockHeight(blockHeight);",
+                "checkedBlockHeight === null",
+                "normalizeKagemushaBlockHeight(blockHeight)",
+                "blockHeight must be a number or bigint",
+                "blockHeight must be an integer",
+                "blockHeight must be non-negative",
+                "blockHeight number must be a safe integer; use bigint for larger u64 values",
+                "blockHeight must fit in u64",
                 '"bundleArchive"',
                 '"verifierRecordArchive"',
                 "recursive spend compact Kagemusha payment-token projection requires native bridge ABI 7 with the compact projection symbol",
@@ -1922,6 +1934,14 @@ def check_recursive_compact_surface(texts, errors):
             "compact projection symbol",
             "compact projection verifier symbols",
             "rejectMalformedProbe(\"recursive-spend-compact-projection\"",
+            "0xffff_ffff_ffff_ffffn",
+            "0x1_0000_0000_0000_0000n",
+            "Number.MAX_SAFE_INTEGER + 1",
+            "blockHeight must be a number or bigint",
+            "blockHeight must be an integer",
+            "blockHeight must be non-negative",
+            "blockHeight number must be a safe integer; use bigint for larger u64 values",
+            "blockHeight must fit in u64",
         ),
         "JavaScript recursive spend compact projection tests",
         errors,
@@ -5539,6 +5559,7 @@ def check_sdk_readme_recursive_compact_unavailable_boundary(texts, errors):
             "isKagemushaRecursiveCompactPaymentTokenVerifierNativeAvailable",
             "kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection(...)",
             "isKagemushaRecursiveSpendCompactPaymentTokenProjectionVerifierNativeAvailable()",
+            "non-integer, bool, negative-height, unsafe-number, or out-of-u64 height inputs",
         ),
         "python/iroha_python/README.md": (
             "kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes",
@@ -9520,6 +9541,35 @@ if mode == "--negative-control-recursive-spend-compact-projection-surface":
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: recursive spend compact projection surface drift was not detected"
+    )
+
+if mode == "--negative-control-js-compact-projection-block-height-validation":
+    mutated_texts = dict(texts)
+    target = "javascript/iroha_js/src/crypto.js"
+    mutated = mutated_texts[target].replace(
+        "const checkedBlockHeight = normalizeKagemushaBlockHeight(blockHeight);",
+        "const checkedBlockHeight = blockHeight;",
+        1,
+    )
+    if mutated == mutated_texts[target]:
+        raise SystemExit(
+            "negative control failed: unable to mutate JavaScript compact projection block-height validation"
+        )
+    mutated_texts[target] = mutated
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        label = "JavaScript recursive spend compact projection gate"
+        if label not in message:
+            raise SystemExit(
+                "negative control failed: JavaScript compact projection block-height validation drift was not detected"
+            )
+        print("negative control rejected JavaScript compact projection block-height validation drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: JavaScript compact projection block-height validation drift was not detected"
     )
 
 if mode == "--negative-control-python-recursive-spend-compact-projection-root-export":

@@ -34,6 +34,7 @@ const ZK_ACE_PRODUCTION_DISABLED_MESSAGE =
   `${ZK_ACE_ALGORITHM_ID} ${ZK_ACE_PRODUCTION_ENTRYPOINT} ` +
   `${ZK_ACE_PRODUCTION_VK_REF}: ` +
   "Iroha production allowlist is not enabled for this audited row";
+const U64_MAX = (1n << 64n) - 1n;
 const U128_MAX = (1n << 128n) - 1n;
 const PRIVACY_NORITO_HEADER_BYTES = 40;
 const PRIVACY_NORITO_MAX_HEADER_PADDING_BYTES = 64;
@@ -2048,6 +2049,7 @@ export function kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection(
     verifierRecordArchive,
     "verifierRecordArchive",
   );
+  const checkedBlockHeight = normalizeKagemushaBlockHeight(blockHeight);
   const native = resolveNativeBinding();
   if (!hasKagemushaRecursiveSpendCompactPaymentTokenProjectionVerifierNative(native)) {
     throw new Error(
@@ -2055,7 +2057,7 @@ export function kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection(
     );
   }
   const result =
-    blockHeight === undefined || blockHeight === null
+    checkedBlockHeight === null
       ? native.kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection(
           compactToken,
           verifierRecord,
@@ -2063,7 +2065,7 @@ export function kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection(
       : native.kagemushaVerifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(
           compactToken,
           verifierRecord,
-          blockHeight,
+          checkedBlockHeight,
         );
   if (typeof result !== "boolean") {
     throw new Error(
@@ -2071,6 +2073,36 @@ export function kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection(
     );
   }
   return result;
+}
+
+function normalizeKagemushaBlockHeight(blockHeight) {
+  if (blockHeight === undefined || blockHeight === null) {
+    return null;
+  }
+  if (typeof blockHeight === "number") {
+    if (!Number.isFinite(blockHeight) || !Number.isInteger(blockHeight)) {
+      throw new TypeError("blockHeight must be an integer");
+    }
+    if (blockHeight < 0) {
+      throw new RangeError("blockHeight must be non-negative");
+    }
+    if (!Number.isSafeInteger(blockHeight)) {
+      throw new RangeError(
+        "blockHeight number must be a safe integer; use bigint for larger u64 values",
+      );
+    }
+    return blockHeight;
+  }
+  if (typeof blockHeight === "bigint") {
+    if (blockHeight < 0n) {
+      throw new RangeError("blockHeight must be non-negative");
+    }
+    if (blockHeight > U64_MAX) {
+      throw new RangeError("blockHeight must fit in u64");
+    }
+    return blockHeight;
+  }
+  throw new TypeError("blockHeight must be a number or bigint");
 }
 
 function hasPrivacyNativeSurface(native) {
