@@ -141,18 +141,18 @@ public final class PrivacyNativeBridgeTest {
   }
 
   private static void rejectsEmptyRequestsBeforeNativeDispatch() {
-    final NativeCall[] helpers = new NativeCall[] {
+    final PrivacyNativeBridge.NativeCall[] helpers = new PrivacyNativeBridge.NativeCall[] {
       PrivacyNativeBridge::buildProof,
       PrivacyNativeBridge::buildConfidentialTransferProofV2,
       PrivacyNativeBridge::buildConfidentialUnshieldProofV3,
       PrivacyNativeBridge::verifyProof
     };
-    for (final NativeCall helper : helpers) {
+    for (final PrivacyNativeBridge.NativeCall helper : helpers) {
       assertThrows(() -> helper.run(new byte[0]));
       assertThrows(() -> helper.run(null));
     }
     final byte[] oversized = new byte[PrivacyNativeBridge.PRIVACY_NATIVE_ARCHIVE_MAX_BYTES + 1];
-    for (final NativeCall helper : helpers) {
+    for (final PrivacyNativeBridge.NativeCall helper : helpers) {
       assertThrows(() -> helper.run(oversized));
       assertThrows(() -> helper.run(privacyNoritoFrame(0x52)));
     }
