@@ -102,6 +102,11 @@ def _path_markdown_unsafe_character(path: str) -> str | None:
 def _artifact(path: Path, root: Path) -> dict[str, Any]:
     payload = path.read_bytes()
     artifact_path = path.relative_to(root).as_posix()
+    if artifact_path.strip() != artifact_path:
+        raise ValueError(
+            "release artifact path must not contain surrounding whitespace: "
+            f"{artifact_path!r}"
+        )
     control_character = _path_control_character(artifact_path)
     if control_character is not None:
         raise ValueError(
@@ -242,6 +247,11 @@ def _native_evm_manifest_relative_path(value: Any, label: str) -> PurePosixPath:
         raise ValueError(
             f"native EVM Groth16 prover bundle {label} path must be a "
             "non-empty relative POSIX file path"
+        )
+    if value.strip() != value:
+        raise ValueError(
+            f"native EVM Groth16 prover bundle {label} path must not contain "
+            "surrounding whitespace"
         )
     control_character = _path_control_character(value)
     if control_character is not None:

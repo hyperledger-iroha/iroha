@@ -444,6 +444,28 @@ export function normalizeHex32(value, label = "value") {
   return bytesToHex(hexToBytes(value, label, 32));
 }
 
+function normalizeCanonicalHex32(value, label = "value") {
+  const text = canonicalRecordString(value, label);
+  if (!text) {
+    throw new Error(`${label} is required.`);
+  }
+  if (/^0X/u.test(text) || /[A-F]/u.test(text.replace(/^0x/u, ""))) {
+    throw new Error(`${label} must be canonical lowercase hex.`);
+  }
+  return normalizeHex32(text, label);
+}
+
+function normalizeCanonicalEvmAddress(value, label = "address") {
+  const text = canonicalRecordString(value, label);
+  if (!text) {
+    throw new Error(`${label} is required.`);
+  }
+  if (/^0X/u.test(text) || /[A-F]/u.test(text.replace(/^0x/u, ""))) {
+    throw new Error(`${label} must be canonical lowercase hex.`);
+  }
+  return normalizeEvmAddress(text, label);
+}
+
 export function isKnownDiagnosticBscVerifierKeyHash(value) {
   try {
     return SCCP_BSC_DIAGNOSTIC_VERIFIER_KEY_HASHES.has(
@@ -826,14 +848,24 @@ function hasOwn(record, key) {
   return Object.prototype.hasOwnProperty.call(record, key);
 }
 
+function canonicalRecordString(value, label) {
+  if (typeof value !== "string" || value.length === 0) {
+    return "";
+  }
+  if (value.trim() !== value) {
+    throw new Error(`${label} must be a non-empty canonical string.`);
+  }
+  return value;
+}
+
 function readFirstString(record, ...keys) {
   if (!isRecord(record)) {
     return "";
   }
   for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
+    const value = canonicalRecordString(record[key], key);
+    if (value) {
+      return value;
     }
   }
   return "";
@@ -2232,11 +2264,11 @@ function readConsistentString(record, keys, label) {
   let selected = "";
   let selectedKey = "";
   for (const key of keys) {
-    const value = record[key];
-    if (typeof value !== "string" || !value.trim()) {
+    const value = canonicalRecordString(record[key], `${label}.${key}`);
+    if (!value) {
       continue;
     }
-    const normalized = value.trim();
+    const normalized = value;
     if (!selected) {
       selected = normalized;
       selectedKey = key;
@@ -2257,12 +2289,12 @@ function collectStringEntries(record, keys, pathName) {
   }
   const entries = [];
   for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "string" && value.trim()) {
+    const value = canonicalRecordString(record[key], `${pathName}.${key}`);
+    if (value) {
       entries.push({
         key,
         path: `${pathName}.${key}`,
-        value: value.trim(),
+        value,
       });
     }
   }
@@ -2491,10 +2523,15 @@ function normalizeRouteManifestForConfig(manifest) {
     throw new Error(`route manifest assetKey must be ${ASSET_KEY}.`);
   }
 
-  const bscNetwork = normalizeBscTestnetKey(
+  const bscNetworkText =
     readFirstString(record, "bscNetwork", "bsc_network", "network") ||
-      readFirstString(record, "chain") ||
-      "testnet",
+    readFirstString(record, "chain") ||
+    "testnet";
+  if (bscNetworkText !== bscNetworkText.toLowerCase() || bscNetworkText.includes("_")) {
+    throw new Error("route manifest bscNetwork must be canonical lowercase text.");
+  }
+  const bscNetwork = normalizeBscTestnetKey(
+    bscNetworkText,
     "route manifest bscNetwork",
   );
   const bscProfile = BSC_NETWORK_PROFILES[bscNetwork];
@@ -2502,7 +2539,10 @@ function normalizeRouteManifestForConfig(manifest) {
     record,
     ["chain"],
     "route manifest chain",
-  ).toLowerCase();
+  );
+  if (chain !== chain.toLowerCase()) {
+    throw new Error("route manifest chain must be canonical lowercase text.");
+  }
   if (chain !== bscProfile.chain) {
     throw new Error(`route manifest chain must be ${bscProfile.chain}.`);
   }
@@ -2510,7 +2550,10 @@ function normalizeRouteManifestForConfig(manifest) {
     record,
     ["chainIdHex", "chain_id_hex"],
     "route manifest chainIdHex",
-  ).toLowerCase();
+  );
+  if (/^0X/u.test(chainIdHex) || /[A-F]/u.test(chainIdHex.replace(/^0x/u, ""))) {
+    throw new Error("route manifest chainIdHex must be canonical lowercase hex.");
+  }
   if (chainIdHex !== bscProfile.chainIdHex) {
     throw new Error(
       `route manifest chainIdHex must be ${bscProfile.label} ${bscProfile.chainIdHex}.`,
@@ -2535,7 +2578,7 @@ function normalizeRouteManifestForConfig(manifest) {
       },
     ],
     "route manifest networkIdHex",
-    (value, label) => normalizeHex32(value, label),
+    (value, label) => normalizeCanonicalHex32(value, label),
   );
   if (networkIdHex !== bscProfile.networkIdHex) {
     throw new Error(`route manifest networkIdHex must be ${bscProfile.label}.`);
@@ -2614,7 +2657,7 @@ function normalizeRouteManifestForConfig(manifest) {
       },
     ],
     "route manifest BSC token address",
-    (value, label) => normalizeEvmAddress(value, label),
+    (value, label) => normalizeCanonicalEvmAddress(value, label),
   );
   const bridgeAddress = readRequiredConsistentNormalizedString(
     [
@@ -2637,7 +2680,7 @@ function normalizeRouteManifestForConfig(manifest) {
       },
     ],
     "route manifest BSC bridge address",
-    (value, label) => normalizeEvmAddress(value, label),
+    (value, label) => normalizeCanonicalEvmAddress(value, label),
   );
   const sourceBridgeAddress = readRequiredConsistentNormalizedString(
     [
@@ -2657,7 +2700,7 @@ function normalizeRouteManifestForConfig(manifest) {
       },
     ],
     "route manifest BSC source bridge address",
-    (value, label) => normalizeEvmAddress(value, label),
+    (value, label) => normalizeCanonicalEvmAddress(value, label),
   );
   const verifierAddress = readRequiredConsistentNormalizedString(
     [
@@ -2686,7 +2729,7 @@ function normalizeRouteManifestForConfig(manifest) {
       },
     ],
     "route manifest BSC verifier address",
-    (value, label) => normalizeEvmAddress(value, label),
+    (value, label) => normalizeCanonicalEvmAddress(value, label),
   );
   if (
     new Set([tokenAddress, bridgeAddress, sourceBridgeAddress, verifierAddress])
@@ -2710,7 +2753,7 @@ function normalizeRouteManifestForConfig(manifest) {
       },
     ],
     "route manifest verifierCodeHash",
-    (value, label) => normalizeHex32(value, label),
+    (value, label) => normalizeCanonicalHex32(value, label),
   );
   const verifierKeyHash = readRequiredConsistentNormalizedString(
     [
@@ -2726,7 +2769,7 @@ function normalizeRouteManifestForConfig(manifest) {
       },
     ],
     "route manifest verifierKeyHash",
-    (value, label) => normalizeHex32(value, label),
+    (value, label) => normalizeCanonicalHex32(value, label),
   );
   const optionalRouteHash = (label, keys) =>
     readConsistentNormalizedString(
@@ -2739,7 +2782,7 @@ function normalizeRouteManifestForConfig(manifest) {
         },
       ],
       label,
-      (value, fieldLabel) => normalizeHex32(value, fieldLabel),
+      (value, fieldLabel) => normalizeCanonicalHex32(value, fieldLabel),
     ) || null;
   const proofArtifactHash = optionalRouteHash(
     "route manifest proofArtifactHash",
@@ -2862,7 +2905,7 @@ function normalizeRouteManifestForConfig(manifest) {
       },
     ],
     "route manifest destination binding hash",
-    (value, label) => normalizeHex32(value, label),
+    (value, label) => normalizeCanonicalHex32(value, label),
   );
   if (destinationBindingHash !== expectedBindingHash) {
     throw new Error(
@@ -2919,7 +2962,7 @@ function normalizeRouteManifestForConfig(manifest) {
     "route manifest tairaXorBurnRecord.contractArtifactB64",
   );
   const artifactSha256 = bytesToHex(sha256(new Uint8Array(artifact.bytes)));
-  const declaredArtifactSha256 = normalizeHex32(
+  const declaredArtifactSha256 = normalizeCanonicalHex32(
     readFirstString(burnRecord, "artifactSha256", "artifact_sha256"),
     "route manifest tairaXorBurnRecord.artifactSha256",
   );
@@ -2993,7 +3036,7 @@ function normalizeRouteManifestForConfig(manifest) {
         },
       ],
       "route manifest postDeployLiveEvidence.sourceBridgeConfigHash",
-      (value, label) => normalizeHex32(value, label),
+      (value, label) => normalizeCanonicalHex32(value, label),
     );
     const sourceEventTransactionId = readRequiredConsistentNormalizedString(
       [
@@ -3004,7 +3047,7 @@ function normalizeRouteManifestForConfig(manifest) {
         },
       ],
       "route manifest postDeployLiveEvidence.sourceEventTransactionId",
-      (value, label) => normalizeHex32(value, label),
+      (value, label) => normalizeCanonicalHex32(value, label),
     );
     const routeCanaryEvidenceHash = readRequiredConsistentNormalizedString(
       [
@@ -3015,7 +3058,7 @@ function normalizeRouteManifestForConfig(manifest) {
         },
       ],
       "route manifest postDeployLiveEvidence.routeCanaryEvidenceHash",
-      (value, label) => normalizeHex32(value, label),
+      (value, label) => normalizeCanonicalHex32(value, label),
     );
     const routeCanaryTransactionId = readRequiredConsistentNormalizedString(
       [
@@ -3026,7 +3069,7 @@ function normalizeRouteManifestForConfig(manifest) {
         },
       ],
       "route manifest postDeployLiveEvidence.routeCanaryTransactionId",
-      (value, label) => normalizeHex32(value, label),
+      (value, label) => normalizeCanonicalHex32(value, label),
     );
     const sourceEventExplorerUrl = readConsistentNormalizedString(
       [
@@ -3081,7 +3124,7 @@ function normalizeRouteManifestForConfig(manifest) {
         },
       ],
       "route manifest postDeployLiveEvidence.offlineFullTomlSha256",
-      (value, label) => normalizeHex32(value, label),
+      (value, label) => normalizeCanonicalHex32(value, label),
     );
     if (productionReady && !sourceEventExplorerUrl) {
       throw new Error(
@@ -3157,7 +3200,7 @@ function normalizeRouteManifestForConfig(manifest) {
     settlementAssetDefinitionId,
     contractArtifactB64: artifact.text,
     artifactSha256,
-    codeHash: normalizeHex32(
+    codeHash: normalizeCanonicalHex32(
       readFirstString(burnRecord, "codeHash", "code_hash"),
       "route manifest tairaXorBurnRecord.codeHash",
     ),
@@ -3211,6 +3254,11 @@ export function buildBscTairaXorRouteConfigToml(manifest, options = {}) {
   if (!route.productionReady && !allowUnready) {
     throw new Error(
       "non-production route manifests require --allow-unready true.",
+    );
+  }
+  if (route.productionReady && allowUnready) {
+    throw new Error(
+      "production-ready route manifests cannot enable --allow-unready.",
     );
   }
   const lines = [

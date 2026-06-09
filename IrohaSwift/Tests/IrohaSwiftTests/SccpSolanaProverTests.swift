@@ -9200,6 +9200,15 @@ final class SccpSolanaProverTests: XCTestCase {
         )) { error in
             XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("domain"))
         }
+        let paddedSdkManifest = Self.sampleEthereumNativeEvmProverBundleJson(
+            destinationBindingHash: binding.hash
+        ).replacingOccurrences(of: "\"sdk\": \"swift\"", with: "\"sdk\": \" swift \"")
+        XCTAssertThrowsError(try EthereumMainnetNativeEvmProverBundle(
+            jsonString: paddedSdkManifest,
+            expectedDestinationBindingHash: binding.hash
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("nativeSdkArtifacts.sdk"))
+        }
         let duplicateJsonKeyManifest = Self.sampleEthereumNativeEvmProverBundleJson(
             destinationBindingHash: binding.hash
         ).replacingOccurrences(
@@ -9454,6 +9463,11 @@ final class SccpSolanaProverTests: XCTestCase {
         XCTAssertEqual(verifiedFromResolver.implementationHash, implementationHash)
         XCTAssertEqual(verifiedFromResolver.crossSdkFixtureParityHash, parityFixtureHash)
         XCTAssertEqual(verifiedFromResolver.nativeProverSelfTestHash, selfTestFixtureHash)
+        XCTAssertThrowsError(try verifiedBundle.verifiedArtifacts(sdk: " swift ") { path in
+            artifactBytesByPath[path] ?? Data()
+        }) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("sdk"))
+        }
         XCTAssertThrowsError(try verifiedBundle.verifiedArtifacts(sdk: "swift") { path in
             if path == verifiedBundle.crossSdkFixtureParityArtifact {
                 throw EvmSccpProverError.invalidPublicInputs("crossSdkFixtureParityArtifact")
@@ -9631,6 +9645,56 @@ final class SccpSolanaProverTests: XCTestCase {
             )
         }
         XCTAssertFalse(implementationUnboundProverCalled)
+        let paddedSdkArtifacts = EthereumMainnetNativeEvmProverArtifacts(
+            hashAlgorithm: sccpNativeEvmProverArtifactHashAlgorithmV1,
+            nativeProverBundle: verifiedBundle,
+            proofArtifactHash: proofArtifactHash,
+            provingKeyHash: provingKeyHash,
+            verifierKeyHash: verifierKeyHash,
+            crossSdkFixtureParityHash: parityFixtureHash,
+            crossSdkFixtureParity: verifiedArtifacts.crossSdkFixtureParity,
+            nativeProverSelfTestHash: selfTestFixtureHash,
+            nativeProverSelfTest: verifiedArtifacts.nativeProverSelfTest,
+            sdk: " swift ",
+            implementation: "native-swift",
+            implementationHash: implementationHash
+        )
+        var paddedSdkProverCalled = false
+        let paddedSdkFacade = EthereumMainnetSccp(
+            proveFunction: { _ in
+                paddedSdkProverCalled = true
+                return Self.sampleGroth16ProofBytes()
+            },
+            nativeProverArtifacts: paddedSdkArtifacts
+        )
+        do {
+            _ = try await paddedSdkFacade.proveOutboundToEthereum(artifactInput)
+            XCTFail("Ethereum outbound prover must reject padded native artifact sdk")
+        } catch {
+            XCTAssertEqual(
+                error as? EvmSccpProverError,
+                .invalidPublicInputs("nativeProverArtifacts.implementationHash")
+            )
+        }
+        XCTAssertFalse(paddedSdkProverCalled)
+        var paddedSelfTestHookCalled = false
+        let paddedSdkSelfTestFacade = EthereumMainnetSccp(
+            nativeProverSelfTestFunction: { _, expected, _ in
+                paddedSelfTestHookCalled = true
+                return expected
+            },
+            nativeProverArtifacts: paddedSdkArtifacts
+        )
+        do {
+            _ = try await paddedSdkSelfTestFacade.runNativeProverSelfTest()
+            XCTFail("Ethereum native prover self-test must reject padded native artifact sdk")
+        } catch {
+            XCTAssertEqual(
+                error as? EvmSccpProverError,
+                .invalidPublicInputs("nativeProverArtifacts.nativeProverSelfTest")
+            )
+        }
+        XCTAssertFalse(paddedSelfTestHookCalled)
         let verifierKeyUnboundArtifacts = EthereumMainnetNativeEvmProverArtifacts(
             hashAlgorithm: sccpNativeEvmProverArtifactHashAlgorithmV1,
             nativeProverBundle: verifiedBundle,
@@ -9775,6 +9839,17 @@ final class SccpSolanaProverTests: XCTestCase {
             proofArtifactBytes: proofArtifactBytes,
             provingKeyBytes: provingKeyBytes,
             verifierKeyBytes: verifierKeyBytes,
+            implementationBytes: implementationBytes,
+            crossSdkFixtureParityBytes: parityFixtureBytes,
+            nativeProverSelfTestBytes: selfTestFixtureBytes
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("sdk"))
+        }
+        XCTAssertThrowsError(try verifiedBundle.verifiedArtifacts(
+            proofArtifactBytes: proofArtifactBytes,
+            provingKeyBytes: provingKeyBytes,
+            verifierKeyBytes: verifierKeyBytes,
+            sdk: " swift ",
             implementationBytes: implementationBytes,
             crossSdkFixtureParityBytes: parityFixtureBytes,
             nativeProverSelfTestBytes: selfTestFixtureBytes

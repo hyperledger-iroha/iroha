@@ -56,6 +56,11 @@ TLC_INVOCATION_SNIPPETS = (
     '-config "$cfg_file"',
     '"$module"',
 )
+APALACHE_ONLY_PR_MODES = {"deep"}
+APALACHE_ONLY_PR_MODE_README_SNIPPETS = (
+    "`deep` is intentionally Apalache-only in PR CI",
+    "Every other PR baseline mode must have both a TLC runner case and README command.",
+)
 
 COMMAND_MODE_PATTERN = r"[A-Za-z0-9_.:/-]+"
 COMMAND_MODE_RE = re.compile(rf"^{COMMAND_MODE_PATTERN}$")
@@ -562,6 +567,60 @@ def runner_case_shape_errors(path: Path, runner_name: str) -> list[str]:
 
 def exact_fast_runner_modes(cases: dict[str, RunnerCase]) -> set[str]:
     return {label for label in cases if "*" not in label and label.endswith("-fast")}
+
+
+def pr_tlc_cross_check_errors(
+    pr_baseline_modes: set[str],
+    modes_with_tlc_runner: set[str],
+    readme_tlc_modes: set[str],
+    apalache_only_modes: set[str] = APALACHE_ONLY_PR_MODES,
+) -> list[str]:
+    """Return coverage errors for PR baseline modes that need TLC parity."""
+    checked_modes = pr_baseline_modes - apalache_only_modes
+    errors: list[str] = []
+
+    missing_runner_modes = sorted_unique(checked_modes - modes_with_tlc_runner)
+    if missing_runner_modes:
+        errors.append(
+            "Sumeragi PR baseline modes without TLC runner cases "
+            "(not explicitly Apalache-only):\n"
+            + format_items(missing_runner_modes)
+        )
+
+    missing_readme_modes = sorted_unique(checked_modes - readme_tlc_modes)
+    if missing_readme_modes:
+        errors.append(
+            "Sumeragi PR baseline modes without README TLC commands "
+            "(not explicitly Apalache-only):\n"
+            + format_items(missing_readme_modes)
+        )
+
+    stale_allowlist_modes = sorted_unique(apalache_only_modes - pr_baseline_modes)
+    if stale_allowlist_modes:
+        errors.append(
+            "Sumeragi Apalache-only PR mode allowlist entries are stale:\n"
+            + format_items(stale_allowlist_modes)
+        )
+
+    allowlisted_runner_modes = sorted_unique(
+        apalache_only_modes & modes_with_tlc_runner
+    )
+    if allowlisted_runner_modes:
+        errors.append(
+            "Sumeragi Apalache-only PR modes unexpectedly have TLC runner cases:\n"
+            + format_items(allowlisted_runner_modes)
+        )
+
+    allowlisted_readme_modes = sorted_unique(
+        apalache_only_modes & readme_tlc_modes
+    )
+    if allowlisted_readme_modes:
+        errors.append(
+            "Sumeragi Apalache-only PR modes unexpectedly have README TLC commands:\n"
+            + format_items(allowlisted_readme_modes)
+        )
+
+    return errors
 
 
 def used_runner_case_labels(
@@ -3070,6 +3129,21 @@ def main() -> int:
     )
     readme_fast_table_set = set(readme_fast_table_modes)
     readme_tlc_set = set(readme_tlc_modes)
+    pr_modes_with_tlc_runner = {
+        mode
+        for mode in pr_baseline_modes | APALACHE_ONLY_PR_MODES
+        if matching_case(mode, tlc_cases) is not None
+    }
+    pr_tlc_cross_check_mismatches = pr_tlc_cross_check_errors(
+        pr_baseline_modes,
+        pr_modes_with_tlc_runner,
+        readme_tlc_set,
+    )
+    apalache_only_readme_mismatches = required_text_errors(
+        README,
+        APALACHE_ONLY_PR_MODE_README_SNIPPETS,
+        "Sumeragi formal README",
+    )
     tlc_modes_to_resolve = readme_fast_table_set | readme_tlc_set | readme_bug_modes
     missing_tlc_runner_modes = sorted_unique(
         mode
@@ -3336,6 +3410,12 @@ def main() -> int:
         errors.append(
             "Sumeragi formal runner invocations do not bind selected proof inputs:\n"
             + format_items(runner_invocation_mismatches)
+        )
+    errors.extend(pr_tlc_cross_check_mismatches)
+    if apalache_only_readme_mismatches:
+        errors.append(
+            "Sumeragi formal README is missing Apalache-only PR mode documentation:\n"
+            + format_items(apalache_only_readme_mismatches)
         )
     if missing_tlc_runner_modes:
         errors.append(

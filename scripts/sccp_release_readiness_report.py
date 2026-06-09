@@ -266,6 +266,27 @@ def _sccp_phase_evidence_source_gate_inventory_errors(
         ]
 
 
+def _release_corridor_phase_transcript_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return source-inventory errors for strict corridor transcript checks."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(
+            verifier,
+            "_sccp_release_corridor_phase_transcript_inventory_errors",
+        )
+        if inventory is None:
+            return list(helper())
+        return list(helper(inventory))
+    except Exception as exc:  # pragma: no cover - exercised through blocker text.
+        return [
+            "SCCP release corridor phase-transcript source inventory "
+            f"cannot run release-bundle verifier helper: {exc}"
+        ]
+
+
 def _sccp_release_bundle_source_copy_gate_inventory_errors(
     inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
 ) -> list[str]:
@@ -316,6 +337,237 @@ def _sccp_release_artifact_path_text_gate_inventory_errors(
     except Exception as exc:  # pragma: no cover - exercised through blocker text.
         return [
             "SCCP release artifact path text source inventory "
+            f"cannot run release-bundle verifier helper: {exc}"
+        ]
+
+
+def _sccp_release_input_provenance_schema_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return source-inventory errors for copied input provenance schemas."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(
+            verifier,
+            "_sccp_release_input_provenance_schema_inventory_errors",
+        )
+        if inventory is None:
+            return list(helper())
+        return list(helper(inventory))
+    except Exception as exc:  # pragma: no cover - exercised through blocker text.
+        return [
+            "SCCP release input-provenance schema source inventory "
+            f"cannot run release-bundle verifier helper: {exc}"
+        ]
+
+
+def _sccp_release_public_json_root_schema_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return source-inventory errors for public JSON-root schemas."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(
+            verifier,
+            "_sccp_release_public_json_root_schema_inventory_errors",
+        )
+        if inventory is None:
+            return list(helper())
+        return list(helper(inventory))
+    except Exception as exc:  # pragma: no cover - exercised through blocker text.
+        return [
+            "SCCP release public JSON-root schema source inventory "
+            f"cannot run release-bundle verifier helper: {exc}"
+        ]
+
+
+def _sccp_release_public_markdown_text_schema_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return source-inventory errors for public Markdown text schemas."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(
+            verifier,
+            "_sccp_release_public_markdown_text_schema_inventory_errors",
+        )
+        if inventory is None:
+            return list(helper())
+        return list(helper(inventory))
+    except Exception as exc:  # pragma: no cover - exercised through blocker text.
+        return [
+            "SCCP release public Markdown text schema source inventory "
+            f"cannot run release-bundle verifier helper: {exc}"
+        ]
+
+
+def _sccp_release_public_crypto_evidence_binding_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return source-inventory errors for public cryptographic-evidence binding."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(
+            verifier,
+            "_sccp_release_public_crypto_evidence_binding_inventory_errors",
+        )
+        if inventory is None:
+            return list(helper())
+        return list(helper(inventory))
+    except Exception as exc:  # pragma: no cover - exercised through blocker text.
+        return [
+            "SCCP release public cryptographic-evidence binding source inventory "
+            f"cannot run release-bundle verifier helper: {exc}"
+        ]
+
+
+def _sccp_release_public_submission_surface_binding_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return source-inventory errors for public submission-surface binding."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(
+            verifier,
+            "_sccp_release_public_submission_surface_binding_inventory_errors",
+        )
+        if inventory is None:
+            return list(helper())
+        return list(helper(inventory))
+    except Exception as exc:  # pragma: no cover - exercised through blocker text.
+        return [
+            "SCCP release public submission-surface binding source inventory "
+            f"cannot run release-bundle verifier helper: {exc}"
+        ]
+
+
+def _sccp_release_manifest_readiness_flags_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return source-inventory errors for exact release manifest readiness flags."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(
+            verifier,
+            "_sccp_release_manifest_readiness_flags_inventory_errors",
+        )
+        if inventory is None:
+            return list(helper())
+        return list(helper(inventory))
+    except Exception as exc:  # pragma: no cover - exercised through blocker text.
+        return [
+            "SCCP release manifest readiness-flags source inventory "
+            f"cannot run release-bundle verifier helper: {exc}"
+        ]
+
+
+def _sccp_release_manifest_artifact_set_order_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return source-inventory errors for release manifest artifact set/order."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(
+            verifier,
+            "_sccp_release_manifest_artifact_set_order_inventory_errors",
+        )
+        if inventory is None:
+            return list(helper())
+        return list(helper(inventory))
+    except Exception as exc:  # pragma: no cover - exercised through blocker text.
+        return [
+            "SCCP release manifest artifact-set/order source inventory "
+            f"cannot run release-bundle verifier helper: {exc}"
+        ]
+
+
+def _sccp_release_public_blocker_list_schema_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return source-inventory errors for public release blocker-list schemas."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(
+            verifier,
+            "_sccp_release_public_blocker_list_schema_inventory_errors",
+        )
+        if inventory is None:
+            return list(helper())
+        return list(helper(inventory))
+    except Exception as exc:  # pragma: no cover - exercised through blocker text.
+        return [
+            "SCCP release public blocker-list schema source inventory "
+            f"cannot run release-bundle verifier helper: {exc}"
+        ]
+
+
+def _sccp_release_public_scalar_text_schema_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return source-inventory errors for public release scalar-text schemas."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(
+            verifier,
+            "_sccp_release_public_scalar_text_schema_inventory_errors",
+        )
+        if inventory is None:
+            return list(helper())
+        return list(helper(inventory))
+    except Exception as exc:  # pragma: no cover - exercised through blocker text.
+        return [
+            "SCCP release public scalar-text schema source inventory "
+            f"cannot run release-bundle verifier helper: {exc}"
+        ]
+
+
+def _sccp_release_notes_attachment_invariants_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return source-inventory errors for release-notes attachment invariants."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(
+            verifier,
+            "_sccp_release_notes_attachment_invariants_inventory_errors",
+        )
+        if inventory is None:
+            return list(helper())
+        return list(helper(inventory))
+    except Exception as exc:  # pragma: no cover - exercised through blocker text.
+        return [
+            "SCCP release-notes attachment invariants source inventory "
+            f"cannot run release-bundle verifier helper: {exc}"
+        ]
+
+
+def _sccp_readiness_markdown_invariants_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return source-inventory errors for readiness Markdown invariants."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(
+            verifier,
+            "_sccp_readiness_markdown_invariants_inventory_errors",
+        )
+        if inventory is None:
+            return list(helper())
+        return list(helper(inventory))
+    except Exception as exc:  # pragma: no cover - exercised through blocker text.
+        return [
+            "SCCP readiness Markdown invariants source inventory "
             f"cannot run release-bundle verifier helper: {exc}"
         ]
 
@@ -474,6 +726,150 @@ def _bsc_inbound_adversarial_gate_inventory_errors(
     except Exception as exc:  # pragma: no cover - exercised through blocker text.
         return [
             "BSC mainnet inbound adversarial source inventory "
+            f"cannot run release-bundle verifier helper: {exc}"
+        ]
+
+
+def _bsc_route_config_canonical_manifest_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return source-inventory errors for BSC route-config manifest guards."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(
+            verifier,
+            "_bsc_route_config_canonical_manifest_inventory_errors",
+        )
+        if inventory is None:
+            return list(helper())
+        return list(helper(inventory))
+    except Exception as exc:  # pragma: no cover - exercised through blocker text.
+        return [
+            "SCCP BSC route-config canonical-manifest source inventory "
+            f"cannot run release-bundle verifier helper: {exc}"
+        ]
+
+
+def _tron_route_config_canonical_manifest_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return source-inventory errors for TRON route-config manifest guards."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(
+            verifier,
+            "_tron_route_config_canonical_manifest_inventory_errors",
+        )
+        if inventory is None:
+            return list(helper())
+        return list(helper(inventory))
+    except Exception as exc:  # pragma: no cover - exercised through blocker text.
+        return [
+            "SCCP TRON route-config canonical-manifest source inventory "
+            f"cannot run release-bundle verifier helper: {exc}"
+        ]
+
+
+def _tron_runtime_route_manifest_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return source-inventory errors for TRON runtime route-manifest guards."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(verifier, "_tron_runtime_route_manifest_inventory_errors")
+        if inventory is None:
+            return list(helper())
+        return list(helper(inventory))
+    except Exception as exc:  # pragma: no cover - exercised through blocker text.
+        return [
+            "SCCP TRON runtime route-manifest source inventory "
+            f"cannot run release-bundle verifier helper: {exc}"
+        ]
+
+
+def _all_lanes_route_canary_scalar_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return source-inventory errors for all-lanes route-canary scalar guards."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(
+            verifier,
+            "_all_lanes_route_canary_scalar_inventory_errors",
+        )
+        if inventory is None:
+            return list(helper())
+        return list(helper(inventory))
+    except Exception as exc:  # pragma: no cover - exercised through blocker text.
+        return [
+            "SCCP all-lanes route-canary scalar source inventory "
+            f"cannot run release-bundle verifier helper: {exc}"
+        ]
+
+
+def _all_lanes_governed_blocker_schema_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return source-inventory errors for all-lanes governed blocker schemas."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(
+            verifier,
+            "_all_lanes_governed_blocker_schema_inventory_errors",
+        )
+        if inventory is None:
+            return list(helper())
+        return list(helper(inventory))
+    except Exception as exc:  # pragma: no cover - exercised through blocker text.
+        return [
+            "SCCP all-lanes governed blocker schema source inventory "
+            f"cannot run release-bundle verifier helper: {exc}"
+        ]
+
+
+def _all_lanes_release_checklist_exact_boolean_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return source-inventory errors for all-lanes exact-boolean checklist guards."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(
+            verifier,
+            "_all_lanes_release_checklist_exact_boolean_inventory_errors",
+        )
+        if inventory is None:
+            return list(helper())
+        return list(helper(inventory))
+    except Exception as exc:  # pragma: no cover - exercised through blocker text.
+        return [
+            "SCCP all-lanes release-checklist exact-boolean source inventory "
+            f"cannot run release-bundle verifier helper: {exc}"
+        ]
+
+
+def _active_launch_checklist_schema_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return source-inventory errors for active-launch checklist schemas."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(
+            verifier,
+            "_active_launch_checklist_schema_inventory_errors",
+        )
+        if inventory is None:
+            return list(helper())
+        return list(helper(inventory))
+    except Exception as exc:  # pragma: no cover - exercised through blocker text.
+        return [
+            "SCCP active-launch checklist schema source inventory "
             f"cannot run release-bundle verifier helper: {exc}"
         ]
 
@@ -1111,6 +1507,27 @@ def _native_sccp_no_wasm_readiness_gate_inventory_errors(
     except Exception as exc:  # pragma: no cover - exercised through blocker text.
         return [
             "native SCCP no-WASM/no-remote readiness source inventory "
+            f"cannot run release-bundle verifier helper: {exc}"
+        ]
+
+
+def _sccp_release_native_prover_bundle_schema_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return source-inventory errors for native prover bundle schema/binding."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(
+            verifier,
+            "_sccp_release_native_prover_bundle_schema_inventory_errors",
+        )
+        if inventory is None:
+            return list(helper())
+        return list(helper(inventory))
+    except Exception as exc:  # pragma: no cover - exercised through blocker text.
+        return [
+            "SCCP release native-prover bundle schema source inventory "
             f"cannot run release-bundle verifier helper: {exc}"
         ]
 
@@ -1846,6 +2263,11 @@ def _artifact(path: Path) -> dict[str, Any]:
     if path.is_symlink():
         raise ValueError(f"release artifact path must not be a symlink: {path}")
     artifact_path = str(path)
+    if artifact_path.strip() != artifact_path:
+        raise ValueError(
+            "release artifact path must not contain surrounding whitespace: "
+            f"{artifact_path!r}"
+        )
     control_character = _path_control_character(artifact_path)
     if control_character is not None:
         raise ValueError(
@@ -1895,6 +2317,8 @@ def _native_evm_manifest_relative_path(
         return None, [
             f"{prefix} path must be a non-empty relative POSIX file path"
         ]
+    if value.strip() != value:
+        return None, [f"{prefix} path must not contain surrounding whitespace"]
     control_character = _path_control_character(value)
     if control_character is not None:
         return None, [
@@ -2027,6 +2451,9 @@ def _native_evm_prover_bundle_artifact_summary(
         implementation = artifact.get("implementation")
         if not isinstance(sdk, str) or not sdk:
             blockers.append(f"{label}.sdk must be a non-empty string")
+            continue
+        if sdk.strip() != sdk:
+            blockers.append(f"{label}.sdk must not contain surrounding whitespace")
             continue
         if sdk in by_sdk:
             blockers.append(f"native_sdk_artifacts contains duplicate sdk: {sdk}")
@@ -3076,8 +3503,12 @@ def _active_launch_blockers(evidence: dict[str, Any]) -> list[str]:
         add("SCCP evidence blocker summary is malformed")
     else:
         for blocker in evidence_blockers:
-            if not isinstance(blocker, str) or not blocker:
-                add("SCCP evidence blocker must be a non-empty string")
+            if (
+                not isinstance(blocker, str)
+                or not blocker
+                or blocker.strip() != blocker
+            ):
+                add("SCCP evidence blocker must be a non-empty canonical string")
                 continue
             if blocker.startswith(prefix):
                 add(blocker)
@@ -3095,8 +3526,14 @@ def _active_launch_blockers(evidence: dict[str, Any]) -> list[str]:
         add(f"{prefix}active launch lane blocker summary is malformed")
         return blockers
     for blocker in lane_blockers:
-        if not isinstance(blocker, str) or not blocker:
-            add(f"{prefix}active launch lane blocker must be a non-empty string")
+        if (
+            not isinstance(blocker, str)
+            or not blocker
+            or blocker.strip() != blocker
+        ):
+            add(
+                f"{prefix}active launch lane blocker must be a non-empty canonical string"
+            )
         elif blocker.startswith(prefix):
             add(blocker)
         else:
@@ -3116,6 +3553,25 @@ def _string_list_or_schema_blockers(value: Any, label: str) -> list[str]:
         else:
             blockers.append(item)
     return blockers
+
+
+def _active_launch_lane_blockers_for_checklist(
+    value: Any,
+    lane_label: str,
+) -> tuple[list[str], list[str]]:
+    label = f"{lane_label}: active launch lane blockers"
+    if not isinstance(value, list):
+        return [], [f"{label} must be a list of non-empty canonical strings"]
+    blockers: list[str] = []
+    schema_blockers: list[str] = []
+    for index, item in enumerate(value):
+        if not isinstance(item, str) or not item or item.strip() != item:
+            schema_blockers.append(
+                f"{label}[{index}] must be a non-empty canonical string"
+            )
+        else:
+            blockers.append(item)
+    return blockers, schema_blockers
 
 
 def _active_launch_evm_live_metadata_blockers(
@@ -3185,7 +3641,16 @@ def _active_launch_route_canary_metadata_blockers(
         blockers.append(
             f"{lane_label}: route canary evidence hash must be a canonical non-zero bytes32 hex string"
         )
-    if canary.get("evidence_source") != ACTIVE_LAUNCH_ROUTE_CANARY_EVIDENCE_SOURCE:
+    evidence_source = canary.get("evidence_source")
+    if (
+        not isinstance(evidence_source, str)
+        or not evidence_source
+        or evidence_source.strip() != evidence_source
+    ):
+        blockers.append(
+            f"{lane_label}: route canary evidence source must be a non-empty canonical string"
+        )
+    elif evidence_source != ACTIVE_LAUNCH_ROUTE_CANARY_EVIDENCE_SOURCE:
         blockers.append(
             f"{lane_label}: route canary evidence source must be {ACTIVE_LAUNCH_ROUTE_CANARY_EVIDENCE_SOURCE}"
         )
@@ -3380,12 +3845,12 @@ def _active_launch_release_checklist(
 ) -> dict[str, Any]:
     lane = _active_launch_lane(evidence) or {}
     lane_label = f"domain {ACTIVE_LAUNCH_DOMAIN} ({ACTIVE_LAUNCH_CHAIN})"
-    raw_lane_blockers = lane.get("blockers")
-    lane_blockers = [
-        blocker
-        for blocker in raw_lane_blockers
-        if isinstance(blocker, str)
-    ] if isinstance(raw_lane_blockers, list) else []
+    lane_blockers, lane_blocker_schema_errors = (
+        _active_launch_lane_blockers_for_checklist(
+            lane.get("blockers"),
+            lane_label,
+        )
+    )
     records = lane.get("records")
     if not isinstance(records, dict):
         records = {}
@@ -3415,6 +3880,7 @@ def _active_launch_release_checklist(
             )
         )
     ]
+    deployment_blockers.extend(lane_blocker_schema_errors)
     if lane:
         deployment_blockers.extend(
             _active_launch_evm_live_metadata_blockers(lane_label, lane)
@@ -3427,6 +3893,7 @@ def _active_launch_release_checklist(
         for blocker in lane_blockers
         if "route allowlist" in blocker
     ]
+    route_blockers.extend(lane_blocker_schema_errors)
     if lane:
         route_blockers.extend(
             _active_launch_route_allowlist_binding_blockers(lane_label, lane)
@@ -3436,6 +3903,7 @@ def _active_launch_release_checklist(
         for blocker in lane_blockers
         if "route canary" in blocker
     ]
+    canary_blockers.extend(lane_blocker_schema_errors)
     route_summary = lane.get("route_allowlist")
     if not isinstance(route_summary, dict):
         route_summary = {}
@@ -3560,6 +4028,9 @@ def _build_report(
     phase_evidence_source_gate_blockers = (
         _sccp_phase_evidence_source_gate_inventory_errors()
     )
+    release_corridor_phase_transcript_gate_blockers = (
+        _release_corridor_phase_transcript_gate_inventory_errors()
+    )
     release_bundle_source_copy_gate_blockers = (
         _sccp_release_bundle_source_copy_gate_inventory_errors()
     )
@@ -3568,6 +4039,39 @@ def _build_report(
     )
     release_artifact_path_text_gate_blockers = (
         _sccp_release_artifact_path_text_gate_inventory_errors()
+    )
+    release_input_provenance_schema_gate_blockers = (
+        _sccp_release_input_provenance_schema_gate_inventory_errors()
+    )
+    release_public_json_root_schema_gate_blockers = (
+        _sccp_release_public_json_root_schema_gate_inventory_errors()
+    )
+    release_public_markdown_text_schema_gate_blockers = (
+        _sccp_release_public_markdown_text_schema_gate_inventory_errors()
+    )
+    release_public_crypto_evidence_binding_gate_blockers = (
+        _sccp_release_public_crypto_evidence_binding_gate_inventory_errors()
+    )
+    release_public_submission_surface_binding_gate_blockers = (
+        _sccp_release_public_submission_surface_binding_gate_inventory_errors()
+    )
+    release_manifest_readiness_flags_gate_blockers = (
+        _sccp_release_manifest_readiness_flags_gate_inventory_errors()
+    )
+    release_manifest_artifact_set_order_gate_blockers = (
+        _sccp_release_manifest_artifact_set_order_gate_inventory_errors()
+    )
+    release_public_blocker_list_schema_gate_blockers = (
+        _sccp_release_public_blocker_list_schema_gate_inventory_errors()
+    )
+    release_public_scalar_text_schema_gate_blockers = (
+        _sccp_release_public_scalar_text_schema_gate_inventory_errors()
+    )
+    release_notes_attachment_invariants_gate_blockers = (
+        _sccp_release_notes_attachment_invariants_gate_inventory_errors()
+    )
+    readiness_markdown_invariants_gate_blockers = (
+        _sccp_readiness_markdown_invariants_gate_inventory_errors()
     )
     retired_network_surface_gate_blockers = (
         _sccp_retired_network_surface_gate_inventory_errors()
@@ -3592,6 +4096,27 @@ def _build_report(
     )
     bsc_inbound_adversarial_gate_blockers = (
         _bsc_inbound_adversarial_gate_inventory_errors()
+    )
+    bsc_route_config_canonical_manifest_gate_blockers = (
+        _bsc_route_config_canonical_manifest_gate_inventory_errors()
+    )
+    tron_route_config_canonical_manifest_gate_blockers = (
+        _tron_route_config_canonical_manifest_gate_inventory_errors()
+    )
+    tron_runtime_route_manifest_gate_blockers = (
+        _tron_runtime_route_manifest_gate_inventory_errors()
+    )
+    all_lanes_route_canary_scalar_gate_blockers = (
+        _all_lanes_route_canary_scalar_gate_inventory_errors()
+    )
+    all_lanes_governed_blocker_schema_gate_blockers = (
+        _all_lanes_governed_blocker_schema_gate_inventory_errors()
+    )
+    all_lanes_release_checklist_exact_boolean_gate_blockers = (
+        _all_lanes_release_checklist_exact_boolean_gate_inventory_errors()
+    )
+    active_launch_checklist_schema_gate_blockers = (
+        _active_launch_checklist_schema_gate_inventory_errors()
     )
     ethereum_outbound_precallback_gate_blockers = (
         _ethereum_outbound_precallback_gate_inventory_errors()
@@ -3686,6 +4211,9 @@ def _build_report(
     native_sccp_no_wasm_readiness_gate_blockers = (
         _native_sccp_no_wasm_readiness_gate_inventory_errors()
     )
+    release_native_prover_bundle_schema_gate_blockers = (
+        _sccp_release_native_prover_bundle_schema_gate_inventory_errors()
+    )
     source_inventory = {
         "launch_scope_constant_gate": {
             "validation_status": (
@@ -3736,6 +4264,66 @@ def _build_report(
                 "passed" if not bsc_inbound_adversarial_gate_blockers else "blocked"
             ),
             "validation_blockers": bsc_inbound_adversarial_gate_blockers,
+        },
+        "bsc_route_config_canonical_manifest_gate": {
+            "validation_status": (
+                "passed"
+                if not bsc_route_config_canonical_manifest_gate_blockers
+                else "blocked"
+            ),
+            "validation_blockers": (
+                bsc_route_config_canonical_manifest_gate_blockers
+            ),
+        },
+        "tron_route_config_canonical_manifest_gate": {
+            "validation_status": (
+                "passed"
+                if not tron_route_config_canonical_manifest_gate_blockers
+                else "blocked"
+            ),
+            "validation_blockers": (
+                tron_route_config_canonical_manifest_gate_blockers
+            ),
+        },
+        "tron_runtime_route_manifest_gate": {
+            "validation_status": (
+                "passed" if not tron_runtime_route_manifest_gate_blockers else "blocked"
+            ),
+            "validation_blockers": tron_runtime_route_manifest_gate_blockers,
+        },
+        "all_lanes_route_canary_scalar_gate": {
+            "validation_status": (
+                "passed"
+                if not all_lanes_route_canary_scalar_gate_blockers
+                else "blocked"
+            ),
+            "validation_blockers": all_lanes_route_canary_scalar_gate_blockers,
+        },
+        "all_lanes_governed_blocker_schema_gate": {
+            "validation_status": (
+                "passed"
+                if not all_lanes_governed_blocker_schema_gate_blockers
+                else "blocked"
+            ),
+            "validation_blockers": all_lanes_governed_blocker_schema_gate_blockers,
+        },
+        "all_lanes_release_checklist_exact_boolean_gate": {
+            "validation_status": (
+                "passed"
+                if not all_lanes_release_checklist_exact_boolean_gate_blockers
+                else "blocked"
+            ),
+            "validation_blockers": (
+                all_lanes_release_checklist_exact_boolean_gate_blockers
+            ),
+        },
+        "active_launch_checklist_schema_gate": {
+            "validation_status": (
+                "passed"
+                if not active_launch_checklist_schema_gate_blockers
+                else "blocked"
+            ),
+            "validation_blockers": active_launch_checklist_schema_gate_blockers,
         },
         "ethereum_outbound_precallback_gate": {
             "validation_status": (
@@ -3981,6 +4569,16 @@ def _build_report(
             ),
             "validation_blockers": native_sccp_no_wasm_readiness_gate_blockers,
         },
+        "release_native_prover_bundle_schema_gate": {
+            "validation_status": (
+                "passed"
+                if not release_native_prover_bundle_schema_gate_blockers
+                else "blocked"
+            ),
+            "validation_blockers": (
+                release_native_prover_bundle_schema_gate_blockers
+            ),
+        },
         "proof_request_bundle_gate": {
             "validation_status": (
                 "passed" if not proof_request_bundle_gate_blockers else "blocked"
@@ -3992,6 +4590,14 @@ def _build_report(
                 "passed" if not phase_evidence_source_gate_blockers else "blocked"
             ),
             "validation_blockers": phase_evidence_source_gate_blockers,
+        },
+        "release_corridor_phase_transcript_gate": {
+            "validation_status": (
+                "passed"
+                if not release_corridor_phase_transcript_gate_blockers
+                else "blocked"
+            ),
+            "validation_blockers": release_corridor_phase_transcript_gate_blockers,
         },
         "release_bundle_source_copy_gate": {
             "validation_status": (
@@ -4010,6 +4616,98 @@ def _build_report(
                 "passed" if not release_artifact_path_text_gate_blockers else "blocked"
             ),
             "validation_blockers": release_artifact_path_text_gate_blockers,
+        },
+        "release_input_provenance_schema_gate": {
+            "validation_status": (
+                "passed"
+                if not release_input_provenance_schema_gate_blockers
+                else "blocked"
+            ),
+            "validation_blockers": release_input_provenance_schema_gate_blockers,
+        },
+        "release_public_json_root_schema_gate": {
+            "validation_status": (
+                "passed"
+                if not release_public_json_root_schema_gate_blockers
+                else "blocked"
+            ),
+            "validation_blockers": release_public_json_root_schema_gate_blockers,
+        },
+        "release_public_markdown_text_schema_gate": {
+            "validation_status": (
+                "passed"
+                if not release_public_markdown_text_schema_gate_blockers
+                else "blocked"
+            ),
+            "validation_blockers": release_public_markdown_text_schema_gate_blockers,
+        },
+        "release_public_crypto_evidence_binding_gate": {
+            "validation_status": (
+                "passed"
+                if not release_public_crypto_evidence_binding_gate_blockers
+                else "blocked"
+            ),
+            "validation_blockers": (
+                release_public_crypto_evidence_binding_gate_blockers
+            ),
+        },
+        "release_public_submission_surface_binding_gate": {
+            "validation_status": (
+                "passed"
+                if not release_public_submission_surface_binding_gate_blockers
+                else "blocked"
+            ),
+            "validation_blockers": (
+                release_public_submission_surface_binding_gate_blockers
+            ),
+        },
+        "release_manifest_readiness_flags_gate": {
+            "validation_status": (
+                "passed"
+                if not release_manifest_readiness_flags_gate_blockers
+                else "blocked"
+            ),
+            "validation_blockers": release_manifest_readiness_flags_gate_blockers,
+        },
+        "release_manifest_artifact_set_order_gate": {
+            "validation_status": (
+                "passed"
+                if not release_manifest_artifact_set_order_gate_blockers
+                else "blocked"
+            ),
+            "validation_blockers": release_manifest_artifact_set_order_gate_blockers,
+        },
+        "release_public_blocker_list_schema_gate": {
+            "validation_status": (
+                "passed"
+                if not release_public_blocker_list_schema_gate_blockers
+                else "blocked"
+            ),
+            "validation_blockers": release_public_blocker_list_schema_gate_blockers,
+        },
+        "release_public_scalar_text_schema_gate": {
+            "validation_status": (
+                "passed"
+                if not release_public_scalar_text_schema_gate_blockers
+                else "blocked"
+            ),
+            "validation_blockers": release_public_scalar_text_schema_gate_blockers,
+        },
+        "release_notes_attachment_invariants_gate": {
+            "validation_status": (
+                "passed"
+                if not release_notes_attachment_invariants_gate_blockers
+                else "blocked"
+            ),
+            "validation_blockers": release_notes_attachment_invariants_gate_blockers,
+        },
+        "readiness_markdown_invariants_gate": {
+            "validation_status": (
+                "passed"
+                if not readiness_markdown_invariants_gate_blockers
+                else "blocked"
+            ),
+            "validation_blockers": readiness_markdown_invariants_gate_blockers,
         },
         "retired_network_surface_gate": {
             "validation_status": (
@@ -4057,6 +4755,13 @@ def _build_report(
         and not ethereum_data_collection_no_proxy_gate_blockers
         and not ethereum_inbound_adversarial_gate_blockers
         and not bsc_inbound_adversarial_gate_blockers
+        and not bsc_route_config_canonical_manifest_gate_blockers
+        and not tron_route_config_canonical_manifest_gate_blockers
+        and not tron_runtime_route_manifest_gate_blockers
+        and not all_lanes_route_canary_scalar_gate_blockers
+        and not all_lanes_governed_blocker_schema_gate_blockers
+        and not all_lanes_release_checklist_exact_boolean_gate_blockers
+        and not active_launch_checklist_schema_gate_blockers
         and not ethereum_outbound_precallback_gate_blockers
         and not ethereum_outbound_provider_validation_gate_blockers
         and not ethereum_local_admission_gate_blockers
@@ -4087,11 +4792,24 @@ def _build_report(
         and not ethereum_route_canary_finalized_receipt_block_gate_blockers
         and not ethereum_evm_block_tag_metadata_gate_blockers
         and not native_sccp_no_wasm_readiness_gate_blockers
+        and not release_native_prover_bundle_schema_gate_blockers
         and not proof_request_bundle_gate_blockers
         and not phase_evidence_source_gate_blockers
+        and not release_corridor_phase_transcript_gate_blockers
         and not release_bundle_source_copy_gate_blockers
         and not release_bundle_output_path_gate_blockers
         and not release_artifact_path_text_gate_blockers
+        and not release_input_provenance_schema_gate_blockers
+        and not release_public_json_root_schema_gate_blockers
+        and not release_public_markdown_text_schema_gate_blockers
+        and not release_public_crypto_evidence_binding_gate_blockers
+        and not release_public_submission_surface_binding_gate_blockers
+        and not release_manifest_readiness_flags_gate_blockers
+        and not release_manifest_artifact_set_order_gate_blockers
+        and not release_public_blocker_list_schema_gate_blockers
+        and not release_public_scalar_text_schema_gate_blockers
+        and not release_notes_attachment_invariants_gate_blockers
+        and not readiness_markdown_invariants_gate_blockers
         and not retired_network_surface_gate_blockers
         and not unready_transparent_proof_config_gate_blockers
     )
@@ -4109,6 +4827,13 @@ def _build_report(
     blockers.extend(ethereum_data_collection_no_proxy_gate_blockers)
     blockers.extend(ethereum_inbound_adversarial_gate_blockers)
     blockers.extend(bsc_inbound_adversarial_gate_blockers)
+    blockers.extend(bsc_route_config_canonical_manifest_gate_blockers)
+    blockers.extend(tron_route_config_canonical_manifest_gate_blockers)
+    blockers.extend(tron_runtime_route_manifest_gate_blockers)
+    blockers.extend(all_lanes_route_canary_scalar_gate_blockers)
+    blockers.extend(all_lanes_governed_blocker_schema_gate_blockers)
+    blockers.extend(all_lanes_release_checklist_exact_boolean_gate_blockers)
+    blockers.extend(active_launch_checklist_schema_gate_blockers)
     blockers.extend(ethereum_outbound_precallback_gate_blockers)
     blockers.extend(ethereum_outbound_provider_validation_gate_blockers)
     blockers.extend(ethereum_local_admission_gate_blockers)
@@ -4139,11 +4864,24 @@ def _build_report(
     blockers.extend(ethereum_route_canary_finalized_receipt_block_gate_blockers)
     blockers.extend(ethereum_evm_block_tag_metadata_gate_blockers)
     blockers.extend(native_sccp_no_wasm_readiness_gate_blockers)
+    blockers.extend(release_native_prover_bundle_schema_gate_blockers)
     blockers.extend(proof_request_bundle_gate_blockers)
     blockers.extend(phase_evidence_source_gate_blockers)
+    blockers.extend(release_corridor_phase_transcript_gate_blockers)
     blockers.extend(release_bundle_source_copy_gate_blockers)
     blockers.extend(release_bundle_output_path_gate_blockers)
     blockers.extend(release_artifact_path_text_gate_blockers)
+    blockers.extend(release_input_provenance_schema_gate_blockers)
+    blockers.extend(release_public_json_root_schema_gate_blockers)
+    blockers.extend(release_public_markdown_text_schema_gate_blockers)
+    blockers.extend(release_public_crypto_evidence_binding_gate_blockers)
+    blockers.extend(release_public_submission_surface_binding_gate_blockers)
+    blockers.extend(release_manifest_readiness_flags_gate_blockers)
+    blockers.extend(release_manifest_artifact_set_order_gate_blockers)
+    blockers.extend(release_public_blocker_list_schema_gate_blockers)
+    blockers.extend(release_public_scalar_text_schema_gate_blockers)
+    blockers.extend(release_notes_attachment_invariants_gate_blockers)
+    blockers.extend(readiness_markdown_invariants_gate_blockers)
     blockers.extend(retired_network_surface_gate_blockers)
     blockers.extend(unready_transparent_proof_config_gate_blockers)
     blockers.extend(
@@ -4646,6 +5384,19 @@ def _render_markdown(report: dict[str, Any], *, max_blockers_per_lane: int) -> s
             "- SCCP Ethereum no-proxy data-collection source inventory must pin app-owned execution/Beacon provider reads and reject Torii proxy or embedded HTTP-client fallbacks across public SDKs.",
             "- SCCP Ethereum inbound adversarial source inventory must pin public SDK regressions for failed receipts, source-event drift, hash-only proof bypasses, immutable evidence snapshots, oversized proof bytes, finality mismatches, sync-committee quorum checks, and wrong-domain receipt transcripts before inbound source proofs can be accepted.",
             "- SCCP BSC inbound adversarial source inventory must pin public SDK regressions for hash-only proof bypasses, receipt-proof metadata binding, source-event digest drift, malformed source logs, and missing source-event validation before BSC inbound source proofs can be accepted.",
+            "- SCCP BSC route-config canonical-manifest source inventory must pin canonical JSON string, lowercase bytes32, lowercase EVM address, and network metadata rejection before governed TAIRA XOR overlays can satisfy production readiness.",
+            "- SCCP TRON route-config canonical-manifest source inventory must pin canonical JSON string, lowercase bytes32, canonical Base58 address, and network metadata rejection before governed TAIRA XOR overlays can satisfy production readiness.",
+            "- SCCP TRON runtime route-manifest source inventory must pin the TRON runtime route-manifest parser, mainnet metadata checks, dynamic destination-binding recomputation, and post-deploy anchor rejection before runtime config evidence can satisfy production readiness.",
+            "- SCCP all-lanes route-canary scalar source inventory must pin canonical status/evidence-source schema blockers before all-lanes release-checklist route-canary readiness can pass.",
+            "- SCCP all-lanes governed blocker schema source inventory must pin destination-rollout and route-allowlist blocker container rejection before governed evidence can satisfy production readiness.",
+            "- SCCP all-lanes release-checklist exact-boolean source inventory must pin exact checklist-item aggregation, record-presence gates, CLI production-ready exits, and route-canary hash replay rejection before all-lanes evidence can satisfy production readiness.",
+            "- SCCP active-launch checklist schema source inventory must pin the active launch checklist ready value, malformed lane metadata, and verifier recomputation before production readiness can pass.",
+            "- SCCP release manifest readiness-flags source inventory must pin exact boolean manifest generation, verifier boolean rejection, manifest/report equality checks, and all-lanes readiness recomputation before published bundle readiness can pass.",
+            "- SCCP release manifest artifact-set/order source inventory must pin required artifact paths, manifest-root exclusion, unmanifested artifact/directory rejection, report-referenced artifact closure, and canonical attachment order before published bundle readiness can pass.",
+            "- SCCP release public blocker-list schema source inventory must pin canonical non-empty blocker strings, no surrounding whitespace, duplicate rejection, ready-surface empty-blocker checks, and invalid-marker rendering before published bundle readiness can pass.",
+            "- SCCP release public scalar-text schema source inventory must pin canonical non-empty scalar text for release-checklist ids/titles, cryptographic-evidence chain/source labels, user-prover submission rows, all-lanes chain labels, destination-binding keys, and route-canary status/source fields before published bundle readiness can pass.",
+            "- SCCP release-notes attachment invariants source inventory must pin canonical title/status rendering, manifest handoff, artifact table hashes, blocker visibility, and canonical attachment drift rejection before public bundle readiness can pass.",
+            "- SCCP readiness Markdown invariants source inventory must pin verifier-owned public Markdown sections, checklist and source-inventory blocker visibility, invalid-marker rendering, and canonical Markdown drift rejection before public bundle readiness can pass.",
             "- SCCP Ethereum outbound pre-callback source inventory must pin public SDK regressions that reject foreign-lane outbound requests, forged destination bindings, missing or partial proof-artifact hashes, zero proof-artifact hashes, and callback-visible proof material before outbound prover callbacks can run.",
             "- SCCP Ethereum outbound provider-validation source inventory must pin public SDK and facade guards that validate app-supplied Ethereum mainnet execution providers before outbound submitter callbacks can run.",
             "- SCCP Ethereum local-admission source inventory must pin public SDK regressions that reject mutated proof bytes, all-zero proof/public-input/bundle/envelope bytes, empty envelopes, zero statement/source-material/source-adapter hashes, and stale proof-family metadata before local admission payloads can be submitted.",
@@ -4674,12 +5425,19 @@ def _render_markdown(report: dict[str, Any], *, max_blockers_per_lane: int) -> s
             "- SCCP Ethereum EVM live source/destination source inventory must pin canonical live RPC chain ids, finalized block tags, deployment receipt binding, runtime bytecode hashes, route canary calldata, and proof tuple drift tests.",
             "- SCCP Ethereum route-canary finalized receipt-block source inventory must pin finalized receipt-block binding, TOML evidence fields, all-lanes comments, runtime hashing, and negative drift tests.",
             "- SCCP Ethereum EVM block-tag metadata source inventory must pin finalized source/destination block-tag evidence and negative drift tests.",
-            "- SCCP native no-WASM/no-remote source inventory must pin public SDK parsers, artifact verifiers, self-tests, browser distribution guards, and adversarial manifest coverage.",
+            "- SCCP native no-WASM/no-remote source inventory must pin public SDK parsers, artifact verifiers, self-tests, browser distribution guards, canonical native EVM prover SDK-id rejection, padded-SDK adversarial tests, and adversarial manifest coverage.",
+            "- SCCP release native-prover bundle schema source inventory must pin native EVM Groth16 manifest schema, readiness summary schema, artifact hash/path binding, and bundled-manifest drift rejection before published bundle readiness can pass.",
             "- SCCP proof-request bundle/source-proof source inventory must pin canonical bundle-byte and non-SORA source-proof rejection gates across Rust, JavaScript, Python, Swift, Kotlin/JVM, and Java Android.",
             "- SCCP phase-evidence source inventory must pin duplicate assignment and directory override rejection across readiness-report and release-bundle CLIs before corridor phase evidence can satisfy production readiness.",
+            "- SCCP release corridor phase-transcript source inventory must pin exact phase markers, observed completion/success output, traced command fragments, dry-run rejection, and forged-block rejection before corridor logs can satisfy public bundle readiness.",
             "- SCCP release bundle source-copy source inventory must pin symlink and control-character rejection for evidence inputs, phase evidence, native EVM prover manifests, and native prover payload sources before bundle copy can run.",
             "- SCCP release bundle output-path source inventory must pin symlink and control-character rejection for output directories before bundle generation can create or overwrite release artifacts.",
             "- SCCP release artifact path text source inventory must pin Markdown-unsafe character rejection for manifest artifact paths, readiness inputs, native prover payload paths, copied bundle filenames, and bundle filesystem entries before release notes can render artifact tables.",
+            "- SCCP release input-provenance schema source inventory must pin canonical copied evidence input paths, unique input/input-artifact provenance, copied `evidence/NN-*.toml` layout, and recomputation from copied TOML before published bundle readiness can pass.",
+            "- SCCP release public JSON-root schema source inventory must pin canonical manifest/readiness/all-lanes JSON serialization, duplicate-key rejection, and non-UTF-8 fail-closed diagnostics before published bundle readiness can pass.",
+            "- SCCP release public Markdown text schema source inventory must pin UTF-8 readiness/release-note Markdown loading and canonical text drift rejection before published bundle readiness can pass.",
+            "- SCCP release public cryptographic-evidence binding source inventory must pin production-domain inventory, lane-field binding, canonical row recomputation, and active route-canary binding rejection before published bundle readiness can pass.",
+            "- SCCP release public submission-surface binding source inventory must pin lane/backend inventory, per-SDK helper inventory, verifier-owned surface recomputation, and corridor-phase binding before published bundle readiness can pass.",
             "- SCCP retired network-surface source inventory must pin the launch-scope no-support note and active-tree scan so retired runtime-network integrations cannot re-enter release evidence silently.",
             "- SCCP unready transparent-proof source inventory must pin the diagnostic `allow_unready` toggle as config-owned and reject environment override paths.",
             "- Public release notes must attach this report and the all-lanes JSON summary before production activation.",

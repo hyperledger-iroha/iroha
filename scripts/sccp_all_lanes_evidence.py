@@ -1018,6 +1018,28 @@ def _blocker_list_errors(record: dict[str, Any], label: str) -> list[str]:
     return errors
 
 
+def _canonical_blocker_list(
+    value: Any,
+    label: str,
+) -> tuple[list[str], list[str]]:
+    if not isinstance(value, list):
+        return [], [f"{label} blockers must be a list of non-empty canonical strings"]
+    blockers: list[str] = []
+    errors: list[str] = []
+    for index, blocker in enumerate(value):
+        if (
+            not isinstance(blocker, str)
+            or not blocker
+            or blocker.strip() != blocker
+        ):
+            errors.append(
+                f"{label} blockers[{index}] must be a non-empty canonical string"
+            )
+        else:
+            blockers.append(blocker)
+    return blockers, errors
+
+
 def _load_sibling_module(filename: str) -> Any:
     cached = _SIBLING_MODULES.get(filename)
     if cached is not None:
@@ -6004,15 +6026,14 @@ def _release_checklist(
 
     for lane in lanes:
         lane_label = f"domain {lane.get('domain')} ({lane.get('chain')})"
-        lane_blockers = lane.get("blockers", [])
-        if not (
-            isinstance(lane_blockers, list)
-            and all(isinstance(item, str) and item for item in lane_blockers)
-        ):
-            blocker = f"{lane_label}: lane blocker summary is malformed"
-            canary_blockers.append(blocker)
-            append_unresolved(blocker)
-            lane_blockers = []
+        lane_blockers, lane_blocker_schema_errors = _canonical_blocker_list(
+            lane.get("blockers", []),
+            f"{lane_label}: lane",
+        )
+        if lane_blocker_schema_errors:
+            canary_blockers.extend(lane_blocker_schema_errors)
+            for blocker in lane_blocker_schema_errors:
+                append_unresolved(blocker)
         else:
             for item in lane_blockers:
                 append_unresolved(f"{lane_label}: {item}")
@@ -6052,15 +6073,20 @@ def _release_checklist(
                     f"{lane_label}: source adapter gate ready flag must be boolean"
                 )
             elif gate_required is True and gate_ready is not True:
-                gate_errors = source_adapter_gate.get("blockers")
-                if not (
-                    isinstance(gate_errors, list)
-                    and all(isinstance(error, str) and error for error in gate_errors)
-                ):
-                    gate_errors = ["source adapter gate is not ready"]
-                deployment_blockers.extend(
-                    f"{lane_label}: {error}" for error in gate_errors
+                gate_errors, gate_schema_errors = _canonical_blocker_list(
+                    source_adapter_gate.get("blockers", []),
+                    f"{lane_label}: source adapter gate",
                 )
+                if gate_schema_errors:
+                    deployment_blockers.extend(gate_schema_errors)
+                elif gate_errors:
+                    deployment_blockers.extend(
+                        f"{lane_label}: {error}" for error in gate_errors
+                    )
+                else:
+                    deployment_blockers.append(
+                        f"{lane_label}: source adapter gate is not ready"
+                    )
         if records.get("destination_rollout") is not True:
             deployment_blockers.append(
                 f"{lane_label}: destination rollout evidence is missing"
@@ -6095,7 +6121,19 @@ def _release_checklist(
         if not isinstance(canary, dict):
             canary_blockers.append(f"{lane_label}: route canary summary is malformed")
             canary = {}
-        if canary.get("status") != "passed":
+        canary_status = canary.get("status")
+        if canary_status in (None, ""):
+            canary_blockers.append(
+                f"{lane_label}: route canary status is not passed"
+            )
+        elif (
+            not isinstance(canary_status, str)
+            or canary_status.strip() != canary_status
+        ):
+            canary_blockers.append(
+                f"{lane_label}: route canary status must be a non-empty canonical string"
+            )
+        elif canary_status != "passed":
             canary_blockers.append(
                 f"{lane_label}: route canary status is not passed"
             )
@@ -6121,6 +6159,13 @@ def _release_checklist(
         if canary_evidence_source in (None, ""):
             canary_blockers.append(
                 f"{lane_label}: live route canary evidence source is missing"
+            )
+        elif (
+            not isinstance(canary_evidence_source, str)
+            or canary_evidence_source.strip() != canary_evidence_source
+        ):
+            canary_blockers.append(
+                f"{lane_label}: live route canary evidence source must be a non-empty canonical string"
             )
         elif canary_evidence_source != expected_evidence_source:
             canary_blockers.append(
@@ -6360,7 +6405,11 @@ def validate_evidence_bundle(records: dict[str, list[dict[str, Any]]] | Any) -> 
             destination,
         )
         if source_adapter_gate.get("required") is True:
-            for gate_blocker in source_adapter_gate.get("blockers", []):
+            gate_blockers, gate_schema_errors = _canonical_blocker_list(
+                source_adapter_gate.get("blockers", []),
+                "source adapter gate",
+            )
+            for gate_blocker in [*gate_schema_errors, *gate_blockers]:
                 if gate_blocker not in blockers:
                     blockers.append(gate_blocker)
         lanes.append(
