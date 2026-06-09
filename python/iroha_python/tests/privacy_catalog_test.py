@@ -7231,6 +7231,191 @@ def test_module_privacy_capabilities_defaults_to_static_sdk_surface() -> None:
 
 
 @pytest.mark.parametrize(
+    ("capability_key", "public_names", "native_name"),
+    [
+        (
+            "confidential_transfer_proof_v2",
+            (
+                "buildConfidentialTransferProofV2",
+                "build_confidential_transfer_proof_v2",
+            ),
+            "build_confidential_transfer_proof_v2",
+        ),
+        (
+            "confidential_unshield_proof_v3",
+            (
+                "buildConfidentialUnshieldProofV3",
+                "build_confidential_unshield_proof_v3",
+            ),
+            "build_confidential_unshield_proof_v3",
+        ),
+    ],
+)
+def test_confidential_python_capabilities_require_public_and_native_builders(
+    monkeypatch: pytest.MonkeyPatch,
+    capability_key: str,
+    public_names: tuple[str, str],
+    native_name: str,
+) -> None:
+    def callable_on_crypto(name: str) -> bool:
+        return name in public_names
+
+    monkeypatch.setattr(
+        privacy_catalog,
+        "_callable_on_crypto",
+        callable_on_crypto,
+    )
+    monkeypatch.setattr(
+        privacy_catalog,
+        "_callable_on_native_crypto",
+        lambda name: name == native_name,
+    )
+
+    capabilities = privacy_capabilities()
+
+    assert capabilities[capability_key] is True
+
+    monkeypatch.setattr(
+        privacy_catalog,
+        "_callable_on_native_crypto",
+        lambda _name: False,
+    )
+
+    disabled = privacy_capabilities()
+
+    assert disabled[capability_key] is False
+
+
+def test_confidential_python_exports_catalog_named_proof_builders() -> None:
+    assert "buildConfidentialTransferProofV2" in crypto.__all__
+    assert "build_confidential_transfer_proof_v2" in crypto.__all__
+    assert "buildConfidentialUnshieldProofV3" in crypto.__all__
+    assert "build_confidential_unshield_proof_v3" in crypto.__all__
+    assert "buildConfidentialTransferProofV2" in iroha_python.__all__
+    assert "buildConfidentialUnshieldProofV3" in iroha_python.__all__
+    assert (
+        crypto.buildConfidentialTransferProofV2
+        is crypto.build_confidential_transfer_proof_v2
+    )
+    assert (
+        crypto.buildConfidentialUnshieldProofV3
+        is crypto.build_confidential_unshield_proof_v3
+    )
+    assert (
+        iroha_python.buildConfidentialTransferProofV2
+        is crypto.buildConfidentialTransferProofV2
+    )
+    assert (
+        iroha_python.buildConfidentialUnshieldProofV3
+        is crypto.buildConfidentialUnshieldProofV3
+    )
+
+
+def test_confidential_transfer_python_builder_delegates_to_native(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, tuple[object, ...]] = {}
+
+    class Native:
+        @staticmethod
+        def build_confidential_transfer_proof_v2(*args: object) -> dict[str, object]:
+            captured["args"] = args
+            return {
+                "nullifiers": [b"n" * 32],
+                "output_commitments": [b"o" * 32],
+                "root": b"r" * 32,
+                "proof": b"proof",
+            }
+
+    monkeypatch.setattr(crypto, "_crypto", Native())
+
+    result = crypto.buildConfidentialTransferProofV2(
+        chain_id="wonderland",
+        asset_definition_id="xor#wonderland",
+        spend_key=b"s" * 32,
+        tree_commitments=[b"t" * 32],
+        inputs=[{"amount": "7", "rho": b"i" * 32, "leaf_index": 0}],
+        outputs=[
+            {
+                "amount": "7",
+                "rho": b"u" * 32,
+                "owner_tag": b"w" * 32,
+            }
+        ],
+        root_hint=b"r" * 32,
+        verifying_key={
+            "backend": "halo2/ipa",
+            "circuit_id": "confidential_transfer_v2",
+            "bytes": b"vk",
+        },
+    )
+
+    assert result["proof"] == b"proof"
+    assert captured["args"] == (
+        "wonderland",
+        "xor#wonderland",
+        b"s" * 32,
+        [b"t" * 32],
+        [{"amount": "7", "rho": b"i" * 32, "leaf_index": 0}],
+        [{"amount": "7", "rho": b"u" * 32, "owner_tag": b"w" * 32}],
+        b"r" * 32,
+        "halo2/ipa",
+        "confidential_transfer_v2",
+        b"vk",
+    )
+
+
+def test_confidential_unshield_python_builder_delegates_to_native(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, tuple[object, ...]] = {}
+
+    class Native:
+        @staticmethod
+        def build_confidential_unshield_proof_v3(*args: object) -> dict[str, object]:
+            captured["args"] = args
+            return {
+                "nullifiers": [b"n" * 32],
+                "output_commitments": [b"o" * 32],
+                "root": b"r" * 32,
+                "proof": b"proof",
+            }
+
+    monkeypatch.setattr(crypto, "_crypto", Native())
+
+    result = crypto.buildConfidentialUnshieldProofV3(
+        chain_id="wonderland",
+        asset_definition_id="xor#wonderland",
+        spend_key=b"s" * 32,
+        tree_commitments=[b"t" * 32],
+        inputs=[{"amount": "9", "rho": b"i" * 32, "leaf_index": 0}],
+        outputs=[{"amount": "2", "rho": b"u" * 32}],
+        public_amount=7,
+        root_hint=b"r" * 32,
+        verifying_key={
+            "backend": "halo2/ipa",
+            "circuit_id": "confidential_unshield_v3",
+            "bytes": b"vk",
+        },
+    )
+
+    assert result["proof"] == b"proof"
+    assert captured["args"] == (
+        "wonderland",
+        "xor#wonderland",
+        b"s" * 32,
+        [b"t" * 32],
+        [{"amount": "9", "rho": b"i" * 32, "leaf_index": 0}],
+        [{"amount": "2", "rho": b"u" * 32}],
+        "7",
+        b"r" * 32,
+        "halo2/ipa",
+        "confidential_unshield_v3",
+        b"vk",
+    )
+
+
+@pytest.mark.parametrize(
     "missing_builder",
     [
         "build_zk_ace_authorization_proof_v1",

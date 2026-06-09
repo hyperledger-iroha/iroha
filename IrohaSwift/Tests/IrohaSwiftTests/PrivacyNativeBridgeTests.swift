@@ -218,6 +218,8 @@ final class PrivacyNativeBridgeTests: XCTestCase {
     func testRejectsEmptyRequestArchivesBeforeBridgeCall() {
         let helpers: [(String, (Data) throws -> Data)] = [
             ("build", PrivacyNativeBridge.buildProofV1),
+            ("confidential transfer", PrivacyNativeBridge.buildConfidentialTransferProofV2),
+            ("confidential unshield", PrivacyNativeBridge.buildConfidentialUnshieldProofV3),
             ("verify", PrivacyNativeBridge.verifyProofV1)
         ]
 

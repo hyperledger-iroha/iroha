@@ -31,14 +31,35 @@ def _secret_path_error(path: str | None, label: str) -> str | None:
 
 
 def _sha256_file(path: Path, label: str) -> tuple[str | None, list[str]]:
-    file_errors = readiness.validate_lineage_local_file(path, label)
+    expected_stat, file_errors = readiness._validate_lineage_local_file_for_read(
+        path,
+        label,
+    )
     if file_errors:
         return None, file_errors
     digest = hashlib.sha256()
     try:
         with path.open("rb") as handle:
+            open_stat = os.fstat(handle.fileno())
+            path_stat = path.lstat()
+            expected_identity = (expected_stat.st_dev, expected_stat.st_ino)
+            open_identity = (open_stat.st_dev, open_stat.st_ino)
+            if stat.S_ISLNK(path_stat.st_mode):
+                return None, [f"{label} must not be a symlink"]
+            if not stat.S_ISREG(path_stat.st_mode) or not stat.S_ISREG(open_stat.st_mode):
+                return None, [f"{label} must be a regular file"]
+            if open_identity != expected_identity or (
+                path_stat.st_dev,
+                path_stat.st_ino,
+            ) != expected_identity:
+                return None, [f"{label} changed while being read"]
+            if open_stat.st_nlink > 1:
+                return None, [f"{label} must not be hardlinked"]
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                 digest.update(chunk)
+            final_path_stat = path.lstat()
+            if (final_path_stat.st_dev, final_path_stat.st_ino) != expected_identity:
+                return None, [f"{label} changed while being read"]
     except OSError:
         return None, [f"{label} could not be read"]
     return digest.hexdigest(), []
@@ -49,41 +70,48 @@ def _sha256_file_with_size(
     label: str,
     *,
     allow_empty: bool = False,
-) -> tuple[str | None, int | None, list[str]]:
-    file_errors = readiness.validate_lineage_local_file(path, label)
+) -> tuple[str | None, int | None, bytes | None, list[str]]:
+    expected_stat, file_errors = readiness._validate_lineage_local_file_for_read(
+        path,
+        label,
+    )
     if file_errors:
-        return None, None, file_errors
+        return None, None, None, file_errors
     digest = hashlib.sha256()
+    prefix_parts: list[bytes] = []
+    prefix_remaining = 4096
     size = 0
     try:
         with path.open("rb") as handle:
             open_stat = os.fstat(handle.fileno())
             path_stat = path.lstat()
+            expected_identity = (expected_stat.st_dev, expected_stat.st_ino)
+            open_identity = (open_stat.st_dev, open_stat.st_ino)
             if stat.S_ISLNK(path_stat.st_mode):
-                return None, None, [f"{label} must not be a symlink"]
+                return None, None, None, [f"{label} must not be a symlink"]
             if not stat.S_ISREG(path_stat.st_mode) or not stat.S_ISREG(open_stat.st_mode):
-                return None, None, [f"{label} must be a regular file"]
-            if (path_stat.st_dev, path_stat.st_ino) != (
-                open_stat.st_dev,
-                open_stat.st_ino,
-            ):
-                return None, None, [f"{label} changed while being read"]
+                return None, None, None, [f"{label} must be a regular file"]
+            if open_identity != expected_identity or (
+                path_stat.st_dev,
+                path_stat.st_ino,
+            ) != expected_identity:
+                return None, None, None, [f"{label} changed while being read"]
             if open_stat.st_nlink > 1:
-                return None, None, [f"{label} must not be hardlinked"]
+                return None, None, None, [f"{label} must not be hardlinked"]
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                 size += len(chunk)
+                if prefix_remaining > 0:
+                    prefix_parts.append(chunk[:prefix_remaining])
+                    prefix_remaining -= min(prefix_remaining, len(chunk))
                 digest.update(chunk)
             final_path_stat = path.lstat()
-            if (final_path_stat.st_dev, final_path_stat.st_ino) != (
-                open_stat.st_dev,
-                open_stat.st_ino,
-            ):
-                return None, None, [f"{label} changed while being read"]
+            if (final_path_stat.st_dev, final_path_stat.st_ino) != expected_identity:
+                return None, None, None, [f"{label} changed while being read"]
     except OSError:
-        return None, None, [f"{label} could not be read"]
+        return None, None, None, [f"{label} could not be read"]
     if size <= 0 and not allow_empty:
-        return None, None, [f"{label} must be non-empty"]
-    return digest.hexdigest(), size, []
+        return None, None, None, [f"{label} must be non-empty"]
+    return digest.hexdigest(), size, b"".join(prefix_parts), []
 
 
 def _validate_generated_at_utc(value: str) -> list[str]:
@@ -156,7 +184,7 @@ def build_evidence(
     artifact_sizes: dict[str, int] = {}
     for artifact in readiness.COMPACT_KEY_REQUIRED_ARTIFACTS:
         path = artifact_dir / artifact
-        digest, artifact_size, file_errors = _sha256_file_with_size(
+        digest, artifact_size, artifact_prefix, file_errors = _sha256_file_with_size(
             path,
             f"recursive compact key artifact {artifact}",
         )
@@ -166,14 +194,23 @@ def build_evidence(
             else:
                 errors.extend(file_errors)
             continue
-        assert digest is not None and artifact_size is not None
-        errors.extend(readiness.validate_compact_key_artifact_content(path, artifact))
+        assert (
+            digest is not None
+            and artifact_size is not None
+            and artifact_prefix is not None
+        )
+        errors.extend(readiness.validate_compact_key_artifact_prefix(artifact_prefix, artifact))
         artifact_digests[artifact] = digest
         artifact_sizes[artifact] = artifact_size
 
     generator_log_digest: str | None = None
     if generator_log_path.name == readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME:
-        generator_log_digest, generator_log_size, generator_log_errors = _sha256_file_with_size(
+        (
+            generator_log_digest,
+            generator_log_size,
+            _generator_log_prefix,
+            generator_log_errors,
+        ) = _sha256_file_with_size(
             generator_log_path,
             "recursive compact key generator log",
             allow_empty=True,

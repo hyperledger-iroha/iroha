@@ -674,7 +674,9 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   labels. Live rail sidecar `profile` and `rail_message_id` identifiers
   and archived rail receipt identifiers enforce the same no-echo check before
   receipt emission, network delivery, or summary rollup. Live rail sidecar
-  `message_type` values must also remain printable ASCII, and rail sidecar
+  `message_type` values must also remain printable ASCII and match the
+  canonical lowercase ISO family-id shape before unsupported-type diagnostics
+  can print a short unsupported family value, and rail sidecar
   `message_type`/`payload_sha256` plus archived rail receipt `message_type`
   values reject secret-looking markers before digest or summary diagnostics.
   Direct receipt replay, evidence replay, readiness replay, and XSD profile
@@ -732,9 +734,10 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   Archived canary command replays reject unsupported secret-looking or
   non-ASCII flag names with label-only diagnostics before evidence summaries can
   echo the flag spelling.
-  Unknown JSON field names that are secret-looking, control-bearing, or
-  non-ASCII are likewise reported with label-only diagnostics while ordinary
-  ASCII typos remain listed for operator ergonomics.
+  Unknown JSON field names that are secret-looking, control-bearing,
+  non-ASCII, overlong, too numerous, or collectively oversized are likewise
+  reported with label-only diagnostics while ordinary ASCII typos remain listed
+  for operator ergonomics.
   Duplicate record, list, digest, OID, DER, compact-summary, archived
   receipt-reuse, and trust-material diagnostics now report label/index-only
   structural failures without echoing the rejected duplicate value.

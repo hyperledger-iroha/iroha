@@ -206,7 +206,7 @@ enum KagemushaInstructionTransactionEncoder {
             throw KagemushaInstructionTransactionError.invalidInstructionArchive
         }
         for type in [KagemushaInstructionType.transfer, .redeemRecursive] {
-            if frame.header.schema == noritoSchemaHash(forTypeName: type.rawValue) {
+            if frame.header.schema == noritoSchemaHash(forTypeName: type.wireName) {
                 return type
             }
         }
@@ -308,6 +308,7 @@ enum KagemushaInstructionTransactionEncoder {
 
 public enum KagemushaRecursiveRedeemRequestArchive {
     public static let typeName = "KagemushaRecursiveSpendRedeemRequestV1"
+    static let schemaName = "iroha_data_model::offline::model::KagemushaRecursiveSpendRedeemRequestV1"
 
     public static func validate(_ archive: Data) throws {
         guard !archive.isEmpty else {
@@ -321,7 +322,7 @@ public enum KagemushaRecursiveRedeemRequestArchive {
               frame.paddingLength <= KagemushaInstructionTransactionEncoder.maxNoritoHeaderPaddingBytes else {
             throw KagemushaRecursiveRedeemRequestArchiveError.invalidRequestArchive
         }
-        guard noritoSchemaHash(forTypeName: typeName) == frame.header.schema else {
+        guard noritoSchemaHash(forTypeName: schemaName) == frame.header.schema else {
             throw KagemushaRecursiveRedeemRequestArchiveError.unsupportedRequestArchiveType
         }
         guard !frame.payload.isEmpty else {

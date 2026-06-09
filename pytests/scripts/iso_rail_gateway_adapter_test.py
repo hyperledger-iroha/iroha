@@ -161,6 +161,7 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             ("private-key_rail_unknown_leak", "rail_unknown_leak"),
             ("unexpected\x1brail_key", "\x1b"),
             ("unexpected_rail_\uff4bey", "\uff4b"),
+            ("x" * 129, "x" * 129),
         )
         for unknown_key, hidden in cases:
             with self.subTest(unknown_key=unknown_key):
@@ -174,6 +175,13 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 self.assertNotIn("password", message)
                 self.assertNotIn(unknown_key, message)
                 self.assertNotIn(hidden, message)
+        many_unknown = {f"field_{offset}": "redacted" for offset in range(9)}
+        with self.assertRaises(ADAPTER.AdapterError) as caught:
+            ADAPTER._reject_unknown_keys(many_unknown, set(), "sidecar")
+        message = str(caught.exception)
+        self.assertIn("contains unknown keys", message)
+        self.assertNotIn("field_0", message)
+        self.assertNotIn("field_8", message)
 
     def test_cli_argument_terminator_is_rejected_without_echo(self):
         hidden = "token=rail-terminator-secret"
@@ -750,6 +758,32 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             self.assertEqual(rc, 2)
             self.assertEqual(stdout, "")
             self.assertIn("message_type must use printable ASCII", stderr)
+            self.assertNotIn(hidden, stderr)
+            self.assertNotIn("unsupported message_type", stderr)
+
+    def test_malformed_sidecar_message_type_is_rejected_without_echo(self):
+        hidden = "pacs.002" + ("x" * 256)
+        with tempfile.TemporaryDirectory() as raw_inbox:
+            inbox = Path(raw_inbox)
+            xml_path, sidecar = write_message(inbox)
+            sidecar["message_type"] = hidden
+            xml_path.with_suffix(".xml.json").write_text(
+                json.dumps(sidecar),
+                encoding="utf-8",
+            )
+
+            rc, stdout, stderr = run_main(
+                [
+                    "--inbox-dir",
+                    str(inbox),
+                    "--torii-base-url",
+                    "https://torii.local-bank.bank",
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("message_type must be lowercase ISO family id", stderr)
             self.assertNotIn(hidden, stderr)
             self.assertNotIn("unsupported message_type", stderr)
 

@@ -7901,7 +7901,7 @@ fn kagemusha_recursive_spend_verify_from_request_archive(
 /// Prepare an online recursive Kagemusha redeem instruction.
 ///
 /// Input is Norito archive bytes of
-/// `iroha_data_model::offline::KagemushaRecursiveSpendRedeemRequestV1`.
+/// `iroha_data_model::offline::model::KagemushaRecursiveSpendRedeemRequestV1`.
 /// Output is Norito archive bytes of
 /// `iroha_data_model::isi::offline::RedeemKagemushaRecursive`.
 #[unsafe(no_mangle)]

@@ -329,6 +329,30 @@ public static class PrivacyNative
             NativeBuildProof));
     }
 
+    public static PrivacyProofResultArchive buildConfidentialTransferProofV2(
+        ReadOnlySpan<byte> requestArchive)
+    {
+        return BuildConfidentialTransferProofV2(requestArchive);
+    }
+
+    public static PrivacyProofResultArchive BuildConfidentialTransferProofV2(
+        ReadOnlySpan<byte> requestArchive)
+    {
+        return BuildProofV1(requestArchive);
+    }
+
+    public static PrivacyProofResultArchive buildConfidentialUnshieldProofV3(
+        ReadOnlySpan<byte> requestArchive)
+    {
+        return BuildConfidentialUnshieldProofV3(requestArchive);
+    }
+
+    public static PrivacyProofResultArchive BuildConfidentialUnshieldProofV3(
+        ReadOnlySpan<byte> requestArchive)
+    {
+        return BuildProofV1(requestArchive);
+    }
+
     public static PrivacyProofResultArchive VerifyProofV1(ReadOnlySpan<byte> requestArchive)
     {
         return new PrivacyProofResultArchive(CallProof(

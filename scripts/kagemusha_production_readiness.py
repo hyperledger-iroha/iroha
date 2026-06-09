@@ -789,14 +789,32 @@ def _is_lower_sha256_hex(value: Any) -> bool:
 
 
 def _sha256_file(path: Path, label: str) -> tuple[str | None, list[str]]:
-    file_errors = validate_lineage_local_file(path, label)
+    expected_stat, file_errors = _validate_lineage_local_file_for_read(path, label)
     if file_errors:
         return None, file_errors
     digest = hashlib.sha256()
     try:
         with path.open("rb") as handle:
+            open_stat = os.fstat(handle.fileno())
+            path_stat = path.lstat()
+            expected_identity = (expected_stat.st_dev, expected_stat.st_ino)
+            open_identity = (open_stat.st_dev, open_stat.st_ino)
+            if stat.S_ISLNK(path_stat.st_mode):
+                return None, [f"{label} must not be a symlink"]
+            if not stat.S_ISREG(path_stat.st_mode) or not stat.S_ISREG(open_stat.st_mode):
+                return None, [f"{label} must be a regular file"]
+            if open_identity != expected_identity or (
+                path_stat.st_dev,
+                path_stat.st_ino,
+            ) != expected_identity:
+                return None, [f"{label} changed while being read"]
+            if open_stat.st_nlink > 1:
+                return None, [f"{label} must not be hardlinked"]
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                 digest.update(chunk)
+            final_path_stat = path.lstat()
+            if (final_path_stat.st_dev, final_path_stat.st_ino) != expected_identity:
+                return None, [f"{label} changed while being read"]
     except OSError:
         return None, [f"{label} could not be read"]
     return digest.hexdigest(), []
@@ -808,70 +826,99 @@ def _sha256_file_with_size(
     *,
     allow_empty: bool = False,
 ) -> tuple[str | None, int | None, list[str]]:
-    file_errors = validate_lineage_local_file(path, label)
+    digest, size, _prefix, errors = _sha256_file_with_size_and_prefix(
+        path,
+        label,
+        allow_empty=allow_empty,
+    )
+    return digest, size, errors
+
+
+def _sha256_file_with_size_and_prefix(
+    path: Path,
+    label: str,
+    *,
+    allow_empty: bool = False,
+    prefix_len: int = 4096,
+) -> tuple[str | None, int | None, bytes | None, list[str]]:
+    expected_stat, file_errors = _validate_lineage_local_file_for_read(path, label)
     if file_errors:
-        return None, None, file_errors
+        return None, None, None, file_errors
     digest = hashlib.sha256()
+    prefix_parts: list[bytes] = []
+    prefix_remaining = prefix_len
     size = 0
     try:
         with path.open("rb") as handle:
             open_stat = os.fstat(handle.fileno())
             path_stat = path.lstat()
+            expected_identity = (expected_stat.st_dev, expected_stat.st_ino)
+            open_identity = (open_stat.st_dev, open_stat.st_ino)
             if stat.S_ISLNK(path_stat.st_mode):
-                return None, None, [f"{label} must not be a symlink"]
+                return None, None, None, [f"{label} must not be a symlink"]
             if not stat.S_ISREG(path_stat.st_mode) or not stat.S_ISREG(open_stat.st_mode):
-                return None, None, [f"{label} must be a regular file"]
-            if (path_stat.st_dev, path_stat.st_ino) != (
-                open_stat.st_dev,
-                open_stat.st_ino,
-            ):
-                return None, None, [f"{label} changed while being read"]
+                return None, None, None, [f"{label} must be a regular file"]
+            if open_identity != expected_identity or (
+                path_stat.st_dev,
+                path_stat.st_ino,
+            ) != expected_identity:
+                return None, None, None, [f"{label} changed while being read"]
             if open_stat.st_nlink > 1:
-                return None, None, [f"{label} must not be hardlinked"]
+                return None, None, None, [f"{label} must not be hardlinked"]
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                 size += len(chunk)
+                if prefix_remaining > 0:
+                    prefix_parts.append(chunk[:prefix_remaining])
+                    prefix_remaining -= min(prefix_remaining, len(chunk))
                 digest.update(chunk)
             final_path_stat = path.lstat()
-            if (final_path_stat.st_dev, final_path_stat.st_ino) != (
-                open_stat.st_dev,
-                open_stat.st_ino,
-            ):
-                return None, None, [f"{label} changed while being read"]
+            if (final_path_stat.st_dev, final_path_stat.st_ino) != expected_identity:
+                return None, None, None, [f"{label} changed while being read"]
     except OSError:
-        return None, None, [f"{label} could not be read"]
+        return None, None, None, [f"{label} could not be read"]
     if size <= 0 and not allow_empty:
-        return None, None, [f"{label} must be non-empty"]
-    return digest.hexdigest(), size, []
+        return None, None, None, [f"{label} must be non-empty"]
+    return digest.hexdigest(), size, b"".join(prefix_parts), []
 
 
-def validate_lineage_local_file(path: Path, label: str) -> list[str]:
+def _validate_lineage_local_file_for_read(
+    path: Path,
+    label: str,
+) -> tuple[os.stat_result | None, list[str]]:
     """Reject local lineage evidence files that could alias external bytes."""
 
     if device_lab.SECRET_RE.search(str(path)):
-        return [f"{label} path must not contain secret-looking material"]
+        return None, [f"{label} path must not contain secret-looking material"]
     ancestor_errors = device_lab.validate_no_symlink_ancestors(
         path,
         f"{label} ancestor directory",
     )
     if ancestor_errors:
-        return ancestor_errors
+        return None, ancestor_errors
     try:
-        mode = path.lstat().st_mode
+        file_stat = path.lstat()
     except FileNotFoundError:
-        return [f"{label} is missing"]
+        return None, [f"{label} is missing"]
     except OSError:
-        return [f"{label} file metadata could not be read"]
-    if stat.S_ISLNK(mode):
-        return [f"{label} must not be a symlink"]
-    if not stat.S_ISREG(mode):
-        return [f"{label} must be a regular file"]
+        return None, [f"{label} file metadata could not be read"]
+    if stat.S_ISLNK(file_stat.st_mode):
+        return None, [f"{label} must not be a symlink"]
+    if not stat.S_ISREG(file_stat.st_mode):
+        return None, [f"{label} must be a regular file"]
     try:
         link_count = path.stat().st_nlink
     except OSError:
-        return [f"{label} hardlink metadata could not be read"]
+        return None, [f"{label} hardlink metadata could not be read"]
     if link_count > 1:
-        return [f"{label} must not be hardlinked"]
-    return []
+        return None, [f"{label} must not be hardlinked"]
+    return file_stat, []
+
+
+def validate_lineage_local_file(path: Path, label: str) -> list[str]:
+    """Reject local lineage evidence files that could alias external bytes."""
+
+    _file_stat, errors = _validate_lineage_local_file_for_read(path, label)
+    return errors
 
 
 def _lineage_local_text(
@@ -883,19 +930,13 @@ def _lineage_local_text(
 ) -> tuple[str | None, list[str]]:
     """Validate a local lineage file immediately before reading text."""
 
-    file_errors = validate_lineage_local_file(path, label)
-    if file_errors:
-        return None, file_errors
-    try:
-        with path.open(
-            "r",
-            encoding="utf-8",
-            errors=decode_errors,
-            newline="",
-        ) as handle:
-            return handle.read(), []
-    except (OSError, UnicodeDecodeError):
-        return None, [unreadable_error]
+    _digest, text, errors = _sha256_text_file(
+        path,
+        label,
+        unreadable_error,
+        decode_errors=decode_errors,
+    )
+    return text, errors
 
 
 def _sha256_text_file(
@@ -909,7 +950,7 @@ def _sha256_text_file(
 ) -> tuple[str | None, str | None, list[str]]:
     """Return a digest and decoded text from one opened, path-bound file."""
 
-    file_errors = validate_lineage_local_file(path, label)
+    expected_stat, file_errors = _validate_lineage_local_file_for_read(path, label)
     if file_errors:
         return None, None, file_errors
     digest = hashlib.sha256()
@@ -919,14 +960,16 @@ def _sha256_text_file(
         with path.open("rb") as handle:
             open_stat = os.fstat(handle.fileno())
             path_stat = path.lstat()
+            expected_identity = (expected_stat.st_dev, expected_stat.st_ino)
+            open_identity = (open_stat.st_dev, open_stat.st_ino)
             if stat.S_ISLNK(path_stat.st_mode):
                 return None, None, [f"{label} must not be a symlink"]
             if not stat.S_ISREG(path_stat.st_mode) or not stat.S_ISREG(open_stat.st_mode):
                 return None, None, [f"{label} must be a regular file"]
-            if (path_stat.st_dev, path_stat.st_ino) != (
-                open_stat.st_dev,
-                open_stat.st_ino,
-            ):
+            if open_identity != expected_identity or (
+                path_stat.st_dev,
+                path_stat.st_ino,
+            ) != expected_identity:
                 return None, None, [f"{label} changed while being read"]
             if open_stat.st_nlink > 1:
                 return None, None, [f"{label} must not be hardlinked"]
@@ -947,10 +990,7 @@ def _sha256_text_file(
                 chunks.append(chunk)
                 digest.update(chunk)
             final_path_stat = path.lstat()
-            if (final_path_stat.st_dev, final_path_stat.st_ino) != (
-                open_stat.st_dev,
-                open_stat.st_ino,
-            ):
+            if (final_path_stat.st_dev, final_path_stat.st_ino) != expected_identity:
                 return None, None, [f"{label} changed while being read"]
     except OSError:
         return None, None, [unreadable_error]
@@ -1232,14 +1272,9 @@ def validate_compact_key_command(command: Any) -> list[str]:
     return errors
 
 
-def validate_compact_key_artifact_content(path: Path, artifact: str) -> list[str]:
+def validate_compact_key_artifact_prefix(prefix: bytes, artifact: str) -> list[str]:
     """Reject obvious development placeholders for ABI-7 compact key artifacts."""
 
-    try:
-        with path.open("rb") as handle:
-            prefix = handle.read(4096)
-    except OSError:
-        return [f"recursive compact key artifact {artifact} could not be read"]
     stripped = prefix.strip().lower()
     if prefix and all(byte == 0 for byte in prefix):
         return [
@@ -1258,17 +1293,40 @@ def validate_compact_key_artifact_content(path: Path, artifact: str) -> list[str
     return []
 
 
-def validate_lineage_artifact_content(path: Path, artifact: str) -> list[str]:
+def validate_compact_key_artifact_content(path: Path, artifact: str) -> list[str]:
+    """Reject obvious development placeholders for ABI-7 compact key artifacts."""
+
+    _digest, _size, prefix, errors = _sha256_file_with_size_and_prefix(
+        path,
+        f"recursive compact key artifact {artifact}",
+        allow_empty=True,
+    )
+    if errors:
+        return errors
+    assert prefix is not None
+    return validate_compact_key_artifact_prefix(prefix, artifact)
+
+
+def validate_lineage_artifact_prefix(prefix: bytes, artifact: str) -> list[str]:
     """Reject obvious development placeholders for Reserved-lineage artifacts."""
 
-    try:
-        with path.open("rb") as handle:
-            prefix = handle.read(4096)
-    except OSError:
-        return [f"lineage artifact {artifact} could not be read"]
     if prefix and all(byte == 0 for byte in prefix):
         return [f"lineage artifact {artifact} {LINEAGE_ARTIFACT_ALL_ZERO_ERROR}"]
     return []
+
+
+def validate_lineage_artifact_content(path: Path, artifact: str) -> list[str]:
+    """Reject obvious development placeholders for Reserved-lineage artifacts."""
+
+    _digest, _size, prefix, errors = _sha256_file_with_size_and_prefix(
+        path,
+        f"lineage artifact {artifact}",
+        allow_empty=True,
+    )
+    if errors:
+        return errors
+    assert prefix is not None
+    return validate_lineage_artifact_prefix(prefix, artifact)
 
 
 def parse_compact_key_generator_log(
@@ -1812,7 +1870,12 @@ def check_lineage_proof_evidence(
                             )
                         )
                 continue
-            actual_digest, artifact_size, digest_errors = _sha256_file_with_size(
+            (
+                actual_digest,
+                artifact_size,
+                artifact_prefix,
+                digest_errors,
+            ) = _sha256_file_with_size_and_prefix(
                 artifact_path,
                 "Reserved-lineage proof evidence artifact file",
                 allow_empty=True,
@@ -1827,7 +1890,11 @@ def check_lineage_proof_evidence(
                         )
                     )
                 continue
-            assert actual_digest is not None and artifact_size is not None
+            assert (
+                actual_digest is not None
+                and artifact_size is not None
+                and artifact_prefix is not None
+            )
             size_matches = _require_lineage_artifact_size(
                 blockers,
                 value=expected_size,
@@ -1843,7 +1910,7 @@ def check_lineage_proof_evidence(
                     )
                 )
                 continue
-            content_errors = validate_lineage_artifact_content(artifact_path, artifact)
+            content_errors = validate_lineage_artifact_prefix(artifact_prefix, artifact)
             if content_errors:
                 for error in content_errors:
                     blockers.append(
@@ -2304,7 +2371,12 @@ def check_compact_key_evidence(
                             )
                         )
                 continue
-            actual_digest, artifact_size, digest_errors = _sha256_file_with_size(
+            (
+                actual_digest,
+                artifact_size,
+                artifact_prefix,
+                digest_errors,
+            ) = _sha256_file_with_size_and_prefix(
                 artifact_path,
                 "ABI-7 recursive compact key evidence artifact file",
                 allow_empty=True,
@@ -2319,7 +2391,11 @@ def check_compact_key_evidence(
                         )
                     )
                 continue
-            assert actual_digest is not None and artifact_size is not None
+            assert (
+                actual_digest is not None
+                and artifact_size is not None
+                and artifact_prefix is not None
+            )
             size_matches = _require_compact_key_artifact_size(
                 blockers,
                 value=expected_size,
@@ -2336,7 +2412,7 @@ def check_compact_key_evidence(
                 )
                 continue
             local_artifact_sizes[artifact] = artifact_size
-            content_errors = validate_compact_key_artifact_content(artifact_path, artifact)
+            content_errors = validate_compact_key_artifact_prefix(artifact_prefix, artifact)
             if content_errors:
                 for error in content_errors:
                     blockers.append(

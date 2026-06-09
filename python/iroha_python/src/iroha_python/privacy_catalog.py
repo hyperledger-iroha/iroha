@@ -4193,6 +4193,14 @@ def _callable_on_crypto(name: str) -> bool:
     return callable(getattr(crypto, name, None))
 
 
+def _callable_on_native_crypto(name: str) -> bool:
+    try:
+        from . import crypto
+    except Exception:  # pragma: no cover - optional native extension
+        return False
+    return callable(getattr(getattr(crypto, "_crypto", None), name, None))
+
+
 def _callable_on_verange(name: str) -> bool:
     try:
         from . import verange
@@ -4299,6 +4307,16 @@ def privacy_capabilities(client: Any | None = None) -> dict[str, Any]:
     ) and _callable_on_crypto("zk_ace_build_transfer_authorization_v1")
     zk_ace_sdk_exports = (
         zk_ace_register and zk_ace_rotate and zk_ace_revoke and zk_ace_transfer and zk_ace_prover
+    )
+    confidential_transfer_proof_v2 = (
+        _callable_on_crypto("buildConfidentialTransferProofV2")
+        and _callable_on_crypto("build_confidential_transfer_proof_v2")
+        and _callable_on_native_crypto("build_confidential_transfer_proof_v2")
+    )
+    confidential_unshield_proof_v3 = (
+        _callable_on_crypto("buildConfidentialUnshieldProofV3")
+        and _callable_on_crypto("build_confidential_unshield_proof_v3")
+        and _callable_on_native_crypto("build_confidential_unshield_proof_v3")
     )
     verange_commitment_builder = _callable_on_verange("buildRangeCommitment")
     verange_envelope_builder = _callable_on_verange("buildVeRangeProofEnvelope")
@@ -4524,8 +4542,8 @@ def privacy_capabilities(client: Any | None = None) -> dict[str, Any]:
         "sis_hints_credential_dev_fixture_v0": sis_hints_credential_dev_fixture,
         "sis_hints_credential_local_verifier_v0": sis_hints_credential_local_verifier,
         "sis_hints_credential_sdk_exports_v0": sis_hints_credential_sdk_exports,
-        "confidential_transfer_proof_v2": False,
-        "confidential_unshield_proof_v3": False,
+        "confidential_transfer_proof_v2": confidential_transfer_proof_v2,
+        "confidential_unshield_proof_v3": confidential_unshield_proof_v3,
         "asset_hidden_transfer_instruction": False,
         "asset_hidden_pool_registration_instruction": False,
         "asset_hidden_transfer_proof_v1": False,

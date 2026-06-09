@@ -61,6 +61,7 @@ IPV4_COMPATIBLE_IPV6_PREFIX = ipaddress.ip_network("::/96")
 RECEIPT_DIGEST_FIELD = "receipt_sha256"
 RECEIPT_VERSION = 1
 LEGACY_MESSAGE_TYPES = {"colr.007"}
+MESSAGE_TYPE_RE = re.compile(r"^[a-z]{4}\.[0-9]{3}$")
 PROFILE_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
 MAX_RAIL_MESSAGE_ID_CHARS = 128
 RAIL_MESSAGE_ID_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._:@+-]*[A-Za-z0-9])?$")
@@ -324,9 +325,10 @@ def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -
         if any(
             _is_secret_looking_key(key)
             or _is_control_bearing_key(key)
+            or len(str(key)) > 128
             or any(ord(ch) > 0x7E for ch in str(key))
             for key in unknown
-        ):
+        ) or len(unknown) > 8 or sum(len(str(key)) for key in unknown) > 256:
             raise AdapterError(f"{label} contains unknown keys")
         raise AdapterError(f"{label} contains unknown keys: {', '.join(unknown)}")
 
@@ -907,7 +909,9 @@ def verify_message_file(
             message_type,
             f"{sidecar_path} message_type",
         )
-    if not isinstance(message_type, str) or message_type not in ENDPOINTS:
+    if not isinstance(message_type, str) or MESSAGE_TYPE_RE.fullmatch(message_type) is None:
+        raise AdapterError(f"{sidecar_path} message_type must be lowercase ISO family id")
+    if message_type not in ENDPOINTS:
         raise AdapterError(f"{sidecar_path} has unsupported message_type {message_type!r}")
     if message_type in LEGACY_MESSAGE_TYPES and not allow_legacy_colr007:
         raise AdapterError(

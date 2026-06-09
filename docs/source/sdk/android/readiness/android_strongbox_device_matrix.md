@@ -194,7 +194,8 @@ Production release criteria:
 	  secret-bearing or aliased slot paths. The per-artifact digest helper also
 	  rechecks each relative artifact path for secret-looking names, unreadable
 	  leaf metadata, symlinks, hardlinks, and non-regular files immediately before
-	  digest reads used by signed evidence and manifest rewrites.
+	  digest reads used by signed evidence and manifest rewrites, then binds each
+	  digest read to the opened regular-file identity.
 		  Low-level signer output writers reject secret-looking signed-evidence and
 		  manifest paths before creating output parents or writing files, reject
 		  absolute signed-evidence output path resolver failures with the structured

@@ -2,6 +2,74 @@
 
 Last updated: 2026-06-09
 
+## 2026-06-09 Kagemusha lineage/compact local read validation-time binding
+
+- Strengthened the Reserved-lineage and ABI-7 compact-key local file readers so
+  artifact digests, artifact sizes, proof-log text, and compact generator-log
+  text are read from one opened regular file bound to the first validated
+  `lstat()` identity. A regular-file replacement after preflight now fails as
+  `changed while being read` instead of being hashed as fresh local evidence.
+- Added regular-file-swap regressions for the shared readiness SHA-256 reader,
+  `_lineage_local_text(...)`, and both evidence helper artifact collectors, then
+  retargeted the production-readiness guard and negative controls to the new
+  `_validate_lineage_local_file_for_read(...)` binding point.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_recursive_compact_key_evidence.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_evidence_rejects_json_symlink_swap_after_preflight scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_evidence_rejects_generator_log_symlink_swap_after_preflight scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_evidence_rejects_artifact_symlink_swap_after_preflight scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_evidence_helper_rejects_artifact_symlink_swap_after_preflight scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_evidence_helper_rejects_artifact_regular_file_swap_after_preflight scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_evidence_rejects_json_symlink_swap_after_preflight scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_evidence_rejects_artifact_symlink_swap_after_preflight scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_log_rejects_symlink_swap_after_preflight scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_readiness_sha256_file_rejects_regular_file_swap_after_preflight scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_local_text_rejects_regular_file_swap_after_preflight scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_evidence_helper_rejects_artifact_symlink_swap_after_preflight scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_evidence_helper_rejects_artifact_regular_file_swap_after_preflight`
+    (`12` tests passed, latest run 0.027s)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-readiness-direct-hash-shape`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-readiness-artifact-open-path-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-readiness-artifact-open-path-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-direct-hash-shape`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-direct-hash-shape`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-artifact-open-path-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-artifact-open-path-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-local-secret-paths`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-local-ancestor-aliases`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-local-file-metadata-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-local-hardlink-metadata-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-readiness-direct-hash-read-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-direct-hash-read-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-direct-hash-read-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test`
+    (`380` tests passed, latest run 33.135s)
+  - `git diff --check -- scripts/kagemusha_production_readiness.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_recursive_compact_key_evidence.py scripts/tests/kagemusha_production_readiness_test.py ci/check_kagemusha_production_readiness.sh docs/source/offline_kagemusha.md status.md roadmap.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" scripts/kagemusha_production_readiness.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_recursive_compact_key_evidence.py scripts/tests/kagemusha_production_readiness_test.py ci/check_kagemusha_production_readiness.sh docs/source/offline_kagemusha.md status.md roadmap.md`
+    (no matches)
+  - `python3 scripts/kagemusha_production_readiness.py --repo-root .`
+    (blocked only by `lineage_proof_evidence_missing`,
+    `compact_key_evidence_missing`, and `android_device_lab_root_missing`)
+
+## 2026-06-09 Kagemusha Android signing-helper slot artifact open-file binding
+
+- Hardened the Android signing helper's per-artifact digest path so slot
+  artifacts used to build signed evidence and refreshed `sha256sum.txt` entries
+  are read from one opened regular file bound to the validation-time `lstat()`
+  identity. Post-preflight regular-file swaps now fail before the helper signs
+  or records swapped artifact bytes.
+- Added a signer slot-artifact regular-file-swap regression, retargeted the
+  signer read-failure and digest-preflight negative controls, and promoted the
+  signer open-path binding into the production-readiness guard and workflow.
+- Validation:
+  - `python3 -m py_compile scripts/sign_android_device_lab_evidence.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_signer_slot_artifact_digest_rejects_read_failure_after_preflight scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_signer_slot_artifact_digest_rejects_regular_file_swap_after_preflight scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_rewrite_sha256_manifest_revalidates_artifact_before_digest scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_signer_slot_artifact_digest_rejects_hardlink_metadata_failure_after_preflight`
+    (`4` tests passed, latest run 0.019s)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-slot-artifact-read-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-slot-artifact-open-path-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-slot-artifact-digest-preflight`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`357` tests passed, latest run 8.332s)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test`
+    (`376` tests passed, latest run 32.631s)
+  - `git diff --check -- scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/tests/check_android_device_lab_slot_test.py ci/check_kagemusha_production_readiness.sh .github/workflows/pr_kagemusha_payload_bench.yml docs/source/offline_kagemusha.md docs/source/sdk/android/readiness/android_strongbox_device_matrix.md status.md roadmap.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/tests/check_android_device_lab_slot_test.py ci/check_kagemusha_production_readiness.sh .github/workflows/pr_kagemusha_payload_bench.yml docs/source/offline_kagemusha.md docs/source/sdk/android/readiness/android_strongbox_device_matrix.md status.md roadmap.md`
+    (no matches)
+  - `python3 scripts/kagemusha_production_readiness.py --repo-root .`
+    (blocked only by `lineage_proof_evidence_missing`,
+    `compact_key_evidence_missing`, and `android_device_lab_root_missing`)
+
 ## 2026-06-09 Kagemusha Android manifest artifact open-file binding
 
 - Hardened `sha256sum.txt` artifact digest verification so each manifest entry
@@ -298,7 +366,7 @@ Last updated: 2026-06-09
 - Started a smaller diagnostic
   `lineage-key-artifacts --profile init --opening-len 2` run under
   `target/kagemusha-diagnostic/`; as of the latest check it was still CPU-bound
-  after more than 86 minutes, had emitted no output after startup, and had not
+  after more than 100 minutes, had emitted no output after startup, and had not
   created partial artifact files.
 - Fixed the production-readiness guard after the source moved evidence artifact
   hashing to `_sha256_file_with_size(...)`: the stale direct `_sha256_file(...)`
@@ -883,10 +951,10 @@ Last updated: 2026-06-09
   values, plus production-readiness compact summary/config/receipt path strings,
   must now remain printable ASCII, preventing Unicode-confusable path evidence
   from being planned, replayed, or preserved in release archives.
-- Unknown JSON field names with non-ASCII characters now use the same
-  label-only unknown-key diagnostic as secret-looking and control-bearing keys
-  across the eight ISO scripts, while ordinary ASCII typos still list the field
-  names.
+- Unknown JSON field names with non-ASCII characters, overlong spellings, too
+  many entries, or collectively oversized spellings now use the same label-only
+  unknown-key diagnostic as secret-looking and control-bearing keys across the
+  eight ISO scripts, while ordinary ASCII typos still list the field names.
 - Receipt verifier, evidence-verifier, and production-readiness `receipt_kind`
   values must now remain printable ASCII, so Unicode-confusable unsupported kind
   labels fail before diagnostics or blockers can echo them.
@@ -917,10 +985,12 @@ Last updated: 2026-06-09
   oversized review text or embedded credentials cannot be preserved in
   digest-bound summaries or echoed by readiness diagnostics.
 - Live rail sidecar and archived rail receipt `message_type` values must now
-  remain printable ASCII before unsupported-message diagnostics can quote sidecar
-  or receipt material. Rail message-type regexes now use ASCII-only digits, and
-  XSD profile-catalog `message_def_id`/version regexes now use ASCII-only digits
-  before missing-schema or skipped-version classification.
+  remain printable ASCII before unsupported-message diagnostics can quote
+  material. Live rail sidecars must also match the lowercase ISO family-id shape
+  before an unsupported-message diagnostic can print a short family value. Rail
+  message-type regexes now use ASCII-only digits, and XSD profile-catalog
+  `message_def_id`/version regexes now use ASCII-only digits before
+  missing-schema or skipped-version classification.
   evidence and readiness archive/canary receipt kind, filename, and metadata
   mismatch blockers no longer print receipt kind values, receipt leaf names, or
   full metadata tuples after invalid marker material is detected.
@@ -1023,7 +1093,7 @@ Last updated: 2026-06-09
     (`3` tests passed, latest run 2.321s)
   - `python3 -m py_compile scripts/iso_*.py pytests/scripts/iso_*_test.py`
   - `python3 -m unittest discover -s pytests/scripts -p 'iso_*_test.py'`
-    (`740` tests passed, latest run 297.151s)
+    (`740` tests passed, latest run 299.282s)
 
 ## 2026-06-09 Kagemusha Reserved-lineage proof-log exactness guard
 

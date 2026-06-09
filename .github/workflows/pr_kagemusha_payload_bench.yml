@@ -26,6 +26,7 @@ on:
       - "scripts/tests/kagemusha_production_readiness_test.py"
       - "fixtures/android/device_lab/**"
       - "fixtures/kagemusha_recursive_spend_abi6/**"
+      - "fixtures/kagemusha_recursive_spend_abi7/**"
       - "crates/iroha_data_model/Cargo.toml"
       - "crates/iroha_data_model/benches/kagemusha_recursive_spend_payload.rs"
       - "crates/iroha_data_model/src/offline/**"

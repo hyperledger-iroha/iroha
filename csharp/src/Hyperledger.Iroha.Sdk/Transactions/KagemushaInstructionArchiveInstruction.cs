@@ -110,7 +110,7 @@ public sealed record class KagemushaInstructionArchiveInstruction : TransactionI
                 parameterName);
         }
 
-        var expectedSchema = NoritoCodec.SchemaHash(instructionType.ArchiveTypeName());
+        var expectedSchema = NoritoCodec.SchemaHash(instructionType.WireName());
         if (!copy.AsSpan(6, expectedSchema.Length).SequenceEqual(expectedSchema))
         {
             throw new ArgumentException(

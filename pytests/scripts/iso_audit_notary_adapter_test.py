@@ -283,6 +283,7 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
             ("private-key_audit_unknown_leak", "audit_unknown_leak"),
             ("unexpected\x1baudit_key", "\x1b"),
             ("unexpected_audit_\uff4bey", "\uff4b"),
+            ("x" * 129, "x" * 129),
         )
         for unknown_key, hidden in cases:
             with self.subTest(unknown_key=unknown_key):
@@ -294,6 +295,13 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                 self.assertNotIn("password", message)
                 self.assertNotIn(unknown_key, message)
                 self.assertNotIn(hidden, message)
+        many_unknown = {f"field_{offset}": "redacted" for offset in range(9)}
+        with self.assertRaises(ADAPTER.AdapterError) as caught:
+            ADAPTER._reject_unknown_keys(many_unknown, set(), "anchor")
+        message = str(caught.exception)
+        self.assertIn("contains unknown keys", message)
+        self.assertNotIn("field_0", message)
+        self.assertNotIn("field_8", message)
 
     def test_cli_argument_terminator_is_rejected_without_echo(self):
         hidden = "token=audit-terminator-secret"

@@ -550,9 +550,10 @@ def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -
         if any(
             _is_secret_looking_key(key)
             or _is_control_bearing_key(key)
+            or len(str(key)) > 128
             or any(ord(ch) > 0x7E for ch in str(key))
             for key in unknown
-        ):
+        ) or len(unknown) > 8 or sum(len(str(key)) for key in unknown) > 256:
             raise ReceiptError(f"{label} contains unknown keys")
         raise ReceiptError(f"{label} contains unknown keys: {', '.join(unknown)}")
 

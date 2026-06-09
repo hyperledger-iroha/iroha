@@ -389,6 +389,18 @@ public sealed class TransactionBuilderTests
     }
 
     [Fact]
+    public void KagemushaInstructionArchiveAcceptsNativeAbi7RedeemInstructionFixture()
+    {
+        var archive = SharedRecursiveSpendAbi7Archive("redeem_instruction");
+        var instruction = TransactionInstruction.KagemushaInstructionArchive(
+            KagemushaInstructionType.RedeemRecursive,
+            archive);
+
+        Assert.Equal(KagemushaInstructionType.RedeemRecursive, instruction.InstructionType);
+        Assert.Equal(archive, instruction.InstructionArchive);
+    }
+
+    [Fact]
     public void KagemushaInstructionArchiveRejectsMalformedWrongTypeAndMismatchedType()
     {
         Assert.Throws<ArgumentException>(() =>
@@ -675,7 +687,38 @@ public sealed class TransactionBuilderTests
         byte[] payload,
         byte flags = 0)
     {
-        return NoritoCodec.Encode(instructionType.ArchiveTypeName(), payload, flags);
+        return NoritoCodec.Encode(instructionType.WireName(), payload, flags);
+    }
+
+    private static byte[] SharedRecursiveSpendAbi7Archive(string archiveName)
+    {
+        using var document = LoadSharedRecursiveSpendAbi7Archives();
+        var archive = document.RootElement
+            .GetProperty("archives")
+            .EnumerateArray()
+            .First(candidate => candidate.GetProperty("name").GetString() == archiveName);
+        return Convert.FromBase64String(archive.GetProperty("bytes_base64").GetString()!);
+    }
+
+    private static JsonDocument LoadSharedRecursiveSpendAbi7Archives()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory != null)
+        {
+            var candidate = Path.Combine(
+                directory.FullName,
+                "fixtures",
+                "kagemusha_recursive_spend_abi7",
+                "archives.json");
+            if (File.Exists(candidate))
+            {
+                return JsonDocument.Parse(File.ReadAllText(candidate));
+            }
+
+            directory = directory.Parent;
+        }
+
+        throw new FileNotFoundException("missing shared recursive spend ABI-7 archives fixture");
     }
 
     private sealed record EncodedInstruction(string WireId, byte[] Payload);

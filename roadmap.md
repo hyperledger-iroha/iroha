@@ -793,7 +793,10 @@ and completed history lives in [`status.md`](./status.md).
 	  local-file ancestors before JSON parsing, digest calculation, or proof-log
 	  reads, and both the readiness rollup's direct SHA-256 reader and the
 	  lineage helper's direct SHA-256 reader repeat that validation before
-	  returning artifact digests, with read-time byte failures reported as
+	  returning artifact digests, with the readiness, lineage-helper, and
+	  compact-key helper readers binding each digest/text read to the first
+	  validated `lstat()` identity so post-preflight regular-file replacements
+	  fail closed, and with read-time byte failures reported as
 	  structured blockers instead of tracebacks. Ready rollup summaries also publish
 		  sanitized SHA-256 maps for the
 		  accepted Reserved-lineage artifacts and proof log without preserving local
@@ -834,7 +837,8 @@ and completed history lives in [`status.md`](./status.md).
 			  symlink output leaves before writing signed evidence, manifest refreshes,
 			  or lineage proof evidence JSON, and the lineage proof helper rejects
 			  unreadable output leaf metadata before evidence writes; signer output
-			  writers also recheck created output parents and ancestors before writing,
+			  writers also bind slot artifact digest reads to the opened regular-file
+			  identity and recheck created output parents and ancestors before writing,
 			  and the lineage helper's direct output preflight rechecks created parents
 			  before returning success.
 			  Android signer absolute output corridor resolver failures now return
@@ -2319,7 +2323,7 @@ and completed history lives in [`status.md`](./status.md).
 					  numeric-label checks can accept Unicode digit confusables,
 					  rejects archived canary command flags with secret-looking or
 					  non-ASCII spellings before echoing unsupported flag names,
-					  reports non-ASCII unknown JSON keys with label-only diagnostics,
+					  reports non-ASCII, overlong, too numerous, or collectively oversized unknown JSON keys with label-only diagnostics,
 					  rejects non-ASCII receipt-kind spellings before unsupported-kind
 					  diagnostics can echo them,
 					  rejects non-ASCII trust embedded-signature policies before
@@ -2364,7 +2368,8 @@ and completed history lives in [`status.md`](./status.md).
 				  that are not flag-shaped, `.xml` rail payload leaves,
 			  and whitespace-free rail
 				  metadata identifiers, with live rail sidecars rejecting non-ASCII
-				  `message_type` values, explicit `null` `profile`/`rail_message_id`
+				  or malformed `message_type` values before unsupported-message echo,
+				  explicit `null` `profile`/`rail_message_id`
 				  values, non-canonical profile IDs, and overlong or non-canonical
 				  ASCII rail-message identifiers before submission, with oversized or
 				  unknown-field sidecars rejected as malformed,

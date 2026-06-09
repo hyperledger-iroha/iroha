@@ -311,7 +311,7 @@ test("buildKagemushaInstructionTransaction wraps one archive instruction", () =>
       const built = buildKagemushaInstructionTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
-        type: "KagemushaTransfer",
+        instruction_type: "KagemushaTransfer",
         instructionArchive: archive,
         metadata: { kagemusha: "transfer" },
         creationTimeMs: 11,

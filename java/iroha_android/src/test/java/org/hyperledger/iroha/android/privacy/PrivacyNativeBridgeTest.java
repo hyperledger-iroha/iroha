@@ -141,15 +141,21 @@ public final class PrivacyNativeBridgeTest {
   }
 
   private static void rejectsEmptyRequestsBeforeNativeDispatch() {
-    assertThrows(() -> PrivacyNativeBridge.buildProof(new byte[0]));
-    assertThrows(() -> PrivacyNativeBridge.verifyProof(new byte[0]));
-    assertThrows(() -> PrivacyNativeBridge.buildProof(null));
-    assertThrows(() -> PrivacyNativeBridge.verifyProof(null));
+    final NativeCall[] helpers = new NativeCall[] {
+      PrivacyNativeBridge::buildProof,
+      PrivacyNativeBridge::buildConfidentialTransferProofV2,
+      PrivacyNativeBridge::buildConfidentialUnshieldProofV3,
+      PrivacyNativeBridge::verifyProof
+    };
+    for (final NativeCall helper : helpers) {
+      assertThrows(() -> helper.run(new byte[0]));
+      assertThrows(() -> helper.run(null));
+    }
     final byte[] oversized = new byte[PrivacyNativeBridge.PRIVACY_NATIVE_ARCHIVE_MAX_BYTES + 1];
-    assertThrows(() -> PrivacyNativeBridge.buildProof(oversized));
-    assertThrows(() -> PrivacyNativeBridge.verifyProof(oversized));
-    assertThrows(() -> PrivacyNativeBridge.buildProof(privacyNoritoFrame(0x52)));
-    assertThrows(() -> PrivacyNativeBridge.verifyProof(privacyNoritoFrame(0x52)));
+    for (final NativeCall helper : helpers) {
+      assertThrows(() -> helper.run(oversized));
+      assertThrows(() -> helper.run(privacyNoritoFrame(0x52)));
+    }
   }
 
   private static void nativeAvailabilityProbeArchiveIsStableAndDefensive() {

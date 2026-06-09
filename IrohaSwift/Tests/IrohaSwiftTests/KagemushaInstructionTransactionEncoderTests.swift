@@ -70,6 +70,17 @@ final class KagemushaInstructionTransactionEncoderTests: XCTestCase {
         XCTAssertNil(parsed.nonce)
     }
 
+    func testKagemushaArchiveValidationAcceptsSharedAbi7Fixtures() throws {
+        let redeemRequest = try Self.sharedRecursiveSpendAbi7Archive(named: "redeem_request")
+        let redeemInstruction = try Self.sharedRecursiveSpendAbi7Archive(named: "redeem_instruction")
+
+        XCTAssertNoThrow(try KagemushaRecursiveRedeemRequestArchive.validate(redeemRequest))
+        XCTAssertEqual(
+            try KagemushaInstructionType.validatedArchiveType(for: redeemInstruction),
+            .redeemRecursive
+        )
+    }
+
     func testBuildKagemushaRecursiveRedeemTransactionDerivesInstructionBeforeSigning() throws {
         let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 0x44, count: 32))
         let authority = try Self.canonicalAuthorityLiteral(from: signingKey)
@@ -393,11 +404,39 @@ final class KagemushaInstructionTransactionEncoderTests: XCTestCase {
         type: KagemushaInstructionType,
         payload: Data
     ) -> Data {
-        noritoEncode(typeName: type.rawValue, payload: payload, flags: 0)
+        noritoEncode(typeName: type.wireName, payload: payload, flags: 0)
     }
 
     private static func redeemRequestArchive(payload: Data) -> Data {
-        noritoEncode(typeName: KagemushaRecursiveRedeemRequestArchive.typeName, payload: payload, flags: 0)
+        noritoEncode(typeName: KagemushaRecursiveRedeemRequestArchive.schemaName, payload: payload, flags: 0)
+    }
+
+    private static func sharedRecursiveSpendAbi7Archive(named archiveName: String) throws -> Data {
+        let fixture = try sharedRecursiveSpendAbi7Archives()
+        let archives = try XCTUnwrap(fixture["archives"] as? [[String: Any]])
+        let archive = try XCTUnwrap(archives.first { $0["name"] as? String == archiveName })
+        let encoded = try XCTUnwrap(archive["bytes_base64"] as? String)
+        return try XCTUnwrap(Data(base64Encoded: encoded))
+    }
+
+    private static func sharedRecursiveSpendAbi7Archives() throws -> [String: Any] {
+        var directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        for _ in 0..<10 {
+            let candidate = directory
+                .appendingPathComponent("fixtures")
+                .appendingPathComponent("kagemusha_recursive_spend_abi7")
+                .appendingPathComponent("archives.json")
+            if FileManager.default.fileExists(atPath: candidate.path) {
+                let data = try Data(contentsOf: candidate)
+                return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            }
+            directory.deleteLastPathComponent()
+        }
+        throw NSError(
+            domain: "KagemushaInstructionTransactionEncoderTests",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: "missing shared recursive spend ABI-7 archives fixture"]
+        )
     }
 
     private static func canonicalAuthorityLiteral(from signingKey: SigningKey) throws -> String {

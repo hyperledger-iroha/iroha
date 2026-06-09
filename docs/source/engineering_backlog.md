@@ -143,9 +143,10 @@ without echoing the repeated key name.
 Secret-looking unknown JSON field names are also rejected with label-only
 unknown-key diagnostics while ordinary unknown-field typos still list the
 field names for operator ergonomics.
-Non-ASCII unknown JSON field names now use the same label-only unknown-key
-diagnostic, preventing Unicode-confusable schema keys from being reflected in
-operator errors.
+Non-ASCII, overlong, too numerous, or collectively oversized unknown JSON field
+names now use the same label-only unknown-key diagnostic, preventing
+Unicode-confusable or oversized schema keys from being reflected in operator
+errors.
 Direct ISO boolean CLI flags reject attached `--flag=value` spellings and
 separate non-option values before argparse can echo the value or reinterpret
 the option.
@@ -189,8 +190,10 @@ Rail sidecar `profile` and `rail_message_id` identifiers, plus archived rail
 receipt `profile` and `rail_message_id` values, now reject secret-looking
 identifier-style strings before network delivery, receipt emission, receipt
 verification, or receipt-summary rollup.
-Rail sidecar `message_type` values must also remain printable ASCII, and rail
-sidecar `message_type`/`payload_sha256` values plus archived rail receipt
+Rail sidecar `message_type` values must also remain printable ASCII and match
+the canonical lowercase ISO family-id shape before unsupported-type diagnostics
+can print a short unsupported family value. Rail sidecar
+`message_type`/`payload_sha256` values plus archived rail receipt
 `message_type` values apply no-echo secret-looking checks before
 unsupported-type, digest-mismatch, or receipt-summary diagnostics can preserve
 operator-provided marker strings.

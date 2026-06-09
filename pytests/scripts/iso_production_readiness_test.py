@@ -640,6 +640,7 @@ class IsoProductionReadinessTest(unittest.TestCase):
             ("private-key_readiness_unknown_leak", "readiness_unknown_leak"),
             ("unexpected\x1breadiness_key", "\x1b"),
             ("unexpected_readiness_\uff4bey", "\uff4b"),
+            ("x" * 129, "x" * 129),
         )
         for unknown_key, hidden in cases:
             with self.subTest(unknown_key=unknown_key):
@@ -653,6 +654,13 @@ class IsoProductionReadinessTest(unittest.TestCase):
                 self.assertNotIn("password", message)
                 self.assertNotIn(unknown_key, message)
                 self.assertNotIn(hidden, message)
+        many_unknown = {f"field_{offset}": "redacted" for offset in range(9)}
+        with self.assertRaises(READINESS.ReadinessError) as caught:
+            READINESS._reject_unknown_keys(many_unknown, set(), "summary")
+        message = str(caught.exception)
+        self.assertIn("contains unknown keys", message)
+        self.assertNotIn("field_0", message)
+        self.assertNotIn("field_8", message)
 
     def test_cli_argument_terminator_is_rejected_without_echo(self):
         hidden = "token=readiness-terminator-secret"

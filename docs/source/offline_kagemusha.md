@@ -321,8 +321,8 @@ command string, LEN=4, IPA `k = 8`, `halo2/ipa`, circuit id
 version `1`, adjacent non-empty digest- and size-checked compact key files, and
 the captured `recursive-compact-key-artifacts.log` stdout line from the
 canonical key-generation command. The rollup hashes and parses that generator
-log from the same opened regular file,
-requires it to contain exactly the canonical CLI summary line with canonical
+log from the same opened regular file bound to the validation-time `lstat()`
+identity, requires it to contain exactly the canonical CLI summary line with canonical
 LF line endings, strict UTF-8 bytes, and a final LF terminator, and checks the
 reported `.vk`, `.pk`, key-artifacts package, verifier-keys package, and
 `.record.norito` byte sizes and SHA-256 digests against the adjacent artifact
@@ -356,7 +356,9 @@ also rejects secret-looking evidence, artifact, or proof-log paths and symlinked
 local-file ancestors before JSON parsing, digest calculation, or proof-log
 reads; both the readiness rollup's direct SHA-256 reader and the lineage
 helper's direct SHA-256 reader repeat that file-shape validation before
-returning artifact digests. Ready summaries publish only
+returning artifact digests, and the readiness, lineage-helper, and compact-key
+helper readers bind each digest/text read to the first validated `lstat()`
+identity so post-preflight regular-file replacements fail closed. Ready summaries publish only
 sanitized SHA-256 maps for the accepted Reserved-lineage artifacts and proof
 log, not the local artifact directory path, so release reviewers can compare
 evidence packets without capturing workstation paths. Android freshness checks consume the
@@ -432,7 +434,8 @@ artifacts, so direct calls cannot hash through secret-bearing or aliased slot
 paths, and the per-artifact digest helper rechecks each relative artifact path
 for secret-looking names, unreadable leaf metadata, symlinks, hardlinks, and
 non-regular files immediately before digest reads used by signed evidence and
-manifest rewrites. Low-level signer output writers also
+manifest rewrites, then binds each digest read to the opened regular-file
+identity. Low-level signer output writers also
 reject secret-looking signed-evidence and manifest paths before creating output
 parents or writing files, convert absolute signed-evidence output path resolver
 failures into `signed evidence output path could not be resolved`, reject

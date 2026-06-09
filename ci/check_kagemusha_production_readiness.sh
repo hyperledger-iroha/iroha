@@ -994,20 +994,22 @@ TEXT_REQUIREMENTS = {
         "must be generated lineage material, not all-zero placeholder bytes",
         "must be generated key material, not a placeholder fixture",
         "must be generated key material, not all-zero placeholder bytes",
-        'def _sha256_file(path: Path, label: str) -> tuple[str | None, list[str]]:\n    file_errors = validate_lineage_local_file(path, label)\n    if file_errors:\n        return None, file_errors\n    digest = hashlib.sha256()\n',
+        'def _sha256_file(path: Path, label: str) -> tuple[str | None, list[str]]:\n    expected_stat, file_errors = _validate_lineage_local_file_for_read(path, label)\n    if file_errors:\n        return None, file_errors\n    digest = hashlib.sha256()\n',
         "def _sha256_file_with_size(",
+        "_validate_lineage_local_file_for_read",
+        "expected_identity = (expected_stat.st_dev, expected_stat.st_ino)",
+        "open_identity = (open_stat.st_dev, open_stat.st_ino)",
         "open_stat = os.fstat(handle.fileno())",
         "            path_stat = path.lstat()",
         "final_path_stat = path.lstat()",
         'f"{label} changed while being read"',
         "size += len(chunk)",
         'return None, None, [f"{label} must be non-empty"]',
-        'def validate_lineage_local_file(path: Path, label: str) -> list[str]:\n    """Reject local lineage evidence files that could alias external bytes."""\n\n    if device_lab.SECRET_RE.search(str(path)):\n        return [f"{label} path must not contain secret-looking material"]\n    ancestor_errors = device_lab.validate_no_symlink_ancestors(\n        path,\n        f"{label} ancestor directory",\n    )\n    if ancestor_errors:\n        return ancestor_errors\n    try:\n        mode = path.lstat().st_mode\n    except FileNotFoundError:\n        return [f"{label} is missing"]\n    except OSError:\n        return [f"{label} file metadata could not be read"]\n    if stat.S_ISLNK(mode):\n        return [f"{label} must not be a symlink"]\n    if not stat.S_ISREG(mode):\n        return [f"{label} must be a regular file"]\n',
-        '    try:\n        link_count = path.stat().st_nlink\n    except OSError:\n        return [f"{label} hardlink metadata could not be read"]\n    if link_count > 1:\n        return [f"{label} must not be hardlinked"]\n    return []\n\n\ndef _lineage_local_text(\n',
+        'def _validate_lineage_local_file_for_read(\n    path: Path,\n    label: str,\n) -> tuple[os.stat_result | None, list[str]]:\n    """Reject local lineage evidence files that could alias external bytes."""\n\n    if device_lab.SECRET_RE.search(str(path)):\n        return None, [f"{label} path must not contain secret-looking material"]\n    ancestor_errors = device_lab.validate_no_symlink_ancestors(\n        path,\n        f"{label} ancestor directory",\n    )\n    if ancestor_errors:\n        return None, ancestor_errors\n    try:\n        file_stat = path.lstat()\n    except FileNotFoundError:\n        return None, [f"{label} is missing"]\n    except OSError:\n        return None, [f"{label} file metadata could not be read"]\n',
+        '    try:\n        link_count = path.stat().st_nlink\n    except OSError:\n        return None, [f"{label} hardlink metadata could not be read"]\n    if link_count > 1:\n        return None, [f"{label} must not be hardlinked"]\n    return file_stat, []\n\n\ndef validate_lineage_local_file(path: Path, label: str) -> list[str]:\n',
         'except OSError:\n        return None, [f"{label} could not be read"]',
         '    try:\n        if path.stat().st_size > MAX_LINEAGE_PROOF_LOG_BYTES:\n            return None, [\n                f"production proof log must be no more than {MAX_LINEAGE_PROOF_LOG_BYTES} bytes"\n            ]\n    except OSError:\n        return None, ["production proof log metadata could not be read"]\n',
         "def _lineage_local_text(",
-        'newline="",',
         "def _sha256_text_file(",
         "chunks: list[bytes] = []",
         'text = b"".join(chunks).decode("utf-8", errors=decode_errors)',
@@ -1074,7 +1076,7 @@ TEXT_REQUIREMENTS = {
         'device_lab.SECRET_RE.search(str(path))',
         "path must not contain secret-looking material",
         "ancestor_errors = device_lab.validate_no_symlink_ancestors(",
-        '    ancestor_errors = device_lab.validate_no_symlink_ancestors(\n        path,\n        f"{label} ancestor directory",\n    )\n    if ancestor_errors:\n        return ancestor_errors\n',
+        'def validate_lineage_local_file(path: Path, label: str) -> list[str]:\n    """Reject local lineage evidence files that could alias external bytes."""\n\n    _file_stat, errors = _validate_lineage_local_file_for_read(path, label)\n    return errors\n',
         'f"{label} ancestor directory"',
         '            artifact_file_errors = validate_lineage_local_file(\n                artifact_path,\n                "Reserved-lineage proof evidence artifact file",\n            )\n            if artifact_file_errors:\n                if artifact_file_errors == [\n                    "Reserved-lineage proof evidence artifact file is missing"\n                ]:\n                    blockers.append(\n                        blocker(\n                            "lineage_proof_evidence_artifact_missing",\n                            "Reserved-lineage proof evidence artifact file is missing",\n                            artifact=artifact,\n                        )\n                    )\n                else:\n                    for error in artifact_file_errors:\n                        blockers.append(\n                            blocker(\n                                "lineage_proof_evidence_artifact_file_shape",\n                                error,\n                                artifact=artifact,\n                            )\n                        )\n                continue\n',
         '            actual_digest, artifact_size, digest_errors = _sha256_file_with_size(\n                artifact_path,\n                "Reserved-lineage proof evidence artifact file",\n                allow_empty=True,\n            )',
@@ -1227,7 +1229,9 @@ TEXT_REQUIREMENTS = {
         "--proof-log must be written directly under --artifact-dir",
         "def _sha256_file(path: Path, label: str) -> tuple[str | None, list[str]]:",
         "def _sha256_file_with_size(",
-        "file_errors = readiness.validate_lineage_local_file(path, label)",
+        "expected_stat, file_errors = readiness._validate_lineage_local_file_for_read(",
+        "expected_identity = (expected_stat.st_dev, expected_stat.st_ino)",
+        "open_identity = (open_stat.st_dev, open_stat.st_ino)",
         "return None, file_errors",
         "open_stat = os.fstat(handle.fileno())",
         "            path_stat = path.lstat()",
@@ -1309,7 +1313,9 @@ TEXT_REQUIREMENTS = {
         "--out must be written directly under --artifact-dir",
         "def _sha256_file(path: Path, label: str) -> tuple[str | None, list[str]]:",
         "def _sha256_file_with_size(",
-        "file_errors = readiness.validate_lineage_local_file(path, label)",
+        "expected_stat, file_errors = readiness._validate_lineage_local_file_for_read(",
+        "expected_identity = (expected_stat.st_dev, expected_stat.st_ino)",
+        "open_identity = (open_stat.st_dev, open_stat.st_ino)",
         "return None, file_errors",
         "open_stat = os.fstat(handle.fileno())",
         "            path_stat = path.lstat()",
@@ -1959,6 +1965,7 @@ TEXT_REQUIREMENTS = {
         "test_compact_key_evidence_helper_rejects_missing_artifact",
         "test_compact_key_evidence_helper_rejects_empty_artifact",
         "test_compact_key_evidence_helper_rejects_artifact_symlink_swap_after_preflight",
+        "test_compact_key_evidence_helper_rejects_artifact_regular_file_swap_after_preflight",
         "test_compact_key_evidence_helper_rejects_placeholder_artifact",
         "test_compact_key_evidence_helper_rejects_all_placeholder_prefixes",
         "test_compact_key_evidence_helper_rejects_all_zero_artifact",
@@ -2142,9 +2149,11 @@ TEXT_REQUIREMENTS = {
         "test_lineage_proof_evidence_rejects_digest_matched_missing_final_lf",
         "test_lineage_local_text_rejects_symlink_directly_before_read",
         "test_lineage_local_text_rejects_hardlink_directly_before_read",
+        "test_lineage_local_text_rejects_regular_file_swap_after_preflight",
         "test_lineage_readiness_sha256_file_rejects_secret_path_directly",
         "test_lineage_readiness_sha256_file_rejects_symlink_directly",
         "test_lineage_readiness_sha256_file_rejects_hardlink_directly",
+        "test_lineage_readiness_sha256_file_rejects_regular_file_swap_after_preflight",
         "test_lineage_readiness_sha256_file_rejects_hardlink_metadata_failure_directly",
         "test_lineage_readiness_sha256_file_rejects_file_metadata_failure_directly",
         "test_lineage_readiness_sha256_file_rejects_read_failure_without_traceback",
@@ -2169,6 +2178,7 @@ TEXT_REQUIREMENTS = {
         "test_lineage_proof_sha256_file_rejects_hardlink_directly",
         "test_lineage_proof_sha256_file_rejects_read_failure_without_traceback",
         "test_lineage_proof_evidence_helper_rejects_artifact_symlink_swap_after_preflight",
+        "test_lineage_proof_evidence_helper_rejects_artifact_regular_file_swap_after_preflight",
         "test_lineage_proof_evidence_rejects_artifact_symlink_swap_after_preflight",
         "test_lineage_proof_evidence_helper_rejects_missing_artifact",
         "test_lineage_proof_evidence_helper_rejects_empty_artifact",
@@ -5894,8 +5904,8 @@ if mode == "--negative-control-lineage-proof-readiness-direct-hash-shape":
         "Reserved-lineage proof readiness direct hash path-shape gate",
         lambda: override_text(
             "scripts/kagemusha_production_readiness.py",
-            '    file_errors = validate_lineage_local_file(path, label)\n    if file_errors:\n        return None, file_errors\n',
-            "",
+            '    expected_stat, file_errors = _validate_lineage_local_file_for_read(path, label)\n    if file_errors:\n        return None, file_errors\n',
+            '    file_errors = []\n    expected_stat = path.stat()\n',
         ),
     )
     raise SystemExit(0)
@@ -5905,8 +5915,8 @@ if mode == "--negative-control-lineage-proof-readiness-direct-hash-read-failure"
         "Reserved-lineage proof readiness direct hash read-failure gate",
         lambda: override_text(
             "scripts/kagemusha_production_readiness.py",
-            '    try:\n        with path.open("rb") as handle:\n            for chunk in iter(lambda: handle.read(1024 * 1024), b""):\n                digest.update(chunk)\n    except OSError:\n        return None, [f"{label} could not be read"]\n',
-            '    with path.open("rb") as handle:\n        for chunk in iter(lambda: handle.read(1024 * 1024), b""):\n            digest.update(chunk)\n',
+            'except OSError:\n        return None, [f"{label} could not be read"]',
+            'except OSError:\n        raise',
         ),
     )
     raise SystemExit(0)
@@ -5916,7 +5926,7 @@ if mode == "--negative-control-lineage-proof-local-secret-paths":
         "Reserved-lineage proof evidence local secret-path gate",
         lambda: override_text(
             "scripts/kagemusha_production_readiness.py",
-            '    if device_lab.SECRET_RE.search(str(path)):\n        return [f"{label} path must not contain secret-looking material"]\n',
+            '    if device_lab.SECRET_RE.search(str(path)):\n        return None, [f"{label} path must not contain secret-looking material"]\n',
             "",
         ),
     )
@@ -5927,7 +5937,7 @@ if mode == "--negative-control-lineage-proof-local-ancestor-aliases":
         "Reserved-lineage proof evidence local ancestor alias gate",
         lambda: override_text(
             "scripts/kagemusha_production_readiness.py",
-            '    ancestor_errors = device_lab.validate_no_symlink_ancestors(\n        path,\n        f"{label} ancestor directory",\n    )\n    if ancestor_errors:\n        return ancestor_errors\n',
+            '    ancestor_errors = device_lab.validate_no_symlink_ancestors(\n        path,\n        f"{label} ancestor directory",\n    )\n    if ancestor_errors:\n        return None, ancestor_errors\n',
             "",
         ),
     )
@@ -5938,8 +5948,8 @@ if mode == "--negative-control-lineage-proof-local-hardlink-metadata-failure":
         "Reserved-lineage proof evidence local hardlink metadata failure gate",
         lambda: override_text(
             "scripts/kagemusha_production_readiness.py",
-            '    try:\n        link_count = path.stat().st_nlink\n    except OSError:\n        return [f"{label} hardlink metadata could not be read"]\n    if link_count > 1:\n        return [f"{label} must not be hardlinked"]\n',
-            '    link_count = path.stat().st_nlink\n    if link_count > 1:\n        return [f"{label} must not be hardlinked"]\n',
+            '    try:\n        link_count = path.stat().st_nlink\n    except OSError:\n        return None, [f"{label} hardlink metadata could not be read"]\n    if link_count > 1:\n        return None, [f"{label} must not be hardlinked"]\n',
+            '    link_count = path.stat().st_nlink\n    if link_count > 1:\n        return None, [f"{label} must not be hardlinked"]\n',
         ),
     )
     raise SystemExit(0)
@@ -5949,8 +5959,8 @@ if mode == "--negative-control-lineage-proof-local-file-metadata-failure":
         "Reserved-lineage proof evidence local file metadata failure gate",
         lambda: override_text(
             "scripts/kagemusha_production_readiness.py",
-            'def validate_lineage_local_file(path: Path, label: str) -> list[str]:\n    """Reject local lineage evidence files that could alias external bytes."""\n\n    if device_lab.SECRET_RE.search(str(path)):\n        return [f"{label} path must not contain secret-looking material"]\n    ancestor_errors = device_lab.validate_no_symlink_ancestors(\n        path,\n        f"{label} ancestor directory",\n    )\n    if ancestor_errors:\n        return ancestor_errors\n    try:\n        mode = path.lstat().st_mode\n    except FileNotFoundError:\n        return [f"{label} is missing"]\n    except OSError:\n        return [f"{label} file metadata could not be read"]\n',
-            'def validate_lineage_local_file(path: Path, label: str) -> list[str]:\n    """Reject local lineage evidence files that could alias external bytes."""\n\n    if device_lab.SECRET_RE.search(str(path)):\n        return [f"{label} path must not contain secret-looking material"]\n    ancestor_errors = device_lab.validate_no_symlink_ancestors(\n        path,\n        f"{label} ancestor directory",\n    )\n    if ancestor_errors:\n        return ancestor_errors\n    try:\n        mode = path.lstat().st_mode\n    except FileNotFoundError:\n        return [f"{label} is missing"]\n    except OSError:\n        return [f"{label} is missing"]\n',
+            '    try:\n        file_stat = path.lstat()\n    except FileNotFoundError:\n        return None, [f"{label} is missing"]\n    except OSError:\n        return None, [f"{label} file metadata could not be read"]\n',
+            '    try:\n        file_stat = path.lstat()\n    except FileNotFoundError:\n        return None, [f"{label} is missing"]\n    except OSError:\n        return None, [f"{label} is missing"]\n',
         ),
     )
     raise SystemExit(0)
@@ -6167,10 +6177,10 @@ if mode == "--negative-control-lineage-proof-helper-output-post-write-preflight"
 if mode == "--negative-control-lineage-proof-helper-artifact-open-path-binding":
     run_negative_control(
         "Reserved-lineage proof evidence helper artifact open path binding",
-        lambda: override_text(
+        lambda: override_text_all(
             "scripts/kagemusha_lineage_proof_evidence.py",
-            "            path_stat = path.lstat()",
-            "            path_stat = open_stat",
+            "expected_identity = (expected_stat.st_dev, expected_stat.st_ino)",
+            "expected_identity = (open_stat.st_dev, open_stat.st_ino)",
         ),
     )
     raise SystemExit(0)
@@ -6271,10 +6281,10 @@ if mode == "--negative-control-compact-key-helper-output-post-write-preflight":
 if mode == "--negative-control-compact-key-helper-artifact-open-path-binding":
     run_negative_control(
         "ABI-7 recursive compact key evidence helper artifact open path binding",
-        lambda: override_text(
+        lambda: override_text_all(
             "scripts/kagemusha_recursive_compact_key_evidence.py",
-            "            path_stat = path.lstat()",
-            "            path_stat = open_stat",
+            "expected_identity = (expected_stat.st_dev, expected_stat.st_ino)",
+            "expected_identity = (open_stat.st_dev, open_stat.st_ino)",
         ),
     )
     raise SystemExit(0)
@@ -6339,8 +6349,8 @@ if mode == "--negative-control-compact-key-helper-direct-hash-shape":
         "ABI-7 recursive compact key evidence helper direct hash-shape gate",
         lambda: override_text(
             "scripts/kagemusha_recursive_compact_key_evidence.py",
-            "file_errors = readiness.validate_lineage_local_file(path, label)",
-            "file_errors = []",
+            '    expected_stat, file_errors = readiness._validate_lineage_local_file_for_read(\n        path,\n        label,\n    )\n    if file_errors:\n        return None, file_errors\n',
+            '    file_errors = []\n    expected_stat = path.stat()\n',
         ),
     )
     raise SystemExit(0)
@@ -6390,8 +6400,8 @@ if mode == "--negative-control-lineage-proof-helper-direct-hash-shape":
         "Reserved-lineage proof evidence helper direct hash path-shape gate",
         lambda: override_text(
             "scripts/kagemusha_lineage_proof_evidence.py",
-            '    file_errors = readiness.validate_lineage_local_file(path, label)\n    if file_errors:\n        return None, file_errors\n',
-            "",
+            '    expected_stat, file_errors = readiness._validate_lineage_local_file_for_read(\n        path,\n        label,\n    )\n    if file_errors:\n        return None, file_errors\n',
+            '    file_errors = []\n    expected_stat = path.stat()\n',
         ),
     )
     raise SystemExit(0)
@@ -6401,8 +6411,8 @@ if mode == "--negative-control-lineage-proof-helper-direct-hash-read-failure":
         "Reserved-lineage proof evidence helper direct hash read-failure gate",
         lambda: override_text(
             "scripts/kagemusha_lineage_proof_evidence.py",
-            '    try:\n        with path.open("rb") as handle:\n            for chunk in iter(lambda: handle.read(1024 * 1024), b""):\n                digest.update(chunk)\n    except OSError:\n        return None, [f"{label} could not be read"]\n',
-            '    with path.open("rb") as handle:\n        for chunk in iter(lambda: handle.read(1024 * 1024), b""):\n            digest.update(chunk)\n',
+            'except OSError:\n        return None, [f"{label} could not be read"]',
+            'except OSError:\n        raise',
         ),
     )
     raise SystemExit(0)
@@ -6593,10 +6603,10 @@ if mode == "--negative-control-lineage-proof-artifact-size-binding":
 if mode == "--negative-control-lineage-proof-readiness-artifact-open-path-binding":
     run_negative_control(
         "Reserved-lineage proof readiness artifact open-path binding",
-        lambda: override_text(
+        lambda: override_text_all(
             "scripts/kagemusha_production_readiness.py",
-            "            path_stat = path.lstat()",
-            "            path_stat = open_stat",
+            "expected_identity = (expected_stat.st_dev, expected_stat.st_ino)",
+            "expected_identity = (open_stat.st_dev, open_stat.st_ino)",
         ),
     )
     raise SystemExit(0)
@@ -6615,10 +6625,10 @@ if mode == "--negative-control-compact-key-artifact-size-binding":
 if mode == "--negative-control-compact-key-readiness-artifact-open-path-binding":
     run_negative_control(
         "ABI-7 recursive compact key readiness artifact open-path binding",
-        lambda: override_text(
+        lambda: override_text_all(
             "scripts/kagemusha_production_readiness.py",
-            "            path_stat = path.lstat()",
-            "            path_stat = open_stat",
+            "expected_identity = (expected_stat.st_dev, expected_stat.st_ino)",
+            "expected_identity = (open_stat.st_dev, open_stat.st_ino)",
         ),
     )
     raise SystemExit(0)

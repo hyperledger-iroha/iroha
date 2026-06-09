@@ -148,6 +148,14 @@ public enum PrivacyNativeBridge {
         }
     }
 
+    public static func buildConfidentialTransferProofV2(requestArchive: Data) throws -> Data {
+        try buildProofV1(requestArchive: requestArchive)
+    }
+
+    public static func buildConfidentialUnshieldProofV3(requestArchive: Data) throws -> Data {
+        try buildProofV1(requestArchive: requestArchive)
+    }
+
     public static func verifyProofV1(requestArchive: Data) throws -> Data {
         try call(
             requestArchive: requestArchive,

@@ -445,7 +445,8 @@ export function buildKagemushaInstructionTransaction({
   chainId,
   authority,
   type,
-  instructionType = type,
+  instructionType,
+  instruction_type,
   instructionArchive,
   instruction_archive,
   archive,
@@ -459,7 +460,7 @@ export function buildKagemushaInstructionTransaction({
   privateKey,
 }) {
   const instruction = buildKagemushaInstructionArchiveInstruction({
-    type: instructionType,
+    type: instructionType ?? type ?? instruction_type,
     instructionArchive,
     instruction_archive,
     archive,

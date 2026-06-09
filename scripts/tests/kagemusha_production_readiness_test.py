@@ -6,6 +6,7 @@ import importlib.util
 import hashlib
 import io
 import json
+import os
 import shutil
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -4954,30 +4955,35 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             evidence_path = create_compact_key_evidence(Path(temp) / "compact")
             target = evidence_path.with_name("aliased-recursive-compact-key-evidence.json")
             target.write_bytes(evidence_path.read_bytes())
-            original_validate_lineage_local_file = readiness.validate_lineage_local_file
+            original_validate_lineage_local_file_for_read = (
+                readiness._validate_lineage_local_file_for_read
+            )
             evidence_validate_calls = 0
 
-            def swapping_validate_lineage_local_file(
+            def swapping_validate_lineage_local_file_for_read(
                 path: Path,
                 label: str,
-            ) -> list[str]:
+            ) -> tuple[os.stat_result | None, list[str]]:
                 nonlocal evidence_validate_calls
-                errors = original_validate_lineage_local_file(path, label)
+                file_stat, errors = original_validate_lineage_local_file_for_read(
+                    path,
+                    label,
+                )
                 if path == evidence_path and not errors:
                     evidence_validate_calls += 1
-                    if evidence_validate_calls == 2:
+                    if evidence_validate_calls == 1:
                         slot_helpers.replace_with_symlink(self, evidence_path, target)
-                return errors
+                return file_stat, errors
 
             with mock.patch.object(
                 readiness,
-                "validate_lineage_local_file",
-                swapping_validate_lineage_local_file,
+                "_validate_lineage_local_file_for_read",
+                swapping_validate_lineage_local_file_for_read,
             ):
                 result = readiness.check_compact_key_evidence(evidence_path)
 
         self.assertFalse(result["ok"])
-        self.assertGreaterEqual(evidence_validate_calls, 2)
+        self.assertGreaterEqual(evidence_validate_calls, 1)
         self.assertIn(
             "compact_key_evidence_file_shape",
             {item["code"] for item in result["blockers"]},
@@ -5384,32 +5390,37 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             target = evidence_path.parent / "aliased-recursive-compact-key-artifacts.log"
             expected_target_bytes = log_path.read_bytes()
             target.write_bytes(expected_target_bytes)
-            original_validate_lineage_local_file = readiness.validate_lineage_local_file
+            original_validate_lineage_local_file_for_read = (
+                readiness._validate_lineage_local_file_for_read
+            )
             log_validate_calls = 0
 
-            def swapping_validate_lineage_local_file(
+            def swapping_validate_lineage_local_file_for_read(
                 path: Path,
                 label: str,
-            ) -> list[str]:
+            ) -> tuple[os.stat_result | None, list[str]]:
                 nonlocal log_validate_calls
-                errors = original_validate_lineage_local_file(path, label)
+                file_stat, errors = original_validate_lineage_local_file_for_read(
+                    path,
+                    label,
+                )
                 if path == log_path and not errors:
                     log_validate_calls += 1
-                    if log_validate_calls == 2:
+                    if log_validate_calls == 1:
                         slot_helpers.replace_with_symlink(self, log_path, target)
-                return errors
+                return file_stat, errors
 
             with mock.patch.object(
                 readiness,
-                "validate_lineage_local_file",
-                swapping_validate_lineage_local_file,
+                "_validate_lineage_local_file_for_read",
+                swapping_validate_lineage_local_file_for_read,
             ):
                 result = readiness.check_compact_key_evidence(evidence_path)
 
             target_bytes = target.read_bytes()
 
         self.assertFalse(result["ok"])
-        self.assertGreaterEqual(log_validate_calls, 2)
+        self.assertGreaterEqual(log_validate_calls, 1)
         self.assertEqual(target_bytes, expected_target_bytes)
         self.assertIn(
             "compact_key_evidence_generator_log_file_shape",
@@ -5709,32 +5720,37 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             artifact_path = evidence_path.parent / artifact_name
             target = evidence_path.parent / "aliased-recursive-compact-len4.pk"
             target.write_bytes(b"KCGK\x00\x01" + b"1" * 64)
-            original_validate_lineage_local_file = readiness.validate_lineage_local_file
+            original_validate_lineage_local_file_for_read = (
+                readiness._validate_lineage_local_file_for_read
+            )
             artifact_validate_calls = 0
 
-            def swapping_validate_lineage_local_file(
+            def swapping_validate_lineage_local_file_for_read(
                 path: Path,
                 label: str,
-            ) -> list[str]:
+            ) -> tuple[os.stat_result | None, list[str]]:
                 nonlocal artifact_validate_calls
-                errors = original_validate_lineage_local_file(path, label)
+                file_stat, errors = original_validate_lineage_local_file_for_read(
+                    path,
+                    label,
+                )
                 if path == artifact_path and not errors:
                     artifact_validate_calls += 1
-                    if artifact_validate_calls == 2:
+                    if artifact_validate_calls == 1:
                         slot_helpers.replace_with_symlink(self, artifact_path, target)
-                return errors
+                return file_stat, errors
 
             with mock.patch.object(
                 readiness,
-                "validate_lineage_local_file",
-                swapping_validate_lineage_local_file,
+                "_validate_lineage_local_file_for_read",
+                swapping_validate_lineage_local_file_for_read,
             ):
                 result = readiness.check_compact_key_evidence(evidence_path)
 
             target_bytes = target.read_bytes()
 
         self.assertFalse(result["ok"])
-        self.assertGreaterEqual(artifact_validate_calls, 2)
+        self.assertGreaterEqual(artifact_validate_calls, 1)
         self.assertEqual(target_bytes, b"KCGK\x00\x01" + b"1" * 64)
         blockers = result["blockers"]
         self.assertIn(
@@ -5950,23 +5966,29 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             artifact_path = artifact_dir / artifact_name
             target = artifact_dir / "aliased-recursive-compact-len4.pk"
             target.write_bytes(b"KCGK\x00\x01" + b"1" * 64)
-            original_validate_lineage_local_file = (
-                compact_key_helper.readiness.validate_lineage_local_file
+            original_validate_lineage_local_file_for_read = (
+                compact_key_helper.readiness._validate_lineage_local_file_for_read
             )
             swapped = False
 
-            def swapping_validate_lineage_local_file(path: Path, label: str) -> list[str]:
+            def swapping_validate_lineage_local_file_for_read(
+                path: Path,
+                label: str,
+            ) -> tuple[os.stat_result | None, list[str]]:
                 nonlocal swapped
-                errors = original_validate_lineage_local_file(path, label)
+                file_stat, errors = original_validate_lineage_local_file_for_read(
+                    path,
+                    label,
+                )
                 if path == artifact_path and not errors and not swapped:
                     slot_helpers.replace_with_symlink(self, artifact_path, target)
                     swapped = True
-                return errors
+                return file_stat, errors
 
             with mock.patch.object(
                 compact_key_helper.readiness,
-                "validate_lineage_local_file",
-                swapping_validate_lineage_local_file,
+                "_validate_lineage_local_file_for_read",
+                swapping_validate_lineage_local_file_for_read,
             ):
                 evidence, errors = compact_key_helper.build_evidence(
                     artifact_dir=artifact_dir,
@@ -5980,6 +6002,52 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(target_bytes, b"KCGK\x00\x01" + b"1" * 64)
         self.assertIn(
             f"recursive compact key artifact {artifact_name} must not be a symlink",
+            errors,
+        )
+
+    def test_compact_key_evidence_helper_rejects_artifact_regular_file_swap_after_preflight(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "compact"
+            create_compact_key_artifact_files(artifact_dir)
+            artifact_name = "recursive-compact-len4.pk"
+            artifact_path = artifact_dir / artifact_name
+            replacement = artifact_dir / "replacement-recursive-compact-len4.pk"
+            replacement.write_bytes(b"KCGK\x00\x01" + b"2" * 64)
+            original_validate_lineage_local_file_for_read = (
+                compact_key_helper.readiness._validate_lineage_local_file_for_read
+            )
+            swapped = False
+
+            def swapping_validate_lineage_local_file_for_read(
+                path: Path,
+                label: str,
+            ) -> tuple[os.stat_result | None, list[str]]:
+                nonlocal swapped
+                file_stat, errors = original_validate_lineage_local_file_for_read(
+                    path,
+                    label,
+                )
+                if path == artifact_path and not errors and not swapped:
+                    replacement.replace(artifact_path)
+                    swapped = True
+                return file_stat, errors
+
+            with mock.patch.object(
+                compact_key_helper.readiness,
+                "_validate_lineage_local_file_for_read",
+                swapping_validate_lineage_local_file_for_read,
+            ):
+                evidence, errors = compact_key_helper.build_evidence(
+                    artifact_dir=artifact_dir,
+                    command=readiness.expected_compact_key_command(),
+                    generated_at_utc=readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                )
+
+        self.assertIsNone(evidence)
+        self.assertIn(
+            f"recursive compact key artifact {artifact_name} changed while being read",
             errors,
         )
 
@@ -6850,30 +6918,35 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             evidence_path = create_lineage_proof_evidence(Path(temp) / "lineage")
             target = evidence_path.with_name("aliased-lineage-proof-evidence.json")
             target.write_bytes(evidence_path.read_bytes())
-            original_validate_lineage_local_file = readiness.validate_lineage_local_file
+            original_validate_lineage_local_file_for_read = (
+                readiness._validate_lineage_local_file_for_read
+            )
             evidence_validate_calls = 0
 
-            def swapping_validate_lineage_local_file(
+            def swapping_validate_lineage_local_file_for_read(
                 path: Path,
                 label: str,
-            ) -> list[str]:
+            ) -> tuple[os.stat_result | None, list[str]]:
                 nonlocal evidence_validate_calls
-                errors = original_validate_lineage_local_file(path, label)
+                file_stat, errors = original_validate_lineage_local_file_for_read(
+                    path,
+                    label,
+                )
                 if path == evidence_path and not errors:
                     evidence_validate_calls += 1
-                    if evidence_validate_calls == 2:
+                    if evidence_validate_calls == 1:
                         slot_helpers.replace_with_symlink(self, evidence_path, target)
-                return errors
+                return file_stat, errors
 
             with mock.patch.object(
                 readiness,
-                "validate_lineage_local_file",
-                swapping_validate_lineage_local_file,
+                "_validate_lineage_local_file_for_read",
+                swapping_validate_lineage_local_file_for_read,
             ):
                 result = readiness.check_lineage_proof_evidence(evidence_path)
 
         self.assertFalse(result["ok"])
-        self.assertGreaterEqual(evidence_validate_calls, 2)
+        self.assertGreaterEqual(evidence_validate_calls, 1)
         self.assertIn(
             "lineage_proof_evidence_file_shape",
             {item["code"] for item in result["blockers"]},
@@ -7328,32 +7401,37 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             artifact_path = evidence_path.parent / artifact_name
             target = evidence_path.parent / "aliased-lineage-init-len128.pk"
             target.write_bytes(b"lineage artifact aliased target\n")
-            original_validate_lineage_local_file = readiness.validate_lineage_local_file
+            original_validate_lineage_local_file_for_read = (
+                readiness._validate_lineage_local_file_for_read
+            )
             artifact_validate_calls = 0
 
-            def swapping_validate_lineage_local_file(
+            def swapping_validate_lineage_local_file_for_read(
                 path: Path,
                 label: str,
-            ) -> list[str]:
+            ) -> tuple[os.stat_result | None, list[str]]:
                 nonlocal artifact_validate_calls
-                errors = original_validate_lineage_local_file(path, label)
+                file_stat, errors = original_validate_lineage_local_file_for_read(
+                    path,
+                    label,
+                )
                 if path == artifact_path and not errors:
                     artifact_validate_calls += 1
-                    if artifact_validate_calls == 2:
+                    if artifact_validate_calls == 1:
                         slot_helpers.replace_with_symlink(self, artifact_path, target)
-                return errors
+                return file_stat, errors
 
             with mock.patch.object(
                 readiness,
-                "validate_lineage_local_file",
-                swapping_validate_lineage_local_file,
+                "_validate_lineage_local_file_for_read",
+                swapping_validate_lineage_local_file_for_read,
             ):
                 result = readiness.check_lineage_proof_evidence(evidence_path)
 
             target_bytes = target.read_bytes()
 
         self.assertFalse(result["ok"])
-        self.assertGreaterEqual(artifact_validate_calls, 2)
+        self.assertGreaterEqual(artifact_validate_calls, 1)
         self.assertEqual(target_bytes, b"lineage artifact aliased target\n")
         blockers = result["blockers"]
         self.assertIn(
@@ -7631,25 +7709,30 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             target = Path(temp) / "aliased-record-archive-proof.log"
             expected_target_bytes = log_path.read_bytes()
             target.write_bytes(expected_target_bytes)
-            original_validate_lineage_local_file = readiness.validate_lineage_local_file
+            original_validate_lineage_local_file_for_read = (
+                readiness._validate_lineage_local_file_for_read
+            )
             log_validate_calls = 0
 
-            def swapping_validate_lineage_local_file(
+            def swapping_validate_lineage_local_file_for_read(
                 path: Path,
                 label: str,
-            ) -> list[str]:
+            ) -> tuple[os.stat_result | None, list[str]]:
                 nonlocal log_validate_calls
-                errors = original_validate_lineage_local_file(path, label)
+                file_stat, errors = original_validate_lineage_local_file_for_read(
+                    path,
+                    label,
+                )
                 if path == log_path and not errors:
                     log_validate_calls += 1
-                    if log_validate_calls == 2:
+                    if log_validate_calls == 1:
                         slot_helpers.replace_with_symlink(self, log_path, target)
-                return errors
+                return file_stat, errors
 
             with mock.patch.object(
                 readiness,
-                "validate_lineage_local_file",
-                swapping_validate_lineage_local_file,
+                "_validate_lineage_local_file_for_read",
+                swapping_validate_lineage_local_file_for_read,
             ):
                 digest, errors = readiness.validate_lineage_proof_log(
                     log_path,
@@ -7659,7 +7742,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             target_bytes = target.read_bytes()
 
         self.assertIsNone(digest)
-        self.assertGreaterEqual(log_validate_calls, 2)
+        self.assertGreaterEqual(log_validate_calls, 1)
         self.assertEqual(target_bytes, expected_target_bytes)
         self.assertEqual(errors, ["production proof log must not be a symlink"])
 
@@ -7906,6 +7989,44 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertIsNone(text)
         self.assertEqual(errors, ["production proof log must not be hardlinked"])
 
+    def test_lineage_local_text_rejects_regular_file_swap_after_preflight(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            log_path = root / "record-archive-proof.log"
+            log_path.write_text("placeholder\n", encoding="utf-8")
+            replacement = root / "replacement-record-archive-proof.log"
+            replacement.write_text("test result: ok. forged marker\n", encoding="utf-8")
+            original_validate_lineage_local_file_for_read = (
+                readiness._validate_lineage_local_file_for_read
+            )
+
+            def swapping_validate_lineage_local_file_for_read(
+                path: Path,
+                label: str,
+            ) -> tuple[os.stat_result | None, list[str]]:
+                file_stat, errors = original_validate_lineage_local_file_for_read(
+                    path,
+                    label,
+                )
+                if path == log_path and not errors:
+                    replacement.replace(log_path)
+                return file_stat, errors
+
+            with mock.patch.object(
+                readiness,
+                "_validate_lineage_local_file_for_read",
+                swapping_validate_lineage_local_file_for_read,
+            ):
+                text, errors = readiness._lineage_local_text(
+                    log_path,
+                    "production proof log",
+                    "production proof log could not be read",
+                    decode_errors="replace",
+                )
+
+        self.assertIsNone(text)
+        self.assertEqual(errors, ["production proof log changed while being read"])
+
     def test_lineage_readiness_sha256_file_rejects_secret_path_directly(
         self,
     ) -> None:
@@ -7960,6 +8081,44 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
 
         self.assertIsNone(digest)
         self.assertEqual(errors, ["lineage rollup artifact must not be hardlinked"])
+
+    def test_lineage_readiness_sha256_file_rejects_regular_file_swap_after_preflight(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            artifact = root / "lineage-artifact.norito"
+            artifact.write_bytes(b"lineage artifact bytes\n")
+            replacement = root / "replacement-lineage-artifact.norito"
+            replacement.write_bytes(b"replacement lineage artifact bytes\n")
+            original_validate_lineage_local_file_for_read = (
+                readiness._validate_lineage_local_file_for_read
+            )
+
+            def swapping_validate_lineage_local_file_for_read(
+                path: Path,
+                label: str,
+            ) -> tuple[os.stat_result | None, list[str]]:
+                file_stat, errors = original_validate_lineage_local_file_for_read(
+                    path,
+                    label,
+                )
+                if path == artifact and not errors:
+                    replacement.replace(artifact)
+                return file_stat, errors
+
+            with mock.patch.object(
+                readiness,
+                "_validate_lineage_local_file_for_read",
+                swapping_validate_lineage_local_file_for_read,
+            ):
+                digest, errors = readiness._sha256_file(
+                    artifact,
+                    "lineage rollup artifact",
+                )
+
+        self.assertIsNone(digest)
+        self.assertEqual(errors, ["lineage rollup artifact changed while being read"])
 
     def test_lineage_readiness_sha256_file_rejects_hardlink_metadata_failure_directly(
         self,
@@ -8577,23 +8736,29 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             artifact_path = artifact_dir / artifact_name
             target = artifact_dir / "aliased-lineage-init-len128.pk"
             target.write_bytes(b"lineage artifact aliased target\n")
-            original_validate_lineage_local_file = (
-                evidence_helper.readiness.validate_lineage_local_file
+            original_validate_lineage_local_file_for_read = (
+                evidence_helper.readiness._validate_lineage_local_file_for_read
             )
             swapped = False
 
-            def swapping_validate_lineage_local_file(path: Path, label: str) -> list[str]:
+            def swapping_validate_lineage_local_file_for_read(
+                path: Path,
+                label: str,
+            ) -> tuple[os.stat_result | None, list[str]]:
                 nonlocal swapped
-                errors = original_validate_lineage_local_file(path, label)
+                file_stat, errors = original_validate_lineage_local_file_for_read(
+                    path,
+                    label,
+                )
                 if path == artifact_path and not errors and not swapped:
                     slot_helpers.replace_with_symlink(self, artifact_path, target)
                     swapped = True
-                return errors
+                return file_stat, errors
 
             with mock.patch.object(
                 evidence_helper.readiness,
-                "validate_lineage_local_file",
-                swapping_validate_lineage_local_file,
+                "_validate_lineage_local_file_for_read",
+                swapping_validate_lineage_local_file_for_read,
             ):
                 evidence, errors = evidence_helper.build_evidence(
                     artifact_dir=artifact_dir,
@@ -8608,6 +8773,55 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertIsNone(evidence)
         self.assertEqual(target_bytes, b"lineage artifact aliased target\n")
         self.assertIn(f"lineage artifact {artifact_name} must not be a symlink", errors)
+
+    def test_lineage_proof_evidence_helper_rejects_artifact_regular_file_swap_after_preflight(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "artifacts"
+            create_lineage_artifact_files(artifact_dir)
+            proof_log = artifact_dir / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS[
+                "record_archive_proof"
+            ]
+            write_passing_lineage_proof_log(proof_log)
+            artifact_name = "lineage-init-len128.pk"
+            artifact_path = artifact_dir / artifact_name
+            replacement = artifact_dir / "replacement-lineage-init-len128.pk"
+            replacement.write_bytes(b"lineage artifact replacement target\n")
+            original_validate_lineage_local_file_for_read = (
+                evidence_helper.readiness._validate_lineage_local_file_for_read
+            )
+            swapped = False
+
+            def swapping_validate_lineage_local_file_for_read(
+                path: Path,
+                label: str,
+            ) -> tuple[os.stat_result | None, list[str]]:
+                nonlocal swapped
+                file_stat, errors = original_validate_lineage_local_file_for_read(
+                    path,
+                    label,
+                )
+                if path == artifact_path and not errors and not swapped:
+                    replacement.replace(artifact_path)
+                    swapped = True
+                return file_stat, errors
+
+            with mock.patch.object(
+                evidence_helper.readiness,
+                "_validate_lineage_local_file_for_read",
+                swapping_validate_lineage_local_file_for_read,
+            ):
+                evidence, errors = evidence_helper.build_evidence(
+                    artifact_dir=artifact_dir,
+                    proof_log=proof_log,
+                    command=evidence_helper.DEFAULT_RECORD_ARCHIVE_PROOF_COMMAND,
+                    elapsed_seconds=14400.0,
+                    generated_at_utc=readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                )
+
+        self.assertIsNone(evidence)
+        self.assertIn(f"lineage artifact {artifact_name} changed while being read", errors)
 
     def test_lineage_proof_evidence_helper_rejects_missing_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

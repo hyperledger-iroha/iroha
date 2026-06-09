@@ -178,12 +178,15 @@ append and redeem use `KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1
 The privacy native surface is intentionally exposed as a generic raw Norito
 archive bridge: `privacy_capabilities_v1()`,
 `privacy_build_proof_v1(request_archive)`, and
-`privacy_verify_proof_v1(request_archive)`. The raw privacy FFI bridge does not
-expose algorithm-specific production proof builders while the privacy rows
-remain gated. Python's executable ZK-ACE SDK builder is exposed separately as
-`build_zk_ace_authorization_proof_v1()` and the legacy
-`zk_ace_build_transfer_authorization_v1()` alias; these helpers do not change
-the fail-closed production gate. Native availability requires bridge ABI 6 or
+`privacy_verify_proof_v1(request_archive)`. The raw privacy FFI bridge remains
+row-gated; algorithm-specific SDK builders are exposed separately for
+production-capable flows. Python exports
+`build_zk_ace_authorization_proof_v1()` with the legacy
+`zk_ace_build_transfer_authorization_v1()` alias, plus confidential transfer
+builders `buildConfidentialTransferProofV2()` and
+`buildConfidentialUnshieldProofV3()` with Pythonic snake-case aliases. These
+helpers do not bypass the fail-closed production gate or BOI evidence
+requirements. Native availability requires bridge ABI 6 or
 later plus successful `capabilities`, `build`, and `verify` probes whose
 operation-specific result schema bytes match the called entry point.
 

@@ -78,6 +78,14 @@ public final class PrivacyNativeBridge {
     return call("build proof", requestArchive, PrivacyNativeBridge::nativeBuildProof);
   }
 
+  public static byte[] buildConfidentialTransferProofV2(final byte[] requestArchive) {
+    return buildProof(requestArchive);
+  }
+
+  public static byte[] buildConfidentialUnshieldProofV3(final byte[] requestArchive) {
+    return buildProof(requestArchive);
+  }
+
   public static byte[] verifyProof(final byte[] requestArchive) {
     return call("verify proof", requestArchive, PrivacyNativeBridge::nativeVerifyProof);
   }

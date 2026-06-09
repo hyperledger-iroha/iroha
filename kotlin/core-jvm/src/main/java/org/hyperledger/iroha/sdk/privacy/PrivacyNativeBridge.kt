@@ -59,6 +59,14 @@ class PrivacyNativeBridge private constructor() {
             call("build proof", requestArchive, ::nativeBuildProof)
 
         @JvmStatic
+        fun buildConfidentialTransferProofV2(requestArchive: ByteArray?): ByteArray =
+            buildProof(requestArchive)
+
+        @JvmStatic
+        fun buildConfidentialUnshieldProofV3(requestArchive: ByteArray?): ByteArray =
+            buildProof(requestArchive)
+
+        @JvmStatic
         fun verifyProof(requestArchive: ByteArray?): ByteArray =
             call("verify proof", requestArchive, ::nativeVerifyProof)
 
