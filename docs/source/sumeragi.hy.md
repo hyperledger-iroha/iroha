@@ -165,7 +165,7 @@ accepts traffic:
   - `sumeragi_epoch_length_blocks`, `sumeragi_epoch_commit_deadline_offset`, `sumeragi_epoch_reveal_deadline_offset` — confirm the node loaded the intended VRF schedule.
   - `sumeragi_prf_epoch_seed_hex` — last seed published by the VRF pipeline (pairs with `/v1/sumeragi/status.prf_epoch_seed`).
   - `sumeragi_npos_collector_selected_total` and `sumeragi_npos_collector_assignments_by_idx{collector_idx}` — sanity check collector rotation.
-- `sumeragi_da_gate_block_total{reason}` and `sumeragi_rbc_da_reschedule_total` — monitor DA availability warnings on missing local payloads; reschedule counters are legacy and should remain zero now that DA is advisory.
+- `sumeragi_da_gate_block_total{reason}` and `sumeragi_rbc_da_reschedule_total` — monitor DA availability warnings on missing local payloads; reschedule counters should remain zero because missing-local-payload handling now uses DA gate transitions and bounded recovery instead of deadline reschedules.
   - `sumeragi_missing_block_fetch_total{outcome}` plus `sumeragi_missing_block_fetch_target_total{target="signers|topology|none"}` confirm missing-block fetch cadence and whether signer targeting fell back to the full topology.
   - `sumeragi_rbc_store_pressure`, `sumeragi_rbc_backpressure_deferrals_total`, `sumeragi_rbc_persist_drops_total`, `sumeragi_rbc_store_evictions_total`, and the per‑dataspace gauges (`sumeragi_rbc_dataspace_*`) — highlight on‑disk RBC congestion.
   - `mode_tag`, `staged_mode_tag`, `staged_mode_activation_height`, and `mode_activation_lag_blocks` (also exposed via `/v1/sumeragi/status`) surface staged flips; non-zero lag means the activation height passed but the runtime mode hasn’t flipped yet and should trigger an alert.
@@ -181,7 +181,7 @@ accepts traffic:
 - View-change pruning: once a higher view is installed for a height, stale pending blocks/RBC sessions/missing-block requests for lower views of that height are dropped to prevent rebroadcast storms; missing payloads are re-requested only for the active view.
 - Validation gate rejects: `/v1/sumeragi/status.validation_rejects` surfaces totals by reason plus the last rejected block hash/height/view/reason/timestamp. Prometheus mirrors the rejects via `sumeragi_validation_reject_total{reason}` with gauges `sumeragi_validation_reject_last_reason`, `_last_height`, `_last_view`, and `_last_timestamp_ms` (all zero when unset) so alerts can distinguish stateless vs execution vs prev-hash/height/topology failures before voting.
 - Evidence helpers:
-  - `/v1/sumeragi/evidence`, `/v1/sumeragi/evidence/count`, and `/v1/sumeragi/evidence/submit` carry the same DTOs surfaced in the JS/Python SDKs, so the CLI and automation can inspect or upload observer/fault evidence without recomputing payload formats.
+  - `GET /v1/sumeragi/evidence`, `GET /v1/sumeragi/evidence/count`, and `POST /v1/sumeragi/evidence` carry the same DTOs surfaced in the JS/Python SDKs, so the CLI and automation can inspect or upload observer/fault evidence without recomputing payload formats.
   - View‑change telemetry is mirrored via `view_change_proof_{accepted,stale,rejected}_total`; `/v1/sumeragi/status` exposes the same counters for ad‑hoc audits.
 
 **Quick reference**
@@ -216,7 +216,7 @@ accepts traffic:
   4. Only re-run admission once both checks succeed; otherwise escalate governance/persistence issues.
 - **Evidence ingestion stalls:** Diverging `iroha ops sumeragi evidence count` outputs or a flat `sumeragi_evidence_records_total` time series indicates the HTTP ingest path is failing.
   1. Compare `evidence count` across at least two validators.
-  2. Tail the Torii logs for `/v1/sumeragi/evidence/submit` errors and re-submit a known fixture.
+  2. Tail the Torii logs for `/v1/sumeragi/evidence` errors and re-submit a known fixture.
   3. If the retry also fails, capture the `count` output and Alertmanager silence IDs, then roll back to the last known-good build.
 
 Node Roles (config)
@@ -454,7 +454,7 @@ Commit rules (scaffold wiring)
 - Availability votes: validators emit `AvailabilityVote` after proposal validation whenever DA is enabled and they have not already voted; vote emission does not wait for RBC delivery. This avoids circular waits between payload transport and voting. Collectors may aggregate availability evidence even when the payload is still missing locally; missing-block fetch runs in parallel so availability status updates once evidence is observed. Nodes continue to accept late availability votes for pending blocks even after a view change so DA quorums can still form, and in DA mode stale availability votes are recorded even if the payload has not been hydrated yet. If the collector target set is empty after filtering the local peer, the vote sender falls back to the commit topology to avoid a no-op broadcast.
 - Commit votes: nodes accept late commit votes even after a view change so commit certificates can still form; in DA mode stale commit votes are recorded even if the payload is not yet known, and in DA-off runs the same holds when a missing-block fetch is in flight so the certificate can be reconstructed after payload arrival. The local validator gossips a block-sync update (fanout‑capped) after emitting its commit vote to propagate cached votes.
 - Payload recovery: nodes that observe availability evidence (RBC `READY` quorum or availability votes) without the payload deterministically fetch it from the certificate signers for `sumeragi.recovery.missing_block_signer_fallback_attempts` attempts, then fall back to the full commit topology (and still fall back immediately when the signer set is empty). Payload hashes are verified before applying the block.
-- Availability timeout on idle views (NPoS/DA-only): pending blocks with `MissingLocalData` log and rebroadcast availability evidence after the availability timeout even if no fresh traffic arrives; while `MissingLocalData` is set, quorum reschedules are deferred until the availability timeout, and `ManifestGuard` remains advisory (warnings only). Permissioned/DA-off paths skip DA availability tracking but still benefit from the prevote-only fallback above.
+- Availability timeout on idle views (NPoS/DA-only): pending blocks with `MissingLocalData` log and rebroadcast availability evidence after the availability timeout even if no fresh traffic arrives; while `MissingLocalData` is set, quorum reschedules are deferred until the availability timeout. Manifest guards follow the per-lane policy: strict lanes keep DA-gated commit/proposal sealing blocked until the manifest is available, audit-only lanes allow missing/read/spool-scan warnings, and manifest hash mismatches reject in every policy. Permissioned/DA-off paths skip DA availability tracking but still benefit from the prevote-only fallback above.
 - Prepare-only fallback: if only a prepare certificate reaches quorum and no commit votes arrive by the quorum timeout, the actor requeues the block’s transactions, rebroadcasts the block + block-sync update + prepare certificate, resets a highest certificate reference that pointed at the stalled block, and triggers a view change so the next round can propose a fresh block without stalling (applies to both DA-off permissioned runs and DA-off NPoS smoke tests).
 - Commit vote lock: once any commit vote is observed at a height, proposal assembly for that height is deferred until the committed block resolves, and quorum reschedules skip requeueing that block’s transactions to avoid conflicting proposals.
 - Aborted pending retention: when a commit inflight timeout or quorum reschedule marks a pending block aborted, the payload is retained for a bounded window (derived from quorum timeout and missing-block fallback attempts) so late commit certificates and missing-block fetches can still finalize; entries are evicted once committed or when the retention window expires without votes or fetches.
@@ -497,24 +497,27 @@ Determinism
 ### Large payload simulations
 
 - Integration helpers `sumeragi_rbc_da_large_payload_four_peers` and `_six_peers`
-  (see `docs/source/sumeragi_da.md`) exercise ≥10 MiB payloads with
-  `sumeragi.da.enabled = true` and confirm that availability evidence forms (or an RBC
-  `READY` quorum is recorded) and commit progresses without deadlocking. RBC
-  delivery typically completes before commit, but commit is not gated on
-  availability evidence or local `DELIVER`.
+  (see `docs/source/sumeragi_da.md`) exercise the harness default
+  `LARGE_PAYLOAD_BYTES = 1024` smoke payload with `sumeragi.da.enabled = true`
+  and confirm that the protocol READY quorum is recorded, payload delivery
+  counters advance, and commit progresses without deadlocking. Larger payloads
+  remain soak/performance work rather than the default smoke shape.
 - DA availability timeout: while availability evidence is still missing
   (RBC `READY` quorum not met), the actor logs and rebroadcasts
   availability evidence after the timeout. The reschedule counters
   (`sumeragi_rbc_da_reschedule_total` and `status_snapshot().da_reschedule_total`)
-  are legacy and should remain zero now that DA is advisory. Nodes missing payload
+  should remain zero because recovery is tracked through DA gate transitions
+  instead of deadline reschedules. Nodes missing payload
   fetch it from certificate signers first, then fall back to the full commit topology after
   the configured retry budget.
 - The helpers capture per-peer Prometheus counters and `/v1/sumeragi/rbc/sessions`
   snapshots; automation can watch their `sumeragi_da_summary::*` output.
-- Performance budgets are enforced by the helpers: RBC delivery ≤ 3.6 s, commit
-  ≤ 4.0 s, throughput ≥ 2.7 MiB/s, background-post queue depth ≤ 32, and P2P queue
-  drops = 0. Violations fail the tests and should alert operators in production
-  runs.
+- Performance budgets are enforced by the helpers: RBC delivery uses a 30 s
+  base budget plus 60 s for each peer beyond four and a 40 s RS16 premium,
+  commit latency may exceed delivery by at most 40 s, throughput must stay above
+  `min(payload / delivery_budget, 0.1 MiB/s)`, background-post queue depth must
+  stay ≤ 32, and P2P queue drops must stay at 0. Violations fail the tests and
+  should alert operators in production runs.
 - Use `cargo run -p build-support --bin sumeragi_da_report` against the latest
   `.summary.json` artifacts to capture measured numbers. The generated Markdown
   now includes `BG queue max` and `P2P drops max` columns mirroring the budgets.
@@ -716,7 +719,7 @@ Operators can pull deterministic telemetry snapshots over Torii or via the CLI.
 | `sumeragi_rbc_persist_drops_total` | Persist requests dropped because the async RBC persist queue is full. | Check disk throughput and queue saturation, then tune RBC store caps or reduce incoming load to avoid prolonged in-memory growth. |
 | `sumeragi_rbc_backlog_sessions_pending` / `sumeragi_rbc_backlog_chunks_total` / `sumeragi_rbc_backlog_chunks_max` | Number of payloads still missing chunks and the highest per-session backlog. | When `pending_sessions` or `chunks_total` plateaus, inspect `iroha --output-format text ops sumeragi rbc sessions` to find the stuck block hash, then check network logs for throttling or mismatched manifests. |
 | `sumeragi_rbc_rebroadcast_skipped_total{kind="payload|ready"}` | Local peer skipped a payload/READY rebroadcast because it was not in the deterministic f+1 sender subset. | Compare counts across peers to confirm the intended subset is rebroadcasting; if stalls persist and skips climb everywhere, verify roster hashes and the leader index ordering. |
-| `sumeragi_rbc_da_reschedule_total` | Legacy counter for DA deadline reschedules (no longer incremented when DA is advisory). | Keep at zero; use `sumeragi_da_gate_block_total{reason="missing_local_data"}` to monitor missing local payloads. |
+| `sumeragi_rbc_da_reschedule_total` | Legacy counter for DA deadline reschedules (no longer incremented by the DA gate recovery path). | Keep at zero; use `sumeragi_da_gate_block_total{reason="missing_local_data"}` to monitor missing local payloads. |
 | `sumeragi_membership_mismatch_total` / `sumeragi_membership_mismatch_active` | Peers disagree on roster membership for a `(height,view)` tuple. | Compare `/v1/sumeragi/status.membership` hashes across peers, run `iroha --output-format text ops sumeragi params` per node, and halt the rollout until every validator reports the same `ordered_peer_ids`. |
 
 #### RBC rebroadcast budget
@@ -952,20 +955,20 @@ and `/v1/sumeragi/telemetry`’s `vrf` section for dashboards.
   exposes the derived seed so operators can audit deterministic leader
   selection for the next epoch.
 
-### DA availability matrix (`sumeragi.da.enabled`, advisory)
+### DA availability matrix (`sumeragi.da.enabled`)
 
 Build-line policy: v3 uses `sumeragi.da.enabled` (on-chain `SumeragiParameters.da_enabled`) as the single DA/RBC switch. In this first release, Iroha v3 deployments must keep DA/RBC enabled; the runtime honors the on-chain value and applies no override, and the node refuses to start if `sumeragi.da.enabled` is false.
 
-- **DA/RBC enabled (`sumeragi.da.enabled=true`)** — availability evidence is tracked (advisory); commits proceed without waiting for evidence:
+- **DA/RBC enabled (`sumeragi.da.enabled=true`)** — availability evidence is tracked for audit/telemetry and deterministic recovery, while the commit quorum remains the commit QC:
   - Missing local payload sets `status.da_gate.reason = missing_local_data`; `status.da_gate.missing_local_data_total` increments on every transition into this state. The gate clears once the payload is available locally (via `BlockCreated` or RBC delivery).
-  - Manifest guard: when a block carries DA commitments but the corresponding manifest is missing or mismatched, `status.da_gate.reason` becomes one of `manifest_missing` / `manifest_hash_mismatch` / `manifest_read_failed` / `manifest_spool_scan` and `status.da_gate.manifest_guard_total` increments. Audit-only lanes still log the warning; strict lanes report the same reason but do not block commit.
+  - Manifest guard: when a block carries DA commitments but the corresponding manifest is missing, unreadable, unavailable due to spool-scan failure, or hash-mismatched, `status.da_gate.reason` becomes one of `manifest_missing` / `manifest_hash_mismatch` / `manifest_read_failed` / `manifest_spool_scan` and `status.da_gate.manifest_guard_total` increments. Audit-only lanes allow missing/read/spool-scan warnings, strict lanes keep DA-gated commit/proposal sealing blocked until the manifest guard clears, and manifest hash mismatches reject in every policy.
 - **DA/RBC disabled (`sumeragi.da.enabled=false`)** — unsupported in v3; the node refuses to start when DA/RBC is disabled.
 - `status.da_gate.last_satisfied` records `missing_data_recovered` when the local payload becomes available. Commit does not depend on local RBC delivery; RBC is transport/recovery and is tracked separately via the RBC endpoints and metrics.
 - Implementation note: commit certificates are cached by `(phase, hash, height, view, epoch)` so availability evidence cannot overwrite prepare/commit certificates. When certificates arrive before the payload, the node replays cached certificates once the payload is available so message reordering cannot strand availability tracking.
 
 | Build line | Availability status | Status fields to watch | Typical remediation |
 |------------|-------------|------------------------|---------------------|
-| Iroha v3 (`sumeragi.da.enabled=true`) | Local payload availability (advisory) | `status.da_gate.reason`, `status.da_gate.missing_local_data_total`, `status.da_gate.last_satisfied`, legacy `status.sumeragi.da_reschedule_total` | Verify `BlockCreated` broadcasts and RBC payload recovery, inspect `/v1/sumeragi/status.rbc_store` and RBC backlog for stuck payloads, and restart collectors if quorum cannot form. |
+| Iroha v3 (`sumeragi.da.enabled=true`) | Local payload availability and DA gate recovery | `status.da_gate.reason`, `status.da_gate.missing_local_data_total`, `status.da_gate.last_satisfied`, legacy `status.sumeragi.da_reschedule_total` | Verify `BlockCreated` broadcasts and RBC payload recovery, inspect `/v1/sumeragi/status.rbc_store` and RBC backlog for stuck payloads, and restart collectors if quorum cannot form. |
 
 DA availability transitions also emit structured debug logs when the reason changes or when a requirement is satisfied. The logs carry `reason`, `satisfied`, `da_enabled`, and `delivered` fields so operators can align missing-availability evidence with the corresponding telemetry counters without scraping Prometheus.
 
@@ -1014,7 +1017,7 @@ DA availability transitions also emit structured debug logs when the reason chan
   `{kind, status}` line; omit it to return the full JSON payload.
 - For pacemaker queue issues, run `python3 scripts/sumeragi_backpressure_log_scraper.py <logfile>`
   (or pipe `journalctl -f … | python3 scripts/sumeragi_backpressure_log_scraper.py -`) to correlate
-  `pacemaker_backpressure_deferrals_total` spikes with "DA availability still missing (advisory)" logs and RBC backlog logs. Add `--status` when you
+  `pacemaker_backpressure_deferrals_total` spikes with "DA availability gate still active" logs and RBC backlog logs. Add `--status` when you
   have a `/v1/sumeragi/status` snapshot to include counter baselines; see `scripts/sumeragi_backpressure_log_scraper.py --help`
   and the telemetry runbook for details.
 

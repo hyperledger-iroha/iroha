@@ -2,6 +2,103 @@
 
 Last updated: 2026-06-09
 
+## 2026-06-09 DA/RBC production-quorum documentation, six-peer RS16, and ignored-test refresh
+
+- Reran the six-peer RS16 DA/RBC distribution path with production READY quorum
+  enabled. The scenario delivered all six RS16 chunks, committed with zero P2P
+  drops, and kept peer stderr empty on the current tree.
+- Removed the obsolete ignored unit test
+  `contiguous_frontier_missing_payload_dwell_hands_off_once_per_window`. Its
+  ignore reason already documented that exact frontier body recovery had
+  removed the old generic frontier dwell handoff, and a forced ignored-test run
+  failed at the stale `frontier_recovery` assertion. The active replacement
+  coverage now asserts that contiguous-frontier retries are migrated into the
+  exact frontier body slot and that same-window direct `MissingPayload`
+  fallback stays suppressed.
+- Removed the obsolete ignored unit test
+  `force_view_change_if_idle_prefers_lowest_missing_height_over_tracked_round`.
+  A forced ignored-test run failed at its stale direct-rotation assertion. The
+  current frontier-first behavior keeps the view stable while exact frontier
+  recovery is armed, then rotates only after the bounded recovery windows allow
+  it.
+- Removed the remaining `16`
+  `#[ignore = "obsolete after frontier-first recovery simplification"]`
+  `force_view_change_if_idle_*` tests from
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`. Updated the active
+  non-leader empty-frontier pacemaker test to assert the current production
+  behavior: after the non-leader missing-proposal timeout expires, the node
+  rotates with a `MissingQc` cause and carries frontier proposal liveness into
+  the next view.
+- Corrected the Sumeragi DA operator guide, the main Sumeragi guide, mirrored
+  localized copies, and the chaos/performance runbook that still described the
+  default smoke scenarios as `force_deliver_quorum_one`/10.5 MiB
+  debug-throughput checks or blanket advisory-DA behavior. The guides now
+  document the current default `LARGE_PAYLOAD_BYTES = 1024` smoke shape,
+  protocol READY thresholds, DA-gate local-payload recovery semantics, and the
+  harness constants (`30 s` base delivery budget, `60 s` per peer beyond four,
+  `40 s` RS16 premium, `40 s` commit headroom, computed throughput floor, queue
+  depth, and zero P2P drops).
+- Corrected the Sumeragi overview manifest-guard policy text. The docs no
+  longer describe `ManifestGuard` as advisory across the board: strict lanes
+  keep DA-gated commit/proposal sealing blocked until manifest evidence is
+  available, audit-only lanes allow missing/read/spool-scan warnings, and
+  manifest hash mismatches reject in every policy.
+- Updated the Sumeragi backpressure log scraper and training script to match
+  the current `"DA availability gate still active"` log message while retaining
+  explicit compatibility with the older `"DA availability still missing
+  (advisory)"` text in historical logs.
+- Validation:
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_da::sumeragi_rbc_da_large_payload_six_peers_rs16 -- --nocapture`
+    (`1` test passed; `6` peers, `6/6` RS16 chunks received,
+    `queue_p2p_dropped_total_max=0`, empty peer stderr; latest current-tree
+    rerun reported `rbc_deliver_ms=9085` and `commit_ms=6236`)
+  - `cargo test -p iroha_core retry_missing_block_requests_triggers_view_change_after_dwell --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core retry_missing_block_requests_routes_contiguous_frontier_retry_through_exact_slot --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core contiguous_frontier_missing_payload_dwell --lib --features telemetry -- --nocapture`
+    (`2` tests passed, `0` failed, `0` ignored for the filter)
+  - `cargo test -p iroha_core force_view_change_if_idle_waits_for_pacemaker_attempt --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core force_view_change_if_idle_defers_initial_contiguous_frontier_gap_for_bounded_commit_skew --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core force_view_change_if_idle_no_actionable_dependency_rotates_after_base_timeout --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core force_view_change_if_idle_rotates_nonleader_empty_frontier_after_pacemaker_timeout --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core force_view_change_if_idle --lib --features telemetry -- --nocapture`
+    (`45` tests passed, `0` failed, `0` ignored for the active idle-timeout
+    filter)
+  - `cargo test -p iroha_core manifest_block_guard --lib --features telemetry -- --nocapture`
+    (`5` tests passed)
+  - `cargo test -p iroha_core manifest_gate --lib --features telemetry -- --nocapture`
+    (`7` tests passed)
+  - `cargo fmt -p iroha_core -- --check`
+  - `python3 scripts/sumeragi_backpressure_log_scraper.py --self-test`
+    (`5` tests passed)
+  - `bash -n scripts/training_script_2.sh`
+  - `git diff --check`
+  - `git diff -- Cargo.lock`
+  - Obsolete ignored-test scan for
+    `contiguous_frontier_missing_payload_dwell_hands_off_once_per_window` and
+    its ignore reason returned no matches in
+    `crates/iroha_core/src/sumeragi/main_loop/tests.rs`.
+  - Obsolete ignored-test scan for
+    `force_view_change_if_idle_prefers_lowest_missing_height_over_tracked_round`
+    returned no matches in
+    `crates/iroha_core/src/sumeragi/main_loop/tests.rs`.
+  - Core Sumeragi ignored-test scan returned no obsolete frontier-first or
+    exact-frontier ignore markers; only the two deliberate
+    `#[ignore = "deep topology coverage"]` model tests remain under
+    `crates/iroha_core/src/sumeragi/main_loop/tests/`.
+  - Broad Sumeragi DA/RBC stale wording scan for the old debug-quorum,
+    10 MiB/3.6 s/2.7 MiB budgets, and blanket advisory-DA wording returned no
+    documentation matches; the only remaining `"DA availability still missing
+    (advisory)"` strings are explicit legacy-log compatibility in
+    `scripts/sumeragi_backpressure_log_scraper.py`.
+  - Manifest-guard stale wording scan for advisory-only or non-blocking strict
+    lane claims returned no matches in `docs/source/sumeragi*.md`.
+
 ## 2026-06-09 Kagemusha signer output readback open-file binding
 
 - Hardened signer output write verification so `signed-evidence.json` and
@@ -11231,6 +11328,20 @@ Last updated: 2026-06-09
   delivered all RBC chunks and committed with zero observed background queue
   depth and zero P2P drops, keeping the synchronous fallback path covered after
   the RBC store cleanup.
+- Reran the six-peer RS16 DA/RBC distribution path with the production READY
+  quorum enabled. The scenario delivered all six RS16 chunks, committed with
+  zero P2P drops, and kept peer stderr empty on the current tree.
+- Updated the Sumeragi DA operator guide, the main Sumeragi guide, mirrored
+  localized guide copies, and the chaos/performance runbook so the default
+  DA/RBC smoke scenarios are documented as production-quorum runs with
+  `LARGE_PAYLOAD_BYTES = 1024`, not as the older
+  `force_deliver_quorum_one`/10.5 MiB debug-throughput checks or blanket
+  advisory-DA behavior. The performance budget tables now match the harness
+  constants for delivery, commit, throughput, queue depth, and P2P drops.
+- Updated the Sumeragi backpressure log scraper and training script to detect
+  the current `"DA availability gate still active"` log while keeping the older
+  `"DA availability still missing (advisory)"` message as legacy-log
+  compatibility.
 - Cleared the strict clippy `ignored_unit_patterns` warning in the client
   confirmation timeout branch that was exposed by the grouped consensus/DA
   integration-target lint run.
@@ -11308,6 +11419,10 @@ Last updated: 2026-06-09
     `queue_bg_post_depth_max=0`, `queue_p2p_dropped_total_max=0`, empty peer
     stderr; latest current-tree rerun reported `rbc_deliver_ms=7088` and
     `commit_ms=7716`)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_da::sumeragi_rbc_da_large_payload_six_peers_rs16 -- --nocapture`
+    (`1` test passed; `6` peers, `6/6` RS16 chunks received,
+    `queue_p2p_dropped_total_max=0`, empty peer stderr; latest current-tree
+    rerun reported `rbc_deliver_ms=9085` and `commit_ms=6236`)
   - `cargo test -p integration_tests --test consensus_and_da sumeragi_da::sumeragi_rbc_recovers_after_peer_restart -- --nocapture`
     (`1` test passed; `4` peers, restarted-peer recovery path exercised,
     peer stderr empty; latest current-tree rerun finished in `74.43s`)

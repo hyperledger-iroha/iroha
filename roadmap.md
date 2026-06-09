@@ -10127,6 +10127,16 @@ fixture corridor into broader release validation.
   unresolved before the availability timeout unless local block payload bytes
   are already available; the timeout boundary still releases the reschedule
   gate.
+  Core Sumeragi DA/RBC readiness no longer carries obsolete exact-frontier or
+  frontier-first ignored unit tests: stale direct-rotation and generic-handoff
+  fixtures were removed, active `force_view_change_if_idle` coverage now
+  asserts current non-leader timeout rotation semantics, and the only remaining
+  ignored core Sumeragi tests are deliberate deep-topology model coverage.
+  Sumeragi operator docs now match the manifest guard policy lanes: strict
+  lanes keep DA-gated commit/proposal sealing blocked until the manifest guard
+  clears, audit-only lanes only allow missing/read/spool-scan warnings, and
+  manifest hash mismatches reject in every policy; `manifest_block_guard` and
+  `manifest_gate` coverage pin those cases.
   Exact-frontier slot tracking no longer carries a
   compatibility mirror layer: callers now observe canonical nested candidate,
   body, timer, and repair state directly. The live vNext
