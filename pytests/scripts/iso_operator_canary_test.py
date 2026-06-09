@@ -59,6 +59,61 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                 self.assertNotIn(unknown_key, message)
                 self.assertNotIn(hidden, message)
 
+    def test_cli_argument_terminator_is_rejected_without_echo(self):
+        hidden = "token=canary-terminator-secret"
+        cases = (
+            (
+                "raw",
+                lambda: CANARY._preflight_raw_cli_secrets(
+                    ["--", "--summary-out", hidden],
+                    {"--summary-out"},
+                ),
+            ),
+            (
+                "path",
+                lambda: CANARY._preflight_output_cli_paths(
+                    ["--", "--summary-out", hidden],
+                    {"--summary-out"},
+                ),
+            ),
+            (
+                "boolean",
+                lambda: CANARY._preflight_boolean_cli_flags(
+                    ["--", "--plan-only", hidden],
+                    {"--plan-only"},
+                ),
+            ),
+            (
+                "numeric",
+                lambda: CANARY._preflight_numeric_cli_values(
+                    ["--", "--stage-timeout-secs", hidden],
+                    integer_flags=set(),
+                    number_flags={"--stage-timeout-secs"},
+                ),
+            ),
+        )
+        for helper, run in cases:
+            with self.subTest(helper=helper):
+                with self.assertRaises(CANARY.CanaryError) as caught:
+                    run()
+
+                message = str(caught.exception)
+                self.assertIn("argument terminator is not supported", message)
+                self.assertNotIn(hidden, message)
+                self.assertNotIn("canary-terminator-secret", message)
+
+    def test_parser_rejects_abbreviated_long_options(self):
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            with self.assertRaises(SystemExit) as caught:
+                CANARY.build_parser().parse_args(
+                    ["--config", "canary.json", "--summary-ou", "out"]
+                )
+
+        self.assertEqual(caught.exception.code, 2)
+        self.assertIn("unrecognized arguments", stderr.getvalue())
+        self.assertIn("--summary-ou", stderr.getvalue())
+
     def test_output_cli_path_flags_reject_flag_like_values(self):
         cases = (
             ["--summary-out"],
@@ -94,6 +149,115 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                 self.assertNotIn(raw_path, message)
                 self.assertNotIn(decoded_secret, message)
                 self.assertNotIn("canary-path-leak", message)
+
+    def test_local_path_validators_reject_percent_encoded_smuggling(self):
+        cases = (
+            (
+                "raw encoded dot",
+                lambda raw: CANARY._reject_raw_output_path_smuggling(raw, "raw path"),
+                "out/%2e/summary.json",
+                "encoded dot or separator",
+            ),
+            (
+                "output encoded slash",
+                lambda raw: CANARY._reject_output_path_smuggling(Path(raw), "output path"),
+                "out/%2f/summary.json",
+                "encoded dot or separator",
+            ),
+            (
+                "raw uri prefix",
+                lambda raw: CANARY._reject_raw_output_path_smuggling(raw, "raw path"),
+                "file:out/summary.json",
+                "URI or drive prefixes",
+            ),
+            (
+                "runbook drive prefix",
+                lambda raw: CANARY._validate_path_string(raw, "rail.receipt_dir"),
+                "C:/receipts/current",
+                "URI or drive prefixes",
+            ),
+            (
+                "runbook encoded semicolon",
+                lambda raw: CANARY._validate_path_string(raw, "rail.receipt_dir"),
+                "receipts/%3b/current",
+                "encoded semicolon",
+            ),
+            (
+                "runbook encoded delimiter",
+                lambda raw: CANARY._validate_path_string(raw, "rail.receipt_dir"),
+                "receipts/%5d/current",
+                "encoded URL delimiter",
+            ),
+            (
+                "raw encoded percent",
+                lambda raw: CANARY._reject_raw_output_path_smuggling(raw, "raw path"),
+                "out/%25/summary.json",
+                "encoded percent",
+            ),
+            (
+                "raw encoded space",
+                lambda raw: CANARY._reject_raw_output_path_smuggling(raw, "raw path"),
+                "out/%20/summary.json",
+                "percent-encoded control or space",
+            ),
+            (
+                "raw malformed percent",
+                lambda raw: CANARY._reject_raw_output_path_smuggling(raw, "raw path"),
+                "out/%zz/summary.json",
+                "malformed percent",
+            ),
+        )
+        for name, call, raw, expected in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(CANARY.CanaryError) as caught:
+                    call(raw)
+
+                message = str(caught.exception)
+                self.assertIn(expected, message)
+                self.assertNotIn(raw, message)
+
+    def test_url_paths_reject_raw_delimiter_smuggling(self):
+        cases = (
+            "https://torii.local-bank.bank/base:debug/v1",
+            "https://torii.local-bank.bank/base@debug/v1",
+            "https://torii.local-bank.bank/base[debug]/v1",
+        )
+        for url in cases:
+            with self.subTest(url=url):
+                with self.assertRaises(CANARY.CanaryError) as caught:
+                    CANARY._validate_endpoint_url(
+                        url,
+                        "rail.torii_base_url",
+                        allow_insecure_http=False,
+                    )
+
+                message = str(caught.exception)
+                self.assertIn("path must not contain URL delimiter characters", message)
+                self.assertNotIn(url, message)
+
+    def test_url_paths_reject_non_ascii_smuggling(self):
+        cases = (
+            (
+                "https://torii.local-bank.bank/base∕debug/v1",
+                "path must use printable ASCII",
+            ),
+            (
+                "https://torii.local-bank.bank/base%c3%a9/v1",
+                "path must not contain percent-encoded non-ASCII bytes",
+            ),
+        )
+        for url, expected in cases:
+            with self.subTest(url=url):
+                with self.assertRaises(CANARY.CanaryError) as caught:
+                    CANARY._validate_endpoint_url(
+                        url,
+                        "rail.torii_base_url",
+                        allow_insecure_http=False,
+                    )
+
+                message = str(caught.exception)
+                self.assertIn(expected, message)
+                self.assertNotIn(url, message)
 
     def test_endpoint_urls_reject_secret_path_without_echo(self):
         cases = (

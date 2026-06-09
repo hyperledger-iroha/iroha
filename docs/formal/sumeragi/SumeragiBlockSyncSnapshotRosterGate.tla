@@ -342,8 +342,10 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+SnapshotRosterMatchesSpec ==
   \A c \in Cases: Matches(c)
+
+SafetyFast == SnapshotRosterMatchesSpec
 
 SnapshotSelectionUsesJournal ==
   Matches("snapshot_matching_stake")

@@ -286,13 +286,15 @@ RecoveryWindowRespected ==
   /\ OwnerReanchor \in ImplementationActions(OwnerRequiredForNpos)
   /\ RangePullReanchor \in ImplementationActions(NoOwnerRangePullAllowed)
 
-NoBugInvariant ==
+CommittedEdgeConflictCoreSafety ==
   /\ ActionsMatchSpec
   /\ SuppressionResultMatchesSpec
   /\ NonConflictsDoNotMutate
   /\ CanonicalStateProtected
   /\ RecoveryWindowRespected
 
-SafetyFast == NoBugInvariant
+NoBugInvariant == CommittedEdgeConflictCoreSafety
+
+SafetyFast == CommittedEdgeConflictCoreSafety
 
 ====

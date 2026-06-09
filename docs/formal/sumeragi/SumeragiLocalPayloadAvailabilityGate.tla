@@ -216,7 +216,7 @@ LookupShapeMatchesShortCircuit ==
   /\ \A c \in {KuraPayload, AbsentPayload}:
        CheckKura \in ImplementationActions(c)
 
-NoBugInvariant ==
+LocalPayloadAvailabilityCoreSafety ==
   /\ ActionsMatchSpec
   /\ PendingEntriesAlwaysCountAsLocalPayload
   /\ InflightEntriesAlwaysCountAsLocalPayload
@@ -224,6 +224,8 @@ NoBugInvariant ==
   /\ AbsentPayloadDoesNotCount
   /\ LookupShapeMatchesShortCircuit
 
-SafetyFast == NoBugInvariant
+NoBugInvariant == LocalPayloadAvailabilityCoreSafety
+
+SafetyFast == LocalPayloadAvailabilityCoreSafety
 
 ====

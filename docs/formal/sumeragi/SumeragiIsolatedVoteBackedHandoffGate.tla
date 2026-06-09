@@ -358,14 +358,17 @@ IsolatedReasonLabelExact ==
     /\ ActualOutput(c)[5] = 1
     /\ ActualOutput(c) = SpecOutput(c)
 
-SafetyFast ==
+IsolatedVoteBackedHandoffCoreSafety ==
   /\ SelectionExact
   /\ AdmissionStable
   /\ SlotValidationStable
   /\ RangePullStable
 
+SafetyFast ==
+  IsolatedVoteBackedHandoffCoreSafety
+
 IsolatedVoteBackedHandoffExactness ==
-  /\ SafetyFast
+  /\ IsolatedVoteBackedHandoffCoreSafety
   /\ IsolatedAdmissionRejectExact
   /\ IsolatedAdmissionAcceptExact
   /\ IsolatedSlotValidationExact
@@ -374,7 +377,7 @@ IsolatedVoteBackedHandoffExactness ==
   /\ IsolatedReasonLabelExact
 
 Safety ==
-  SafetyFast
+  IsolatedVoteBackedHandoffCoreSafety
 
 =============================================================================
 ====

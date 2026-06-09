@@ -301,7 +301,7 @@ TypeInvariant ==
 Matches(c) ==
   ActualValidate(c) = SpecValidate(c)
 
-SafetyFast ==
+EvidenceValidationMatchesSpec ==
   /\ Matches("invalid_qc_ok")
   /\ Matches("kind_mismatch_double_kind_invalid_qc_payload")
   /\ Matches("kind_mismatch_invalid_qc_kind_double_payload")
@@ -344,6 +344,8 @@ SafetyFast ==
   /\ Matches("censorship_tx_mismatch_precedes_quorum")
   /\ Matches("censorship_outsider_precedes_signature")
   /\ Matches("censorship_signature_precedes_quorum")
+
+SafetyFast == EvidenceValidationMatchesSpec
 
 BugKindMismatchAccepted ==
   ActualValidate("kind_mismatch_double_kind_invalid_qc_payload") =

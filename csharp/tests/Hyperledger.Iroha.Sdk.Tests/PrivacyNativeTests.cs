@@ -1010,7 +1010,7 @@ public sealed class PrivacyNativeTests
             "verifier fuzzing gate is incomplete",
             capabilities.ProductionGate.Missing);
         Assert.Contains(
-            "external audit signoff is missing",
+            "internal cryptographic review signoff is missing",
             capabilities.ProductionGate.Missing);
         Assert.Contains(
             "implementation stage is not production-hardened",

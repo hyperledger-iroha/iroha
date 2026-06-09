@@ -380,6 +380,35 @@ def _reject_symlinked_existing_ancestors(path: Path) -> None:
             raise AdapterError(f"{current} must not be a symlink")
 
 
+def _reject_percent_encoded_path_smuggling(raw: str, label: str) -> None:
+    index = 0
+    while True:
+        index = raw.find("%", index)
+        if index == -1:
+            return
+        token = raw[index + 1 : index + 3]
+        if len(token) != 2 or any(ch not in "0123456789abcdefABCDEF" for ch in token):
+            raise AdapterError(f"{label} must not contain malformed percent escapes")
+        byte = int(token, 16)
+        if byte <= 0x20 or byte == 0x7F:
+            raise AdapterError(
+                f"{label} must not contain percent-encoded control or space characters"
+            )
+        if byte in {0x2E, 0x2F, 0x5C}:
+            raise AdapterError(
+                f"{label} must not contain encoded dot or separator characters"
+            )
+        if byte == 0x3B:
+            raise AdapterError(f"{label} must not contain encoded semicolon parameters")
+        if byte in {0x23, 0x3A, 0x3F, 0x40, 0x5B, 0x5D}:
+            raise AdapterError(
+                f"{label} must not contain encoded URL delimiter characters"
+            )
+        if byte == 0x25:
+            raise AdapterError(f"{label} must not contain encoded percent characters")
+        index += 3
+
+
 def _reject_output_path_smuggling(path: Path, label: str) -> None:
     raw = str(path)
     if not raw or not path.name:
@@ -396,8 +425,11 @@ def _reject_output_path_smuggling(path: Path, label: str) -> None:
         raise AdapterError(f"{label} must use forward slashes")
     if ";" in raw:
         raise AdapterError(f"{label} must not contain semicolon path parameters")
+    if ":" in raw:
+        raise AdapterError(f"{label} must not contain URI or drive prefixes")
     if _contains_secret_material(raw) or _contains_secret_identifier_material(raw):
         raise AdapterError(f"{label} must not contain secret-looking material")
+    _reject_percent_encoded_path_smuggling(raw, label)
     parts = path.parts[1:] if path.is_absolute() else path.parts
     if any(part.startswith("-") for part in parts if part):
         raise AdapterError(f"{label} must not contain leading-dash path segments")
@@ -420,8 +452,11 @@ def _reject_raw_output_path_smuggling(raw: str, label: str) -> None:
         raise AdapterError(f"{label} must use forward slashes")
     if ";" in raw:
         raise AdapterError(f"{label} must not contain semicolon path parameters")
+    if ":" in raw:
+        raise AdapterError(f"{label} must not contain URI or drive prefixes")
     if _contains_secret_material(raw) or _contains_secret_identifier_material(raw):
         raise AdapterError(f"{label} must not contain secret-looking material")
+    _reject_percent_encoded_path_smuggling(raw, label)
     parts = raw.split("/")
     checked_parts = parts[1:] if raw.startswith("/") else parts
     if any(part == "" for part in checked_parts):
@@ -437,6 +472,8 @@ def _preflight_raw_cli_secrets(argv: list[str] | None, value_flags: set[str]) ->
     index = 0
     while index < len(raw_args):
         arg = raw_args[index]
+        if arg == "--":
+            raise AdapterError("argument terminator is not supported")
         if arg in value_flags:
             index += 2
             continue
@@ -453,6 +490,8 @@ def _preflight_boolean_cli_flags(argv: list[str] | None, flags: set[str]) -> Non
     index = 0
     while index < len(raw_args):
         arg = raw_args[index]
+        if arg == "--":
+            raise AdapterError("argument terminator is not supported")
         flag, separator, _value = arg.partition("=")
         if separator and flag in flags:
             raise AdapterError(f"{flag} does not take a value")
@@ -471,7 +510,7 @@ def _preflight_output_cli_paths(argv: list[str] | None, flags: set[str]) -> None
     while index < len(raw_args):
         arg = raw_args[index]
         if arg == "--":
-            return
+            raise AdapterError("argument terminator is not supported")
         matched = False
         for flag in flags:
             if arg == flag:
@@ -507,7 +546,7 @@ def _preflight_required_cli_values(
     while index < len(raw_args):
         arg = raw_args[index]
         if arg == "--":
-            return
+            raise AdapterError("argument terminator is not supported")
         matched = False
         for flag in flags:
             if arg == flag:
@@ -552,7 +591,7 @@ def _preflight_numeric_cli_values(
     while index < len(raw_args):
         arg = raw_args[index]
         if arg == "--":
-            return
+            raise AdapterError("argument terminator is not supported")
         matched = False
         for flag in flags:
             if arg == flag:
@@ -858,8 +897,11 @@ def _require_clean_path_string(value: Any, label: str) -> str:
         raise AdapterError(f"{label} must use forward slashes")
     if ";" in path:
         raise AdapterError(f"{label} must not contain semicolon path parameters")
+    if ":" in path:
+        raise AdapterError(f"{label} must not contain URI or drive prefixes")
     if _contains_secret_material(path) or _contains_secret_identifier_material(path):
         raise AdapterError(f"{label} must not contain secret-looking material")
+    _reject_percent_encoded_path_smuggling(path, label)
     parts = path.split("/")
     checked_parts = parts[1:] if path.startswith("/") else parts
     if any(part == "" for part in checked_parts):
@@ -1543,10 +1585,14 @@ def _address_embeds_non_global_ipv4(address: ipaddress.IPv4Address | ipaddress.I
 
 def _validate_url_path(parsed: urllib.parse.ParseResult, label: str) -> None:
     path = parsed.path
+    if any(ord(ch) > 0x7E for ch in path):
+        raise AdapterError(f"{label} path must use printable ASCII")
     if "\\" in path:
         raise AdapterError(f"{label} path must use forward slashes")
     if ";" in path:
         raise AdapterError(f"{label} path must not contain semicolon parameters")
+    if any(token in path for token in (":", "@", "[", "]")):
+        raise AdapterError(f"{label} path must not contain URL delimiter characters")
     segments = path.split("/")
     checked_segments = segments[1:] if path.startswith("/") else segments
     if any(segment == "" for segment in checked_segments[:-1]):
@@ -1564,6 +1610,8 @@ def _validate_url_path(parsed: urllib.parse.ParseResult, label: str) -> None:
         raise AdapterError(f"{label} path must not contain encoded URL delimiter characters")
     if "%25" in lowered:
         raise AdapterError(f"{label} path must not contain encoded percent characters")
+    if re.search(r"%[89a-f][0-9a-f]", lowered):
+        raise AdapterError(f"{label} path must not contain percent-encoded non-ASCII bytes")
 
 
 def _validate_endpoint(endpoint: str, allow_insecure_http: bool) -> None:
@@ -1887,7 +1935,8 @@ def run(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Verify and publish ISO 20022 audit_export_dir notary anchors."
+        description="Verify and publish ISO 20022 audit_export_dir notary anchors.",
+        allow_abbrev=False,
     )
     parser.add_argument(
         "--export-dir",

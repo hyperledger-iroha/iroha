@@ -296,7 +296,7 @@ RemovalCounterAnchors ==
   /\ RemovalCountIncremented \in
        ImplementationActions(StaleLocalPayloadCachedQc)
 
-NoBugInvariant ==
+StaleMissingCommitQcPruneCoreSafety ==
   /\ ActionsMatchSpec
   /\ OnlyStaleSameHeightRequestsRemoved
   /\ ExactFrontierRepairRequiresActiveActionableExactSlot
@@ -310,6 +310,8 @@ NoBugInvariant ==
   /\ GateCheckAnchors
   /\ RemovalCounterAnchors
 
-SafetyFast == NoBugInvariant
+NoBugInvariant == StaleMissingCommitQcPruneCoreSafety
+
+SafetyFast == StaleMissingCommitQcPruneCoreSafety
 
 ====

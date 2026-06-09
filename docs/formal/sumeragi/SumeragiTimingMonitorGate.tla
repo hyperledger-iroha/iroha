@@ -251,11 +251,13 @@ TypeInvariant ==
        /\ SpecActions(c) \subseteq Actions
        /\ ImplementationActions(c) \subseteq Actions
 
-NoBugInvariant ==
+TimingMonitorCoreSafety ==
   \A c \in Cases:
     ImplementationActions(c) = SpecActions(c)
 
-SafetyFast == NoBugInvariant
+NoBugInvariant == TimingMonitorCoreSafety
+
+SafetyFast == TimingMonitorCoreSafety
 
 BugGapThresholdStrict == NoBugInvariant
 BugCostThresholdStrict == NoBugInvariant

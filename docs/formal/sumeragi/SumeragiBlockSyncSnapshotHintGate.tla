@@ -273,8 +273,10 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+SnapshotHintMatchesSpec ==
   \A c \in Cases: Matches(c)
+
+SafetyFast == SnapshotHintMatchesSpec
 
 UnknownDoesNotUseSnapshot ==
   Matches("unknown_snapshot_hints")

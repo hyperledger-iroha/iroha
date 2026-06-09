@@ -361,7 +361,7 @@ PendingScanIsExistential ==
   /\ SecondPendingUrgent \in ImplementationActions(FirstNonUrgentSecondUrgent)
   /\ ImplementationUrgent(AllNonUrgent) = FALSE
 
-NoBugInvariant ==
+QuorumRecoveryVoteDrainUrgentCoreSafety ==
   /\ ResultMatchesSpec
   /\ ActionsMatchSpec
   /\ QuorumTimeoutRequired
@@ -371,6 +371,8 @@ NoBugInvariant ==
   /\ AgeSourceAndBoundaryMatchRust
   /\ PendingScanIsExistential
 
-SafetyFast == NoBugInvariant
+NoBugInvariant == QuorumRecoveryVoteDrainUrgentCoreSafety
+
+SafetyFast == QuorumRecoveryVoteDrainUrgentCoreSafety
 
 ====

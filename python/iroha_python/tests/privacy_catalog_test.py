@@ -4827,7 +4827,7 @@ def test_privacy_catalog_chain_domain_binding_metadata_rejects_negated_bounded_t
         ("replay/nullifier rejection tests are required", "replay/nullifier", True),
         ("parser/verifier fuzzing is required", "parser/verifier fuzzing", True),
         ("performance gates are required", "performance", True),
-        ("internal cryptographic review is required", "audit", True),
+        ("internal cryptographic review is required", "review", True),
         ("not deterministic vectors", "deterministic vectors", False),
         ("no negative/adversarial test cases", "negative/adversarial", False),
         ("without replay/nullifier rejection tests", "replay/nullifier", False),

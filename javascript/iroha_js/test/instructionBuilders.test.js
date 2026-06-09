@@ -5173,7 +5173,7 @@ descriptorTest("privacy algorithm descriptors enforce PQ and catalog availabilit
     "parser fuzzing gate is incomplete",
     "verifier fuzzing gate is incomplete",
     "performance gate is incomplete",
-    "external audit signoff is missing",
+    "internal cryptographic review signoff is missing",
   ];
   const supplementalProductionGateMissing = [
     "implementation stage is not production-hardened",
@@ -5215,7 +5215,7 @@ descriptorTest("privacy algorithm descriptors enforce PQ and catalog availabilit
       `${descriptor.id} production gate missing reasons must stay canonical`,
     );
     assert.ok(
-      descriptor.productionGate.missing.includes("external audit signoff is missing"),
+      descriptor.productionGate.missing.includes("internal cryptographic review signoff is missing"),
       `${descriptor.id} must remain blocked without audit signoff`,
     );
     assert.ok(
@@ -5753,7 +5753,7 @@ descriptorTest("privacy capabilities report native bridge without production cla
       "parser fuzzing gate is incomplete",
       "verifier fuzzing gate is incomplete",
       "performance gate is incomplete",
-      "external audit signoff is missing",
+      "internal cryptographic review signoff is missing",
     ];
     const supplementalProductionGateMissing = [
       "implementation stage is not production-hardened",
@@ -6149,7 +6149,7 @@ descriptorTest("privacy algorithm descriptors return defensive copies", () => {
   assert.equal(second.productionReady, false);
   assert.equal(second.productionGate.ready, false);
   assert.equal(second.productionGate.gates.external_audit, false);
-  assert.ok(second.productionGate.missing.includes("external audit signoff is missing"));
+  assert.ok(second.productionGate.missing.includes("internal cryptographic review signoff is missing"));
   assert.equal(second.recommendedFor.includes("malicious recommendation"), false);
   assert.equal(second.setupSteps.includes("malicious setup"), false);
   assert.equal(second.sourceReferences[0].url.startsWith("https://www.nist.gov/"), true);

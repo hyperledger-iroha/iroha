@@ -348,6 +348,35 @@ def _reject_symlinked_existing_ancestors(path: Path) -> None:
             raise ReceiptError(f"{current} must not be a symlink")
 
 
+def _reject_percent_encoded_path_smuggling(raw: str, label: str) -> None:
+    index = 0
+    while True:
+        index = raw.find("%", index)
+        if index == -1:
+            return
+        token = raw[index + 1 : index + 3]
+        if len(token) != 2 or any(ch not in "0123456789abcdefABCDEF" for ch in token):
+            raise ReceiptError(f"{label} must not contain malformed percent escapes")
+        byte = int(token, 16)
+        if byte <= 0x20 or byte == 0x7F:
+            raise ReceiptError(
+                f"{label} must not contain percent-encoded control or space characters"
+            )
+        if byte in {0x2E, 0x2F, 0x5C}:
+            raise ReceiptError(
+                f"{label} must not contain encoded dot or separator characters"
+            )
+        if byte == 0x3B:
+            raise ReceiptError(f"{label} must not contain encoded semicolon parameters")
+        if byte in {0x23, 0x3A, 0x3F, 0x40, 0x5B, 0x5D}:
+            raise ReceiptError(
+                f"{label} must not contain encoded URL delimiter characters"
+            )
+        if byte == 0x25:
+            raise ReceiptError(f"{label} must not contain encoded percent characters")
+        index += 3
+
+
 def _reject_raw_cli_path_smuggling(raw: str, label: str) -> None:
     if not raw:
         raise ReceiptError(f"{label} must be a non-empty path")
@@ -363,8 +392,11 @@ def _reject_raw_cli_path_smuggling(raw: str, label: str) -> None:
         raise ReceiptError(f"{label} must use forward slashes")
     if ";" in raw:
         raise ReceiptError(f"{label} must not contain semicolon path parameters")
+    if ":" in raw:
+        raise ReceiptError(f"{label} must not contain URI or drive prefixes")
     if _contains_secret_material(raw) or _contains_secret_identifier_material(raw):
         raise ReceiptError(f"{label} must not contain secret-looking material")
+    _reject_percent_encoded_path_smuggling(raw, label)
     parts = raw.split("/")
     checked_parts = parts[1:] if raw.startswith("/") else parts
     if any(part == "" for part in checked_parts):
@@ -380,6 +412,8 @@ def _preflight_raw_cli_secrets(argv: list[str] | None, value_flags: set[str]) ->
     index = 0
     while index < len(raw_args):
         arg = raw_args[index]
+        if arg == "--":
+            raise ReceiptError("argument terminator is not supported")
         if arg in value_flags:
             index += 2
             continue
@@ -396,6 +430,8 @@ def _preflight_boolean_cli_flags(argv: list[str] | None, flags: set[str]) -> Non
     index = 0
     while index < len(raw_args):
         arg = raw_args[index]
+        if arg == "--":
+            raise ReceiptError("argument terminator is not supported")
         flag, separator, _value = arg.partition("=")
         if separator and flag in flags:
             raise ReceiptError(f"{flag} does not take a value")
@@ -414,7 +450,7 @@ def _preflight_cli_paths(argv: list[str] | None, flags: set[str]) -> None:
     while index < len(raw_args):
         arg = raw_args[index]
         if arg == "--":
-            return
+            raise ReceiptError("argument terminator is not supported")
         matched = False
         for flag in flags:
             if arg == flag:
@@ -821,10 +857,14 @@ def _address_embeds_non_global_ipv4(address: ipaddress.IPv4Address | ipaddress.I
 
 def _validate_url_path(parsed: urllib.parse.ParseResult, label: str) -> None:
     path = parsed.path
+    if any(ord(ch) > 0x7E for ch in path):
+        raise ReceiptError(f"{label} path must use printable ASCII")
     if "\\" in path:
         raise ReceiptError(f"{label} path must use forward slashes")
     if ";" in path:
         raise ReceiptError(f"{label} path must not contain semicolon parameters")
+    if any(token in path for token in (":", "@", "[", "]")):
+        raise ReceiptError(f"{label} path must not contain URL delimiter characters")
     segments = path.split("/")
     checked_segments = segments[1:] if path.startswith("/") else segments
     if any(segment == "" for segment in checked_segments[:-1]):
@@ -842,6 +882,8 @@ def _validate_url_path(parsed: urllib.parse.ParseResult, label: str) -> None:
         raise ReceiptError(f"{label} path must not contain encoded URL delimiter characters")
     if "%25" in lowered:
         raise ReceiptError(f"{label} path must not contain encoded percent characters")
+    if re.search(r"%[89a-f][0-9a-f]", lowered):
+        raise ReceiptError(f"{label} path must not contain percent-encoded non-ASCII bytes")
 
 
 def _require_clean_string(value: Any, label: str) -> str:
@@ -854,10 +896,23 @@ def _require_clean_string(value: Any, label: str) -> str:
     return value
 
 
+def _require_nonsecret_clean_string(value: Any, label: str) -> str:
+    text = _require_clean_string(value, label)
+    if _contains_secret_material(text) or _contains_secret_identifier_material(text):
+        raise ReceiptError(f"{label} must not contain secret-looking material")
+    return text
+
+
 def _require_optional_clean_string(value: Any, label: str) -> str | None:
     if value is None:
         return None
     return _require_clean_string(value, label)
+
+
+def _require_optional_nonsecret_clean_string(value: Any, label: str) -> str | None:
+    if value is None:
+        return None
+    return _require_nonsecret_clean_string(value, label)
 
 
 def _require_clean_path_string(value: Any, label: str) -> str:
@@ -870,6 +925,11 @@ def _require_clean_path_string(value: Any, label: str) -> str:
         raise ReceiptError(f"{label} must use forward slashes")
     if ";" in path:
         raise ReceiptError(f"{label} must not contain semicolon path parameters")
+    if ":" in path:
+        raise ReceiptError(f"{label} must not contain URI or drive prefixes")
+    if _contains_secret_material(path) or _contains_secret_identifier_material(path):
+        raise ReceiptError(f"{label} must not contain secret-looking material")
+    _reject_percent_encoded_path_smuggling(path, label)
     parts = path.split("/")
     checked_parts = parts[1:] if path.startswith("/") else parts
     if any(part == "" for part in checked_parts):
@@ -961,7 +1021,7 @@ def _verify_optional_clean_string_fields(
     value: dict[str, Any], keys: set[str], label: str
 ) -> None:
     for key in keys:
-        _require_optional_clean_string(value.get(key), f"{label}.{key}")
+        _require_optional_nonsecret_clean_string(value.get(key), f"{label}.{key}")
 
 
 def _verify_persisted_context(value: Any, label: str) -> None:
@@ -1012,8 +1072,8 @@ def _verify_persisted_history_entry(value: Any, label: str) -> tuple[str, str, i
         value.get("updated_at_ms"),
         f"{label}.updated_at_ms",
     )
-    _require_optional_clean_string(value.get("detail"), f"{label}.detail")
-    _require_optional_clean_string(value.get("reason_code"), f"{label}.reason_code")
+    _require_optional_nonsecret_clean_string(value.get("detail"), f"{label}.detail")
+    _require_optional_nonsecret_clean_string(value.get("reason_code"), f"{label}.reason_code")
     return status, code, updated_at_ms
 
 
@@ -1055,7 +1115,7 @@ def _verify_persisted_record_source(
         "hold_reason_code",
         "rejection_reason_code",
     ):
-        _require_optional_clean_string(value.get(key), f"{label}.{key}")
+        _require_optional_nonsecret_clean_string(value.get(key), f"{label}.{key}")
     if value.get("transaction_hash") != index_record.get("transaction_hash"):
         raise ReceiptError(f"{label}.transaction_hash does not match audit index record")
     _require_bool(value.get("ledger_tx_queued"), f"{label}.ledger_tx_queued")
@@ -1063,7 +1123,7 @@ def _verify_persisted_record_source(
     if not isinstance(change_reason_codes, list):
         raise ReceiptError(f"{label}.change_reason_codes must be an array")
     for offset, code in enumerate(change_reason_codes):
-        _require_clean_string(code, f"{label}.change_reason_codes[{offset}]")
+        _require_nonsecret_clean_string(code, f"{label}.change_reason_codes[{offset}]")
     _verify_persisted_context(value.get("context"), f"{label}.context")
     _verify_persisted_metadata(
         value.get("metadata"),
@@ -1245,8 +1305,11 @@ def _verify_audit_index_record_source(record: Any, label: str) -> None:
     if not isinstance(record, dict):
         raise ReceiptError(f"{label} must be an object")
     _require_exact_keys(record, AUDIT_INDEX_RECORD_KEYS, label)
-    message_id = _require_clean_string(record.get("message_id"), f"{label}.message_id")
-    filename = _require_clean_string(record.get("filename"), f"{label}.filename")
+    message_id = _require_nonsecret_clean_string(
+        record.get("message_id"),
+        f"{label}.message_id",
+    )
+    filename = _require_nonsecret_clean_string(record.get("filename"), f"{label}.filename")
     expected_filename = _expected_message_filename(message_id)
     if filename != expected_filename:
         raise ReceiptError(
@@ -1257,21 +1320,27 @@ def _verify_audit_index_record_source(record: Any, label: str) -> None:
     _require_audit_record_status_consistency(record, label)
     _require_nonnegative_int(record.get("updated_at_ms"), f"{label}.updated_at_ms")
     _require_optional_nonnegative_int(record.get("settled_at_ms"), f"{label}.settled_at_ms")
-    _require_optional_clean_string(record.get("transaction_hash"), f"{label}.transaction_hash")
-    _require_optional_clean_string(record.get("profile_id"), f"{label}.profile_id")
-    _require_optional_clean_string(record.get("message_type"), f"{label}.message_type")
-    _require_optional_clean_string(
+    _require_optional_nonsecret_clean_string(
+        record.get("transaction_hash"),
+        f"{label}.transaction_hash",
+    )
+    _require_optional_nonsecret_clean_string(record.get("profile_id"), f"{label}.profile_id")
+    _require_optional_nonsecret_clean_string(
+        record.get("message_type"),
+        f"{label}.message_type",
+    )
+    _require_optional_nonsecret_clean_string(
         record.get("business_message_id"),
         f"{label}.business_message_id",
     )
-    _require_optional_clean_string(record.get("uetr"), f"{label}.uetr")
-    payload_hash = _require_optional_clean_string(
+    _require_optional_nonsecret_clean_string(record.get("uetr"), f"{label}.uetr")
+    payload_hash = _require_optional_nonsecret_clean_string(
         record.get("payload_hash"),
         f"{label}.payload_hash",
     )
     if payload_hash is not None and not _is_lower_hex_sha256(payload_hash):
         raise ReceiptError(f"{label}.payload_hash must be a canonical SHA-256")
-    _require_optional_clean_string(
+    _require_optional_nonsecret_clean_string(
         record.get("reference_snapshot_id"),
         f"{label}.reference_snapshot_id",
     )
@@ -1920,7 +1989,8 @@ def run(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Verify ISO 20022 operator rail/notary adapter receipts."
+        description="Verify ISO 20022 operator rail/notary adapter receipts.",
+        allow_abbrev=False,
     )
     parser.add_argument(
         "--receipt",

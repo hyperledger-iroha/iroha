@@ -194,6 +194,59 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                 self.assertNotIn(unknown_key, message)
                 self.assertNotIn(hidden, message)
 
+    def test_cli_argument_terminator_is_rejected_without_echo(self):
+        hidden = "token=xsd-terminator-secret"
+        cases = (
+            (
+                "raw",
+                lambda: VERIFIER._preflight_raw_cli_secrets(
+                    ["--", "--summary-out", hidden],
+                    {"--summary-out"},
+                ),
+            ),
+            (
+                "path",
+                lambda: VERIFIER._preflight_output_cli_paths(
+                    ["--", "--summary-out", hidden],
+                    {"--summary-out"},
+                ),
+            ),
+            (
+                "boolean",
+                lambda: VERIFIER._preflight_boolean_cli_flags(
+                    ["--", "--validate-xml-schema", hidden],
+                    {"--validate-xml-schema"},
+                ),
+            ),
+            (
+                "numeric",
+                lambda: VERIFIER._preflight_numeric_cli_values(
+                    ["--", "--xmllint-timeout-secs", hidden],
+                    integer_flags=set(),
+                    number_flags={"--xmllint-timeout-secs"},
+                ),
+            ),
+        )
+        for helper, run in cases:
+            with self.subTest(helper=helper):
+                with self.assertRaises(VERIFIER.FixtureManifestError) as caught:
+                    run()
+
+                message = str(caught.exception)
+                self.assertIn("argument terminator is not supported", message)
+                self.assertNotIn(hidden, message)
+                self.assertNotIn("xsd-terminator-secret", message)
+
+    def test_parser_rejects_abbreviated_long_options(self):
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            with self.assertRaises(SystemExit) as caught:
+                VERIFIER.build_parser().parse_args(["--summary-ou", "out"])
+
+        self.assertEqual(caught.exception.code, 2)
+        self.assertIn("unrecognized arguments", stderr.getvalue())
+        self.assertIn("--summary-ou", stderr.getvalue())
+
     def test_nested_control_material_in_manifest_is_rejected_without_echo(self):
         cases = (
             (
@@ -252,6 +305,89 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                 self.assertNotIn(raw_path, message)
                 self.assertNotIn(decoded_secret, message)
                 self.assertNotIn("xsd-path-leak", message)
+
+    def test_local_path_validators_reject_percent_encoded_smuggling(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            cases = (
+                (
+                    "raw encoded dot",
+                    lambda raw: VERIFIER._reject_raw_output_path_smuggling(raw, "raw path"),
+                    "out/%2e/summary.json",
+                    "encoded dot or separator",
+                ),
+                (
+                    "output encoded slash",
+                    lambda raw: VERIFIER._reject_output_path_smuggling(
+                        Path(raw),
+                        "output path",
+                    ),
+                    "out/%2f/summary.json",
+                    "encoded dot or separator",
+                ),
+                (
+                    "raw uri prefix",
+                    lambda raw: VERIFIER._reject_raw_output_path_smuggling(raw, "raw path"),
+                    "file:out/summary.json",
+                    "URI or drive prefixes",
+                ),
+                (
+                    "source drive prefix",
+                    lambda raw: VERIFIER._validate_source_path(raw, "source.path"),
+                    "C:/schemas/camt.052.xsd",
+                    "URI or drive prefixes",
+                ),
+                (
+                    "source encoded dot",
+                    lambda raw: VERIFIER._validate_source_path(raw, "source.path"),
+                    "schemas/camt%2e.052.xsd",
+                    "encoded dot or separator",
+                ),
+                (
+                    "relative encoded semicolon",
+                    lambda raw: VERIFIER._validate_relative_path(
+                        raw,
+                        root,
+                        root,
+                        "fixture.path",
+                        allow_parent_segments=False,
+                    ),
+                    "fixtures/%3b/pacs.xml",
+                    "encoded semicolon",
+                ),
+                (
+                    "raw encoded delimiter",
+                    lambda raw: VERIFIER._reject_raw_output_path_smuggling(raw, "raw path"),
+                    "out/%3f/summary.json",
+                    "encoded URL delimiter",
+                ),
+                (
+                    "raw encoded percent",
+                    lambda raw: VERIFIER._reject_raw_output_path_smuggling(raw, "raw path"),
+                    "out/%25/summary.json",
+                    "encoded percent",
+                ),
+                (
+                    "raw encoded space",
+                    lambda raw: VERIFIER._reject_raw_output_path_smuggling(raw, "raw path"),
+                    "out/%20/summary.json",
+                    "percent-encoded control or space",
+                ),
+                (
+                    "raw malformed percent",
+                    lambda raw: VERIFIER._reject_raw_output_path_smuggling(raw, "raw path"),
+                    "out/%zz/summary.json",
+                    "malformed percent",
+                ),
+            )
+            for name, call, raw, expected in cases:
+                with self.subTest(name=name):
+                    with self.assertRaises(VERIFIER.FixtureManifestError) as caught:
+                        call(raw)
+
+                    message = str(caught.exception)
+                    self.assertIn(expected, message)
+                    self.assertNotIn(raw, message)
 
     def test_boolean_cli_flags_reject_values_without_echo(self):
         cases = (

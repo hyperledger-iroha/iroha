@@ -389,7 +389,7 @@ RecordOnlySideEffectsMatch ==
          SpecMissingCommitRequestCleared(c)
     /\ ActualNewViewReplay(c) = SpecNewViewReplay(c)
 
-NoBugInvariant ==
+CommittedHeightQcCoreSafety ==
   /\ DecisionMatchesSpec
   /\ DropReasonMatchesSpec
   /\ ValidationMatchesSpec
@@ -417,7 +417,9 @@ CommittedHeightQcAdmissionExactness ==
   /\ CommittedHeightValidationExact
   /\ CommittedHeightEvidenceExact
 
-SafetyFast == NoBugInvariant
+NoBugInvariant == CommittedHeightQcCoreSafety
+
+SafetyFast == CommittedHeightQcCoreSafety
 
 BugFutureDropped == NoBugInvariant
 BugFutureRecordOnly == NoBugInvariant

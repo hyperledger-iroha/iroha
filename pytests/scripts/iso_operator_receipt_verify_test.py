@@ -86,6 +86,51 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                 self.assertNotIn(unknown_key, message)
                 self.assertNotIn(hidden, message)
 
+    def test_cli_argument_terminator_is_rejected_without_echo(self):
+        hidden = "token=receipt-terminator-secret"
+        cases = (
+            (
+                "raw",
+                lambda: VERIFIER._preflight_raw_cli_secrets(
+                    ["--", "--receipt-dir", hidden],
+                    {"--receipt-dir"},
+                ),
+            ),
+            (
+                "path",
+                lambda: VERIFIER._preflight_cli_paths(
+                    ["--", "--receipt-dir", hidden],
+                    {"--receipt-dir"},
+                ),
+            ),
+            (
+                "boolean",
+                lambda: VERIFIER._preflight_boolean_cli_flags(
+                    ["--", "--allow-failed", hidden],
+                    {"--allow-failed"},
+                ),
+            ),
+        )
+        for helper, run in cases:
+            with self.subTest(helper=helper):
+                with self.assertRaises(VERIFIER.ReceiptError) as caught:
+                    run()
+
+                message = str(caught.exception)
+                self.assertIn("argument terminator is not supported", message)
+                self.assertNotIn(hidden, message)
+                self.assertNotIn("receipt-terminator-secret", message)
+
+    def test_parser_rejects_abbreviated_long_options(self):
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            with self.assertRaises(SystemExit) as caught:
+                VERIFIER.build_parser().parse_args(["--receipt-di", "receipts"])
+
+        self.assertEqual(caught.exception.code, 2)
+        self.assertIn("unrecognized arguments", stderr.getvalue())
+        self.assertIn("--receipt-di", stderr.getvalue())
+
     def test_nested_control_material_in_receipt_is_rejected_without_echo(self):
         cases = (
             (
@@ -108,6 +153,270 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                 self.assertIn(expected, message)
                 self.assertNotIn("\x1b", message)
                 self.assertNotIn(hidden, message)
+
+    def test_audit_index_source_secret_identifiers_are_rejected_without_echo(self):
+        cases = (
+            (
+                "message_id",
+                lambda record: record.update({"message_id": "token-receipt-index-secret"}),
+                "token-receipt-index-secret",
+            ),
+            (
+                "profile_id",
+                lambda record: record.update({"profile_id": "private_key=receipt-index-secret"}),
+                "private_key=receipt-index-secret",
+            ),
+            (
+                "business_message_id",
+                lambda record: record.update(
+                    {"business_message_id": "%70assword%253Dreceipt-index-secret"}
+                ),
+                "password=receipt-index-secret",
+            ),
+            (
+                "reference_snapshot_id",
+                lambda record: record.update(
+                    {"reference_snapshot_id": "x_iroha_signature=receipt-index-secret"}
+                ),
+                "x_iroha_signature=receipt-index-secret",
+            ),
+        )
+        for name, mutate, hidden in cases:
+            with self.subTest(name=name):
+                index = audit_test.sample_index()
+                mutate(index["records"][0])
+                index = audit_test.with_digest(index, audit_test.ADAPTER.INDEX_DIGEST_FIELD)
+
+                with self.assertRaises(VERIFIER.ReceiptError) as caught:
+                    VERIFIER._verify_audit_index_source(index, "anchor.audit_index")
+
+                message = str(caught.exception)
+                self.assertIn("secret-looking material", message)
+                self.assertNotIn("receipt-index-secret", message)
+                self.assertNotIn(hidden, message)
+
+    def test_persisted_record_source_secret_values_are_rejected_without_echo(self):
+        cases = (
+            (
+                "detail",
+                lambda source: source.update({"detail": "token=receipt-source-secret"}),
+                "token=receipt-source-secret",
+            ),
+            (
+                "context",
+                lambda source: source["context"].update(
+                    {"source_account_id": "private-key=receipt-source-secret"}
+                ),
+                "private-key=receipt-source-secret",
+            ),
+            (
+                "history-detail",
+                lambda source: source["status_history"][0].update(
+                    {"detail": "%70assword%253Dreceipt-source-secret"}
+                ),
+                "password=receipt-source-secret",
+            ),
+        )
+        for name, mutate, hidden in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    record = audit_test.sample_record()
+                    source = audit_test.sample_persisted_record(record)
+                    mutate(source)
+                    source = audit_test.with_digest(
+                        source,
+                        audit_test.ADAPTER.PERSISTED_RECORD_DIGEST_FIELD,
+                    )
+                    record[audit_test.ADAPTER.PERSISTED_RECORD_DIGEST_FIELD] = source[
+                        audit_test.ADAPTER.PERSISTED_RECORD_DIGEST_FIELD
+                    ]
+                    record_path = root / record["filename"]
+                    record_path.write_text(
+                        json.dumps(source, indent=2) + "\n",
+                        encoding="utf-8",
+                    )
+
+                    with self.assertRaises(VERIFIER.ReceiptError) as caught:
+                        VERIFIER._verify_persisted_record_source(
+                            record,
+                            record_path,
+                            str(record_path),
+                        )
+
+                    message = str(caught.exception)
+                    self.assertIn("secret-looking material", message)
+                    self.assertNotIn("receipt-source-secret", message)
+                    self.assertNotIn(hidden, message)
+
+    def test_archived_source_paths_reject_secret_identifiers_without_echo(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            inbox = root / "rail"
+            inbox.mkdir()
+            xml_path, _sidecar = rail_test.write_message(inbox)
+            sidecar_path = xml_path.with_suffix(xml_path.suffix + ".json")
+            with rail_test.capture_server() as (base_url, _requests):
+                self.assertEqual(
+                    rail_test.run_main(
+                        [
+                            "--inbox-dir",
+                            str(inbox),
+                            "--torii-base-url",
+                            base_url,
+                            "--allow-insecure-http",
+                        ]
+                    )[0],
+                    0,
+                )
+            receipt = next((inbox / "receipts").glob("*.receipt.json"))
+            original = receipt.read_bytes()
+            cases = (
+                (
+                    "xml_path",
+                    lambda: rewrite_receipt(
+                        receipt,
+                        lambda body: body.update(
+                            {
+                                "xml_path": str(
+                                    xml_path.with_name(
+                                        "token-receipt-xml-source-secret.xml"
+                                    )
+                                )
+                            }
+                        ),
+                    ),
+                    "xml_path must not contain secret-looking material",
+                    "token-receipt-xml-source-secret",
+                ),
+                (
+                    "sidecar_path",
+                    lambda: rewrite_receipt(
+                        receipt,
+                        lambda body: body.update(
+                            {
+                                "sidecar_path": str(
+                                    sidecar_path.with_name(
+                                        "token-receipt-sidecar-source-secret.xml.json"
+                                    )
+                                )
+                            }
+                        ),
+                    ),
+                    "sidecar_path must not contain secret-looking material",
+                    "token-receipt-sidecar-source-secret",
+                ),
+            )
+            for name, mutate, expected, hidden in cases:
+                with self.subTest(name=name):
+                    receipt.write_bytes(original)
+                    mutate()
+
+                    rc, _stdout, stderr = run_verify(
+                        [
+                            "--receipt",
+                            str(receipt),
+                            "--allow-insecure-http",
+                            "--require-source-files",
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(expected, stderr)
+                    self.assertNotIn(hidden, stderr)
+
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            export_dir = root / "export"
+            export_dir.mkdir()
+            _index, _anchor, digest_anchor = audit_test.write_export(
+                export_dir,
+                store_dir=root / "store",
+                write_record_sources_flag=True,
+            )
+            with audit_test.capture_server() as (endpoint, _requests):
+                self.assertEqual(
+                    audit_test.run_main(
+                        [
+                            "--export-dir",
+                            str(export_dir),
+                            "--endpoint",
+                            endpoint,
+                            "--allow-insecure-http",
+                        ]
+                    )[0],
+                    0,
+                )
+            receipt = next((export_dir / "receipts").glob("*.receipt.json"))
+            original = receipt.read_bytes()
+            latest = export_dir / audit_test.ADAPTER.LATEST_ANCHOR_FILE
+
+            def rewrite_anchor_store_dir() -> None:
+                anchor = json.loads(latest.read_text(encoding="utf-8"))
+                anchor["store_dir"] = str(root / "token-receipt-store-source-secret")
+                anchor = audit_test.with_digest(
+                    anchor,
+                    audit_test.ADAPTER.ANCHOR_DIGEST_FIELD,
+                )
+                anchor_text = json.dumps(anchor, indent=2) + "\n"
+                latest.write_text(anchor_text, encoding="utf-8")
+                digest_anchor.write_text(anchor_text, encoding="utf-8")
+                rewrite_receipt(
+                    receipt,
+                    lambda body: body.update(
+                        {
+                            "anchor_sha256": anchor[
+                                audit_test.ADAPTER.ANCHOR_DIGEST_FIELD
+                            ]
+                        }
+                    ),
+                )
+
+            cases = (
+                (
+                    "anchor_path",
+                    lambda: rewrite_receipt(
+                        receipt,
+                        lambda body: body.update(
+                            {
+                                "anchor_path": str(
+                                    latest.with_name(
+                                        "token-receipt-anchor-source-secret.notary.json"
+                                    )
+                                )
+                            }
+                        ),
+                    ),
+                    "anchor_path must not contain secret-looking material",
+                    "token-receipt-anchor-source-secret",
+                ),
+                (
+                    "store_dir",
+                    rewrite_anchor_store_dir,
+                    "store_dir must not contain secret-looking material",
+                    "token-receipt-store-source-secret",
+                ),
+            )
+            for name, mutate, expected, hidden in cases:
+                with self.subTest(name=name):
+                    receipt.write_bytes(original)
+                    latest.write_bytes(
+                        digest_anchor.read_bytes()
+                    )
+                    mutate()
+
+                    rc, _stdout, stderr = run_verify(
+                        [
+                            "--receipt",
+                            str(receipt),
+                            "--allow-insecure-http",
+                            "--require-source-files",
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(expected, stderr)
+                    self.assertNotIn(hidden, stderr)
 
     def test_cli_path_flags_reject_flag_like_values(self):
         cases = (
@@ -144,6 +453,115 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                 self.assertNotIn(raw_path, message)
                 self.assertNotIn(decoded_secret, message)
                 self.assertNotIn("receipt-path-leak", message)
+
+    def test_local_path_validators_reject_percent_encoded_smuggling(self):
+        cases = (
+            (
+                "cli encoded dot",
+                lambda raw: VERIFIER._reject_raw_cli_path_smuggling(raw, "--receipt-dir"),
+                "receipts/%2e/archive",
+                "encoded dot or separator",
+            ),
+            (
+                "source encoded slash",
+                lambda raw: VERIFIER._require_clean_path_string(raw, "receipt.xml_path"),
+                "/ops/%2f/rail.xml",
+                "encoded dot or separator",
+            ),
+            (
+                "cli uri prefix",
+                lambda raw: VERIFIER._reject_raw_cli_path_smuggling(raw, "--receipt-dir"),
+                "file:receipts/archive",
+                "URI or drive prefixes",
+            ),
+            (
+                "source drive prefix",
+                lambda raw: VERIFIER._require_clean_path_string(raw, "receipt.xml_path"),
+                "C:/ops/rail.xml",
+                "URI or drive prefixes",
+            ),
+            (
+                "source encoded semicolon",
+                lambda raw: VERIFIER._require_clean_path_string(raw, "receipt.anchor_path"),
+                "/ops/%3b/latest.notary.json",
+                "encoded semicolon",
+            ),
+            (
+                "cli encoded delimiter",
+                lambda raw: VERIFIER._reject_raw_cli_path_smuggling(raw, "--receipt-dir"),
+                "receipts/%23/archive",
+                "encoded URL delimiter",
+            ),
+            (
+                "cli encoded percent",
+                lambda raw: VERIFIER._reject_raw_cli_path_smuggling(raw, "--receipt-dir"),
+                "receipts/%25/archive",
+                "encoded percent",
+            ),
+            (
+                "cli encoded control",
+                lambda raw: VERIFIER._reject_raw_cli_path_smuggling(raw, "--receipt-dir"),
+                "receipts/%00/archive",
+                "percent-encoded control or space",
+            ),
+            (
+                "cli malformed percent",
+                lambda raw: VERIFIER._reject_raw_cli_path_smuggling(raw, "--receipt-dir"),
+                "receipts/%zz/archive",
+                "malformed percent",
+            ),
+        )
+        for name, call, raw, expected in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(VERIFIER.ReceiptError) as caught:
+                    call(raw)
+
+                message = str(caught.exception)
+                self.assertIn(expected, message)
+                self.assertNotIn(raw, message)
+
+    def test_url_paths_reject_raw_delimiter_smuggling(self):
+        cases = (
+            "https://notary.local-bank.bank/archive:debug/anchor",
+            "https://notary.local-bank.bank/archive@debug/anchor",
+            "https://notary.local-bank.bank/archive[debug]/anchor",
+        )
+        for endpoint in cases:
+            with self.subTest(endpoint=endpoint):
+                with self.assertRaises(VERIFIER.ReceiptError) as caught:
+                    VERIFIER._require_https(
+                        endpoint,
+                        allow_insecure_http=False,
+                        label="receipt.endpoint",
+                    )
+
+                message = str(caught.exception)
+                self.assertIn("path must not contain URL delimiter characters", message)
+                self.assertNotIn(endpoint, message)
+
+    def test_url_paths_reject_non_ascii_smuggling(self):
+        cases = (
+            (
+                "https://notary.local-bank.bank/archive∕debug/anchor",
+                "path must use printable ASCII",
+            ),
+            (
+                "https://notary.local-bank.bank/archive%c3%a9/anchor",
+                "path must not contain percent-encoded non-ASCII bytes",
+            ),
+        )
+        for endpoint, expected in cases:
+            with self.subTest(endpoint=endpoint):
+                with self.assertRaises(VERIFIER.ReceiptError) as caught:
+                    VERIFIER._require_https(
+                        endpoint,
+                        allow_insecure_http=False,
+                        label="receipt.endpoint",
+                    )
+
+                message = str(caught.exception)
+                self.assertIn(expected, message)
+                self.assertNotIn(endpoint, message)
 
     def test_boolean_cli_flags_reject_values_without_echo(self):
         cases = (

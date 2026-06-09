@@ -146,8 +146,10 @@ TypeInvariant ==
        /\ SpecPeerState(c) \in PeerStates
        /\ ActualPeerState(c) \in PeerStates
 
-SafetyFast ==
+DispatchMatchesSpec ==
   \A c \in Cases: Matches(c)
+
+SafetyFast == DispatchMatchesSpec
 
 PostsStayPosts ==
   \A c \in Cases:

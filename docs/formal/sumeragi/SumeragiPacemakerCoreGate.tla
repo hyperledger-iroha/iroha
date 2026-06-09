@@ -197,11 +197,13 @@ TypeInvariant ==
        /\ SpecActions(c) \subseteq Actions
        /\ ImplementationActions(c) \subseteq Actions
 
-NoBugInvariant ==
+PacemakerCoreDirectSafety ==
   \A c \in Cases:
     ImplementationActions(c) = SpecActions(c)
 
-SafetyFast == NoBugInvariant
+NoBugInvariant == PacemakerCoreDirectSafety
+
+SafetyFast == PacemakerCoreDirectSafety
 
 BugNewDeadlineUsesNow == NoBugInvariant
 BugNewDropsInterval == NoBugInvariant

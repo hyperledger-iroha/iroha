@@ -322,9 +322,12 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+ProposalBatchMatchesSpec ==
   /\ \A c \in TrimCases: ActualTrimOutput(c) = SpecTrimOutput(c)
   /\ \A c \in CanonCases: ActualCanonOutput(c) = SpecCanonOutput(c)
+
+SafetyFast ==
+  ProposalBatchMatchesSpec
 
 BugTrimNoExcessRemoves ==
   ActualTrimOutput("trim_no_excess") = SpecTrimOutput("trim_no_excess")

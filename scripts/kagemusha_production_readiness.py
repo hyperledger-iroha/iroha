@@ -75,12 +75,18 @@ LINEAGE_PROOF_REQUIRED_TEST_LOGS = {
 EXPECTED_LINEAGE_PROOF_RESULT_PREFIX = (
     "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;"
 )
+LINEAGE_PROOF_RESULT_RE = re.compile(
+    r"^test result: ok\. 1 passed; 0 failed; 0 ignored; 0 measured; "
+    r"0 filtered out; finished in [0-9]+(?:\.[0-9]+)?s$"
+)
 LINEAGE_ARTIFACT_ALL_ZERO_ERROR = (
     "must be generated lineage material, not all-zero placeholder bytes"
 )
 COMPACT_KEY_REQUIRED_ARTIFACTS = (
     "recursive-compact-len4.vk",
     "recursive-compact-len4.pk",
+    "recursive-compact-key-artifacts.norito",
+    "recursive-compact-verifier-keys.norito",
     "recursive-compact-len4.record.norito",
 )
 COMPACT_KEY_PLACEHOLDER_PREFIXES = (
@@ -95,6 +101,8 @@ MAX_COMPACT_KEY_GENERATOR_LOG_BYTES = 1024 * 1024
 COMPACT_KEY_GENERATOR_LOG_SIZE_FIELDS = {
     "recursive-compact-len4.vk": "vk",
     "recursive-compact-len4.pk": "pk",
+    "recursive-compact-key-artifacts.norito": "key_artifacts",
+    "recursive-compact-verifier-keys.norito": "verifier_keys",
     "recursive-compact-len4.record.norito": "record",
 }
 COMPACT_KEY_GENERATOR_LOG_RE = re.compile(
@@ -104,7 +112,9 @@ COMPACT_KEY_GENERATOR_LOG_RE = re.compile(
     r"artifacts/kagemusha/recursive-compact-len4\.pk "
     r"\(vk=(?P<vk>[1-9][0-9]*) bytes, "
     r"pk=(?P<pk>[1-9][0-9]*) bytes, "
-    r"record=(?P<record>[1-9][0-9]*) bytes\)$"
+    r"record=(?P<record>[1-9][0-9]*) bytes, "
+    r"key_artifacts=(?P<key_artifacts>[1-9][0-9]*) bytes, "
+    r"verifier_keys=(?P<verifier_keys>[1-9][0-9]*) bytes\)$"
 )
 
 
@@ -125,6 +135,8 @@ def expected_compact_key_command() -> str:
         "iroha app zk kagemusha recursive-compact-key-artifacts "
         "--vk-out artifacts/kagemusha/recursive-compact-len4.vk "
         "--pk-out artifacts/kagemusha/recursive-compact-len4.pk "
+        "--key-artifacts-out artifacts/kagemusha/recursive-compact-key-artifacts.norito "
+        "--verifier-keys-out artifacts/kagemusha/recursive-compact-verifier-keys.norito "
         "--record-out artifacts/kagemusha/recursive-compact-len4.record.norito "
         "--record-namespace offline_kagemusha "
         "--record-version 1"
@@ -141,7 +153,9 @@ def expected_compact_key_generator_log_line(artifact_size_bytes: dict[str, int])
         "artifacts/kagemusha/recursive-compact-len4.pk "
         f"(vk={artifact_size_bytes['recursive-compact-len4.vk']} bytes, "
         f"pk={artifact_size_bytes['recursive-compact-len4.pk']} bytes, "
-        f"record={artifact_size_bytes['recursive-compact-len4.record.norito']} bytes)"
+        f"record={artifact_size_bytes['recursive-compact-len4.record.norito']} bytes, "
+        f"key_artifacts={artifact_size_bytes['recursive-compact-key-artifacts.norito']} bytes, "
+        f"verifier_keys={artifact_size_bytes['recursive-compact-verifier-keys.norito']} bytes)"
     )
 
 
@@ -736,10 +750,13 @@ def _lineage_local_text(
     if file_errors:
         return None, file_errors
     try:
-        return path.read_text(
+        with path.open(
+            "r",
             encoding="utf-8",
             errors=decode_errors,
-        ), []
+            newline="",
+        ) as handle:
+            return handle.read(), []
     except (OSError, UnicodeDecodeError):
         return None, [unreadable_error]
 
@@ -767,16 +784,19 @@ def validate_lineage_proof_log(path: Path, expected_name: str) -> tuple[str | No
         path,
         "production proof log",
         "production proof log could not be read",
-        decode_errors="replace",
     )
     if text_errors:
         return None, text_errors
     assert text is not None
     errors: list[str] = []
+    if "\r" in text:
+        errors.append("--proof-log must use canonical LF line endings")
+    if not text.endswith("\n"):
+        errors.append("--proof-log must end with a canonical LF line terminator")
     lines = text.splitlines()
     expected_test_line = f"test {expected_name} ... ok"
     test_lines = [
-        line.rstrip()
+        line
         for line in lines
         if line.startswith("test ") and not line.startswith("test result:")
     ]
@@ -786,14 +806,15 @@ def validate_lineage_proof_log(path: Path, expected_name: str) -> tuple[str | No
     if test_lines != [expected_test_line]:
         errors.append("--proof-log must contain only the single production proof test line")
 
-    result_lines = [line.rstrip() for line in lines if line.startswith("test result:")]
+    result_lines = [line for line in lines if line.startswith("test result:")]
     has_expected_result_line = any(
-        line.startswith(EXPECTED_LINEAGE_PROOF_RESULT_PREFIX) for line in result_lines
+        LINEAGE_PROOF_RESULT_RE.fullmatch(line) for line in result_lines
     )
     if not has_expected_result_line:
         errors.append("--proof-log must contain a passing cargo test result")
-    if len(result_lines) != 1 or not result_lines[0].startswith(
-        EXPECTED_LINEAGE_PROOF_RESULT_PREFIX
+    if (
+        len(result_lines) != 1
+        or LINEAGE_PROOF_RESULT_RE.fullmatch(result_lines[0]) is None
     ):
         errors.append(
             "--proof-log must contain exactly one cargo test result for one passed production test"
@@ -982,6 +1003,10 @@ def validate_compact_key_command(command: Any) -> list[str]:
         "artifacts/kagemusha/recursive-compact-len4.vk",
         "--pk-out",
         "artifacts/kagemusha/recursive-compact-len4.pk",
+        "--key-artifacts-out",
+        "artifacts/kagemusha/recursive-compact-key-artifacts.norito",
+        "--verifier-keys-out",
+        "artifacts/kagemusha/recursive-compact-verifier-keys.norito",
         "--record-out",
         "artifacts/kagemusha/recursive-compact-len4.record.norito",
         "--record-namespace",
@@ -1049,10 +1074,17 @@ def validate_lineage_artifact_content(path: Path, artifact: str) -> list[str]:
 def parse_compact_key_generator_log(text: str) -> tuple[dict[str, int], list[str]]:
     """Parse the canonical ABI-7 recursive compact key generator summary log."""
 
+    errors: list[str] = []
+    if "\r" in text:
+        errors.append("compact key generator log must use canonical LF line endings")
+    if not text.endswith("\n"):
+        errors.append("compact key generator log must end with a canonical LF line terminator")
     lines = text.splitlines()
     if len(lines) != 1:
-        return {}, ["compact key generator log must contain exactly one summary line"]
-    line = lines[0].rstrip()
+        errors.append("compact key generator log must contain exactly one summary line")
+    if errors:
+        return {}, errors
+    line = lines[0]
     match = COMPACT_KEY_GENERATOR_LOG_RE.fullmatch(line)
     if match is None:
         return {}, ["compact key generator log must match the canonical CLI summary"]

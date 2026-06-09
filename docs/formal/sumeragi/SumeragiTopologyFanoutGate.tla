@@ -270,7 +270,7 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+TopologyFanoutCoreSafety ==
   /\ ActualRedundantSendR("redundant_len_zero") =
        SpecRedundantSendR("redundant_len_zero")
   /\ ActualRedundantSendR("redundant_len_one") =
@@ -324,6 +324,9 @@ SafetyFast ==
   /\ ActualFanoutOutput("len7_count_ten") =
        SpecFanoutOutput("len7_count_ten")
 
+SafetyFast ==
+  TopologyFanoutCoreSafety
+
 RedundantSendCountExact ==
   \A c \in RedundantCases:
     ActualRedundantSendR(c) = SpecRedundantSendR(c)
@@ -341,7 +344,7 @@ TailFanoutSelectionExact ==
     ActualFanoutOutput(c) = SpecFanoutOutput(c)
 
 TopologyFanoutHelperExactness ==
-  /\ SafetyFast
+  /\ TopologyFanoutCoreSafety
   /\ RedundantSendCountExact
   /\ ViewChangeQuorumExact
   /\ RedundantSendFloorExact
@@ -416,7 +419,7 @@ BugFanoutDuplicates ==
     SpecFanoutDistinct("len4_count_three")
 
 Safety ==
-  SafetyFast
+  TopologyFanoutCoreSafety
 
 =============================================================================
 ====

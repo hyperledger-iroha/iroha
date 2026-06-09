@@ -446,13 +446,16 @@ RescueProgressStable ==
   /\ ~ActualRescue(RescueDeliveredMissingQcWait).ready_sent
   /\ ActualRescue(RescueDeliveredMissingQcAfterMax).ready_sent
 
-SafetyFast ==
+RbcTargetedRepairCoreSafety ==
   /\ ReadySendExact
   /\ DeliverSendExact
   /\ RescueExact
   /\ TargetedSendStable
   /\ RescueGatesStable
   /\ RescueProgressStable
+
+SafetyFast ==
+  RbcTargetedRepairCoreSafety
 
 AllReadySendCasesMatchSpec ==
   \A c \in ReadySendCases:

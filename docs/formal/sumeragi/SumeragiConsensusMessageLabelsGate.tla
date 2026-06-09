@@ -228,7 +228,7 @@ SampleHandlingTripleStable ==
   /\ ActualOutcomeLabel(2) = "deferred"
   /\ ActualReasonLabel(35) = "roster_hash_mismatch_deferred"
 
-SafetyFast ==
+ConsensusMessageLabelsExactness ==
   /\ KindLabelsExact
   /\ OutcomeLabelsExact
   /\ ReasonLabelsExact
@@ -236,5 +236,7 @@ SafetyFast ==
   /\ OutcomeLabelsDistinct
   /\ ReasonLabelsDistinct
   /\ SampleHandlingTripleStable
+
+SafetyFast == ConsensusMessageLabelsExactness
 
 ====

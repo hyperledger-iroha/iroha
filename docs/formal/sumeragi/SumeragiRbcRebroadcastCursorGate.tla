@@ -156,8 +156,11 @@ StableSelections ==
   /\ ActualSelection(UrgentNormalDedup) = [selected |-> <<B, A, C>>, cursor |-> C]
   /\ ActualSelection(NoActiveCursorAdvances) = [selected |-> <<>>, cursor |-> D]
 
-SafetyFast ==
+RbcRebroadcastCursorCoreSafety ==
   /\ SelectionExact
   /\ StableSelections
+
+SafetyFast ==
+  RbcRebroadcastCursorCoreSafety
 
 ====

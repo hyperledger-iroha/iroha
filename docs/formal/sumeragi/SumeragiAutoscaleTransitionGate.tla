@@ -118,8 +118,10 @@ Next ==
 TypeInvariant ==
   checked = 0
 
-SafetyFast ==
+TransitionMatchesSpec ==
   \A c \in Cases: ActualCase(c) = SpecCase(c)
+
+SafetyFast == TransitionMatchesSpec
 
 BugSkipMatchingTransition ==
   ActualCase("enabled_matching_success") = SpecCase("enabled_matching_success")

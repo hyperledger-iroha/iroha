@@ -1200,6 +1200,54 @@ def _stable_release_bundle(bundle: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _check_release_bundle_evidence_paths(value: Any) -> list[dict[str, Any]]:
+    blockers: list[dict[str, Any]] = []
+    if not isinstance(value, dict):
+        return [
+            _blocker(
+                "kagemusha_release_bundle_manifest_evidence_shape",
+                "Kagemusha release bundle evidence inventory must be a JSON object",
+            )
+        ]
+
+    def visit(item: Any) -> None:
+        if isinstance(item, dict):
+            path = item.get("path")
+            if "path" in item:
+                if not isinstance(path, str):
+                    blockers.append(
+                        _blocker(
+                            "kagemusha_release_bundle_manifest_evidence_path",
+                            "Kagemusha release bundle evidence path must be a string",
+                        )
+                    )
+                else:
+                    path_errors: list[str] = []
+                    safe_relative = device_lab._normalise_safe_relative_path(  # type: ignore[attr-defined]
+                        path,
+                        path_errors,
+                        "Kagemusha release bundle evidence path",
+                    )
+                    if safe_relative is None or safe_relative != path:
+                        for error in path_errors or [
+                            "Kagemusha release bundle evidence path must be canonical"
+                        ]:
+                            blockers.append(
+                                _blocker(
+                                    "kagemusha_release_bundle_manifest_evidence_path",
+                                    error,
+                                )
+                            )
+            for child in item.values():
+                visit(child)
+        elif isinstance(item, list):
+            for child in item:
+                visit(child)
+
+    visit(value)
+    return blockers
+
+
 def _check_release_bundle_manifest_shape(bundle: dict[str, Any]) -> list[dict[str, Any]]:
     blockers: list[dict[str, Any]] = []
     if _contains_secret_string(bundle):
@@ -1262,6 +1310,7 @@ def _check_release_bundle_manifest_shape(bundle: dict[str, Any]) -> list[dict[st
                 "Kagemusha release bundle manifest must not contain blockers",
             )
         )
+    blockers.extend(_check_release_bundle_evidence_paths(bundle.get("evidence")))
     return blockers
 
 

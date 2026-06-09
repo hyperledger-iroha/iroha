@@ -171,7 +171,7 @@ RecentAndFutureEvidenceAllowed ==
   /\ ActualAllowed("above_lower_bound")
   /\ ActualAllowed("future_subject")
 
-SafetyFast ==
+EvidenceHorizonCoreSafety ==
   /\ MatchesSpec
   /\ ZeroHorizonDisablesFilter
   /\ MissingSubjectDefaultsToCurrent
@@ -180,7 +180,8 @@ SafetyFast ==
   /\ StaleEvidenceRejected
   /\ RecentAndFutureEvidenceAllowed
 
-Safety ==
-  SafetyFast
+SafetyFast == EvidenceHorizonCoreSafety
+
+Safety == EvidenceHorizonCoreSafety
 
 ====

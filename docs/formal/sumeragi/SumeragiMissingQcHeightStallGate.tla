@@ -367,7 +367,7 @@ MarkerHeightModeSafety ==
   /\ RotationUnchanged \in ImplementationActions(MarkRotationWrongHeight)
   /\ RotationUnchanged \in ImplementationActions(MarkRotationInactive)
 
-SafetyFast ==
+MissingQcHeightStallCoreSafety ==
   /\ SnapshotMatchesSpec
   /\ ReservationMatchesSpec
   /\ MarkerMatchesSpec
@@ -375,6 +375,9 @@ SafetyFast ==
   /\ DependencyContinuitySafety
   /\ ReservationWindowSafety
   /\ MarkerHeightModeSafety
+
+SafetyFast ==
+  MissingQcHeightStallCoreSafety
 
 SpecComparisonAnchors ==
   /\ SnapshotMatchesSpec

@@ -6678,7 +6678,7 @@ mod tests {
             .retain(|missing| missing != "internal cryptographic review signoff is missing");
         assert!(
             !privacy_capability_invariants_hold(&missing_audit),
-            "removed external-audit evidence must be rejected",
+            "removed internal-review evidence must be rejected",
         );
 
         let mut missing_engine = base.clone();
@@ -17341,7 +17341,10 @@ const PRIVACY_PRODUCTION_GATE_REQUIREMENTS: &[(&str, &str)] = &[
     ("parser_fuzzing", "parser fuzzing gate is incomplete"),
     ("verifier_fuzzing", "verifier fuzzing gate is incomplete"),
     ("performance_gates", "performance gate is incomplete"),
-    ("external_audit", "internal cryptographic review signoff is missing"),
+    (
+        "external_audit",
+        "internal cryptographic review signoff is missing",
+    ),
 ];
 
 const PRIVACY_REQUIRED_PRODUCTION_PLAN_ROWS: &[(&str, &str, &str)] = &[

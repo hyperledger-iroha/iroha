@@ -249,11 +249,14 @@ BackpressureAndCleanupStable ==
   /\ ActualFlush(AllSkippedKeepsCursor)[2] = B
   /\ ~ActualFlush(AllSkippedKeepsCursor)[1]
 
-SafetyFast ==
+RbcOutboundFlushCoreSafety ==
   /\ FlushExact
   /\ EntryGatesStable
   /\ OrderAndBudgetStable
   /\ BackpressureAndCleanupStable
+
+SafetyFast ==
+  RbcOutboundFlushCoreSafety
 
 AllFlushCasesMatchSpec ==
   \A c \in Cases:

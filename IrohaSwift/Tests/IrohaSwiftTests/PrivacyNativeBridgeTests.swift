@@ -996,7 +996,7 @@ final class PrivacyNativeBridgeTests: XCTestCase {
         )
         XCTAssertTrue(
             capabilities.productionGate.missing.contains(
-                "external audit signoff is missing"
+                "internal cryptographic review signoff is missing"
             )
         )
         XCTAssertTrue(

@@ -279,11 +279,14 @@ DigestCleanupMatchesExpectedDigests ==
   /\ DropCountTwo \in ImplementationActions(DropMixedMismatches)
   /\ ReceivedRecomputed \in ImplementationActions(DropMixedMismatches)
 
-SafetyFast ==
+RbcSessionChunkIngestCoreSafety ==
   /\ ActionsMatchSpec
   /\ ConstructionRejectsInvalidMetadata
   /\ RejectedChunksDoNotMutate
   /\ AcceptedAndDuplicateChunksAccountExactly
   /\ DigestCleanupMatchesExpectedDigests
+
+SafetyFast ==
+  RbcSessionChunkIngestCoreSafety
 
 ====

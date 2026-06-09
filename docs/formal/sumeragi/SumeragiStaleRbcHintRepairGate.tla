@@ -230,7 +230,7 @@ NoCachedHintNeverRepairs ==
   /\ NoAcceptWithoutHint \in ImplementationActions(NoCachedHint)
   /\ ~(ReturnAccept \in ImplementationActions(NoCachedHint))
 
-NoBugInvariant ==
+StaleRbcHintRepairCoreSafety ==
   /\ ActionsMatchSpec
   /\ HintBackedStaleChunkSeedsRepair
   /\ HintRepairRequiresDaKindAndFrontier
@@ -239,6 +239,8 @@ NoBugInvariant ==
   /\ RejectedStaleRbcHasNoChunkSideEffects
   /\ NoCachedHintNeverRepairs
 
-SafetyFast == NoBugInvariant
+NoBugInvariant == StaleRbcHintRepairCoreSafety
+
+SafetyFast == StaleRbcHintRepairCoreSafety
 
 ====

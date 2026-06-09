@@ -2150,7 +2150,7 @@ test("package dist entrypoint exports privacy native archive helpers", () => {
   assert.equal(fresh.privacyAlgorithms[0].productionGate.gates.external_audit, false);
   assert.ok(
     fresh.privacyAlgorithms[0].productionGate.missing.includes(
-      "external audit signoff is missing",
+      "internal cryptographic review signoff is missing",
     ),
   );
   assert.deepEqual(fresh.privacyCriteria, capabilities.privacyCriteria);

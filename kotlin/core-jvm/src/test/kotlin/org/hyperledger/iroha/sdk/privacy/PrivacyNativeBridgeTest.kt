@@ -776,7 +776,7 @@ class PrivacyNativeBridgeTest {
         )
         assertTrue(
             capabilities.productionGate.missing.contains(
-                "external audit signoff is missing",
+                "internal cryptographic review signoff is missing",
             ),
         )
         assertTrue(

@@ -267,11 +267,14 @@ DeliverReplaysAreImmutable ==
     /\ DeliverUpdated \notin ImplementationActions(c)
     /\ InvalidPreserved \in ImplementationActions(c)
 
-SafetyFast ==
+RbcSessionReadyDeliverCoreSafety ==
   /\ ActionsMatchSpec
   /\ ReadyRecordingIsIdempotentAndConflictAware
   /\ ReadyRosterHashIsSetOnceAndEnforced
   /\ DeliverFirstRecordsAndAdvances
   /\ DeliverReplaysAreImmutable
+
+SafetyFast ==
+  RbcSessionReadyDeliverCoreSafety
 
 ====

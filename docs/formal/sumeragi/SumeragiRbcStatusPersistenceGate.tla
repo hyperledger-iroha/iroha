@@ -291,7 +291,7 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+RbcStatusPersistenceMatchesSpec ==
   /\ \A c \in ReadCases:
        /\ ActualReadResult(c) = SpecReadResult(c)
        /\ ActualPromoteAfterRead(c) = SpecPromoteAfterRead(c)
@@ -308,6 +308,9 @@ SafetyFast ==
        /\ ActualFatalMetric(c) = SpecFatalMetric(c)
   /\ \A c \in TempPathCases:
        ActualTempPath(c) = SpecTempPath(c)
+
+SafetyFast ==
+  RbcStatusPersistenceMatchesSpec
 
 BugReadPrefersTmpOverMain ==
   ActualReadResult("main_valid_tmp_valid") = SpecReadResult("main_valid_tmp_valid")

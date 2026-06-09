@@ -331,13 +331,16 @@ CooldownAndMarkSafety ==
   /\ NoMark \in ImplementationActions(CooldownDuplicate)
   /\ NoMark \in ImplementationActions(InactiveStall)
 
-SafetyFast ==
+MissingQcStallRangePullCoreSafety ==
   /\ ActionsMatchSpec
   /\ ReasonClassifierSafety
   /\ ExactStallGateSafety
   /\ SuppressionSafety
   /\ CohortSafety
   /\ CooldownAndMarkSafety
+
+SafetyFast ==
+  MissingQcStallRangePullCoreSafety
 
 ActionComparisonAnchors ==
   ActionsMatchSpec

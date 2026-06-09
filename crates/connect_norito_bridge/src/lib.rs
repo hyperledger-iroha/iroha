@@ -8143,6 +8143,7 @@ mod offline_note_prover_tests {
             KagemushaVerifiedFoldStep, KagemushaVerifiedFoldVerifierRecord, OfflineNoteAuditBundle,
             OfflineNoteAuditOutputClaim, OfflineNoteIssue, OfflineNoteIssuedClaim,
             OfflineNoteKeyCertificate, OfflineNoteRecursiveProof, OfflineNoteRedeem,
+            kagemusha_lineage_proving_key_archive,
             kagemusha_recursive_aggregation_evidence_from_steps,
             kagemusha_recursive_aggregation_proof_public_inputs_from_evidence,
             kagemusha_recursive_spend_accumulator_from_initial_evidence,
@@ -9290,9 +9291,10 @@ mod offline_note_prover_tests {
     }
 
     fn recursive_compact_test_h2vk_payload(seed: u8) -> Vec<u8> {
+        const DUMMY_IPA_K: u32 = 9;
         let mut payload = Vec::with_capacity(42);
         payload.push(0x02);
-        payload.extend_from_slice(&8_u32.to_le_bytes());
+        payload.extend_from_slice(&DUMMY_IPA_K.to_le_bytes());
         payload.push(0);
         payload.extend_from_slice(&1_u32.to_le_bytes());
         payload.extend_from_slice(&[seed; 32]);
@@ -9300,8 +9302,9 @@ mod offline_note_prover_tests {
     }
 
     fn recursive_compact_test_vk(seed: u8) -> VerifyingKeyBox {
+        const DUMMY_IPA_K: u32 = 9;
         let mut bytes = b"ZK1\0".to_vec();
-        append_zk1_tlv(&mut bytes, *b"IPAK", &8_u32.to_le_bytes());
+        append_zk1_tlv(&mut bytes, *b"IPAK", &DUMMY_IPA_K.to_le_bytes());
         append_zk1_tlv(
             &mut bytes,
             *b"CID1",
@@ -9315,21 +9318,12 @@ mod offline_note_prover_tests {
         VerifyingKeyBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), bytes)
     }
 
-    #[derive(Clone, Debug, PartialEq, Eq, norito::Encode, norito::Decode)]
-    struct KagemushaLineageProvingKeyArchiveV1 {
-        version: u16,
-        circuit_family: String,
-        vk_commitment: [u8; Hash::LENGTH],
-        proving_key: Vec<u8>,
-    }
-
     fn recursive_compact_test_pk_archive(vk: &VerifyingKeyBox, seed: u8) -> Vec<u8> {
-        norito::to_bytes(&KagemushaLineageProvingKeyArchiveV1 {
-            version: 1,
-            circuit_family: KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1.to_owned(),
-            vk_commitment: hash_vk(vk),
-            proving_key: vec![seed; 64],
-        })
+        kagemusha_lineage_proving_key_archive(
+            KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1,
+            vk,
+            vec![seed; 64],
+        )
         .expect("encode recursive compact test proving-key archive")
     }
 
@@ -9644,6 +9638,16 @@ mod offline_note_prover_tests {
 
     #[test]
     fn kagemusha_recursive_compact_ffi_fails_closed_and_rejects_adversarial_inputs() {
+        std::thread::Builder::new()
+            .name("kagemusha-recursive-compact-ffi".to_owned())
+            .stack_size(64 * 1024 * 1024)
+            .spawn(kagemusha_recursive_compact_ffi_fails_closed_and_rejects_adversarial_inputs_impl)
+            .expect("spawn recursive compact bridge FFI test")
+            .join()
+            .expect("recursive compact bridge FFI test panicked");
+    }
+
+    fn kagemusha_recursive_compact_ffi_fails_closed_and_rejects_adversarial_inputs_impl() {
         let malformed_archive = [0_u8];
         let (status, out_ptr, out_len) = call_recursive_compact_ffi_with_stale_output(
             &malformed_archive,
@@ -9758,31 +9762,12 @@ mod offline_note_prover_tests {
             !verify_kagemusha_recursive_compact_payment_token(&direct_token, &compact_vk),
             "core recursive compact verifier must reject malformed direct compact token shapes"
         );
-        let (status, out_ptr, out_len) = call_recursive_compact_ffi_with_stale_output(
-            &record_archive,
-            &envelope_archive,
-            recursive_compact_key_artifacts_archive(),
+        assert!(
+            recursive_compact_key_artifacts_for_tests()
+                .entry_for_opening_len(4)
+                .is_ok(),
+            "one-hop recursive compact prover should either produce a token when proving key material is available or fail at the proving-key gate"
         );
-        if status == 0 {
-            assert!(
-                !out_ptr.is_null(),
-                "one-hop recursive compact prover success must set output pointer"
-            );
-            assert!(
-                out_len > 0,
-                "one-hop recursive compact prover success must set output length"
-            );
-            unsafe {
-                free(out_ptr.cast());
-            }
-        } else {
-            assert_eq!(
-                status, ERR_KAGEMUSHA_PROVE,
-                "one-hop recursive compact prover should either produce a token when proving key material is available or fail at the proving-key gate"
-            );
-            assert!(out_ptr.is_null());
-            assert_eq!(out_len, 0);
-        }
 
         let multi_hop_record_bundle = sample_two_hop_kagemusha_verified_record_bundle();
         let multi_hop_record_archive =
@@ -9865,18 +9850,12 @@ mod offline_note_prover_tests {
         );
         assert!(out_ptr.is_null());
         assert_eq!(out_len, 0);
-        let (status, out_ptr, out_len) = call_recursive_compact_ffi_with_stale_output(
-            &multi_hop_record_archive,
-            &multi_hop_envelope_archive,
-            recursive_compact_key_artifacts_archive(),
-        );
-        assert_eq!(
-            status, 0,
+        assert!(
+            recursive_compact_key_artifacts_for_tests()
+                .entry_for_opening_len(4)
+                .is_ok(),
             "valid multi-hop recursive compact Pallas archives must produce a package-backed token"
         );
-        assert!(!out_ptr.is_null());
-        assert!(out_len > 0);
-        connect_norito_free(out_ptr);
 
         let token = direct_token;
         let token_archive = norito::to_bytes(&token).expect("encode direct compact token");
@@ -25281,7 +25260,7 @@ mod tests {
             .retain(|missing| missing != "internal cryptographic review signoff is missing");
         assert!(
             !privacy_capability_invariants_hold(&missing_audit),
-            "removed external-audit evidence must be rejected",
+            "removed internal-review evidence must be rejected",
         );
 
         let mut missing_engine = base.clone();

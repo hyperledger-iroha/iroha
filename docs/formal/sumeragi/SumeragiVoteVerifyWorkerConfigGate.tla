@@ -181,7 +181,7 @@ VoteVerifyWorkerConfigExactness ==
   /\ VoteVerifyWorkerThreadsExact
   /\ VoteVerifyWorkerQueueCapsExact
 
-SafetyFast ==
+VoteVerifyWorkerConfigCoreSafety ==
   ActualOutput = SpecOutput
   /\ AutoThreadsUseAvailable
   /\ ExplicitThreadsPreserved
@@ -190,6 +190,9 @@ SafetyFast ==
   /\ ExplicitCapPreservation
   /\ QueueCapsPositive
   /\ VoteVerifyWorkerConfigExactness
+
+SafetyFast ==
+  VoteVerifyWorkerConfigCoreSafety
 
 BugAutoThreadsUseAvailable ==
   ActualAutoHigh = SpecAutoHigh

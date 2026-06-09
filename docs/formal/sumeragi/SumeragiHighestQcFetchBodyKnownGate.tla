@@ -211,7 +211,7 @@ LookupShapeMatchesShortCircuit ==
   /\ \A c \in Cases \ {KuraBody, PendingValid, PendingInvalid}:
        CheckInflight \in ImplementationActions(c)
 
-NoBugInvariant ==
+HighestQcFetchBodyKnownCoreSafety ==
   /\ ActionsMatchSpec
   /\ KuraBodiesSuppressFetch
   /\ PendingBodiesSuppressFetchUnlessAborted
@@ -219,6 +219,8 @@ NoBugInvariant ==
   /\ DeferredHashOnlyAndAbsentBodiesStillFetch
   /\ LookupShapeMatchesShortCircuit
 
-SafetyFast == NoBugInvariant
+NoBugInvariant == HighestQcFetchBodyKnownCoreSafety
+
+SafetyFast == HighestQcFetchBodyKnownCoreSafety
 
 ====

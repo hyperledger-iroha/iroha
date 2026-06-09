@@ -103,7 +103,7 @@ public final class PrivacyNativeBridgeTest {
     assert capabilities.missingProductionGates().contains(
         "verifier fuzzing gate is incomplete");
     assert capabilities.missingProductionGates().contains(
-        "external audit signoff is missing");
+        "internal cryptographic review signoff is missing");
     assert capabilities.missingProductionGates().contains(
         "implementation stage is not production-hardened");
     assert capabilities.missingProductionGates().contains(
@@ -133,7 +133,7 @@ public final class PrivacyNativeBridgeTest {
         "parser fuzzing gate is incomplete",
         "verifier fuzzing gate is incomplete",
         "performance gate is incomplete",
-        "external audit signoff is missing",
+        "internal cryptographic review signoff is missing",
         "implementation stage is not production-hardened",
         "planned SDK entrypoints remain",
         "dev fixture entrypoints are not production entrypoints",

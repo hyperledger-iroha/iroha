@@ -299,12 +299,15 @@ ExpectedLengthsMatchLayout ==
   /\ ParityLenChunk \in
        ImplementationActions(Rs16ParityAfterPartialStripe)
 
-SafetyFast ==
+RbcPayloadLayoutCoreSafety ==
   /\ ActionsMatchSpec
   /\ InvalidLayoutsAreRejected
   /\ LegacyPlainHasUnknownPayloadSize
   /\ ChunkCountsMatchEncoding
   /\ EncodedPayloadIndicesRoundTrip
   /\ ExpectedLengthsMatchLayout
+
+SafetyFast ==
+  RbcPayloadLayoutCoreSafety
 
 ====

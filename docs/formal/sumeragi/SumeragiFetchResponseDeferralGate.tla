@@ -137,8 +137,11 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+FetchResponseDeferralMatchesSpec ==
   \A c \in Cases: Matches(c)
+
+SafetyFast ==
+  FetchResponseDeferralMatchesSpec
 
 NextHeightNotDeferred ==
   Matches("next_height_block_created")

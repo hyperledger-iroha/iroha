@@ -1,6 +1,6 @@
 # Engineering Backlog (Detailed Open Work)
 
-Last updated: 2026-06-08
+Last updated: 2026-06-09
 
 The public roadmap lives in [`../../roadmap.md`](../../roadmap.md). Completed
 history lives in [`../../status.md`](../../status.md). This file should only
@@ -10,8 +10,8 @@ track detailed unfinished engineering work.
 
 The active SCCP launch scope is Ethereum, BSC, Solana, TON, and TRON. Retired
 runtime-network families outside that launch scope are not supported for now.
-Retired platform-family lanes are explicitly outside SCCP launch support for
-now.
+Retired platform-family lanes are explicitly outside SCCP launch support for now.
+Retired platform-family networks are explicitly outside SCCP launch support for now.
 Substrate/Polkadot networks are explicitly outside SCCP launch support for now.
 Backlog notes for unsupported network families are diagnostic only; they should
 not be treated as release blockers or advertised as production network support
@@ -28,6 +28,11 @@ aliases before filesystem metadata is inspected.
 Archived child-command evidence rejects value-taking flags whose separate or
 equals-form values are empty or another flag token, keeping canary command
 evidence unambiguous before production archiving.
+Archived canary child commands now also must keep the runner-emitted shape:
+Python interpreter, expected stage script path, then supported flags and their
+values. The archived interpreter/script paths use the same local-path smuggling
+preflight as other artifacts, and extra positional command tokens are rejected
+before evidence can be accepted.
 Direct ISO CLI path preflights now also treat missing, empty, following
 `--flag`, or `--path-flag=--flag` path values as missing before any file or
 network work.
@@ -39,6 +44,13 @@ All ISO operator entry points now also reject secret-looking raw CLI tokens
 before argparse can echo unknown arguments; the scanner covers bearer tokens,
 private keys, passwords/passphrases, API/access/session keys, client secrets,
 cookies, and Iroha signatures.
+Those entry points also reject the `--` argument terminator because the ISO
+operator CLIs do not accept positional operands; raw secret, boolean, path,
+context, and numeric preflights all fail closed before trailing tokens after
+the terminator can bypass scanning and later be echoed by argparse.
+The same CLIs disable argparse long-option abbreviation, so partial spellings
+such as `--summary-ou` or `--receipt-di` cannot bypass exact preflight flag
+matching or be accepted as production options.
 Secret scanning now also checks repeated percent-decoded forms, so encoded or
 double-encoded secret-looking key/value material is rejected in CLI paths,
 unknown JSON keys, recursive JSON values, compact summary paths, and remote
@@ -46,10 +58,20 @@ response previews/errors without echoing the decoded material.
 ISO URL path validators now also reject secret-looking key/value material in
 literal, percent-encoded, or double-encoded path segments before live network
 delivery, archived evidence ingestion, or readiness rollup.
+They also reject raw URL delimiter characters in path segments, matching the
+existing encoded-delimiter rejection for `:`, `@`, `[`, and `]`.
+URL paths must also remain printable ASCII: raw Unicode path characters and
+percent-encoded non-ASCII bytes are rejected before live submission, archive
+replay, or release-readiness rollup.
 Local path, raw CLI, summary-path, artifact-path, and URL-path validators now
 also reject narrow identifier-style secret path material such as
 `token-*-secret` and strong key markers without treating ordinary token-file
 operator paths as secret-bearing by name alone.
+Local artifact path validators now also reject raw URI/drive prefixes,
+malformed percent escapes, and percent-encoded control/space, dot/separator,
+semicolon, URL delimiter, and percent bytes across raw CLI, output, runbook,
+XSD, trust, receipt, evidence, and readiness paths before those values are
+expanded, replayed, or archived.
 Canary runbook artifact paths now use the same narrow local-path scanner,
 including non-whitespace control-character rejection, before plan-only output
 or child command construction, while bearer-token file paths remain runtime
@@ -159,6 +181,14 @@ when upstreams return those markers or unsafe control characters, and the
 receipt verifier rejects successful archived receipts carrying the redacted
 response marker plus archived previews/errors containing the same marker set or
 unsafe control characters.
+Audit-notary anchor publication now also rejects secret-looking audit-index
+identifiers and persisted record-source string values before publication or
+source replay can archive them, and direct receipt verification mirrors that
+rule when replaying archived notary sources.
+Archived receipt source paths, including rail XML/sidecar paths, notary anchor
+paths, and notary store directories, now reject narrow secret-looking
+identifiers, URI/drive prefixes, and percent-encoded path smuggling before
+missing-source or mismatch diagnostics can echo them.
 Live rail sidecars now run the same recursive secret-material scan on known
 fields before unsupported message type, profile, payload digest, or
 rail-message-id validation can echo operator-provided values.
@@ -325,13 +355,37 @@ redistributable schemas, and official trust/revocation bundles.
   wrong-slot-count, malformed, or all-zero accumulator payloads. The proof
   public-input schema and prover/verifier key artifacts now also carry typed
   proof-profile payloads that bind the canonical backend, key format, circuit
-  id, statement-hash layout, and governed schema digest while rejecting opaque
-  schema/key bytes, empty or all-zero key material, and duplicate
-  prover/verifier key material. Crypto now also
+  id, registered parameter profile digests, maximum bootstrap depth,
+  statement-hash layout, and governed schema digest while rejecting opaque
+  schema/key bytes, profile/depth drift, empty or all-zero key material, and
+  duplicate prover/verifier key material. Crypto now also
+  hashes full-bootstrap artifact bundles through a typed digest material with
+  version, artifact-digest count, and per-role artifact hashes, and pins valid
+  alternate-artifact regressions for every mutable artifact role that can vary
+  under the first-release profile. Crypto now also pins exact and bounded
+  full-bootstrap execution statement digest goldens for that typed artifact
+  bundle layout. Crypto now also
+  declares and validates the v1 statement-material and per-slot claim layout,
+  requiring parameter, public-key, bootstrap-key, material, artifact-bundle,
+  slot-index, ciphertext, proof-mode, and residual/noise-bound commitments
+  before proof artifacts are accepted. Crypto tests also pin the canonical
+  proof schema artifact digest and prover-key material commitment digest.
+  Data-model tests pin the Soracloud FHE public-input schema hashes that Core
+  verifier records use for input admission, bootstrap-key proof,
+  full-bootstrap material proof, and full-bootstrap execution proof gates.
+  Core now also requires the full-bootstrap material proof verifier record to
+  carry the canonical material-proof gas schedule id and has adversarial
+  verifier-record drift coverage matching the execution-proof gate.
+  Input-admission and bootstrap-key proof verifier records now likewise require
+  their canonical gas schedule ids rather than any non-empty schedule id.
+  Crypto now also
   exposes a domain-separated full-bootstrap execution proof statement digest
   that validates and binds the public key, governed bootstrap key/material,
   concrete artifact bundle, input/output ciphertexts, exact or bounded proof
-  mode, and input/output bound metadata for the verifier.
+  mode, input/output bound metadata, and execution-witness digest for the
+  verifier. The Soracloud execution proof public-input schema and stable hash
+  now advertise that witness digest so verifier records cannot keep accepting
+  the pre-witness claim layout by metadata accident.
   `RunSoracloudFheJob` now carries optional full-bootstrap artifacts plus an
   ordered execution-proof vector, provenance signs both, and Core routes
   exact/bounded full-mode jobs through artifact-aware full-bootstrap execution
@@ -360,6 +414,10 @@ redistributable schemas, and official trust/revocation bundles.
   `OpenVerifyEnvelope` admission now also reject all-zero native STARK
   envelope bytes for Soracloud FHE input, bootstrap-key, full-bootstrap
   material, and full-bootstrap execution proofs.
+  Under `zk-stark`, Core also decodes full-bootstrap execution native
+  `StarkVerifyEnvelopeV1` payloads before backend verification and adversarially
+  rejects drift across transcript label, domain tag, AIR section presence,
+  circuit id, trace width, opening count, composition root, and public digest.
   A `zk-stark` positive fixture now installs the governed artifact-backed
   STARK verifier key, generates backend-verified `OpenVerifyEnvelope` proofs
   over each full-bootstrap execution statement, and proves the active-verifier
@@ -374,10 +432,11 @@ redistributable schemas, and official trust/revocation bundles.
   Core regressions now also prove that correctly shaped full-bootstrap
   execution proof attachments fail closed before backend verification when the
   governed verifier record is missing or withdrawn.
-  The Core proof helper now also reruns local job-shape validation and requires
-  input-bound metadata to match the input envelope count before deriving proof
-  statements, so stale bound sidecars and multi-input bootstrap drift cannot
-  reach proof verification.
+  The Core proof helper now also reruns local job-shape validation, requires
+  input-bound metadata to match the input envelope count, and rejects missing or
+  surplus output slots before deriving proof statements, so stale bound
+  sidecars, stale output sidecars, and multi-input bootstrap drift cannot reach
+  proof verification.
   It also rejects full-bootstrap execution circuit artifacts outside
   full-bootstrap proof context even when no execution-proof attachments are
   supplied, so artifact-only bypass attempts fail at the proof boundary.
@@ -385,8 +444,34 @@ redistributable schemas, and official trust/revocation bundles.
   drift across namespace, backend, curve, public-input schema, circuit/version,
   gas schedule, active circuit mapping, proof byte caps, key presence/length,
   commitment, and governed verifier-key byte binding.
+  Full-bootstrap execution proof statements now bind the zero-based output slot
+  index, and Core rejects slot-position replay even when duplicate ciphertext
+  slots would otherwise produce identical input/output claims.
+  Full-bootstrap jobs now also require `bootstrap_count == 1` in Core execution,
+  bound propagation, proof verification, and Torii signed-request preflight, so
+  the one-proof-per-output-slot statement cannot be replayed as a multi-round
+  full-bootstrap claim.
+  Core now also preflights full-bootstrap execution-proof material after
+  loading FHE inputs and before artifact-aware execution, rejecting proof
+  vectors whose length does not match the actual input/output slot count before
+  the heavier arithmetic path runs.
+  Exact and bounded-noise Core runtime coverage now also rejects drifted signed
+  artifact bundles, role-swapped artifact envelopes, and stale prover/verifier
+  key-material commitments before Galois-key availability or final output
+  execution.
+  Full-bootstrap proof-key payloads now also bind the canonical execution
+  public-input layout and a generated prover/verifier pair commitment; governed
+  material stores that pair commitment and Core/Torii recompute it from decoded
+  proof-key artifacts before accepting signed material.
+  Torii signed-request preflight coverage now also rejects full-bootstrap
+  artifact attachments outside full-bootstrap context and binds a matching
+  signed material digest to a role-swapped artifact envelope before rejecting
+  the wrong declared role or stale prover/verifier key-material commitments
+  locally before instruction construction.
   The legacy no-artifact Core execution helpers are test-only, so production
-  full-mode jobs must pass through the governed artifact-aware path.
+  full-mode jobs must pass through the governed artifact-aware path; the
+  no-artifact residual-bound wrapper is also test-only, keeping the non-test
+  Core path on artifact-aware execution and bound propagation.
   Refresh-only proof and execution paths still reject `FullBootstrapV1`.
   Remaining production work is the audited full-bootstrap arithmetic
   proof-producing backend plus release-grade prover/verifier artifacts, not the

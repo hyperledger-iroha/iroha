@@ -290,7 +290,7 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+RbcStatusHandleMatchesSpec ==
   /\ \A c \in ConfigureCases:
        /\ ActualConfigureMap(c) = SpecConfigureMap(c)
        /\ ActualConfigureDiskEnabled(c) = SpecConfigureDiskEnabled(c)
@@ -314,6 +314,9 @@ SafetyFast ==
   /\ \A c \in ActiveCases:
        /\ ActualGlobalSnapshot(c) = SpecGlobalSnapshot(c)
        /\ ActualGlobalActiveCount(c) = SpecGlobalActiveCount(c)
+
+SafetyFast ==
+  RbcStatusHandleMatchesSpec
 
 BugConfigureNoneKeepsMap ==
   ActualConfigureMap("none_with_state") = SpecConfigureMap("none_with_state")

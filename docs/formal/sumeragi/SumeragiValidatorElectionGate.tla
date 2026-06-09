@@ -360,10 +360,12 @@ TypeInvariant ==
        /\ SpecActions(c) \subseteq Actions
        /\ ImplementationActions(c) \subseteq Actions
 
-NoBugInvariant ==
+ValidatorElectionCoreSafety ==
   \A c \in Cases:
     ImplementationActions(c) = SpecActions(c)
 
-Safety == NoBugInvariant
+NoBugInvariant == ValidatorElectionCoreSafety
+
+Safety == ValidatorElectionCoreSafety
 
 ====

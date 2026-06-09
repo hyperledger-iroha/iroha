@@ -157,13 +157,15 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+DistinctVoteEpochsMatchesSpec ==
   /\ \A c \in Cases:
        ActualEpochs(c) = SpecEpochs(c)
   /\ \A c \in Cases:
        ActualReplayEpochs(c) = SpecReplayEpochs(c)
   /\ \A c \in Cases:
        ActualReplayCount(c) = SpecReplayCount(c)
+
+SafetyFast == DistinctVoteEpochsMatchesSpec
 
 BugIncludeWrongPhase ==
   ActualEpochs("wrong_phase_only") = SpecEpochs("wrong_phase_only")

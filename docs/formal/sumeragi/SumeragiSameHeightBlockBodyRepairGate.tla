@@ -192,8 +192,11 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+SameHeightBlockBodyRepairMatchesSpec ==
   \A c \in Cases: Matches(c)
+
+SafetyFast ==
+  SameHeightBlockBodyRepairMatchesSpec
 
 PendingSourceAllowed ==
   Matches("pending_actionable")

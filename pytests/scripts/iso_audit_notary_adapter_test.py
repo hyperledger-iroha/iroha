@@ -294,6 +294,69 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                 self.assertNotIn(unknown_key, message)
                 self.assertNotIn(hidden, message)
 
+    def test_cli_argument_terminator_is_rejected_without_echo(self):
+        hidden = "token=audit-terminator-secret"
+        cases = (
+            (
+                "raw",
+                lambda: ADAPTER._preflight_raw_cli_secrets(
+                    ["--", "--receipt-dir", hidden],
+                    {"--receipt-dir"},
+                ),
+            ),
+            (
+                "path",
+                lambda: ADAPTER._preflight_output_cli_paths(
+                    ["--", "--receipt-dir", hidden],
+                    {"--receipt-dir"},
+                ),
+            ),
+            (
+                "boolean",
+                lambda: ADAPTER._preflight_boolean_cli_flags(
+                    ["--", "--dry-run", hidden],
+                    {"--dry-run"},
+                ),
+            ),
+            (
+                "url",
+                lambda: ADAPTER._preflight_required_cli_values(
+                    ["--", "--endpoint", hidden],
+                    {"--endpoint"},
+                    "URL",
+                ),
+            ),
+            (
+                "numeric",
+                lambda: ADAPTER._preflight_numeric_cli_values(
+                    ["--", "--timeout-secs", hidden],
+                    integer_flags=set(),
+                    number_flags={"--timeout-secs"},
+                ),
+            ),
+        )
+        for helper, run in cases:
+            with self.subTest(helper=helper):
+                with self.assertRaises(ADAPTER.AdapterError) as caught:
+                    run()
+
+                message = str(caught.exception)
+                self.assertIn("argument terminator is not supported", message)
+                self.assertNotIn(hidden, message)
+                self.assertNotIn("audit-terminator-secret", message)
+
+    def test_parser_rejects_abbreviated_long_options(self):
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            with self.assertRaises(SystemExit) as caught:
+                ADAPTER.build_parser().parse_args(
+                    ["--export-dir", ".", "--receipt-di", "out"]
+                )
+
+        self.assertEqual(caught.exception.code, 2)
+        self.assertIn("unrecognized arguments", stderr.getvalue())
+        self.assertIn("--receipt-di", stderr.getvalue())
+
     def test_audit_index_secret_looking_identifiers_are_rejected_without_echo(self):
         cases = (
             (
@@ -421,6 +484,107 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                 self.assertNotIn(raw_path, message)
                 self.assertNotIn(decoded_secret, message)
                 self.assertNotIn("notary-path-leak", message)
+
+    def test_local_path_validators_reject_percent_encoded_smuggling(self):
+        cases = (
+            (
+                "raw encoded dot",
+                lambda raw: ADAPTER._reject_raw_output_path_smuggling(raw, "raw path"),
+                "out/%2e/receipt",
+                "encoded dot or separator",
+            ),
+            (
+                "output encoded slash",
+                lambda raw: ADAPTER._reject_output_path_smuggling(Path(raw), "output path"),
+                "out/%2f/receipt",
+                "encoded dot or separator",
+            ),
+            (
+                "raw uri prefix",
+                lambda raw: ADAPTER._reject_raw_output_path_smuggling(raw, "raw path"),
+                "file:out/receipt",
+                "URI or drive prefixes",
+            ),
+            (
+                "output drive prefix",
+                lambda raw: ADAPTER._reject_output_path_smuggling(Path(raw), "output path"),
+                "C:/out/receipt",
+                "URI or drive prefixes",
+            ),
+            (
+                "store encoded semicolon",
+                lambda raw: ADAPTER._require_clean_path_string(raw, "anchor.store_dir"),
+                "/ops/%3b/store",
+                "encoded semicolon",
+            ),
+            (
+                "raw encoded delimiter",
+                lambda raw: ADAPTER._reject_raw_output_path_smuggling(raw, "raw path"),
+                "out/%23/receipt",
+                "encoded URL delimiter",
+            ),
+            (
+                "raw encoded percent",
+                lambda raw: ADAPTER._reject_raw_output_path_smuggling(raw, "raw path"),
+                "out/%25/receipt",
+                "encoded percent",
+            ),
+            (
+                "raw encoded space",
+                lambda raw: ADAPTER._reject_raw_output_path_smuggling(raw, "raw path"),
+                "out/%20/receipt",
+                "percent-encoded control or space",
+            ),
+            (
+                "raw malformed percent",
+                lambda raw: ADAPTER._reject_raw_output_path_smuggling(raw, "raw path"),
+                "out/%zz/receipt",
+                "malformed percent",
+            ),
+        )
+        for name, call, raw, expected in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(ADAPTER.AdapterError) as caught:
+                    call(raw)
+
+                message = str(caught.exception)
+                self.assertIn(expected, message)
+                self.assertNotIn(raw, message)
+
+    def test_url_paths_reject_raw_delimiter_smuggling(self):
+        cases = (
+            "https://notary.local-bank.bank/archive:debug/anchor",
+            "https://notary.local-bank.bank/archive@debug/anchor",
+            "https://notary.local-bank.bank/archive[debug]/anchor",
+        )
+        for endpoint in cases:
+            with self.subTest(endpoint=endpoint):
+                with self.assertRaises(ADAPTER.AdapterError) as caught:
+                    ADAPTER._validate_endpoint(endpoint, allow_insecure_http=False)
+
+                message = str(caught.exception)
+                self.assertIn("path must not contain URL delimiter characters", message)
+                self.assertNotIn(endpoint, message)
+
+    def test_url_paths_reject_non_ascii_smuggling(self):
+        cases = (
+            (
+                "https://notary.local-bank.bank/archive∕debug/anchor",
+                "path must use printable ASCII",
+            ),
+            (
+                "https://notary.local-bank.bank/archive%c3%a9/anchor",
+                "path must not contain percent-encoded non-ASCII bytes",
+            ),
+        )
+        for endpoint, expected in cases:
+            with self.subTest(endpoint=endpoint):
+                with self.assertRaises(ADAPTER.AdapterError) as caught:
+                    ADAPTER._validate_endpoint(endpoint, allow_insecure_http=False)
+
+                message = str(caught.exception)
+                self.assertIn(expected, message)
+                self.assertNotIn(endpoint, message)
 
     def test_boolean_cli_flags_reject_values_without_echo(self):
         cases = (

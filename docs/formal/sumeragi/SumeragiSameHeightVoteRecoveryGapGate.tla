@@ -194,12 +194,15 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+SameHeightVoteRecoveryGapMatchesSpec ==
   /\ \A c \in StandardCases:
        ActualStandardOutput(c) = SpecStandardOutput(c)
   /\ \A c \in EscalationCases:
        ActualEscalationOutput(c) = SpecEscalationOutput(c)
   /\ ActualStandardImpliesEscalation = SpecStandardImpliesEscalation
+
+SafetyFast ==
+  SameHeightVoteRecoveryGapMatchesSpec
 
 BugStdAllowsSubjectAhead ==
   ActualStandardOutput("std_subject_ahead") =

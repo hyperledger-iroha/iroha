@@ -325,7 +325,7 @@ PruneBoundaryAnchors ==
   /\ EntryPresent \in ImplementationActions(PruneFutureFresh)
   /\ EntryPresent \in ImplementationActions(PruneCommittedZeroHeightZero)
 
-NoBugInvariant ==
+ConsensusRecoveryPruneCoreSafety ==
   /\ ActionsMatchSpec
   /\ ClearRemovesOnlyMatchingHeightEntries
   /\ ClearAlwaysResetsPublishedStatus
@@ -338,6 +338,8 @@ NoBugInvariant ==
   /\ PruneRetentionCheckGating
   /\ PruneBoundaryAnchors
 
-SafetyFast == NoBugInvariant
+NoBugInvariant == ConsensusRecoveryPruneCoreSafety
+
+SafetyFast == ConsensusRecoveryPruneCoreSafety
 
 ====

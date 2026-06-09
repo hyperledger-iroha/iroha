@@ -335,7 +335,7 @@ PreemptiveNearQuorumFlagExact ==
   /\ NearQuorumFlag(VoteRosterVotes) = TRUE
   /\ NearQuorumFlag(AtQuorumOutput) = FALSE
 
-SafetyFast ==
+PreemptiveVoteBackedRetransmitCoreSafety ==
   /\ CandidateStable
   /\ SelectionStable
   /\ DispatchStable
@@ -343,8 +343,10 @@ SafetyFast ==
   /\ PendingStable
   /\ NearFlagStable
 
+SafetyFast == PreemptiveVoteBackedRetransmitCoreSafety
+
 PreemptiveVoteBackedRetransmitExactness ==
-  /\ SafetyFast
+  /\ PreemptiveVoteBackedRetransmitCoreSafety
   /\ PreemptiveCandidateRejectExact
   /\ PreemptiveCandidateAcceptExact
   /\ PreemptiveMissingPendingExact

@@ -237,7 +237,7 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+ManifestGuardMatchesSpec ==
   /\ \A result \in LookupResults:
        ActualEnforceResult(result) = SpecEnforceResult(result)
   /\ \A result \in LookupResults:
@@ -256,6 +256,9 @@ SafetyFast ==
        /\ ActualBlockWarnings(c) = SpecBlockWarnings(c)
   /\ \A c \in BundleCases:
        ActualBundleValid(c) = SpecBundleValid(c)
+
+SafetyFast ==
+  ManifestGuardMatchesSpec
 
 HashMismatchAlwaysRejects ==
   \A policy \in Policies:

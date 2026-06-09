@@ -653,6 +653,67 @@ class IsoProductionReadinessTest(unittest.TestCase):
                 self.assertNotIn(unknown_key, message)
                 self.assertNotIn(hidden, message)
 
+    def test_cli_argument_terminator_is_rejected_without_echo(self):
+        hidden = "token=readiness-terminator-secret"
+        cases = (
+            (
+                "raw",
+                lambda: READINESS._preflight_raw_cli_secrets(
+                    ["--", "--summary-out", hidden],
+                    {"--summary-out"},
+                ),
+            ),
+            (
+                "context",
+                lambda: READINESS._preflight_required_cli_values(
+                    ["--", "--provider", hidden],
+                    {"--provider"},
+                    "context",
+                ),
+            ),
+            (
+                "boolean",
+                lambda: READINESS._preflight_boolean_cli_flags(
+                    ["--", "--allow-reviewed-xsd-gaps", hidden],
+                    {"--allow-reviewed-xsd-gaps"},
+                ),
+            ),
+            (
+                "path",
+                lambda: READINESS._preflight_output_cli_paths(
+                    ["--", "--summary-out", hidden],
+                    {"--summary-out"},
+                ),
+            ),
+            (
+                "numeric",
+                lambda: READINESS._preflight_numeric_cli_values(
+                    ["--", "--max-evidence-age-days", hidden],
+                    integer_flags={"--max-evidence-age-days"},
+                    number_flags=set(),
+                ),
+            ),
+        )
+        for helper, run in cases:
+            with self.subTest(helper=helper):
+                with self.assertRaises(READINESS.ReadinessError) as caught:
+                    run()
+
+                message = str(caught.exception)
+                self.assertIn("argument terminator is not supported", message)
+                self.assertNotIn(hidden, message)
+                self.assertNotIn("readiness-terminator-secret", message)
+
+    def test_parser_rejects_abbreviated_long_options(self):
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            with self.assertRaises(SystemExit) as caught:
+                READINESS.build_parser().parse_args(["--summary-ou", "out"])
+
+        self.assertEqual(caught.exception.code, 2)
+        self.assertIn("unrecognized arguments", stderr.getvalue())
+        self.assertIn("--summary-ou", stderr.getvalue())
+
     def test_output_cli_path_flags_reject_flag_like_values(self):
         cases = (
             ["--summary-out"],
@@ -691,6 +752,104 @@ class IsoProductionReadinessTest(unittest.TestCase):
                 self.assertNotIn(raw_path, message)
                 self.assertNotIn(decoded_secret, message)
                 self.assertNotIn("readiness-path-leak", message)
+
+    def test_local_path_validators_reject_percent_encoded_smuggling(self):
+        cases = (
+            (
+                "raw encoded dot",
+                lambda raw: READINESS._reject_raw_output_path_smuggling(raw, "raw path"),
+                "out/%2e/summary.json",
+                "encoded dot or separator",
+            ),
+            (
+                "output encoded slash",
+                lambda raw: READINESS._reject_output_path_smuggling(Path(raw), "output path"),
+                "out/%2f/summary.json",
+                "encoded dot or separator",
+            ),
+            (
+                "raw uri prefix",
+                lambda raw: READINESS._reject_raw_output_path_smuggling(raw, "raw path"),
+                "file:out/summary.json",
+                "URI or drive prefixes",
+            ),
+            (
+                "input drive prefix",
+                lambda raw: READINESS._reject_path_smuggling(raw, "config_path"),
+                "C:/ops/readiness.json",
+                "URI or drive prefixes",
+            ),
+            (
+                "input encoded semicolon",
+                lambda raw: READINESS._reject_path_smuggling(raw, "config_path"),
+                "/ops/%3b/readiness.json",
+                "encoded semicolon",
+            ),
+            (
+                "input encoded delimiter",
+                lambda raw: READINESS._reject_path_smuggling(raw, "config_path"),
+                "/ops/%3f/readiness.json",
+                "encoded URL delimiter",
+            ),
+            (
+                "raw encoded percent",
+                lambda raw: READINESS._reject_raw_output_path_smuggling(raw, "raw path"),
+                "out/%25/summary.json",
+                "encoded percent",
+            ),
+            (
+                "raw encoded space",
+                lambda raw: READINESS._reject_raw_output_path_smuggling(raw, "raw path"),
+                "out/%20/summary.json",
+                "percent-encoded control or space",
+            ),
+            (
+                "raw malformed percent",
+                lambda raw: READINESS._reject_raw_output_path_smuggling(raw, "raw path"),
+                "out/%zz/summary.json",
+                "malformed percent",
+            ),
+        )
+        for name, call, raw, expected in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(READINESS.ReadinessError) as caught:
+                    call(raw)
+
+                message = str(caught.exception)
+                self.assertIn(expected, message)
+                self.assertNotIn(raw, message)
+
+    def test_url_paths_reject_raw_delimiter_smuggling(self):
+        cases = (
+            "https://pki.local-bank.bank/source:debug",
+            "https://pki.local-bank.bank/source@debug",
+            "https://pki.local-bank.bank/source[debug]",
+        )
+        for url in cases:
+            with self.subTest(url=url):
+                with self.assertRaises(READINESS.ReadinessError) as caught:
+                    READINESS._validate_https_source_url(url, "source.url")
+
+                message = str(caught.exception)
+                self.assertIn("path must not contain URL delimiter characters", message)
+                self.assertNotIn(url, message)
+
+    def test_url_paths_reject_non_ascii_smuggling(self):
+        cases = (
+            ("https://pki.local-bank.bank/source∕debug", "path must use printable ASCII"),
+            (
+                "https://pki.local-bank.bank/source%c3%a9",
+                "path must not contain percent-encoded non-ASCII bytes",
+            ),
+        )
+        for url, expected in cases:
+            with self.subTest(url=url):
+                with self.assertRaises(READINESS.ReadinessError) as caught:
+                    READINESS._validate_https_source_url(url, "source.url")
+
+                message = str(caught.exception)
+                self.assertIn(expected, message)
+                self.assertNotIn(url, message)
 
     def test_source_urls_reject_secret_path_without_echo(self):
         cases = (

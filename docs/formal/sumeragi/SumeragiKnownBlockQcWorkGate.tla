@@ -252,11 +252,13 @@ TypeInvariant ==
        /\ SpecActions(c) \subseteq Actions
        /\ ImplementationActions(c) \subseteq Actions
 
-NoBugInvariant ==
+KnownBlockQcWorkCoreSafety ==
   \A c \in Cases:
     ImplementationActions(c) = SpecActions(c)
 
-SafetyFast == NoBugInvariant
+NoBugInvariant == KnownBlockQcWorkCoreSafety
+
+SafetyFast == KnownBlockQcWorkCoreSafety
 
 BugEmptyTopologyReturnsWork == NoBugInvariant
 BugEmptyTopologySkipsRecovery == NoBugInvariant

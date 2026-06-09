@@ -261,9 +261,11 @@ TypeInvariant ==
        /\ SpecActions(c) \subseteq Actions
        /\ ImplementationActions(c) \subseteq Actions
 
-NoBugInvariant ==
+KuraRetryCoreSafety ==
   \A c \in Cases:
     ImplementationActions(c) = SpecActions(c)
+
+NoBugInvariant == KuraRetryCoreSafety
 
 DueSemantics ==
   /\ ImplementationActions(DueNoDeadline) = DueOnly(TRUE)

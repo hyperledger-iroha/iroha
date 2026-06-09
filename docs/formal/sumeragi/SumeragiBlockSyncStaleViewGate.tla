@@ -179,8 +179,10 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+StaleViewMatchesSpec ==
   \A c \in Cases: Matches(c)
+
+SafetyFast == StaleViewMatchesSpec
 
 FreshViewContinues ==
   Matches("fresh_view")

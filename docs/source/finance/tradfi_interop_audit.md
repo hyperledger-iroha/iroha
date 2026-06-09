@@ -579,12 +579,29 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   path validators also reject secret-looking key/value material in literal,
   percent-encoded, or double-encoded path segments before live rail/notary
   delivery, canary planning, receipt verification, trust/evidence ingestion, or readiness
-  rollup, and the local path/raw CLI/summary-path/artifact-path validators use a
+  rollup, and reject raw URL delimiter characters in path segments with the
+  same fail-closed posture used for encoded delimiters. They also require URL
+  paths to stay printable ASCII, rejecting raw Unicode path characters and
+  percent-encoded non-ASCII bytes before those URLs can be archived or used.
+  The local
+  path/raw CLI/summary-path/artifact-path validators use a
   narrow identifier-style path scanner for composite names such as
-  `token-*-secret` and strong key markers. Secret-looking field-name markers
+  `token-*-secret` and strong key markers. Those local path validators also
+  reject raw URI or drive prefixes, malformed percent escapes, and
+  percent-encoded control/space, dot/separator, semicolon, URL delimiter, and
+  percent bytes before path expansion, summary emission, archive replay, or
+  child command construction.
+  Secret-looking field-name markers
   also cover hyphenated `private-key` and underscore-form `x_iroha_signature`
   spellings across ISO validators, and receipt JSON secret-field scans recurse
   through nested objects and arrays before receipt semantics are evaluated.
+  Audit-notary anchor publication also rejects secret-looking audit-index
+  identifiers and persisted record-source string values before network
+  publication can preserve them in operator evidence, and direct receipt
+  verification mirrors that rule when replaying archived notary sources.
+  Archived receipt source paths, including rail XML/sidecar paths, notary anchor
+  paths, and notary store directories, also reject narrow secret-looking
+  identifiers before missing-source or mismatch diagnostics can echo them.
   Canary runbooks,
   trust bundles, evidence/readiness summaries, XSD manifests, profile catalogs,
   schema files, XML fixtures, and receipt archive directories must reject
@@ -670,7 +687,13 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   flag-looking, or secret-looking numeric values before argparse can echo raw
   operator input. All ISO operator entry points reject secret-looking raw CLI
   tokens, including percent-encoded forms, before argparse can echo unknown
-  arguments, and direct boolean CLI flags reject attached `--flag=value`
+  arguments. Because those tools do not accept positional operands, they also
+  reject the `--` argument terminator in raw secret, boolean, path, context, and
+  numeric preflights before any trailing flag/value material can bypass scanning
+  and be echoed by argparse. The parsers also disable long-option abbreviation,
+  so partial spellings such as `--summary-ou` cannot be accepted as exact
+  production flags. Direct boolean CLI
+  flags reject attached `--flag=value`
   spellings and separate non-option values before argparse can echo the value or
   reinterpret the option. Evidence and production-readiness
   provider/environment context flags reject missing, empty, flag-looking, or
@@ -766,6 +789,9 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   child command flags using attached or separate values, non-positive or
   non-finite numeric child command flag values, value-taking child command flags
   whose separate or equals-form values are empty or another flag token,
+  child command arrays that do not start with a Python interpreter plus the
+  expected stage script path, or that contain extra positional arguments after
+  that runner-emitted prefix,
   non-canonical child command path values including leading-dash segments,
   control characters or surrounding whitespace in executed or plan-only child
   command arrays,

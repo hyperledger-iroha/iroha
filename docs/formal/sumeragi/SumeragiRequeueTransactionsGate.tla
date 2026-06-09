@@ -237,8 +237,11 @@ TypeInvariant ==
   /\ Bug \in BugModes
   /\ checked = 0
 
-SafetyFast ==
+RequeueTransactionsMatchesSpec ==
   \A c \in Cases:
     ActualActions(c) = SpecActions(c)
+
+SafetyFast ==
+  RequeueTransactionsMatchesSpec
 
 ====

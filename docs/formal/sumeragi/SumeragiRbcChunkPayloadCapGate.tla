@@ -168,12 +168,14 @@ TypeInvariant ==
        /\ ActualCap(c) \in 0..512
        /\ SpecFit(c)
 
-NoBugInvariant ==
+RbcChunkPayloadCapCoreSafety ==
   \A c \in Cases:
     /\ ActualCap(c) = SpecCap(c)
     /\ ActualFit(c)
 
-SafetyFast == NoBugInvariant
+NoBugInvariant == RbcChunkPayloadCapCoreSafety
+
+SafetyFast == RbcChunkPayloadCapCoreSafety
 
 BugBaseOverflowReturnsPositive == NoBugInvariant
 BugBaseEqualReturnsOne == NoBugInvariant

@@ -290,7 +290,7 @@ TotalSelectionWithinChunkRange ==
   returns_some =>
     selected_len <= TotalChunks(candidate)
 
-Safety ==
+RbcRs16InitialFanoutCoreSafety ==
   /\ ReturnDecisionMatchesSpec
   /\ RequiredCountMatchesSpec
   /\ SelectedLenMatchesSpec
@@ -308,5 +308,7 @@ Safety ==
   /\ SelectionLengthEqualsPerStripeTotal
   /\ ReducedFanoutIsReconstructable
   /\ TotalSelectionWithinChunkRange
+
+Safety == RbcRs16InitialFanoutCoreSafety
 
 ====

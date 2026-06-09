@@ -10135,7 +10135,7 @@ const PRIVACY_PRODUCTION_GATE_MISSING_ENGINE: &str =
     "real protocol engine is not production-enabled";
 const PRIVACY_PRODUCTION_GATE_MISSING_ALLOWLIST: &str =
     "Iroha production allowlist is not enabled for this audited row";
-const PRIVACY_PRODUCTION_DISABLED_MESSAGE: &str = "privacy production is disabled until exact protocol implementation, real proving, real verification, chain admission, cross-SDK parity, wallet/state support, witness privacy checks, deterministic tests, negative/adversarial tests, replay/nullifier rejection tests, fuzzing, parser fuzzing, verifier fuzzing, performance gates, external audit, real protocol engine enablement, and Iroha production allowlist evidence all pass";
+const PRIVACY_PRODUCTION_DISABLED_MESSAGE: &str = "privacy production is disabled until exact protocol implementation, real proving, real verification, chain admission, cross-SDK parity, wallet/state support, witness privacy checks, deterministic tests, negative/adversarial tests, replay/nullifier rejection tests, fuzzing, parser fuzzing, verifier fuzzing, performance gates, internal cryptographic review, real protocol engine enablement, and Iroha production allowlist evidence all pass";
 #[cfg(test)]
 const PRIVACY_NATIVE_AVAILABILITY_PROBE_ARCHIVE: &[u8] =
     b"iroha-privacy-native-availability-probe-v1";
@@ -10196,7 +10196,10 @@ const PRIVACY_PRODUCTION_GATE_REQUIREMENTS: &[(&str, &str)] = &[
     ("parser_fuzzing", "parser fuzzing gate is incomplete"),
     ("verifier_fuzzing", "verifier fuzzing gate is incomplete"),
     ("performance_gates", "performance gate is incomplete"),
-    ("external_audit", "external audit signoff is missing"),
+    (
+        "external_audit",
+        "internal cryptographic review signoff is missing",
+    ),
 ];
 
 const PRIVACY_REQUIRED_PRODUCTION_PLAN_ROWS: &[(&str, &str, &str)] = &[
@@ -14290,7 +14293,7 @@ mod tests {
                     .production_gate
                     .missing
                     .iter()
-                    .any(|missing| missing.contains("external audit")),
+                    .any(|missing| missing.contains("internal cryptographic review")),
             );
         }
     }
@@ -14595,7 +14598,7 @@ mod tests {
         missing_audit
             .production_gate
             .missing
-            .retain(|missing| missing != "external audit signoff is missing");
+            .retain(|missing| missing != "internal cryptographic review signoff is missing");
         assert!(
             !privacy_capability_invariants_hold(&missing_audit),
             "removed external-audit evidence must be rejected",
@@ -14632,7 +14635,7 @@ mod tests {
         forged_missing_reason
             .production_gate
             .missing
-            .push("external audit signoff passed without evidence".to_owned());
+            .push("internal cryptographic review signoff passed without evidence".to_owned());
         assert!(
             !privacy_capability_invariants_hold(&forged_missing_reason),
             "unknown production-gate missing reasons must be rejected",
@@ -15529,7 +15532,7 @@ mod tests {
             "parser fuzzing",
             "verifier fuzzing",
             "performance gates",
-            "external audit",
+            "internal cryptographic review",
             "real protocol engine",
             "Iroha production allowlist",
         ] {
@@ -15598,7 +15601,7 @@ mod tests {
             "parser fuzzing",
             "verifier fuzzing",
             "performance gates",
-            "external audit",
+            "internal cryptographic review",
             "real protocol engine",
             "Iroha production allowlist",
         ] {

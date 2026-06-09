@@ -252,6 +252,8 @@ iroha app zk kagemusha lineage-key-artifacts \
 iroha app zk kagemusha recursive-compact-key-artifacts \
   --vk-out artifacts/kagemusha/recursive-compact-len4.vk \
   --pk-out artifacts/kagemusha/recursive-compact-len4.pk \
+  --key-artifacts-out artifacts/kagemusha/recursive-compact-key-artifacts.norito \
+  --verifier-keys-out artifacts/kagemusha/recursive-compact-verifier-keys.norito \
   --record-out artifacts/kagemusha/recursive-compact-len4.record.norito \
   --record-namespace offline_kagemusha \
   --record-version 1
@@ -264,16 +266,19 @@ operator needs a different namespace or governance version. The separate `.vk`
 and `.pk` files are optional operator artifacts for inspection, checksums, or
 escrow. The `recursive-compact-key-artifacts` command writes the ABI-7 one-hop
 LEN=4 compact verifier key and packaged compact proving-key archive used by
-`kagemusha-recursive-compact-v1`; its optional record is the governance input,
-and it does not create a multi-hop compact proof package. Generating these
-artifacts is intentionally expensive; do it during release preparation, not on
-payment devices or inside request handling.
+`kagemusha-recursive-compact-v1`, plus the LEN=4 recursive compact
+`KagemushaRecursiveCompactKeyArtifactsV1` and
+`KagemushaRecursiveCompactVerifierKeysV1` Norito packages consumed by
+multi-hop ABI-7 SDK/bridge calls; its optional record is the governance input.
+Generating these artifacts is intentionally expensive; do it during release
+preparation, not on payment devices or inside request handling.
 The production readiness rollup requires
 `artifacts/kagemusha/lineage-proof-evidence.json` and
 `artifacts/kagemusha/recursive-compact-key-evidence.json` to sit beside these
 Reserved-lineage `.norito`, `.record.norito`, `.vk`, and `.pk` files, the
-ABI-7 recursive compact `.record.norito`, `.vk`, and `.pk` files, plus the
-captured `record-archive-proof.log` from the ignored production proof run. The
+ABI-7 recursive compact `.record.norito`, `.vk`, `.pk`, key-artifacts package,
+and verifier-keys package files, plus the captured `record-archive-proof.log`
+from the ignored production proof run. The
 canonical `lineage-proof-evidence.json` and
 `recursive-compact-key-evidence.json` filenames are part of the release packet
 contract; renamed, copied, symlinked, or symlink-ancestor evidence JSON files
@@ -292,23 +297,26 @@ also be ordinary non-symlink, non-hardlinked files with symlink-free ancestors
 before their contents can satisfy readiness,
 then re-checks that the local proof log
 contains the passing cargo result for the production Reserved-lineage test
-as a single expected `test ... ok` line with exactly one one-test cargo result,
-rerunning the lineage local-file validator immediately before reading proof-log
-text,
+as the exact single expected `test ... ok` line with exactly one one-test cargo
+result, canonical LF line endings, strict UTF-8 bytes, and no trailing
+whitespace or forged result-line suffix, with the log ending in a final LF
+terminator, rerunning the lineage local-file validator immediately before
+reading proof-log text,
 and that the recorded command is the production
 `cargo test -p iroha_core ... --lib -- --ignored --test-threads=1 --nocapture`
 run exactly as the canonical command string, with runtime lineage keygen unset
 and no quoted-token aliases, newlines, or appended shell commands, before it can
 report ready. The compact key evidence separately requires the exact
-`iroha app zk kagemusha recursive-compact-key-artifacts --vk-out artifacts/kagemusha/recursive-compact-len4.vk --pk-out artifacts/kagemusha/recursive-compact-len4.pk --record-out artifacts/kagemusha/recursive-compact-len4.record.norito --record-namespace offline_kagemusha --record-version 1`
+`iroha app zk kagemusha recursive-compact-key-artifacts --vk-out artifacts/kagemusha/recursive-compact-len4.vk --pk-out artifacts/kagemusha/recursive-compact-len4.pk --key-artifacts-out artifacts/kagemusha/recursive-compact-key-artifacts.norito --verifier-keys-out artifacts/kagemusha/recursive-compact-verifier-keys.norito --record-out artifacts/kagemusha/recursive-compact-len4.record.norito --record-namespace offline_kagemusha --record-version 1`
 command string, LEN=4, IPA `k = 8`, `halo2/ipa`, circuit id
 `kagemusha-recursive-compact-v1`, record namespace `offline_kagemusha`, record
 version `1`, adjacent non-empty digest- and size-checked compact key files, and
 the captured `recursive-compact-key-artifacts.log` stdout line from the
 canonical key-generation command. The rollup hash-binds that generator log,
-requires it to contain exactly the canonical CLI summary line, and checks the
-reported `.vk`, `.pk`, and `.record.norito` byte sizes against the adjacent
-artifact bytes.
+requires it to contain exactly the canonical CLI summary line with canonical
+LF line endings, strict UTF-8 bytes, and a final LF terminator, and checks the
+reported `.vk`, `.pk`, key-artifacts package, verifier-keys package, and
+`.record.norito` byte sizes against the adjacent artifact bytes.
 All-zero Reserved-lineage artifacts and plain-text or all-zero placeholder
 compact key artifacts are rejected as non-production fixtures even when their
 SHA-256 digest and byte size match the evidence JSON.
@@ -506,6 +514,8 @@ python3 scripts/kagemusha_lineage_proof_evidence.py \
 iroha app zk kagemusha recursive-compact-key-artifacts \
   --vk-out artifacts/kagemusha/recursive-compact-len4.vk \
   --pk-out artifacts/kagemusha/recursive-compact-len4.pk \
+  --key-artifacts-out artifacts/kagemusha/recursive-compact-key-artifacts.norito \
+  --verifier-keys-out artifacts/kagemusha/recursive-compact-verifier-keys.norito \
   --record-out artifacts/kagemusha/recursive-compact-len4.record.norito \
   --record-namespace offline_kagemusha \
   --record-version 1 \
@@ -592,7 +602,8 @@ the compact key evidence helper applies the same output checks for
 rejects obvious plain-text or all-zero placeholder compact key artifacts before emitting
 evidence JSON. It also requires `recursive-compact-key-artifacts.log` beside the
 key artifacts and verifies that the canonical generator summary sizes match the
-local `.vk`, `.pk`, and `.record.norito` files.
+local `.vk`, `.pk`, key-artifacts package, verifier-keys package, and
+`.record.norito` files.
 Both helpers create missing output parents only after these preflights,
 classify `--out` parents with `lstat()` before any `Path.is_dir()` preflight,
 and recheck created output parents before direct helper preflight returns. Input

@@ -174,6 +174,76 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 self.assertNotIn(unknown_key, message)
                 self.assertNotIn(hidden, message)
 
+    def test_cli_argument_terminator_is_rejected_without_echo(self):
+        hidden = "token=rail-terminator-secret"
+        cases = (
+            (
+                "raw",
+                lambda: ADAPTER._preflight_raw_cli_secrets(
+                    ["--", "--receipt-dir", hidden],
+                    {"--receipt-dir"},
+                ),
+            ),
+            (
+                "path",
+                lambda: ADAPTER._preflight_output_cli_paths(
+                    ["--", "--receipt-dir", hidden],
+                    {"--receipt-dir"},
+                ),
+            ),
+            (
+                "boolean",
+                lambda: ADAPTER._preflight_boolean_cli_flags(
+                    ["--", "--dry-run", hidden],
+                    {"--dry-run"},
+                ),
+            ),
+            (
+                "url",
+                lambda: ADAPTER._preflight_required_cli_values(
+                    ["--", "--torii-base-url", hidden],
+                    {"--torii-base-url"},
+                    "URL",
+                ),
+            ),
+            (
+                "numeric",
+                lambda: ADAPTER._preflight_numeric_cli_values(
+                    ["--", "--timeout-secs", hidden],
+                    integer_flags=set(),
+                    number_flags={"--timeout-secs"},
+                ),
+            ),
+        )
+        for helper, run in cases:
+            with self.subTest(helper=helper):
+                with self.assertRaises(ADAPTER.AdapterError) as caught:
+                    run()
+
+                message = str(caught.exception)
+                self.assertIn("argument terminator is not supported", message)
+                self.assertNotIn(hidden, message)
+                self.assertNotIn("rail-terminator-secret", message)
+
+    def test_parser_rejects_abbreviated_long_options(self):
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            with self.assertRaises(SystemExit) as caught:
+                ADAPTER.build_parser().parse_args(
+                    [
+                        "--inbox-dir",
+                        ".",
+                        "--torii-base-url",
+                        "https://bank.example/iso",
+                        "--receipt-di",
+                        "out",
+                    ]
+                )
+
+        self.assertEqual(caught.exception.code, 2)
+        self.assertIn("unrecognized arguments", stderr.getvalue())
+        self.assertIn("--receipt-di", stderr.getvalue())
+
     def test_nested_control_material_in_sidecar_is_rejected_without_echo(self):
         cases = (
             (
@@ -232,6 +302,113 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 self.assertNotIn(raw_path, message)
                 self.assertNotIn(decoded_secret, message)
                 self.assertNotIn("rail-path-leak", message)
+
+    def test_local_path_validators_reject_percent_encoded_smuggling(self):
+        cases = (
+            (
+                "raw encoded dot",
+                lambda raw: ADAPTER._reject_raw_output_path_smuggling(raw, "raw path"),
+                "out/%2e/receipts",
+                "encoded dot or separator",
+            ),
+            (
+                "output encoded slash",
+                lambda raw: ADAPTER._reject_output_path_smuggling(Path(raw), "output path"),
+                "out/%2f/receipts",
+                "encoded dot or separator",
+            ),
+            (
+                "raw uri prefix",
+                lambda raw: ADAPTER._reject_raw_output_path_smuggling(raw, "raw path"),
+                "file:out/receipts",
+                "URI or drive prefixes",
+            ),
+            (
+                "message drive prefix",
+                lambda raw: ADAPTER._validate_path_argument(raw, "--message path"),
+                "C:/inbox/rail-status.xml",
+                "URI or drive prefixes",
+            ),
+            (
+                "message encoded backslash",
+                lambda raw: ADAPTER._validate_path_argument(raw, "--message path"),
+                "nested/%5c/rail-status.xml",
+                "encoded dot or separator",
+            ),
+            (
+                "message encoded semicolon",
+                lambda raw: ADAPTER._validate_path_argument(raw, "--message path"),
+                "nested/%3b/rail-status.xml",
+                "encoded semicolon",
+            ),
+            (
+                "raw encoded delimiter",
+                lambda raw: ADAPTER._reject_raw_output_path_smuggling(raw, "raw path"),
+                "out/%5b/receipts",
+                "encoded URL delimiter",
+            ),
+            (
+                "raw encoded percent",
+                lambda raw: ADAPTER._reject_raw_output_path_smuggling(raw, "raw path"),
+                "out/%25/receipts",
+                "encoded percent",
+            ),
+            (
+                "raw encoded space",
+                lambda raw: ADAPTER._reject_raw_output_path_smuggling(raw, "raw path"),
+                "out/%20/receipts",
+                "percent-encoded control or space",
+            ),
+            (
+                "raw malformed percent",
+                lambda raw: ADAPTER._reject_raw_output_path_smuggling(raw, "raw path"),
+                "out/%zz/receipts",
+                "malformed percent",
+            ),
+        )
+        for name, call, raw, expected in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(ADAPTER.AdapterError) as caught:
+                    call(raw)
+
+                message = str(caught.exception)
+                self.assertIn(expected, message)
+                self.assertNotIn(raw, message)
+
+    def test_url_paths_reject_raw_delimiter_smuggling(self):
+        cases = (
+            "https://torii.local-bank.bank/base:debug/v1",
+            "https://torii.local-bank.bank/base@debug/v1",
+            "https://torii.local-bank.bank/base[debug]/v1",
+        )
+        for base_url in cases:
+            with self.subTest(base_url=base_url):
+                with self.assertRaises(ADAPTER.AdapterError) as caught:
+                    ADAPTER._validate_base_url(base_url, allow_insecure_http=False)
+
+                message = str(caught.exception)
+                self.assertIn("path must not contain URL delimiter characters", message)
+                self.assertNotIn(base_url, message)
+
+    def test_url_paths_reject_non_ascii_smuggling(self):
+        cases = (
+            (
+                "https://torii.local-bank.bank/base∕debug/v1",
+                "path must use printable ASCII",
+            ),
+            (
+                "https://torii.local-bank.bank/base%c3%a9/v1",
+                "path must not contain percent-encoded non-ASCII bytes",
+            ),
+        )
+        for base_url, expected in cases:
+            with self.subTest(base_url=base_url):
+                with self.assertRaises(ADAPTER.AdapterError) as caught:
+                    ADAPTER._validate_base_url(base_url, allow_insecure_http=False)
+
+                message = str(caught.exception)
+                self.assertIn(expected, message)
+                self.assertNotIn(base_url, message)
 
     def test_url_cli_flags_reject_missing_empty_or_flag_like_values(self):
         cases = (

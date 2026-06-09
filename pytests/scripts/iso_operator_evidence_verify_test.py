@@ -509,6 +509,67 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 self.assertNotIn(unknown_key, message)
                 self.assertNotIn(hidden, message)
 
+    def test_cli_argument_terminator_is_rejected_without_echo(self):
+        hidden = "token=evidence-terminator-secret"
+        cases = (
+            (
+                "raw",
+                lambda: EVIDENCE._preflight_raw_cli_secrets(
+                    ["--", "--summary-out", hidden],
+                    {"--summary-out"},
+                ),
+            ),
+            (
+                "context",
+                lambda: EVIDENCE._preflight_required_cli_values(
+                    ["--", "--provider", hidden],
+                    {"--provider"},
+                    "context",
+                ),
+            ),
+            (
+                "boolean",
+                lambda: EVIDENCE._preflight_boolean_cli_flags(
+                    ["--", "--allow-plan-only", hidden],
+                    {"--allow-plan-only"},
+                ),
+            ),
+            (
+                "path",
+                lambda: EVIDENCE._preflight_output_cli_paths(
+                    ["--", "--summary-out", hidden],
+                    {"--summary-out"},
+                ),
+            ),
+            (
+                "numeric",
+                lambda: EVIDENCE._preflight_numeric_cli_values(
+                    ["--", "--receipt-verifier-timeout-secs", hidden],
+                    integer_flags=set(),
+                    number_flags={"--receipt-verifier-timeout-secs"},
+                ),
+            ),
+        )
+        for helper, run in cases:
+            with self.subTest(helper=helper):
+                with self.assertRaises(EVIDENCE.EvidenceError) as caught:
+                    run()
+
+                message = str(caught.exception)
+                self.assertIn("argument terminator is not supported", message)
+                self.assertNotIn(hidden, message)
+                self.assertNotIn("evidence-terminator-secret", message)
+
+    def test_parser_rejects_abbreviated_long_options(self):
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            with self.assertRaises(SystemExit) as caught:
+                EVIDENCE.build_parser().parse_args(["--summary-ou", "out"])
+
+        self.assertEqual(caught.exception.code, 2)
+        self.assertIn("unrecognized arguments", stderr.getvalue())
+        self.assertIn("--summary-ou", stderr.getvalue())
+
     def test_output_cli_path_flags_reject_flag_like_values(self):
         cases = (
             ["--summary-out"],
@@ -544,6 +605,112 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 self.assertNotIn(raw_path, message)
                 self.assertNotIn(decoded_secret, message)
                 self.assertNotIn("evidence-path-leak", message)
+
+    def test_local_path_validators_reject_percent_encoded_smuggling(self):
+        cases = (
+            (
+                "raw encoded dot",
+                lambda raw: EVIDENCE._reject_raw_output_path_smuggling(raw, "raw path"),
+                "out/%2e/summary.json",
+                "encoded dot or separator",
+            ),
+            (
+                "output encoded slash",
+                lambda raw: EVIDENCE._reject_output_path_smuggling(Path(raw), "output path"),
+                "out/%2f/summary.json",
+                "encoded dot or separator",
+            ),
+            (
+                "raw uri prefix",
+                lambda raw: EVIDENCE._reject_raw_output_path_smuggling(raw, "raw path"),
+                "file:out/summary.json",
+                "URI or drive prefixes",
+            ),
+            (
+                "input drive prefix",
+                lambda raw: EVIDENCE._reject_path_smuggling(raw, "config_path"),
+                "C:/ops/canary.json",
+                "URI or drive prefixes",
+            ),
+            (
+                "input encoded semicolon",
+                lambda raw: EVIDENCE._reject_path_smuggling(raw, "config_path"),
+                "/ops/%3b/canary.json",
+                "encoded semicolon",
+            ),
+            (
+                "input encoded delimiter",
+                lambda raw: EVIDENCE._reject_path_smuggling(raw, "config_path"),
+                "/ops/%40/canary.json",
+                "encoded URL delimiter",
+            ),
+            (
+                "raw encoded percent",
+                lambda raw: EVIDENCE._reject_raw_output_path_smuggling(raw, "raw path"),
+                "out/%25/summary.json",
+                "encoded percent",
+            ),
+            (
+                "raw encoded space",
+                lambda raw: EVIDENCE._reject_raw_output_path_smuggling(raw, "raw path"),
+                "out/%20/summary.json",
+                "percent-encoded control or space",
+            ),
+            (
+                "raw malformed percent",
+                lambda raw: EVIDENCE._reject_raw_output_path_smuggling(raw, "raw path"),
+                "out/%zz/summary.json",
+                "malformed percent",
+            ),
+        )
+        for name, call, raw, expected in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(EVIDENCE.EvidenceError) as caught:
+                    call(raw)
+
+                message = str(caught.exception)
+                self.assertIn(expected, message)
+                self.assertNotIn(raw, message)
+
+    def test_url_paths_reject_raw_delimiter_smuggling(self):
+        cases = (
+            "https://pki.local-bank.bank/source:debug",
+            "https://pki.local-bank.bank/source@debug",
+            "https://pki.local-bank.bank/source[debug]",
+        )
+        for url in cases:
+            with self.subTest(url=url):
+                with self.assertRaises(EVIDENCE.EvidenceError) as caught:
+                    EVIDENCE._check_https_url(
+                        url,
+                        "source.url",
+                        allow_insecure_http=False,
+                    )
+
+                message = str(caught.exception)
+                self.assertIn("path must not contain URL delimiter characters", message)
+                self.assertNotIn(url, message)
+
+    def test_url_paths_reject_non_ascii_smuggling(self):
+        cases = (
+            ("https://pki.local-bank.bank/source∕debug", "path must use printable ASCII"),
+            (
+                "https://pki.local-bank.bank/source%c3%a9",
+                "path must not contain percent-encoded non-ASCII bytes",
+            ),
+        )
+        for url, expected in cases:
+            with self.subTest(url=url):
+                with self.assertRaises(EVIDENCE.EvidenceError) as caught:
+                    EVIDENCE._check_https_url(
+                        url,
+                        "source.url",
+                        allow_insecure_http=False,
+                    )
+
+                message = str(caught.exception)
+                self.assertIn(expected, message)
+                self.assertNotIn(url, message)
 
     def test_source_urls_reject_secret_path_without_echo(self):
         cases = (
@@ -3950,6 +4117,103 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
 
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
+
+    def test_canary_child_commands_require_runner_command_shape(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            trust_path = write_trust_summary(root)
+            cases = []
+            non_python_launcher = valid_canary_summary()
+            non_python_launcher["stages"][0]["command"][0] = "/usr/bin/env"
+            non_python_launcher.pop("summary_sha256")
+            cases.append(
+                (
+                    digest_summary(non_python_launcher),
+                    [],
+                    "stages[0].command[0] must be a Python interpreter path",
+                    "/usr/bin/env",
+                )
+            )
+            script_uri_prefix = valid_canary_summary()
+            script_uri_prefix["stages"][0]["command"][1] = (
+                "file:/ops/iso_rail_gateway_adapter.py"
+            )
+            script_uri_prefix.pop("summary_sha256")
+            cases.append(
+                (
+                    digest_summary(script_uri_prefix),
+                    [],
+                    "stages[0].command[1] must not contain URI or drive prefixes",
+                    "file:/ops/iso_rail_gateway_adapter.py",
+                )
+            )
+            script_encoded_separator = plan_only_canary_summary()
+            script_encoded_separator["planned_stages"][1]["command"][1] = (
+                "/ops/%2f/iso_audit_notary_adapter.py"
+            )
+            script_encoded_separator.pop("summary_sha256")
+            cases.append(
+                (
+                    digest_summary(script_encoded_separator),
+                    ["--allow-plan-only"],
+                    (
+                        "planned_stages[1].command[1] must not contain encoded dot "
+                        "or separator characters"
+                    ),
+                    "/ops/%2f/iso_audit_notary_adapter.py",
+                )
+            )
+            wrong_script = valid_canary_summary()
+            wrong_script["stages"][2]["command"][1] = "/ops/iso/not_the_receipt_verifier.py"
+            wrong_script.pop("summary_sha256")
+            cases.append(
+                (
+                    digest_summary(wrong_script),
+                    [],
+                    "stages[2].command does not invoke iso_operator_receipt_verify.py",
+                    "/ops/iso/not_the_receipt_verifier.py",
+                )
+            )
+            extra_positional = valid_canary_summary()
+            extra_positional["stages"][2]["command"].insert(2, "/ops/iso/manual.json")
+            extra_positional.pop("summary_sha256")
+            cases.append(
+                (
+                    digest_summary(extra_positional),
+                    [],
+                    "stages[2].command[2] uses unsupported positional argument",
+                    "/ops/iso/manual.json",
+                )
+            )
+            missing_script = plan_only_canary_summary()
+            missing_script["planned_stages"][2]["command"] = [sys.executable]
+            missing_script.pop("summary_sha256")
+            cases.append(
+                (
+                    digest_summary(missing_script),
+                    ["--allow-plan-only"],
+                    (
+                        "planned_stages[2].command must start with a Python "
+                        "interpreter and iso_operator_receipt_verify.py"
+                    ),
+                    None,
+                )
+            )
+            for body, extra_args, message, hidden in cases:
+                with self.subTest(message=message):
+                    canary_path = write_canary(root, body)
+
+                    rc, _stdout, stderr = run_evidence(
+                        ["--canary-summary", str(canary_path), "--trust-summary", str(trust_path)]
+                        + extra_args
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(message, stderr)
+                    if hidden is not None and (
+                        "must not contain" in message or "unsupported positional" in message
+                    ):
+                        self.assertNotIn(hidden, stderr)
 
     def test_duplicate_singleton_child_command_flags_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:

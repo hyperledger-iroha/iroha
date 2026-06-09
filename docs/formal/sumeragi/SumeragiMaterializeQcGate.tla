@@ -234,14 +234,16 @@ FailClosedCasesStayNone ==
             CanonicalMappingIncomplete}:
     ActualResult(c) = NoneQc
 
-NoBugInvariant ==
+MaterializeQcCoreSafety ==
   /\ ResultMatchesSpec
   /\ TryFormMatchesSpec
   /\ KuraRecoveryMatchesSpec
   /\ CacheInsertionMatchesSpec
   /\ FailClosedCasesStayNone
 
-SafetyFast == NoBugInvariant
+NoBugInvariant == MaterializeQcCoreSafety
+
+SafetyFast == MaterializeQcCoreSafety
 
 BugIgnoreCachedExisting == NoBugInvariant
 BugEmptyRosterSkipsRecovery == NoBugInvariant

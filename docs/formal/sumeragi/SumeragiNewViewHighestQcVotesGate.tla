@@ -318,7 +318,7 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+NewViewHighestQcVotesMatchesSpec ==
   /\ \A c \in Cases:
        ActualGroups(c) = SpecGroups(c)
   /\ \A c \in Cases:
@@ -328,6 +328,9 @@ SafetyFast ==
   /\ \A c \in Cases:
        \A q \in QcUniverse:
          ActualGroupSize(c, q) = SpecGroupSize(c, q)
+
+SafetyFast ==
+  NewViewHighestQcVotesMatchesSpec
 
 BugIncludeNonSigner ==
   ActualGroups("signers_filter") = SpecGroups("signers_filter")

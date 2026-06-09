@@ -288,7 +288,7 @@ VNextNormalizationAnchors ==
   /\ ActualVNextLabel("pending_block_invalid") = "stateless"
   /\ ActualVNextLabel("other_rejection") = "stateless"
 
-SafetyFast ==
+ValidationRejectReasonLabelCoreSafety ==
   /\ ValidationLabelsExact
   /\ VNextLabelsExact
   /\ DirectLabelsStable
@@ -302,5 +302,8 @@ SafetyFast ==
   /\ StatelessTemporalRosterAnchors
   /\ VNextPassThroughAnchors
   /\ VNextNormalizationAnchors
+
+SafetyFast ==
+  ValidationRejectReasonLabelCoreSafety
 
 ====

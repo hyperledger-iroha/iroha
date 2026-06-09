@@ -3305,6 +3305,86 @@ def test_cfg_semantic_check_errors_rejects_type_only_check(
     ]
 
 
+def test_cfg_fast_generic_check_errors_rejects_fast_generic_checks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiFrontier_fast.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT SafetyFast",
+                "INVARIANTS DirectSafety Safety",
+                "INVARIANT NoBugInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_fast_generic_check_errors(
+        "frontier-fast", cfg, "Apalache"
+    ) == [
+        f"frontier-fast: Apalache cfg {cfg}:4 references generic check "
+        "SafetyFast; fast configs must use a model-specific direct invariant",
+        f"frontier-fast: Apalache cfg {cfg}:5 references generic check "
+        "Safety; fast configs must use a model-specific direct invariant",
+        f"frontier-fast: Apalache cfg {cfg}:6 references generic check "
+        "NoBugInvariant; fast configs must use a model-specific direct invariant",
+    ]
+
+
+def test_cfg_fast_generic_check_errors_accepts_direct_fast_checks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiFrontier_fast.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT FrontierDirectSafety",
+                "INVARIANTS FrontierAnchors FrontierExactness",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        module.cfg_fast_generic_check_errors("frontier-fast", cfg, "TLC")
+        == []
+    )
+
+
+def test_cfg_fast_generic_check_errors_ignores_mutation_configs(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiFrontier_bug_stale.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT NoBugInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        module.cfg_fast_generic_check_errors(
+            "frontier-bug-stale", cfg, "Apalache"
+        )
+        == []
+    )
+
+
 def test_unreferenced_formal_file_errors_require_inventory_reachability(
     tmp_path: Path,
 ) -> None:
