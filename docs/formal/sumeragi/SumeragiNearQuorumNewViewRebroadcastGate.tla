@@ -192,8 +192,11 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-Safety ==
+AllCasesMatchSpec ==
   \A c \in Cases: Matches(c)
+
+Safety ==
+  AllCasesMatchSpec
 
 AdmissionGates ==
   /\ Matches("observer_rejected")

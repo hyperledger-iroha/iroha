@@ -211,7 +211,7 @@ TypeInvariant ==
        /\ SpecActions(c) \subseteq Actions
        /\ ImplementationActions(c) \subseteq Actions
 
-NoBugInvariant ==
+RosterIndexProjectionCoreSafety ==
   \A c \in Cases:
     ImplementationActions(c) = SpecActions(c)
 
@@ -242,7 +242,9 @@ RosterIndexProjectionExactness ==
   /\ RosterIndexManagerApplyExact
   /\ RosterIndexProjectionManagerExact
 
-SafetyFast == NoBugInvariant
+NoBugInvariant == RosterIndexProjectionCoreSafety
+
+SafetyFast == RosterIndexProjectionCoreSafety
 
 BugProjectEmptyNonempty == NoBugInvariant
 BugNoProviderOneBased == NoBugInvariant

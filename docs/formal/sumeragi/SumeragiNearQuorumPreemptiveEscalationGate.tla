@@ -392,8 +392,10 @@ TypeInvariant ==
   /\ checked = 0
   /\ Bug \in Bugs
 
-SafetyFast ==
+NearQuorumPreemptiveEscalationCoreSafety ==
   \A c \in Cases: ActualOutput(c) = SpecOutput(c)
+
+SafetyFast == NearQuorumPreemptiveEscalationCoreSafety
 
 NearQuorumBudgetGateExact ==
   /\ \A c \in BudgetGateCases:
@@ -467,7 +469,7 @@ NearQuorumProgressCounterExact ==
     /\ ActualOutput(c) = SpecOutput(c)
 
 NearQuorumPreemptiveEscalationExactness ==
-  /\ SafetyFast
+  /\ NearQuorumPreemptiveEscalationCoreSafety
   /\ NearQuorumBudgetGateExact
   /\ NearQuorumFreshRequestSuppressionExact
   /\ NearQuorumInflightSuppressionExact

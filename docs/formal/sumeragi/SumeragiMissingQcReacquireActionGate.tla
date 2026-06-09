@@ -355,13 +355,16 @@ ResultSafety ==
   /\ ImplementationActions(RequestedSuccessCounter) = SpecActions(RequestedSuccessCounter)
   /\ ImplementationActions(TriggeredSuccessCounter) = SpecActions(TriggeredSuccessCounter)
 
-SafetyFast ==
+MissingQcReacquireActionCoreSafety ==
   /\ PriorSafety
   /\ AttemptSafety
   /\ SuppressionSafety
   /\ HighestFetchSafety
   /\ RangePullSafety
   /\ ResultSafety
+
+SafetyFast ==
+  MissingQcReacquireActionCoreSafety
 
 PriorAnchors ==
   /\ PriorSafety

@@ -217,7 +217,7 @@ IdleAndUnknownFallbackAnchors ==
   /\ ActualStageFromId(0) = Idle
   /\ \A id \in UnknownIds: ActualStageFromId(id) = Idle
 
-SafetyFast ==
+WorkerLoopStageCoreSafety ==
   /\ StageIdsExact
   /\ StageFromIdsExact
   /\ StageLabelsExact
@@ -230,5 +230,8 @@ SafetyFast ==
   /\ KnownIdsReverseRoundTrip
   /\ StageLabelImageExact
   /\ IdleAndUnknownFallbackAnchors
+
+SafetyFast ==
+  WorkerLoopStageCoreSafety
 
 ====

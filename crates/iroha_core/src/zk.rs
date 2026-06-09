@@ -14330,7 +14330,10 @@ fn verify_kagemusha_recursive_spend_bundle_with_record_at_optional_height(
 }
 
 #[cfg(feature = "zk-stark")]
-fn normalize_stark_fri_circuit_id_for_backend(backend: &str, raw: &str) -> Option<String> {
+pub(crate) fn normalize_stark_fri_circuit_id_for_backend(
+    backend: &str,
+    raw: &str,
+) -> Option<String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() || trimmed == backend {
         return None;
@@ -14347,7 +14350,7 @@ fn normalize_stark_fri_circuit_id_for_backend(backend: &str, raw: &str) -> Optio
 }
 
 #[cfg(feature = "zk-stark")]
-fn stark_open_verify_domain_tag_current(
+pub(crate) fn stark_open_verify_domain_tag_current(
     backend: &str,
     circuit_id: &str,
     vk_hash: [u8; 32],
@@ -14380,6 +14383,8 @@ const STARK_BINDING_AIR_CONSTANT: u64 = 17;
 const STARK_BINDING_AIR_Z_COEFF: u64 = 19;
 #[cfg(feature = "zk-stark")]
 const STARK_GOLDILOCKS_MODULUS: u128 = (1u128 << 64) - (1u128 << 32) + 1;
+#[cfg(feature = "zk-stark")]
+pub(crate) const STARK_OPEN_VERIFY_AIR_TRANSCRIPT_LABEL_V1: &str = "IROHA-STARK-AIR-V1";
 
 #[cfg(feature = "zk-stark")]
 fn stark_binding_air_preimage(
@@ -14461,6 +14466,28 @@ fn stark_binding_air_terms(
     terms
 }
 
+#[cfg(feature = "zk-stark")]
+pub(crate) fn stark_open_verify_air_public_digest_current(
+    backend: &str,
+    circuit_id: &str,
+    vk_hash: [u8; 32],
+    env_public_inputs: &[u8],
+    public_inputs: &[Vec<[u8; 32]>],
+) -> Result<[u8; 32], String> {
+    let terms = stark_binding_air_terms(
+        backend,
+        circuit_id,
+        vk_hash,
+        env_public_inputs,
+        public_inputs,
+    );
+    crate::zk_stark::stark_air_public_digest_from_composition(
+        STARK_BINDING_AIR_CONSTANT,
+        STARK_BINDING_AIR_Z_COEFF,
+        &terms,
+    )
+}
+
 /// Build a STARK/FRI `OpenVerifyEnvelope` from backend-native public inputs.
 ///
 /// The first-release native V1 circuit carries an explicit AIR section whose
@@ -14537,7 +14564,7 @@ pub fn prove_stark_fri_open_verify_envelope(
     )?;
     let envelope_bytes = crate::zk_stark::prove_stark_fri_air_envelope_bytes(
         params,
-        "IROHA-STARK-AIR-V1".to_owned(),
+        STARK_OPEN_VERIFY_AIR_TRANSCRIPT_LABEL_V1.to_owned(),
         env_circuit_id.clone(),
         public_digest,
     )?;

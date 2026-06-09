@@ -287,8 +287,11 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+FetchPendingResponseSendMatchesSpec ==
   \A c \in Cases: Matches(c)
+
+SafetyFast ==
+  FetchPendingResponseSendMatchesSpec
 
 HintlessRequiresRosterProof ==
   Matches("hintless_no_roster")

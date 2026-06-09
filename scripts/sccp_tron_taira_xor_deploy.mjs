@@ -106,6 +106,18 @@ const REQUIRED_POST_DEPLOY_CHECKS = Object.freeze([
   "Run scripts/sccp_tron_source_bridge_evidence.py for source bridge config evidence",
   "Run scripts/sccp_tron_live_evidence.py for live verifier/source/canary evidence",
 ]);
+const POST_DEPLOY_LIVE_EVIDENCE_BLOCKER_KEYS = Object.freeze([
+  "productionBlockers",
+  "production_blockers",
+  "postDeployProductionBlockers",
+  "post_deploy_production_blockers",
+  "fullTomlProductionBlockers",
+  "full_toml_production_blockers",
+  "sourceEventTransactionProductionBlockers",
+  "source_event_transaction_production_blockers",
+  "routeCanaryProductionBlockers",
+  "route_canary_production_blockers",
+]);
 const DEPLOYMENT_ARTIFACT_SECRET_KEY_PATTERN =
   /(?:private[_-]?key|mnemonic|recovery[_-]?phrase|seed[_-]?phrase|secret)/iu;
 const PRIVATE_KEY_PEM_PATTERN =
@@ -2752,6 +2764,33 @@ function requireBooleanTrue(value, label) {
   }
 }
 
+function normalizeOptionalStringList(value, label) {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) {
+    throw new Error(`${label} must be a list of non-empty strings`);
+  }
+  return value.map((entry, index) => normalizeNonEmptyText(entry, `${label}[${index}]`));
+}
+
+function postDeployLiveEvidenceProductionBlockers(record) {
+  if (!record || typeof record !== "object" || Array.isArray(record)) {
+    return [];
+  }
+  const blockers = [];
+  for (const key of POST_DEPLOY_LIVE_EVIDENCE_BLOCKER_KEYS) {
+    if (!Object.hasOwn(record, key)) {
+      continue;
+    }
+    for (const blocker of normalizeOptionalStringList(
+      record[key],
+      `route manifest postDeployLiveEvidence.${key}`,
+    )) {
+      blockers.push(`${key}: ${blocker}`);
+    }
+  }
+  return blockers;
+}
+
 function normalizeLiveEvidenceForRoute(liveEvidence, expected) {
   const profile = expected.profile ?? expected.addresses?.profile ?? TRON_NETWORK_PROFILES.mainnet;
   const summary = requireJsonObject(liveEvidence, "live evidence");
@@ -3037,16 +3076,22 @@ function normalizeLiveEvidenceForRoute(liveEvidence, expected) {
     }
   }
 
+  const sourceEventTransactionBlockers = normalizeOptionalStringList(
+    sourceEventTransaction.source_event_transaction_production_blockers,
+    "live evidence source_event_transaction.source_event_transaction_production_blockers",
+  );
   if (sourceEventTransaction.source_event_transaction_production_ready !== true) {
-    const blockers = Array.isArray(sourceEventTransaction.source_event_transaction_production_blockers)
-      ? sourceEventTransaction.source_event_transaction_production_blockers
-          .filter((blocker) => typeof blocker === "string" && blocker.trim())
-          .join("; ")
-      : "";
+    const blockers = sourceEventTransactionBlockers.join("; ");
     throw new Error(
       `live evidence source_event_transaction.source_event_transaction_production_ready must be true${
         blockers ? `: ${blockers}` : ""
       }`,
+    );
+  }
+  if (sourceEventTransactionBlockers.length > 0) {
+    throw new Error(
+      "live evidence source_event_transaction.source_event_transaction_production_blockers "
+        + `must be empty when source_event_transaction_production_ready is true: ${sourceEventTransactionBlockers.join("; ")}`,
     );
   }
 
@@ -3350,16 +3395,108 @@ function normalizeRouteManifestForConfig(manifest) {
     "route manifest tairaXorBurnRecord.vkRef",
   );
   const settlement = routeConfigRequiredRecord(record.settlement, "route manifest settlement");
+  const destinationBinding = routeConfigRequiredRecord(
+    record.destinationBinding,
+    "route manifest destinationBinding",
+  );
   const productionReady = record.productionReady === true;
   if (record.productionReady !== true && record.productionReady !== false) {
     throw new Error("route manifest productionReady must be true or false");
   }
+  const hasDisabledReason =
+    record.disabledReason !== undefined && record.disabledReason !== null;
+  const hasDisabledReasonSnake =
+    record.disabled_reason !== undefined && record.disabled_reason !== null;
+  if (
+    hasDisabledReason &&
+    hasDisabledReasonSnake &&
+    record.disabledReason !== record.disabled_reason
+  ) {
+    throw new Error("route manifest disabledReason and disabled_reason must match");
+  }
+  const disabledReason =
+    hasDisabledReason || hasDisabledReasonSnake
+      ? normalizeNonEmptyText(
+          hasDisabledReason ? record.disabledReason : record.disabled_reason,
+          "route manifest disabledReason",
+        )
+      : null;
+  if (productionReady && disabledReason) {
+    throw new Error(
+      "route manifest productionReady cannot be true when disabledReason is set",
+    );
+  }
+  const hasPostDeployReadbackChecked =
+    record.postDeployReadbackChecked !== undefined &&
+    record.postDeployReadbackChecked !== null;
+  const hasPostDeployReadbackCheckedSnake =
+    record.post_deploy_readback_checked !== undefined &&
+    record.post_deploy_readback_checked !== null;
+  if (
+    hasPostDeployReadbackChecked &&
+    hasPostDeployReadbackCheckedSnake &&
+    record.postDeployReadbackChecked !== record.post_deploy_readback_checked
+  ) {
+    throw new Error(
+      "route manifest postDeployReadbackChecked and post_deploy_readback_checked must match",
+    );
+  }
+  const postDeployReadbackChecked = hasPostDeployReadbackChecked
+    ? record.postDeployReadbackChecked
+    : hasPostDeployReadbackCheckedSnake
+      ? record.post_deploy_readback_checked
+      : null;
+  if (
+    postDeployReadbackChecked !== null &&
+    postDeployReadbackChecked !== true &&
+    postDeployReadbackChecked !== false
+  ) {
+    throw new Error("route manifest postDeployReadbackChecked must be true or false");
+  }
+  if (productionReady && postDeployReadbackChecked !== true) {
+    throw new Error(
+      "route manifest productionReady requires postDeployReadbackChecked true",
+    );
+  }
   const routeId = normalizeNonEmptyText(record.routeId, "route manifest routeId");
+  if (routeId !== ROUTE_ID) {
+    throw new Error(`route manifest routeId must be ${ROUTE_ID}`);
+  }
   const assetKey = normalizeNonEmptyText(record.assetKey, "route manifest assetKey");
+  if (assetKey !== ASSET_KEY) {
+    throw new Error(`route manifest assetKey must be ${ASSET_KEY}`);
+  }
   const counterpartyDomain = normalizeUint32(
     record.counterpartyDomain,
     "route manifest counterpartyDomain",
   );
+  if (counterpartyDomain !== SCCP_DOMAIN_TRON) {
+    throw new Error("route manifest counterpartyDomain must be TRON domain 5");
+  }
+  const tronNetwork = normalizeTronNetwork(record.tronNetwork);
+  const tronProfile = TRON_NETWORK_PROFILES[tronNetwork];
+  if (productionReady && tronProfile.key !== "mainnet") {
+    throw new Error("route manifest productionReady requires tronNetwork mainnet");
+  }
+  const chain = normalizeNonEmptyText(record.chain, "route manifest chain");
+  if (chain !== tronProfile.network) {
+    throw new Error("route manifest chain must match tronNetwork");
+  }
+  const chainIdHex = normalizeNonEmptyText(record.chainIdHex, "route manifest chainIdHex");
+  if (chainIdHex !== tronProfile.chainIdHex) {
+    throw new Error("route manifest chainIdHex must match tronNetwork");
+  }
+  const networkIdHex = normalizeBytes32(record.networkIdHex, "route manifest networkIdHex");
+  if (networkIdHex !== tronProfile.networkIdHex) {
+    throw new Error("route manifest networkIdHex must match tronNetwork");
+  }
+  const verifierTarget = normalizeNonEmptyText(
+    record.verifierTarget,
+    "route manifest verifierTarget",
+  );
+  if (verifierTarget !== "TronContract") {
+    throw new Error("route manifest verifierTarget must be TronContract");
+  }
   const gasLimit = normalizePositiveSafeInteger(
     burnRecord.gasLimit,
     "route manifest burn-record gasLimit",
@@ -3370,77 +3507,295 @@ function normalizeRouteManifestForConfig(manifest) {
         "route manifest postDeployLiveEvidence",
       )
     : null;
+  if (productionReady && !postDeployLiveEvidence) {
+    throw new Error(
+      "route manifest productionReady requires postDeployLiveEvidence",
+    );
+  }
+  if (productionReady && postDeployLiveEvidence.fullTomlReady !== true) {
+    throw new Error(
+      "route manifest productionReady requires postDeployLiveEvidence.fullTomlReady true",
+    );
+  }
+  const postDeployProductionBlockers = postDeployLiveEvidence
+    ? postDeployLiveEvidenceProductionBlockers(postDeployLiveEvidence)
+    : [];
+  if (productionReady && postDeployProductionBlockers.length > 0) {
+    throw new Error(
+      "route manifest productionReady requires empty postDeployLiveEvidence "
+        + `production blocker lists: ${postDeployProductionBlockers.join("; ")}`,
+    );
+  }
+  if (
+    productionReady &&
+    (postDeployLiveEvidence.offlineFullTomlSha256 === undefined ||
+      postDeployLiveEvidence.offlineFullTomlSha256 === null)
+  ) {
+    throw new Error(
+      "route manifest productionReady requires postDeployLiveEvidence.offlineFullTomlSha256",
+    );
+  }
+  const version = normalizeUint32(record.version ?? 1, "route manifest version");
+  if (version !== 1) {
+    throw new Error("route manifest version must be 1");
+  }
+  const tairaXorTokenAddress = normalizeTronBase58Address(
+    record.tairaXorTokenAddress,
+    "route manifest tairaXorTokenAddress",
+  ).base58;
+  const tairaXorBridgeAddress = normalizeTronBase58Address(
+    record.tairaXorBridgeAddress,
+    "route manifest tairaXorBridgeAddress",
+  ).base58;
+  const sccpTronSourceBridgeAddress = normalizeTronBase58Address(
+    record.sccpTronSourceBridgeAddress,
+    "route manifest sccpTronSourceBridgeAddress",
+  ).base58;
+  const tronVerifierAddress = normalizeTronBase58Address(
+    record.tronVerifierAddress,
+    "route manifest tronVerifierAddress",
+  ).base58;
+  const destinationVerifierAlias =
+    record.sccpTronDestinationVerifierAddress ??
+    record.sccp_tron_destination_verifier_address;
+  if (destinationVerifierAlias !== undefined && destinationVerifierAlias !== null) {
+    const normalizedDestinationVerifierAlias = normalizeTronBase58Address(
+      destinationVerifierAlias,
+      "route manifest sccpTronDestinationVerifierAddress",
+    ).base58;
+    if (normalizedDestinationVerifierAlias !== tronVerifierAddress) {
+      throw new Error(
+        "route manifest sccpTronDestinationVerifierAddress must match tronVerifierAddress",
+      );
+    }
+  }
+  if (
+    new Set([
+      tairaXorTokenAddress,
+      tairaXorBridgeAddress,
+      sccpTronSourceBridgeAddress,
+      tronVerifierAddress,
+    ]).size !== 4
+  ) {
+    throw new Error(
+      "route manifest TRON token, bridge, source bridge, and verifier addresses must be distinct",
+    );
+  }
+  const verifierBackend = normalizeNonEmptyText(
+    destinationRollout.verifierBackend ?? destinationRollout.verifier_backend,
+    "route manifest destinationRollout.verifierBackend",
+  );
+  if (verifierBackend !== TRON_GROTH16_BACKEND) {
+    throw new Error(`route manifest verifier backend must be ${TRON_GROTH16_BACKEND}`);
+  }
+  const proofFamily = normalizeNonEmptyText(
+    destinationRollout.proofFamily ?? destinationRollout.proof_family,
+    "route manifest destinationRollout.proofFamily",
+  );
+  if (proofFamily !== SCCP_PROOF_FAMILY_STARK_FRI) {
+    throw new Error(`route manifest proof family must be ${SCCP_PROOF_FAMILY_STARK_FRI}`);
+  }
+  const verifierCodeHash = normalizeBytes32(
+    destinationRollout.verifierCodeHash,
+    "route manifest destinationRollout.verifierCodeHash",
+  );
+  const verifierKeyHash = normalizeBytes32(
+    destinationRollout.verifierKeyHash,
+    "route manifest destinationRollout.verifierKeyHash",
+  );
+  const destinationRolloutVersion = normalizeUint32(
+    destinationRollout.version ?? 1,
+    "route manifest destinationRollout.version",
+  );
+  if (destinationRolloutVersion !== 1) {
+    throw new Error("route manifest destinationRollout.version must be 1");
+  }
+  const destinationNetworkId = normalizeBytes32(
+    destinationRollout.destinationNetworkId ?? destinationRollout.destination_network_id,
+    "route manifest destinationRollout.destinationNetworkId",
+  );
+  if (destinationNetworkId !== networkIdHex) {
+    throw new Error("route manifest destinationRollout.destinationNetworkId must match networkIdHex");
+  }
+  const verifierIdentity = normalizeTronBase58Address(
+    destinationRollout.verifierIdentity ?? destinationRollout.verifier_identity,
+    "route manifest destinationRollout.verifierIdentity",
+  ).base58;
+  if (verifierIdentity !== tronVerifierAddress) {
+    throw new Error("route manifest destinationRollout.verifierIdentity must match tronVerifierAddress");
+  }
+  const destinationSourceDomain = normalizeUint32(
+    destinationRollout.sourceDomain,
+    "route manifest destinationRollout.sourceDomain",
+  );
+  const destinationTargetDomain = normalizeUint32(
+    destinationRollout.targetDomain,
+    "route manifest destinationRollout.targetDomain",
+  );
+  if (
+    destinationSourceDomain !== SCCP_DOMAIN_SORA ||
+    destinationTargetDomain !== SCCP_DOMAIN_TRON
+  ) {
+    throw new Error("route manifest destinationRollout must be SORA -> TRON");
+  }
+  const bindingSourceDomain = normalizeUint32(
+    destinationBinding.sourceDomain,
+    "route manifest destinationBinding.sourceDomain",
+  );
+  const destinationBindingVersion = normalizeUint32(
+    destinationBinding.version ?? 1,
+    "route manifest destinationBinding.version",
+  );
+  if (destinationBindingVersion !== 1) {
+    throw new Error("route manifest destinationBinding.version must be 1");
+  }
+  const bindingTargetDomain = normalizeUint32(
+    destinationBinding.targetDomain,
+    "route manifest destinationBinding.targetDomain",
+  );
+  if (
+    bindingSourceDomain !== SCCP_DOMAIN_SORA ||
+    bindingTargetDomain !== SCCP_DOMAIN_TRON
+  ) {
+    throw new Error("route manifest destinationBinding must be SORA -> TRON");
+  }
+  const bindingNetworkIdHex = normalizeBytes32(
+    destinationBinding.networkIdHex,
+    "route manifest destinationBinding.networkIdHex",
+  );
+  if (bindingNetworkIdHex !== networkIdHex) {
+    throw new Error("route manifest destinationBinding.networkIdHex must match networkIdHex");
+  }
+  const expectedDestinationBindingKey = tronDestinationBindingKey({
+    networkId: networkIdHex,
+    verifierAddress: tronVerifierAddress,
+    verifierCodeHash,
+    verifierKeyHash,
+  });
+  const destinationBindingKey = normalizeNonEmptyText(
+    destinationRollout.destinationBindingKey,
+    "route manifest destinationRollout.destinationBindingKey",
+  );
+  if (destinationBindingKey !== expectedDestinationBindingKey) {
+    throw new Error(
+      "route manifest destination binding key does not match TRON deployment evidence",
+    );
+  }
+  const declaredDestinationBindingKey = normalizeNonEmptyText(
+    destinationBinding.key,
+    "route manifest destinationBinding.key",
+  );
+  if (declaredDestinationBindingKey !== destinationBindingKey) {
+    throw new Error("route manifest destinationBinding.key must match destinationRollout.destinationBindingKey");
+  }
+  const expectedDestinationBindingHash = tronDestinationBindingHash({
+    networkId: networkIdHex,
+    verifierAddress: tronVerifierAddress,
+    verifierCodeHash,
+    verifierKeyHash,
+  });
+  const destinationBindingHash = normalizeBytes32(
+    destinationRollout.destinationBindingHash,
+    "route manifest destinationRollout.destinationBindingHash",
+  );
+  if (destinationBindingHash !== expectedDestinationBindingHash) {
+    throw new Error(
+      "route manifest destination binding hash does not match TRON deployment evidence",
+    );
+  }
+  const declaredDestinationBindingHash = normalizeBytes32(
+    destinationBinding.bindingHash,
+    "route manifest destinationBinding.bindingHash",
+  );
+  if (declaredDestinationBindingHash !== destinationBindingHash) {
+    throw new Error(
+      "route manifest destinationBinding.bindingHash must match destinationRollout.destinationBindingHash",
+    );
+  }
+  const contractArtifact = normalizeStrictBase64(
+    burnRecord.contractArtifactB64,
+    "route manifest tairaXorBurnRecord.contractArtifactB64",
+  );
+  const artifactSha256 = bytesToHex(sha256(new Uint8Array(contractArtifact.bytes)));
+  const declaredArtifactSha256 = normalizeBytes32(
+    burnRecord.artifactSha256,
+    "route manifest tairaXorBurnRecord.artifactSha256",
+  );
+  if (declaredArtifactSha256 !== artifactSha256) {
+    throw new Error(
+      "route manifest TAIRA burn-record artifact sha256 does not match artifact bytes",
+    );
+  }
+  const settlementRouteId = settlement.routeId ?? settlement.route_id;
+  if (settlementRouteId !== undefined && settlementRouteId !== null) {
+    const normalizedSettlementRouteId = normalizeNonEmptyText(
+      settlementRouteId,
+      "route manifest settlement.routeId",
+    );
+    if (normalizedSettlementRouteId !== ROUTE_ID) {
+      throw new Error(`route manifest settlement.routeId must be ${ROUTE_ID}`);
+    }
+  }
+  const settlementAssetKey = settlement.assetKey ?? settlement.asset_key;
+  if (settlementAssetKey !== undefined && settlementAssetKey !== null) {
+    const normalizedSettlementAssetKey = normalizeNonEmptyText(
+      settlementAssetKey,
+      "route manifest settlement.assetKey",
+    );
+    if (normalizedSettlementAssetKey !== ASSET_KEY) {
+      throw new Error(`route manifest settlement.assetKey must be ${ASSET_KEY}`);
+    }
+  }
+  const settlementSubmitPath = normalizeNonEmptyText(
+    settlement.submitPath ?? settlement.submit_path,
+    "route manifest settlement.submitPath",
+  );
+  if (settlementSubmitPath !== "/v1/bridge/messages") {
+    throw new Error("route manifest settlement.submitPath must be /v1/bridge/messages");
+  }
+  const settlementMode = normalizeNonEmptyText(
+    settlement.mode,
+    "route manifest settlement.mode",
+  );
+  if (settlementMode !== "finalize_inbound") {
+    throw new Error("route manifest settlement.mode must be finalize_inbound");
+  }
   return {
-    version: normalizeUint32(record.version ?? 1, "route manifest version"),
+    version,
     routeId,
     assetKey,
-    tronNetwork: normalizeNonEmptyText(record.tronNetwork, "route manifest tronNetwork"),
-    chain: normalizeNonEmptyText(record.chain, "route manifest chain"),
-    chainIdHex: normalizeNonEmptyText(record.chainIdHex, "route manifest chainIdHex"),
+    tronNetwork,
+    chain,
+    chainIdHex,
     counterpartyDomain,
-    verifierTarget: normalizeNonEmptyText(
-      record.verifierTarget,
-      "route manifest verifierTarget",
-    ),
+    verifierTarget,
     productionReady,
-    disabledReason:
-      record.disabledReason === undefined || record.disabledReason === null
-        ? null
-        : normalizeNonEmptyText(record.disabledReason, "route manifest disabledReason"),
-    networkIdHex: normalizeBytes32(record.networkIdHex, "route manifest networkIdHex"),
-    tairaXorTokenAddress: normalizeTronBase58Address(
-      record.tairaXorTokenAddress,
-      "route manifest tairaXorTokenAddress",
-    ).base58,
-    tairaXorBridgeAddress: normalizeTronBase58Address(
-      record.tairaXorBridgeAddress,
-      "route manifest tairaXorBridgeAddress",
-    ).base58,
-    sccpTronSourceBridgeAddress: normalizeTronBase58Address(
-      record.sccpTronSourceBridgeAddress,
-      "route manifest sccpTronSourceBridgeAddress",
-    ).base58,
-    tronVerifierAddress: normalizeTronBase58Address(
-      record.tronVerifierAddress,
-      "route manifest tronVerifierAddress",
-    ).base58,
-    verifierCodeHash: normalizeBytes32(
-      destinationRollout.verifierCodeHash,
-      "route manifest destinationRollout.verifierCodeHash",
-    ),
-    verifierKeyHash: normalizeBytes32(
-      destinationRollout.verifierKeyHash,
-      "route manifest destinationRollout.verifierKeyHash",
-    ),
-    destinationBindingKey: normalizeNonEmptyText(
-      destinationRollout.destinationBindingKey,
-      "route manifest destinationRollout.destinationBindingKey",
-    ),
-    destinationBindingHash: normalizeBytes32(
-      destinationRollout.destinationBindingHash,
-      "route manifest destinationRollout.destinationBindingHash",
-    ),
+    postDeployReadbackChecked: postDeployReadbackChecked === true,
+    disabledReason,
+    networkIdHex,
+    tairaXorTokenAddress,
+    tairaXorBridgeAddress,
+    sccpTronSourceBridgeAddress,
+    tronVerifierAddress,
+    verifierCodeHash,
+    verifierKeyHash,
+    destinationBindingKey,
+    destinationBindingHash,
     settlementAssetDefinitionId: normalizeCanonicalAssetDefinitionId(
       burnRecord.settlementAssetDefinitionId,
       "route manifest tairaXorBurnRecord.settlementAssetDefinitionId",
     ),
-    contractArtifactB64: normalizeStrictBase64(
-      burnRecord.contractArtifactB64,
-      "route manifest tairaXorBurnRecord.contractArtifactB64",
-    ).text,
-    artifactSha256: normalizeBytes32(
-      burnRecord.artifactSha256,
-      "route manifest tairaXorBurnRecord.artifactSha256",
-    ),
-    codeHash: normalizeNonEmptyText(
+    contractArtifactB64: contractArtifact.text,
+    artifactSha256: declaredArtifactSha256,
+    codeHash: normalizeBytes32(
       burnRecord.codeHash,
       "route manifest tairaXorBurnRecord.codeHash",
     ),
-    vkBackend: normalizeNonEmptyText(
+    vkBackend: normalizeVerifierKeyRefText(
       vkRef.backend,
       "route manifest tairaXorBurnRecord.vkRef.backend",
     ),
-    vkName: normalizeNonEmptyText(
+    vkName: normalizeVerifierKeyRefText(
       vkRef.name,
       "route manifest tairaXorBurnRecord.vkRef.name",
     ),

@@ -215,8 +215,10 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+DirectCommitQcForBlockMatchesSpec ==
   \A c \in Cases: Matches(c)
+
+SafetyFast == DirectCommitQcForBlockMatchesSpec
 
 CachedQcReturned ==
   Matches("cached_only")

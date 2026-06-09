@@ -220,10 +220,12 @@ TypeInvariant ==
        /\ SpecActions(c) \subseteq Actions
        /\ ImplementationActions(c) \subseteq Actions
 
-NoBugInvariant ==
+ConsensusHandshakeCapsCoreSafety ==
   \A c \in Cases:
     ImplementationActions(c) = SpecActions(c)
 
-SafetyFast == NoBugInvariant
+NoBugInvariant == ConsensusHandshakeCapsCoreSafety
+
+SafetyFast == ConsensusHandshakeCapsCoreSafety
 
 ====

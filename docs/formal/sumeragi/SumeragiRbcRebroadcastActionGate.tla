@@ -329,9 +329,12 @@ StableActions ==
   /\ ActualAction(CombinedActions) =
        ActionResult(TRUE, FALSE, FALSE, FALSE, TRUE, FALSE, FALSE, TRUE, TRUE, TRUE)
 
-SafetyFast ==
+RbcRebroadcastActionCoreSafety ==
   /\ ActionExact
   /\ ProgressMatchesActions
   /\ StableActions
+
+SafetyFast ==
+  RbcRebroadcastActionCoreSafety
 
 ====

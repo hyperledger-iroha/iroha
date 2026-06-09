@@ -146,6 +146,18 @@ const NATIVE_EVM_PROVER_BUNDLE_KEYS = Object.freeze([
   "proverBundle",
   "prover_bundle",
 ]);
+const POST_DEPLOY_LIVE_EVIDENCE_BLOCKER_KEYS = Object.freeze([
+  "productionBlockers",
+  "production_blockers",
+  "postDeployProductionBlockers",
+  "post_deploy_production_blockers",
+  "fullTomlProductionBlockers",
+  "full_toml_production_blockers",
+  "sourceEventTransactionProductionBlockers",
+  "source_event_transaction_production_blockers",
+  "routeCanaryProductionBlockers",
+  "route_canary_production_blockers",
+]);
 const NATIVE_EVM_PROVER_AUDIT_OPTION_KEYS = Object.freeze({
   circuit_security_audit: [
     "audit-circuit-security",
@@ -1093,6 +1105,44 @@ function normalizeNonEmptyText(value, label) {
     throw new Error(`${label} is required.`);
   }
   return normalized;
+}
+
+function normalizeCanonicalStringList(value, label) {
+  if (value === undefined || value === null) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw new Error(`${label} must be a list of non-empty strings.`);
+  }
+  return value.map((entry, index) => {
+    if (
+      typeof entry !== "string" ||
+      entry.length === 0 ||
+      entry.trim() !== entry
+    ) {
+      throw new Error(`${label}[${index}] must be a non-empty canonical string.`);
+    }
+    return entry;
+  });
+}
+
+function postDeployLiveEvidenceProductionBlockers(record) {
+  if (!isRecord(record)) {
+    return [];
+  }
+  const blockers = [];
+  for (const key of POST_DEPLOY_LIVE_EVIDENCE_BLOCKER_KEYS) {
+    if (!hasOwn(record, key)) {
+      continue;
+    }
+    for (const blocker of normalizeCanonicalStringList(
+      record[key],
+      `route manifest postDeployLiveEvidence.${key}`,
+    )) {
+      blockers.push(`${key}: ${blocker}`);
+    }
+  }
+  return blockers;
 }
 
 function normalizeCanonicalAssetDefinitionId(value, label) {
@@ -3079,6 +3129,14 @@ function normalizeRouteManifestForConfig(manifest) {
       sourceBridgeConfigHashSources,
       "route manifest postDeployLiveEvidence.sourceBridgeConfigHash",
     );
+    const postDeployProductionBlockers =
+      postDeployLiveEvidenceProductionBlockers(postDeployLiveEvidence);
+    if (productionReady && postDeployProductionBlockers.length > 0) {
+      throw new Error(
+        "route manifest productionReady requires empty postDeployLiveEvidence "
+          + `production blockers: ${postDeployProductionBlockers.join("; ")}.`,
+      );
+    }
     const sourceBridgeConfigHash = readRequiredConsistentNormalizedString(
       sourceBridgeConfigHashSources,
       "route manifest postDeployLiveEvidence.sourceBridgeConfigHash",

@@ -81,8 +81,11 @@ ActualOutput ==
   <<ActualPayloadKnown, ActualPayloadMissing, ActualObsoleteKnown,
     ActualObsoleteMissing>>
 
-SafetyFast ==
+MissingBlockClearMatchesSpec ==
   ActualOutput = SpecOutput
+
+SafetyFast ==
+  MissingBlockClearMatchesSpec
 
 BugPayloadAvailableWithoutLocalRejected ==
   ActualPayloadMissing = SpecPayloadMissing

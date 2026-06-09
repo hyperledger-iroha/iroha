@@ -134,10 +134,13 @@ SuppressedBranchEffectSafety ==
   /\ SuppressedBlocksAnchorPull
   /\ SuppressedStillAllowsSidecarHint
 
-SafetyFast ==
+LiveFrontierIdleMissingQcCoreSafety ==
   /\ SuppressionPositiveSafety
   /\ SuppressionNegativeSafety
   /\ SuppressedBranchEffectSafety
+
+SafetyFast ==
+  LiveFrontierIdleMissingQcCoreSafety
 
 SuppressionPositiveAnchors ==
   /\ SuppressionPositiveSafety

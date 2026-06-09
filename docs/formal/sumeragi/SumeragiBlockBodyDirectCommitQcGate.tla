@@ -156,8 +156,10 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+DirectCommitQcMatchesSpec ==
   \A c \in Cases: Matches(c)
+
+SafetyFast == DirectCommitQcMatchesSpec
 
 UpdateEmbeddedReturned ==
   Matches("update_embedded_qc")

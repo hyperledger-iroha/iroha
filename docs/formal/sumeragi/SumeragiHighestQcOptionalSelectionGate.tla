@@ -218,12 +218,14 @@ IgnoredEvidenceCannotClearSelection ==
   /\ last_case = "some_then_none" => selected = "q_low"
   /\ last_case = "some_then_non_new_view" => selected = "q_low"
 
-Safety ==
+HighestQcOptionalSelectionCoreSafety ==
   /\ SelectedMatchesSpec
   /\ NoSelectionWithoutSomeNewView
   /\ SelectionComesFromEmbeddedNewViewQc
   /\ EmbeddedHighestNotCertificateSubject
   /\ MaxCandidateSelected
   /\ IgnoredEvidenceCannotClearSelection
+
+Safety == HighestQcOptionalSelectionCoreSafety
 
 ====

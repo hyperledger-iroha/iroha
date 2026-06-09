@@ -126,13 +126,16 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+LaneInterleaveMatchesSpec ==
   /\ \A c \in Cases:
        ActualOrder(c) = SpecOrder(c)
   /\ \A c \in Cases:
        Total(c) \in 0..5
   /\ \A c \in Cases:
        LaneCount(c) \in 0..3
+
+SafetyFast ==
+  LaneInterleaveMatchesSpec
 
 BugEmptyAddsIndex ==
   ActualOrder("empty") = SpecOrder("empty")

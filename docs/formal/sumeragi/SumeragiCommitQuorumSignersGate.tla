@@ -143,8 +143,10 @@ SpecFailedCommitBranchAnchors ==
   /\ SpecFailedCommitQuorumBranch("above_min_failure")
   /\ ~SpecFailedCommitQuorumBranch("boundary_success")
 
-SafetyFast ==
+CommitQuorumSignersMatchesSpec ==
   \A c \in Cases: ActualCase(c) = SpecCase(c)
+
+SafetyFast == CommitQuorumSignersMatchesSpec
 
 BugMissingSignersAccepted ==
   ActualCase("missing_min_one_failure") = SpecCase("missing_min_one_failure")

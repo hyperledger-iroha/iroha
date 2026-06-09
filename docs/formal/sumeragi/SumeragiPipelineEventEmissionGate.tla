@@ -297,7 +297,7 @@ PipelineEventEmissionSafetyAnchors ==
   /\ DeliveryAnchors
   /\ FailureAndPanicAnchors
 
-SafetyFast ==
+PipelineEventEmissionCoreSafety ==
   /\ AttemptCountExact
   /\ AttemptKindExact
   /\ AttemptPayloadExact
@@ -311,6 +311,9 @@ SafetyFast ==
   /\ DuplicateEventsArePreserved
   /\ ClosedSenderDoesNotDeliver
   /\ OpenSenderDeliversAttemptedEnvelope
+
+SafetyFast ==
+  PipelineEventEmissionCoreSafety
 
 Safety == PipelineEventEmissionSafetyAnchors
 

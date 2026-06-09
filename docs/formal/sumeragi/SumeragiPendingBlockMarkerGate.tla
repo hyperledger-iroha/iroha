@@ -390,10 +390,12 @@ PendingBlockMarkerCooldownExactness ==
   /\ PendingBlockPrecommitRebroadcastExact
   /\ PendingBlockValidationRedriveExact
 
-NoBugInvariant ==
+PendingBlockMarkerCoreSafety ==
   PendingBlockMarkerCooldownExactness
 
-SafetyFast == NoBugInvariant
+NoBugInvariant == PendingBlockMarkerCoreSafety
+
+SafetyFast == PendingBlockMarkerCoreSafety
 
 BugLocalVoteSkipsFirstProgress == NoBugInvariant
 BugLocalVoteAdvancesFromQc == NoBugInvariant

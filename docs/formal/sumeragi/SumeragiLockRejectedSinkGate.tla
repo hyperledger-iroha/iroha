@@ -313,12 +313,14 @@ PurgeCoversAllSurfaces ==
       ClearRecoveryWindows, ClearViewChange, PurgeValidationWhenPendingRemoved,
       PurgeRbc} \subseteq ImplementationActions(PurgeRecoveryArtifacts)
 
-NoBugInvariant ==
+LockRejectedSinkCoreSafety ==
   /\ ActionsMatchSpec
   /\ ActivityGatesFailClosed
   /\ SuppressionDoesNotCreateDependencies
   /\ PurgeCoversAllSurfaces
 
-SafetyFast == NoBugInvariant
+NoBugInvariant == LockRejectedSinkCoreSafety
+
+SafetyFast == LockRejectedSinkCoreSafety
 
 ====

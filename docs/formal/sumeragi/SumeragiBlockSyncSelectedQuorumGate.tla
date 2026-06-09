@@ -479,7 +479,7 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+SelectedQuorumMatchesSpec ==
   /\ Matches("qc_evidence_quorum")
   /\ Matches("commit_cert_quorum")
   /\ Matches("signature_quorum")
@@ -501,6 +501,8 @@ SafetyFast ==
   /\ Matches("invalid_qc_drop")
   /\ Matches("invalid_qc_block_quorum")
   /\ Matches("invalid_qc_checkpoint")
+
+SafetyFast == SelectedQuorumMatchesSpec
 
 EvidenceQuorum ==
   /\ ActualQuorumInitial("qc_evidence_quorum") = SpecQuorumInitial("qc_evidence_quorum")

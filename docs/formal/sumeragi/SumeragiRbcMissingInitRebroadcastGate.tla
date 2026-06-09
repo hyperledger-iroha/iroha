@@ -261,9 +261,12 @@ GateStable ==
   /\ ActualDecision(BackpressureExemptCase).chunk_messages = 3
   /\ ActualDecision(RepairNotNeededRebroadcastCase).ready_forwarded = 1
 
-SafetyFast ==
+RbcMissingInitRebroadcastCoreSafety ==
   /\ DecisionExact
   /\ GateStable
+
+SafetyFast ==
+  RbcMissingInitRebroadcastCoreSafety
 
 AllDecisionsMatchSpec ==
   \A c \in Cases:

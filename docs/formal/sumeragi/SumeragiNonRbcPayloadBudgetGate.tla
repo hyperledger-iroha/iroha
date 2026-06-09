@@ -113,13 +113,16 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+NonRbcPayloadBudgetMatchesSpec ==
   /\ \A c \in Cases:
        ActualBudget(c) = SpecBudget(c)
   /\ \A c \in Cases:
        SpecFrameCap(c) >= 0
   /\ \A c \in Cases:
        SpecBudget(c) <= SpecFrameCap(c)
+
+SafetyFast ==
+  NonRbcPayloadBudgetMatchesSpec
 
 BugUnderflowBelowHeadroom ==
   ActualBudget("unset_below_headroom") = SpecBudget("unset_below_headroom")

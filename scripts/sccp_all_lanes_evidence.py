@@ -53,6 +53,13 @@ SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS = (
 SCCP_UNSUPPORTED_LAUNCH_REMOTE_DOMAINS: tuple[int, ...] = ()
 SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID = "sccp-source-adapter-v1"
 SCCP_PROOF_FAMILY_STARK_FRI = "stark-fri-v1"
+ROUTE_CANARY_EVIDENCE_SOURCE_BY_DOMAIN = {
+    SCCP_DOMAIN_ETH: "evm_message_proof_accepted_transaction",
+    SCCP_DOMAIN_BSC: "evm_message_proof_accepted_transaction",
+    SCCP_DOMAIN_SOL: "solana_live_programdata_snapshot",
+    SCCP_DOMAIN_TON: "ton_live_account_snapshot",
+    SCCP_DOMAIN_TRON: "tron_message_proof_accepted_transaction",
+}
 
 
 @dataclass(frozen=True)
@@ -992,9 +999,23 @@ def _decode_canonical_base64(value: str, *, label: str) -> bytes:
     return raw
 
 
-def _blockers_empty(record: dict[str, Any]) -> bool:
+def _blocker_list_errors(record: dict[str, Any], label: str) -> list[str]:
     blockers = record.get("blockers", [])
-    return isinstance(blockers, list) and not blockers
+    if not isinstance(blockers, list):
+        return [f"{label} blockers must be a list of non-empty canonical strings"]
+    errors: list[str] = []
+    for index, blocker in enumerate(blockers):
+        if (
+            not isinstance(blocker, str)
+            or not blocker
+            or blocker.strip() != blocker
+        ):
+            errors.append(
+                f"{label} blockers[{index}] must be a non-empty canonical string"
+            )
+    if blockers:
+        errors.append(f"{label} blockers must be empty")
+    return errors
 
 
 def _load_sibling_module(filename: str) -> Any:
@@ -3020,8 +3041,7 @@ def _check_destination_rollout(profile: LaneProfile, record: dict[str, Any]) -> 
         errors.extend(_check_solana_live_programdata_evidence(record))
     if profile.chain == "ton":
         errors.extend(_check_ton_live_account_evidence(record))
-    if not _blockers_empty(record):
-        errors.append("destination rollout blockers must be empty")
+    errors.extend(_blocker_list_errors(record, "destination rollout"))
     return errors
 
 
@@ -3817,8 +3837,7 @@ def _check_route_allowlist(
     _expect(errors, record, "route_allowlist_id", profile.route_allowlist_id)
     _expect(errors, record, "routes_allowlisted", True)
     _expect_nonzero_hex(errors, record, "route_allowlist_hash")
-    if not _blockers_empty(record):
-        errors.append("route allowlist blockers must be empty")
+    errors.extend(_blocker_list_errors(record, "route allowlist"))
 
     supplied_hash_raw = _hex_bytes(record.get("route_allowlist_hash"), byte_length=32)
     if supplied_hash_raw is not None and any(supplied_hash_raw):
@@ -5977,38 +5996,83 @@ def _release_checklist(
     deployment_blockers: list[str] = []
     route_blockers: list[str] = []
     canary_blockers: list[str] = []
+    unresolved_blockers = list(all_blockers)
+
+    def append_unresolved(blocker: str) -> None:
+        if blocker not in unresolved_blockers:
+            unresolved_blockers.append(blocker)
 
     for lane in lanes:
-        lane_label = f"domain {lane['domain']} ({lane['chain']})"
+        lane_label = f"domain {lane.get('domain')} ({lane.get('chain')})"
+        lane_blockers = lane.get("blockers", [])
+        if not (
+            isinstance(lane_blockers, list)
+            and all(isinstance(item, str) and item for item in lane_blockers)
+        ):
+            blocker = f"{lane_label}: lane blocker summary is malformed"
+            canary_blockers.append(blocker)
+            append_unresolved(blocker)
+            lane_blockers = []
+        else:
+            for item in lane_blockers:
+                append_unresolved(f"{lane_label}: {item}")
+
+        records = lane.get("records", {})
+        if not isinstance(records, dict):
+            records_blockers.append(f"{lane_label}: lane record summary is malformed")
+            records = {}
         missing_records = [
             label
             for key, label in record_labels.items()
-            if not lane["records"].get(key)
+            if records.get(key) is not True
         ]
         if missing_records:
             records_blockers.append(
                 f"{lane_label}: missing {', '.join(missing_records)}"
             )
 
-        if not lane["records"].get("source_adapter_deployment"):
+        if records.get("source_adapter_deployment") is not True:
             deployment_blockers.append(
                 f"{lane_label}: source adapter deployment evidence is missing"
             )
         source_adapter_gate = lane.get("source_adapter_gate", {})
-        if source_adapter_gate.get("required") and not source_adapter_gate.get("ready"):
-            gate_errors = source_adapter_gate.get("blockers") or [
-                "source adapter gate is not ready"
-            ]
-            deployment_blockers.extend(
-                f"{lane_label}: {error}" for error in gate_errors
+        if not isinstance(source_adapter_gate, dict):
+            deployment_blockers.append(
+                f"{lane_label}: source adapter gate summary is malformed"
             )
-        if not lane["records"].get("destination_rollout"):
+        else:
+            gate_required = source_adapter_gate.get("required")
+            gate_ready = source_adapter_gate.get("ready")
+            if type(gate_required) is not bool:
+                deployment_blockers.append(
+                    f"{lane_label}: source adapter gate required flag must be boolean"
+                )
+            elif type(gate_ready) is not bool:
+                deployment_blockers.append(
+                    f"{lane_label}: source adapter gate ready flag must be boolean"
+                )
+            elif gate_required is True and gate_ready is not True:
+                gate_errors = source_adapter_gate.get("blockers")
+                if not (
+                    isinstance(gate_errors, list)
+                    and all(isinstance(error, str) and error for error in gate_errors)
+                ):
+                    gate_errors = ["source adapter gate is not ready"]
+                deployment_blockers.extend(
+                    f"{lane_label}: {error}" for error in gate_errors
+                )
+        if records.get("destination_rollout") is not True:
             deployment_blockers.append(
                 f"{lane_label}: destination rollout evidence is missing"
             )
         destination_binding = lane.get("destination_binding", {})
+        if not isinstance(destination_binding, dict):
+            deployment_blockers.append(
+                f"{lane_label}: destination binding summary is malformed"
+            )
+            destination_binding = {}
         if (
-            lane["records"].get("destination_rollout")
+            records.get("destination_rollout") is True
             and destination_binding.get("expected_destination_binding_hash_matches")
             is not True
         ):
@@ -6017,7 +6081,10 @@ def _release_checklist(
             )
 
         route_summary = lane.get("route_allowlist", {})
-        if not lane["records"].get("route_allowlist"):
+        if not isinstance(route_summary, dict):
+            route_blockers.append(f"{lane_label}: route allowlist summary is malformed")
+            route_summary = {}
+        if records.get("route_allowlist") is not True:
             route_blockers.append(f"{lane_label}: route allowlist evidence is missing")
         elif route_summary.get("expected_route_allowlist_hash_matches") is not True:
             route_blockers.append(
@@ -6025,20 +6092,42 @@ def _release_checklist(
             )
 
         canary = route_summary.get("route_canary", {})
+        if not isinstance(canary, dict):
+            canary_blockers.append(f"{lane_label}: route canary summary is malformed")
+            canary = {}
         if canary.get("status") != "passed":
             canary_blockers.append(
                 f"{lane_label}: route canary status is not passed"
             )
-        if not canary.get("evidence_hash"):
+        canary_evidence_hash = canary.get("evidence_hash")
+        parsed_canary_evidence_hash = _hex_bytes(
+            canary_evidence_hash,
+            byte_length=32,
+        )
+        if canary_evidence_hash in (None, ""):
             canary_blockers.append(
                 f"{lane_label}: route canary evidence hash is missing"
             )
-        if not canary.get("evidence_source"):
+        elif parsed_canary_evidence_hash is None or not any(
+            parsed_canary_evidence_hash
+        ):
+            canary_blockers.append(
+                f"{lane_label}: route canary evidence hash must be a canonical non-zero bytes32"
+            )
+        expected_evidence_source = ROUTE_CANARY_EVIDENCE_SOURCE_BY_DOMAIN.get(
+            lane["domain"]
+        )
+        canary_evidence_source = canary.get("evidence_source")
+        if canary_evidence_source in (None, ""):
             canary_blockers.append(
                 f"{lane_label}: live route canary evidence source is missing"
             )
+        elif canary_evidence_source != expected_evidence_source:
+            canary_blockers.append(
+                f"{lane_label}: live route canary evidence source must be {expected_evidence_source}"
+            )
         lane_canary_blockers = [
-            item for item in lane["blockers"] if "route canary" in item
+            item for item in lane_blockers if "route canary" in item
         ]
         if canary.get("evidence_bound") is not True and not lane_canary_blockers:
             lane_canary_blockers.append("route canary evidence is not bound")
@@ -6068,11 +6157,11 @@ def _release_checklist(
         _release_checklist_item(
             "no_unresolved_blockers",
             "No SCCP all-lanes preflight blockers remain",
-            list(all_blockers),
+            unresolved_blockers,
         ),
     ]
     return {
-        "ready": all(item["ready"] for item in items),
+        "ready": all(item["ready"] is True for item in items),
         "items": items,
     }
 
@@ -6147,14 +6236,25 @@ def _evm_live_metadata_summary(
     }
 
 
-def validate_evidence_bundle(records: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
+def _evidence_bundle_root_errors(records: Any) -> tuple[dict[str, Any], list[str]]:
+    """Return a dict-shaped evidence root plus root-level validation blockers."""
+
+    if not isinstance(records, dict):
+        return {}, ["evidence bundle root must be an object"]
+
+    errors: list[str] = []
+    for section in sorted(records, key=lambda item: str(item)):
+        if not isinstance(section, str):
+            errors.append(f"evidence section name must be a string: {section!r}")
+        elif section not in SECTION_NAMES:
+            errors.append(f"unsupported evidence section {section}")
+    return records, errors
+
+
+def validate_evidence_bundle(records: dict[str, list[dict[str, Any]]] | Any) -> dict[str, Any]:
     """Return a production-readiness summary for a merged SCCP evidence bundle."""
 
-    global_errors = [
-        f"unsupported evidence section {section}"
-        for section in sorted(records)
-        if section not in SECTION_NAMES
-    ]
+    records, global_errors = _evidence_bundle_root_errors(records)
     materials, material_errors = _records_by_domain(
         records.get("sccp_source_verifier_materials", []),
         "source_domain",
@@ -6350,7 +6450,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if not args.quiet:
         print(json.dumps(summary, indent=2, sort_keys=True))
-    return 0 if summary["production_ready"] else 1
+    return 0 if summary["production_ready"] is True else 1
 
 
 if __name__ == "__main__":

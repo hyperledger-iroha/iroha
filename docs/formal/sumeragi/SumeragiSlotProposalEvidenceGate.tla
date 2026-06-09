@@ -464,7 +464,7 @@ ShortCircuitAndFallbackAnchors ==
   /\ CheckActiveOwner \in
        ImplementationActions(AuthoritativeOwnerNoInfoWithActive)
 
-NoBugInvariant ==
+SlotProposalEvidenceCoreSafety ==
   /\ ResultsMatchSpec
   /\ ActionsMatchSpec
   /\ AcceptedSourcesProduceEvidence
@@ -476,6 +476,8 @@ NoBugInvariant ==
   /\ RejectedSourceReturnAnchors
   /\ ShortCircuitAndFallbackAnchors
 
-SafetyFast == NoBugInvariant
+NoBugInvariant == SlotProposalEvidenceCoreSafety
+
+SafetyFast == SlotProposalEvidenceCoreSafety
 
 ====

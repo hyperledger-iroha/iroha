@@ -234,8 +234,10 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+VotePlaceholderMatchesSpec ==
   \A c \in Cases: Matches(c)
+
+SafetyFast == VotePlaceholderMatchesSpec
 
 NoVotesNoPlaceholder ==
   Matches("no_votes")

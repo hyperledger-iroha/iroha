@@ -493,9 +493,12 @@ Safety ==
   /\ IdleBudgetPreservationMatchesSpec
   /\ IdleBudgetRequiresWakeupAndCandidate
 
-SafetyFast ==
+CommitPipelineSchedulingFastSafety ==
   /\ Safety
   /\ CommitPipelineSchedulingExactness
+
+SafetyFast ==
+  CommitPipelineSchedulingFastSafety
 
 =============================================================================
 ====

@@ -309,12 +309,15 @@ TypeInvariant ==
   /\ Bug \in BugModes
   /\ checked = 0
 
-SafetyFast ==
+MissingPayloadFetchWindowMatchesSpec ==
   /\ \A c \in WindowCases:
        ActualWindowActions(c) = SpecWindowActions(c)
   /\ \A c \in EmitCases:
        ActualEmitActions(c) = SpecEmitActions(c)
   /\ \A c \in CapCases:
        ActualCap(c) = SpecCap(c)
+
+SafetyFast ==
+  MissingPayloadFetchWindowMatchesSpec
 
 ====

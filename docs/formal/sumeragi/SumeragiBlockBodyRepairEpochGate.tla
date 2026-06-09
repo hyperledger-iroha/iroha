@@ -174,8 +174,10 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+RepairEpochMatchesSpec ==
   \A c \in Cases: Matches(c)
+
+SafetyFast == RepairEpochMatchesSpec
 
 CacheReturned ==
   Matches("cache_only")

@@ -346,9 +346,12 @@ TypeInvariant ==
        /\ SpecActions(c) \subseteq Actions
        /\ ImplementationActions(c) \subseteq Actions
 
-NoBugInvariant ==
+ActionsMatchSpec ==
   \A c \in Cases:
     ImplementationActions(c) = SpecActions(c)
+
+NoBugInvariant ==
+  ActionsMatchSpec
 
 SafetyFast == NoBugInvariant
 

@@ -276,11 +276,13 @@ TypeInvariant ==
   /\ Bug \in Bugs
   /\ checked \in 0..1
 
-NoBugInvariant ==
+PrecommitSignerHistoryCoreSafety ==
   \A c \in Cases:
     ImplementationActions(c) = SpecActions(c)
 
-SafetyFast == NoBugInvariant
+NoBugInvariant == PrecommitSignerHistoryCoreSafety
+
+SafetyFast == PrecommitSignerHistoryCoreSafety
 
 BugHistoryDropsNewerView ==
   {} = {PreserveNewerRecord}

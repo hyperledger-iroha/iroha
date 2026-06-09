@@ -289,8 +289,10 @@ Next ==
 TypeInvariant ==
   checked = 0
 
-SafetyFast ==
+CanonicalRoundRosterMatchesSpec ==
   \A c \in Cases: ActualActions(c) = SpecActions(c)
+
+SafetyFast == CanonicalRoundRosterMatchesSpec
 
 BugAllowFutureWithoutHistory ==
   ActualActions(FutureNoHistoryEmpty) = SpecActions(FutureNoHistoryEmpty)

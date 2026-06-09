@@ -144,8 +144,10 @@ ActualOutput ==
   <<ActualBase, ActualFinishIgnoresPrevious, ActualSaturatingDurations,
     ActualBookkeepingIgnored>>
 
-SafetyFast ==
+CommitPipelineSampleMatchesSpec ==
   ActualOutput = SpecOutput
+
+SafetyFast == CommitPipelineSampleMatchesSpec
 
 BugFinishSetsTotal ==
   ActualFinishIgnoresPrevious = SpecFinishIgnoresPrevious

@@ -307,7 +307,7 @@ ActualRecord(c) ==
 RecordMatches(c) ==
   ActualRecord(c) = SpecRecord(c)
 
-SafetyFast ==
+DoubleVoteRecordingMatchesSpec ==
   /\ DetectMatches("bare_prepare_conflict")
   /\ DetectMatches("bare_commit_block_conflict")
   /\ DetectMatches("bare_commit_root_conflict")
@@ -336,6 +336,8 @@ SafetyFast ==
   /\ RecordMatches("record_swapped_duplicate")
   /\ RecordMatches("record_cross_phase_new")
   /\ RecordMatches("record_commit_root_new")
+
+SafetyFast == DoubleVoteRecordingMatchesSpec
 
 BugDetectHeightMismatchEmits ==
   DetectMatches("bare_height_mismatch")

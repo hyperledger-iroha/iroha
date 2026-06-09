@@ -164,13 +164,15 @@ BadDeferredDoesNotBlockEarlySource ==
   /\ ImplementationActionable(AuthoritativeWithBadDeferred)
   /\ ImplementationActionable(ValidationWithBadDeferred)
 
-NoBugInvariant ==
+VotePayloadActionableCoreSafety ==
   /\ ResultMatchesSpec
   /\ EachSourceActionable
   /\ DeferredIdentityMustMatch
   /\ NoSourceRejected
   /\ BadDeferredDoesNotBlockEarlySource
 
-SafetyFast == NoBugInvariant
+NoBugInvariant == VotePayloadActionableCoreSafety
+
+SafetyFast == VotePayloadActionableCoreSafety
 
 ====

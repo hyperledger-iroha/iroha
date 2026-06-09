@@ -37,6 +37,8 @@ pub mod isi {
     use iroha_data_model::isi::confidential;
     // Bring runtime upgrade ISIs into scope
     use iroha_data_model::isi::runtime_upgrade;
+    #[cfg(feature = "zk-stark")]
+    use iroha_data_model::proof::VerifyingKeyBox;
     use iroha_data_model::{
         Level,
         account::AccountController,
@@ -90,11 +92,19 @@ pub mod isi {
             SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
             SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_GAS_SCHEDULE_ID_V1,
             SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_VERSION_V1,
+            SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
+            SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_GAS_SCHEDULE_ID_V1,
+            SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_VERSION_V1,
             SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1,
             SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_GAS_SCHEDULE_ID_V1,
             SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_VERSION_V1,
+            SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1,
+            SORACLOUD_FHE_INPUT_ADMISSION_GAS_SCHEDULE_ID_V1,
+            SORACLOUD_FHE_INPUT_ADMISSION_PROOF_VERSION_V1,
             soracloud_fhe_bootstrap_key_proof_public_inputs_schema_hash_v1,
+            soracloud_fhe_full_bootstrap_execution_proof_public_inputs_schema_hash_v1,
             soracloud_fhe_full_bootstrap_material_proof_public_inputs_schema_hash_v1,
+            soracloud_fhe_input_admission_public_inputs_schema_hash_v1,
         },
         zk::{
             BackendTag, OpenVerifyEnvelope as ZkOpenVerifyEnvelope,
@@ -929,135 +939,154 @@ pub mod isi {
         Ok(())
     }
 
-    fn validate_soracloud_fhe_bootstrap_key_verifying_key_record(
+    #[derive(Clone, Copy)]
+    struct SoracloudFheStarkVerifierProfile {
+        label: &'static str,
+        circuit_id: &'static str,
+        version: u16,
+        gas_schedule_id: &'static str,
+        public_inputs_schema_hash: fn() -> [u8; 32],
+    }
+
+    const SORACLOUD_FHE_STARK_VERIFIER_PROFILES: &[SoracloudFheStarkVerifierProfile] = &[
+        SoracloudFheStarkVerifierProfile {
+            label: "FHE input admission",
+            circuit_id: SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1,
+            version: SORACLOUD_FHE_INPUT_ADMISSION_PROOF_VERSION_V1,
+            gas_schedule_id: SORACLOUD_FHE_INPUT_ADMISSION_GAS_SCHEDULE_ID_V1,
+            public_inputs_schema_hash: soracloud_fhe_input_admission_public_inputs_schema_hash_v1,
+        },
+        SoracloudFheStarkVerifierProfile {
+            label: "FHE bootstrap-key",
+            circuit_id: SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
+            version: SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_VERSION_V1,
+            gas_schedule_id: SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_GAS_SCHEDULE_ID_V1,
+            public_inputs_schema_hash:
+                soracloud_fhe_bootstrap_key_proof_public_inputs_schema_hash_v1,
+        },
+        SoracloudFheStarkVerifierProfile {
+            label: "FHE full-bootstrap material",
+            circuit_id: SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1,
+            version: SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_VERSION_V1,
+            gas_schedule_id: SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_GAS_SCHEDULE_ID_V1,
+            public_inputs_schema_hash:
+                soracloud_fhe_full_bootstrap_material_proof_public_inputs_schema_hash_v1,
+        },
+        SoracloudFheStarkVerifierProfile {
+            label: "FHE full-bootstrap execution",
+            circuit_id: SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
+            version: SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_VERSION_V1,
+            gas_schedule_id: SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_GAS_SCHEDULE_ID_V1,
+            public_inputs_schema_hash:
+                soracloud_fhe_full_bootstrap_execution_proof_public_inputs_schema_hash_v1,
+        },
+    ];
+
+    fn validate_soracloud_fhe_stark_verifying_key_records(
         id: &VerifyingKeyId,
         record: &VerifyingKeyRecord,
     ) -> Result<(), Error> {
-        if id.name != SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1
-            && record.circuit_id != SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1
-        {
-            return Ok(());
-        }
-        if id.name != SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1 {
-            return Err(invalid_smart_contract_parameter(
-                "FHE bootstrap-key verifying key id name must use the canonical v1 circuit",
-            ));
-        }
-        if !crate::zk::is_stark_fri_v1_backend(id.backend.as_str()) {
-            return Err(invalid_smart_contract_parameter(
-                "FHE bootstrap-key verifying key id backend must target STARK/FRI v1",
-            ));
-        }
-        if record.namespace != "soracloud" {
-            return Err(invalid_smart_contract_parameter(
-                "FHE bootstrap-key verifying key must be in the soracloud namespace",
-            ));
-        }
-        if record.backend != BackendTag::Stark {
-            return Err(invalid_smart_contract_parameter(
-                "FHE bootstrap-key verifying key must use STARK backend",
-            ));
-        }
-        if record.curve != "goldilocks" {
-            return Err(invalid_smart_contract_parameter(
-                "FHE bootstrap-key verifying key must use goldilocks STARK field",
-            ));
-        }
-        if record.circuit_id != SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1 {
-            return Err(invalid_smart_contract_parameter(
-                "FHE bootstrap-key verifying key must use the canonical v1 circuit",
-            ));
-        }
-        if record.version != u32::from(SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_VERSION_V1) {
-            return Err(invalid_smart_contract_parameter(
-                "FHE bootstrap-key verifying key must use the canonical v1 circuit version",
-            ));
-        }
-        if record.public_inputs_schema_hash
-            != soracloud_fhe_bootstrap_key_proof_public_inputs_schema_hash_v1()
-        {
-            return Err(invalid_smart_contract_parameter(
-                "FHE bootstrap-key verifying key public-input schema mismatch",
-            ));
-        }
-        if record.gas_schedule_id.as_deref()
-            != Some(SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_GAS_SCHEDULE_ID_V1)
-        {
-            return Err(invalid_smart_contract_parameter(
-                "FHE bootstrap-key verifying key must use the canonical gas_schedule_id",
-            ));
-        }
-        if record.status == ConfidentialStatus::Active && record.key.is_none() {
-            return Err(invalid_smart_contract_parameter(
-                "FHE bootstrap-key active verifying key bytes missing",
-            ));
+        for profile in SORACLOUD_FHE_STARK_VERIFIER_PROFILES {
+            validate_soracloud_fhe_stark_verifying_key_record(id, record, *profile)?;
         }
         Ok(())
     }
 
-    fn validate_soracloud_fhe_full_bootstrap_material_verifying_key_record(
+    fn validate_soracloud_fhe_stark_verifying_key_record(
         id: &VerifyingKeyId,
         record: &VerifyingKeyRecord,
+        profile: SoracloudFheStarkVerifierProfile,
     ) -> Result<(), Error> {
-        if id.name != SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1
-            && record.circuit_id != SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1
-        {
+        if id.name != profile.circuit_id && record.circuit_id != profile.circuit_id {
             return Ok(());
         }
-        if id.name != SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1 {
-            return Err(invalid_smart_contract_parameter(
-                "FHE full-bootstrap material verifying key id name must use the canonical v1 circuit",
-            ));
+        if id.name != profile.circuit_id {
+            return Err(invalid_smart_contract_parameter(format!(
+                "{} verifying key id name must use the canonical v1 circuit",
+                profile.label
+            )));
         }
         if !crate::zk::is_stark_fri_v1_backend(id.backend.as_str()) {
-            return Err(invalid_smart_contract_parameter(
-                "FHE full-bootstrap material verifying key id backend must target STARK/FRI v1",
-            ));
+            return Err(invalid_smart_contract_parameter(format!(
+                "{} verifying key id backend must target STARK/FRI v1",
+                profile.label
+            )));
         }
         if record.namespace != "soracloud" {
-            return Err(invalid_smart_contract_parameter(
-                "FHE full-bootstrap material verifying key must be in the soracloud namespace",
-            ));
+            return Err(invalid_smart_contract_parameter(format!(
+                "{} verifying key must be in the soracloud namespace",
+                profile.label
+            )));
         }
         if record.backend != BackendTag::Stark {
-            return Err(invalid_smart_contract_parameter(
-                "FHE full-bootstrap material verifying key must use STARK backend",
-            ));
+            return Err(invalid_smart_contract_parameter(format!(
+                "{} verifying key must use STARK backend",
+                profile.label
+            )));
         }
         if record.curve != "goldilocks" {
-            return Err(invalid_smart_contract_parameter(
-                "FHE full-bootstrap material verifying key must use goldilocks STARK field",
-            ));
+            return Err(invalid_smart_contract_parameter(format!(
+                "{} verifying key must use goldilocks STARK field",
+                profile.label
+            )));
         }
-        if record.circuit_id != SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1 {
-            return Err(invalid_smart_contract_parameter(
-                "FHE full-bootstrap material verifying key must use the canonical v1 circuit",
-            ));
+        if record.circuit_id != profile.circuit_id {
+            return Err(invalid_smart_contract_parameter(format!(
+                "{} verifying key must use the canonical v1 circuit",
+                profile.label
+            )));
         }
-        if record.version != u32::from(SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_VERSION_V1) {
-            return Err(invalid_smart_contract_parameter(
-                "FHE full-bootstrap material verifying key must use the canonical v1 circuit version",
-            ));
+        if record.version != u32::from(profile.version) {
+            return Err(invalid_smart_contract_parameter(format!(
+                "{} verifying key must use the canonical v1 circuit version",
+                profile.label
+            )));
         }
-        if record.public_inputs_schema_hash
-            != soracloud_fhe_full_bootstrap_material_proof_public_inputs_schema_hash_v1()
-        {
-            return Err(invalid_smart_contract_parameter(
-                "FHE full-bootstrap material verifying key public-input schema mismatch",
-            ));
+        if record.public_inputs_schema_hash != (profile.public_inputs_schema_hash)() {
+            return Err(invalid_smart_contract_parameter(format!(
+                "{} verifying key public-input schema mismatch",
+                profile.label
+            )));
         }
-        if record.gas_schedule_id.as_deref()
-            != Some(SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_GAS_SCHEDULE_ID_V1)
-        {
-            return Err(invalid_smart_contract_parameter(
-                "FHE full-bootstrap material verifying key must use the canonical gas_schedule_id",
-            ));
+        if record.gas_schedule_id.as_deref() != Some(profile.gas_schedule_id) {
+            return Err(invalid_smart_contract_parameter(format!(
+                "{} verifying key must use the canonical gas_schedule_id",
+                profile.label
+            )));
+        }
+        if let Some(vk) = &record.key {
+            #[cfg(feature = "zk-stark")]
+            validate_soracloud_fhe_stark_verifying_key_payload(profile, vk)?;
+            #[cfg(not(feature = "zk-stark"))]
+            let _ = vk;
         }
         if record.status == ConfidentialStatus::Active && record.key.is_none() {
-            return Err(invalid_smart_contract_parameter(
-                "FHE full-bootstrap material active verifying key bytes missing",
-            ));
+            return Err(invalid_smart_contract_parameter(format!(
+                "{} active verifying key bytes missing",
+                profile.label
+            )));
         }
+        Ok(())
+    }
+
+    #[cfg(feature = "zk-stark")]
+    fn validate_soracloud_fhe_stark_verifying_key_payload(
+        profile: SoracloudFheStarkVerifierProfile,
+        vk: &VerifyingKeyBox,
+    ) -> Result<(), Error> {
+        let payload: crate::zk_stark::StarkFriVerifyingKeyV1 = norito::decode_from_bytes(&vk.bytes)
+            .map_err(|_| {
+                invalid_smart_contract_parameter(format!(
+                    "{} verifying key has invalid STARK payload",
+                    profile.label
+                ))
+            })?;
+        crate::zk_stark::validate_stark_fri_production_verifying_key_payload(
+            &payload,
+            profile.circuit_id,
+            profile.label,
+        )
+        .map_err(invalid_smart_contract_parameter)?;
         Ok(())
     }
 
@@ -2767,8 +2796,7 @@ pub mod isi {
                     ),
                 ));
             }
-            validate_soracloud_fhe_bootstrap_key_verifying_key_record(&id, &record)?;
-            validate_soracloud_fhe_full_bootstrap_material_verifying_key_record(&id, &record)?;
+            validate_soracloud_fhe_stark_verifying_key_records(&id, &record)?;
             state_transaction
                 .world
                 .verifying_keys
@@ -6721,8 +6749,7 @@ pub mod isi {
                 ),
             ));
         }
-        validate_soracloud_fhe_bootstrap_key_verifying_key_record(id, new)?;
-        validate_soracloud_fhe_full_bootstrap_material_verifying_key_record(id, new)?;
+        validate_soracloud_fhe_stark_verifying_key_records(id, new)?;
         Ok(())
     }
 
@@ -23110,50 +23137,143 @@ pub mod isi {
                 .expect("grant manage vk");
         }
 
-        fn soracloud_bootstrap_vk_id() -> VerifyingKeyId {
-            VerifyingKeyId::new(
-                "stark/fri/sha256-goldilocks",
-                SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
+        #[derive(Clone, Copy)]
+        struct SoracloudFheVkTestProfile {
+            label: &'static str,
+            circuit_id: &'static str,
+            version: u16,
+            gas_schedule_id: &'static str,
+            public_inputs_schema_hash: fn() -> [u8; 32],
+            commitment_fill: u8,
+        }
+
+        fn soracloud_fhe_stark_vk_test_profiles() -> [SoracloudFheVkTestProfile; 4] {
+            [
+                SoracloudFheVkTestProfile {
+                    label: "input_admission",
+                    circuit_id: SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1,
+                    version: SORACLOUD_FHE_INPUT_ADMISSION_PROOF_VERSION_V1,
+                    gas_schedule_id: SORACLOUD_FHE_INPUT_ADMISSION_GAS_SCHEDULE_ID_V1,
+                    public_inputs_schema_hash:
+                        soracloud_fhe_input_admission_public_inputs_schema_hash_v1,
+                    commitment_fill: 0x90,
+                },
+                SoracloudFheVkTestProfile {
+                    label: "bootstrap_key",
+                    circuit_id: SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
+                    version: SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_VERSION_V1,
+                    gas_schedule_id: SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_GAS_SCHEDULE_ID_V1,
+                    public_inputs_schema_hash:
+                        soracloud_fhe_bootstrap_key_proof_public_inputs_schema_hash_v1,
+                    commitment_fill: 0x91,
+                },
+                SoracloudFheVkTestProfile {
+                    label: "full_bootstrap_material",
+                    circuit_id: SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1,
+                    version: SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_VERSION_V1,
+                    gas_schedule_id: SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_GAS_SCHEDULE_ID_V1,
+                    public_inputs_schema_hash:
+                        soracloud_fhe_full_bootstrap_material_proof_public_inputs_schema_hash_v1,
+                    commitment_fill: 0x94,
+                },
+                SoracloudFheVkTestProfile {
+                    label: "full_bootstrap_execution",
+                    circuit_id: SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
+                    version: SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_VERSION_V1,
+                    gas_schedule_id:
+                        SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_GAS_SCHEDULE_ID_V1,
+                    public_inputs_schema_hash:
+                        soracloud_fhe_full_bootstrap_execution_proof_public_inputs_schema_hash_v1,
+                    commitment_fill: 0x97,
+                },
+            ]
+        }
+
+        fn soracloud_fhe_stark_vk_id(profile: SoracloudFheVkTestProfile) -> VerifyingKeyId {
+            VerifyingKeyId::new("stark/fri/sha256-goldilocks", profile.circuit_id)
+        }
+
+        fn soracloud_fhe_stark_vk_record(
+            profile: SoracloudFheVkTestProfile,
+            version: u32,
+        ) -> VerifyingKeyRecord {
+            debug_assert!(
+                version <= u32::from(profile.version),
+                "test {} verifier-key version {version} exceeds canonical version {}",
+                profile.label,
+                profile.version
+            );
+            let mut record = VerifyingKeyRecord::new_with_owner(
+                version,
+                profile.circuit_id,
+                None,
+                "soracloud",
+                BackendTag::Stark,
+                "goldilocks",
+                (profile.public_inputs_schema_hash)(),
+                [profile.commitment_fill; 32],
+            );
+            record.gas_schedule_id = Some(profile.gas_schedule_id.into());
+            record
+        }
+
+        fn soracloud_bootstrap_vk_profile() -> SoracloudFheVkTestProfile {
+            soracloud_fhe_stark_vk_test_profiles()[1]
+        }
+
+        fn soracloud_full_bootstrap_material_vk_profile() -> SoracloudFheVkTestProfile {
+            soracloud_fhe_stark_vk_test_profiles()[2]
+        }
+
+        #[cfg(feature = "zk-stark")]
+        fn soracloud_fhe_stark_vk_box_for_test(
+            profile: SoracloudFheVkTestProfile,
+            n_log2: u8,
+            blowup_log2: u8,
+            queries: u16,
+        ) -> VerifyingKeyBox {
+            let payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
+                version: 1,
+                circuit_id: profile.circuit_id.to_owned(),
+                n_log2,
+                blowup_log2,
+                fold_arity: 2,
+                queries,
+                merkle_arity: 2,
+                hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
+            };
+            VerifyingKeyBox::new(
+                "stark/fri/sha256-goldilocks".into(),
+                norito::to_bytes(&payload).expect("encode Soracloud STARK verifying key"),
             )
+        }
+
+        #[cfg(feature = "zk-stark")]
+        fn attach_soracloud_fhe_stark_vk_box(
+            record: &mut VerifyingKeyRecord,
+            vk_box: VerifyingKeyBox,
+        ) {
+            record.commitment = hash_vk(&vk_box);
+            record.vk_len =
+                u32::try_from(vk_box.bytes.len()).expect("verifying key length fits into u32");
+            record.status = ConfidentialStatus::Active;
+            record.key = Some(vk_box);
+        }
+
+        fn soracloud_bootstrap_vk_id() -> VerifyingKeyId {
+            soracloud_fhe_stark_vk_id(soracloud_bootstrap_vk_profile())
         }
 
         fn soracloud_bootstrap_vk_record(version: u32) -> VerifyingKeyRecord {
-            let mut record = VerifyingKeyRecord::new_with_owner(
-                version,
-                SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
-                None,
-                "soracloud",
-                BackendTag::Stark,
-                "goldilocks",
-                soracloud_fhe_bootstrap_key_proof_public_inputs_schema_hash_v1(),
-                [0x91; 32],
-            );
-            record.gas_schedule_id =
-                Some(SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_GAS_SCHEDULE_ID_V1.into());
-            record
+            soracloud_fhe_stark_vk_record(soracloud_bootstrap_vk_profile(), version)
         }
 
         fn soracloud_full_bootstrap_material_vk_id() -> VerifyingKeyId {
-            VerifyingKeyId::new(
-                "stark/fri/sha256-goldilocks",
-                SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1,
-            )
+            soracloud_fhe_stark_vk_id(soracloud_full_bootstrap_material_vk_profile())
         }
 
         fn soracloud_full_bootstrap_material_vk_record(version: u32) -> VerifyingKeyRecord {
-            let mut record = VerifyingKeyRecord::new_with_owner(
-                version,
-                SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1,
-                None,
-                "soracloud",
-                BackendTag::Stark,
-                "goldilocks",
-                soracloud_fhe_full_bootstrap_material_proof_public_inputs_schema_hash_v1(),
-                [0x94; 32],
-            );
-            record.gas_schedule_id =
-                Some(SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_GAS_SCHEDULE_ID_V1.into());
-            record
+            soracloud_fhe_stark_vk_record(soracloud_full_bootstrap_material_vk_profile(), version)
         }
 
         const PENDING_PRODUCTION_VERIFIER_LABELS: &[&str] = &[
@@ -24898,6 +25018,157 @@ pub mod isi {
                 .expect_err("Soracloud full-bootstrap material verifier update drift must fail");
             let msg = smart_contract_error_message(err);
             assert!(msg.contains("public-input schema mismatch"));
+        }
+
+        #[cfg(feature = "zk-stark")]
+        #[test]
+        fn register_vk_accepts_soracloud_fhe_stark_verifier_payload_at_production_floor() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            grant_manage_verifying_keys(&mut stx);
+            stx.apply();
+
+            let mut stx = state_block.transaction();
+            let exec = Executor::default();
+            for profile in soracloud_fhe_stark_vk_test_profiles() {
+                let id = soracloud_fhe_stark_vk_id(profile);
+                let mut record = soracloud_fhe_stark_vk_record(profile, u32::from(profile.version));
+                let vk_box = soracloud_fhe_stark_vk_box_for_test(
+                    profile,
+                    crate::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2,
+                    crate::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2,
+                    crate::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES,
+                );
+                attach_soracloud_fhe_stark_vk_box(&mut record, vk_box);
+
+                let instr: InstructionBox = verifying_keys::RegisterVerifyingKey {
+                    id: id.clone(),
+                    record,
+                }
+                .into();
+                exec.execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
+                    .unwrap_or_else(|err| {
+                        panic!(
+                            "canonical Soracloud {} STARK verifier should register: {err:?}",
+                            profile.label
+                        )
+                    });
+                let stored = stx
+                    .world
+                    .verifying_keys
+                    .get(&id)
+                    .expect("verifying key stored");
+                assert_eq!(stored.circuit_id, profile.circuit_id);
+                assert_eq!(stored.status, ConfidentialStatus::Active);
+                assert!(stored.key.is_some());
+            }
+        }
+
+        #[cfg(feature = "zk-stark")]
+        #[test]
+        fn register_vk_rejects_soracloud_fhe_stark_verifier_payload_below_production_floor() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            grant_manage_verifying_keys(&mut stx);
+            stx.apply();
+
+            let mut stx = state_block.transaction();
+            let exec = Executor::default();
+            for profile in soracloud_fhe_stark_vk_test_profiles() {
+                let id = soracloud_fhe_stark_vk_id(profile);
+                let mut record = soracloud_fhe_stark_vk_record(profile, u32::from(profile.version));
+                let weak_n_log2 = crate::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2 - 1;
+                let vk_box = soracloud_fhe_stark_vk_box_for_test(
+                    profile,
+                    weak_n_log2,
+                    crate::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2,
+                    crate::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES,
+                );
+                attach_soracloud_fhe_stark_vk_box(&mut record, vk_box);
+
+                let instr: InstructionBox =
+                    verifying_keys::RegisterVerifyingKey { id, record }.into();
+                let err = match exec.execute_instruction(&mut stx, &ALICE_ID.clone(), instr) {
+                    Ok(()) => panic!(
+                        "Soracloud {} weak STARK verifier must fail cleanly",
+                        profile.label
+                    ),
+                    Err(err) => err,
+                };
+                let msg = smart_contract_error_message(err);
+                assert!(
+                    msg.contains("below production floor"),
+                    "unexpected msg for {}: {msg}",
+                    profile.label
+                );
+            }
+        }
+
+        #[cfg(feature = "zk-stark")]
+        #[test]
+        fn update_vk_rejects_soracloud_fhe_stark_verifier_payload_below_production_floor() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            grant_manage_verifying_keys(&mut stx);
+            stx.apply();
+
+            let profile = soracloud_fhe_stark_vk_test_profiles()[3];
+            let id = soracloud_fhe_stark_vk_id(profile);
+            let old_record = soracloud_fhe_stark_vk_record(profile, 0);
+            let mut seed_stx = state_block.transaction();
+            seed_stx
+                .world
+                .verifying_keys
+                .insert(id.clone(), old_record.clone());
+            seed_stx.world.verifying_keys_by_circuit.insert(
+                (old_record.circuit_id.clone(), old_record.version),
+                id.clone(),
+            );
+            seed_stx.apply();
+
+            let mut new_record = soracloud_fhe_stark_vk_record(profile, u32::from(profile.version));
+            let weak_n_log2 = crate::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2 - 1;
+            let vk_box = soracloud_fhe_stark_vk_box_for_test(
+                profile,
+                weak_n_log2,
+                crate::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2,
+                crate::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES,
+            );
+            attach_soracloud_fhe_stark_vk_box(&mut new_record, vk_box);
+
+            let mut stx = state_block.transaction();
+            let exec = Executor::default();
+            let instr: InstructionBox = verifying_keys::UpdateVerifyingKey {
+                id,
+                record: new_record,
+            }
+            .into();
+            let err = exec
+                .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
+                .expect_err("Soracloud weak STARK verifier update must fail");
+            let msg = smart_contract_error_message(err);
+            assert!(
+                msg.contains("below production floor"),
+                "unexpected msg: {msg}"
+            );
         }
 
         #[test]

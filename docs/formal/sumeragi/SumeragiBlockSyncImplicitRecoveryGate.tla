@@ -145,8 +145,10 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+ImplicitRecoveryMatchesSpec ==
   \A c \in Cases: Matches(c)
+
+SafetyFast == ImplicitRecoveryMatchesSpec
 
 AlreadyRequestedPreserved ==
   Matches("already_requested")

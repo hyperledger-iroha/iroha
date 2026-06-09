@@ -307,8 +307,11 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+PendingResponseFlushMatchesSpec ==
   \A c \in Cases: Matches(c)
+
+SafetyFast ==
+  PendingResponseFlushMatchesSpec
 
 FetchAbsentReturnsFalse ==
   Matches("fetch_absent")

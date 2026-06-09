@@ -250,11 +250,13 @@ TypeInvariant ==
        /\ SpecActions(c) \subseteq Actions
        /\ ImplementationActions(c) \subseteq Actions
 
-NoBugInvariant ==
+StakeSnapshotCoreSafety ==
   \A c \in Cases:
     ImplementationActions(c) = SpecActions(c)
 
-SafetyFast == NoBugInvariant
+NoBugInvariant == StakeSnapshotCoreSafety
+
+SafetyFast == StakeSnapshotCoreSafety
 
 BugSnapshotEmptyRosterReturnsSnapshot == NoBugInvariant
 BugSnapshotEmptyMapMissingFallback == NoBugInvariant

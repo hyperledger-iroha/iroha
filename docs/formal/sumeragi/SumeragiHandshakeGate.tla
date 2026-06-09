@@ -105,11 +105,14 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+HandshakeMatchesSpec ==
   /\ \A c \in ValidateCases:
        ActualValidate(c) = SpecValidate(c)
   /\ \A field \in LocalFields:
        ActualLocal(field) = SpecLocal(field)
+
+SafetyFast ==
+  HandshakeMatchesSpec
 
 BugValidateRejectsMatch ==
   ActualValidate("all_match") = SpecValidate("all_match")

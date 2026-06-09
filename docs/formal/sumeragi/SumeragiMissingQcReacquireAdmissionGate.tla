@@ -158,12 +158,15 @@ EmptyFrontierFallbackSafety ==
   /\ EmptyFallbackRejectsProposalSeen
   /\ EmptyFallbackRejectsCurrentTimedOut
 
-SafetyFast ==
+MissingQcReacquireAdmissionCoreSafety ==
   /\ DuplicateSafety
   /\ ProposalObservedSafety
   /\ NoDependencyWindowSafety
   /\ GeneralAdmissionSafety
   /\ EmptyFrontierFallbackSafety
+
+SafetyFast ==
+  MissingQcReacquireAdmissionCoreSafety
 
 DuplicateAnchors ==
   /\ DuplicateSafety

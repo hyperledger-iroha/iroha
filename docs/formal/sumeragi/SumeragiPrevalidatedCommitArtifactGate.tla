@@ -168,9 +168,12 @@ PrevalidatedCommitArtifactExactness ==
 CaseTupleExact ==
   \A c \in Cases: ActualCase(c) = SpecCase(c)
 
-SafetyFast ==
+PrevalidatedCommitArtifactFastSafety ==
   /\ PrevalidatedCommitArtifactExactness
   /\ CaseTupleExact
+
+SafetyFast ==
+  PrevalidatedCommitArtifactFastSafety
 
 BugRequiresArtifact ==
   ActualCase("no_artifact") = SpecCase("no_artifact")
