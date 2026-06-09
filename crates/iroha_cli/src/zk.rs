@@ -2838,7 +2838,7 @@ mod tests {
         )
         .expect_err("empty compact vk bytes must reject");
         assert!(
-            format!("{err}").contains("invalid CID1/Halo2 IPA verifier-key envelope"),
+            format!("{err}").contains("must be non-empty"),
             "unexpected empty compact-key error: {err}"
         );
     }
