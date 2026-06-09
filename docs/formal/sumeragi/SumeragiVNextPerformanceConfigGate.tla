@@ -197,7 +197,7 @@ ConfigOverflowSaturationAnchors ==
   /\ ActualSuspicionMs("config_overflow_cooldown") =
      InputSuspicionRaw("config_overflow_cooldown")
 
-SafetyFast ==
+VNextPerformanceConfigCoreSafety ==
   /\ \A c \in DurationCases:
        ActualDurationMillis(c) = SpecDurationMillis(c)
   /\ \A c \in ConfigCases:
@@ -219,6 +219,9 @@ SafetyFast ==
   /\ ConfigDurationConversion
   /\ ConfigDurationIndependence
   /\ ConfigOverflowSaturationAnchors
+
+SafetyFast ==
+  VNextPerformanceConfigCoreSafety
 
 BugDurationOverflowWraps ==
   ActualDurationMillis("duration_overflow") =

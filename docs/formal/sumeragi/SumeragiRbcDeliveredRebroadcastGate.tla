@@ -289,10 +289,13 @@ TickStable ==
   /\ ~ActualTick(TickDeliverBroadcast).payload_broadcast
   /\ ~ActualTick(TickDeliverBroadcast).ready_broadcast
 
-SafetyFast ==
+RbcDeliveredRebroadcastCoreSafety ==
   /\ NextDueExact
   /\ TickExact
   /\ NextStable
   /\ TickStable
+
+SafetyFast ==
+  RbcDeliveredRebroadcastCoreSafety
 
 ====

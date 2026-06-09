@@ -252,8 +252,11 @@ def _reject_output_path_smuggling(path: Path, label: str) -> None:
         raise TrustBundleError(f"{label} must use forward slashes")
     if ";" in raw:
         raise TrustBundleError(f"{label} must not contain semicolon path parameters")
+    if ":" in raw:
+        raise TrustBundleError(f"{label} must not contain URI or drive prefixes")
     if _contains_secret_material(raw) or _contains_secret_identifier_material(raw):
         raise TrustBundleError(f"{label} must not contain secret-looking material")
+    _reject_percent_encoded_path_smuggling(raw, label)
     parts = path.parts[1:] if path.is_absolute() else path.parts
     if any(part.startswith("-") for part in parts if part):
         raise TrustBundleError(f"{label} must not contain leading-dash path segments")
@@ -276,8 +279,11 @@ def _reject_raw_output_path_smuggling(raw: str, label: str) -> None:
         raise TrustBundleError(f"{label} must use forward slashes")
     if ";" in raw:
         raise TrustBundleError(f"{label} must not contain semicolon path parameters")
+    if ":" in raw:
+        raise TrustBundleError(f"{label} must not contain URI or drive prefixes")
     if _contains_secret_material(raw) or _contains_secret_identifier_material(raw):
         raise TrustBundleError(f"{label} must not contain secret-looking material")
+    _reject_percent_encoded_path_smuggling(raw, label)
     parts = raw.split("/")
     checked_parts = parts[1:] if raw.startswith("/") else parts
     if any(part == "" for part in checked_parts):
@@ -293,12 +299,18 @@ def _preflight_raw_cli_secrets(argv: list[str] | None, value_flags: set[str]) ->
     index = 0
     while index < len(raw_args):
         arg = raw_args[index]
+        if arg == "--":
+            raise TrustBundleError("argument terminator is not supported")
         if arg in value_flags:
             index += 2
             continue
         if any(arg.startswith(f"{flag}=") for flag in value_flags):
             index += 1
             continue
+        if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in arg):
+            raise TrustBundleError("CLI argument must not contain control characters")
+        if any(ord(ch) > 0x7E for ch in arg):
+            raise TrustBundleError("CLI argument must use printable ASCII")
         if _contains_secret_material(arg) or _contains_secret_identifier_material(arg):
             raise TrustBundleError("CLI argument must not contain secret-looking material")
         index += 1
@@ -309,6 +321,8 @@ def _preflight_boolean_cli_flags(argv: list[str] | None, flags: set[str]) -> Non
     index = 0
     while index < len(raw_args):
         arg = raw_args[index]
+        if arg == "--":
+            raise TrustBundleError("argument terminator is not supported")
         flag, separator, _value = arg.partition("=")
         if separator and flag in flags:
             raise TrustBundleError(f"{flag} does not take a value")
@@ -324,6 +338,8 @@ def _preflight_boolean_cli_flags(argv: list[str] | None, flags: set[str]) -> Non
 def _reject_raw_positive_int_cli_value(raw: str, flag: str) -> None:
     if raw != raw.strip() or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
         raise TrustBundleError(f"{flag} must be a positive integer")
+    if any(ord(ch) > 0x7E for ch in raw):
+        raise TrustBundleError(f"{flag} must use printable ASCII")
     try:
         value = int(raw, 10)
     except ValueError as error:
@@ -341,7 +357,7 @@ def _preflight_positive_int_cli_values(
     while index < len(raw_args):
         arg = raw_args[index]
         if arg == "--":
-            return
+            raise TrustBundleError("argument terminator is not supported")
         matched = False
         for flag in flags:
             if arg == flag:
@@ -373,7 +389,7 @@ def _preflight_output_cli_paths(argv: list[str] | None, flags: set[str]) -> None
     while index < len(raw_args):
         arg = raw_args[index]
         if arg == "--":
-            return
+            raise TrustBundleError("argument terminator is not supported")
         matched = False
         for flag in flags:
             if arg == flag:
@@ -540,7 +556,13 @@ def _require_object(value: Any, label: str) -> dict[str, Any]:
 def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -> None:
     unknown = sorted(set(value) - allowed)
     if unknown:
-        if any(_is_secret_looking_key(key) for key in unknown):
+        if any(
+            _is_secret_looking_key(key)
+            or _is_control_bearing_key(key)
+            or len(str(key)) > 128
+            or any(ord(ch) > 0x7E for ch in str(key))
+            for key in unknown
+        ) or len(unknown) > 8 or sum(len(str(key)) for key in unknown) > 256:
             raise TrustBundleError(f"{label} contains unknown keys")
         raise TrustBundleError(f"{label} contains unknown keys: {', '.join(unknown)}")
 
@@ -575,9 +597,32 @@ def _is_secret_looking_key(value: Any) -> bool:
     )
 
 
+def _is_control_bearing_key(value: Any) -> bool:
+    return any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in str(value))
+
+
+def _contains_unsafe_json_control(value: str) -> bool:
+    return any(
+        (ord(ch) < 0x20 and ch not in {"\n", "\r", "\t"}) or ord(ch) == 0x7F
+        for ch in value
+    )
+
+
 def _reject_secret_looking_identifier(value: str, label: str) -> None:
     if _contains_secret_material(value) or _is_secret_looking_key(value):
         raise TrustBundleError(f"{label} must not contain secret-looking material")
+
+
+def _reject_non_ascii_context(value: str, label: str) -> None:
+    if any(ord(ch) > 0x7E for ch in value):
+        raise TrustBundleError(f"{label} must use printable ASCII")
+
+
+def _required_context_string(bundle: dict[str, Any], key: str, label: str) -> str:
+    raw = _required_string(bundle, key, label)
+    _reject_non_ascii_context(raw, f"{label}.{key}")
+    _reject_secret_looking_identifier(raw, f"{label}.{key}")
+    return raw
 
 
 def _check_no_secret_material(value: Any, path: str = "$") -> None:
@@ -585,17 +630,52 @@ def _check_no_secret_material(value: Any, path: str = "$") -> None:
         for key, child in value.items():
             if _is_secret_looking_key(key):
                 raise TrustBundleError(f"{path} contains forbidden secret-looking field")
+            if _is_control_bearing_key(key):
+                raise TrustBundleError(f"{path} contains forbidden control-bearing field")
             _check_no_secret_material(child, f"{path}.{key}")
     elif isinstance(value, list):
         for offset, child in enumerate(value):
             _check_no_secret_material(child, f"{path}[{offset}]")
     elif isinstance(value, str):
+        if _contains_unsafe_json_control(value):
+            raise TrustBundleError(f"{path} contains unsafe control characters")
         if _contains_secret_material(value):
             raise TrustBundleError(f"{path} contains secret-looking material")
 
 
 def _has_ascii_control(value: str) -> bool:
     return any(ord(char) < 0x20 or ord(char) == 0x7F for char in value)
+
+
+def _reject_percent_encoded_path_smuggling(raw: str, label: str) -> None:
+    index = 0
+    while True:
+        index = raw.find("%", index)
+        if index == -1:
+            return
+        token = raw[index + 1 : index + 3]
+        if len(token) != 2 or any(ch not in "0123456789abcdefABCDEF" for ch in token):
+            raise TrustBundleError(f"{label} must not contain malformed percent escapes")
+        byte = int(token, 16)
+        if byte <= 0x20 or byte == 0x7F:
+            raise TrustBundleError(
+                f"{label} must not contain percent-encoded control or space characters"
+            )
+        if byte in {0x2E, 0x2F, 0x5C}:
+            raise TrustBundleError(
+                f"{label} must not contain encoded dot or separator characters"
+            )
+        if byte == 0x3B:
+            raise TrustBundleError(
+                f"{label} must not contain encoded semicolon parameters"
+            )
+        if byte in {0x23, 0x3A, 0x3F, 0x40, 0x5B, 0x5D}:
+            raise TrustBundleError(
+                f"{label} must not contain encoded URL delimiter characters"
+            )
+        if byte == 0x25:
+            raise TrustBundleError(f"{label} must not contain encoded percent characters")
+        index += 3
 
 
 def _reject_ascii_control(value: str, label: str) -> None:
@@ -668,6 +748,8 @@ def _optional_positive_cli_int(value: Any, label: str) -> int | None:
     if isinstance(value, int):
         parsed = value
     elif isinstance(value, str):
+        if any(ord(ch) > 0x7E for ch in value):
+            raise TrustBundleError(f"{label} must use printable ASCII")
         if value != value.strip() or not value.isdecimal():
             raise TrustBundleError(f"{label} must be a positive integer")
         parsed = int(value)
@@ -777,7 +859,7 @@ def _strict_base64_der(
     *,
     kind: str,
     allow_synthetic_der: bool,
-) -> tuple[bytes, str]:
+) -> tuple[bytes, str, bool]:
     raw = value.strip()
     if len(raw) > MAX_DER_BASE64_CHARS:
         raise TrustBundleError(
@@ -790,12 +872,13 @@ def _strict_base64_der(
     if not der or len(der) > MAX_DER_BYTES:
         raise TrustBundleError(f"{label} must be non-empty DER no larger than {MAX_DER_BYTES} bytes")
     _require_der_sequence(der, label)
-    if not allow_synthetic_der:
-        _require_der_kind(der, label, kind)
+    matches_kind = _der_matches_kind(der, label, kind)
+    if not allow_synthetic_der and not matches_kind:
+        _raise_der_kind_error(label, kind)
     canonical = base64.b64encode(der).decode("ascii")
     if canonical != raw:
         raise TrustBundleError(f"{label} must be canonical padded base64")
-    return der, canonical
+    return der, canonical, not matches_kind
 
 
 def _require_der_sequence(der: bytes, label: str) -> None:
@@ -863,17 +946,29 @@ def _root_children(der: bytes, label: str) -> list[DerElement]:
 
 
 def _require_der_kind(der: bytes, label: str, kind: str) -> None:
+    if not _der_matches_kind(der, label, kind):
+        _raise_der_kind_error(label, kind)
+
+
+def _der_matches_kind(der: bytes, label: str, kind: str) -> bool:
     if kind == DER_KIND_CERTIFICATE:
-        if not _looks_like_x509_certificate(der, label):
-            raise TrustBundleError(f"{label} must look like an X.509 certificate")
+        return _looks_like_x509_certificate(der, label)
     elif kind == DER_KIND_CRL:
-        if not _looks_like_x509_crl(der, label):
-            raise TrustBundleError(f"{label} must look like an X.509 CRL")
+        return _looks_like_x509_crl(der, label)
     elif kind == DER_KIND_OCSP:
-        if not _looks_like_ocsp_response(der, label):
-            raise TrustBundleError(f"{label} must look like an OCSPResponse")
+        return _looks_like_ocsp_response(der, label)
     else:  # pragma: no cover - internal caller bug.
         raise TrustBundleError(f"{label} has unsupported DER kind {kind}")
+
+
+def _raise_der_kind_error(label: str, kind: str) -> None:
+    if kind == DER_KIND_CERTIFICATE:
+        raise TrustBundleError(f"{label} must look like an X.509 certificate")
+    if kind == DER_KIND_CRL:
+        raise TrustBundleError(f"{label} must look like an X.509 CRL")
+    if kind == DER_KIND_OCSP:
+        raise TrustBundleError(f"{label} must look like an OCSPResponse")
+    raise TrustBundleError(f"{label} has unsupported DER kind {kind}")
 
 
 def _looks_like_algorithm_identifier(element: DerElement, label: str) -> bool:
@@ -948,7 +1043,7 @@ def _der_objects(
     *,
     kind: str,
     allow_synthetic_der: bool,
-) -> tuple[list[dict[str, Any]], list[str]]:
+) -> tuple[list[dict[str, Any]], list[str], bool]:
     raw = _required_list_field(bundle, key, label, "DER objects")
     if not isinstance(raw, list):
         raise TrustBundleError(f"{label}.{key} must be an array of DER objects")
@@ -958,11 +1053,16 @@ def _der_objects(
     base64_values: list[str] = []
     seen: set[str] = set()
     seen_labels: set[str] = set()
+    uses_synthetic_der = False
     for offset, item in enumerate(raw):
         obj = _require_object(item, f"{label}.{key}[{offset}]")
         _reject_unknown_keys(obj, DER_OBJECT_KEYS, f"{label}.{key}[{offset}]")
         name = _optional_string(obj, "label", f"{label}.{key}[{offset}]")
         if name is not None:
+            _reject_non_ascii_context(
+                name,
+                f"{label}.{key}[{offset}].label",
+            )
             _reject_secret_looking_identifier(
                 name,
                 f"{label}.{key}[{offset}].label",
@@ -973,12 +1073,13 @@ def _der_objects(
                 raise TrustBundleError(f"{label}.{key}[{offset}].label duplicates label")
             seen_labels.add(name)
         der_b64 = _required_string(obj, "der_base64", f"{label}.{key}[{offset}]")
-        der, canonical_b64 = _strict_base64_der(
+        der, canonical_b64, is_synthetic_der = _strict_base64_der(
             der_b64,
             f"{label}.{key}[{offset}].der_base64",
             kind=kind,
             allow_synthetic_der=allow_synthetic_der,
         )
+        uses_synthetic_der = uses_synthetic_der or is_synthetic_der
         digest = sha256_hex(der)
         declared_digest = obj.get("sha256")
         if not isinstance(declared_digest, str):
@@ -1001,7 +1102,7 @@ def _der_objects(
             entry["label"] = name
         entries.append(entry)
         base64_values.append(canonical_b64)
-    return entries, base64_values
+    return entries, base64_values, uses_synthetic_der
 
 
 def _source(
@@ -1015,8 +1116,10 @@ def _source(
     source = _require_object(raw, f"{label}.source")
     _reject_unknown_keys(source, SOURCE_KEYS, f"{label}.source")
     authority = _required_string(source, "authority", f"{label}.source")
+    _reject_non_ascii_context(authority, f"{label}.source.authority")
     _reject_secret_looking_identifier(authority, f"{label}.source.authority")
     version = _required_string(source, "version", f"{label}.source")
+    _reject_non_ascii_context(version, f"{label}.source.version")
     _reject_secret_looking_identifier(version, f"{label}.source.version")
     normalized: dict[str, Any] = {
         "authority": authority,
@@ -1100,6 +1203,8 @@ def _validate_source_url(
         raise TrustBundleError(f"{label} host must be lowercase")
     if raw_host.endswith("."):
         raise TrustBundleError(f"{label} host must not end with a dot")
+    if any(ord(ch) > 0x7E for ch in raw_host):
+        raise TrustBundleError(f"{label} host must use printable ASCII")
     _reject_secret_looking_identifier(raw_host, f"{label} host")
     _validate_host_labels(raw_host, label)
     if parsed.params or parsed.query or parsed.fragment:
@@ -1185,6 +1290,49 @@ def _profile_json_emittable(args: argparse.Namespace, summaries: list[dict[str, 
             for summary in summaries
         )
     )
+
+
+def _summary_uses_insecure_source_url(summary: dict[str, Any]) -> bool:
+    source = summary["source"]
+    parsed = urllib.parse.urlparse(source["url"])
+    return parsed.scheme == "http"
+
+
+def _reject_unused_local_overrides(
+    args: argparse.Namespace,
+    summaries: list[dict[str, Any]],
+) -> None:
+    if args.allow_record_only and not any(
+        summary["embedded_signature_policy"] != REQUIRE_VERIFIED
+        for summary in summaries
+    ):
+        raise TrustBundleError(
+            "--allow-record-only requires at least one bundle with a "
+            "non-production embedded_signature_policy"
+        )
+    if args.allow_insecure_source_url and not any(
+        _summary_uses_insecure_source_url(summary)
+        for summary in summaries
+    ):
+        raise TrustBundleError(
+            "--allow-insecure-source-url requires at least one bundle with an "
+            "http:// source URL"
+        )
+    if args.allow_synthetic_der and not any(
+        summary.get("_uses_synthetic_der") is True
+        for summary in summaries
+    ):
+        raise TrustBundleError(
+            "--allow-synthetic-der requires at least one bundle with synthetic DER"
+        )
+
+
+def _public_bundle_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in summary.items()
+        if not key.startswith("_")
+    }
 
 
 def _reject_profile_emission_blockers(
@@ -1297,10 +1445,14 @@ def _reject_legacy_ipv4_host_notation(raw_host: str, label: str) -> None:
 
 def _validate_url_path(parsed: urllib.parse.ParseResult, label: str) -> None:
     path = parsed.path
+    if any(ord(ch) > 0x7E for ch in path):
+        raise TrustBundleError(f"{label} path must use printable ASCII")
     if "\\" in path:
         raise TrustBundleError(f"{label} path must use forward slashes")
     if ";" in path:
         raise TrustBundleError(f"{label} path must not contain semicolon parameters")
+    if any(token in path for token in (":", "@", "[", "]")):
+        raise TrustBundleError(f"{label} path must not contain URL delimiter characters")
     segments = path.split("/")
     checked_segments = segments[1:] if path.startswith("/") else segments
     if any(segment == "" for segment in checked_segments[:-1]):
@@ -1318,6 +1470,10 @@ def _validate_url_path(parsed: urllib.parse.ParseResult, label: str) -> None:
         raise TrustBundleError(f"{label} path must not contain encoded URL delimiter characters")
     if "%25" in lowered:
         raise TrustBundleError(f"{label} path must not contain encoded percent characters")
+    if re.search(r"%[89a-f][0-9a-f]", lowered):
+        raise TrustBundleError(
+            f"{label} path must not contain percent-encoded non-ASCII bytes"
+        )
 
 
 def _merge_unique(values: list[str], additions: list[str], label: str) -> list[str]:
@@ -1384,11 +1540,11 @@ def verify_bundle(
 
     profile_id = _required_profile_id(bundle, "profile_id", str(path))
     rail = _required_rail(bundle, "rail", str(path))
-    environment = _required_string(bundle, "environment", str(path))
-    _reject_secret_looking_identifier(environment, f"{path}.environment")
+    environment = _required_context_string(bundle, "environment", str(path))
     if "embedded_signature_policy" not in bundle:
         raise TrustBundleError(f"{path}.embedded_signature_policy must be recorded")
     policy = _required_string(bundle, "embedded_signature_policy", str(path))
+    _reject_non_ascii_context(policy, f"{path}.embedded_signature_policy")
     _reject_secret_looking_identifier(policy, f"{path}.embedded_signature_policy")
     if not isinstance(policy, str) or policy not in POLICIES:
         raise TrustBundleError(f"{path}.embedded_signature_policy is unsupported")
@@ -1404,28 +1560,28 @@ def verify_bundle(
     revoked_pin_values = _sha256_list(bundle, "revoked_certificate_sha256", str(path))
     policy_oids = _oid_list(bundle, "x509_required_certificate_policy_oids", str(path))
 
-    trust_anchors, trust_anchor_der_values = _der_objects(
+    trust_anchors, trust_anchor_der_values, trust_anchor_uses_synthetic_der = _der_objects(
         bundle,
         "x509_trust_anchors",
         str(path),
         kind=DER_KIND_CERTIFICATE,
         allow_synthetic_der=allow_synthetic_der,
     )
-    revoked_certificates, _revoked_der_values = _der_objects(
+    revoked_certificates, _revoked_der_values, revoked_uses_synthetic_der = _der_objects(
         bundle,
         "revoked_certificates",
         str(path),
         kind=DER_KIND_CERTIFICATE,
         allow_synthetic_der=allow_synthetic_der,
     )
-    crls, crl_values = _der_objects(
+    crls, crl_values, crl_uses_synthetic_der = _der_objects(
         bundle,
         "x509_crls",
         str(path),
         kind=DER_KIND_CRL,
         allow_synthetic_der=allow_synthetic_der,
     )
-    ocsp_responses, ocsp_values = _der_objects(
+    ocsp_responses, ocsp_values, ocsp_uses_synthetic_der = _der_objects(
         bundle,
         "x509_ocsp_responses",
         str(path),
@@ -1529,6 +1685,12 @@ def verify_bundle(
         ],
         "profile_overrides": profile_overrides,
     }
+    summary["_uses_synthetic_der"] = (
+        trust_anchor_uses_synthetic_der
+        or revoked_uses_synthetic_der
+        or crl_uses_synthetic_der
+        or ocsp_uses_synthetic_der
+    )
     summary["bundle_sha256"] = sha256_hex(_canonical_json_bytes(bundle))
     return summary
 
@@ -1561,9 +1723,11 @@ def run(args: argparse.Namespace) -> int:
         for path in bundle_paths
     ]
     _reject_profile_emission_blockers(args, summaries)
+    _reject_unused_local_overrides(args, summaries)
     _reject_duplicate_summary_field(summaries, "bundle_sha256", "bundles")
     _reject_duplicate_summary_field(summaries, "profile_id", "bundles")
     profile_json_emittable = _profile_json_emittable(args, summaries)
+    public_summaries = [_public_bundle_summary(summary) for summary in summaries]
     profile_text = None
     profile_json_sha256 = None
     if args.emit_profile_json is not None:
@@ -1581,7 +1745,7 @@ def run(args: argparse.Namespace) -> int:
         "profile_json_emitted": args.emit_profile_json is not None,
         "profile_json_emittable": profile_json_emittable,
         "profile_json_sha256": profile_json_sha256,
-        "bundles": summaries,
+        "bundles": public_summaries,
     }
     output[SUMMARY_DIGEST_FIELD] = sha256_hex(_canonical_json_bytes(output))
     text = json.dumps(output, indent=2, sort_keys=True) + "\n"
@@ -1595,7 +1759,8 @@ def run(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Verify ISO 20022 XMLDSig/XAdES operator trust bundle JSON."
+        description="Verify ISO 20022 XMLDSig/XAdES operator trust bundle JSON.",
+        allow_abbrev=False,
     )
     parser.add_argument(
         "--bundle",

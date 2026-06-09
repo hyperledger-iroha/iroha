@@ -555,7 +555,10 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "crossSdkFixtureParityArtifact",
             "nativeProverBundle verifierKeyHash must match destinationBinding",
             "SCCP_NATIVE_EVM_PROVER_FORBIDDEN_ARTIFACT_MARKERS",
-            "SCCP_NATIVE_EVM_PROVER_MIN_ARTIFACT_BYTES_V1",
+            "SCCP_NATIVE_EVM_PROVER_MIN_PROOF_ARTIFACT_BYTES_V1",
+            "SCCP_NATIVE_EVM_PROVER_MIN_PROVING_KEY_BYTES_V1",
+            "SCCP_NATIVE_EVM_PROVER_MIN_VERIFIER_KEY_BYTES_V1",
+            "SCCP_NATIVE_EVM_PROVER_MIN_SUPPORT_ARTIFACT_BYTES_V1",
             "assertNativeEvmProverArtifactHasProductionSize",
             "must be at least",
             "contains forbidden prover dependency marker",
@@ -604,7 +607,10 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "crossSdkFixtureParityArtifact",
             "nativeProverBundle verifierKeyHash must match destinationBinding",
             "SCCP_NATIVE_EVM_PROVER_FORBIDDEN_ARTIFACT_MARKERS",
-            "SCCP_NATIVE_EVM_PROVER_MIN_ARTIFACT_BYTES_V1",
+            "SCCP_NATIVE_EVM_PROVER_MIN_PROOF_ARTIFACT_BYTES_V1",
+            "SCCP_NATIVE_EVM_PROVER_MIN_PROVING_KEY_BYTES_V1",
+            "SCCP_NATIVE_EVM_PROVER_MIN_VERIFIER_KEY_BYTES_V1",
+            "SCCP_NATIVE_EVM_PROVER_MIN_SUPPORT_ARTIFACT_BYTES_V1",
             "assertNativeEvmProverArtifactHasProductionSize",
             "must be at least",
             "requireEthereumMainnetVerifiedNativeEvmProverArtifactsForRequest",
@@ -675,7 +681,7 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "crossSdkFixtureParityArtifact:",
             "flaggedArtifactBytes",
             "tinyProofArtifactBytes",
-            "proofArtifactBytes must be at least 256 bytes",
+            "proofArtifactBytes must be at least 65536 bytes",
             "proofArtifactBytes contains forbidden prover dependency marker",
             "verified native EVM prover artifacts",
             "buildEthereumCalldata({ proofResult })",
@@ -716,7 +722,7 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "nativeProverSelfTest",
             "ipfs:proof-artifact.bin",
             "artifacts/eth-mainnet/proof.wasm",
-            "proofArtifactBytes must be at least 256 bytes",
+            "proofArtifactBytes must be at least 65536 bytes",
         ),
     },
     "swift-sdk": {
@@ -1539,6 +1545,10 @@ def test_release_readiness_active_launch_policy_is_ethereum_mainnet() -> None:
     assert report.ACTIVE_LAUNCH_CHAIN == "eth"
     assert report.ACTIVE_LAUNCH_POLICY == "EthereumMainnetLane"
     assert report.ACTIVE_LAUNCH_DISPLAY == "Ethereum mainnet"
+    assert (
+        report.ACTIVE_LAUNCH_ROUTE_CANARY_EVIDENCE_SOURCE
+        == "evm_message_proof_accepted_transaction"
+    )
 
 
 def test_release_readiness_submission_surfaces_match_supported_launch_scope() -> None:
@@ -1900,6 +1910,1094 @@ def test_release_readiness_report_guards_ethereum_beacon_rest_execution_payload_
         and (
             "missing marker: execution payload receipts_root must match "
             "block.receiptsRoot"
+        )
+        in error
+        for error in errors
+    )
+
+
+def test_release_readiness_report_guards_ethereum_inbound_adversarial_gate_inventory(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must pin Ethereum inbound adversarial guards."""
+
+    report = load_report_module()
+    assert report._ethereum_inbound_adversarial_gate_inventory_errors() == []
+
+    sparse_test = tmp_path / "sccpEthereumMainnet.test.js"
+    sparse_test.write_text("failedReceipt\n", encoding="utf-8")
+    errors = report._ethereum_inbound_adversarial_gate_inventory_errors(
+        (
+            (
+                sparse_test,
+                (
+                    "failedReceipt",
+                    "duplicateReceipt",
+                    "/receiptProof\\.sourceEventDigest must match receipt source event/u",
+                ),
+            ),
+        )
+    )
+
+    assert any(
+        "Ethereum mainnet inbound adversarial SDK test inventory" in error
+        and str(sparse_test) in error
+        and "missing marker: duplicateReceipt" in error
+        for error in errors
+    )
+    assert any(
+        "Ethereum mainnet inbound adversarial SDK test inventory" in error
+        and (
+            "missing marker: /receiptProof\\.sourceEventDigest must match "
+            "receipt source event/u"
+        )
+        in error
+        for error in errors
+    )
+
+
+def test_release_readiness_report_guards_bsc_inbound_adversarial_gate_inventory(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must pin BSC inbound adversarial guards."""
+
+    report = load_report_module()
+    assert report._bsc_inbound_adversarial_gate_inventory_errors() == []
+
+    sparse_test = tmp_path / "sccpBscMainnet.test.js"
+    sparse_test.write_text(
+        "BscMainnetSccp requires full receipt proof evidence before inbound proving\n",
+        encoding="utf-8",
+    )
+    errors = report._bsc_inbound_adversarial_gate_inventory_errors(
+        (
+            (
+                sparse_test,
+                (
+                    "BscMainnetSccp requires full receipt proof evidence before inbound proving",
+                    "callbackEvidence.receiptProof.blockHash",
+                    "callbackEvidence.sourceEventDigest",
+                ),
+            ),
+        )
+    )
+
+    assert any(
+        "BSC mainnet inbound adversarial SDK test inventory" in error
+        and str(sparse_test) in error
+        and "missing marker: callbackEvidence.receiptProof.blockHash" in error
+        for error in errors
+    )
+    assert any(
+        "BSC mainnet inbound adversarial SDK test inventory" in error
+        and "missing marker: callbackEvidence.sourceEventDigest" in error
+        for error in errors
+    )
+
+
+def test_release_readiness_report_guards_bsc_route_config_canonical_manifest_gate_inventory(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must pin BSC route-config manifest guards."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    assert report._bsc_route_config_canonical_manifest_gate_inventory_errors() == []
+
+    sparse_script = tmp_path / "sccp_bsc_taira_xor_deploy.mjs"
+    sparse_script.write_text(
+        "function canonicalRecordString(value, label) {}\n",
+        encoding="utf-8",
+    )
+    errors = report._bsc_route_config_canonical_manifest_gate_inventory_errors(
+        (
+            (
+                sparse_script,
+                verifier.BSC_ROUTE_CONFIG_CANONICAL_MANIFEST_MARKERS[0][1],
+            ),
+        )
+    )
+
+    assert any(
+        "SCCP BSC route-config canonical-manifest source inventory" in error
+        and str(sparse_script) in error
+        and "missing marker: function normalizeCanonicalEvmAddress" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP BSC route-config canonical-manifest source inventory" in error
+        and "missing marker: route manifest chainIdHex must be canonical lowercase hex."
+        in error
+        for error in errors
+    )
+
+
+def test_release_readiness_report_guards_tron_route_config_canonical_manifest_gate_inventory(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must pin TRON route-config manifest guards."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    assert report._tron_route_config_canonical_manifest_gate_inventory_errors() == []
+
+    sparse_test = tmp_path / "sccp_tron_taira_xor_deploy.test.mjs"
+    sparse_test.write_text(
+        "TRON route-config rejects malformed or foreign route manifests\n",
+        encoding="utf-8",
+    )
+    errors = report._tron_route_config_canonical_manifest_gate_inventory_errors(
+        (
+            (
+                sparse_test,
+                verifier.TRON_ROUTE_CONFIG_CANONICAL_MANIFEST_MARKERS[1][1],
+            ),
+        )
+    )
+
+    assert any(
+        "SCCP TRON route-config canonical-manifest source inventory" in error
+        and str(sparse_test) in error
+        and "missing marker: tronNetwork: \"TRON-MAINNET\"" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP TRON route-config canonical-manifest source inventory" in error
+        and "missing marker: offlineFullTomlSha256: routeHash(\"offline-full-toml\").toUpperCase()"
+        in error
+        for error in errors
+    )
+
+
+def test_release_readiness_report_guards_tron_runtime_route_manifest_gate_inventory(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must pin TRON runtime route manifests."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    assert report._tron_runtime_route_manifest_gate_inventory_errors() == []
+
+    sparse_source = tmp_path / "user.rs"
+    sparse_source.write_text(
+        "fn validate_tron_production_metadata() {}\n",
+        encoding="utf-8",
+    )
+    errors = report._tron_runtime_route_manifest_gate_inventory_errors(
+        (
+            (
+                sparse_source,
+                verifier.TRON_RUNTIME_ROUTE_MANIFEST_MARKERS[0][1],
+            ),
+        )
+    )
+
+    assert any(
+        "SCCP TRON runtime route-manifest source inventory" in error
+        and str(sparse_source) in error
+        and "missing marker: fn expected_tron_destination_binding_key(" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP TRON runtime route-manifest source inventory" in error
+        and "missing marker: fn production_ready_tron_route_requires_offline_full_toml_hash()"
+        in error
+        for error in errors
+    )
+
+
+def test_release_readiness_report_guards_all_lanes_route_canary_scalar_gate_inventory(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must pin all-lanes route-canary scalars."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    assert report._all_lanes_route_canary_scalar_gate_inventory_errors() == []
+
+    sparse_test = tmp_path / "sccp_all_lanes_evidence_test.py"
+    sparse_test.write_text(
+        "def test_all_lanes_release_checklist_rejects_malformed_route_canary_scalars():\n",
+        encoding="utf-8",
+    )
+    errors = report._all_lanes_route_canary_scalar_gate_inventory_errors(
+        (
+            (
+                sparse_test,
+                verifier.ALL_LANES_ROUTE_CANARY_SCALAR_MARKERS[1][1],
+            ),
+        )
+    )
+
+    assert any(
+        "SCCP all-lanes route-canary scalar source inventory" in error
+        and str(sparse_test) in error
+        and 'missing marker: "status",' in error
+        for error in errors
+    )
+    assert any(
+        "SCCP all-lanes route-canary scalar source inventory" in error
+        and 'missing marker: " evm_message_proof_accepted_transaction "'
+        in error
+        for error in errors
+    )
+
+
+def test_release_readiness_report_guards_all_lanes_governed_blocker_schema_gate_inventory(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must pin governed blocker schemas."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    assert report._all_lanes_governed_blocker_schema_gate_inventory_errors() == []
+
+    sparse_test = tmp_path / "sccp_all_lanes_evidence_test.py"
+    sparse_test.write_text(
+        "def test_all_lanes_evidence_rejects_malformed_governed_blocker_containers():\n",
+        encoding="utf-8",
+    )
+    errors = report._all_lanes_governed_blocker_schema_gate_inventory_errors(
+        (
+            (
+                sparse_test,
+                verifier.ALL_LANES_GOVERNED_BLOCKER_SCHEMA_MARKERS[1][1],
+            ),
+        )
+    )
+
+    assert any(
+        "SCCP all-lanes governed blocker schema source inventory" in error
+        and str(sparse_test) in error
+        and 'missing marker: eth_destination["blockers"] = "operator says destination rollout is ready"'
+        in error
+        for error in errors
+    )
+    assert any(
+        "SCCP all-lanes governed blocker schema source inventory" in error
+        and 'missing marker: sol_route["blockers"] = [" route canary still pending"]'
+        in error
+        for error in errors
+    )
+
+
+def test_release_readiness_report_guards_all_lanes_release_checklist_exact_boolean_gate_inventory(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must pin all-lanes exact-boolean checks."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    assert (
+        report._all_lanes_release_checklist_exact_boolean_gate_inventory_errors()
+        == []
+    )
+
+    sparse_script = tmp_path / "sccp_all_lanes_evidence.py"
+    sparse_script.write_text(
+        '"ready": all(item["ready"] is True for item in items)\n',
+        encoding="utf-8",
+    )
+    errors = report._all_lanes_release_checklist_exact_boolean_gate_inventory_errors(
+        (
+            (
+                sparse_script,
+                verifier.ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS[0][1],
+            ),
+        )
+    )
+
+    assert any(
+        "SCCP all-lanes release-checklist exact-boolean source inventory" in error
+        and str(sparse_script) in error
+        and 'missing marker: records.get(key) is not True' in error
+        for error in errors
+    )
+    assert any(
+        "SCCP all-lanes release-checklist exact-boolean source inventory" in error
+        and 'missing marker: return 0 if summary["production_ready"] is True else 1'
+        in error
+        for error in errors
+    )
+
+
+def test_release_readiness_report_guards_active_launch_checklist_schema_gate_inventory(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must pin active-launch checklist schemas."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    assert report._active_launch_checklist_schema_gate_inventory_errors() == []
+
+    sparse_report = tmp_path / "sccp_release_readiness_report.py"
+    sparse_report.write_text(
+        "def _active_launch_release_checklist(evidence, native_prover_bundle):\n",
+        encoding="utf-8",
+    )
+    errors = report._active_launch_checklist_schema_gate_inventory_errors(
+        (
+            (
+                sparse_report,
+                verifier.ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS[0][1],
+            ),
+        )
+    )
+
+    assert any(
+        "SCCP active-launch checklist schema source inventory" in error
+        and str(sparse_report) in error
+        and 'missing marker: release_checklist["ready"] is True' in error
+        for error in errors
+    )
+    assert any(
+        "SCCP active-launch checklist schema source inventory" in error
+        and "missing marker: _active_launch_route_allowlist_binding_blockers(lane_label, lane)"
+        in error
+        for error in errors
+    )
+
+
+def test_release_readiness_report_guards_release_manifest_readiness_flags_gate_inventory(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must pin exact release manifest readiness flags."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    assert report._sccp_release_manifest_readiness_flags_gate_inventory_errors() == []
+
+    sparse_bundle = tmp_path / "sccp_release_bundle.py"
+    sparse_bundle.write_text(
+        "def _release_bundle_manifest(output_dir, report, artifact_paths):\n",
+        encoding="utf-8",
+    )
+    errors = report._sccp_release_manifest_readiness_flags_gate_inventory_errors(
+        (
+            (
+                sparse_bundle,
+                verifier.SCCP_RELEASE_MANIFEST_READINESS_FLAGS_MARKERS[0][1],
+            ),
+        )
+    )
+
+    assert any(
+        "SCCP release manifest readiness-flags source inventory" in error
+        and str(sparse_bundle) in error
+        and "missing marker: Build the release manifest without truthy-coercing readiness fields."
+        in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release manifest readiness-flags source inventory" in error
+        and 'missing marker: "corridor_ready": report["corridor"]["production_ready"]'
+        in error
+        for error in errors
+    )
+
+
+def test_release_readiness_report_guards_release_manifest_artifact_set_order_gate_inventory(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must pin manifest artifact set/order checks."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    assert (
+        report._sccp_release_manifest_artifact_set_order_gate_inventory_errors()
+        == []
+    )
+
+    sparse_verifier = tmp_path / "sccp_verify_release_bundle.py"
+    sparse_verifier.write_text(
+        "def _referenced_report_artifact_paths(report):\n",
+        encoding="utf-8",
+    )
+    errors = (
+        report._sccp_release_manifest_artifact_set_order_gate_inventory_errors(
+            (
+                (
+                    sparse_verifier,
+                    verifier.SCCP_RELEASE_MANIFEST_ARTIFACT_SET_ORDER_MARKERS[1][1],
+                ),
+            )
+        )
+    )
+
+    assert any(
+        "SCCP release manifest artifact-set/order source inventory" in error
+        and str(sparse_verifier) in error
+        and "missing marker: REQUIRED_ARTIFACT_PATHS = (" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release manifest artifact-set/order source inventory" in error
+        and "missing marker: manifest artifact order does not match canonical"
+        in error
+        for error in errors
+    )
+
+
+def test_release_readiness_report_guards_release_public_blocker_list_schema_gate_inventory(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must pin public blocker-list schemas."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    assert (
+        report._sccp_release_public_blocker_list_schema_gate_inventory_errors()
+        == []
+    )
+
+    sparse_verifier = tmp_path / "sccp_verify_release_bundle.py"
+    sparse_verifier.write_text(
+        "def _string_list_field_errors(label, payload, field, *, allow_empty):\n",
+        encoding="utf-8",
+    )
+    errors = (
+        report._sccp_release_public_blocker_list_schema_gate_inventory_errors(
+            (
+                (
+                    sparse_verifier,
+                    verifier.SCCP_RELEASE_PUBLIC_BLOCKER_LIST_SCHEMA_MARKERS[0][1],
+                ),
+            )
+        )
+    )
+
+    assert any(
+        "SCCP release public blocker-list schema source inventory" in error
+        and str(sparse_verifier) in error
+        and "missing marker: must not contain duplicate strings" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release public blocker-list schema source inventory" in error
+        and "missing marker: `<invalid blockers>`" in error
+        for error in errors
+    )
+
+
+def test_release_readiness_report_guards_release_public_scalar_text_schema_gate_inventory(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must pin public scalar-text schemas."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    assert (
+        report._sccp_release_public_scalar_text_schema_gate_inventory_errors()
+        == []
+    )
+
+    sparse_verifier = tmp_path / "sccp_verify_release_bundle.py"
+    sparse_verifier.write_text(
+        "def _non_empty_string_field_errors(label, payload, field):\n",
+        encoding="utf-8",
+    )
+    errors = report._sccp_release_public_scalar_text_schema_gate_inventory_errors(
+        (
+            (
+                sparse_verifier,
+                verifier.SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS[0][1],
+            ),
+        )
+    )
+
+    assert any(
+        "SCCP release public scalar-text schema source inventory" in error
+        and str(sparse_verifier) in error
+        and "missing marker: def _cryptographic_evidence_row_schema_errors(" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release public scalar-text schema source inventory" in error
+        and "missing marker: for field in (\"status\", \"evidence_source\"):" in error
+        for error in errors
+    )
+
+
+def test_release_readiness_report_guards_release_notes_attachment_invariants_gate_inventory(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must pin release-notes attachment invariants."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    assert (
+        report._sccp_release_notes_attachment_invariants_gate_inventory_errors()
+        == []
+    )
+
+    sparse_verifier = tmp_path / "sccp_verify_release_bundle.py"
+    sparse_verifier.write_text(
+        "def _release_notes_attachment_invariant_errors(report, artifacts, notes):\n",
+        encoding="utf-8",
+    )
+    errors = report._sccp_release_notes_attachment_invariants_gate_inventory_errors(
+        (
+            (
+                sparse_verifier,
+                verifier.SCCP_RELEASE_NOTES_ATTACHMENT_INVARIANTS_MARKERS[1][1],
+            ),
+        )
+    )
+
+    assert any(
+        "SCCP release-notes attachment invariants source inventory" in error
+        and str(sparse_verifier) in error
+        and "missing marker: release notes attachment missing canonical title"
+        in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release-notes attachment invariants source inventory" in error
+        and "missing marker: release notes attachment does not list manifest.json"
+        in error
+        for error in errors
+    )
+
+
+def test_release_readiness_report_guards_readiness_markdown_invariants_gate_inventory(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must pin public Markdown invariants."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    assert report._sccp_readiness_markdown_invariants_gate_inventory_errors() == []
+
+    sparse_verifier = tmp_path / "sccp_verify_release_bundle.py"
+    sparse_verifier.write_text(
+        "def _readiness_markdown_invariant_errors(report, markdown):\n",
+        encoding="utf-8",
+    )
+    errors = report._sccp_readiness_markdown_invariants_gate_inventory_errors(
+        (
+            (
+                sparse_verifier,
+                verifier.SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS[1][1],
+            ),
+        )
+    )
+
+    assert any(
+        "SCCP readiness Markdown invariants source inventory" in error
+        and str(sparse_verifier) in error
+        and "missing marker: READINESS_MARKDOWN_REQUIRED_SECTIONS" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP readiness Markdown invariants source inventory" in error
+        and "missing marker: readiness report Markdown does not match readiness report JSON"
+        in error
+        for error in errors
+    )
+
+
+def test_release_readiness_report_guards_ethereum_outbound_precallback_gate_inventory(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must pin Ethereum outbound pre-callback guards."""
+
+    report = load_report_module()
+    assert report._ethereum_outbound_precallback_gate_inventory_errors() == []
+
+    sparse_test = tmp_path / "sccpEthereumMainnet.test.js"
+    sparse_test.write_text(
+        "Ethereum outbound prover callback must not see BSC requests\n",
+        encoding="utf-8",
+    )
+    errors = report._ethereum_outbound_precallback_gate_inventory_errors(
+        (
+            (
+                sparse_test,
+                (
+                    "Ethereum outbound prover callback must not see BSC requests",
+                    "assert.equal(outboundProverCalled, false)",
+                    "proofArtifactHash and provingKeyHash must match request",
+                ),
+            ),
+        )
+    )
+
+    assert any(
+        "Ethereum mainnet outbound pre-callback SDK test inventory" in error
+        and str(sparse_test) in error
+        and "missing marker: assert.equal(outboundProverCalled, false)" in error
+        for error in errors
+    )
+    assert any(
+        "Ethereum mainnet outbound pre-callback SDK test inventory" in error
+        and "missing marker: proofArtifactHash and provingKeyHash must match request"
+        in error
+        for error in errors
+    )
+
+
+def test_release_readiness_report_guards_ethereum_outbound_provider_validation_gate_inventory(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must pin Ethereum outbound provider guards."""
+
+    report = load_report_module()
+    assert report._ethereum_outbound_provider_validation_gate_inventory_errors() == []
+
+    sparse_sdk = tmp_path / "sccp.py"
+    sparse_sdk.write_text(
+        'provider = options.get("execution_provider", self.execution_provider)\n',
+        encoding="utf-8",
+    )
+    errors = report._ethereum_outbound_provider_validation_gate_inventory_errors(
+        (
+            (
+                sparse_sdk,
+                (
+                    'provider = options.get("execution_provider", self.execution_provider)',
+                    "await self.validate_execution_provider_mainnet(provider)",
+                    "return await _maybe_await(submitter(dict(submission), options))",
+                ),
+            ),
+        )
+    )
+
+    assert any(
+        "Ethereum mainnet outbound provider validation source inventory" in error
+        and str(sparse_sdk) in error
+        and (
+            "missing marker: await self.validate_execution_provider_mainnet"
+            "(provider)"
+        )
+        in error
+        for error in errors
+    )
+    assert any(
+        "Ethereum mainnet outbound provider validation source inventory" in error
+        and (
+            "missing marker: return await _maybe_await"
+            "(submitter(dict(submission), options))"
+        )
+        in error
+        for error in errors
+    )
+
+
+def test_release_readiness_report_guards_ethereum_local_admission_gate_inventory(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must pin Ethereum local-admission guards."""
+
+    report = load_report_module()
+    assert report._ethereum_local_admission_gate_inventory_errors() == []
+
+    sparse_test = tmp_path / "sccpEthereumMainnet.test.js"
+    sparse_test.write_text(
+        "EthereumMainnetSccp builds ETH -> SORA local-admission submissions\n",
+        encoding="utf-8",
+    )
+    errors = report._ethereum_local_admission_gate_inventory_errors(
+        (
+            (
+                sparse_test,
+                (
+                    "EthereumMainnetSccp builds ETH -> SORA local-admission submissions",
+                    "sourceVerifierMaterialHash must not be zero",
+                    "metadata is not canonical",
+                ),
+            ),
+        )
+    )
+
+    assert any(
+        "Ethereum mainnet local-admission SDK test inventory" in error
+        and str(sparse_test) in error
+        and "missing marker: sourceVerifierMaterialHash must not be zero" in error
+        for error in errors
+    )
+    assert any(
+        "Ethereum mainnet local-admission SDK test inventory" in error
+        and "missing marker: metadata is not canonical" in error
+        for error in errors
+    )
+
+
+def test_release_readiness_report_guards_ethereum_receipt_root_zero_gate_inventory(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must pin Ethereum receipt-root zero guards."""
+
+    report = load_report_module()
+    assert report._ethereum_receipt_root_zero_gate_inventory_errors() == []
+
+    sparse_test = tmp_path / "SourceSccpProofHashesTest.kt"
+    sparse_test.write_text(
+        "SccpSourceProofs.canonicalEvmReceiptRootMptValue(zeroHash)\n",
+        encoding="utf-8",
+    )
+    errors = report._ethereum_receipt_root_zero_gate_inventory_errors(
+        (
+            (
+                sparse_test,
+                (
+                    "SccpSourceProofs.canonicalEvmReceiptRootMptValue(zeroHash)",
+                    "assertFailsWith<IllegalArgumentException>",
+                ),
+            ),
+        )
+    )
+
+    assert any(
+        "Ethereum mainnet receipt-root zero rejection SDK test inventory" in error
+        and str(sparse_test) in error
+        and "missing marker: assertFailsWith<IllegalArgumentException>" in error
+        for error in errors
+    )
+
+
+def test_release_readiness_report_guards_ethereum_receipt_rlp_zero_topic_gate_inventory(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must pin Ethereum receipt-RLP zero-topic guards."""
+
+    report = load_report_module()
+    assert report._ethereum_receipt_rlp_zero_topic_gate_inventory_errors() == []
+
+    sparse_test = tmp_path / "sccpEthereumMainnet.test.js"
+    sparse_test.write_text("zeroTopicReceiptTrieProof\n", encoding="utf-8")
+    errors = report._ethereum_receipt_rlp_zero_topic_gate_inventory_errors(
+        (
+            (
+                sparse_test,
+                (
+                    "zeroTopicReceiptTrieProof",
+                    'topics: [hex32("00")]',
+                ),
+            ),
+        )
+    )
+
+    assert any(
+        "Ethereum mainnet receipt RLP zero-topic SDK test inventory" in error
+        and str(sparse_test) in error
+        and 'missing marker: topics: [hex32("00")]' in error
+        for error in errors
+    )
+
+
+def test_release_readiness_report_guards_ethereum_receipt_rlp_zero_address_gate_inventory(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must pin Ethereum receipt-RLP zero-address guards."""
+
+    report = load_report_module()
+    assert report._ethereum_receipt_rlp_zero_address_gate_inventory_errors() == []
+
+    sparse_test = tmp_path / "sccpEthereumMainnet.test.js"
+    sparse_test.write_text("zeroAddressReceiptTrieProof\n", encoding="utf-8")
+    errors = report._ethereum_receipt_rlp_zero_address_gate_inventory_errors(
+        (
+            (
+                sparse_test,
+                (
+                    "zeroAddressReceiptTrieProof",
+                    'address: `0x${"00".repeat(20)}`',
+                ),
+            ),
+        )
+    )
+
+    assert any(
+        "Ethereum mainnet receipt RLP zero-address SDK test inventory" in error
+        and str(sparse_test) in error
+        and 'missing marker: address: `0x${"00".repeat(20)}`' in error
+        for error in errors
+    )
+
+
+def test_release_readiness_report_guards_ethereum_receipt_source_event_context_gate_inventory(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must pin Ethereum source-event context guards."""
+
+    report = load_report_module()
+    assert report._ethereum_receipt_source_event_context_gate_inventory_errors() == []
+
+    sparse_test = tmp_path / "sccp_evm_receipt_proof_evidence_test.py"
+    sparse_test.write_text(
+        "test_collect_receipt_proof_rejects_source_event_missing_context_fields\n",
+        encoding="utf-8",
+    )
+    errors = report._ethereum_receipt_source_event_context_gate_inventory_errors(
+        (
+            (
+                sparse_test,
+                (
+                    "test_collect_receipt_proof_rejects_source_event_missing_context_fields",
+                    'for field in ("transactionHash", "blockHash", "blockNumber")',
+                ),
+            ),
+        )
+    )
+
+    assert any(
+        "Ethereum mainnet source-event context SDK test inventory" in error
+        and str(sparse_test) in error
+        and (
+            'missing marker: for field in ("transactionHash", "blockHash", '
+            '"blockNumber")'
+        )
+        in error
+        for error in errors
+    )
+
+
+def test_release_readiness_report_guards_ethereum_receipt_source_event_mode_gate_inventory(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must pin Ethereum source-event mode guards."""
+
+    report = load_report_module()
+    assert report._ethereum_receipt_source_event_mode_gate_inventory_errors() == []
+
+    sparse_test = tmp_path / "sccp_evm_receipt_proof_evidence_test.py"
+    sparse_test.write_text(
+        "test_collect_receipt_proof_requires_explicit_receipt_only_mode_without_source_bridge\n",
+        encoding="utf-8",
+    )
+    errors = report._ethereum_receipt_source_event_mode_gate_inventory_errors(
+        (
+            (
+                sparse_test,
+                (
+                    "test_collect_receipt_proof_requires_explicit_receipt_only_mode_without_source_bridge",
+                    "test_collect_receipt_proof_allows_explicit_receipt_only_mode",
+                ),
+            ),
+        )
+    )
+
+    assert any(
+        "Ethereum mainnet source-event evidence mode SDK test inventory" in error
+        and str(sparse_test) in error
+        and (
+            "missing marker: "
+            "test_collect_receipt_proof_allows_explicit_receipt_only_mode"
+        )
+        in error
+        for error in errors
+    )
+
+
+def test_release_readiness_report_guards_ethereum_receipt_source_event_zero_digest_gate_inventory(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must pin Ethereum source-event digest guards."""
+
+    report = load_report_module()
+    assert report._ethereum_receipt_source_event_zero_digest_gate_inventory_errors() == []
+
+    sparse_test = tmp_path / "sccp_evm_receipt_proof_evidence_test.py"
+    sparse_test.write_text(
+        "test_collect_receipt_proof_rejects_zero_source_event_digest\n",
+        encoding="utf-8",
+    )
+    errors = report._ethereum_receipt_source_event_zero_digest_gate_inventory_errors(
+        (
+            (
+                sparse_test,
+                (
+                    "test_collect_receipt_proof_rejects_zero_source_event_digest",
+                    "zero source event digest was accepted",
+                ),
+            ),
+        )
+    )
+
+    assert any(
+        "Ethereum mainnet source-event zero digest SDK test inventory" in error
+        and str(sparse_test) in error
+        and "missing marker: zero source event digest was accepted" in error
+        for error in errors
+    )
+
+
+def test_release_readiness_report_guards_ethereum_receipt_rpc_duplicate_json_gate_inventory(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must pin Ethereum receipt duplicate-key guards."""
+
+    report = load_report_module()
+    assert report._ethereum_receipt_rpc_duplicate_json_gate_inventory_errors() == []
+
+    sparse_test = tmp_path / "sccp_evm_receipt_proof_evidence_test.py"
+    sparse_test.write_text(
+        "test_collect_receipt_proof_rejects_duplicate_json_rpc_result_keys\n",
+        encoding="utf-8",
+    )
+    errors = report._ethereum_receipt_rpc_duplicate_json_gate_inventory_errors(
+        (
+            (
+                sparse_test,
+                (
+                    "test_collect_receipt_proof_rejects_duplicate_json_rpc_result_keys",
+                    "test_collect_receipt_proof_rejects_duplicate_json_receipt_fields",
+                ),
+            ),
+        )
+    )
+
+    assert any(
+        "Ethereum mainnet receipt RPC duplicate JSON SDK test inventory" in error
+        and str(sparse_test) in error
+        and (
+            "missing marker: "
+            "test_collect_receipt_proof_rejects_duplicate_json_receipt_fields"
+        )
+        in error
+        for error in errors
+    )
+
+
+def test_release_readiness_report_guards_ethereum_receipt_block_transaction_hash_gate_inventory(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must pin block receipt tx-hash guards."""
+
+    report = load_report_module()
+    assert report._ethereum_receipt_block_transaction_hash_gate_inventory_errors() == []
+
+    sparse_test = tmp_path / "sccp_evm_receipt_proof_evidence_test.py"
+    sparse_test.write_text(
+        "test_receipt_trie_builder_rejects_duplicate_transaction_hashes\n",
+        encoding="utf-8",
+    )
+    errors = report._ethereum_receipt_block_transaction_hash_gate_inventory_errors(
+        (
+            (
+                sparse_test,
+                (
+                    "test_receipt_trie_builder_rejects_duplicate_transaction_hashes",
+                    'receipts[1]["transactionHash"] = receipts[0]["transactionHash"]',
+                ),
+            ),
+        )
+    )
+
+    assert any(
+        "Ethereum mainnet block receipt transactionHash SDK test inventory" in error
+        and str(sparse_test) in error
+        and (
+            'missing marker: receipts[1]["transactionHash"] = '
+            'receipts[0]["transactionHash"]'
+        )
+        in error
+        for error in errors
+    )
+
+
+def test_release_readiness_report_guards_ethereum_js_receipt_admission_guard_gate_inventory(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must pin JS receipt admission guards."""
+
+    report = load_report_module()
+    assert report._ethereum_js_receipt_admission_guard_gate_inventory_errors() == []
+
+    sparse_dist = tmp_path / "sccp.js"
+    sparse_dist.write_text(
+        "eth_getBlockReceipts target receipt must match transactionHash\n",
+        encoding="utf-8",
+    )
+    errors = report._ethereum_js_receipt_admission_guard_gate_inventory_errors(
+        (
+            (
+                sparse_dist,
+                (
+                    "eth_getBlockReceipts target receipt must match transactionHash",
+                    "Ethereum mainnet receipt proof construction requires beaconFinality.",
+                ),
+            ),
+        )
+    )
+
+    assert any(
+        "Ethereum mainnet JS receipt admission source inventory" in error
+        and str(sparse_dist) in error
+        and (
+            "missing marker: Ethereum mainnet receipt proof construction "
+            "requires beaconFinality."
+        )
+        in error
+        for error in errors
+    )
+
+
+def test_release_readiness_report_guards_ethereum_sdk_receipt_metadata_guard_gate_inventory(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must pin SDK receipt metadata guards."""
+
+    report = load_report_module()
+    assert report._ethereum_sdk_receipt_metadata_guard_gate_inventory_errors() == []
+
+    sparse_source = tmp_path / "SourceSccpProofHashes.kt"
+    sparse_source.write_text(
+        "typed receipt type must fit one byte below 0x80\n",
+        encoding="utf-8",
+    )
+    errors = report._ethereum_sdk_receipt_metadata_guard_gate_inventory_errors(
+        (
+            (
+                sparse_source,
+                (
+                    "typed receipt type must fit one byte below 0x80",
+                    "typed receipt type is not supported for Ethereum mainnet receipt proofs",
+                ),
+            ),
+        )
+    )
+
+    assert any(
+        "Ethereum mainnet SDK receipt metadata source inventory" in error
+        and str(sparse_source) in error
+        and (
+            "missing marker: typed receipt type is not supported "
+            "for Ethereum mainnet receipt proofs"
+        )
+        in error
+        for error in errors
+    )
+
+
+def test_release_readiness_report_guards_ethereum_noncanonical_chain_id_gate_inventory(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must pin noncanonical Ethereum chain-id guards."""
+
+    report = load_report_module()
+    assert report._ethereum_noncanonical_chain_id_gate_inventory_errors() == []
+
+    sparse_test = tmp_path / "sccpEthereumMainnet.test.js"
+    sparse_test.write_text("canonical JSON-RPC quantity\n", encoding="utf-8")
+    errors = report._ethereum_noncanonical_chain_id_gate_inventory_errors(
+        (
+            (
+                sparse_test,
+                (
+                    'for (const chainId of ["1", 1, "0x01", "0X1", " 0x1", "0x1 "])',
+                    "canonical JSON-RPC quantity",
+                ),
+            ),
+        )
+    )
+
+    assert any(
+        "Ethereum mainnet noncanonical chain id SDK test inventory" in error
+        and str(sparse_test) in error
+        and (
+            'missing marker: for (const chainId of ["1", 1, "0x01", '
+            '"0X1", " 0x1", "0x1 "])'
         )
         in error
         for error in errors
@@ -2378,6 +3476,40 @@ def test_release_readiness_report_guards_native_sccp_no_wasm_readiness_gate_inve
     )
 
 
+def test_release_readiness_report_guards_native_evm_canonical_sdk_inventory(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must pin padded native SDK-id regressions."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    markers_by_path = dict(verifier.NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS)
+    js_path = "javascript/iroha_js/test/sccpEthereumMainnet.test.js"
+    required_markers = markers_by_path[js_path]
+    removed_marker = 'sdk: " javascript "'
+    sparse_js_test = tmp_path / "sccpEthereumMainnet.test.js"
+    sparse_js_test.write_text(
+        "\n".join(marker for marker in required_markers if marker != removed_marker),
+        encoding="utf-8",
+    )
+
+    errors = report._native_sccp_no_wasm_readiness_gate_inventory_errors(
+        (
+            (
+                sparse_js_test,
+                required_markers,
+            ),
+        )
+    )
+
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and str(sparse_js_test) in error
+        and removed_marker in error
+        for error in errors
+    )
+
+
 def test_release_readiness_evidence_phase_requires_evm_script_suites() -> None:
     """The evidence phase transcript must prove the EVM evidence suites ran."""
 
@@ -2605,6 +3737,473 @@ def test_release_readiness_report_guards_sccp_proof_request_bundle_gate_inventor
     )
 
 
+def test_release_readiness_report_guards_sccp_phase_evidence_source_gate_inventory(
+    tmp_path: Path,
+) -> None:
+    """Readiness coverage must pin fail-closed phase evidence source handling."""
+
+    report = load_report_module()
+    assert report._sccp_phase_evidence_source_gate_inventory_errors() == []
+
+    sparse_report = tmp_path / "sccp_release_readiness_report.py"
+    sparse_report.write_text(
+        "duplicate SCCP corridor phase evidence for\n",
+        encoding="utf-8",
+    )
+    errors = report._sccp_phase_evidence_source_gate_inventory_errors(
+        (
+            (
+                sparse_report,
+                (
+                    "duplicate SCCP corridor phase evidence for",
+                    "already set by",
+                    "cannot set from",
+                ),
+            ),
+        )
+    )
+
+    assert any(
+        "SCCP phase evidence duplicate-input source inventory" in error
+        and str(sparse_report) in error
+        and "missing marker: already set by" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP phase evidence duplicate-input source inventory" in error
+        and "missing marker: cannot set from" in error
+        for error in errors
+    )
+
+
+def test_release_readiness_report_guards_release_corridor_phase_transcript_gate_inventory(
+    tmp_path: Path,
+) -> None:
+    """Readiness coverage must pin strict corridor phase transcript checks."""
+
+    report = load_report_module()
+    assert report._release_corridor_phase_transcript_gate_inventory_errors() == []
+
+    sparse_report = tmp_path / "sccp_release_readiness_report.py"
+    sparse_report.write_text(
+        "def _phase_transcript_errors(bundle_dir, phase, artifact):\n",
+        encoding="utf-8",
+    )
+    errors = report._release_corridor_phase_transcript_gate_inventory_errors(
+        (
+            (
+                sparse_report,
+                (
+                    "def _phase_transcript_errors(",
+                    "def _phase_transcript_block(",
+                    "evidence artifact is missing expected phase-block success marker:",
+                ),
+            ),
+        )
+    )
+
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and str(sparse_report) in error
+        and "missing marker: def _phase_transcript_block(" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and (
+            "missing marker: evidence artifact is missing expected "
+            "phase-block success marker:"
+            in error
+        )
+        for error in errors
+    )
+
+
+def test_release_readiness_report_guards_sccp_release_bundle_source_copy_gate_inventory(
+    tmp_path: Path,
+) -> None:
+    """Readiness coverage must pin fail-closed release bundle source copying."""
+
+    report = load_report_module()
+    assert report._sccp_release_bundle_source_copy_gate_inventory_errors() == []
+
+    sparse_bundle = tmp_path / "sccp_release_bundle.py"
+    sparse_bundle.write_text(
+        "def _reject_path_control_characters(path, label):\n"
+        "    raise SystemExit('contains control character')\n",
+        encoding="utf-8",
+    )
+    errors = report._sccp_release_bundle_source_copy_gate_inventory_errors(
+        (
+            (
+                sparse_bundle,
+                (
+                    "def _reject_path_control_characters(",
+                    "contains control character",
+                    "release bundle source path must not be a symlink",
+                    "release bundle source path ancestor must not be a symlink",
+                ),
+            ),
+        )
+    )
+
+    assert any(
+        "SCCP release bundle source-copy source inventory" in error
+        and str(sparse_bundle) in error
+        and "missing marker: release bundle source path must not be a symlink"
+        in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release bundle source-copy source inventory" in error
+        and (
+            "missing marker: release bundle source path ancestor must not be "
+            "a symlink"
+        )
+        in error
+        for error in errors
+    )
+
+
+def test_release_readiness_report_guards_sccp_release_bundle_output_path_gate_inventory(
+    tmp_path: Path,
+) -> None:
+    """Readiness coverage must pin fail-closed bundle output paths."""
+
+    report = load_report_module()
+    assert report._sccp_release_bundle_output_path_gate_inventory_errors() == []
+
+    sparse_bundle = tmp_path / "sccp_release_bundle.py"
+    sparse_bundle.write_text(
+        "def _reject_symlinked_existing_output_path(output_dir):\n"
+        "    pass\n",
+        encoding="utf-8",
+    )
+    errors = report._sccp_release_bundle_output_path_gate_inventory_errors(
+        (
+            (
+                sparse_bundle,
+                (
+                    "def _reject_symlinked_existing_output_path(",
+                    "release bundle output directory must not be a symlink",
+                    "release bundle output directory ancestor must not be a symlink",
+                ),
+            ),
+        )
+    )
+
+    assert any(
+        "SCCP release bundle output-path source inventory" in error
+        and str(sparse_bundle) in error
+        and (
+            "missing marker: release bundle output directory must not be "
+            "a symlink"
+        )
+        in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release bundle output-path source inventory" in error
+        and (
+            "missing marker: release bundle output directory ancestor must not "
+            "be a symlink"
+        )
+        in error
+        for error in errors
+    )
+
+
+def test_release_readiness_report_guards_sccp_release_artifact_path_text_gate_inventory(
+    tmp_path: Path,
+) -> None:
+    """Readiness coverage must pin Markdown-safe release artifact paths."""
+
+    report = load_report_module()
+    assert report._sccp_release_artifact_path_text_gate_inventory_errors() == []
+
+    sparse_report = tmp_path / "sccp_release_readiness_report.py"
+    sparse_report.write_text(
+        "MARKDOWN_UNSAFE_PATH_CHARACTERS = frozenset('|`<>')\n"
+        "def _path_markdown_unsafe_character(path):\n"
+        "    return None\n",
+        encoding="utf-8",
+    )
+    errors = report._sccp_release_artifact_path_text_gate_inventory_errors(
+        (
+            (
+                sparse_report,
+                (
+                    "MARKDOWN_UNSAFE_PATH_CHARACTERS",
+                    "def _path_markdown_unsafe_character(",
+                    "release artifact path contains Markdown-unsafe character",
+                    "path contains Markdown-unsafe character",
+                ),
+            ),
+        )
+    )
+
+    assert any(
+        "SCCP release artifact path text source inventory" in error
+        and str(sparse_report) in error
+        and (
+            "missing marker: release artifact path contains "
+            "Markdown-unsafe character"
+        )
+        in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release artifact path text source inventory" in error
+        and "missing marker: path contains Markdown-unsafe character" in error
+        for error in errors
+    )
+
+
+def test_release_readiness_report_guards_release_input_provenance_schema_gate_inventory(
+    tmp_path: Path,
+) -> None:
+    """Readiness coverage must pin copied input provenance schemas."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    assert (
+        report._sccp_release_input_provenance_schema_gate_inventory_errors()
+        == []
+    )
+
+    sparse_verifier = tmp_path / "sccp_verify_release_bundle.py"
+    sparse_verifier.write_text(
+        "def _input_provenance_schema_errors(report):\n",
+        encoding="utf-8",
+    )
+    errors = report._sccp_release_input_provenance_schema_gate_inventory_errors(
+        (
+            (
+                sparse_verifier,
+                verifier.SCCP_RELEASE_INPUT_PROVENANCE_SCHEMA_MARKERS[0][1],
+            ),
+        )
+    )
+
+    assert any(
+        "SCCP release input-provenance schema source inventory" in error
+        and str(sparse_verifier) in error
+        and "missing marker: def _canonical_report_input_path_errors(" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release input-provenance schema source inventory" in error
+        and "missing marker: readiness report inputs do not match copied input artifacts"
+        in error
+        for error in errors
+    )
+
+
+def test_release_readiness_report_guards_release_public_json_root_schema_gate_inventory(
+    tmp_path: Path,
+) -> None:
+    """Readiness coverage must pin public JSON-root schemas."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    assert (
+        report._sccp_release_public_json_root_schema_gate_inventory_errors()
+        == []
+    )
+
+    sparse_verifier = tmp_path / "sccp_verify_release_bundle.py"
+    sparse_verifier.write_text(
+        "def _load_json(path):\n",
+        encoding="utf-8",
+    )
+    errors = report._sccp_release_public_json_root_schema_gate_inventory_errors(
+        (
+            (
+                sparse_verifier,
+                verifier.SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS[0][1],
+            ),
+        )
+    )
+
+    assert any(
+        "SCCP release public JSON-root schema source inventory" in error
+        and str(sparse_verifier) in error
+        and "missing marker: object_pairs_hook=_reject_duplicate_json_keys" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release public JSON-root schema source inventory" in error
+        and "missing marker: all-lanes summary JSON is not UTF-8 text" in error
+        for error in errors
+    )
+
+
+def test_release_readiness_report_guards_release_public_markdown_text_schema_gate_inventory(
+    tmp_path: Path,
+) -> None:
+    """Readiness coverage must pin public Markdown text schemas."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    assert (
+        report._sccp_release_public_markdown_text_schema_gate_inventory_errors()
+        == []
+    )
+
+    sparse_verifier = tmp_path / "sccp_verify_release_bundle.py"
+    sparse_verifier.write_text(
+        'report_md_path.read_text(encoding="utf-8")\n',
+        encoding="utf-8",
+    )
+    errors = report._sccp_release_public_markdown_text_schema_gate_inventory_errors(
+        (
+            (
+                sparse_verifier,
+                verifier.SCCP_RELEASE_PUBLIC_MARKDOWN_TEXT_SCHEMA_MARKERS[0][1],
+            ),
+        )
+    )
+
+    assert any(
+        "SCCP release public Markdown text schema source inventory" in error
+        and str(sparse_verifier) in error
+        and "missing marker: release-notes attachment is not UTF-8 text" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release public Markdown text schema source inventory" in error
+        and "missing marker: release notes attachment does not match manifest and report"
+        in error
+        for error in errors
+    )
+
+
+def test_release_readiness_report_guards_release_public_crypto_evidence_binding_gate_inventory(
+    tmp_path: Path,
+) -> None:
+    """Readiness coverage must pin public crypto-evidence binding."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    assert (
+        report._sccp_release_public_crypto_evidence_binding_gate_inventory_errors()
+        == []
+    )
+
+    sparse_verifier = tmp_path / "sccp_verify_release_bundle.py"
+    sparse_verifier.write_text(
+        "def _cryptographic_evidence_inventory_errors(crypto):\n",
+        encoding="utf-8",
+    )
+    errors = report._sccp_release_public_crypto_evidence_binding_gate_inventory_errors(
+        (
+            (
+                sparse_verifier,
+                verifier.SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS[0][1],
+            ),
+        )
+    )
+
+    assert any(
+        "SCCP release public cryptographic-evidence binding source inventory"
+        in error
+        and str(sparse_verifier) in error
+        and "missing marker: def _cryptographic_evidence_lane_binding_errors("
+        in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release public cryptographic-evidence binding source inventory"
+        in error
+        and "missing marker: readiness report cryptographic_evidence does not match embedded lane evidence"
+        in error
+        for error in errors
+    )
+
+
+def test_release_readiness_report_guards_release_public_submission_surface_binding_gate_inventory(
+    tmp_path: Path,
+) -> None:
+    """Readiness coverage must pin public submission-surface binding."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    assert (
+        report._sccp_release_public_submission_surface_binding_gate_inventory_errors()
+        == []
+    )
+
+    sparse_verifier = tmp_path / "sccp_verify_release_bundle.py"
+    sparse_verifier.write_text(
+        "def _submission_surface_inventory_errors(surfaces):\n",
+        encoding="utf-8",
+    )
+    errors = report._sccp_release_public_submission_surface_binding_gate_inventory_errors(
+        (
+            (
+                sparse_verifier,
+                verifier.SCCP_RELEASE_PUBLIC_SUBMISSION_SURFACE_BINDING_MARKERS[
+                    0
+                ][1],
+            ),
+        )
+    )
+
+    assert any(
+        "SCCP release public submission-surface binding source inventory" in error
+        and str(sparse_verifier) in error
+        and "missing marker: def _expected_submission_surfaces(report:" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release public submission-surface binding source inventory" in error
+        and "missing marker: readiness report user_prover_submission_surfaces does not match corridor phases"
+        in error
+        for error in errors
+    )
+
+
+def test_release_readiness_report_guards_release_native_prover_bundle_schema_gate_inventory(
+    tmp_path: Path,
+) -> None:
+    """Readiness coverage must pin native prover bundle schemas."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    assert (
+        report._sccp_release_native_prover_bundle_schema_gate_inventory_errors()
+        == []
+    )
+
+    sparse_verifier = tmp_path / "sccp_verify_release_bundle.py"
+    sparse_verifier.write_text(
+        "def _native_evm_prover_bundle_summary_schema_errors(status):\n",
+        encoding="utf-8",
+    )
+    errors = report._sccp_release_native_prover_bundle_schema_gate_inventory_errors(
+        (
+            (
+                sparse_verifier,
+                verifier.SCCP_RELEASE_NATIVE_PROVER_BUNDLE_SCHEMA_MARKERS[0][1],
+            ),
+        )
+    )
+
+    assert any(
+        "SCCP release native-prover bundle schema source inventory" in error
+        and str(sparse_verifier) in error
+        and "missing marker: def _native_evm_prover_bundle_status_from_payload("
+        in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release native-prover bundle schema source inventory" in error
+        and "missing marker: readiness report native_evm_prover_bundle does not match bundled"
+        in error
+        for error in errors
+    )
+
+
 def test_release_readiness_report_blocks_missing_sccp_proof_request_source_gate(
     tmp_path: Path,
     monkeypatch,
@@ -2659,6 +4258,693 @@ def test_release_readiness_report_blocks_missing_sccp_proof_request_source_gate(
         "validation_blockers": [],
     }
     assert readiness["source_inventory"]["unready_transparent_proof_config_gate"] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+
+def test_release_readiness_report_blocks_missing_sccp_phase_evidence_source_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Production readiness must fail when phase evidence source guards drift."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    report = load_report_module()
+    blocker = (
+        "SCCP phase evidence duplicate-input source inventory "
+        "scripts/sccp_release_bundle.py missing marker: already set by"
+    )
+    monkeypatch.setattr(
+        report,
+        "_sccp_phase_evidence_source_gate_inventory_errors",
+        lambda: [blocker],
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    assert readiness["production_ready"] is False
+    assert blocker in readiness["blockers"]
+    assert readiness["source_inventory"]["phase_evidence_source_gate"] == {
+        "validation_status": "blocked",
+        "validation_blockers": [blocker],
+    }
+    assert readiness["source_inventory"]["proof_request_bundle_gate"] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+
+def test_release_readiness_report_blocks_missing_release_corridor_phase_transcript_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Production readiness must fail when corridor transcript guards drift."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    report = load_report_module()
+    blocker = (
+        "SCCP release corridor phase-transcript source inventory "
+        "scripts/sccp_release_readiness_report.py missing marker: "
+        "def _phase_transcript_block("
+    )
+    monkeypatch.setattr(
+        report,
+        "_release_corridor_phase_transcript_gate_inventory_errors",
+        lambda: [blocker],
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    assert readiness["production_ready"] is False
+    assert blocker in readiness["blockers"]
+    assert readiness["source_inventory"]["release_corridor_phase_transcript_gate"] == {
+        "validation_status": "blocked",
+        "validation_blockers": [blocker],
+    }
+    assert readiness["source_inventory"]["phase_evidence_source_gate"] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+
+def test_release_readiness_report_blocks_missing_sccp_release_bundle_source_copy_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Production readiness must fail when release source-copy guards drift."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    report = load_report_module()
+    blocker = (
+        "SCCP release bundle source-copy source inventory "
+        "scripts/sccp_release_bundle.py missing marker: "
+        "release bundle source path must not be a symlink"
+    )
+    monkeypatch.setattr(
+        report,
+        "_sccp_release_bundle_source_copy_gate_inventory_errors",
+        lambda: [blocker],
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    assert readiness["production_ready"] is False
+    assert blocker in readiness["blockers"]
+    assert readiness["source_inventory"]["release_bundle_source_copy_gate"] == {
+        "validation_status": "blocked",
+        "validation_blockers": [blocker],
+    }
+    assert readiness["source_inventory"]["phase_evidence_source_gate"] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+
+def test_release_readiness_report_blocks_missing_sccp_release_bundle_output_path_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Production readiness must fail when release output-path guards drift."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    report = load_report_module()
+    blocker = (
+        "SCCP release bundle output-path source inventory "
+        "scripts/sccp_release_bundle.py missing marker: "
+        "release bundle output directory must not be a symlink"
+    )
+    monkeypatch.setattr(
+        report,
+        "_sccp_release_bundle_output_path_gate_inventory_errors",
+        lambda: [blocker],
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    assert readiness["production_ready"] is False
+    assert blocker in readiness["blockers"]
+    assert readiness["source_inventory"]["release_bundle_output_path_gate"] == {
+        "validation_status": "blocked",
+        "validation_blockers": [blocker],
+    }
+    assert readiness["source_inventory"]["release_bundle_source_copy_gate"] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+
+def test_release_readiness_report_blocks_missing_sccp_release_artifact_path_text_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Production readiness must fail when artifact path text guards drift."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    report = load_report_module()
+    blocker = (
+        "SCCP release artifact path text source inventory "
+        "scripts/sccp_verify_release_bundle.py missing marker: "
+        "artifact path contains Markdown-unsafe character"
+    )
+    monkeypatch.setattr(
+        report,
+        "_sccp_release_artifact_path_text_gate_inventory_errors",
+        lambda: [blocker],
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    assert readiness["production_ready"] is False
+    assert blocker in readiness["blockers"]
+    assert readiness["source_inventory"]["release_artifact_path_text_gate"] == {
+        "validation_status": "blocked",
+        "validation_blockers": [blocker],
+    }
+    assert readiness["source_inventory"]["release_bundle_output_path_gate"] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+
+def test_release_readiness_report_blocks_missing_release_input_provenance_schema_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Production readiness must fail when input provenance schemas drift."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    report = load_report_module()
+    blocker = (
+        "SCCP release input-provenance schema source inventory "
+        "scripts/sccp_verify_release_bundle.py missing marker: "
+        "readiness report inputs do not match copied input artifacts"
+    )
+    monkeypatch.setattr(
+        report,
+        "_sccp_release_input_provenance_schema_gate_inventory_errors",
+        lambda: [blocker],
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    assert readiness["production_ready"] is False
+    assert blocker in readiness["blockers"]
+    assert readiness["source_inventory"]["release_input_provenance_schema_gate"] == {
+        "validation_status": "blocked",
+        "validation_blockers": [blocker],
+    }
+    assert readiness["source_inventory"]["release_artifact_path_text_gate"] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+
+def test_release_readiness_report_blocks_missing_release_public_json_root_schema_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Production readiness must fail when public JSON-root schemas drift."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    report = load_report_module()
+    blocker = (
+        "SCCP release public JSON-root schema source inventory "
+        "scripts/sccp_verify_release_bundle.py missing marker: "
+        "object_pairs_hook=_reject_duplicate_json_keys"
+    )
+    monkeypatch.setattr(
+        report,
+        "_sccp_release_public_json_root_schema_gate_inventory_errors",
+        lambda: [blocker],
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    assert readiness["production_ready"] is False
+    assert blocker in readiness["blockers"]
+    assert readiness["source_inventory"]["release_public_json_root_schema_gate"] == {
+        "validation_status": "blocked",
+        "validation_blockers": [blocker],
+    }
+    assert readiness["source_inventory"]["release_input_provenance_schema_gate"] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+
+def test_release_readiness_report_blocks_missing_release_public_markdown_text_schema_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Production readiness must fail when public Markdown text schemas drift."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    report = load_report_module()
+    blocker = (
+        "SCCP release public Markdown text schema source inventory "
+        "scripts/sccp_verify_release_bundle.py missing marker: "
+        "release-notes attachment is not UTF-8 text"
+    )
+    monkeypatch.setattr(
+        report,
+        "_sccp_release_public_markdown_text_schema_gate_inventory_errors",
+        lambda: [blocker],
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    assert readiness["production_ready"] is False
+    assert blocker in readiness["blockers"]
+    assert readiness["source_inventory"]["release_public_markdown_text_schema_gate"] == {
+        "validation_status": "blocked",
+        "validation_blockers": [blocker],
+    }
+    assert readiness["source_inventory"]["release_public_json_root_schema_gate"] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+
+def test_release_readiness_report_blocks_missing_release_public_crypto_evidence_binding_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Production readiness must fail when public crypto binding drifts."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    report = load_report_module()
+    blocker = (
+        "SCCP release public cryptographic-evidence binding source inventory "
+        "scripts/sccp_verify_release_bundle.py missing marker: "
+        "def _cryptographic_evidence_lane_binding_errors("
+    )
+    monkeypatch.setattr(
+        report,
+        "_sccp_release_public_crypto_evidence_binding_gate_inventory_errors",
+        lambda: [blocker],
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    assert readiness["production_ready"] is False
+    assert blocker in readiness["blockers"]
+    assert readiness["source_inventory"][
+        "release_public_crypto_evidence_binding_gate"
+    ] == {
+        "validation_status": "blocked",
+        "validation_blockers": [blocker],
+    }
+    assert readiness["source_inventory"]["release_public_markdown_text_schema_gate"] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+
+def test_release_readiness_report_blocks_missing_release_public_submission_surface_binding_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Production readiness must fail when public submission binding drifts."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    report = load_report_module()
+    blocker = (
+        "SCCP release public submission-surface binding source inventory "
+        "scripts/sccp_verify_release_bundle.py missing marker: "
+        "def _expected_submission_surfaces(report:"
+    )
+    monkeypatch.setattr(
+        report,
+        "_sccp_release_public_submission_surface_binding_gate_inventory_errors",
+        lambda: [blocker],
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    assert readiness["production_ready"] is False
+    assert blocker in readiness["blockers"]
+    assert readiness["source_inventory"][
+        "release_public_submission_surface_binding_gate"
+    ] == {
+        "validation_status": "blocked",
+        "validation_blockers": [blocker],
+    }
+    assert readiness["source_inventory"][
+        "release_public_crypto_evidence_binding_gate"
+    ] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+
+def test_release_readiness_report_blocks_missing_release_native_prover_bundle_schema_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Production readiness must fail when native bundle schema coverage drifts."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    report = load_report_module()
+    blocker = (
+        "SCCP release native-prover bundle schema source inventory "
+        "scripts/sccp_verify_release_bundle.py missing marker: "
+        "def _native_evm_prover_bundle_status_from_payload("
+    )
+    monkeypatch.setattr(
+        report,
+        "_sccp_release_native_prover_bundle_schema_gate_inventory_errors",
+        lambda: [blocker],
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    assert readiness["production_ready"] is False
+    assert blocker in readiness["blockers"]
+    assert readiness["source_inventory"]["release_native_prover_bundle_schema_gate"] == {
+        "validation_status": "blocked",
+        "validation_blockers": [blocker],
+    }
+    assert readiness["source_inventory"][
+        "release_public_submission_surface_binding_gate"
+    ] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+
+def test_release_readiness_report_blocks_missing_release_manifest_readiness_flags_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Production readiness must fail when release manifest readiness checks drift."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    report = load_report_module()
+    blocker = (
+        "SCCP release manifest readiness-flags source inventory "
+        "scripts/sccp_verify_release_bundle.py missing marker: "
+        "manifest production_ready is not true"
+    )
+    monkeypatch.setattr(
+        report,
+        "_sccp_release_manifest_readiness_flags_gate_inventory_errors",
+        lambda: [blocker],
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    assert readiness["production_ready"] is False
+    assert blocker in readiness["blockers"]
+    assert readiness["source_inventory"]["release_manifest_readiness_flags_gate"] == {
+        "validation_status": "blocked",
+        "validation_blockers": [blocker],
+    }
+    assert readiness["source_inventory"]["release_artifact_path_text_gate"] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+
+def test_release_readiness_report_blocks_missing_release_manifest_artifact_set_order_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Production readiness must fail when manifest artifact-set checks drift."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    report = load_report_module()
+    blocker = (
+        "SCCP release manifest artifact-set/order source inventory "
+        "scripts/sccp_verify_release_bundle.py missing marker: "
+        "manifest artifact order does not match canonical"
+    )
+    monkeypatch.setattr(
+        report,
+        "_sccp_release_manifest_artifact_set_order_gate_inventory_errors",
+        lambda: [blocker],
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    assert readiness["production_ready"] is False
+    assert blocker in readiness["blockers"]
+    assert readiness["source_inventory"]["release_manifest_artifact_set_order_gate"] == {
+        "validation_status": "blocked",
+        "validation_blockers": [blocker],
+    }
+    assert readiness["source_inventory"]["release_manifest_readiness_flags_gate"] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+
+def test_release_readiness_report_blocks_missing_release_public_blocker_list_schema_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Production readiness must fail when public blocker-list schemas drift."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    report = load_report_module()
+    blocker = (
+        "SCCP release public blocker-list schema source inventory "
+        "scripts/sccp_verify_release_bundle.py missing marker: "
+        "must not contain duplicate strings"
+    )
+    monkeypatch.setattr(
+        report,
+        "_sccp_release_public_blocker_list_schema_gate_inventory_errors",
+        lambda: [blocker],
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    assert readiness["production_ready"] is False
+    assert blocker in readiness["blockers"]
+    assert readiness["source_inventory"]["release_public_blocker_list_schema_gate"] == {
+        "validation_status": "blocked",
+        "validation_blockers": [blocker],
+    }
+    assert readiness["source_inventory"]["release_manifest_artifact_set_order_gate"] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+
+def test_release_readiness_report_blocks_missing_release_public_scalar_text_schema_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Production readiness must fail when public scalar-text schemas drift."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    report = load_report_module()
+    blocker = (
+        "SCCP release public scalar-text schema source inventory "
+        "scripts/sccp_verify_release_bundle.py missing marker: "
+        "def _cryptographic_evidence_row_schema_errors("
+    )
+    monkeypatch.setattr(
+        report,
+        "_sccp_release_public_scalar_text_schema_gate_inventory_errors",
+        lambda: [blocker],
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    assert readiness["production_ready"] is False
+    assert blocker in readiness["blockers"]
+    assert readiness["source_inventory"]["release_public_scalar_text_schema_gate"] == {
+        "validation_status": "blocked",
+        "validation_blockers": [blocker],
+    }
+    assert readiness["source_inventory"]["release_public_blocker_list_schema_gate"] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+
+def test_release_readiness_report_blocks_missing_release_notes_attachment_invariants_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Production readiness must fail when release-notes invariants drift."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    report = load_report_module()
+    blocker = (
+        "SCCP release-notes attachment invariants source inventory "
+        "scripts/sccp_verify_release_bundle.py missing marker: "
+        "release notes attachment does not list manifest.json"
+    )
+    monkeypatch.setattr(
+        report,
+        "_sccp_release_notes_attachment_invariants_gate_inventory_errors",
+        lambda: [blocker],
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    assert readiness["production_ready"] is False
+    assert blocker in readiness["blockers"]
+    assert readiness["source_inventory"]["release_notes_attachment_invariants_gate"] == {
+        "validation_status": "blocked",
+        "validation_blockers": [blocker],
+    }
+    assert readiness["source_inventory"]["release_manifest_readiness_flags_gate"] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+
+def test_release_readiness_report_blocks_missing_readiness_markdown_invariants_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Production readiness must fail when public Markdown invariants drift."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    report = load_report_module()
+    blocker = (
+        "SCCP readiness Markdown invariants source inventory "
+        "scripts/sccp_verify_release_bundle.py missing marker: "
+        "readiness report Markdown missing section"
+    )
+    monkeypatch.setattr(
+        report,
+        "_sccp_readiness_markdown_invariants_gate_inventory_errors",
+        lambda: [blocker],
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    assert readiness["production_ready"] is False
+    assert blocker in readiness["blockers"]
+    assert readiness["source_inventory"]["readiness_markdown_invariants_gate"] == {
+        "validation_status": "blocked",
+        "validation_blockers": [blocker],
+    }
+    assert readiness["source_inventory"]["release_notes_attachment_invariants_gate"] == {
         "validation_status": "passed",
         "validation_blockers": [],
     }
@@ -3047,6 +5333,948 @@ def test_release_readiness_report_blocks_missing_ethereum_beacon_rest_finalized_
         "validation_blockers": [blocker],
     }
     assert readiness["source_inventory"]["ethereum_native_receipt_finality_gate"] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+
+def test_release_readiness_report_blocks_missing_ethereum_inbound_adversarial_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Production readiness must fail when inbound adversarial guards drift."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    report = load_report_module()
+    blocker = (
+        "Ethereum mainnet inbound adversarial SDK test inventory "
+        "javascript/iroha_js/test/sccpEthereumMainnet.test.js missing marker: "
+        "duplicateReceipt"
+    )
+    monkeypatch.setattr(
+        report,
+        "_ethereum_inbound_adversarial_gate_inventory_errors",
+        lambda: [blocker],
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    assert readiness["production_ready"] is False
+    assert blocker in readiness["blockers"]
+    assert readiness["source_inventory"]["ethereum_inbound_adversarial_gate"] == {
+        "validation_status": "blocked",
+        "validation_blockers": [blocker],
+    }
+    assert readiness["source_inventory"]["ethereum_native_receipt_finality_gate"] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+
+def test_release_readiness_report_blocks_missing_bsc_inbound_adversarial_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Production readiness must fail when BSC inbound adversarial guards drift."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    report = load_report_module()
+    blocker = (
+        "BSC mainnet inbound adversarial SDK test inventory "
+        "javascript/iroha_js/test/sccpBscMainnet.test.js missing marker: "
+        "callbackEvidence.receiptProof.blockHash"
+    )
+    monkeypatch.setattr(
+        report,
+        "_bsc_inbound_adversarial_gate_inventory_errors",
+        lambda: [blocker],
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    assert readiness["production_ready"] is False
+    assert blocker in readiness["blockers"]
+    assert readiness["source_inventory"]["bsc_inbound_adversarial_gate"] == {
+        "validation_status": "blocked",
+        "validation_blockers": [blocker],
+    }
+    assert readiness["source_inventory"]["ethereum_native_receipt_finality_gate"] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+
+def test_release_readiness_report_blocks_missing_bsc_route_config_canonical_manifest_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Production readiness must fail when BSC route-config guards drift."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    report = load_report_module()
+    blocker = (
+        "SCCP BSC route-config canonical-manifest source inventory "
+        "scripts/sccp_bsc_taira_xor_deploy.test.mjs missing marker: "
+        "bscTokenAddress: BSC_TOKEN_ADDRESS.toUpperCase()"
+    )
+    monkeypatch.setattr(
+        report,
+        "_bsc_route_config_canonical_manifest_gate_inventory_errors",
+        lambda: [blocker],
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    assert readiness["production_ready"] is False
+    assert blocker in readiness["blockers"]
+    assert readiness["source_inventory"]["bsc_route_config_canonical_manifest_gate"] == {
+        "validation_status": "blocked",
+        "validation_blockers": [blocker],
+    }
+    assert readiness["source_inventory"]["bsc_inbound_adversarial_gate"] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+
+def test_release_readiness_report_blocks_missing_tron_route_config_canonical_manifest_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Production readiness must fail when TRON route-config guards drift."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    report = load_report_module()
+    blocker = (
+        "SCCP TRON route-config canonical-manifest source inventory "
+        "scripts/sccp_tron_taira_xor_deploy.test.mjs missing marker: "
+        "tronNetwork: \"TRON-MAINNET\""
+    )
+    monkeypatch.setattr(
+        report,
+        "_tron_route_config_canonical_manifest_gate_inventory_errors",
+        lambda: [blocker],
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    assert readiness["production_ready"] is False
+    assert blocker in readiness["blockers"]
+    assert readiness["source_inventory"]["tron_route_config_canonical_manifest_gate"] == {
+        "validation_status": "blocked",
+        "validation_blockers": [blocker],
+    }
+    assert readiness["source_inventory"]["bsc_route_config_canonical_manifest_gate"] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+
+def test_release_readiness_report_blocks_missing_tron_runtime_route_manifest_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Production readiness must fail when TRON runtime parser guards drift."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    report = load_report_module()
+    blocker = (
+        "SCCP TRON runtime route-manifest source inventory "
+        "crates/iroha_config/src/parameters/user.rs missing marker: "
+        "fn production_ready_tron_route_requires_offline_full_toml_hash()"
+    )
+    monkeypatch.setattr(
+        report,
+        "_tron_runtime_route_manifest_gate_inventory_errors",
+        lambda: [blocker],
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    assert readiness["production_ready"] is False
+    assert blocker in readiness["blockers"]
+    assert readiness["source_inventory"]["tron_runtime_route_manifest_gate"] == {
+        "validation_status": "blocked",
+        "validation_blockers": [blocker],
+    }
+    assert readiness["source_inventory"]["tron_route_config_canonical_manifest_gate"] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+
+def test_release_readiness_report_blocks_missing_all_lanes_route_canary_scalar_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Production readiness must fail when all-lanes scalar guards drift."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    report = load_report_module()
+    blocker = (
+        "SCCP all-lanes route-canary scalar source inventory "
+        "scripts/sccp_all_lanes_evidence.py missing marker: "
+        "route canary status must be a non-empty canonical string"
+    )
+    monkeypatch.setattr(
+        report,
+        "_all_lanes_route_canary_scalar_gate_inventory_errors",
+        lambda: [blocker],
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    assert readiness["production_ready"] is False
+    assert blocker in readiness["blockers"]
+    assert readiness["source_inventory"]["all_lanes_route_canary_scalar_gate"] == {
+        "validation_status": "blocked",
+        "validation_blockers": [blocker],
+    }
+    assert readiness["source_inventory"]["tron_route_config_canonical_manifest_gate"] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+
+def test_release_readiness_report_blocks_missing_all_lanes_governed_blocker_schema_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Production readiness must fail when governed blocker schema guards drift."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    report = load_report_module()
+    blocker = (
+        "SCCP all-lanes governed blocker schema source inventory "
+        "scripts/sccp_all_lanes_evidence.py missing marker: "
+        "errors.extend(_blocker_list_errors(record, \"route allowlist\"))"
+    )
+    monkeypatch.setattr(
+        report,
+        "_all_lanes_governed_blocker_schema_gate_inventory_errors",
+        lambda: [blocker],
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    assert readiness["production_ready"] is False
+    assert blocker in readiness["blockers"]
+    assert readiness["source_inventory"]["all_lanes_governed_blocker_schema_gate"] == {
+        "validation_status": "blocked",
+        "validation_blockers": [blocker],
+    }
+    assert readiness["source_inventory"]["all_lanes_route_canary_scalar_gate"] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+
+def test_release_readiness_report_blocks_missing_all_lanes_release_checklist_exact_boolean_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Production readiness must fail when all-lanes exact-boolean guards drift."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    report = load_report_module()
+    blocker = (
+        "SCCP all-lanes release-checklist exact-boolean source inventory "
+        "scripts/sccp_all_lanes_evidence.py missing marker: "
+        'return 0 if summary["production_ready"] is True else 1'
+    )
+    monkeypatch.setattr(
+        report,
+        "_all_lanes_release_checklist_exact_boolean_gate_inventory_errors",
+        lambda: [blocker],
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    assert readiness["production_ready"] is False
+    assert blocker in readiness["blockers"]
+    assert readiness["source_inventory"][
+        "all_lanes_release_checklist_exact_boolean_gate"
+    ] == {
+        "validation_status": "blocked",
+        "validation_blockers": [blocker],
+    }
+    assert readiness["source_inventory"]["all_lanes_governed_blocker_schema_gate"] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+
+def test_release_readiness_report_blocks_missing_active_launch_checklist_schema_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Production readiness must fail when active checklist schema guards drift."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    report = load_report_module()
+    blocker = (
+        "SCCP active-launch checklist schema source inventory "
+        "scripts/sccp_release_readiness_report.py missing marker: "
+        'release_checklist["ready"] is True'
+    )
+    monkeypatch.setattr(
+        report,
+        "_active_launch_checklist_schema_gate_inventory_errors",
+        lambda: [blocker],
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    assert readiness["production_ready"] is False
+    assert blocker in readiness["blockers"]
+    assert readiness["source_inventory"]["active_launch_checklist_schema_gate"] == {
+        "validation_status": "blocked",
+        "validation_blockers": [blocker],
+    }
+    assert readiness["source_inventory"]["all_lanes_governed_blocker_schema_gate"] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+
+def test_release_readiness_report_blocks_missing_ethereum_outbound_precallback_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Production readiness must fail when outbound pre-callback guards drift."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    report = load_report_module()
+    blocker = (
+        "Ethereum mainnet outbound pre-callback SDK test inventory "
+        "javascript/iroha_js/test/sccpEthereumMainnet.test.js missing marker: "
+        "assert.equal(outboundProverCalled, false)"
+    )
+    monkeypatch.setattr(
+        report,
+        "_ethereum_outbound_precallback_gate_inventory_errors",
+        lambda: [blocker],
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    assert readiness["production_ready"] is False
+    assert blocker in readiness["blockers"]
+    assert readiness["source_inventory"]["ethereum_outbound_precallback_gate"] == {
+        "validation_status": "blocked",
+        "validation_blockers": [blocker],
+    }
+    assert readiness["source_inventory"]["ethereum_native_receipt_finality_gate"] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+
+def test_release_readiness_report_blocks_missing_ethereum_local_admission_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Production readiness must fail when local-admission guards drift."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    report = load_report_module()
+    blocker = (
+        "Ethereum mainnet local-admission SDK test inventory "
+        "javascript/iroha_js/test/sccpEthereumMainnet.test.js missing marker: "
+        "metadata is not canonical"
+    )
+    monkeypatch.setattr(
+        report,
+        "_ethereum_local_admission_gate_inventory_errors",
+        lambda: [blocker],
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    assert readiness["production_ready"] is False
+    assert blocker in readiness["blockers"]
+    assert readiness["source_inventory"]["ethereum_local_admission_gate"] == {
+        "validation_status": "blocked",
+        "validation_blockers": [blocker],
+    }
+    assert readiness["source_inventory"]["ethereum_native_receipt_finality_gate"] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+
+def test_release_readiness_report_blocks_missing_ethereum_outbound_provider_validation_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Production readiness must fail when outbound provider guards drift."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    report = load_report_module()
+    blocker = (
+        "Ethereum mainnet outbound provider validation source inventory "
+        "python/iroha_torii_client/sccp.py missing marker: "
+        "await self.validate_execution_provider_mainnet(provider)"
+    )
+    monkeypatch.setattr(
+        report,
+        "_ethereum_outbound_provider_validation_gate_inventory_errors",
+        lambda: [blocker],
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    assert readiness["production_ready"] is False
+    assert blocker in readiness["blockers"]
+    assert readiness["source_inventory"][
+        "ethereum_outbound_provider_validation_gate"
+    ] == {
+        "validation_status": "blocked",
+        "validation_blockers": [blocker],
+    }
+    assert readiness["source_inventory"]["ethereum_local_admission_gate"] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+
+def test_release_readiness_report_blocks_missing_ethereum_receipt_root_zero_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Production readiness must fail when receipt-root zero guards drift."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    report = load_report_module()
+    blocker = (
+        "Ethereum mainnet receipt-root zero rejection SDK test inventory "
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/"
+        "SourceSccpProofHashesTest.kt missing marker: "
+        "assertFailsWith<IllegalArgumentException>"
+    )
+    monkeypatch.setattr(
+        report,
+        "_ethereum_receipt_root_zero_gate_inventory_errors",
+        lambda: [blocker],
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    assert readiness["production_ready"] is False
+    assert blocker in readiness["blockers"]
+    assert readiness["source_inventory"]["ethereum_receipt_root_zero_gate"] == {
+        "validation_status": "blocked",
+        "validation_blockers": [blocker],
+    }
+    assert readiness["source_inventory"]["ethereum_native_receipt_finality_gate"] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+
+def test_release_readiness_report_blocks_missing_ethereum_receipt_rlp_zero_topic_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Production readiness must fail when receipt-RLP zero-topic guards drift."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    report = load_report_module()
+    blocker = (
+        "Ethereum mainnet receipt RLP zero-topic SDK test inventory "
+        "javascript/iroha_js/test/sccpEthereumMainnet.test.js missing marker: "
+        'topics: [hex32("00")]'
+    )
+    monkeypatch.setattr(
+        report,
+        "_ethereum_receipt_rlp_zero_topic_gate_inventory_errors",
+        lambda: [blocker],
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    assert readiness["production_ready"] is False
+    assert blocker in readiness["blockers"]
+    assert readiness["source_inventory"]["ethereum_receipt_rlp_zero_topic_gate"] == {
+        "validation_status": "blocked",
+        "validation_blockers": [blocker],
+    }
+    assert readiness["source_inventory"]["ethereum_native_receipt_finality_gate"] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+
+def test_release_readiness_report_blocks_missing_ethereum_receipt_rlp_zero_address_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Production readiness must fail when receipt-RLP zero-address guards drift."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    report = load_report_module()
+    blocker = (
+        "Ethereum mainnet receipt RLP zero-address SDK test inventory "
+        "javascript/iroha_js/test/sccpEthereumMainnet.test.js missing marker: "
+        'address: `0x${"00".repeat(20)}`'
+    )
+    monkeypatch.setattr(
+        report,
+        "_ethereum_receipt_rlp_zero_address_gate_inventory_errors",
+        lambda: [blocker],
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    assert readiness["production_ready"] is False
+    assert blocker in readiness["blockers"]
+    assert readiness["source_inventory"]["ethereum_receipt_rlp_zero_address_gate"] == {
+        "validation_status": "blocked",
+        "validation_blockers": [blocker],
+    }
+    assert readiness["source_inventory"]["ethereum_native_receipt_finality_gate"] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+
+def test_release_readiness_report_blocks_missing_ethereum_receipt_source_event_context_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Production readiness must fail when source-event context guards drift."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    report = load_report_module()
+    blocker = (
+        "Ethereum mainnet source-event context SDK test inventory "
+        "pytests/scripts/sccp_evm_receipt_proof_evidence_test.py missing marker: "
+        'for field in ("transactionHash", "blockHash", "blockNumber")'
+    )
+    monkeypatch.setattr(
+        report,
+        "_ethereum_receipt_source_event_context_gate_inventory_errors",
+        lambda: [blocker],
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    assert readiness["production_ready"] is False
+    assert blocker in readiness["blockers"]
+    assert readiness["source_inventory"][
+        "ethereum_receipt_source_event_context_gate"
+    ] == {
+        "validation_status": "blocked",
+        "validation_blockers": [blocker],
+    }
+    assert readiness["source_inventory"]["ethereum_native_receipt_finality_gate"] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+
+def test_release_readiness_report_blocks_missing_ethereum_receipt_source_event_mode_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Production readiness must fail when source-event mode guards drift."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    report = load_report_module()
+    blocker = (
+        "Ethereum mainnet source-event evidence mode SDK test inventory "
+        "pytests/scripts/sccp_evm_receipt_proof_evidence_test.py missing marker: "
+        "test_collect_receipt_proof_allows_explicit_receipt_only_mode"
+    )
+    monkeypatch.setattr(
+        report,
+        "_ethereum_receipt_source_event_mode_gate_inventory_errors",
+        lambda: [blocker],
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    assert readiness["production_ready"] is False
+    assert blocker in readiness["blockers"]
+    assert readiness["source_inventory"][
+        "ethereum_receipt_source_event_mode_gate"
+    ] == {
+        "validation_status": "blocked",
+        "validation_blockers": [blocker],
+    }
+    assert readiness["source_inventory"]["ethereum_native_receipt_finality_gate"] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+
+def test_release_readiness_report_blocks_missing_ethereum_receipt_source_event_zero_digest_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Production readiness must fail when source-event digest guards drift."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    report = load_report_module()
+    blocker = (
+        "Ethereum mainnet source-event zero digest SDK test inventory "
+        "pytests/scripts/sccp_evm_receipt_proof_evidence_test.py missing marker: "
+        "zero source event digest was accepted"
+    )
+    monkeypatch.setattr(
+        report,
+        "_ethereum_receipt_source_event_zero_digest_gate_inventory_errors",
+        lambda: [blocker],
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    assert readiness["production_ready"] is False
+    assert blocker in readiness["blockers"]
+    assert readiness["source_inventory"][
+        "ethereum_receipt_source_event_zero_digest_gate"
+    ] == {
+        "validation_status": "blocked",
+        "validation_blockers": [blocker],
+    }
+    assert readiness["source_inventory"]["ethereum_native_receipt_finality_gate"] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+
+def test_release_readiness_report_blocks_missing_ethereum_receipt_rpc_duplicate_json_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Production readiness must fail when receipt duplicate-JSON guards drift."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    report = load_report_module()
+    blocker = (
+        "Ethereum mainnet receipt RPC duplicate JSON SDK test inventory "
+        "pytests/scripts/sccp_evm_receipt_proof_evidence_test.py missing marker: "
+        "test_collect_receipt_proof_rejects_duplicate_json_receipt_fields"
+    )
+    monkeypatch.setattr(
+        report,
+        "_ethereum_receipt_rpc_duplicate_json_gate_inventory_errors",
+        lambda: [blocker],
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    assert readiness["production_ready"] is False
+    assert blocker in readiness["blockers"]
+    assert readiness["source_inventory"][
+        "ethereum_receipt_rpc_duplicate_json_gate"
+    ] == {
+        "validation_status": "blocked",
+        "validation_blockers": [blocker],
+    }
+    assert readiness["source_inventory"]["ethereum_native_receipt_finality_gate"] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+
+def test_release_readiness_report_blocks_missing_ethereum_receipt_block_transaction_hash_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Production readiness must fail when block receipt tx-hash guards drift."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    report = load_report_module()
+    blocker = (
+        "Ethereum mainnet block receipt transactionHash SDK test inventory "
+        "pytests/scripts/sccp_evm_receipt_proof_evidence_test.py missing marker: "
+        'receipts[1]["transactionHash"] = receipts[0]["transactionHash"]'
+    )
+    monkeypatch.setattr(
+        report,
+        "_ethereum_receipt_block_transaction_hash_gate_inventory_errors",
+        lambda: [blocker],
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    assert readiness["production_ready"] is False
+    assert blocker in readiness["blockers"]
+    assert readiness["source_inventory"][
+        "ethereum_receipt_block_transaction_hash_gate"
+    ] == {
+        "validation_status": "blocked",
+        "validation_blockers": [blocker],
+    }
+    assert readiness["source_inventory"]["ethereum_native_receipt_finality_gate"] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+
+def test_release_readiness_report_blocks_missing_ethereum_js_receipt_admission_guard_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Production readiness must fail when JS receipt admission guards drift."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    report = load_report_module()
+    blocker = (
+        "Ethereum mainnet JS receipt admission source inventory "
+        "javascript/iroha_js/dist/sccp.js missing marker: "
+        "Ethereum mainnet receipt proof construction requires beaconFinality."
+    )
+    monkeypatch.setattr(
+        report,
+        "_ethereum_js_receipt_admission_guard_gate_inventory_errors",
+        lambda: [blocker],
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    assert readiness["production_ready"] is False
+    assert blocker in readiness["blockers"]
+    assert readiness["source_inventory"][
+        "ethereum_js_receipt_admission_guard_gate"
+    ] == {
+        "validation_status": "blocked",
+        "validation_blockers": [blocker],
+    }
+    assert readiness["source_inventory"]["ethereum_native_receipt_finality_gate"] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+
+def test_release_readiness_report_blocks_missing_ethereum_sdk_receipt_metadata_guard_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Production readiness must fail when SDK receipt metadata guards drift."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    report = load_report_module()
+    blocker = (
+        "Ethereum mainnet SDK receipt metadata source inventory "
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/"
+        "SourceSccpProofHashes.kt missing marker: "
+        "typed receipt type is not supported for Ethereum mainnet receipt proofs"
+    )
+    monkeypatch.setattr(
+        report,
+        "_ethereum_sdk_receipt_metadata_guard_gate_inventory_errors",
+        lambda: [blocker],
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    assert readiness["production_ready"] is False
+    assert blocker in readiness["blockers"]
+    assert readiness["source_inventory"][
+        "ethereum_sdk_receipt_metadata_guard_gate"
+    ] == {
+        "validation_status": "blocked",
+        "validation_blockers": [blocker],
+    }
+    assert readiness["source_inventory"]["ethereum_native_receipt_finality_gate"] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+
+def test_release_readiness_report_blocks_missing_ethereum_noncanonical_chain_id_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Production readiness must fail when noncanonical chain-id guards drift."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    report = load_report_module()
+    blocker = (
+        "Ethereum mainnet noncanonical chain id SDK test inventory "
+        "javascript/iroha_js/test/sccpEthereumMainnet.test.js missing marker: "
+        "canonical JSON-RPC quantity"
+    )
+    monkeypatch.setattr(
+        report,
+        "_ethereum_noncanonical_chain_id_gate_inventory_errors",
+        lambda: [blocker],
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    assert readiness["production_ready"] is False
+    assert blocker in readiness["blockers"]
+    assert readiness["source_inventory"]["ethereum_noncanonical_chain_id_gate"] == {
+        "validation_status": "blocked",
+        "validation_blockers": [blocker],
+    }
+    assert readiness["source_inventory"][
+        "ethereum_beacon_rest_finalized_header_shape_gate"
+    ] == {
         "validation_status": "passed",
         "validation_blockers": [],
     }
@@ -5966,6 +9194,775 @@ def test_release_readiness_report_passes_with_only_active_launch_lane(
         if lane["domain"] != active_domain and not lane["production_ready"]
     ]
     assert blocked_future_lanes
+    future_crypto_rows = [
+        row
+        for row in payload["cryptographic_evidence"]
+        if row["domain"] != active_domain
+    ]
+    assert future_crypto_rows
+    assert all(
+        row["route_canary_evidence_bound"] is False for row in future_crypto_rows
+    )
+
+
+def test_release_readiness_report_compares_checklist_ready_exactly(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Top-level readiness must not truthy-coerce checklist readiness."""
+
+    report = load_report_module()
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+
+    def malformed_launch_checklist(
+        evidence_summary,
+        native_prover_bundle=None,
+    ):
+        return {"ready": "true", "items": []}
+
+    monkeypatch.setattr(
+        report,
+        "_active_launch_release_checklist",
+        malformed_launch_checklist,
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    assert readiness["release_checklist"]["ready"] == "true"
+    assert readiness["production_ready"] is False
+
+
+def test_release_readiness_report_markdown_compares_row_ready_exactly(
+    tmp_path: Path,
+) -> None:
+    """Markdown readiness rows must not truthy-coerce malformed flags."""
+
+    report = load_report_module()
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    checklist_item = readiness["release_checklist"]["items"][0]
+    checklist_item["ready"] = "true"
+    checklist_item["blockers"] = []
+    active_lane = next(
+        lane
+        for lane in readiness["evidence"]["lanes"]
+        if lane["domain"] == report.ACTIVE_LAUNCH_DOMAIN
+    )
+    active_lane["production_ready"] = "true"
+    active_lane["blockers"] = []
+    active_lane["records"]["source_verifier_material"] = "true"
+    active_crypto = next(
+        row
+        for row in readiness["cryptographic_evidence"]
+        if row["domain"] == report.ACTIVE_LAUNCH_DOMAIN
+    )
+    active_crypto["route_canary_evidence_bound"] = "false"
+    readiness["native_evm_prover_bundle"]["required"] = "true"
+
+    markdown = report._render_markdown(readiness, max_blockers_per_lane=4)
+
+    assert f"| `{checklist_item['id']}` | blocked | -" in markdown
+    assert (
+        f"| {report.ACTIVE_LAUNCH_DOMAIN} | `{report.ACTIVE_LAUNCH_CHAIN}` | "
+        "blocked |"
+    ) in markdown
+    assert (
+        "source=no, deploy=yes, dest=yes, route=yes"
+        in markdown
+    )
+    assert (
+        f"`{report.ACTIVE_LAUNCH_ROUTE_CANARY_EVIDENCE_SOURCE} (unbound)`"
+        in markdown
+    )
+    assert "| no | passed |" in markdown
+    assert "| yes | passed |" not in markdown
+
+
+def test_release_readiness_report_markdown_marks_malformed_blocker_containers(
+    tmp_path: Path,
+) -> None:
+    """Markdown blocker cells must not flatten strings or crash on bad entries."""
+
+    report = load_report_module()
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+    readiness["native_evm_prover_bundle"]["validation_blockers"] = (
+        "operator override"
+    )
+    readiness["source_inventory"]["proof_request_bundle_gate"][
+        "validation_blockers"
+    ] = ["", 1]
+    readiness["user_prover_submission_surfaces"][0]["validation_status"] = "blocked"
+    readiness["user_prover_submission_surfaces"][0]["validation_blockers"] = ""
+    readiness["blockers"] = "operator override"
+
+    markdown = report._render_markdown(readiness, max_blockers_per_lane=4)
+
+    assert markdown.count("`<invalid validation_blockers>`") >= 3
+    assert "- `<invalid blockers>`" in markdown
+    assert "o<br>p<br>e<br>r<br>a<br>t<br>o<br>r" not in markdown
+    assert "- o\n- p\n- e\n- r" not in markdown
+
+
+def test_release_readiness_report_markdown_names_native_sdk_id_evidence(
+    tmp_path: Path,
+) -> None:
+    """Release notes must name canonical native SDK-id evidence explicitly."""
+
+    report = load_report_module()
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    markdown = report._render_markdown(readiness, max_blockers_per_lane=4)
+
+    assert "canonical native EVM prover SDK-id rejection" in markdown
+    assert "padded-SDK adversarial tests" in markdown
+
+
+def test_release_readiness_report_preserves_malformed_crypto_evidence_values(
+    tmp_path: Path,
+) -> None:
+    """Cryptographic evidence rows must not truthy-coerce malformed values."""
+
+    report = load_report_module()
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    evidence_summary = report._load_evidence_summary([evidence])
+    active_lane = report._active_launch_lane(evidence_summary)
+    assert active_lane is not None
+
+    active_lane["route_allowlist"]["route_canary"]["evidence_bound"] = "false"
+    active_lane["source_adapter_gate"]["required"] = "false"
+    active_lane["source_adapter_gate"]["gate_hash"] = 0
+    active_lane["source_adapter_gate"]["audit_hashes"] = ["not", "an", "object"]
+
+    active_row = next(
+        row
+        for row in report._cryptographic_evidence(evidence_summary)
+        if row["domain"] == report.ACTIVE_LAUNCH_DOMAIN
+    )
+
+    assert active_row["route_canary_evidence_bound"] == "false"
+    assert active_row["source_adapter_gate_required"] == "false"
+    assert active_row["source_adapter_gate_hash"] == 0
+    assert active_row["source_adapter_gate_audit_hashes"] == ["not", "an", "object"]
+
+
+def test_release_readiness_report_blocks_malformed_active_route_canary_metadata(
+    tmp_path: Path,
+) -> None:
+    """The release checklist must validate active route-canary transaction fields."""
+
+    report = load_report_module()
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    cases = (
+        (
+            "evidence_hash",
+            "0x" + "00" * 32,
+            "route canary evidence hash must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "evidence_source",
+            "operator_note",
+            "route canary evidence source must be evm_message_proof_accepted_transaction",
+        ),
+        (
+            "evidence_source",
+            None,
+            "route canary evidence source must be a non-empty canonical string",
+        ),
+        (
+            "evidence_source",
+            "",
+            "route canary evidence source must be a non-empty canonical string",
+        ),
+        (
+            "evidence_source",
+            f" {report.ACTIVE_LAUNCH_ROUTE_CANARY_EVIDENCE_SOURCE} ",
+            "route canary evidence source must be a non-empty canonical string",
+        ),
+        (
+            "evidence_source",
+            123,
+            "route canary evidence source must be a non-empty canonical string",
+        ),
+        (
+            "transaction_hash",
+            None,
+            "route canary transaction hash must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "transaction_hash",
+            fixed_hex32(0x31).upper(),
+            "route canary transaction hash must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "receipt_block_hash",
+            "0x" + "00" * 32,
+            "route canary receipt block hash must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "block_receipts_root",
+            "0x" + "00" * 32,
+            "route canary block receipts root must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "message_id",
+            "0x" + "00" * 32,
+            "route canary message id must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "receipt_block_number",
+            0,
+            "route canary receipt block number must be a positive integer",
+        ),
+        (
+            "receipt_block_number",
+            "10144",
+            "route canary receipt block number must be a positive integer",
+        ),
+        (
+            "receipt_block_finalized",
+            False,
+            "route canary receipt block must be finalized",
+        ),
+    )
+
+    for field, value, expected_blocker in cases:
+        evidence_summary = report._load_evidence_summary([evidence])
+        native_status = report._native_evm_prover_bundle_status(
+            native_bundle,
+            evidence_summary,
+        )
+        active_lane = report._active_launch_lane(evidence_summary)
+        assert active_lane is not None
+        canary = active_lane["route_allowlist"]["route_canary"]
+        if value is None:
+            canary.pop(field, None)
+        else:
+            canary[field] = value
+
+        checklist = report._active_launch_release_checklist(
+            evidence_summary,
+            native_status,
+        )
+        item_by_id = {item["id"]: item for item in checklist["items"]}
+        route_canary_item = item_by_id["live_route_canary_evidence"]
+
+        assert checklist["ready"] is False, field
+        assert route_canary_item["ready"] is False, field
+        assert any(
+            expected_blocker in blocker
+            for blocker in route_canary_item["blockers"]
+        ), field
+
+
+def test_release_readiness_report_blocks_malformed_active_route_allowlist_binding(
+    tmp_path: Path,
+) -> None:
+    """The release checklist must validate active route allowlist binding fields."""
+
+    report = load_report_module()
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    cases = (
+        (
+            "route_allowlist.route_allowlist_hash",
+            "0x" + "00" * 32,
+            "route allowlist hash must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "route_allowlist.route_allowlist_hash",
+            fixed_hex32(0x41).upper(),
+            "route allowlist hash must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "route_allowlist.expected_route_allowlist_hash",
+            None,
+            "expected route allowlist hash must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "route_allowlist.expected_route_allowlist_hash_matches",
+            False,
+            "route allowlist expected hash match flag must be true",
+        ),
+        (
+            "route_allowlist.hash_mismatch",
+            fixed_hex32(0x42),
+            "route allowlist hash must match the expected canonical source, deployment, and destination binding hash",
+        ),
+        (
+            "source_record_hashes.source_verifier_material_hash",
+            "0x" + "00" * 32,
+            "route allowlist source verifier material hash must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "source_record_hashes.source_adapter_engine_deployment_hash",
+            None,
+            "route allowlist source adapter engine deployment hash must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "destination_binding.destination_binding_hash",
+            "0x" + "00" * 32,
+            "route allowlist destination binding hash must be a canonical non-zero bytes32 hex string",
+        ),
+    )
+
+    for path, value, expected_blocker in cases:
+        evidence_summary = report._load_evidence_summary([evidence])
+        native_status = report._native_evm_prover_bundle_status(
+            native_bundle,
+            evidence_summary,
+        )
+        active_lane = report._active_launch_lane(evidence_summary)
+        assert active_lane is not None
+        route_allowlist = active_lane["route_allowlist"]
+        if path == "route_allowlist.hash_mismatch":
+            route_allowlist["expected_route_allowlist_hash"] = value
+            route_allowlist["expected_route_allowlist_hash_matches"] = True
+        else:
+            section, field = path.split(".", 1)
+            target = active_lane[section]
+            if value is None:
+                target.pop(field, None)
+            else:
+                target[field] = value
+
+        checklist = report._active_launch_release_checklist(
+            evidence_summary,
+            native_status,
+        )
+        item_by_id = {item["id"]: item for item in checklist["items"]}
+        route_item = item_by_id["route_allowlist_binding"]
+
+        assert checklist["ready"] is False, path
+        assert route_item["ready"] is False, path
+        assert any(expected_blocker in blocker for blocker in route_item["blockers"]), path
+
+
+def test_release_readiness_report_blocks_malformed_active_governed_deployment_metadata(
+    tmp_path: Path,
+) -> None:
+    """The release checklist must validate active deployment and binding metadata."""
+
+    report = load_report_module()
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    cases = (
+        (
+            "source_record_hashes.source_verifier_material_hash",
+            "0x" + "00" * 32,
+            "governed deployment source verifier material hash must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "source_record_hashes.source_adapter_engine_deployment_hash",
+            fixed_hex32(0x51).upper(),
+            "governed deployment source adapter engine deployment hash must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "destination_binding.destination_binding_hash",
+            "0x" + "00" * 32,
+            "governed deployment destination binding hash must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "destination_binding.expected_destination_binding_hash",
+            None,
+            "governed deployment expected destination binding hash must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "destination_binding.expected_destination_binding_hash_matches",
+            False,
+            "governed deployment destination binding expected hash match flag must be true",
+        ),
+        (
+            "destination_binding.hash_mismatch",
+            fixed_hex32(0x52),
+            "governed deployment destination binding hash must match the expected canonical binding hash",
+        ),
+        (
+            "source_adapter_gate",
+            None,
+            "source adapter gate summary is missing",
+        ),
+        (
+            "source_adapter_gate.ready",
+            False,
+            "source adapter gate summary must be ready",
+        ),
+        (
+            "source_adapter_gate.required",
+            True,
+            "active EVM source adapter gate summary must not be required",
+        ),
+        (
+            "source_adapter_gate.gate_hash",
+            fixed_hex32(0x53),
+            "active EVM source adapter gate hash must be empty",
+        ),
+        (
+            "source_adapter_gate.audit_hashes",
+            {"unexpected_gate_hash": fixed_hex32(0x54)},
+            "active EVM source adapter gate audit hashes must be empty",
+        ),
+    )
+
+    for path, value, expected_blocker in cases:
+        evidence_summary = report._load_evidence_summary([evidence])
+        native_status = report._native_evm_prover_bundle_status(
+            native_bundle,
+            evidence_summary,
+        )
+        active_lane = report._active_launch_lane(evidence_summary)
+        assert active_lane is not None
+        if path == "destination_binding.hash_mismatch":
+            active_lane["destination_binding"]["expected_destination_binding_hash"] = (
+                value
+            )
+            active_lane["destination_binding"][
+                "expected_destination_binding_hash_matches"
+            ] = True
+        elif path == "source_adapter_gate":
+            active_lane.pop("source_adapter_gate", None)
+        else:
+            section, field = path.split(".", 1)
+            target = active_lane[section]
+            if value is None:
+                target.pop(field, None)
+            else:
+                target[field] = value
+
+        checklist = report._active_launch_release_checklist(
+            evidence_summary,
+            native_status,
+        )
+        item_by_id = {item["id"]: item for item in checklist["items"]}
+        deployment_item = item_by_id["governed_deployment_evidence"]
+
+        assert checklist["ready"] is False, path
+        assert deployment_item["ready"] is False, path
+        assert any(
+            expected_blocker in blocker
+            for blocker in deployment_item["blockers"]
+        ), path
+
+
+def test_release_readiness_report_blocks_malformed_active_required_record_metadata(
+    tmp_path: Path,
+) -> None:
+    """The release checklist must validate active lane identity and record flags."""
+
+    report = load_report_module()
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    cases = (
+        (
+            "chain",
+            "bsc",
+            "active launch lane chain must be eth",
+        ),
+        (
+            "production_ready",
+            False,
+            "active launch lane must be production ready",
+        ),
+        (
+            "records",
+            None,
+            "required record summary is missing",
+        ),
+        (
+            "records.source_verifier_material",
+            "yes",
+            "missing source verifier material",
+        ),
+        (
+            "records.source_adapter_deployment",
+            1,
+            "missing source adapter deployment",
+        ),
+        (
+            "records.destination_rollout",
+            False,
+            "missing destination rollout",
+        ),
+        (
+            "records.route_allowlist",
+            None,
+            "missing route allowlist",
+        ),
+        (
+            "records.operator_override",
+            True,
+            "required record summary has unknown field operator_override",
+        ),
+    )
+
+    for path, value, expected_blocker in cases:
+        evidence_summary = report._load_evidence_summary([evidence])
+        native_status = report._native_evm_prover_bundle_status(
+            native_bundle,
+            evidence_summary,
+        )
+        active_lane = report._active_launch_lane(evidence_summary)
+        assert active_lane is not None
+        if path == "records":
+            active_lane.pop("records", None)
+        elif path.startswith("records."):
+            _, field = path.split(".", 1)
+            records = active_lane["records"]
+            if value is None:
+                records.pop(field, None)
+            else:
+                records[field] = value
+        else:
+            active_lane[path] = value
+
+        checklist = report._active_launch_release_checklist(
+            evidence_summary,
+            native_status,
+        )
+        item_by_id = {item["id"]: item for item in checklist["items"]}
+        records_item = item_by_id["all_required_lane_records"]
+
+        assert checklist["ready"] is False, path
+        assert records_item["ready"] is False, path
+        assert any(
+            expected_blocker in blocker for blocker in records_item["blockers"]
+        ), path
+
+
+def test_release_readiness_report_blocks_active_lane_unresolved_blockers(
+    tmp_path: Path,
+) -> None:
+    """The no-unresolved-blockers item must inspect active lane blockers directly."""
+
+    report = load_report_module()
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    cases = (
+        (
+            ["operator launch hold"],
+            [],
+            "domain 1 (eth): operator launch hold",
+        ),
+        (
+            "operator launch hold",
+            [],
+            "domain 1 (eth): active launch lane blocker summary is malformed",
+        ),
+        (
+            [""],
+            [],
+            "domain 1 (eth): active launch lane blocker must be a non-empty canonical string",
+        ),
+        (
+            [" padded "],
+            [],
+            "domain 1 (eth): active launch lane blocker must be a non-empty canonical string",
+        ),
+        (
+            ["operator launch hold"],
+            ["domain 1 (eth): operator launch hold"],
+            "domain 1 (eth): operator launch hold",
+        ),
+        (
+            [],
+            [""],
+            "SCCP evidence blocker must be a non-empty canonical string",
+        ),
+        (
+            [],
+            [" padded "],
+            "SCCP evidence blocker must be a non-empty canonical string",
+        ),
+        (
+            [],
+            "operator launch hold",
+            "SCCP evidence blocker summary is malformed",
+        ),
+    )
+
+    for lane_blockers, top_level_blockers, expected_blocker in cases:
+        evidence_summary = report._load_evidence_summary([evidence])
+        native_status = report._native_evm_prover_bundle_status(
+            native_bundle,
+            evidence_summary,
+        )
+        active_lane = report._active_launch_lane(evidence_summary)
+        assert active_lane is not None
+        active_lane["blockers"] = lane_blockers
+        evidence_summary["blockers"] = top_level_blockers
+
+        checklist = report._active_launch_release_checklist(
+            evidence_summary,
+            native_status,
+        )
+        item_by_id = {item["id"]: item for item in checklist["items"]}
+        unresolved_item = item_by_id["no_unresolved_blockers"]
+
+        assert checklist["ready"] is False, str(lane_blockers)
+        assert unresolved_item["ready"] is False, str(lane_blockers)
+        assert expected_blocker in unresolved_item["blockers"]
+        if lane_blockers == ["operator launch hold"] and top_level_blockers:
+            assert unresolved_item["blockers"].count(expected_blocker) == 1
+
+
+def test_release_readiness_report_classifies_malformed_active_lane_blockers(
+    tmp_path: Path,
+) -> None:
+    """Malformed active lane blockers must fail every category that classifies them."""
+
+    report = load_report_module()
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    category_item_ids = (
+        "governed_deployment_evidence",
+        "route_allowlist_binding",
+        "live_route_canary_evidence",
+    )
+    cases = (
+        (
+            "operator launch hold",
+            category_item_ids,
+            "domain 1 (eth): active launch lane blockers must be a list of non-empty canonical strings",
+        ),
+        (
+            [123],
+            category_item_ids,
+            "domain 1 (eth): active launch lane blockers[0] must be a non-empty canonical string",
+        ),
+        (
+            [" padded "],
+            category_item_ids,
+            "domain 1 (eth): active launch lane blockers[0] must be a non-empty canonical string",
+        ),
+        (
+            ["route canary operator launch hold"],
+            ("live_route_canary_evidence",),
+            "domain 1 (eth): route canary operator launch hold",
+        ),
+    )
+
+    for lane_blockers, expected_item_ids, expected_blocker in cases:
+        evidence_summary = report._load_evidence_summary([evidence])
+        native_status = report._native_evm_prover_bundle_status(
+            native_bundle,
+            evidence_summary,
+        )
+        active_lane = report._active_launch_lane(evidence_summary)
+        assert active_lane is not None
+        active_lane["blockers"] = lane_blockers
+
+        checklist = report._active_launch_release_checklist(
+            evidence_summary,
+            native_status,
+        )
+        item_by_id = {item["id"]: item for item in checklist["items"]}
+
+        assert checklist["ready"] is False, repr(lane_blockers)
+        for item_id in expected_item_ids:
+            item = item_by_id[item_id]
+            assert item["ready"] is False, (repr(lane_blockers), item_id)
+            assert expected_blocker in item["blockers"], (
+                repr(lane_blockers),
+                item_id,
+            )
+        if not isinstance(lane_blockers, list):
+            assert "o" not in item_by_id["live_route_canary_evidence"]["blockers"]
+
+
+def test_release_readiness_report_blocks_malformed_native_prover_blockers(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Native prover blocker containers must not be filtered or character-expanded."""
+
+    report = load_report_module()
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    cases = (
+        (
+            "operator override",
+            "native EVM prover validation_blockers must be a list of non-empty canonical strings",
+        ),
+        (
+            [123],
+            "native EVM prover validation_blockers[0] must be a non-empty canonical string",
+        ),
+        (
+            [" padded "],
+            "native EVM prover validation_blockers[0] must be a non-empty canonical string",
+        ),
+        (
+            ["operator launch hold"],
+            "operator launch hold",
+        ),
+    )
+
+    for blocker_value, expected_blocker in cases:
+        evidence_summary = report._load_evidence_summary([evidence])
+        native_status = report._native_evm_prover_bundle_status(
+            native_bundle,
+            evidence_summary,
+        )
+        native_status["validation_blockers"] = blocker_value
+
+        checklist = report._active_launch_release_checklist(
+            evidence_summary,
+            native_status,
+        )
+        item_by_id = {item["id"]: item for item in checklist["items"]}
+        native_item = item_by_id["native_evm_groth16_prover_bundle"]
+
+        assert checklist["ready"] is False, repr(blocker_value)
+        assert native_item["ready"] is False, repr(blocker_value)
+        assert expected_blocker in native_item["blockers"]
+
+        monkeypatch.setattr(
+            report,
+            "_native_evm_prover_bundle_status",
+            lambda *_args, status=native_status: status,
+        )
+        readiness = report._build_report(
+            [evidence],
+            ["all=passed"],
+            [],
+            require_phase_evidence=False,
+            native_evm_prover_bundle=native_bundle,
+        )
+
+        assert readiness["production_ready"] is False, repr(blocker_value)
+        assert expected_blocker in readiness["blockers"]
+        assert "o" not in readiness["blockers"]
 
 
 def test_release_readiness_report_blocks_without_native_evm_prover_bundle(
@@ -6614,6 +10611,47 @@ def test_release_readiness_report_blocks_malformed_native_evm_prover_sdk_artifac
         "native_sdk_artifacts[1] contains unknown field: operator_note"
     ) in blockers
     assert "native_sdk_artifacts[2] missing field: implementation_hash" in blockers
+    assert payload["release_checklist"]["ready"] is False
+
+
+def test_release_readiness_report_blocks_padded_native_evm_prover_sdk_artifacts(
+    tmp_path: Path,
+) -> None:
+    """Native prover manifests must reject SDK ids normalized by trimming."""
+
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    payload = json.loads(native_bundle.read_text(encoding="utf-8"))
+    missing_sdk = payload["native_sdk_artifacts"][0]["sdk"]
+    payload["native_sdk_artifacts"][0]["sdk"] = f" {missing_sdk} "
+    native_bundle.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--format",
+            "json",
+            "--phase-result",
+            "all=passed",
+            "--native-evm-prover-bundle",
+            str(native_bundle),
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    payload = json.loads(completed.stdout)
+    blockers = payload["native_evm_prover_bundle"]["validation_blockers"]
+    assert "native_sdk_artifacts[0].sdk must not contain surrounding whitespace" in blockers
+    assert f"native_sdk_artifacts missing sdk: {missing_sdk}" in blockers
     assert payload["release_checklist"]["ready"] is False
 
 
@@ -11601,6 +15639,37 @@ def test_release_readiness_rejects_markdown_unsafe_artifact_paths(
     assert "complete|operator.toml" in completed.stderr
 
 
+def test_release_readiness_rejects_padded_artifact_paths(
+    tmp_path: Path,
+) -> None:
+    """Release-readiness artifact paths must not rely on trimming."""
+
+    _, payload = write_complete_evidence(tmp_path)
+    evidence = tmp_path / "complete-operator.toml "
+    evidence.write_text(payload, encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--format",
+            "json",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert (
+        "release artifact path must not contain surrounding whitespace:"
+        in completed.stderr
+    )
+    assert "complete-operator.toml " in completed.stderr
+
+
 def test_release_readiness_rejects_markdown_unsafe_native_evm_payload_paths(
     tmp_path: Path,
 ) -> None:
@@ -11645,6 +15714,48 @@ def test_release_readiness_rejects_markdown_unsafe_native_evm_payload_paths(
     assert any(
         "native EVM Groth16 prover bundle proof_artifact path contains "
         "Markdown-unsafe character '|'"
+        in blocker
+        for blocker in native_status["validation_blockers"]
+    )
+
+
+def test_release_readiness_rejects_padded_native_evm_payload_paths(
+    tmp_path: Path,
+) -> None:
+    """Native prover payload paths must not be accepted after trimming."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    payload = json.loads(native_bundle.read_text(encoding="utf-8"))
+    payload["proof_artifact"] = f" {payload['proof_artifact']} "
+    native_bundle.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--format",
+            "json",
+            "--native-evm-prover-bundle",
+            str(native_bundle),
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    report = json.loads(completed.stdout)
+    native_status = report["native_evm_prover_bundle"]
+    assert native_status["validation_status"] == "blocked"
+    assert any(
+        "native EVM Groth16 prover bundle proof_artifact path must not contain "
+        "surrounding whitespace"
         in blocker
         for blocker in native_status["validation_blockers"]
     )

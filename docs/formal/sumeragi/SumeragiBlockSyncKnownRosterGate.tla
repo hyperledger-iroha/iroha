@@ -360,8 +360,10 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+KnownRosterMatchesSpec ==
   \A c \in Cases: Matches(c)
+
+SafetyFast == KnownRosterMatchesSpec
 
 KnownSelectedRosterBookkeeping ==
   Matches("known_selection_qc")

@@ -224,10 +224,13 @@ UnresolvedBlocksStable ==
   /\ ActualUnresolved(NotReady)
   /\ ActualUnresolved(CompleteButNotReady)
 
-SafetyFast ==
+RbcAvailabilityRescheduleCoreSafety ==
   /\ SelectionExact
   /\ FailOpenStable
   /\ UnresolvedBlocksStable
+
+SafetyFast ==
+  RbcAvailabilityRescheduleCoreSafety
 
 RbcAvailabilityFailOpenGateExact ==
   \A c \in FailOpenGateCases:
@@ -269,7 +272,7 @@ RbcAvailabilityDeficitBlocksExact ==
        ELSE TRUE
 
 RbcAvailabilityRescheduleExactness ==
-  /\ SafetyFast
+  /\ RbcAvailabilityRescheduleCoreSafety
   /\ RbcAvailabilityFailOpenGateExact
   /\ RbcAvailabilityTerminalSessionExact
   /\ RbcAvailabilityPendingBlocksExact

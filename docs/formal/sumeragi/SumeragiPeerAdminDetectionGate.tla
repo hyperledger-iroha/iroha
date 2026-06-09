@@ -173,13 +173,15 @@ TypeInvariant ==
        /\ SpecTransactionAdmin(t) \in BOOLEAN
        /\ ActualTransactionAdmin(t) \in BOOLEAN
 
-NoBugInvariant ==
+PeerAdminDetectionCoreSafety ==
   /\ \A c \in InstructionCases:
        ActualInstructionAdmin(c) = SpecInstructionAdmin(c)
   /\ \A t \in TransactionCases:
        ActualTransactionAdmin(t) = SpecTransactionAdmin(t)
 
-SafetyFast == NoBugInvariant
+NoBugInvariant == PeerAdminDetectionCoreSafety
+
+SafetyFast == PeerAdminDetectionCoreSafety
 
 BugRejectExactRegister == NoBugInvariant
 BugRejectExactUnregister == NoBugInvariant

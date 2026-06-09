@@ -1,5 +1,6 @@
 [package]
 name = "iroha_data_model"
+autotests = false
 autobins = false
 
 edition.workspace = true
@@ -150,3 +151,13 @@ required-features = ["test-fixtures", "transparent_api"]
 name = "offline_v2_vectors"
 path = "src/bin/offline_v2_vectors.rs"
 required-features = ["test-fixtures", "transparent_api"]
+
+# Grouped integration-test harnesses keep `cargo test` from linking one binary per tests/*.rs file.
+
+[[test]]
+name = "iroha_data_model_group_01"
+path = "tests/grouped/group_01.rs"
+
+[[test]]
+name = "iroha_data_model_group_02"
+path = "tests/grouped/group_02.rs"

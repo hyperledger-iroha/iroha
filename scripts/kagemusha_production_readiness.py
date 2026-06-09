@@ -7,11 +7,13 @@ import datetime as dt
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import re
 import shlex
 import stat
 import sys
+import tempfile
 from typing import Any, Iterable
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -75,9 +77,18 @@ LINEAGE_PROOF_REQUIRED_TEST_LOGS = {
 EXPECTED_LINEAGE_PROOF_RESULT_PREFIX = (
     "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;"
 )
+LINEAGE_PROOF_RESULT_RE = re.compile(
+    r"^test result: ok\. 1 passed; 0 failed; 0 ignored; 0 measured; "
+    r"0 filtered out; finished in [0-9]+(?:\.[0-9]+)?s$"
+)
+LINEAGE_ARTIFACT_ALL_ZERO_ERROR = (
+    "must be generated lineage material, not all-zero placeholder bytes"
+)
 COMPACT_KEY_REQUIRED_ARTIFACTS = (
     "recursive-compact-len4.vk",
     "recursive-compact-len4.pk",
+    "recursive-compact-key-artifacts.norito",
+    "recursive-compact-verifier-keys.norito",
     "recursive-compact-len4.record.norito",
 )
 COMPACT_KEY_PLACEHOLDER_PREFIXES = (
@@ -87,20 +98,29 @@ COMPACT_KEY_PLACEHOLDER_PREFIXES = (
     b"test recursive compact key ",
 )
 COMPACT_KEY_PLACEHOLDER_ERROR = "must be generated key material, not a placeholder fixture"
+COMPACT_KEY_ALL_ZERO_ERROR = "must be generated key material, not all-zero placeholder bytes"
 MAX_COMPACT_KEY_GENERATOR_LOG_BYTES = 1024 * 1024
 COMPACT_KEY_GENERATOR_LOG_SIZE_FIELDS = {
     "recursive-compact-len4.vk": "vk",
     "recursive-compact-len4.pk": "pk",
+    "recursive-compact-key-artifacts.norito": "key_artifacts",
+    "recursive-compact-verifier-keys.norito": "verifier_keys",
     "recursive-compact-len4.record.norito": "record",
+}
+COMPACT_KEY_GENERATOR_LOG_DIGEST_FIELDS = {
+    artifact: f"{field}_sha256"
+    for artifact, field in COMPACT_KEY_GENERATOR_LOG_SIZE_FIELDS.items()
 }
 COMPACT_KEY_GENERATOR_LOG_RE = re.compile(
     r"^Wrote ABI-7 recursive compact key artifacts for "
     r"`kagemusha-recursive-compact-v1` opening_len=4 to "
     r"artifacts/kagemusha/recursive-compact-len4\.vk and "
     r"artifacts/kagemusha/recursive-compact-len4\.pk "
-    r"\(vk=(?P<vk>[1-9][0-9]*) bytes, "
-    r"pk=(?P<pk>[1-9][0-9]*) bytes, "
-    r"record=(?P<record>[1-9][0-9]*) bytes\)$"
+    r"\(vk=(?P<vk>[1-9][0-9]*) bytes sha256=(?P<vk_sha256>[0-9a-f]{64}), "
+    r"pk=(?P<pk>[1-9][0-9]*) bytes sha256=(?P<pk_sha256>[0-9a-f]{64}), "
+    r"record=(?P<record>[1-9][0-9]*) bytes sha256=(?P<record_sha256>[0-9a-f]{64}), "
+    r"key_artifacts=(?P<key_artifacts>[1-9][0-9]*) bytes sha256=(?P<key_artifacts_sha256>[0-9a-f]{64}), "
+    r"verifier_keys=(?P<verifier_keys>[1-9][0-9]*) bytes sha256=(?P<verifier_keys_sha256>[0-9a-f]{64})\)$"
 )
 
 
@@ -121,13 +141,18 @@ def expected_compact_key_command() -> str:
         "iroha app zk kagemusha recursive-compact-key-artifacts "
         "--vk-out artifacts/kagemusha/recursive-compact-len4.vk "
         "--pk-out artifacts/kagemusha/recursive-compact-len4.pk "
+        "--key-artifacts-out artifacts/kagemusha/recursive-compact-key-artifacts.norito "
+        "--verifier-keys-out artifacts/kagemusha/recursive-compact-verifier-keys.norito "
         "--record-out artifacts/kagemusha/recursive-compact-len4.record.norito "
         "--record-namespace offline_kagemusha "
         "--record-version 1"
     )
 
 
-def expected_compact_key_generator_log_line(artifact_size_bytes: dict[str, int]) -> str:
+def expected_compact_key_generator_log_line(
+    artifact_size_bytes: dict[str, int],
+    artifact_sha256: dict[str, str],
+) -> str:
     """Return the canonical ABI-7 recursive compact key generator summary line."""
 
     return (
@@ -135,9 +160,16 @@ def expected_compact_key_generator_log_line(artifact_size_bytes: dict[str, int])
         "`kagemusha-recursive-compact-v1` opening_len=4 to "
         "artifacts/kagemusha/recursive-compact-len4.vk and "
         "artifacts/kagemusha/recursive-compact-len4.pk "
-        f"(vk={artifact_size_bytes['recursive-compact-len4.vk']} bytes, "
-        f"pk={artifact_size_bytes['recursive-compact-len4.pk']} bytes, "
-        f"record={artifact_size_bytes['recursive-compact-len4.record.norito']} bytes)"
+        f"(vk={artifact_size_bytes['recursive-compact-len4.vk']} bytes "
+        f"sha256={artifact_sha256['recursive-compact-len4.vk']}, "
+        f"pk={artifact_size_bytes['recursive-compact-len4.pk']} bytes "
+        f"sha256={artifact_sha256['recursive-compact-len4.pk']}, "
+        f"record={artifact_size_bytes['recursive-compact-len4.record.norito']} bytes "
+        f"sha256={artifact_sha256['recursive-compact-len4.record.norito']}, "
+        f"key_artifacts={artifact_size_bytes['recursive-compact-key-artifacts.norito']} bytes "
+        f"sha256={artifact_sha256['recursive-compact-key-artifacts.norito']}, "
+        f"verifier_keys={artifact_size_bytes['recursive-compact-verifier-keys.norito']} bytes "
+        f"sha256={artifact_sha256['recursive-compact-verifier-keys.norito']})"
     )
 
 
@@ -377,6 +409,14 @@ class DuplicateJsonKeyError(ValueError):
         super().__init__(key)
 
 
+class NonFiniteJsonConstantError(ValueError):
+    """Raised when release evidence JSON uses non-standard numeric constants."""
+
+    def __init__(self, constant: str) -> None:
+        self.constant = constant
+        super().__init__(constant)
+
+
 def _display_json_key(key: str) -> str:
     return device_lab.SECRET_PATH_REDACTION if device_lab.SECRET_RE.search(key) else key
 
@@ -390,11 +430,67 @@ def _reject_duplicate_json_object_pairs(pairs: list[tuple[str, Any]]) -> dict[st
     return item
 
 
+def _reject_nonfinite_json_constant(constant: str) -> None:
+    raise NonFiniteJsonConstantError(constant)
+
+
 def _read_json_without_duplicate_keys(path: Path) -> Any:
     return json.loads(
         path.read_text(encoding="utf-8"),
         object_pairs_hook=_reject_duplicate_json_object_pairs,
+        parse_constant=_reject_nonfinite_json_constant,
     )
+
+
+def _read_release_json_text(
+    path: Path,
+    label: str,
+    *,
+    missing_code: str,
+    shape_code: str,
+    unreadable_code: str,
+) -> tuple[str | None, list[dict[str, Any]]]:
+    shape_errors = validate_release_local_json_file(path, label)
+    if shape_errors:
+        missing_error = f"{label} is missing"
+        if shape_errors == [missing_error]:
+            return None, [blocker(missing_code, f"missing {label}")]
+        return None, [blocker(shape_code, error) for error in shape_errors]
+    chunks: list[bytes] = []
+    try:
+        with path.open("rb") as handle:
+            open_stat = os.fstat(handle.fileno())
+            release_json_path_stat = path.lstat()
+            if stat.S_ISLNK(release_json_path_stat.st_mode):
+                return None, [blocker(shape_code, f"{label} must not be a symlink")]
+            if not stat.S_ISREG(release_json_path_stat.st_mode) or not stat.S_ISREG(
+                open_stat.st_mode
+            ):
+                return None, [blocker(shape_code, f"{label} must be a regular file")]
+            if (release_json_path_stat.st_dev, release_json_path_stat.st_ino) != (
+                open_stat.st_dev,
+                open_stat.st_ino,
+            ):
+                return None, [blocker(shape_code, f"{label} changed while being read")]
+            if open_stat.st_nlink > 1:
+                return None, [blocker(shape_code, f"{label} must not be hardlinked")]
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                chunks.append(chunk)
+            release_json_final_path_stat = path.lstat()
+            if (
+                release_json_final_path_stat.st_dev,
+                release_json_final_path_stat.st_ino,
+            ) != (
+                open_stat.st_dev,
+                open_stat.st_ino,
+            ):
+                return None, [blocker(shape_code, f"{label} changed while being read")]
+    except OSError:
+        return None, [blocker(unreadable_code, f"{label} could not be read")]
+    try:
+        return b"".join(chunks).decode("utf-8"), []
+    except UnicodeDecodeError:
+        return None, [blocker(unreadable_code, f"{label} could not be read")]
 
 
 def _duplicate_json_key_message(label: str, exc: DuplicateJsonKeyError) -> str:
@@ -402,39 +498,22 @@ def _duplicate_json_key_message(label: str, exc: DuplicateJsonKeyError) -> str:
 
 
 def _load_json(path: Path) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
-    shape_errors = validate_release_local_json_file(path, "ABI-6 manifest")
-    if shape_errors:
-        missing_error = "ABI-6 manifest is missing"
-        if shape_errors == [missing_error]:
-            return None, [
-                blocker(
-                    "abi6_manifest_missing",
-                    "missing ABI-6 manifest",
-                )
-            ]
-        return None, [
-            blocker(
-                "abi6_manifest_file_shape",
-                error,
-            )
-            for error in shape_errors
-        ]
+    text, read_blockers = _read_release_json_text(
+        path,
+        "ABI-6 manifest",
+        missing_code="abi6_manifest_missing",
+        shape_code="abi6_manifest_file_shape",
+        unreadable_code="abi6_manifest_unreadable",
+    )
+    if read_blockers:
+        return None, read_blockers
+    assert text is not None
     try:
-        data = _read_json_without_duplicate_keys(path)
-    except FileNotFoundError:
-        return None, [
-            blocker(
-                "abi6_manifest_missing",
-                f"missing ABI-6 manifest at {path.as_posix()}",
-            )
-        ]
-    except (OSError, UnicodeDecodeError):
-        return None, [
-            blocker(
-                "abi6_manifest_unreadable",
-                "ABI-6 manifest could not be read",
-            )
-        ]
+        data = json.loads(
+            text,
+            object_pairs_hook=_reject_duplicate_json_object_pairs,
+            parse_constant=_reject_nonfinite_json_constant,
+        )
     except json.JSONDecodeError as exc:
         return None, [
             blocker(
@@ -447,6 +526,13 @@ def _load_json(path: Path) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]
             blocker(
                 "abi6_manifest_invalid_json",
                 _duplicate_json_key_message("ABI-6 manifest", exc),
+            )
+        ]
+    except NonFiniteJsonConstantError as exc:
+        return None, [
+            blocker(
+                "abi6_manifest_invalid_json",
+                f"ABI-6 manifest is not strict JSON: non-finite constant {exc.constant} is not allowed",
             )
         ]
     if not isinstance(data, dict):
@@ -529,9 +615,37 @@ def _repo_source_marker_text(
     file_errors = validate_repo_source_marker_file(path, label)
     if file_errors:
         return None, file_errors
+    chunks: list[bytes] = []
     try:
-        return path.read_text(encoding="utf-8"), []
-    except (OSError, UnicodeDecodeError):
+        with path.open("rb") as handle:
+            open_stat = os.fstat(handle.fileno())
+            marker_path_stat = path.lstat()
+            if stat.S_ISLNK(marker_path_stat.st_mode):
+                return None, [f"{label} must not be a symlink"]
+            if not stat.S_ISREG(marker_path_stat.st_mode) or not stat.S_ISREG(
+                open_stat.st_mode
+            ):
+                return None, [f"{label} must be a regular file"]
+            if (marker_path_stat.st_dev, marker_path_stat.st_ino) != (
+                open_stat.st_dev,
+                open_stat.st_ino,
+            ):
+                return None, [f"{label} changed while being read"]
+            if open_stat.st_nlink > 1:
+                return None, [f"{label} must not be hardlinked"]
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                chunks.append(chunk)
+            marker_final_path_stat = path.lstat()
+            if (marker_final_path_stat.st_dev, marker_final_path_stat.st_ino) != (
+                open_stat.st_dev,
+                open_stat.st_ino,
+            ):
+                return None, [f"{label} changed while being read"]
+    except OSError:
+        return None, [unreadable_error]
+    try:
+        return b"".join(chunks).decode("utf-8"), []
+    except UnicodeDecodeError:
         return None, [unreadable_error]
 
 
@@ -541,19 +655,45 @@ def _load_json_artifact(
     missing_code: str,
     invalid_code: str,
     unreadable_code: str,
+    shape_code: str,
     not_object_code: str,
     label: str,
 ) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    digest, text, read_errors = _sha256_text_file(
+        path,
+        label,
+        f"{label} could not be read",
+    )
+    if read_errors:
+        blockers: list[dict[str, Any]] = []
+        missing_error = f"{label} is missing"
+        unreadable_error = f"{label} could not be read"
+        for error in read_errors:
+            if error == missing_error:
+                blockers.append(blocker(missing_code, f"missing {label}"))
+            elif error == unreadable_error:
+                blockers.append(blocker(unreadable_code, error))
+            else:
+                blockers.append(blocker(shape_code, error))
+        return None, blockers
+    assert digest is not None and text is not None
     try:
-        data = _read_json_without_duplicate_keys(path)
-    except FileNotFoundError:
-        return None, [blocker(missing_code, f"missing {label}")]
-    except (OSError, UnicodeDecodeError):
-        return None, [blocker(unreadable_code, f"{label} could not be read")]
+        data = json.loads(
+            text,
+            object_pairs_hook=_reject_duplicate_json_object_pairs,
+            parse_constant=_reject_nonfinite_json_constant,
+        )
     except json.JSONDecodeError as exc:
         return None, [blocker(invalid_code, f"{label} is not valid JSON: {exc}")]
     except DuplicateJsonKeyError as exc:
         return None, [blocker(invalid_code, _duplicate_json_key_message(label, exc))]
+    except NonFiniteJsonConstantError as exc:
+        return None, [
+            blocker(
+                invalid_code,
+                f"{label} is not strict JSON: non-finite constant {exc.constant} is not allowed",
+            )
+        ]
     if not isinstance(data, dict):
         return None, [blocker(not_object_code, f"{label} must be a JSON object")]
     return data, []
@@ -649,47 +789,136 @@ def _is_lower_sha256_hex(value: Any) -> bool:
 
 
 def _sha256_file(path: Path, label: str) -> tuple[str | None, list[str]]:
-    file_errors = validate_lineage_local_file(path, label)
+    expected_stat, file_errors = _validate_lineage_local_file_for_read(path, label)
     if file_errors:
         return None, file_errors
     digest = hashlib.sha256()
     try:
         with path.open("rb") as handle:
+            open_stat = os.fstat(handle.fileno())
+            path_stat = path.lstat()
+            expected_identity = (expected_stat.st_dev, expected_stat.st_ino)
+            open_identity = (open_stat.st_dev, open_stat.st_ino)
+            if stat.S_ISLNK(path_stat.st_mode):
+                return None, [f"{label} must not be a symlink"]
+            if not stat.S_ISREG(path_stat.st_mode) or not stat.S_ISREG(open_stat.st_mode):
+                return None, [f"{label} must be a regular file"]
+            if open_identity != expected_identity or (
+                path_stat.st_dev,
+                path_stat.st_ino,
+            ) != expected_identity:
+                return None, [f"{label} changed while being read"]
+            if open_stat.st_nlink > 1:
+                return None, [f"{label} must not be hardlinked"]
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                 digest.update(chunk)
+            final_path_stat = path.lstat()
+            if (final_path_stat.st_dev, final_path_stat.st_ino) != expected_identity:
+                return None, [f"{label} changed while being read"]
     except OSError:
         return None, [f"{label} could not be read"]
     return digest.hexdigest(), []
 
 
-def validate_lineage_local_file(path: Path, label: str) -> list[str]:
+def _sha256_file_with_size(
+    path: Path,
+    label: str,
+    *,
+    allow_empty: bool = False,
+) -> tuple[str | None, int | None, list[str]]:
+    digest, size, _prefix, errors = _sha256_file_with_size_and_prefix(
+        path,
+        label,
+        allow_empty=allow_empty,
+    )
+    return digest, size, errors
+
+
+def _sha256_file_with_size_and_prefix(
+    path: Path,
+    label: str,
+    *,
+    allow_empty: bool = False,
+    prefix_len: int = 4096,
+) -> tuple[str | None, int | None, bytes | None, list[str]]:
+    expected_stat, file_errors = _validate_lineage_local_file_for_read(path, label)
+    if file_errors:
+        return None, None, None, file_errors
+    digest = hashlib.sha256()
+    prefix_parts: list[bytes] = []
+    prefix_remaining = prefix_len
+    size = 0
+    try:
+        with path.open("rb") as handle:
+            open_stat = os.fstat(handle.fileno())
+            path_stat = path.lstat()
+            expected_identity = (expected_stat.st_dev, expected_stat.st_ino)
+            open_identity = (open_stat.st_dev, open_stat.st_ino)
+            if stat.S_ISLNK(path_stat.st_mode):
+                return None, None, None, [f"{label} must not be a symlink"]
+            if not stat.S_ISREG(path_stat.st_mode) or not stat.S_ISREG(open_stat.st_mode):
+                return None, None, None, [f"{label} must be a regular file"]
+            if open_identity != expected_identity or (
+                path_stat.st_dev,
+                path_stat.st_ino,
+            ) != expected_identity:
+                return None, None, None, [f"{label} changed while being read"]
+            if open_stat.st_nlink > 1:
+                return None, None, None, [f"{label} must not be hardlinked"]
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                size += len(chunk)
+                if prefix_remaining > 0:
+                    prefix_parts.append(chunk[:prefix_remaining])
+                    prefix_remaining -= min(prefix_remaining, len(chunk))
+                digest.update(chunk)
+            final_path_stat = path.lstat()
+            if (final_path_stat.st_dev, final_path_stat.st_ino) != expected_identity:
+                return None, None, None, [f"{label} changed while being read"]
+    except OSError:
+        return None, None, None, [f"{label} could not be read"]
+    if size <= 0 and not allow_empty:
+        return None, None, None, [f"{label} must be non-empty"]
+    return digest.hexdigest(), size, b"".join(prefix_parts), []
+
+
+def _validate_lineage_local_file_for_read(
+    path: Path,
+    label: str,
+) -> tuple[os.stat_result | None, list[str]]:
     """Reject local lineage evidence files that could alias external bytes."""
 
     if device_lab.SECRET_RE.search(str(path)):
-        return [f"{label} path must not contain secret-looking material"]
+        return None, [f"{label} path must not contain secret-looking material"]
     ancestor_errors = device_lab.validate_no_symlink_ancestors(
         path,
         f"{label} ancestor directory",
     )
     if ancestor_errors:
-        return ancestor_errors
+        return None, ancestor_errors
     try:
-        mode = path.lstat().st_mode
+        file_stat = path.lstat()
     except FileNotFoundError:
-        return [f"{label} is missing"]
+        return None, [f"{label} is missing"]
     except OSError:
-        return [f"{label} file metadata could not be read"]
-    if stat.S_ISLNK(mode):
-        return [f"{label} must not be a symlink"]
-    if not stat.S_ISREG(mode):
-        return [f"{label} must be a regular file"]
+        return None, [f"{label} file metadata could not be read"]
+    if stat.S_ISLNK(file_stat.st_mode):
+        return None, [f"{label} must not be a symlink"]
+    if not stat.S_ISREG(file_stat.st_mode):
+        return None, [f"{label} must be a regular file"]
     try:
         link_count = path.stat().st_nlink
     except OSError:
-        return [f"{label} hardlink metadata could not be read"]
+        return None, [f"{label} hardlink metadata could not be read"]
     if link_count > 1:
-        return [f"{label} must not be hardlinked"]
-    return []
+        return None, [f"{label} must not be hardlinked"]
+    return file_stat, []
+
+
+def validate_lineage_local_file(path: Path, label: str) -> list[str]:
+    """Reject local lineage evidence files that could alias external bytes."""
+
+    _file_stat, errors = _validate_lineage_local_file_for_read(path, label)
+    return errors
 
 
 def _lineage_local_text(
@@ -701,16 +930,75 @@ def _lineage_local_text(
 ) -> tuple[str | None, list[str]]:
     """Validate a local lineage file immediately before reading text."""
 
-    file_errors = validate_lineage_local_file(path, label)
+    _digest, text, errors = _sha256_text_file(
+        path,
+        label,
+        unreadable_error,
+        decode_errors=decode_errors,
+    )
+    return text, errors
+
+
+def _sha256_text_file(
+    path: Path,
+    label: str,
+    unreadable_error: str,
+    *,
+    max_bytes: int | None = None,
+    too_large_error: str | None = None,
+    decode_errors: str = "strict",
+) -> tuple[str | None, str | None, list[str]]:
+    """Return a digest and decoded text from one opened, path-bound file."""
+
+    expected_stat, file_errors = _validate_lineage_local_file_for_read(path, label)
     if file_errors:
-        return None, file_errors
+        return None, None, file_errors
+    digest = hashlib.sha256()
+    chunks: list[bytes] = []
+    size = 0
     try:
-        return path.read_text(
-            encoding="utf-8",
-            errors=decode_errors,
-        ), []
-    except (OSError, UnicodeDecodeError):
-        return None, [unreadable_error]
+        with path.open("rb") as handle:
+            open_stat = os.fstat(handle.fileno())
+            path_stat = path.lstat()
+            expected_identity = (expected_stat.st_dev, expected_stat.st_ino)
+            open_identity = (open_stat.st_dev, open_stat.st_ino)
+            if stat.S_ISLNK(path_stat.st_mode):
+                return None, None, [f"{label} must not be a symlink"]
+            if not stat.S_ISREG(path_stat.st_mode) or not stat.S_ISREG(open_stat.st_mode):
+                return None, None, [f"{label} must be a regular file"]
+            if open_identity != expected_identity or (
+                path_stat.st_dev,
+                path_stat.st_ino,
+            ) != expected_identity:
+                return None, None, [f"{label} changed while being read"]
+            if open_stat.st_nlink > 1:
+                return None, None, [f"{label} must not be hardlinked"]
+            if max_bytes is not None and open_stat.st_size > max_bytes:
+                return None, None, [
+                    too_large_error
+                    if too_large_error is not None
+                    else f"{label} must be no more than {max_bytes} bytes"
+                ]
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                size += len(chunk)
+                if max_bytes is not None and size > max_bytes:
+                    return None, None, [
+                        too_large_error
+                        if too_large_error is not None
+                        else f"{label} must be no more than {max_bytes} bytes"
+                    ]
+                chunks.append(chunk)
+                digest.update(chunk)
+            final_path_stat = path.lstat()
+            if (final_path_stat.st_dev, final_path_stat.st_ino) != expected_identity:
+                return None, None, [f"{label} changed while being read"]
+    except OSError:
+        return None, None, [unreadable_error]
+    try:
+        text = b"".join(chunks).decode("utf-8", errors=decode_errors)
+    except UnicodeDecodeError:
+        return None, None, [unreadable_error]
+    return digest.hexdigest(), text, []
 
 
 def validate_lineage_proof_log(path: Path, expected_name: str) -> tuple[str | None, list[str]]:
@@ -729,23 +1017,26 @@ def validate_lineage_proof_log(path: Path, expected_name: str) -> tuple[str | No
     except OSError:
         return None, ["production proof log metadata could not be read"]
 
-    digest, digest_errors = _sha256_file(path, "production proof log")
-    if digest_errors:
-        return None, digest_errors
-    text, text_errors = _lineage_local_text(
+    size_error = f"production proof log must be no more than {MAX_LINEAGE_PROOF_LOG_BYTES} bytes"
+    digest, text, read_errors = _sha256_text_file(
         path,
         "production proof log",
         "production proof log could not be read",
-        decode_errors="replace",
+        max_bytes=MAX_LINEAGE_PROOF_LOG_BYTES,
+        too_large_error=size_error,
     )
-    if text_errors:
-        return None, text_errors
-    assert text is not None
+    if read_errors:
+        return None, read_errors
+    assert digest is not None and text is not None
     errors: list[str] = []
+    if "\r" in text:
+        errors.append("--proof-log must use canonical LF line endings")
+    if not text.endswith("\n"):
+        errors.append("--proof-log must end with a canonical LF line terminator")
     lines = text.splitlines()
     expected_test_line = f"test {expected_name} ... ok"
     test_lines = [
-        line.rstrip()
+        line
         for line in lines
         if line.startswith("test ") and not line.startswith("test result:")
     ]
@@ -755,14 +1046,15 @@ def validate_lineage_proof_log(path: Path, expected_name: str) -> tuple[str | No
     if test_lines != [expected_test_line]:
         errors.append("--proof-log must contain only the single production proof test line")
 
-    result_lines = [line.rstrip() for line in lines if line.startswith("test result:")]
+    result_lines = [line for line in lines if line.startswith("test result:")]
     has_expected_result_line = any(
-        line.startswith(EXPECTED_LINEAGE_PROOF_RESULT_PREFIX) for line in result_lines
+        LINEAGE_PROOF_RESULT_RE.fullmatch(line) for line in result_lines
     )
     if not has_expected_result_line:
         errors.append("--proof-log must contain a passing cargo test result")
-    if len(result_lines) != 1 or not result_lines[0].startswith(
-        EXPECTED_LINEAGE_PROOF_RESULT_PREFIX
+    if (
+        len(result_lines) != 1
+        or LINEAGE_PROOF_RESULT_RE.fullmatch(result_lines[0]) is None
     ):
         errors.append(
             "--proof-log must contain exactly one cargo test result for one passed production test"
@@ -951,6 +1243,10 @@ def validate_compact_key_command(command: Any) -> list[str]:
         "artifacts/kagemusha/recursive-compact-len4.vk",
         "--pk-out",
         "artifacts/kagemusha/recursive-compact-len4.pk",
+        "--key-artifacts-out",
+        "artifacts/kagemusha/recursive-compact-key-artifacts.norito",
+        "--verifier-keys-out",
+        "artifacts/kagemusha/recursive-compact-verifier-keys.norito",
         "--record-out",
         "artifacts/kagemusha/recursive-compact-len4.record.norito",
         "--record-namespace",
@@ -976,15 +1272,17 @@ def validate_compact_key_command(command: Any) -> list[str]:
     return errors
 
 
-def validate_compact_key_artifact_content(path: Path, artifact: str) -> list[str]:
+def validate_compact_key_artifact_prefix(prefix: bytes, artifact: str) -> list[str]:
     """Reject obvious development placeholders for ABI-7 compact key artifacts."""
 
-    try:
-        with path.open("rb") as handle:
-            prefix = handle.read(4096)
-    except OSError:
-        return [f"recursive compact key artifact {artifact} could not be read"]
     stripped = prefix.strip().lower()
+    if prefix and all(byte == 0 for byte in prefix):
+        return [
+            (
+                f"recursive compact key artifact {artifact} "
+                f"{COMPACT_KEY_ALL_ZERO_ERROR}"
+            )
+        ]
     if any(stripped.startswith(marker) for marker in COMPACT_KEY_PLACEHOLDER_PREFIXES):
         return [
             (
@@ -995,28 +1293,84 @@ def validate_compact_key_artifact_content(path: Path, artifact: str) -> list[str
     return []
 
 
-def parse_compact_key_generator_log(text: str) -> tuple[dict[str, int], list[str]]:
+def validate_compact_key_artifact_content(path: Path, artifact: str) -> list[str]:
+    """Reject obvious development placeholders for ABI-7 compact key artifacts."""
+
+    _digest, _size, prefix, errors = _sha256_file_with_size_and_prefix(
+        path,
+        f"recursive compact key artifact {artifact}",
+        allow_empty=True,
+    )
+    if errors:
+        return errors
+    assert prefix is not None
+    return validate_compact_key_artifact_prefix(prefix, artifact)
+
+
+def validate_lineage_artifact_prefix(prefix: bytes, artifact: str) -> list[str]:
+    """Reject obvious development placeholders for Reserved-lineage artifacts."""
+
+    if prefix and all(byte == 0 for byte in prefix):
+        return [f"lineage artifact {artifact} {LINEAGE_ARTIFACT_ALL_ZERO_ERROR}"]
+    return []
+
+
+def validate_lineage_artifact_content(path: Path, artifact: str) -> list[str]:
+    """Reject obvious development placeholders for Reserved-lineage artifacts."""
+
+    _digest, _size, prefix, errors = _sha256_file_with_size_and_prefix(
+        path,
+        f"lineage artifact {artifact}",
+        allow_empty=True,
+    )
+    if errors:
+        return errors
+    assert prefix is not None
+    return validate_lineage_artifact_prefix(prefix, artifact)
+
+
+def parse_compact_key_generator_log(
+    text: str,
+) -> tuple[dict[str, int], dict[str, str], list[str]]:
     """Parse the canonical ABI-7 recursive compact key generator summary log."""
 
+    errors: list[str] = []
+    if "\r" in text:
+        errors.append("compact key generator log must use canonical LF line endings")
+    if not text.endswith("\n"):
+        errors.append("compact key generator log must end with a canonical LF line terminator")
     lines = text.splitlines()
     if len(lines) != 1:
-        return {}, ["compact key generator log must contain exactly one summary line"]
-    line = lines[0].rstrip()
+        errors.append("compact key generator log must contain exactly one summary line")
+    if errors:
+        return {}, {}, errors
+    line = lines[0]
     match = COMPACT_KEY_GENERATOR_LOG_RE.fullmatch(line)
     if match is None:
-        return {}, ["compact key generator log must match the canonical CLI summary"]
+        return {}, {}, ["compact key generator log must match the canonical CLI summary"]
     sizes = {
         artifact: int(match.group(field))
         for artifact, field in COMPACT_KEY_GENERATOR_LOG_SIZE_FIELDS.items()
     }
-    return sizes, []
+    digests = {
+        artifact: match.group(field)
+        for artifact, field in COMPACT_KEY_GENERATOR_LOG_DIGEST_FIELDS.items()
+    }
+    if any(digest == "0" * 64 for digest in digests.values()):
+        return (
+            {},
+            {},
+            ["compact key generator log must contain non-zero SHA-256 artifact digests"],
+        )
+    return sizes, digests, []
 
 
 def validate_compact_key_generator_log(
     path: Path,
     expected_sha256: Any,
     artifact_size_bytes: dict[str, int],
-) -> tuple[str | None, dict[str, int], list[dict[str, Any]]]:
+    artifact_sha256: dict[str, str],
+) -> tuple[str | None, dict[str, int], dict[str, str], list[dict[str, Any]]]:
     """Validate the ABI-7 compact-key generator log against local artifacts."""
 
     blockers: list[dict[str, Any]] = []
@@ -1038,19 +1392,20 @@ def validate_compact_key_generator_log(
                     error,
                 )
             )
-        return None, {}, blockers
+        return None, {}, {}, blockers
+    size_error = (
+        "ABI-7 recursive compact key generator log must be no more than "
+        f"{MAX_COMPACT_KEY_GENERATOR_LOG_BYTES} bytes"
+    )
     try:
         if path.stat().st_size > MAX_COMPACT_KEY_GENERATOR_LOG_BYTES:
             blockers.append(
                 blocker(
                     "compact_key_evidence_generator_log_size",
-                    (
-                        "ABI-7 recursive compact key generator log must be no more than "
-                        f"{MAX_COMPACT_KEY_GENERATOR_LOG_BYTES} bytes"
-                    ),
+                    size_error,
                 )
             )
-            return None, {}, blockers
+            return None, {}, {}, blockers
     except OSError:
         blockers.append(
             blocker(
@@ -1058,21 +1413,28 @@ def validate_compact_key_generator_log(
                 "ABI-7 recursive compact key generator log metadata could not be read",
             )
         )
-        return None, {}, blockers
-    digest, digest_errors = _sha256_file(
+        return None, {}, {}, blockers
+    digest, text, read_errors = _sha256_text_file(
         path,
         "ABI-7 recursive compact key generator log",
+        "ABI-7 recursive compact key generator log could not be read",
+        max_bytes=MAX_COMPACT_KEY_GENERATOR_LOG_BYTES,
+        too_large_error=size_error,
     )
-    if digest_errors:
-        for error in digest_errors:
+    if read_errors:
+        for error in read_errors:
             blockers.append(
                 blocker(
-                    "compact_key_evidence_generator_log_file_shape",
+                    (
+                        "compact_key_evidence_generator_log_size"
+                        if error == size_error
+                        else "compact_key_evidence_generator_log_file_shape"
+                    ),
                     error,
                 )
             )
-        return None, {}, blockers
-    assert digest is not None
+        return None, {}, {}, blockers
+    assert digest is not None and text is not None
     if _is_lower_sha256_hex(expected_sha256) and digest != expected_sha256:
         blockers.append(
             blocker(
@@ -1080,22 +1442,7 @@ def validate_compact_key_generator_log(
                 "ABI-7 recursive compact key generator log digest does not match local bytes",
             )
         )
-    text, text_errors = _lineage_local_text(
-        path,
-        "ABI-7 recursive compact key generator log",
-        "ABI-7 recursive compact key generator log could not be read",
-    )
-    if text_errors:
-        for error in text_errors:
-            blockers.append(
-                blocker(
-                    "compact_key_evidence_generator_log_file_shape",
-                    error,
-                )
-            )
-        return digest, {}, blockers
-    assert text is not None
-    parsed_sizes, parse_errors = parse_compact_key_generator_log(text)
+    parsed_sizes, parsed_digests, parse_errors = parse_compact_key_generator_log(text)
     for error in parse_errors:
         blockers.append(
             blocker(
@@ -1113,7 +1460,17 @@ def validate_compact_key_generator_log(
                     artifact=artifact,
                 )
             )
-    return digest, parsed_sizes, blockers
+    for artifact, actual_digest in artifact_sha256.items():
+        logged_digest = parsed_digests.get(artifact)
+        if logged_digest is not None and logged_digest != actual_digest:
+            blockers.append(
+                blocker(
+                    "compact_key_evidence_generator_log_artifact_digest",
+                    "ABI-7 recursive compact key generator log digest does not match local artifact bytes",
+                    artifact=artifact,
+                )
+            )
+    return digest, parsed_sizes, parsed_digests, blockers
 
 
 def _require_lineage_sha256(
@@ -1210,6 +1567,12 @@ def _display_evidence_field(field: str) -> str:
     return device_lab.SECRET_PATH_REDACTION if device_lab.SECRET_RE.search(field) else field
 
 
+def _display_evidence_value(value: Any) -> Any:
+    if isinstance(value, str) and device_lab.SECRET_RE.search(value):
+        return device_lab.SECRET_PATH_REDACTION
+    return value
+
+
 def check_lineage_proof_evidence(
     path: Path,
     *,
@@ -1270,6 +1633,7 @@ def check_lineage_proof_evidence(
         missing_code="lineage_proof_evidence_missing",
         invalid_code="lineage_proof_evidence_invalid_json",
         unreadable_code="lineage_proof_evidence_unreadable",
+        shape_code="lineage_proof_evidence_file_shape",
         not_object_code="lineage_proof_evidence_not_object",
         label="Reserved-lineage proof evidence",
     )
@@ -1305,7 +1669,7 @@ def check_lineage_proof_evidence(
             )
         )
 
-    details["schema"] = evidence.get("schema")
+    details["schema"] = _display_evidence_value(evidence.get("schema"))
     details["generated_at_utc"] = None
     if evidence.get("schema") != LINEAGE_PROOF_EVIDENCE_SCHEMA:
         blockers.append(
@@ -1325,13 +1689,13 @@ def check_lineage_proof_evidence(
         )
     else:
         generated_at_raw = generated_at_text
-        details["generated_at_utc"] = generated_at_raw
+        details["generated_at_utc"] = _display_evidence_value(generated_at_raw)
         if device_lab.SIGNED_AT_UTC_RE.fullmatch(generated_at_raw) is None:
             blockers.append(
                 blocker(
                     "lineage_proof_evidence_timestamp_noncanonical",
                     "Reserved-lineage proof evidence generated_at_utc must be canonical UTC YYYY-MM-DDTHH:MM:SSZ",
-                    generated_at_utc=generated_at_raw,
+                    generated_at_utc=_display_evidence_value(generated_at_raw),
                 )
             )
         generated_at, parse_blocker = parse_utc_timestamp(
@@ -1346,7 +1710,7 @@ def check_lineage_proof_evidence(
                 blocker(
                     "lineage_proof_evidence_stale",
                     "Reserved-lineage proof evidence predates the required release evidence cutoff",
-                    generated_at_utc=generated_at_raw,
+                    generated_at_utc=_display_evidence_value(generated_at_raw),
                     min_generated_at_utc=min_generated_at.isoformat().replace("+00:00", "Z"),
                 )
             )
@@ -1355,7 +1719,7 @@ def check_lineage_proof_evidence(
                 blocker(
                     "lineage_proof_evidence_future_dated",
                     "Reserved-lineage proof evidence is ahead of the release validator clock skew",
-                    generated_at_utc=generated_at_raw,
+                    generated_at_utc=_display_evidence_value(generated_at_raw),
                     max_generated_at_utc=max_generated_at.isoformat().replace("+00:00", "Z"),
                 )
             )
@@ -1395,8 +1759,8 @@ def check_lineage_proof_evidence(
                     expected=expected,
                 )
             )
-    details["record_archive_proof_runtime_keygen_env"] = evidence.get(
-        "record_archive_proof_runtime_keygen_env"
+    details["record_archive_proof_runtime_keygen_env"] = _display_evidence_value(
+        evidence.get("record_archive_proof_runtime_keygen_env")
     )
 
     circuit_ids = evidence.get("circuit_ids")
@@ -1417,7 +1781,8 @@ def check_lineage_proof_evidence(
                 )
             )
         details["circuit_ids"] = {
-            key: circuit_ids.get(key) for key in sorted(EXPECTED_LINEAGE_CIRCUIT_IDS)
+            key: _display_evidence_value(circuit_ids.get(key))
+            for key in sorted(EXPECTED_LINEAGE_CIRCUIT_IDS)
         }
         for key, expected in EXPECTED_LINEAGE_CIRCUIT_IDS.items():
             if circuit_ids.get(key) != expected:
@@ -1505,17 +1870,31 @@ def check_lineage_proof_evidence(
                             )
                         )
                 continue
-            try:
-                artifact_size = artifact_path.stat().st_size
-            except OSError:
-                blockers.append(
-                    blocker(
-                        "lineage_proof_evidence_artifact_file_shape",
-                        "Reserved-lineage proof evidence artifact metadata could not be read",
-                        artifact=artifact,
+            (
+                actual_digest,
+                artifact_size,
+                artifact_prefix,
+                digest_errors,
+            ) = _sha256_file_with_size_and_prefix(
+                artifact_path,
+                "Reserved-lineage proof evidence artifact file",
+                allow_empty=True,
+            )
+            if digest_errors:
+                for error in digest_errors:
+                    blockers.append(
+                        blocker(
+                            "lineage_proof_evidence_artifact_file_shape",
+                            error,
+                            artifact=artifact,
+                        )
                     )
-                )
                 continue
+            assert (
+                actual_digest is not None
+                and artifact_size is not None
+                and artifact_prefix is not None
+            )
             size_matches = _require_lineage_artifact_size(
                 blockers,
                 value=expected_size,
@@ -1531,22 +1910,18 @@ def check_lineage_proof_evidence(
                     )
                 )
                 continue
-            if _is_lower_sha256_hex(expected_digest):
-                actual_digest, digest_errors = _sha256_file(
-                    artifact_path,
-                    "Reserved-lineage proof evidence artifact file",
-                )
-                if digest_errors:
-                    for error in digest_errors:
-                        blockers.append(
-                            blocker(
-                                "lineage_proof_evidence_artifact_file_shape",
-                                error,
-                                artifact=artifact,
-                            )
+            content_errors = validate_lineage_artifact_prefix(artifact_prefix, artifact)
+            if content_errors:
+                for error in content_errors:
+                    blockers.append(
+                        blocker(
+                            "lineage_proof_evidence_artifact_placeholder",
+                            error,
+                            artifact=artifact,
                         )
-                    continue
-                assert actual_digest is not None
+                    )
+                continue
+            if _is_lower_sha256_hex(expected_digest):
                 if actual_digest != expected_digest:
                     blockers.append(
                         blocker(
@@ -1580,7 +1955,7 @@ def check_lineage_proof_evidence(
                     field=_display_evidence_field(key),
                 )
             )
-        details["tests"] = sorted(tests)
+        details["tests"] = [_display_evidence_field(key) for key in sorted(tests)]
         for key, expected_name in LINEAGE_PROOF_REQUIRED_TESTS.items():
             test = tests.get(key)
             if not isinstance(test, dict):
@@ -1777,6 +2152,7 @@ def check_compact_key_evidence(
         missing_code="compact_key_evidence_missing",
         invalid_code="compact_key_evidence_invalid_json",
         unreadable_code="compact_key_evidence_unreadable",
+        shape_code="compact_key_evidence_file_shape",
         not_object_code="compact_key_evidence_not_object",
         label="ABI-7 recursive compact key evidence",
     )
@@ -1813,7 +2189,7 @@ def check_compact_key_evidence(
             )
         )
 
-    details["schema"] = evidence.get("schema")
+    details["schema"] = _display_evidence_value(evidence.get("schema"))
     details["generated_at_utc"] = None
     if evidence.get("schema") != COMPACT_KEY_EVIDENCE_SCHEMA:
         blockers.append(
@@ -1833,13 +2209,13 @@ def check_compact_key_evidence(
         )
     else:
         compact_generated_at_raw = generated_at_text
-        details["generated_at_utc"] = compact_generated_at_raw
+        details["generated_at_utc"] = _display_evidence_value(compact_generated_at_raw)
         if device_lab.SIGNED_AT_UTC_RE.fullmatch(compact_generated_at_raw) is None:
             blockers.append(
                 blocker(
                     "compact_key_evidence_timestamp_noncanonical",
                     "ABI-7 recursive compact key evidence generated_at_utc must be canonical UTC YYYY-MM-DDTHH:MM:SSZ",
-                    generated_at_utc=compact_generated_at_raw,
+                    generated_at_utc=_display_evidence_value(compact_generated_at_raw),
                 )
             )
         generated_at, parse_blocker = parse_utc_timestamp(
@@ -1854,7 +2230,7 @@ def check_compact_key_evidence(
                 blocker(
                     "compact_key_evidence_stale",
                     "ABI-7 recursive compact key evidence predates the required release evidence cutoff",
-                    generated_at_utc=compact_generated_at_raw,
+                    generated_at_utc=_display_evidence_value(compact_generated_at_raw),
                     min_generated_at_utc=min_generated_at.isoformat().replace("+00:00", "Z"),
                 )
             )
@@ -1863,7 +2239,7 @@ def check_compact_key_evidence(
                 blocker(
                     "compact_key_evidence_future_dated",
                     "ABI-7 recursive compact key evidence is ahead of the release validator clock skew",
-                    generated_at_utc=compact_generated_at_raw,
+                    generated_at_utc=_display_evidence_value(compact_generated_at_raw),
                     max_generated_at_utc=max_generated_at.isoformat().replace("+00:00", "Z"),
                 )
             )
@@ -1905,7 +2281,7 @@ def check_compact_key_evidence(
                     expected=expected,
                 )
             )
-        details[field] = evidence.get(field)
+        details[field] = _display_evidence_value(evidence.get(field))
 
     command_errors = validate_compact_key_command(evidence.get("command"))
     for error in command_errors:
@@ -1923,6 +2299,7 @@ def check_compact_key_evidence(
     artifact_count = 0
     validated_artifact_sha256: dict[str, str] = {}
     validated_artifact_sizes: dict[str, int] = {}
+    local_artifact_sha256: dict[str, str] = {}
     local_artifact_sizes: dict[str, int] = {}
     artifact_sizes_valid = isinstance(artifact_sizes, dict)
     if not artifact_sizes_valid:
@@ -1994,17 +2371,31 @@ def check_compact_key_evidence(
                             )
                         )
                 continue
-            try:
-                artifact_size = artifact_path.stat().st_size
-            except OSError:
-                blockers.append(
-                    blocker(
-                        "compact_key_evidence_artifact_file_shape",
-                        "ABI-7 recursive compact key evidence artifact metadata could not be read",
-                        artifact=artifact,
+            (
+                actual_digest,
+                artifact_size,
+                artifact_prefix,
+                digest_errors,
+            ) = _sha256_file_with_size_and_prefix(
+                artifact_path,
+                "ABI-7 recursive compact key evidence artifact file",
+                allow_empty=True,
+            )
+            if digest_errors:
+                for error in digest_errors:
+                    blockers.append(
+                        blocker(
+                            "compact_key_evidence_artifact_file_shape",
+                            error,
+                            artifact=artifact,
+                        )
                     )
-                )
                 continue
+            assert (
+                actual_digest is not None
+                and artifact_size is not None
+                and artifact_prefix is not None
+            )
             size_matches = _require_compact_key_artifact_size(
                 blockers,
                 value=expected_size,
@@ -2021,7 +2412,7 @@ def check_compact_key_evidence(
                 )
                 continue
             local_artifact_sizes[artifact] = artifact_size
-            content_errors = validate_compact_key_artifact_content(artifact_path, artifact)
+            content_errors = validate_compact_key_artifact_prefix(artifact_prefix, artifact)
             if content_errors:
                 for error in content_errors:
                     blockers.append(
@@ -2032,22 +2423,8 @@ def check_compact_key_evidence(
                         )
                     )
                 continue
+            local_artifact_sha256[artifact] = actual_digest
             if _is_lower_sha256_hex(expected_digest):
-                actual_digest, digest_errors = _sha256_file(
-                    artifact_path,
-                    "ABI-7 recursive compact key evidence artifact file",
-                )
-                if digest_errors:
-                    for error in digest_errors:
-                        blockers.append(
-                            blocker(
-                                "compact_key_evidence_artifact_file_shape",
-                                error,
-                                artifact=artifact,
-                            )
-                        )
-                    continue
-                assert actual_digest is not None
                 if actual_digest != expected_digest:
                     blockers.append(
                         blocker(
@@ -2083,17 +2460,19 @@ def check_compact_key_evidence(
             )
         )
     else:
-        actual_log_digest, generator_log_sizes, generator_log_blockers = (
+        actual_log_digest, generator_log_sizes, generator_log_digests, generator_log_blockers = (
             validate_compact_key_generator_log(
                 path.parent / COMPACT_KEY_GENERATOR_LOG_FILENAME,
                 generator_log_sha256,
                 local_artifact_sizes,
+                local_artifact_sha256,
             )
         )
         blockers.extend(generator_log_blockers)
         if actual_log_digest is not None and not generator_log_blockers:
             details["generator_log_sha256"] = actual_log_digest
             details["generator_log_artifact_size_bytes"] = generator_log_sizes
+            details["generator_log_artifact_sha256"] = generator_log_digests
     details["artifact_count"] = artifact_count
     details["artifact_sha256"] = validated_artifact_sha256
     details["artifact_size_bytes"] = validated_artifact_sizes
@@ -2157,11 +2536,15 @@ def check_abi7_fail_closed(repo_root: Path) -> dict[str, Any]:
         "KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_OPENING_LEN",
         "KAGEMUSHA_RECURSIVE_COMPACT_MIN_PROOF_BYTES",
         "prove_halo2_ipa_kagemusha_recursive_compact_payment_token_one_hop_envelope",
-        "duplicated multi-hop compact Pallas archive must reject before unavailable",
-        "height-aware duplicated multi-hop compact Pallas archive must reject before unavailable",
-        "forged multi-hop compact Pallas metadata must reject before unavailable",
-        "reordered multi-hop compact Pallas archive must reject before unavailable",
-        "height-aware reordered multi-hop compact Pallas archive must reject before unavailable",
+        "height-aware detached compact Pallas archive must reject before proving",
+        "height-aware extra compact Pallas opening must reject before proving",
+        "height-aware missing compact Pallas opening must reject before proving",
+        "duplicated multi-hop compact Pallas archive must reject before proving",
+        "height-aware duplicated multi-hop compact Pallas archive must reject before proving",
+        "forged multi-hop compact Pallas metadata must reject before proving",
+        "height-aware forged multi-hop compact Pallas metadata must reject before proving",
+        "reordered multi-hop compact Pallas archive must reject before proving",
+        "height-aware reordered multi-hop compact Pallas archive must reject before proving",
     )
     for snippet in required_core_snippets:
         if snippet not in core_text:
@@ -2174,19 +2557,39 @@ def check_abi7_fail_closed(repo_root: Path) -> dict[str, Any]:
             )
     core_function_contracts = (
         (
-            "fn prove_kagemusha_recursive_compact_payment_token_one_hop_from_record_bundle_and_pallas_open_envelope_archive(",
+            "fn prove_kagemusha_recursive_compact_payment_token_one_hop_from_record_bundle_and_pallas_open_envelopes(",
             (
-                "decode_kagemusha_recursive_compact_pallas_open_envelopes(",
                 "kagemusha_pallas_ipa_batch_verifier_preflight_bound_to_hop_proofs(",
                 "validate_kagemusha_recursive_one_hop_verifier_slice_preflight_binding(",
-                "return Err(KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_PROOF_UNAVAILABLE.to_owned())",
-                "4 => prove_halo2_ipa_kagemusha_recursive_compact_payment_token_one_hop_envelope::<4>",
+                "kagemusha_recursive_spend_lineage_runtime_keygen_enabled()",
+                "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEY_ARTIFACTS_REQUIRED",
+                "missing compact one-hop proving key archive",
+                "prove_halo2_ipa_kagemusha_recursive_compact_payment_token_one_hop_envelope_dispatch(",
+            ),
+        ),
+        (
+            "fn prove_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelopes(",
+            (
+                "prove_kagemusha_recursive_compact_payment_token_one_hop_from_record_bundle_and_pallas_open_envelopes(",
+                "prove_halo2_ipa_kagemusha_recursive_compact_payment_token_append_envelope_dispatch(",
+                "for hop_index in 1..hop_count",
+                "kagemusha_recursive_spend_lineage_runtime_keygen_enabled()",
+                "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEY_ARTIFACTS_REQUIRED",
+                "missing compact append proving key archive",
+            ),
+        ),
+        (
+            "fn prove_halo2_ipa_kagemusha_recursive_compact_payment_token_one_hop_envelope_dispatch(",
+            (
+                "prove_halo2_ipa_kagemusha_recursive_compact_payment_token_one_hop_envelope::<$len>",
+                "match usize::try_from(preflight.opening_len)",
+                "4 => prove_len!(4)",
             ),
         ),
         (
             "pub fn prove_verified_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelope_archive(",
             (
-                "prove_kagemusha_recursive_compact_payment_token_one_hop_from_record_bundle_and_pallas_open_envelope_archive(",
+                "prove_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelopes(",
                 "proving_key_bytes",
                 "None",
             ),
@@ -2194,7 +2597,7 @@ def check_abi7_fail_closed(repo_root: Path) -> dict[str, Any]:
         (
             "pub fn prove_verified_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelope_archive_at_height(",
             (
-                "prove_kagemusha_recursive_compact_payment_token_one_hop_from_record_bundle_and_pallas_open_envelope_archive(",
+                "prove_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelopes(",
                 "proving_key_bytes",
                 "Some(block_height)",
             ),
@@ -2266,7 +2669,7 @@ def check_abi7_fail_closed(repo_root: Path) -> dict[str, Any]:
         (
             "pub unsafe extern \"C\" fn connect_norito_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes(",
             (
-                "prove_verified_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelope_archive(",
+                "prove_verified_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelope_archive_with_key_artifacts(",
                 "is_kagemusha_recursive_compact_unavailable_error(&err)",
                 "BridgeError::KagemushaRecursiveCompactUnavailable",
             ),
@@ -2274,9 +2677,9 @@ def check_abi7_fail_closed(repo_root: Path) -> dict[str, Any]:
         (
             "pub unsafe extern \"C\" fn connect_norito_kagemusha_verify_recursive_compact_payment_token(",
             (
-                "preverify_kagemusha_recursive_compact_payment_token(&token, &vk_box)",
+                "preverify_kagemusha_recursive_compact_payment_token(&token, vk_box)",
                 "Err(err) if is_kagemusha_recursive_compact_unavailable_error(&err) => {}",
-                "verify_kagemusha_recursive_compact_payment_token(&token, &vk_box)",
+                "verify_kagemusha_recursive_compact_payment_token(&token, vk_box)",
                 "*out_valid = 0",
             ),
         ),
@@ -2294,7 +2697,7 @@ def check_abi7_fail_closed(repo_root: Path) -> dict[str, Any]:
             )
     return {
         "ok": not blockers,
-        "state": "one_hop_wired_multi_hop_reserved" if not blockers else "unknown",
+        "state": "package_aware_multi_hop_composed" if not blockers else "unknown",
         "circuit_id": "kagemusha-recursive-compact-v1",
         "blockers": blockers,
     }
@@ -2473,6 +2876,16 @@ def _check_android_signed_evidence_freshness(
                 )
             )
             continue
+        if device_lab.SIGNED_AT_UTC_RE.fullmatch(signed_at_text) is None:
+            blockers.append(
+                blocker(
+                    "android_signed_evidence_timestamp_noncanonical",
+                    "signed evidence artifact signed_at_utc must be canonical UTC YYYY-MM-DDTHH:MM:SSZ",
+                    slot=slot_name,
+                    signed_at_utc=_display_evidence_value(signed_at_text),
+                )
+            )
+            continue
         signed_at, parse_blocker = parse_utc_timestamp(
             signed_at_text,
             "signed evidence artifact signed_at_utc",
@@ -2568,6 +2981,26 @@ def _android_signed_evidence_summary(reports: list[dict[str, Any]]) -> dict[str,
             ("signed_at_utc", "signed_at_utc"),
             ("signed_evidence_artifact_sha256", "artifact_sha256"),
             ("signed_evidence_signer_public_key_sha256", "signer_public_key_sha256"),
+            ("offline_wallet_apk_path", "offline_wallet_apk_path"),
+            ("offline_wallet_apk_sha256", "offline_wallet_apk_sha256"),
+            ("d2d_payment_transcript_path", "d2d_payment_transcript_path"),
+            ("d2d_payment_transcript_sha256", "d2d_payment_transcript_sha256"),
+            (
+                "wallet_integrity_transcript_path",
+                "wallet_integrity_transcript_path",
+            ),
+            (
+                "wallet_integrity_transcript_sha256",
+                "wallet_integrity_transcript_sha256",
+            ),
+            (
+                "attestation_certificate_chain_path",
+                "attestation_certificate_chain_path",
+            ),
+            (
+                "attestation_certificate_chain_sha256",
+                "attestation_certificate_chain_sha256",
+            ),
         ):
             value = kagemusha.get(source_key)
             if isinstance(value, str) and value:
@@ -2935,16 +3368,66 @@ def write_summary(path: Path, summary: dict[str, Any]) -> list[dict[str, Any]]:
     errors = validate_summary_output_path(path)
     if errors:
         return errors
+    summary_text = json.dumps(summary, indent=2, sort_keys=True) + "\n"
+    tmp_path: Path | None = None
     try:
-        path.write_text(
-            json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        with tempfile.NamedTemporaryFile(
+            "w",
+            dir=path.parent,
             encoding="utf-8",
-        )
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            tmp_path = Path(handle.name)
+            handle.write(summary_text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        errors = validate_summary_output_path(path)
+        if errors:
+            return errors
+        os.replace(tmp_path, path)
+        tmp_path = None
     except OSError:
         return [
             blocker(
                 SUMMARY_OUT_PATH_INVALID_CODE,
                 "--summary-out could not be written",
+            )
+        ]
+    finally:
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+    try:
+        parent_fd = os.open(path.parent, os.O_RDONLY)
+    except OSError:
+        parent_fd = None
+    if parent_fd is not None:
+        try:
+            os.fsync(parent_fd)
+        except OSError:
+            pass
+        finally:
+            os.close(parent_fd)
+    errors = validate_summary_output_path(path)
+    if errors:
+        return errors
+    try:
+        if path.read_text(encoding="utf-8") != summary_text:
+            return [
+                blocker(
+                    SUMMARY_OUT_PATH_INVALID_CODE,
+                    "--summary-out write verification failed",
+                )
+            ]
+    except (OSError, UnicodeDecodeError):
+        return [
+            blocker(
+                SUMMARY_OUT_PATH_INVALID_CODE,
+                "--summary-out write verification failed",
             )
         ]
     return []

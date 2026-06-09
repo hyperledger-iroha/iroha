@@ -156,8 +156,11 @@ RawCountAnchors ==
   /\ SpecCount("three_zero_bytes") = 0
   /\ SpecCount("mixed_three") = 8
 
-SafetyFast ==
+QcSignerCountMatchesSpec ==
   \A c \in Cases: ActualCount(c) = SpecCount(c)
+
+SafetyFast ==
+  QcSignerCountMatchesSpec
 
 EmptyAndZeroByteCountExact ==
   /\ ActualCount("empty") = SpecCount("empty")
@@ -182,7 +185,7 @@ MultiByteCountExact ==
 QcSignerRawCountExactness ==
   /\ CountWithinBitmapWidth
   /\ RawCountAnchors
-  /\ SafetyFast
+  /\ QcSignerCountMatchesSpec
   /\ EmptyAndZeroByteCountExact
   /\ SingleBitCountExact
   /\ FullByteAndPaddingCountExact

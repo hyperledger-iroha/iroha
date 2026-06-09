@@ -197,7 +197,7 @@ QueueCapsPositive ==
     /\ output[2] >= 1
     /\ output[3] >= 1
 
-SafetyFast ==
+ValidationWorkerConfigCoreSafety ==
   ActualOutput = SpecOutput
   /\ AutoThreadClampAnchors
   /\ ExplicitThreadPreservation
@@ -205,6 +205,9 @@ SafetyFast ==
   /\ ZeroResultCapDerivation
   /\ ExplicitCapPreservation
   /\ QueueCapsPositive
+
+SafetyFast ==
+  ValidationWorkerConfigCoreSafety
 
 BugAutoMinFloor ==
   ActualAutoLow = SpecAutoLow

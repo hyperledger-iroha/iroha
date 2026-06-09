@@ -102,6 +102,11 @@ def _path_markdown_unsafe_character(path: str) -> str | None:
 def _artifact(path: Path, root: Path) -> dict[str, Any]:
     payload = path.read_bytes()
     artifact_path = path.relative_to(root).as_posix()
+    if artifact_path.strip() != artifact_path:
+        raise ValueError(
+            "release artifact path must not contain surrounding whitespace: "
+            f"{artifact_path!r}"
+        )
     control_character = _path_control_character(artifact_path)
     if control_character is not None:
         raise ValueError(
@@ -242,6 +247,11 @@ def _native_evm_manifest_relative_path(value: Any, label: str) -> PurePosixPath:
         raise ValueError(
             f"native EVM Groth16 prover bundle {label} path must be a "
             "non-empty relative POSIX file path"
+        )
+    if value.strip() != value:
+        raise ValueError(
+            f"native EVM Groth16 prover bundle {label} path must not contain "
+            "surrounding whitespace"
         )
     control_character = _path_control_character(value)
     if control_character is not None:
@@ -392,11 +402,275 @@ def _write_json(path: Path, payload: Any) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def _markdown_string_list_items(value: Any, *, field_label: str) -> list[str]:
+    if not isinstance(value, list):
+        return [f"- `<invalid {field_label}>`"]
+    if not value:
+        return []
+    if not all(isinstance(item, str) and item for item in value):
+        return [f"- `<invalid {field_label}>`"]
+    return [f"- {item}" for item in value]
+
+
+CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS = (
+    "domain",
+    "chain",
+    "evm_source_rpc_chain_id",
+    "evm_source_block_tag",
+    "evm_destination_rpc_chain_id",
+    "evm_destination_block_tag",
+    "source_verifier_material_hash",
+    "source_adapter_engine_deployment_hash",
+    "destination_binding_hash",
+    "source_adapter_gate_hash",
+    "source_adapter_gate_required",
+    "source_adapter_gate_audit_hashes",
+    "route_allowlist_hash",
+    "route_canary_evidence_hash",
+    "route_canary_evidence_source",
+    "route_canary_evidence_bound",
+    "route_canary_transaction_hash",
+    "route_canary_receipt_block_number",
+    "route_canary_receipt_block_hash",
+    "route_canary_receipt_block_finalized",
+    "route_canary_block_receipts_root",
+    "route_canary_message_id",
+    "route_canary_block_number",
+    "route_canary_block_timestamp",
+)
+
+USER_PROVER_SUBMISSION_SURFACE_FIELDS = (
+    "lanes",
+    "proof_backend",
+    "sdk_helpers",
+    "on_chain_submission",
+    "required_phases",
+    "validation_status",
+)
+
+
+def _require_report_mapping(
+    value: Any,
+    label: str,
+    errors: list[str],
+) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    errors.append(f"{label} must be an object")
+    return {}
+
+
+def _require_report_list(value: Any, label: str, errors: list[str]) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    errors.append(f"{label} must be a list")
+    return []
+
+
+def _require_report_fields(
+    payload: dict[str, Any],
+    label: str,
+    fields: tuple[str, ...],
+    errors: list[str],
+) -> None:
+    for field in fields:
+        if field not in payload:
+            errors.append(f"{label} missing field: {field}")
+
+
+def _release_report_preflight_errors(report: Any, *, label: str) -> list[str]:
+    errors: list[str] = []
+    payload = _require_report_mapping(report, label, errors)
+    if errors:
+        return errors
+    _require_report_fields(payload, label, ("production_ready", "blockers"), errors)
+    return errors
+
+
+def _artifact_row_errors(row: Any, label: str) -> list[str]:
+    errors: list[str] = []
+    artifact = _require_report_mapping(row, label, errors)
+    if not errors:
+        _require_report_fields(artifact, label, ("path", "bytes", "sha256"), errors)
+    return errors
+
+
+def _release_report_bundle_errors(report: Any, *, label: str) -> list[str]:
+    errors = _release_report_preflight_errors(report, label=label)
+    payload = report if isinstance(report, dict) else {}
+    if not isinstance(payload, dict):
+        return errors
+
+    _require_report_fields(
+        payload,
+        label,
+        (
+            "input_artifacts",
+            "release_checklist",
+            "corridor",
+            "cryptographic_evidence",
+            "user_prover_submission_surfaces",
+            "native_evm_prover_bundle",
+            "source_inventory",
+            "evidence",
+        ),
+        errors,
+    )
+
+    for index, artifact in enumerate(
+        _require_report_list(payload.get("input_artifacts"), f"{label}.input_artifacts", errors)
+    ):
+        errors.extend(_artifact_row_errors(artifact, f"{label}.input_artifacts[{index}]"))
+
+    checklist = _require_report_mapping(
+        payload.get("release_checklist"),
+        f"{label}.release_checklist",
+        errors,
+    )
+    if checklist:
+        _require_report_fields(
+            checklist,
+            f"{label}.release_checklist",
+            ("ready", "items"),
+            errors,
+        )
+        for index, item in enumerate(
+            _require_report_list(
+                checklist.get("items"),
+                f"{label}.release_checklist.items",
+                errors,
+            )
+        ):
+            item_payload = _require_report_mapping(
+                item,
+                f"{label}.release_checklist.items[{index}]",
+                errors,
+            )
+            if item_payload:
+                _require_report_fields(
+                    item_payload,
+                    f"{label}.release_checklist.items[{index}]",
+                    ("id", "ready"),
+                    errors,
+                )
+
+    corridor = _require_report_mapping(payload.get("corridor"), f"{label}.corridor", errors)
+    if corridor:
+        _require_report_fields(
+            corridor,
+            f"{label}.corridor",
+            ("production_ready", "phases", "evidence_artifacts"),
+            errors,
+        )
+        _require_report_mapping(corridor.get("phases"), f"{label}.corridor.phases", errors)
+        evidence_artifacts = _require_report_mapping(
+            corridor.get("evidence_artifacts"),
+            f"{label}.corridor.evidence_artifacts",
+            errors,
+        )
+        for phase, artifact in evidence_artifacts.items():
+            if artifact is not None:
+                errors.extend(
+                    _artifact_row_errors(
+                        artifact,
+                        f"{label}.corridor.evidence_artifacts[{phase!r}]",
+                    )
+                )
+
+    for index, row in enumerate(
+        _require_report_list(
+            payload.get("cryptographic_evidence"),
+            f"{label}.cryptographic_evidence",
+            errors,
+        )
+    ):
+        row_payload = _require_report_mapping(
+            row,
+            f"{label}.cryptographic_evidence[{index}]",
+            errors,
+        )
+        if row_payload:
+            _require_report_fields(
+                row_payload,
+                f"{label}.cryptographic_evidence[{index}]",
+                CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS,
+                errors,
+            )
+
+    for index, surface in enumerate(
+        _require_report_list(
+            payload.get("user_prover_submission_surfaces"),
+            f"{label}.user_prover_submission_surfaces",
+            errors,
+        )
+    ):
+        surface_payload = _require_report_mapping(
+            surface,
+            f"{label}.user_prover_submission_surfaces[{index}]",
+            errors,
+        )
+        if surface_payload:
+            _require_report_fields(
+                surface_payload,
+                f"{label}.user_prover_submission_surfaces[{index}]",
+                USER_PROVER_SUBMISSION_SURFACE_FIELDS,
+                errors,
+            )
+            _require_report_list(
+                surface_payload.get("required_phases"),
+                f"{label}.user_prover_submission_surfaces[{index}].required_phases",
+                errors,
+            )
+
+    _require_report_mapping(
+        payload.get("native_evm_prover_bundle"),
+        f"{label}.native_evm_prover_bundle",
+        errors,
+    )
+    source_inventory = _require_report_mapping(
+        payload.get("source_inventory"),
+        f"{label}.source_inventory",
+        errors,
+    )
+    for gate, inventory in source_inventory.items():
+        _require_report_mapping(inventory, f"{label}.source_inventory[{gate!r}]", errors)
+
+    evidence = _require_report_mapping(payload.get("evidence"), f"{label}.evidence", errors)
+    if evidence:
+        for index, lane in enumerate(
+            _require_report_list(evidence.get("lanes"), f"{label}.evidence.lanes", errors)
+        ):
+            lane_payload = _require_report_mapping(
+                lane,
+                f"{label}.evidence.lanes[{index}]",
+                errors,
+            )
+            if lane_payload:
+                _require_report_fields(
+                    lane_payload,
+                    f"{label}.evidence.lanes[{index}]",
+                    ("domain", "chain", "production_ready", "records"),
+                    errors,
+                )
+                _require_report_mapping(
+                    lane_payload.get("records"),
+                    f"{label}.evidence.lanes[{index}].records",
+                    errors,
+                )
+    return errors
+
+
+def _reject_malformed_release_report(errors: list[str]) -> None:
+    if errors:
+        details = "\n".join(f"- {error}" for error in errors)
+        raise ValueError("malformed SCCP release readiness report:\n" + details)
+
+
 def _release_notes_attachment(
     report: dict[str, Any],
     artifacts: list[dict[str, Any]],
 ) -> str:
-    status = "READY" if report["production_ready"] else "NOT READY"
+    status = "READY" if report["production_ready"] is True else "NOT READY"
     lines = [
         "# SCCP Public Release Notes Attachment",
         "",
@@ -423,14 +697,35 @@ def _release_notes_attachment(
                 sha256=artifact["sha256"],
             )
         )
-    if report["blockers"]:
+    blocker_lines = _markdown_string_list_items(
+        report.get("blockers"),
+        field_label="blockers",
+    )
+    if blocker_lines:
         lines.extend(["", "## Blocking Items", ""])
-        lines.extend(f"- {blocker}" for blocker in report["blockers"])
+        lines.extend(blocker_lines)
     return "\n".join(lines) + "\n"
 
 
 def _bundle_artifacts(output_dir: Path, paths: list[Path]) -> list[dict[str, Any]]:
     return [_artifact(path, output_dir) for path in paths]
+
+
+def _release_bundle_manifest(
+    output_dir: Path,
+    report: dict[str, Any],
+    artifact_paths: list[Path],
+) -> dict[str, Any]:
+    """Build the release manifest without truthy-coercing readiness fields."""
+
+    return {
+        "schema": "sccp-release-bundle-v1",
+        "production_ready": report["production_ready"],
+        "release_checklist_ready": report["release_checklist"]["ready"],
+        "corridor_ready": report["corridor"]["production_ready"],
+        "blockers": report["blockers"],
+        "artifacts": _bundle_artifacts(output_dir, artifact_paths),
+    }
 
 
 def _verify_generated_bundle(output_dir: Path) -> dict[str, Any]:
@@ -707,9 +1002,23 @@ def main(argv: list[str] | None = None) -> int:
             require_phase_evidence=True,
             native_evm_prover_bundle=args.native_evm_prover_bundle,
         )
-        if not preflight_report["production_ready"] and not args.allow_not_ready:
-            blockers = "\n".join(f"- {blocker}" for blocker in preflight_report["blockers"])
+        _reject_malformed_release_report(
+            _release_report_preflight_errors(preflight_report, label="preflight report")
+        )
+        if (
+            preflight_report["production_ready"] is not True
+            and not args.allow_not_ready
+        ):
+            blockers = "\n".join(
+                _markdown_string_list_items(
+                    preflight_report.get("blockers"),
+                    field_label="blockers",
+                )
+            )
             parser.exit(1, f"SCCP release bundle is not production ready:\n{blockers}\n")
+        _reject_malformed_release_report(
+            _release_report_bundle_errors(preflight_report, label="preflight report")
+        )
 
         _prepare_output_dir(args.output_dir, force=args.force)
         copied_evidence = _copy_evidence_inputs(args.toml, args.output_dir)
@@ -732,6 +1041,9 @@ def main(argv: list[str] | None = None) -> int:
             args.phase_result,
             copied_phase_args,
             copied_native_evm_prover_bundle,
+        )
+        _reject_malformed_release_report(
+            _release_report_bundle_errors(report, label="bundled report")
         )
         summary = _all_lanes_summary(copied_evidence)
 
@@ -767,17 +1079,10 @@ def main(argv: list[str] | None = None) -> int:
             encoding="utf-8",
         )
         all_artifact_paths = [*attachment_paths, notes_md]
-        manifest = {
-            "schema": "sccp-release-bundle-v1",
-            "production_ready": bool(report["production_ready"]),
-            "release_checklist_ready": bool(report["release_checklist"]["ready"]),
-            "corridor_ready": bool(report["corridor"]["production_ready"]),
-            "blockers": report["blockers"],
-            "artifacts": _bundle_artifacts(args.output_dir, all_artifact_paths),
-        }
+        manifest = _release_bundle_manifest(args.output_dir, report, all_artifact_paths)
         _write_json(manifest_json, manifest)
         verification_summary: dict[str, Any] | None = None
-        if report["production_ready"]:
+        if report["production_ready"] is True:
             verification_summary = _verify_generated_bundle(args.output_dir)
     except (
         OSError,
@@ -788,7 +1093,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.exit(2, f"{parser.prog}: error: {exc}\n")
 
     print(f"Wrote SCCP release bundle to {args.output_dir}")
-    if report["production_ready"]:
+    if report["production_ready"] is True:
         print(f"Verified SCCP release bundle at {args.output_dir}")
         if verification_summary is not None:
             print(

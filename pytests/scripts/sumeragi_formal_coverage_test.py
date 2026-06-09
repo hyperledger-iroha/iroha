@@ -3305,6 +3305,86 @@ def test_cfg_semantic_check_errors_rejects_type_only_check(
     ]
 
 
+def test_cfg_fast_generic_check_errors_rejects_fast_generic_checks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiFrontier_fast.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT SafetyFast",
+                "INVARIANTS DirectSafety Safety",
+                "INVARIANT NoBugInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_fast_generic_check_errors(
+        "frontier-fast", cfg, "Apalache"
+    ) == [
+        f"frontier-fast: Apalache cfg {cfg}:4 references generic check "
+        "SafetyFast; fast configs must use a model-specific direct invariant",
+        f"frontier-fast: Apalache cfg {cfg}:5 references generic check "
+        "Safety; fast configs must use a model-specific direct invariant",
+        f"frontier-fast: Apalache cfg {cfg}:6 references generic check "
+        "NoBugInvariant; fast configs must use a model-specific direct invariant",
+    ]
+
+
+def test_cfg_fast_generic_check_errors_accepts_direct_fast_checks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiFrontier_fast.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT FrontierDirectSafety",
+                "INVARIANTS FrontierAnchors FrontierExactness",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        module.cfg_fast_generic_check_errors("frontier-fast", cfg, "TLC")
+        == []
+    )
+
+
+def test_cfg_fast_generic_check_errors_ignores_mutation_configs(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiFrontier_bug_stale.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT NoBugInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        module.cfg_fast_generic_check_errors(
+            "frontier-bug-stale", cfg, "Apalache"
+        )
+        == []
+    )
+
+
 def test_unreferenced_formal_file_errors_require_inventory_reachability(
     tmp_path: Path,
 ) -> None:
@@ -3338,6 +3418,60 @@ def test_duplicate_values_reports_each_duplicate_once() -> None:
     assert module.duplicate_values(
         ["frontier-fast", "quorum-fast", "frontier-fast", "quorum-fast", "quorum-fast"]
     ) == ["frontier-fast", "quorum-fast"]
+
+
+def test_pr_tlc_cross_check_errors_rejects_missing_non_allowlisted_mode() -> None:
+    module = load_coverage_module()
+
+    errors = module.pr_tlc_cross_check_errors(
+        {"fast", "deep", "fork-npos"},
+        {"fast"},
+        {"fast"},
+    )
+
+    assert len(errors) == 2
+    assert errors[0] == (
+        "Sumeragi PR baseline modes without TLC runner cases "
+        "(not explicitly Apalache-only):\n"
+        "  - fork-npos"
+    )
+    assert errors[1] == (
+        "Sumeragi PR baseline modes without README TLC commands "
+        "(not explicitly Apalache-only):\n"
+        "  - fork-npos"
+    )
+
+
+def test_pr_tlc_cross_check_errors_accepts_documented_apalache_only_deep() -> None:
+    module = load_coverage_module()
+
+    assert (
+        module.pr_tlc_cross_check_errors(
+            {"fast", "deep", "fork-npos"},
+            {"fast", "fork-npos"},
+            {"fast", "fork-npos"},
+        )
+        == []
+    )
+
+
+def test_pr_tlc_cross_check_errors_rejects_stale_or_routed_allowlist() -> None:
+    module = load_coverage_module()
+
+    errors = module.pr_tlc_cross_check_errors(
+        {"fast"},
+        {"fast", "deep"},
+        {"fast", "deep"},
+    )
+
+    assert errors == [
+        "Sumeragi Apalache-only PR mode allowlist entries are stale:\n"
+        "  - deep",
+        "Sumeragi Apalache-only PR modes unexpectedly have TLC runner cases:\n"
+        "  - deep",
+        "Sumeragi Apalache-only PR modes unexpectedly have README TLC commands:\n"
+        "  - deep",
+    ]
 
 
 def test_runner_case_labels_parse_duplicates_for_guarding(tmp_path: Path) -> None:

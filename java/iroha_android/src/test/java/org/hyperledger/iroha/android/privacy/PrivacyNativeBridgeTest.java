@@ -77,8 +77,13 @@ public final class PrivacyNativeBridgeTest {
     assert !capabilities.hasChainAdmission();
     assert !capabilities.hasSdkParity();
     assert !capabilities.hasWalletState();
+    assert !capabilities.hasWitnessPrivacyChecks();
     assert !capabilities.hasDeterministicTests();
+    assert !capabilities.hasNegativeAdversarialTests();
+    assert !capabilities.hasReplayNullifierTests();
     assert !capabilities.hasFuzzing();
+    assert !capabilities.hasParserFuzzing();
+    assert !capabilities.hasVerifierFuzzing();
     assert !capabilities.hasPerformanceGates();
     assert !capabilities.hasExternalAudit();
     assert capabilities.auditReferences().isEmpty();
@@ -88,7 +93,17 @@ public final class PrivacyNativeBridgeTest {
     assert capabilities.missingProductionGates().contains(
         "chain admission path is not enabled");
     assert capabilities.missingProductionGates().contains(
-        "external audit signoff is missing");
+        "witness privacy checks are incomplete");
+    assert capabilities.missingProductionGates().contains(
+        "negative/adversarial tests are incomplete");
+    assert capabilities.missingProductionGates().contains(
+        "replay/nullifier rejection tests are incomplete");
+    assert capabilities.missingProductionGates().contains(
+        "parser fuzzing gate is incomplete");
+    assert capabilities.missingProductionGates().contains(
+        "verifier fuzzing gate is incomplete");
+    assert capabilities.missingProductionGates().contains(
+        "internal cryptographic review signoff is missing");
     assert capabilities.missingProductionGates().contains(
         "implementation stage is not production-hardened");
     assert capabilities.missingProductionGates().contains(
@@ -110,10 +125,15 @@ public final class PrivacyNativeBridgeTest {
         "chain admission path is not enabled",
         "cross-SDK parity is incomplete",
         "wallet/state support is incomplete",
+        "witness privacy checks are incomplete",
         "deterministic tests are incomplete",
+        "negative/adversarial tests are incomplete",
+        "replay/nullifier rejection tests are incomplete",
         "fuzzing gate is incomplete",
+        "parser fuzzing gate is incomplete",
+        "verifier fuzzing gate is incomplete",
         "performance gate is incomplete",
-        "external audit signoff is missing",
+        "internal cryptographic review signoff is missing",
         "implementation stage is not production-hardened",
         "planned SDK entrypoints remain",
         "dev fixture entrypoints are not production entrypoints",
@@ -121,15 +141,21 @@ public final class PrivacyNativeBridgeTest {
   }
 
   private static void rejectsEmptyRequestsBeforeNativeDispatch() {
-    assertThrows(() -> PrivacyNativeBridge.buildProof(new byte[0]));
-    assertThrows(() -> PrivacyNativeBridge.verifyProof(new byte[0]));
-    assertThrows(() -> PrivacyNativeBridge.buildProof(null));
-    assertThrows(() -> PrivacyNativeBridge.verifyProof(null));
+    final PrivacyNativeBridge.NativeCall[] helpers = new PrivacyNativeBridge.NativeCall[] {
+      PrivacyNativeBridge::buildProof,
+      PrivacyNativeBridge::buildConfidentialTransferProofV2,
+      PrivacyNativeBridge::buildConfidentialUnshieldProofV3,
+      PrivacyNativeBridge::verifyProof
+    };
+    for (final PrivacyNativeBridge.NativeCall helper : helpers) {
+      assertThrows(() -> helper.run(new byte[0]));
+      assertThrows(() -> helper.run(null));
+    }
     final byte[] oversized = new byte[PrivacyNativeBridge.PRIVACY_NATIVE_ARCHIVE_MAX_BYTES + 1];
-    assertThrows(() -> PrivacyNativeBridge.buildProof(oversized));
-    assertThrows(() -> PrivacyNativeBridge.verifyProof(oversized));
-    assertThrows(() -> PrivacyNativeBridge.buildProof(privacyNoritoFrame(0x52)));
-    assertThrows(() -> PrivacyNativeBridge.verifyProof(privacyNoritoFrame(0x52)));
+    for (final PrivacyNativeBridge.NativeCall helper : helpers) {
+      assertThrows(() -> helper.run(oversized));
+      assertThrows(() -> helper.run(privacyNoritoFrame(0x52)));
+    }
   }
 
   private static void nativeAvailabilityProbeArchiveIsStableAndDefensive() {

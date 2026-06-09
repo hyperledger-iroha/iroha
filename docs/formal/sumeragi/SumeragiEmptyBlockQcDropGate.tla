@@ -299,11 +299,12 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-Safety ==
+EmptyBlockMatchesSpec ==
   \A c \in Cases: Matches(c)
 
-SafetyFast ==
-  Safety
+Safety == EmptyBlockMatchesSpec
+
+SafetyFast == EmptyBlockMatchesSpec
 
 EmptyBlockDropDecisionExact ==
   \A c \in Cases:

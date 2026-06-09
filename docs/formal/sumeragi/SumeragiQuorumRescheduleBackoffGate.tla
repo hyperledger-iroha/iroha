@@ -278,7 +278,7 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+QuorumRescheduleBackoffCoreSafety ==
   /\ ActualOutput("base_zero") = SpecOutput("base_zero")
   /\ ActualOutput("no_votes_no_stall") = SpecOutput("no_votes_no_stall")
   /\ ActualOutput("one_missing_no_stall") = SpecOutput("one_missing_no_stall")
@@ -311,6 +311,9 @@ SafetyFast ==
   /\ ActualOutput("fast_vote_queue_backlog") =
        SpecOutput("fast_vote_queue_backlog")
   /\ ActualOutput("fast_rbc_unresolved") = SpecOutput("fast_rbc_unresolved")
+
+SafetyFast ==
+  QuorumRescheduleBackoffCoreSafety
 
 QuorumBackoffBaseZeroExact ==
   \A c \in BaseZeroCases:
@@ -360,7 +363,7 @@ QuorumFastResendRejectExact ==
     /\ ActualOutput(c) = SpecOutput(c)
 
 QuorumRescheduleBackoffExactness ==
-  /\ SafetyFast
+  /\ QuorumRescheduleBackoffCoreSafety
   /\ QuorumBackoffBaseZeroExact
   /\ QuorumBackoffDeficitMultiplierExact
   /\ QuorumBackoffStallEscalationExact
@@ -437,7 +440,7 @@ BugFastIgnoresRbc ==
   ActualOutput("fast_rbc_unresolved") = SpecOutput("fast_rbc_unresolved")
 
 Safety ==
-  SafetyFast
+  QuorumRescheduleBackoffCoreSafety
 
 =============================================================================
 ====

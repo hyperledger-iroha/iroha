@@ -336,8 +336,10 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+DeferredHelperMatchesSpec ==
   \A c \in Cases: Matches(c)
+
+SafetyFast == DeferredHelperMatchesSpec
 
 ValidationNoInflightAllows ==
   Matches("validation_no_inflight")

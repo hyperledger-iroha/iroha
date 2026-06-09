@@ -649,17 +649,20 @@ public struct IssueOfflineNoteV2Request: Sendable {
     public let issue: OfflineNoteIssueV2
     public let ttlMs: UInt64?
     public let nonce: UInt32?
+    public let metadata: [String: ToriiJSONValue]
 
     public init(chainId: String,
                 authority: String,
                 issue: OfflineNoteIssueV2,
                 ttlMs: UInt64? = nil,
-                nonce: UInt32? = nil) {
+                nonce: UInt32? = nil,
+                metadata: [String: ToriiJSONValue] = [:]) {
         self.chainId = chainId
         self.authority = authority
         self.issue = issue
         self.ttlMs = ttlMs
         self.nonce = nonce
+        self.metadata = metadata
     }
 }
 
@@ -669,17 +672,20 @@ public struct RedeemOfflineNoteV2Request: Sendable {
     public let redemption: OfflineNoteRedeemV2
     public let ttlMs: UInt64?
     public let nonce: UInt32?
+    public let metadata: [String: ToriiJSONValue]
 
     public init(chainId: String,
                 authority: String,
                 redemption: OfflineNoteRedeemV2,
                 ttlMs: UInt64? = nil,
-                nonce: UInt32? = nil) {
+                nonce: UInt32? = nil,
+                metadata: [String: ToriiJSONValue] = [:]) {
         self.chainId = chainId
         self.authority = authority
         self.redemption = redemption
         self.ttlMs = ttlMs
         self.nonce = nonce
+        self.metadata = metadata
     }
 }
 
@@ -689,17 +695,20 @@ public struct AuditOfflineNoteV2Request: Sendable {
     public let audit: OfflineNoteAuditBundleV2
     public let ttlMs: UInt64?
     public let nonce: UInt32?
+    public let metadata: [String: ToriiJSONValue]
 
     public init(chainId: String,
                 authority: String,
                 audit: OfflineNoteAuditBundleV2,
                 ttlMs: UInt64? = nil,
-                nonce: UInt32? = nil) {
+                nonce: UInt32? = nil,
+                metadata: [String: ToriiJSONValue] = [:]) {
         self.chainId = chainId
         self.authority = authority
         self.audit = audit
         self.ttlMs = ttlMs
         self.nonce = nonce
+        self.metadata = metadata
     }
 }
 

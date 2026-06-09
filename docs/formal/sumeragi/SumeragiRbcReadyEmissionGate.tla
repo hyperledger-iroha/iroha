@@ -349,12 +349,15 @@ SpecialCasesStable ==
   /\ ~ActualDecision(BuilderMissingLocal).sent_ready
   /\ ActualDecision(BuilderMissingLocal).deliver_attempt
 
-SafetyFast ==
+RbcReadyEmissionCoreSafety ==
   /\ DecisionExact
   /\ TerminalCasesDoNotPublish
   /\ DeferralCasesDoNotEmitReady
   /\ ReadySuccessRecordsAndBroadcasts
   /\ InvalidationStopsDelivery
   /\ SpecialCasesStable
+
+SafetyFast ==
+  RbcReadyEmissionCoreSafety
 
 ====

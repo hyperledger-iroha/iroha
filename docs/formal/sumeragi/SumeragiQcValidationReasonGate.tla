@@ -210,8 +210,11 @@ TypeInvariant ==
   /\ \A c \in Cases: ActualReason(c) \in AllReasonValues
   /\ \A c \in Cases: ActualEvidenceReason(c) \in AllReasonValues
 
-SafetyFast ==
+QcValidationReasonMatchesSpec ==
   \A c \in Cases: Matches(c)
+
+SafetyFast ==
+  QcValidationReasonMatchesSpec
 
 BugBitmapLengthLabelWrong ==
   Matches(BitmapLengthMismatch)

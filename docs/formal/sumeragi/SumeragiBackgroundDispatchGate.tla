@@ -225,8 +225,10 @@ TypeInvariant ==
        /\ Kind(c) \in Kinds
        /\ Channel(c) \in {"ready", "full", "no_worker", "disconnected"}
 
-SafetyFast ==
+DispatchMatchesSpec ==
   \A c \in Cases: Matches(c)
+
+SafetyFast == DispatchMatchesSpec
 
 AllRequestsBlockingEligible ==
   \A c \in Cases: ActualAllowsBlocking(c) = TRUE

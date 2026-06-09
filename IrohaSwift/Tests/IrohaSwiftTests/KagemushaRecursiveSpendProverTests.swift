@@ -447,6 +447,24 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
         )
     }
 
+    func testRedeemSpendRejectsAbi7FixtureRequestWhileAdmissionRemainsReserved() throws {
+        let archiveFixture = try Self.sharedRecursiveSpendAbi7Archives()
+        XCTAssertEqual(
+            archiveFixture["schema"] as? String,
+            "iroha.kagemusha.recursive_spend.abi7.archive_fixtures.v1"
+        )
+        let archives = try XCTUnwrap(archiveFixture["archives"] as? [[String: Any]])
+        let redeemRequest = try XCTUnwrap(archives.first { $0["name"] as? String == "redeem_request" })
+        let redeemInstruction = try XCTUnwrap(archives.first { $0["name"] as? String == "redeem_instruction" })
+        XCTAssertEqual(redeemRequest["norito_type"] as? String, "KagemushaRecursiveSpendRedeemRequestV1")
+        XCTAssertEqual(redeemInstruction["norito_type"] as? String, "RedeemKagemushaRecursive")
+
+        let requestArchive = try XCTUnwrap(Data(base64Encoded: try XCTUnwrap(redeemRequest["bytes_base64"] as? String)))
+        XCTAssertThrowsError(try KagemushaRecursiveSpendProver.redeemSpend(requestArchive: requestArchive)) { error in
+            XCTAssertEqual(error as? KagemushaRecursiveSpendProverError, .proofRejected)
+        }
+    }
+
     func testExportsStableCircuitIds() {
         XCTAssertEqual(KagemushaRecursiveSpendProver.requiredBridgeAbiVersion, 6)
         XCTAssertEqual(
@@ -1393,12 +1411,19 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
         try sharedRecursiveSpendFixture(named: "archives.json")
     }
 
-    private static func sharedRecursiveSpendFixture(named fileName: String) throws -> [String: Any] {
+    private static func sharedRecursiveSpendAbi7Archives() throws -> [String: Any] {
+        try sharedRecursiveSpendFixture(named: "archives.json", abiDirectoryName: "kagemusha_recursive_spend_abi7")
+    }
+
+    private static func sharedRecursiveSpendFixture(
+        named fileName: String,
+        abiDirectoryName: String = "kagemusha_recursive_spend_abi6"
+    ) throws -> [String: Any] {
         var directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
         for _ in 0..<10 {
             let candidate = directory
                 .appendingPathComponent("fixtures")
-                .appendingPathComponent("kagemusha_recursive_spend_abi6")
+                .appendingPathComponent(abiDirectoryName)
                 .appendingPathComponent(fileName)
             if FileManager.default.fileExists(atPath: candidate.path) {
                 let data = try Data(contentsOf: candidate)
@@ -1409,7 +1434,7 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
         throw NSError(
             domain: "KagemushaRecursiveSpendProverTests",
             code: 1,
-            userInfo: [NSLocalizedDescriptionKey: "missing shared recursive spend ABI-6 fixture \(fileName)"]
+            userInfo: [NSLocalizedDescriptionKey: "missing shared recursive spend fixture \(abiDirectoryName)/\(fileName)"]
         )
     }
 

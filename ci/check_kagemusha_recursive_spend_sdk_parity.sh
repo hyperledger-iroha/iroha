@@ -103,6 +103,12 @@ REQUIRED_LINEAGE_KEY_ARTIFACT_JS_PUBLIC_EXPORTS = (
     "validateKagemushaRecursiveSpendLineageKeyArtifacts",
 )
 
+REQUIRED_JS_KAGEMUSHA_INSTRUCTION_TRANSACTION_PUBLIC_EXPORTS = (
+    "buildKagemushaInstructionArchiveInstruction",
+    "buildKagemushaInstructionTransaction",
+    "buildKagemushaRecursiveRedeemTransaction",
+)
+
 REQUIRED_PYTHON_NATIVE_METHODS = (
     "kagemusha_recursive_spend_init",
     "kagemusha_recursive_spend_append",
@@ -139,6 +145,17 @@ REQUIRED_RECURSIVE_SPEND_COMPACT_PROJECTION_PYTHON_PUBLIC_METHODS = (
     "is_kagemusha_recursive_spend_compact_payment_token_projection_available",
     "is_kagemusha_recursive_spend_compact_payment_token_projection_verifier_available",
     *REQUIRED_RECURSIVE_SPEND_COMPACT_PROJECTION_PYTHON_METHODS,
+)
+
+REQUIRED_PYTHON_KAGEMUSHA_INSTRUCTION_TRANSACTION_PUBLIC_METHODS = (
+    "KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_TRANSFER",
+    "KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_REDEEM_RECURSIVE",
+    "KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPES",
+    "KagemushaInstructionArchiveType",
+    "kagemusha_instruction_archive_instruction",
+    "kagemusha_recursive_redeem_instruction",
+    "build_kagemusha_instruction_transaction",
+    "build_kagemusha_recursive_redeem_transaction",
 )
 
 REQUIRED_LINEAGE_KEY_ARTIFACT_PYTHON_PUBLIC_METHODS = (
@@ -197,7 +214,7 @@ REQUIRED_PYTHON_PUBLIC_METHODS = REQUIRED_PYTHON_NATIVE_METHODS + (
     "can_prove_kagemusha_recursive_spend_append_output_proof_circuit_id",
     "can_select_kagemusha_recursive_spend_append_output_proof_circuit_id",
     "requires_kagemusha_recursive_spend_previous_proof_open_envelopes_for_append",
-) + REQUIRED_LINEAGE_KEY_ARTIFACT_PYTHON_PUBLIC_METHODS
+) + REQUIRED_LINEAGE_KEY_ARTIFACT_PYTHON_PUBLIC_METHODS + REQUIRED_PYTHON_KAGEMUSHA_INSTRUCTION_TRANSACTION_PUBLIC_METHODS
 
 JNI_METHODS = (
     "nativeBridgeAbiVersion",
@@ -234,24 +251,30 @@ SOURCE_PATHS = (
     "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveAggregationProofBundleProver.swift",
     "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift",
     "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveCompactPaymentTokenProver.swift",
+    "IrohaSwift/Sources/IrohaSwift/KagemushaInstructionTransactionEncoder.swift",
     "IrohaSwift/Sources/IrohaSwift/Halo2OfflineNoteProver.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaCompactPaymentTokenProverTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveAggregationProofBundleProverTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveCompactPaymentTokenProverTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/KagemushaInstructionTransactionEncoderTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/UC4DecodePaymentTokenTests.swift",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaCompactPaymentTokenProver.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveAggregationProofBundleProver.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaInstructionArchives.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveCompactPaymentTokenProver.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteHalo2Prover.java",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaCompactPaymentTokenProver.kt",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/TransactionBuilderTests.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveAggregationProofBundleProver.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaInstructionArchives.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveCompactPaymentTokenProver.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteHalo2Prover.java",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaInstructionArchivesTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProverTest.kt",
     "javascript/iroha_js/src/crypto.js",
@@ -260,20 +283,29 @@ SOURCE_PATHS = (
     "javascript/iroha_js/dist/crypto.browser.js",
     "javascript/iroha_js/src/index.js",
     "javascript/iroha_js/dist/index.js",
+    "javascript/iroha_js/src/transaction.js",
+    "javascript/iroha_js/dist/transaction.js",
     "javascript/iroha_js/index.d.ts",
     "javascript/iroha_js/package.json",
     "javascript/iroha_js/package-lock.json",
     "javascript/iroha_js/test/crypto.browser.test.js",
+    "javascript/iroha_js/test/transactionBuilder.test.js",
     "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
     "javascript/iroha_js/test/package_dist.test.js",
     "python/iroha_python/src/iroha_python/__init__.py",
     "python/iroha_python/src/iroha_python/kagemusha.py",
+    "python/iroha_python/src/iroha_python/tx.py",
     "python/iroha_python/iroha_python_rs/src/lib.rs",
     "python/iroha_python/tests/kagemusha_test.py",
     "csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj",
     "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
+    "csharp/src/Hyperledger.Iroha.Sdk/Transactions/KagemushaInstructionArchiveInstruction.cs",
+    "csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionBuilder.cs",
+    "csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionEncodingContext.cs",
+    "csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionInstruction.cs",
     "csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj",
     "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
+    "csharp/tests/Hyperledger.Iroha.Sdk.Tests/TransactionBuilderTests.cs",
 )
 
 NATIVE_MANIFEST_PATHS = (
@@ -325,7 +357,7 @@ NATIVE_BRIDGE_UNANCHORED_COMPACT_TEST_COMMAND = "cargo test -p connect_norito_br
 NATIVE_BRIDGE_UNANCHORED_VALID_COMPACT_TEST_COMMAND = "cargo test -p connect_norito_bridge kagemusha_unanchored_compact_token_ffi_rejects_valid_bundle_without_records --lib -- --test-threads=1"
 NATIVE_BRIDGE_RECORD_COMPACT_TEST_COMMAND = "cargo test -p connect_norito_bridge kagemusha_verified_record_compact_token_ffi_rejects_bad_records --lib -- --test-threads=1"
 NATIVE_BRIDGE_RECORD_RECURSIVE_AGGREGATION_TEST_COMMAND = "cargo test -p connect_norito_bridge kagemusha_verified_record_recursive_aggregation_proof_bundle_ffi_rejects_adversarial_inputs --lib -- --test-threads=1"
-NATIVE_BRIDGE_RECURSIVE_COMPACT_TEST_COMMAND = "cargo test -p connect_norito_bridge kagemusha_recursive_compact_ffi_fails_closed_and_rejects_adversarial_inputs --lib -- --test-threads=1"
+NATIVE_BRIDGE_RECURSIVE_COMPACT_TEST_COMMAND = "RUST_MIN_STACK=67108864 CARGO_PROFILE_TEST_OPT_LEVEL=3 CARGO_PROFILE_TEST_DEBUG=0 cargo test -p connect_norito_bridge kagemusha_recursive_compact_ffi_fails_closed_and_rejects_adversarial_inputs --lib -- --test-threads=1"
 NATIVE_BRIDGE_RECURSIVE_COMPACT_WINDOWED_RECORD_TEST_COMMAND = "cargo test -p connect_norito_bridge kagemusha_recursive_compact_ffi_rejects_windowed_records_before_unavailable --lib -- --test-threads=1"
 PYTHON_SDK_TEST_COMMAND = "ci/check_kagemusha_recursive_spend_python_sdk.sh"
 PYTHON_HOST_APPEND_BOUNDARY_TEST_COMMAND = "cargo test -p iroha_python_rs kagemusha_recursive_spend_lineage_append_boundary_python_rejects_duplicate_current_outputs --lib -- --test-threads=1"
@@ -363,6 +395,10 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "JavaScript lineage key package binding negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-lineage-key-package-binding",
+    ),
+    (
+        "JavaScript Kagemusha instruction transaction builder negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-kagemusha-instruction-transaction-builder",
     ),
     (
         "Python lineage key package binding negative control",
@@ -441,6 +477,26 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-readme-proof-chain-accumulator",
     ),
     (
+        "offline Kagemusha doc accumulator boundary negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-offline-doc-native-owned-accumulator-boundary",
+    ),
+    (
+        "offline Kagemusha doc instruction transaction surface negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-offline-doc-instruction-transaction-surface",
+    ),
+    (
+        "SDK proof-chain accumulator public-input negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-proof-chain-accumulator-input",
+    ),
+    (
+        "SDK accumulator digest public-input negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-accumulator-digest-inputs",
+    ),
+    (
+        "SDK accumulator boundary digest public-input negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-accumulator-boundary-digest-inputs",
+    ),
+    (
         "SDK README availability surface negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-readme-availability-surface",
     ),
@@ -465,8 +521,16 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-cross-sdk-helper-bodies",
     ),
     (
+        "cross-SDK preferred-mode fallback negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-cross-sdk-preferred-mode-fallback",
+    ),
+    (
         "mobile Halo2 canonical VK hash negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-halo2-vk-hash",
+    ),
+    (
+        "Rust recursive compact unavailable classifier negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-rust-recursive-compact-unavailable-classifier",
     ),
     (
         "SDK recursive compact unavailable helper negative control",
@@ -475,6 +539,54 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "ABI-7 recursive compact verifier surface negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-recursive-compact-verifier-surface",
+    ),
+    (
+        "ABI-7 recursive compact key-package arity negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-recursive-compact-key-package-arity",
+    ),
+    (
+        "Python recursive compact probe arity negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-recursive-compact-probe-arity",
+    ),
+    (
+        "JavaScript recursive compact key-package dispatch negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-recursive-compact-key-package-dispatch",
+    ),
+    (
+        "JavaScript package dist recursive compact declaration negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-recursive-compact-declarations",
+    ),
+    (
+        "JavaScript package dist accumulator digest declaration negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-accumulator-digest-declarations",
+    ),
+    (
+        "JavaScript package dist accumulator digest denylist negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-accumulator-digest-denylist",
+    ),
+    (
+        "JavaScript package dist terminal accumulator digest denylist negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-terminal-accumulator-digest-denylist",
+    ),
+    (
+        "JavaScript package dist declaration sweep negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-declaration-sweep",
+    ),
+    (
+        "JavaScript package dist Nexus declaration sweep negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-nexus-declaration-sweep",
+    ),
+    (
+        "JavaScript package dist Kotodama declaration sweep negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-kotodama-declaration-sweep",
+    ),
+    (
+        "JavaScript TypeScript recursive compact key-package declaration negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-dts-recursive-compact-key-package",
+    ),
+    (
+        "Python recursive compact root re-export negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-recursive-compact-root-export",
     ),
     (
         "recursive spend compact projection surface negative control",
@@ -487,6 +599,10 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "Kagemusha ABI probe bounds negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kagemusha-abi-probe-bounds",
+    ),
+    (
+        "Kagemusha probe rejection shape negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kagemusha-probe-rejection-shape",
     ),
     (
         "SDK negative-control workflow negative control",
@@ -693,6 +809,10 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-kagemusha-native-output-cap",
     ),
     (
+        "Swift Kagemusha instruction transaction builder negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-kagemusha-instruction-transaction-builder",
+    ),
+    (
         "Swift SDK version script negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-sdk-version-script",
     ),
@@ -865,6 +985,15 @@ def require_contains(texts, relative, needles, label, errors):
 def require_regex(texts, relative, pattern, label, errors, flags=0):
     text = texts[relative]
     require(re.search(pattern, text, flags) is not None, f"{label} missing pattern {pattern}", errors)
+
+
+def require_not_regex(texts, relative, pattern, label, errors, flags=0):
+    text = texts[relative]
+    require(
+        re.search(pattern, text, flags) is None,
+        f"{label} contains forbidden pattern {pattern}",
+        errors,
+    )
 
 
 def require_same_set(actual, expected, label, errors):
@@ -1560,8 +1689,9 @@ def check_recursive_compact_surface(texts, errors):
         "crates/connect_norito_bridge/include/connect_norito_bridge.h",
         (
             "uint8_t* out_valid",
+            "KagemushaRecursiveCompactVerifierKeysV1",
             "Malformed archives and malformed token bindings return ERR_KAGEMUSHA_PROVE.",
-            "Output: `*out_valid = 0` for every shape-valid token in this release.",
+            "Shape-valid tokens with invalid proof bodies return success with `*out_valid = 0`.",
         ),
         "C header recursive compact verifier contract",
         errors,
@@ -1575,13 +1705,17 @@ def check_recursive_compact_surface(texts, errors):
             "preverify_kagemusha_recursive_compact_payment_token",
             "KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE",
             "KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_PROOF_UNAVAILABLE",
+            "KagemushaRecursiveCompactKeyArtifactsV1",
+            "KagemushaRecursiveCompactVerifierKeysV1",
+            "recursive_compact_key_artifacts_norito_ptr",
+            "recursive_compact_verifier_keys_norito_ptr",
             "Vec<iroha_zkp_halo2::OpenVerifyEnvelope>",
-            "malformed Pallas opening archives before the unavailable gate",
-            "detached valid Pallas opening archives before the unavailable gate",
+            "malformed Pallas opening archives before proving",
+            "detached valid Pallas opening archives before proving",
             "kagemusha_recursive_compact_ffi_rejects_windowed_records_before_unavailable",
-            "windowed recursive compact verifier records must reject before unavailable",
+            "windowed recursive compact verifier records must reject before proving",
             "height-windowed recursive compact record bundles must clear stale output lengths",
-            "valid multi-hop recursive compact Pallas archives must map to unavailable",
+            "valid multi-hop recursive compact Pallas archives must produce a package-backed token",
             "shape-valid ABI-7 compact tokens with invalid proof bodies must return a soft invalid result",
             "sentinel-spoofed compact token",
             "must not spoof the unavailable sentinel through interpolated circuit ids",
@@ -1607,18 +1741,18 @@ def check_recursive_compact_surface(texts, errors):
         texts,
         "crates/connect_norito_bridge/src/lib.rs",
         r"connect_norito_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes"
-        r"[\s\S]*prove_verified_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelope_archive"
-        r"\(\s*&record_bundle,\s*&pallas_open_envelopes_archive,\s*None,",
-        "Rust recursive compact C core Pallas preflight",
+        r"[\s\S]*prove_verified_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelope_archive_with_key_artifacts"
+        r"\(\s*&record_bundle,\s*&pallas_open_envelopes_archive,\s*&key_artifacts,",
+        "Rust recursive compact C package-backed Pallas prover",
         errors,
     )
     require_regex(
         texts,
         "crates/connect_norito_bridge/src/lib.rs",
         r"fn\s+java_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes"
-        r"[\s\S]*prove_verified_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelope_archive"
-        r"\(\s*&record_bundle,\s*pallas_open_envelopes_archive,\s*None,",
-        "Rust recursive compact JNI core Pallas preflight",
+        r"[\s\S]*prove_verified_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelope_archive_with_key_artifacts"
+        r"\(\s*&record_bundle,\s*pallas_open_envelopes_archive,\s*&key_artifacts,",
+        "Rust recursive compact JNI package-backed Pallas prover",
         errors,
     )
     require_contains(
@@ -1821,8 +1955,7 @@ def check_recursive_compact_surface(texts, errors):
             "pallasOpenEnvelopesArchive must not exceed",
             "Kagemusha recursive compact payment token archive must not exceed",
             "detached valid recursive compact Pallas archive must reject",
-            "valid multi-hop recursive compact archive must remain unavailable",
-            "KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_PROOF_UNAVAILABLE",
+            "valid multi-hop recursive compact archive must produce a token",
             "public-input hash mismatch",
             "sentinel-spoofed recursive compact token must reject",
             "circuit id `forged::",
@@ -1856,11 +1989,13 @@ def check_recursive_compact_surface(texts, errors):
                 "isKagemushaRecursiveCompactUnavailable(error)",
                 "hasKagemushaRecursiveCompactPaymentTokenVerifierNative",
                 'typeof native.kagemushaVerifyRecursiveCompactPaymentToken !== "function"',
-                "native.kagemushaVerifyRecursiveCompactPaymentToken(KAGEMUSHA_NATIVE_PROBE_ARCHIVE)",
+                "recursiveCompactVerifierKeysArchive",
                 "/\\b(?:archive|Norito|probe)\\b/i.test(error.message)",
                 "toOwnedKagemushaArchiveBuffer",
                 'const compactToken = toOwnedKagemushaArchiveBuffer(',
+                'const recursiveCompactVerifierKeys = toOwnedKagemushaArchiveBuffer(',
                 '"compactTokenArchive"',
+                '"recursiveCompactVerifierKeysArchive"',
                 "recursive compact Kagemusha payment-token verifier requires native bridge ABI 7 with the compact verifier symbol",
                 "kagemushaVerifyRecursiveCompactPaymentToken returned a non-boolean result",
             ),
@@ -1972,10 +2107,35 @@ def check_recursive_compact_surface(texts, errors):
         "Python recursive compact verifier surface",
         errors,
     )
+    wrapper_text = texts[wrapper]
+    require(
+        re.search(
+            r"_probe_native_archive_method\(\s*module,\s*_RECURSIVE_COMPACT_TOKEN_METHOD,\s*"
+            r"_MALFORMED_NATIVE_PROBE_ARCHIVE,\s*_MALFORMED_NATIVE_PROBE_ARCHIVE,\s*"
+            r"_MALFORMED_NATIVE_PROBE_ARCHIVE,\s*\)",
+            wrapper_text,
+        )
+        is not None,
+        "Python recursive compact prover availability probe must pass record, Pallas, and key-artifact probe archives",
+        errors,
+    )
+    require(
+        len(
+            re.findall(
+                r"_probe_native_archive_method\(\s*module,\s*_RECURSIVE_COMPACT_TOKEN_VERIFY_METHOD,\s*"
+                r"_MALFORMED_NATIVE_PROBE_ARCHIVE,\s*_MALFORMED_NATIVE_PROBE_ARCHIVE,\s*\)",
+                wrapper_text,
+            )
+        )
+        >= 2,
+        "Python recursive compact verifier availability probes must pass compact-token and verifier-key probe archives",
+        errors,
+    )
     require_contains(
         texts,
         init,
-        REQUIRED_RECURSIVE_COMPACT_PYTHON_PUBLIC_METHODS,
+        REQUIRED_RECURSIVE_COMPACT_PYTHON_PUBLIC_METHODS
+        + REQUIRED_RECURSIVE_COMPACT_PYTHON_METHODS,
         "Python package recursive compact re-exports",
         errors,
     )
@@ -1995,8 +2155,7 @@ def check_recursive_compact_surface(texts, errors):
             "pallas_open_envelopes_archive must not exceed",
             "Kagemusha recursive compact payment token archive must not exceed",
             "detached valid Pallas archive",
-            "valid multi-hop recursive compact archive must remain unavailable",
-            "KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_PROOF_UNAVAILABLE",
+            "valid multi-hop recursive compact archive must produce a token",
             "public-input hash mismatch",
             "sentinel-spoofed recursive compact token must reject",
             "circuit id `forged::",
@@ -2250,7 +2409,7 @@ def check_recursive_compact_surface(texts, errors):
             "REQUIRED_BRIDGE_ABI_VERSION: Int = 7",
             "fun isVerifierNativeAvailable(): Boolean",
             "fun isProjectionVerifierNativeAvailable(): Boolean",
-            "fun verifyRecursiveCompactPaymentToken(compactTokenArchive: ByteArray?): Boolean",
+            "recursiveCompactVerifierKeysArchive: ByteArray?",
             "fun verifyRecursiveSpendCompactPaymentTokenProjection(",
             "fun verifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(",
             "private val nativeVerifierAvailable: Boolean = loadVerifierLibrary()",
@@ -2260,10 +2419,11 @@ def check_recursive_compact_surface(texts, errors):
             "private fun loadVerifierLibrary(): Boolean",
             "private fun loadProjectionVerifierLibrary(): Boolean",
             "val compactToken = ownedNativeInput(compactTokenArchive, \"compactTokenArchive\")",
+            "recursiveCompactVerifierKeysArchive, \"recursiveCompactVerifierKeysArchive\"",
             "val verifierRecord = ownedNativeInput(verifierRecordArchive, \"verifierRecordArchive\")",
             "KagemushaCompactPaymentTokenProver.isValidNoritoArchive(archive)",
             "KagemushaCompactPaymentTokenProver.hasNonEmptyNoritoPayload(archive)",
-            "nativeVerifyRecursiveCompactPaymentToken(ByteArray(0))",
+            "nativeVerifyRecursiveCompactPaymentToken(ByteArray(0), ByteArray(0))",
             "nativeVerifyRecursiveSpendCompactPaymentTokenProjection(ByteArray(0), ByteArray(0))",
             "nativeVerifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(",
         ),
@@ -2273,7 +2433,7 @@ def check_recursive_compact_surface(texts, errors):
             "REQUIRED_BRIDGE_ABI_VERSION = 7",
             "public static boolean isVerifierNativeAvailable()",
             "public static boolean isProjectionVerifierNativeAvailable()",
-            "public static boolean verifyRecursiveCompactPaymentToken(final byte[] compactTokenArchive)",
+            "final byte[] recursiveCompactVerifierKeysArchive",
             "public static boolean verifyRecursiveSpendCompactPaymentTokenProjection(",
             "public static boolean verifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(",
             "NATIVE_VERIFIER_AVAILABLE = loadVerifierLibrary()",
@@ -2283,10 +2443,11 @@ def check_recursive_compact_surface(texts, errors):
             "private static boolean loadVerifierLibrary()",
             "private static boolean loadProjectionVerifierLibrary()",
             "final byte[] compactToken = ownedNativeInput(compactTokenArchive, \"compactTokenArchive\")",
+            "recursiveCompactVerifierKeysArchive, \"recursiveCompactVerifierKeysArchive\"",
             "final byte[] verifierRecord",
             "KagemushaCompactPaymentTokenProver.isValidNoritoArchive(archive)",
             "KagemushaCompactPaymentTokenProver.hasNonEmptyNoritoPayload(archive)",
-            "nativeVerifyRecursiveCompactPaymentToken(new byte[0])",
+            "nativeVerifyRecursiveCompactPaymentToken(new byte[0], new byte[0])",
             "nativeVerifyRecursiveSpendCompactPaymentTokenProjection(",
             "nativeVerifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(",
         ),
@@ -2335,7 +2496,9 @@ def check_recursive_compact_surface(texts, errors):
             "KagemushaRecursiveCompactPaymentTokenProver.isVerifierNativeAvailable()",
             "KagemushaRecursiveCompactPaymentTokenProver.isProjectionVerifierNativeAvailable()",
             ".recursiveSpendCompactPaymentTokenFromBundle(ByteArray(0))",
-            "KagemushaRecursiveCompactPaymentTokenProver.verifyRecursiveCompactPaymentToken(ByteArray(0))",
+            "KagemushaRecursiveCompactPaymentTokenProver.verifyRecursiveCompactPaymentToken(",
+            "validRecursiveCompactVerifierKeys",
+            "recursiveCompactVerifierKeysArchive must not be empty",
             ".verifyRecursiveSpendCompactPaymentTokenProjection(",
             ".verifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(",
             "KagemushaRecursiveCompactPaymentTokenProver.isRecursiveCompactUnavailable",
@@ -2363,7 +2526,9 @@ def check_recursive_compact_surface(texts, errors):
             "KagemushaRecursiveCompactPaymentTokenProver.isVerifierNativeAvailable()",
             "KagemushaRecursiveCompactPaymentTokenProver.isProjectionVerifierNativeAvailable()",
             ".recursiveSpendCompactPaymentTokenFromBundle(new byte[0])",
-            "KagemushaRecursiveCompactPaymentTokenProver.verifyRecursiveCompactPaymentToken(new byte[0])",
+            "KagemushaRecursiveCompactPaymentTokenProver.verifyRecursiveCompactPaymentToken(",
+            "validRecursiveCompactVerifierKeys",
+            "recursiveCompactVerifierKeysArchive must not be empty",
             ".verifyRecursiveSpendCompactPaymentTokenProjection(",
             ".verifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(",
             "KagemushaRecursiveCompactPaymentTokenProver.isRecursiveCompactUnavailable",
@@ -2400,7 +2565,7 @@ def check_recursive_compact_surface(texts, errors):
             "TryProbeRecursiveSpendCompactPaymentTokenProjectionVerifierSymbol",
             "public static KagemushaRecursiveCompactPaymentTokenArchive RecursiveSpendCompactPaymentTokenFromBundle(",
             "ReadOnlySpan<byte> bundleArchive)",
-            "public static bool VerifyRecursiveCompactPaymentToken(ReadOnlySpan<byte> compactTokenArchive)",
+            "ReadOnlySpan<byte> recursiveCompactVerifierKeysArchive)",
             "public static bool VerifyRecursiveSpendCompactPaymentTokenProjection(",
             "RequireValidInputArchive",
             "RequireValidRecursiveCompactTokenArchive(compactToken)",
@@ -2414,6 +2579,7 @@ def check_recursive_compact_surface(texts, errors):
             "returned empty Norito payload",
             "Compact token archive must be a valid Norito archive.",
             "Compact token archive must contain a non-empty Norito payload.",
+            "Recursive compact verifier keys archive",
             "RecursiveCompactUnavailableBridgeErrorCode = -312",
             "code == RecursiveCompactUnavailableBridgeErrorCode",
             "recursive compact proof composition",
@@ -2442,7 +2608,9 @@ def check_recursive_compact_surface(texts, errors):
         (
             "IsRecursiveCompactPaymentTokenVerifierAvailable",
             "IsRecursiveSpendCompactPaymentTokenProjectionVerifierAvailable",
-            "VerifyRecursiveCompactPaymentToken(Array.Empty<byte>())",
+            "VerifyRecursiveCompactPaymentToken(",
+            "validRecursiveCompactVerifierKeys",
+            "Recursive compact verifier keys archive must not be empty",
             "VerifyRecursiveSpendCompactPaymentTokenProjection",
             "RecursiveCompactProverRejectsMalformedInputsBeforeLoadingNativeBridge",
             "RecursiveCompactProverRejectsEmptyPayloadInputsBeforeLoadingNativeBridge",
@@ -2461,6 +2629,190 @@ def check_recursive_compact_surface(texts, errors):
         ),
         "C# recursive compact verifier tests",
         errors,
+    )
+
+
+def check_recursive_compact_sdk_key_package_arity(texts, errors):
+    swift = "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveCompactPaymentTokenProver.swift"
+    kotlin = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveCompactPaymentTokenProver.kt"
+    android = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveCompactPaymentTokenProver.java"
+    csharp = "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs"
+    dts = "javascript/iroha_js/index.d.ts"
+
+    forbidden = (
+        (
+            swift,
+            r"recursiveCompactKeyArtifactsArchive:\s*Data\s*=\s*Data\s*\(",
+            "Swift recursive compact prover public key-package argument",
+        ),
+        (
+            swift,
+            r"recursiveCompactVerifierKeysArchive:\s*Data\s*=\s*Data\s*\(",
+            "Swift recursive compact verifier public key-package argument",
+        ),
+        (
+            kotlin,
+            r"fun\s+proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes\s*"
+            r"\(\s*recordBundleArchive:\s*ByteArray\?,\s*pallasOpenEnvelopesArchive:\s*ByteArray\?,?\s*\)"
+            r"\s*:\s*ByteArray",
+            "Kotlin recursive compact prover public key-package arity",
+        ),
+        (
+            kotlin,
+            r"fun\s+verifyRecursiveCompactPaymentToken\s*"
+            r"\(\s*compactTokenArchive:\s*ByteArray\?,?\s*\)\s*:\s*Boolean",
+            "Kotlin recursive compact verifier public key-package arity",
+        ),
+        (
+            android,
+            r"public\s+static\s+byte\[\]\s+proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes\s*"
+            r"\(\s*final\s+byte\[\]\s+recordBundleArchive\s*,\s*final\s+byte\[\]\s+pallasOpenEnvelopesArchive\s*\)",
+            "Android Java recursive compact prover public key-package arity",
+        ),
+        (
+            android,
+            r"public\s+static\s+boolean\s+verifyRecursiveCompactPaymentToken\s*"
+            r"\(\s*final\s+byte\[\]\s+compactTokenArchive\s*\)",
+            "Android Java recursive compact verifier public key-package arity",
+        ),
+        (
+            csharp,
+            r"public\s+static\s+KagemushaRecursiveCompactPaymentTokenArchive\s+"
+            r"ProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes\s*"
+            r"\(\s*ReadOnlySpan<byte>\s+recordBundleArchive\s*,\s*ReadOnlySpan<byte>\s+pallasOpenEnvelopesArchive\s*\)",
+            "C# recursive compact prover public key-package arity",
+        ),
+        (
+            csharp,
+            r"public\s+static\s+bool\s+VerifyRecursiveCompactPaymentToken\s*"
+            r"\(\s*ReadOnlySpan<byte>\s+compactTokenArchive\s*\)",
+            "C# recursive compact verifier public key-package arity",
+        ),
+        (
+            dts,
+            r"recursiveCompactKeyArtifactsArchive\?:\s*BinaryLike",
+            "JavaScript TypeScript recursive compact prover key-package declaration",
+        ),
+        (
+            dts,
+            r"recursiveCompactVerifierKeysArchive\?:\s*BinaryLike",
+            "JavaScript TypeScript recursive compact verifier key-package declaration",
+        ),
+        (
+            dts,
+            r"export\s+function\s+kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes\s*"
+            r"\(\s*recordBundleArchive:\s*BinaryLike\s*,\s*pallasOpenEnvelopesArchive:\s*BinaryLike\s*,?\s*\)"
+            r"\s*:\s*Buffer",
+            "JavaScript TypeScript recursive compact prover key-package arity",
+        ),
+        (
+            dts,
+            r"export\s+function\s+kagemushaVerifyRecursiveCompactPaymentToken\s*"
+            r"\(\s*compactTokenArchive:\s*BinaryLike\s*,?\s*\)\s*:\s*boolean",
+            "JavaScript TypeScript recursive compact verifier key-package arity",
+        ),
+    )
+    for relative, pattern, label in forbidden:
+        require_not_regex(texts, relative, pattern, label, errors, flags=re.S)
+
+    require_regex(
+        texts,
+        swift,
+        r"public\s+static\s+func\s+proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes\s*"
+        r"\(\s*recordBundleArchive:\s*Data\s*,\s*pallasOpenEnvelopesArchive:\s*Data\s*,\s*"
+        r"recursiveCompactKeyArtifactsArchive:\s*Data\s*\)\s*throws\s*->\s*Data",
+        "Swift recursive compact wrapper",
+        errors,
+        flags=re.S,
+    )
+    require_regex(
+        texts,
+        swift,
+        r"public\s+static\s+func\s+verifyRecursiveCompactPaymentToken\s*"
+        r"\(\s*compactTokenArchive:\s*Data\s*,\s*recursiveCompactVerifierKeysArchive:\s*Data\s*\)"
+        r"\s*throws\s*->\s*Bool",
+        "Swift recursive compact wrapper",
+        errors,
+        flags=re.S,
+    )
+    require_regex(
+        texts,
+        kotlin,
+        r"fun\s+proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes\s*"
+        r"\(\s*recordBundleArchive:\s*ByteArray\?,\s*pallasOpenEnvelopesArchive:\s*ByteArray\?,\s*"
+        r"recursiveCompactKeyArtifactsArchive:\s*ByteArray\?,\s*\)\s*:\s*ByteArray",
+        "Kotlin recursive compact wrapper",
+        errors,
+        flags=re.S,
+    )
+    require_regex(
+        texts,
+        kotlin,
+        r"fun\s+verifyRecursiveCompactPaymentToken\s*"
+        r"\(\s*compactTokenArchive:\s*ByteArray\?,\s*recursiveCompactVerifierKeysArchive:\s*ByteArray\?,\s*\)"
+        r"\s*:\s*Boolean",
+        "Kotlin recursive compact wrapper",
+        errors,
+        flags=re.S,
+    )
+    require_regex(
+        texts,
+        android,
+        r"public\s+static\s+byte\[\]\s+proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes\s*"
+        r"\(\s*final\s+byte\[\]\s+recordBundleArchive\s*,\s*final\s+byte\[\]\s+pallasOpenEnvelopesArchive\s*,\s*"
+        r"final\s+byte\[\]\s+recursiveCompactKeyArtifactsArchive\s*\)",
+        "Android Java recursive compact wrapper",
+        errors,
+        flags=re.S,
+    )
+    require_regex(
+        texts,
+        android,
+        r"public\s+static\s+boolean\s+verifyRecursiveCompactPaymentToken\s*"
+        r"\(\s*final\s+byte\[\]\s+compactTokenArchive\s*,\s*final\s+byte\[\]\s+recursiveCompactVerifierKeysArchive\s*\)",
+        "Android Java recursive compact wrapper",
+        errors,
+        flags=re.S,
+    )
+    require_regex(
+        texts,
+        csharp,
+        r"public\s+static\s+KagemushaRecursiveCompactPaymentTokenArchive\s+"
+        r"ProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes\s*"
+        r"\(\s*ReadOnlySpan<byte>\s+recordBundleArchive\s*,\s*ReadOnlySpan<byte>\s+pallasOpenEnvelopesArchive\s*,\s*"
+        r"ReadOnlySpan<byte>\s+recursiveCompactKeyArtifactsArchive\s*\)",
+        "C# recursive compact wrapper",
+        errors,
+        flags=re.S,
+    )
+    require_regex(
+        texts,
+        csharp,
+        r"public\s+static\s+bool\s+VerifyRecursiveCompactPaymentToken\s*"
+        r"\(\s*ReadOnlySpan<byte>\s+compactTokenArchive\s*,\s*ReadOnlySpan<byte>\s+recursiveCompactVerifierKeysArchive\s*\)",
+        "C# recursive compact wrapper",
+        errors,
+        flags=re.S,
+    )
+    require_regex(
+        texts,
+        dts,
+        r"export\s+function\s+kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes\s*"
+        r"\(\s*recordBundleArchive:\s*BinaryLike\s*,\s*pallasOpenEnvelopesArchive:\s*BinaryLike\s*,\s*"
+        r"recursiveCompactKeyArtifactsArchive:\s*BinaryLike\s*,\s*\)\s*:\s*Buffer\s*;",
+        "JavaScript TypeScript recursive compact wrapper",
+        errors,
+        flags=re.S,
+    )
+    require_regex(
+        texts,
+        dts,
+        r"export\s+function\s+kagemushaVerifyRecursiveCompactPaymentToken\s*"
+        r"\(\s*compactTokenArchive:\s*BinaryLike\s*,\s*recursiveCompactVerifierKeysArchive:\s*BinaryLike\s*,\s*\)"
+        r"\s*:\s*boolean\s*;",
+        "JavaScript TypeScript recursive compact wrapper",
+        errors,
+        flags=re.S,
     )
 
 
@@ -2771,8 +3123,77 @@ def check_javascript(texts, errors):
             errors,
         )
 
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/package_dist.test.js",
+        (
+            "package dist Kagemusha recursive compact requires key packages before native dispatch",
+            "recursiveCompactKeyArtifactsArchive must be a Buffer, string, or ArrayBuffer view",
+            "recursiveCompactKeyArtifactsArchive must not be empty",
+            "recursiveCompactVerifierKeysArchive must be a Buffer, string, or ArrayBuffer view",
+            "recursiveCompactVerifierKeysArchive must not be empty",
+            "assert.notStrictEqual(calls[0][1][2], keyArtifacts)",
+            "assert.notStrictEqual(calls[1][1][1], verifierKeys)",
+        ),
+        "JavaScript package dist recursive compact key-package dispatch coverage",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/package_dist.test.js",
+        (
+            "package declarations expose recursive compact key-package signatures",
+            'packageJson.types, "./index.d.ts"',
+            'packageJson.exports["."].types, "./index.d.ts"',
+            'packageJson.exports["./crypto"].types, "./index.d.ts"',
+            'packageJson.files.includes("index.d.ts")',
+            "recursiveCompactKeyArtifactsArchive: BinaryLike,",
+            "recursiveCompactVerifierKeysArchive: BinaryLike,",
+            "recursive compact key packages must not be optional",
+        ),
+        "JavaScript package dist recursive compact declaration coverage",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/package_dist.test.js",
+        (
+            "package declarations keep accumulator digests native-owned",
+            "PACKAGE_DECLARATION_TEXTS",
+            "connect.browser.d.ts",
+            "nexus-app.d.ts",
+            "kotodama-compiler.d.ts",
+            "for (const [name, declarationsText] of PACKAGE_DECLARATION_TEXTS)",
+            "lineageDigest|LineageDigest|lineage_digest",
+            "aggregationTranscriptDigest|AggregationTranscriptDigest|aggregation_transcript_digest",
+            "fixedWindowTableScheduleDigest|FixedWindowTableScheduleDigest|fixed_window_table_schedule_digest",
+            "fixedWindowSharedTableManifestDigest|FixedWindowSharedTableManifestDigest|fixed_window_shared_table_manifest_digest",
+            "fixedWindowTableBaseDigest|FixedWindowTableBaseDigest|fixed_window_table_base_digest",
+            "verifierWitnessBatchDigest|VerifierWitnessBatchDigest|verifier_witness_batch_digest",
+            "recursiveProofChainDigest|RecursiveProofChainDigest|recursive_proof_chain_digest",
+            "proofChainDigest|ProofChainDigest|proof_chain_digest",
+            "transitionProfileBindingDigest|TransitionProfileBindingDigest|transition_profile_binding_digest",
+            "appendOpeningPreflightDigest|AppendOpeningPreflightDigest|append_opening_preflight_digest",
+            "appendBoundaryDigest|AppendBoundaryDigest|append_boundary_digest",
+            "recursiveVerifierScalarProjectionDigest|RecursiveVerifierScalarProjectionDigest|recursive_verifier_scalar_projection_digest",
+            "previousAccumulatorDigest|PreviousAccumulatorDigest|previous_accumulator_digest",
+            "resultingAccumulatorDigest|ResultingAccumulatorDigest|resulting_accumulator_digest",
+            "accumulatorDigest|AccumulatorDigest|accumulator_digest",
+            "${name}: recursive accumulator digests must remain native-owned",
+        ),
+        "JavaScript package dist accumulator digest declaration coverage",
+        errors,
+    )
+
     for relative in ("javascript/iroha_js/src/index.js", "javascript/iroha_js/dist/index.js"):
         require_contains(texts, relative, REQUIRED_JS_PUBLIC_EXPORTS, f"{relative} re-exports", errors)
+        require_contains(
+            texts,
+            relative,
+            REQUIRED_JS_KAGEMUSHA_INSTRUCTION_TRANSACTION_PUBLIC_EXPORTS,
+            f"{relative} Kagemusha instruction transaction re-exports",
+            errors,
+        )
         require_contains(
             texts,
             relative,
@@ -2825,6 +3246,77 @@ def check_javascript(texts, errors):
             "readonly isAppendArtifact: boolean;",
         ),
         "JavaScript TypeScript declarations",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/index.d.ts",
+        REQUIRED_JS_KAGEMUSHA_INSTRUCTION_TRANSACTION_PUBLIC_EXPORTS
+        + (
+            "KagemushaInstructionArchiveType",
+            '"KagemushaTransfer"',
+            '"RedeemKagemushaRecursive"',
+            "KagemushaInstructionArchiveInput",
+            "KagemushaInstructionTransactionInput",
+            "KagemushaRecursiveRedeemTransactionBaseInput",
+            "KagemushaRecursiveRedeemArchiveInput",
+            "KagemushaRecursiveRedeemTransactionInput",
+            "KagemushaInstructionArchive:",
+            "bytes_base64: string;",
+            "redeemRequestArchive: BinaryLike;",
+        ),
+        "JavaScript TypeScript Kagemusha instruction transaction declarations",
+        errors,
+    )
+    for relative in ("javascript/iroha_js/src/transaction.js", "javascript/iroha_js/dist/transaction.js"):
+        require_contains(
+            texts,
+            relative,
+            REQUIRED_JS_KAGEMUSHA_INSTRUCTION_TRANSACTION_PUBLIC_EXPORTS
+            + (
+                "KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPES",
+                "KagemushaInstructionArchive",
+                "KagemushaTransfer",
+                "RedeemKagemushaRecursive",
+                "kagemushaRecursiveSpendRedeem",
+                "kagemushaRecursiveRedeem.redeemRequestArchive",
+            ),
+            f"{relative} Kagemusha instruction transaction builder",
+            errors,
+        )
+        require_regex(
+            texts,
+            relative,
+            r"buildKagemushaRecursiveRedeemTransaction[\s\S]*?kagemushaRecursiveSpendRedeem[\s\S]*?buildKagemushaInstructionTransaction",
+            f"{relative} Kagemusha recursive redeem transaction flow",
+            errors,
+        )
+    require_contains(
+        texts,
+        "crates/iroha_js_host/src/lib.rs",
+        (
+            "fn kagemusha_instruction_archive_from_json",
+            "remove_case_insensitive(&mut map, \"KagemushaInstructionArchive\")",
+            "KagemushaTransfer",
+            "RedeemKagemushaRecursive",
+            "ensure_kagemusha_recursive_archive_len(archive.len(), \"Kagemusha instruction archive\")",
+            "build_transaction_from_instructions_json_accepts_kagemusha_instruction_archive",
+            "kagemusha_instruction_archive_json_rejects_adversarial_inputs",
+        ),
+        "iroha_js_host Kagemusha instruction transaction archive decoder",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/transactionBuilder.test.js",
+        (
+            "buildKagemushaInstructionArchiveInstruction normalizes archive bytes",
+            "buildKagemushaInstructionTransaction wraps one archive instruction",
+            "buildKagemushaRecursiveRedeemTransaction derives instruction before signing",
+            "redeemRequestArchive must be a Buffer or ArrayBuffer view",
+            "redeem native rejected",
+        ),
+        "JavaScript Kagemusha instruction transaction builder tests",
         errors,
     )
     require_contains(
@@ -3092,9 +3584,77 @@ def check_python(texts, errors):
     )
     init = "python/iroha_python/src/iroha_python/__init__.py"
     wrapper = "python/iroha_python/src/iroha_python/kagemusha.py"
+    tx_wrapper = "python/iroha_python/src/iroha_python/tx.py"
     host = "python/iroha_python/iroha_python_rs/src/lib.rs"
     require_contains(texts, wrapper, REQUIRED_PYTHON_PUBLIC_METHODS, "Python SDK", errors)
     require_contains(texts, init, REQUIRED_PYTHON_PUBLIC_METHODS, "Python package re-exports", errors)
+    require_contains(
+        texts,
+        wrapper,
+        REQUIRED_PYTHON_KAGEMUSHA_INSTRUCTION_TRANSACTION_PUBLIC_METHODS
+        + (
+            "def _normalize_kagemusha_instruction_archive_type(",
+            "_norito_archive_bytes_named(instruction_archive, \"instruction_archive\")",
+            "getattr(Instruction, \"kagemusha_instruction_archive\", None)",
+            "getattr(Instruction, \"kagemusha_recursive_redeem\", None)",
+            "build_signed_transaction",
+            "instructions=(instruction,)",
+            "_archive_bytes_named(private_key, \"private_key\")",
+            "_norito_archive_bytes_named(redeem_request_archive, \"redeem_request_archive\")",
+        ),
+        "Python Kagemusha instruction transaction builder",
+        errors,
+    )
+    require_contains(
+        texts,
+        tx_wrapper,
+        (
+            "def kagemusha_instruction_archive(",
+            "kagemusha_instruction_archive_instruction",
+            "def kagemusha_recursive_redeem(",
+            "kagemusha_recursive_redeem_instruction",
+            "self.add_instruction(",
+        ),
+        "Python TransactionDraft Kagemusha instruction helpers",
+        errors,
+    )
+    require_contains(
+        texts,
+        host,
+        (
+            "fn kagemusha_instruction_archive_box(",
+            "fn kagemusha_instruction_archive(",
+            "fn kagemusha_recursive_redeem(",
+            "KagemushaTransfer",
+            "RedeemKagemushaRecursive",
+            "decode_from_bytes(instruction_archive)",
+            "kagemusha_recursive_spend_redeem_instruction_from_request(request)",
+            "kagemusha_instruction_archive_box_accepts_transfer_and_redeem_archives",
+            "kagemusha_instruction_archive_box_rejects_adversarial_archives",
+        ),
+        "Python PyO3 Kagemusha instruction transaction archive decoder",
+        errors,
+    )
+    require_contains(
+        texts,
+        "python/iroha_python/tests/kagemusha_test.py",
+        (
+            "test_kagemusha_instruction_archive_transaction_helpers_wrap_redeem_archive",
+            "test_kagemusha_recursive_redeem_transaction_helper_derives_instruction_before_signing",
+            "test_kagemusha_instruction_archive_transaction_helpers_reject_adversarial_inputs",
+            "_shared_recursive_spend_abi7_archive(\"redeem_instruction\")",
+            "_shared_recursive_spend_abi7_archive(\"redeem_request\")",
+            "_instruction_archive_bytes(instruction)",
+            "committed_instruction = kagemusha.kagemusha_instruction_archive_instruction",
+            "KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_REDEEM_RECURSIVE",
+            "instruction_archive must be a valid Norito archive",
+            "invalid RedeemKagemushaRecursive instruction archive",
+            "redeem_request_archive must be a valid Norito archive",
+            "draft.kagemusha_recursive_redeem(request_archive)",
+        ),
+        "Python Kagemusha instruction transaction tests",
+        errors,
+    )
     require_contains(
         texts,
         wrapper,
@@ -3316,9 +3876,11 @@ def check_swift(texts, errors):
     compact_prover = "IrohaSwift/Sources/IrohaSwift/KagemushaCompactPaymentTokenProver.swift"
     recursive_aggregation_prover = "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveAggregationProofBundleProver.swift"
     bridge = "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift"
+    instruction_encoder = "IrohaSwift/Sources/IrohaSwift/KagemushaInstructionTransactionEncoder.swift"
     test = "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift"
     compact_test = "IrohaSwift/Tests/IrohaSwiftTests/KagemushaCompactPaymentTokenProverTests.swift"
     recursive_aggregation_test = "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveAggregationProofBundleProverTests.swift"
+    instruction_encoder_test = "IrohaSwift/Tests/IrohaSwiftTests/KagemushaInstructionTransactionEncoderTests.swift"
     uc4_decode_test = "IrohaSwift/Tests/IrohaSwiftTests/UC4DecodePaymentTokenTests.swift"
     require_contains(texts, prover, REQUIRED_PUBLIC_METHODS, "Swift public prover", errors)
     require_contains(
@@ -3448,6 +4010,57 @@ def check_swift(texts, errors):
             "emptyPayloadKagemushaNoritoArchive",
         ),
         "Swift recursive spend input/output Norito guard tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        instruction_encoder,
+        (
+            "public enum KagemushaInstructionTransactionError",
+            "public enum KagemushaInstructionType",
+            "case transfer = \"KagemushaTransfer\"",
+            "case redeemRecursive = \"RedeemKagemushaRecursive\"",
+            "public struct KagemushaInstructionTransactionRequest",
+            "public struct KagemushaRecursiveRedeemTransactionRequest",
+            "public enum KagemushaRecursiveRedeemRequestArchive",
+            "KagemushaRecursiveRedeemRequestArchiveError",
+            "unexpectedInstructionArchiveType(expected: KagemushaInstructionType, actual: KagemushaInstructionType)",
+            "KagemushaRecursiveSpendRedeemRequestV1",
+            "static func encodeKagemushaInstruction(",
+            "static func encodeKagemushaRecursiveRedeem(",
+            "func buildKagemushaInstruction(",
+            "func buildKagemushaRecursiveRedeem(",
+            "try KagemushaRecursiveSpendProver.redeemSpend(requestArchive: $0)",
+            "KagemushaRecursiveCompactPaymentTokenProver.nativeArchiveMaxBytes",
+            "frame.header.compression == .none",
+            "frame.header.schema == noritoSchemaHash(forTypeName: type.wireName)",
+            "noritoSchemaHash(forTypeName: schemaName) == frame.header.schema",
+            "Kagemusha instruction archive type is not supported by this transaction builder.",
+        ),
+        "Swift Kagemusha instruction transaction builder",
+        errors,
+    )
+    require_contains(
+        texts,
+        instruction_encoder_test,
+        (
+            "testBuildRecursiveRedeemInstructionTransactionWrapsNativeInstructionArchive",
+            "testBuildKagemushaTransferInstructionTransactionUsesTransferWireName",
+            "testBuildKagemushaRecursiveRedeemTransactionDerivesInstructionBeforeSigning",
+            "testKagemushaInstructionTransactionRejectsAdversarialArchives",
+            "testKagemushaRecursiveRedeemTransactionRejectsMalformedRequestBeforeNativeRedeem",
+            "testKagemushaRecursiveRedeemTransactionRejectsAdversarialNativeInstructionArchives",
+            "testKagemushaRecursiveRedeemRequestArchiveValidationRejectsAdversarialInputs",
+            "testKagemushaInstructionRequestValidationRejectsInvalidInputsBeforeSigning",
+            ".unsupportedInstructionArchiveType",
+            ".unsupportedRequestArchiveType",
+            ".unexpectedInstructionArchiveType(expected: .redeemRecursive, actual: .transfer)",
+            "unsupportedFlagsArchive",
+            "nonZeroPaddingArchive",
+            "excessivePaddingArchive",
+            "KagemushaRecursiveCompactPaymentTokenProver.nativeArchiveMaxBytes + 1",
+        ),
+        "Swift Kagemusha instruction transaction builder tests",
         errors,
     )
     require_contains(
@@ -3872,7 +4485,8 @@ def check_java_kotlin(texts, errors):
             "static byte[] ownedNativeInput",
             "final byte[] recordBundle = ownedNativeInput(recordBundleArchive, \"recordBundleArchive\")",
             "final byte[] compactToken = ownedNativeInput(compactTokenArchive, \"compactTokenArchive\")",
-            "nativeVerifyRecursiveCompactPaymentToken(compactToken)",
+            "recursiveCompactVerifierKeysArchive, \"recursiveCompactVerifierKeysArchive\"",
+            "nativeVerifyRecursiveCompactPaymentToken(compactToken, verifierKeys)",
         ),
         "Android Java recursive compact archive input copy",
         errors,
@@ -3884,7 +4498,8 @@ def check_java_kotlin(texts, errors):
             "internal fun ownedNativeInput",
             "val recordBundle = ownedNativeInput(recordBundleArchive, \"recordBundleArchive\")",
             "val compactToken = ownedNativeInput(compactTokenArchive, \"compactTokenArchive\")",
-            "nativeVerifyRecursiveCompactPaymentToken(compactToken)",
+            "recursiveCompactVerifierKeysArchive, \"recursiveCompactVerifierKeysArchive\"",
+            "nativeVerifyRecursiveCompactPaymentToken(compactToken, verifierKeys)",
         ),
         "Kotlin recursive compact archive input copy",
         errors,
@@ -3922,6 +4537,102 @@ def check_java_kotlin(texts, errors):
             "nativeCall(ownedArchive)",
         ),
         "Kotlin recursive spend archive input copy",
+        errors,
+    )
+
+    require_contains(
+        texts,
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaInstructionArchives.kt",
+        (
+            "enum class KagemushaInstructionType",
+            "TRANSFER(",
+            "REDEEM_RECURSIVE(",
+            '"KagemushaTransfer"',
+            '"RedeemKagemushaRecursive"',
+            '"iroha_data_model::isi::offline::KagemushaTransfer"',
+            '"iroha_data_model::isi::offline::RedeemKagemushaRecursive"',
+            "fun instructionBox(",
+            "recursiveRedeemInstructionBox",
+            "recursiveRedeemInstructionBoxFromRequest",
+            "fun transactionPayload(",
+            "recursiveRedeemTransactionPayload",
+            "recursiveRedeemTransactionPayloadFromRequest",
+            "KagemushaRecursiveSpendProver.redeemSpend(redeemRequestArchive)",
+            "KagemushaRecursiveSpendProver.NATIVE_ARCHIVE_MAX_BYTES",
+            "NoritoHeader.decode(archive, SchemaHash.hash16(instructionType.wireName))",
+            "decoded.header.compression == NoritoHeader.COMPRESSION_NONE",
+            "decoded.header.payloadLength > 0",
+            "decoded.header.validateChecksum(decoded.payload)",
+            "InstructionBox.fromWirePayload(instructionType.wireName, archive)",
+            "Executable.instructions(listOf(instructionBox(instructionType, instructionArchive)))",
+        ),
+        "Kotlin Kagemusha instruction archive transaction helper",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaInstructionArchives.java",
+        (
+            "public enum InstructionType",
+            "TRANSFER(",
+            "REDEEM_RECURSIVE(",
+            '"KagemushaTransfer"',
+            '"RedeemKagemushaRecursive"',
+            '"iroha_data_model::isi::offline::KagemushaTransfer"',
+            '"iroha_data_model::isi::offline::RedeemKagemushaRecursive"',
+            "public static InstructionBox instructionBox(",
+            "recursiveRedeemInstructionBox",
+            "recursiveRedeemInstructionBoxFromRequest",
+            "public static TransactionPayload transactionPayload(",
+            "recursiveRedeemTransactionPayload",
+            "recursiveRedeemTransactionPayloadFromRequest",
+            "KagemushaRecursiveSpendProver.redeemSpend(redeemRequestArchive)",
+            "KagemushaRecursiveSpendProver.NATIVE_ARCHIVE_MAX_BYTES",
+            "NoritoHeader.decode(archive, SchemaHash.hash16(instructionType.wireName()))",
+            "decoded.header().compression() != NoritoHeader.COMPRESSION_NONE",
+            "decoded.header().payloadLength() == 0",
+            "decoded.header().validateChecksum(decoded.payload())",
+            "InstructionBox.fromWirePayload(instructionType.wireName(), archive)",
+            "Executable.instructions(List.of(instructionBox(instructionType, instructionArchive)))",
+        ),
+        "Android Java Kagemusha instruction archive transaction helper",
+        errors,
+    )
+    require_contains(
+        texts,
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaInstructionArchivesTest.kt",
+        (
+            "instructionBox preserves redeem archive bytes and wire name",
+            "transactionPayload wraps a single transfer archive instruction",
+            "instructionBox rejects malformed wrong schema empty and tampered archives",
+            "KagemushaInstructionType.REDEEM_RECURSIVE",
+            "KagemushaInstructionType.TRANSFER",
+            "assertContentEquals(archive, wire.payloadBytes)",
+            "recursiveRedeemInstructionBoxFromRequest(byteArrayOf())",
+            "recursiveRedeemTransactionPayloadFromRequest(",
+            '"KagemushaRecursiveSpendRedeemRequestV1"',
+            "tampered[tampered.lastIndex]",
+        ),
+        "Kotlin Kagemusha instruction archive transaction helper tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/TransactionBuilderTests.java",
+        (
+            "kagemushaInstructionArchivesBuildPayloads",
+            "kagemushaInstructionArchivesRejectAdversarialInputs",
+            "KagemushaInstructionArchives.InstructionType.REDEEM_RECURSIVE",
+            "KagemushaInstructionArchives.InstructionType.TRANSFER",
+            "KagemushaInstructionArchives.recursiveRedeemInstructionBox(archive)",
+            "KagemushaInstructionArchives.transactionPayload(",
+            "KagemushaInstructionArchives.recursiveRedeemInstructionBoxFromRequest(new byte[0])",
+            "KagemushaInstructionArchives.recursiveRedeemTransactionPayloadFromRequest(",
+            "Arrays.equals(transferArchive, transferWire.payloadBytes())",
+            '"KagemushaRecursiveSpendRedeemRequestV1"',
+            "tampered[tampered.length - 1] ^= 0x01",
+        ),
+        "Android Java Kagemusha instruction archive transaction helper tests",
         errors,
     )
 
@@ -4040,7 +4751,8 @@ def check_java_kotlin(texts, errors):
             "KagemushaRecursiveSpendProver.lineageWitnessFromInitResult(null, validArchive)",
             "KagemushaRecursiveSpendProver.lineageWitnessAppendResult(validArchive, validArchive, null)",
             "KagemushaRecursiveSpendProver.verifySpend(null)",
-            "KagemushaRecursiveCompactPaymentTokenProver.verifyRecursiveCompactPaymentToken(null)",
+            "KagemushaRecursiveCompactPaymentTokenProver.verifyRecursiveCompactPaymentToken(",
+            "recursiveCompactVerifierKeysArchive must not be empty",
             "compactTokenArchive must not be empty",
         ),
         "Kotlin Java-callable native archive null negative tests",
@@ -4430,6 +5142,84 @@ def check_csharp(texts, errors):
     )
     require_contains(
         texts,
+        "csharp/src/Hyperledger.Iroha.Sdk/Transactions/KagemushaInstructionArchiveInstruction.cs",
+        (
+            "public enum KagemushaInstructionType",
+            "RedeemRecursive",
+            "ArchiveTypeName",
+            "WireName",
+            '"KagemushaTransfer"',
+            '"RedeemKagemushaRecursive"',
+            '"iroha_data_model::isi::offline::KagemushaTransfer"',
+            '"iroha_data_model::isi::offline::RedeemKagemushaRecursive"',
+            "CopyAndValidateArchive",
+            "KagemushaRecursiveSpendNative.NativeArchiveMaxBytes",
+            "PrivacyNative.IsNoritoV1Archive(copy)",
+            "PrivacyNative.HasNonEmptyPrivacyNoritoPayload(copy)",
+            "NoritoCodec.SchemaHash(instructionType.WireName())",
+            "SequenceEqual(expectedSchema)",
+            "KagemushaRecursiveSpendRedeemInstructionArchive",
+            "EncodeFramedPayload",
+            "return InstructionArchive;",
+        ),
+        "C# Kagemusha instruction archive transaction instruction",
+        errors,
+    )
+    require_contains(
+        texts,
+        "csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionInstruction.cs",
+        (
+            "internal virtual byte[] EncodeFramedPayload",
+            "NoritoCodec.Encode(TypeName, EncodePayload(context))",
+            "KagemushaInstructionArchive(",
+            "KagemushaRecursiveRedeem(",
+            "KagemushaInstructionArchiveInstruction.RedeemRecursive",
+        ),
+        "C# Kagemusha instruction transaction factories",
+        errors,
+    )
+    require_contains(
+        texts,
+        "csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionEncodingContext.cs",
+        (
+            "instruction.EncodeFramedPayload(this)",
+            "writer.WriteField(EncodeString(instruction.WireId))",
+            "writer.WriteField(EncodeBytesVec(framedInstruction))",
+        ),
+        "C# Kagemusha instruction archive pass-through encoder",
+        errors,
+    )
+    require_contains(
+        texts,
+        "csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionBuilder.cs",
+        (
+            "KagemushaInstructionArchive(",
+            "KagemushaRecursiveRedeem(",
+            "KagemushaRecursiveSpendNative.Redeem(redeemRequestArchive)",
+            "KagemushaRecursiveSpendRedeemInstructionArchive",
+        ),
+        "C# Kagemusha recursive redeem transaction builder",
+        errors,
+    )
+    require_contains(
+        texts,
+        "csharp/tests/Hyperledger.Iroha.Sdk.Tests/TransactionBuilderTests.cs",
+        (
+            "AddInstructionAcceptsKagemushaInstructionArchiveFactories",
+            "BuildSignedEmbedsKagemushaInstructionArchiveWithoutReframing",
+            "KagemushaInstructionArchiveRejectsMalformedWrongTypeAndMismatchedType",
+            "KagemushaInstructionType.RedeemRecursive",
+            "KagemushaInstructionType.Transfer",
+            "new KagemushaRecursiveSpendRedeemInstructionArchive(redeemArchive)",
+            "Assert.Equal(archive, instruction.Payload)",
+            'Assert.Equal("iroha_data_model::isi::offline::RedeemKagemushaRecursive", instruction.WireId)',
+            'NoritoCodec.Encode("KagemushaRecursiveSpendRedeemRequestV1", new byte[] { 1, 2, 3 })',
+        ),
+        "C# Kagemusha instruction transaction builder tests",
+        errors,
+    )
+    require_contains(
+        texts,
         relative,
         (
             "RecursiveSpendLineageTransitionCircuitWiredV1",
@@ -4501,7 +5291,16 @@ def check_sdk_readme_previous_proof_boundary(texts, errors):
         "plus a record-backed lineage witness",
         "previous recursive proof bytes",
         "`recursive_proof_chain_digest`",
-        "must not derive or patch the accumulator state",
+        "native-owned accumulator digests",
+        "lineage/aggregation transcript",
+        "fixed-window schedule/shared-manifest/table-base",
+        "verifier-witness batch",
+        "transition-profile",
+        "append-opening-preflight",
+        "append-boundary",
+        "scalar-projection",
+        "previous/resulting accumulator digests",
+        "must not derive, supply, or patch accumulator state",
     )
     for relative in SDK_README_PATHS:
         text = re.sub(r"\s+", " ", texts[relative])
@@ -4516,6 +5315,129 @@ def check_sdk_readme_previous_proof_boundary(texts, errors):
             f"{relative} still describes Reserved-lineage append output as future",
             errors,
         )
+
+
+def check_sdk_readme_instruction_transaction_surface(texts, errors):
+    common_required = (
+        "KagemushaTransfer",
+        "RedeemKagemushaRecursive",
+        "valid Norito archives",
+        "empty, malformed, tampered, or wrong-type instruction archives",
+        "recursive redeem derivation inside",
+    )
+    sdk_required = {
+        "IrohaSwift/README.md": (
+            "KagemushaInstructionTransactionRequest",
+            "IrohaSDK.buildKagemushaRecursiveRedeem(...)",
+        ),
+        "java/iroha_android/README.md": (
+            "KagemushaInstructionArchives",
+            "builds a single archived instruction transaction payload",
+            "derives the redeem instruction from a native recursive redeem request",
+        ),
+        "kotlin/README.md": (
+            "KagemushaInstructionArchives",
+            "builds a single archived instruction transaction payload",
+            "derives the redeem instruction from a native recursive redeem request",
+        ),
+        "csharp/README.md": (
+            "TransactionInstruction.KagemushaInstructionArchive(...)",
+            "KagemushaInstructionArchiveInstruction",
+            "TransactionBuilder.KagemushaInstructionArchive(...)",
+            "TransactionBuilder.KagemushaRecursiveRedeem(...)",
+        ),
+        "javascript/iroha_js/README.md": (
+            "buildKagemushaInstructionArchiveInstruction({ instructionType, instructionArchive })",
+            "buildKagemushaInstructionTransaction(...)",
+            "buildKagemushaRecursiveRedeemTransaction(...)",
+        ),
+        "python/iroha_python/README.md": (
+            "kagemusha_instruction_archive_instruction(instruction_type, instruction_archive)",
+            "build_kagemusha_instruction_transaction(...)",
+            "build_kagemusha_recursive_redeem_transaction(...)",
+            "TransactionDraft.kagemusha_instruction_archive(...)",
+            "TransactionDraft.kagemusha_recursive_redeem(...)",
+        ),
+    }
+    for relative in SDK_README_PATHS:
+        text = re.sub(r"\s+", " ", texts[relative])
+        for needle in (*common_required, *sdk_required[relative]):
+            require(
+                needle in text,
+                f"{relative} missing Kagemusha instruction transaction docs: {needle}",
+                errors,
+            )
+
+
+def check_sdk_accumulator_digest_is_native_owned(texts, errors):
+    sdk_sources = (
+        "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift",
+        "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift",
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java",
+        "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
+        "javascript/iroha_js/src/crypto.js",
+        "javascript/iroha_js/dist/crypto.js",
+        "javascript/iroha_js/index.d.ts",
+        "python/iroha_python/src/iroha_python/kagemusha.py",
+        "python/iroha_python/src/iroha_python/__init__.py",
+    )
+    forbidden = (
+        r"\b[A-Za-z0-9_]*lineageDigest\b",
+        r"\b[A-Za-z0-9_]*LineageDigest\b",
+        r"\b[A-Za-z0-9_]*lineage_digest\b",
+        r"\b[A-Za-z0-9_]*aggregationTranscriptDigest\b",
+        r"\b[A-Za-z0-9_]*AggregationTranscriptDigest\b",
+        r"\b[A-Za-z0-9_]*aggregation_transcript_digest\b",
+        r"\b[A-Za-z0-9_]*fixedWindowTableScheduleDigest\b",
+        r"\b[A-Za-z0-9_]*FixedWindowTableScheduleDigest\b",
+        r"\b[A-Za-z0-9_]*fixed_window_table_schedule_digest\b",
+        r"\b[A-Za-z0-9_]*fixedWindowSharedTableManifestDigest\b",
+        r"\b[A-Za-z0-9_]*FixedWindowSharedTableManifestDigest\b",
+        r"\b[A-Za-z0-9_]*fixed_window_shared_table_manifest_digest\b",
+        r"\b[A-Za-z0-9_]*fixedWindowTableBaseDigest\b",
+        r"\b[A-Za-z0-9_]*FixedWindowTableBaseDigest\b",
+        r"\b[A-Za-z0-9_]*fixed_window_table_base_digest\b",
+        r"\b[A-Za-z0-9_]*verifierWitnessBatchDigest\b",
+        r"\b[A-Za-z0-9_]*VerifierWitnessBatchDigest\b",
+        r"\b[A-Za-z0-9_]*verifier_witness_batch_digest\b",
+        r"\b[A-Za-z0-9_]*recursiveProofChainDigest\b",
+        r"\b[A-Za-z0-9_]*RecursiveProofChainDigest\b",
+        r"\b[A-Za-z0-9_]*recursive_proof_chain_digest\b",
+        r"\b[A-Za-z0-9_]*proofChainDigest\b",
+        r"\b[A-Za-z0-9_]*ProofChainDigest\b",
+        r"\b[A-Za-z0-9_]*proof_chain_digest\b",
+        r"\b[A-Za-z0-9_]*transitionProfileBindingDigest\b",
+        r"\b[A-Za-z0-9_]*TransitionProfileBindingDigest\b",
+        r"\b[A-Za-z0-9_]*transition_profile_binding_digest\b",
+        r"\b[A-Za-z0-9_]*appendOpeningPreflightDigest\b",
+        r"\b[A-Za-z0-9_]*AppendOpeningPreflightDigest\b",
+        r"\b[A-Za-z0-9_]*append_opening_preflight_digest\b",
+        r"\b[A-Za-z0-9_]*appendBoundaryDigest\b",
+        r"\b[A-Za-z0-9_]*AppendBoundaryDigest\b",
+        r"\b[A-Za-z0-9_]*append_boundary_digest\b",
+        r"\b[A-Za-z0-9_]*recursiveVerifierScalarProjectionDigest\b",
+        r"\b[A-Za-z0-9_]*RecursiveVerifierScalarProjectionDigest\b",
+        r"\b[A-Za-z0-9_]*recursive_verifier_scalar_projection_digest\b",
+        r"\b[A-Za-z0-9_]*previousAccumulatorDigest\b",
+        r"\b[A-Za-z0-9_]*PreviousAccumulatorDigest\b",
+        r"\b[A-Za-z0-9_]*previous_accumulator_digest\b",
+        r"\b[A-Za-z0-9_]*resultingAccumulatorDigest\b",
+        r"\b[A-Za-z0-9_]*ResultingAccumulatorDigest\b",
+        r"\b[A-Za-z0-9_]*resulting_accumulator_digest\b",
+        r"\b[A-Za-z0-9_]*accumulatorDigest\b",
+        r"\b[A-Za-z0-9_]*AccumulatorDigest\b",
+        r"\b[A-Za-z0-9_]*accumulator_digest\b",
+    )
+    for relative in sdk_sources:
+        for pattern in forbidden:
+            require_not_regex(
+                texts,
+                relative,
+                pattern,
+                f"{relative} accumulator digest public input",
+                errors,
+            )
 
 
 def check_sdk_readme_recursive_compact_unavailable_boundary(texts, errors):
@@ -4587,8 +5509,10 @@ def check_sdk_readme_recursive_compact_unavailable_boundary(texts, errors):
             "isKagemushaRecursiveSpendCompactPaymentTokenProjectionVerifierNativeAvailable()",
         ),
         "python/iroha_python/README.md": (
-            "kagemusha_prove_verified_recursive_compact_payment_token",
+            "kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes",
             "kagemusha_verify_recursive_compact_payment_token",
+            "recursive_compact_key_artifacts_archive",
+            "recursive_compact_verifier_keys_archive",
             "is_kagemusha_recursive_compact_payment_token_prover_available",
             "is_kagemusha_recursive_compact_payment_token_verifier_available",
             "kagemusha_verify_recursive_spend_compact_payment_token_projection(...)",
@@ -4643,6 +5567,33 @@ def check_offline_doc_lineage_key_artifact_sdk_surface(texts, errors):
         )
 
 
+def check_offline_doc_instruction_transaction_sdk_surface(texts, errors):
+    text = re.sub(r"\s+", " ", texts["docs/source/offline_kagemusha.md"])
+    required = (
+        "Swift, Kotlin/JVM, Java Android, JavaScript/Node, Python, and C#",
+        "typed archived-instruction transaction surface",
+        "KagemushaTransfer",
+        "RedeemKagemushaRecursive",
+        "valid Norito archives",
+        "preserve their canonical bytes rather than re-framing them",
+        "empty, malformed, tampered, or wrong-type instruction archives",
+        "KagemushaInstructionTransactionRequest",
+        "KagemushaInstructionArchives",
+        "buildKagemushaRecursiveRedeemTransaction(...)",
+        "TransactionDraft.kagemusha_recursive_redeem(...)",
+        "TransactionBuilder.KagemushaRecursiveRedeem(...)",
+        "Recursive redeem derivation inside the transaction helper",
+        "native recursive redeem request",
+        "signs exactly one `RedeemKagemushaRecursive` instruction",
+    )
+    for needle in required:
+        require(
+            needle in text,
+            f"offline Kagemusha docs missing all-SDK instruction transaction boundary: {needle}",
+            errors,
+        )
+
+
 def check_offline_doc_native_output_sdk_surface(texts, errors):
     text = re.sub(r"\s+", " ", texts["docs/source/offline_kagemusha.md"])
     required = (
@@ -4654,6 +5605,30 @@ def check_offline_doc_native_output_sdk_surface(texts, errors):
         require(
             needle in text,
             f"offline Kagemusha docs missing all-SDK native output boundary: {needle}",
+            errors,
+        )
+
+
+def check_offline_doc_native_owned_accumulator_boundary(texts, errors):
+    text = re.sub(r"\s+", " ", texts["docs/source/offline_kagemusha.md"])
+    required = (
+        "Appenders must provide the previous recursive proof to the native append builder",
+        "Native append streams the previous recursive proof bytes and per-hop accumulator material into native-owned accumulator digests",
+        "`recursive_proof_chain_digest`",
+        "lineage/aggregation transcript",
+        "fixed-window schedule/shared-manifest/table-base",
+        "verifier-witness batch",
+        "transition-profile",
+        "append-opening-preflight",
+        "append-boundary",
+        "scalar-projection",
+        "previous/resulting accumulator digests",
+        "SDKs must not derive, supply, or patch accumulator state themselves",
+    )
+    for needle in required:
+        require(
+            needle in text,
+            f"offline Kagemusha docs missing native-owned accumulator boundary: {needle}",
             errors,
         )
 
@@ -4681,6 +5656,140 @@ def check_mobile_halo2_canonical_vk_hash(texts, errors):
         require_contains(texts, relative, (needle,), label, errors)
 
 
+def check_cross_sdk_preferred_mode_fallback_policy(texts, errors):
+    """Pin production preferred-mode selection until recursive compact is promoted."""
+
+    for relative in (
+        "javascript/iroha_js/src/crypto.js",
+        "javascript/iroha_js/dist/crypto.js",
+        "javascript/iroha_js/src/crypto.browser.js",
+        "javascript/iroha_js/dist/crypto.browser.js",
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                'KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1 = "checked_prefold_v1"',
+                "preferredKagemushaOfflineSpendModeForCapabilities",
+                "void recursiveCompactAvailable;",
+                "return KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1;",
+                "arguments.length >= 2 ? recursiveCompactAvailable : false",
+            ),
+            f"{relative} preferred Kagemusha mode fallback policy",
+            errors,
+        )
+        require_regex(
+            texts,
+            relative,
+            r"export\s+function\s+preferredKagemushaOfflineSpendModeForCapabilities"
+            r"\(\s*recursiveCompactAvailable,\s*recursiveSpendAvailable,\s*\)\s*\{\s*"
+            r"void\s+recursiveCompactAvailable;\s*"
+            r"if\s*\(\s*recursiveSpendAvailable\s*\)\s*\{\s*"
+            r"return\s+KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1;\s*\}\s*"
+            r"return\s+KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1;\s*\}",
+            f"{relative} preferred Kagemusha mode fallback policy",
+            errors,
+            flags=re.S,
+        )
+
+    require_contains(
+        texts,
+        "python/iroha_python/src/iroha_python/kagemusha.py",
+        (
+            'KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1 = "checked_prefold_v1"',
+            "preferred_kagemusha_offline_spend_mode_for_capabilities",
+            "_ = recursive_compact_available",
+            "return KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1",
+        ),
+        "Python preferred Kagemusha mode fallback policy",
+        errors,
+    )
+    require_regex(
+        texts,
+        "python/iroha_python/src/iroha_python/kagemusha.py",
+        r"def\s+preferred_kagemusha_offline_spend_mode_for_capabilities"
+        r"\(\s*recursive_compact_available:\s*bool,\s*recursive_spend_available:\s*bool,\s*\)"
+        r"\s*->\s*KagemushaOfflineSpendMode:\s*"
+        r"_\s*=\s*recursive_compact_available\s*"
+        r"if\s+recursive_spend_available:\s*"
+        r"return\s+KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1\s*"
+        r"return\s+KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1",
+        "Python preferred Kagemusha mode fallback policy",
+        errors,
+        flags=re.S,
+    )
+
+    require_contains(
+        texts,
+        "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift",
+        (
+            'case checkedPrefoldV1 = "checked_prefold_v1"',
+            "recursiveCompactAvailable: KagemushaRecursiveCompactPaymentTokenProver.isNativeAvailable",
+            "recursiveCompactAvailable: false",
+            "_ = recursiveCompactAvailable",
+            "return recursiveSpendAvailable ? .recursiveSpendV1 : .checkedPrefoldV1",
+        ),
+        "Swift preferred Kagemusha mode fallback policy",
+        errors,
+    )
+
+    require_contains(
+        texts,
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
+        (
+            'CHECKED_PREFOLD_V1("checked_prefold_v1")',
+            "recursiveCompactAvailable = KagemushaRecursiveCompactPaymentTokenProver.isNativeAvailable()",
+            "recursiveCompactAvailable = false",
+            "@Suppress(\"UNUSED_PARAMETER\")",
+            "// ABI-7 compact mode is not a production default yet.",
+            "Mode.CHECKED_PREFOLD_V1",
+        ),
+        "Kotlin preferred Kagemusha mode fallback policy",
+        errors,
+    )
+    require_regex(
+        texts,
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
+        r"fun\s+preferredMode\(\s*recursiveCompactAvailable:\s*Boolean,\s*"
+        r"recursiveSpendAvailable:\s*Boolean,\s*\):\s*Mode\s*\{\s*"
+        r"// ABI-7 compact mode is not a production default yet\.\s*"
+        r"return\s+if\s*\(\s*recursiveSpendAvailable\s*\)\s*\{\s*"
+        r"Mode\.RECURSIVE_SPEND_V1\s*\}\s*else\s*\{\s*Mode\.CHECKED_PREFOLD_V1\s*\}\s*\}",
+        "Kotlin preferred Kagemusha mode fallback policy",
+        errors,
+        flags=re.S,
+    )
+
+    require_contains(
+        texts,
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java",
+        (
+            'CHECKED_PREFOLD_V1("checked_prefold_v1")',
+            "KagemushaRecursiveCompactPaymentTokenProver.isNativeAvailable(), NATIVE_AVAILABLE",
+            "return preferredMode(false, recursiveSpendAvailable);",
+            "// ABI-7 compact mode is not a production default yet.",
+            "return recursiveSpendAvailable ? Mode.RECURSIVE_SPEND_V1 : Mode.CHECKED_PREFOLD_V1;",
+        ),
+        "Android Java preferred Kagemusha mode fallback policy",
+        errors,
+    )
+
+    require_contains(
+        texts,
+        "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
+        (
+            'CheckedPrefoldV1WireName = "checked_prefold_v1"',
+            "return PreferredMode(IsRecursiveCompactPaymentTokenProverAvailable(), IsAvailable());",
+            "return PreferredMode(false, recursiveSpendAvailable);",
+            "_ = recursiveCompactAvailable;",
+            "? KagemushaOfflineSpendMode.RecursiveSpendV1",
+            ": KagemushaOfflineSpendMode.CheckedPrefoldV1;",
+        ),
+        "C# preferred Kagemusha mode fallback policy",
+        errors,
+    )
+
+
 def run_checks(texts):
     errors = []
     check_workflow_paths(errors)
@@ -4697,6 +5806,7 @@ def run_checks(texts):
     check_js_parity_meta_test(errors)
     check_c_bridge(texts, errors)
     check_recursive_compact_surface(texts, errors)
+    check_recursive_compact_sdk_key_package_arity(texts, errors)
     check_record_backed_javascript_surface(texts, errors)
     check_rust_policy_constants(texts, errors)
     check_node_host(texts, errors)
@@ -4707,11 +5817,16 @@ def run_checks(texts):
     check_java_kotlin(texts, errors)
     check_csharp(texts, errors)
     check_mobile_halo2_canonical_vk_hash(texts, errors)
+    check_cross_sdk_preferred_mode_fallback_policy(texts, errors)
     check_sdk_readme_previous_proof_boundary(texts, errors)
+    check_sdk_readme_instruction_transaction_surface(texts, errors)
+    check_sdk_accumulator_digest_is_native_owned(texts, errors)
     check_sdk_readme_recursive_compact_unavailable_boundary(texts, errors)
     check_offline_doc_recursive_compact_projection_sdk_surface(texts, errors)
     check_offline_doc_lineage_key_artifact_sdk_surface(texts, errors)
+    check_offline_doc_instruction_transaction_sdk_surface(texts, errors)
     check_offline_doc_native_output_sdk_surface(texts, errors)
+    check_offline_doc_native_owned_accumulator_boundary(texts, errors)
     if errors:
         raise ParityError("\n".join(errors))
 
@@ -5821,6 +6936,40 @@ if mode == "--negative-control-swift-kagemusha-native-output-cap":
         raise SystemExit(0)
     raise SystemExit("negative control failed: Swift Kagemusha native output cap drift was not detected")
 
+if mode == "--negative-control-swift-kagemusha-instruction-transaction-builder":
+    mutated_texts = dict(texts)
+    source_target = "IrohaSwift/Sources/IrohaSwift/KagemushaInstructionTransactionEncoder.swift"
+    test_target = "IrohaSwift/Tests/IrohaSwiftTests/KagemushaInstructionTransactionEncoderTests.swift"
+    mutated_source = texts[source_target].replace(
+        "func buildKagemushaRecursiveRedeem(",
+        "func buildKagemushaRecursiveRedeemUnchecked(",
+        2,
+    )
+    mutated_test = texts[test_target].replace(
+        "testBuildKagemushaRecursiveRedeemTransactionDerivesInstructionBeforeSigning",
+        "testBuildKagemushaRecursiveRedeemTransactionSkipsNativeDerivationBeforeSigning",
+        1,
+    )
+    if (
+        mutated_source == texts[source_target]
+        or "func buildKagemushaRecursiveRedeem(" in mutated_source
+        or mutated_test == texts[test_target]
+    ):
+        raise SystemExit(
+            "negative control failed: unable to mutate Swift Kagemusha instruction transaction builder coverage"
+        )
+    mutated_texts[source_target] = mutated_source
+    mutated_texts[test_target] = mutated_test
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        print("negative control rejected Swift Kagemusha instruction transaction builder drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: Swift Kagemusha instruction transaction builder drift was not detected"
+    )
+
 if mode == "--negative-control-swift-sdk-version-script":
     target = SWIFT_SDK_PARSE_COMMAND
     original = read(target)
@@ -6515,6 +7664,36 @@ if mode == "--negative-control-js-lineage-key-package-binding":
         raise SystemExit(0)
     raise SystemExit("negative control failed: JS lineage key package binding drift was not detected")
 
+if mode == "--negative-control-js-kagemusha-instruction-transaction-builder":
+    mutated = dict(texts)
+    source_target = "javascript/iroha_js/src/transaction.js"
+    test_target = "javascript/iroha_js/test/transactionBuilder.test.js"
+    mutated_source = texts[source_target].replace(
+        "export function buildKagemushaRecursiveRedeemTransaction",
+        "export function buildKagemushaRecursiveRedeemUncheckedTransaction",
+        1,
+    )
+    mutated_test = texts[test_target].replace(
+        "buildKagemushaRecursiveRedeemTransaction derives instruction before signing",
+        "buildKagemushaRecursiveRedeemTransaction skips instruction derivation before signing",
+        1,
+    )
+    if mutated_source == texts[source_target] or mutated_test == texts[test_target]:
+        raise SystemExit(
+            "negative control failed: unable to mutate JS Kagemusha instruction transaction builder coverage"
+        )
+    mutated[source_target] = mutated_source
+    mutated[test_target] = mutated_test
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        print("negative control rejected JS Kagemusha instruction transaction builder drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: JS Kagemusha instruction transaction builder drift was not detected"
+    )
+
 if mode == "--negative-control-python-lineage-key-package-binding":
     mutated = dict(texts)
     target = "python/iroha_python/src/iroha_python/kagemusha.py"
@@ -7130,10 +8309,13 @@ if mode == "--negative-control-sdk-readme-proof-chain-accumulator":
     mutated = dict(texts)
     target = "javascript/iroha_js/README.md"
     mutated[target] = mutated[target].replace(
-        "Native append streams the previous recursive proof bytes into\n"
-        "`recursive_proof_chain_digest`; SDK code must not derive or patch the\n"
-        "accumulator state.",
-        "Native append treats previous recursive proof bytes as optional SDK metadata.",
+        "Native append streams the previous recursive proof bytes and per-hop accumulator\n"
+        "material into native-owned accumulator digests (`recursive_proof_chain_digest`,\n"
+        "lineage/aggregation transcript, fixed-window schedule/shared-manifest/table-base,\n"
+        "verifier-witness batch, transition-profile, append-opening-preflight,\n"
+        "append-boundary, scalar-projection, and previous/resulting accumulator digests);\n"
+        "SDK code must not derive, supply, or patch accumulator state.",
+        "Native append treats previous recursive proof bytes and accumulator digests as optional SDK metadata.",
         1,
     )
     if mutated[target] == texts[target]:
@@ -7145,6 +8327,241 @@ if mode == "--negative-control-sdk-readme-proof-chain-accumulator":
         print(str(error).splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: SDK README proof-chain accumulator drift was not detected")
+
+if mode == "--negative-control-offline-doc-native-owned-accumulator-boundary":
+    mutated = dict(texts)
+    target = "docs/source/offline_kagemusha.md"
+    mutated[target] = mutated[target].replace(
+        "Native append streams the previous recursive proof bytes and per-hop\n"
+        "accumulator material into native-owned accumulator digests\n"
+        "(`recursive_proof_chain_digest`, lineage/aggregation transcript, fixed-window\n"
+        "schedule/shared-manifest/table-base, verifier-witness batch, transition-profile,\n"
+        "append-opening-preflight, append-boundary, scalar-projection, and\n"
+        "previous/resulting accumulator digests); SDKs must not derive, supply, or patch\n"
+        "accumulator state themselves.",
+        "Native append lets SDKs supply accumulator digests as optional metadata.",
+        1,
+    )
+    if mutated[target] == texts[target]:
+        raise SystemExit("negative control failed: unable to mutate offline Kagemusha accumulator boundary")
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        print("negative control rejected offline Kagemusha accumulator boundary drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: offline Kagemusha accumulator boundary drift was not detected")
+
+if mode == "--negative-control-offline-doc-instruction-transaction-surface":
+    mutated = dict(texts)
+    target = "docs/source/offline_kagemusha.md"
+    mutated[target] = mutated[target].replace(
+        "empty, malformed, tampered, or wrong-type\n"
+        "instruction archives before transaction payload construction",
+        "empty instruction archives before transaction payload construction",
+        1,
+    )
+    if mutated[target] == texts[target]:
+        raise SystemExit(
+            "negative control failed: unable to mutate offline Kagemusha instruction transaction surface"
+        )
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        print("negative control rejected offline Kagemusha instruction transaction surface drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: offline Kagemusha instruction transaction surface drift was not detected"
+    )
+
+if mode == "--negative-control-sdk-proof-chain-accumulator-input":
+    mutated = dict(texts)
+    mutations = (
+        (
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift",
+            "\nprivate enum StaleProofChainDigestInputFixture { static func append(recursiveProofChainDigest: Data) {} }\n",
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift accumulator digest public input",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
+            "\nprivate object StaleProofChainDigestInputFixture { fun append(proofChainDigest: ByteArray?) {} }\n",
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt accumulator digest public input",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java",
+            "\nfinal class StaleProofChainDigestInputFixture { static void append(final byte[] recursiveProofChainDigest) {} }\n",
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java accumulator digest public input",
+        ),
+        (
+            "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
+            "\nstatic class StaleProofChainDigestInputFixture { static void Append(ReadOnlySpan<byte> RecursiveProofChainDigest) {} }\n",
+            "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs accumulator digest public input",
+        ),
+        (
+            "python/iroha_python/src/iroha_python/kagemusha.py",
+            "\ndef _stale_proof_chain_digest_input_fixture(recursive_proof_chain_digest: bytes) -> None:\n    pass\n",
+            "python/iroha_python/src/iroha_python/kagemusha.py accumulator digest public input",
+        ),
+        (
+            "javascript/iroha_js/src/crypto.js",
+            "\nfunction staleProofChainDigestInputFixture(recursiveProofChainDigest) { return recursiveProofChainDigest; }\n",
+            "javascript/iroha_js/src/crypto.js accumulator digest public input",
+        ),
+        (
+            "javascript/iroha_js/index.d.ts",
+            "\nexport interface StaleProofChainDigestInputFixture { recursiveProofChainDigest: BinaryLike; }\n",
+            "javascript/iroha_js/index.d.ts accumulator digest public input",
+        ),
+    )
+    expected_labels = []
+    for target, addition, label in mutations:
+        if addition in mutated[target]:
+            raise SystemExit(f"negative control failed: stale proof-chain digest fixture already present in {target}")
+        mutated[target] += addition
+        expected_labels.append(label)
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: SDK proof-chain accumulator public input drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected SDK proof-chain accumulator public input drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: SDK proof-chain accumulator public input drift was not detected"
+    )
+
+if mode == "--negative-control-sdk-accumulator-digest-inputs":
+    mutated = dict(texts)
+    mutations = (
+        (
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift",
+            "\nprivate enum StaleAccumulatorDigestInputFixture { static func append(lineageDigest: Data, aggregationTranscriptDigest: Data) {} }\n",
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift accumulator digest public input",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
+            "\nprivate object StaleAccumulatorDigestInputFixture { fun append(aggregationTranscriptDigest: ByteArray?, verifierWitnessBatchDigest: ByteArray?) {} }\n",
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt accumulator digest public input",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java",
+            "\nfinal class StaleAccumulatorDigestInputFixture { static void append(final byte[] fixedWindowTableBaseDigest, final byte[] verifierWitnessBatchDigest) {} }\n",
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java accumulator digest public input",
+        ),
+        (
+            "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
+            "\nstatic class StaleAccumulatorDigestInputFixture { static void Append(ReadOnlySpan<byte> LineageDigest, ReadOnlySpan<byte> FixedWindowTableBaseDigest) {} }\n",
+            "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs accumulator digest public input",
+        ),
+        (
+            "python/iroha_python/src/iroha_python/kagemusha.py",
+            "\ndef _stale_accumulator_digest_input_fixture(lineage_digest: bytes, aggregation_transcript_digest: bytes) -> None:\n    pass\n",
+            "python/iroha_python/src/iroha_python/kagemusha.py accumulator digest public input",
+        ),
+        (
+            "javascript/iroha_js/src/crypto.js",
+            "\nfunction staleAccumulatorDigestInputFixture(lineageDigest, aggregationTranscriptDigest) { return lineageDigest || aggregationTranscriptDigest; }\n",
+            "javascript/iroha_js/src/crypto.js accumulator digest public input",
+        ),
+        (
+            "javascript/iroha_js/index.d.ts",
+            "\nexport interface StaleAccumulatorDigestInputFixture { lineageDigest: BinaryLike; aggregationTranscriptDigest: BinaryLike; fixedWindowTableBaseDigest: BinaryLike; verifierWitnessBatchDigest: BinaryLike; }\n",
+            "javascript/iroha_js/index.d.ts accumulator digest public input",
+        ),
+    )
+    expected_labels = []
+    for target, addition, label in mutations:
+        if addition in mutated[target]:
+            raise SystemExit(f"negative control failed: stale accumulator digest fixture already present in {target}")
+        mutated[target] += addition
+        expected_labels.append(label)
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: SDK accumulator digest public input drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected SDK accumulator digest public input drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: SDK accumulator digest public input drift was not detected"
+    )
+
+if mode == "--negative-control-sdk-accumulator-boundary-digest-inputs":
+    mutated = dict(texts)
+    mutations = (
+        (
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift",
+            "\nprivate enum StaleAccumulatorBoundaryDigestInputFixture { static func append(appendBoundaryDigest: Data, transitionProfileBindingDigest: Data) {} }\n",
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift accumulator digest public input",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
+            "\nprivate object StaleAccumulatorBoundaryDigestInputFixture { fun append(appendOpeningPreflightDigest: ByteArray?, fixedWindowTableScheduleDigest: ByteArray?) {} }\n",
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt accumulator digest public input",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java",
+            "\nfinal class StaleAccumulatorBoundaryDigestInputFixture { static void append(final byte[] fixedWindowSharedTableManifestDigest, final byte[] recursiveVerifierScalarProjectionDigest) {} }\n",
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java accumulator digest public input",
+        ),
+        (
+            "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
+            "\nstatic class StaleAccumulatorBoundaryDigestInputFixture { static void Append(ReadOnlySpan<byte> AppendBoundaryDigest, ReadOnlySpan<byte> PreviousAccumulatorDigest) {} }\n",
+            "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs accumulator digest public input",
+        ),
+        (
+            "python/iroha_python/src/iroha_python/kagemusha.py",
+            "\ndef _stale_accumulator_boundary_digest_input_fixture(append_boundary_digest: bytes, resulting_accumulator_digest: bytes) -> None:\n    pass\n",
+            "python/iroha_python/src/iroha_python/kagemusha.py accumulator digest public input",
+        ),
+        (
+            "javascript/iroha_js/src/crypto.js",
+            "\nfunction staleAccumulatorBoundaryDigestInputFixture(appendBoundaryDigest, transitionProfileBindingDigest) { return appendBoundaryDigest || transitionProfileBindingDigest; }\n",
+            "javascript/iroha_js/src/crypto.js accumulator digest public input",
+        ),
+        (
+            "javascript/iroha_js/index.d.ts",
+            "\nexport interface StaleAccumulatorBoundaryDigestInputFixture { appendBoundaryDigest: BinaryLike; appendOpeningPreflightDigest: BinaryLike; transitionProfileBindingDigest: BinaryLike; recursiveVerifierScalarProjectionDigest: BinaryLike; }\n",
+            "javascript/iroha_js/index.d.ts accumulator digest public input",
+        ),
+    )
+    expected_labels = []
+    for target, addition, label in mutations:
+        if addition in mutated[target]:
+            raise SystemExit(
+                f"negative control failed: stale accumulator boundary digest fixture already present in {target}"
+            )
+        mutated[target] += addition
+        expected_labels.append(label)
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: SDK accumulator boundary digest public input drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected SDK accumulator boundary digest public input drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: SDK accumulator boundary digest public input drift was not detected"
+    )
 
 if mode == "--negative-control-sdk-readme-availability-surface":
     mutated = dict(texts)
@@ -7292,6 +8709,86 @@ if mode == "--negative-control-cross-sdk-helper-bodies":
         raise SystemExit(0)
     raise SystemExit("negative control failed: cross-SDK helper body drift was not detected")
 
+if mode == "--negative-control-cross-sdk-preferred-mode-fallback":
+    mutated = dict(texts)
+    mutations = (
+        (
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift",
+            "_ = recursiveCompactAvailable",
+            "if recursiveCompactAvailable { return .recursiveCompactV1 }",
+            "Swift preferred Kagemusha mode fallback policy",
+        ),
+        (
+            "javascript/iroha_js/src/crypto.js",
+            "void recursiveCompactAvailable;",
+            "if (recursiveCompactAvailable) { return KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1; }",
+            "javascript/iroha_js/src/crypto.js preferred Kagemusha mode fallback policy",
+        ),
+        (
+            "javascript/iroha_js/dist/crypto.js",
+            "void recursiveCompactAvailable;",
+            "if (recursiveCompactAvailable) { return KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1; }",
+            "javascript/iroha_js/dist/crypto.js preferred Kagemusha mode fallback policy",
+        ),
+        (
+            "javascript/iroha_js/src/crypto.browser.js",
+            "void recursiveCompactAvailable;",
+            "if (recursiveCompactAvailable) { return KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1; }",
+            "javascript/iroha_js/src/crypto.browser.js preferred Kagemusha mode fallback policy",
+        ),
+        (
+            "javascript/iroha_js/dist/crypto.browser.js",
+            "void recursiveCompactAvailable;",
+            "if (recursiveCompactAvailable) { return KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1; }",
+            "javascript/iroha_js/dist/crypto.browser.js preferred Kagemusha mode fallback policy",
+        ),
+        (
+            "python/iroha_python/src/iroha_python/kagemusha.py",
+            "_ = recursive_compact_available",
+            "if recursive_compact_available: return KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1",
+            "Python preferred Kagemusha mode fallback policy",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
+            "return if (recursiveSpendAvailable) {",
+            "return if (recursiveCompactAvailable) {",
+            "Kotlin preferred Kagemusha mode fallback policy",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java",
+            "return recursiveSpendAvailable ? Mode.RECURSIVE_SPEND_V1 : Mode.CHECKED_PREFOLD_V1;",
+            "return recursiveCompactAvailable ? Mode.RECURSIVE_COMPACT_V1 : Mode.CHECKED_PREFOLD_V1;",
+            "Android Java preferred Kagemusha mode fallback policy",
+        ),
+        (
+            "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
+            "_ = recursiveCompactAvailable;",
+            "if (recursiveCompactAvailable) { return KagemushaOfflineSpendMode.RecursiveCompactV1; }",
+            "C# preferred Kagemusha mode fallback policy",
+        ),
+    )
+    expected_labels = []
+    for target, old, new, label in mutations:
+        updated = mutated[target].replace(old, new, 1)
+        if updated == mutated[target]:
+            raise SystemExit(f"negative control failed: unable to mutate {target}")
+        mutated[target] = updated
+        expected_labels.append(label)
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: preferred-mode fallback drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected cross-SDK preferred-mode fallback drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: cross-SDK preferred-mode fallback drift was not detected")
+
 if mode == "--negative-control-rust-recursive-compact-unavailable-classifier":
     mutated_texts = dict(texts)
     old = """    matches!(
@@ -7388,13 +8885,13 @@ if mode == "--negative-control-recursive-compact-verifier-surface":
             "crates/connect_norito_bridge/src/lib.rs",
             "prove_verified_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelope_archive",
             "prove_verified_kagemusha_recursive_compact_payment_token_from_record_bundle_and_unchecked_archive",
-            "Rust recursive compact C core Pallas preflight",
+            "Rust recursive compact C package-backed Pallas prover",
         ),
         (
             "crates/connect_norito_bridge/src/lib.rs",
             "prove_verified_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelope_archive",
             "prove_verified_kagemusha_recursive_compact_payment_token_from_record_bundle_and_unchecked_archive",
-            "Rust recursive compact JNI core Pallas preflight",
+            "Rust recursive compact JNI package-backed Pallas prover",
         ),
         (
             "crates/connect_norito_bridge/src/lib.rs",
@@ -7404,7 +8901,7 @@ if mode == "--negative-control-recursive-compact-verifier-surface":
         ),
         (
             "crates/connect_norito_bridge/src/lib.rs",
-            "windowed recursive compact verifier records must reject before unavailable",
+            "windowed recursive compact verifier records must reject before proving",
             "windowed recursive compact verifier records may map to unavailable",
             "Rust recursive compact verifier contract",
         ),
@@ -7458,20 +8955,20 @@ if mode == "--negative-control-recursive-compact-verifier-surface":
         ),
         (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveCompactPaymentTokenProver.kt",
-            "fun verifyRecursiveCompactPaymentToken(compactTokenArchive: ByteArray?): Boolean",
-            "fun checkRecursiveCompactPaymentToken(compactTokenArchive: ByteArray?): Boolean",
+            "recursiveCompactVerifierKeysArchive: ByteArray?",
+            "recursiveCompactVerifierKeysArchiveUnchecked: ByteArray?",
             "Kotlin recursive compact wrapper",
         ),
         (
             "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveCompactPaymentTokenProver.java",
-            "public static boolean verifyRecursiveCompactPaymentToken(final byte[] compactTokenArchive)",
-            "public static boolean checkRecursiveCompactPaymentToken(final byte[] compactTokenArchive)",
+            "final byte[] recursiveCompactVerifierKeysArchive",
+            "final byte[] recursiveCompactVerifierKeysArchiveUnchecked",
             "Android Java recursive compact wrapper",
         ),
         (
             "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
-            "public static bool VerifyRecursiveCompactPaymentToken(ReadOnlySpan<byte> compactTokenArchive)",
-            "public static bool CheckRecursiveCompactPaymentToken(ReadOnlySpan<byte> compactTokenArchive)",
+            "ReadOnlySpan<byte> recursiveCompactVerifierKeysArchive)",
+            "ReadOnlySpan<byte> recursiveCompactVerifierKeysArchiveUnchecked)",
             "C# recursive compact wrapper",
         ),
         (
@@ -7509,6 +9006,463 @@ if mode == "--negative-control-recursive-compact-verifier-surface":
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: ABI-7 recursive compact verifier surface drift was not detected"
+    )
+
+if mode == "--negative-control-recursive-compact-key-package-arity":
+    mutated = dict(texts)
+    stale_overloads = (
+        (
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveCompactPaymentTokenProver.swift",
+            """
+
+enum StaleRecursiveCompactKeyPackageArityFixture {
+    static func prove(
+        recordBundleArchive: Data,
+        pallasOpenEnvelopesArchive: Data,
+        recursiveCompactKeyArtifactsArchive: Data = Data()
+    ) {}
+
+    static func verify(
+        compactTokenArchive: Data,
+        recursiveCompactVerifierKeysArchive: Data = Data()
+    ) -> Bool { false }
+}
+""",
+            (
+                "Swift recursive compact prover public key-package argument",
+                "Swift recursive compact verifier public key-package argument",
+            ),
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveCompactPaymentTokenProver.kt",
+            """
+
+private object StaleRecursiveCompactKeyPackageArityFixture {
+    fun proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+        recordBundleArchive: ByteArray?,
+        pallasOpenEnvelopesArchive: ByteArray?,
+    ): ByteArray = ByteArray(0)
+
+    fun verifyRecursiveCompactPaymentToken(compactTokenArchive: ByteArray?): Boolean = false
+}
+""",
+            (
+                "Kotlin recursive compact prover public key-package arity",
+                "Kotlin recursive compact verifier public key-package arity",
+            ),
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveCompactPaymentTokenProver.java",
+            """
+
+final class StaleRecursiveCompactKeyPackageArityFixture {
+  public static byte[] proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+      final byte[] recordBundleArchive,
+      final byte[] pallasOpenEnvelopesArchive) {
+    return new byte[0];
+  }
+
+  public static boolean verifyRecursiveCompactPaymentToken(
+      final byte[] compactTokenArchive) {
+    return false;
+  }
+}
+""",
+            (
+                "Android Java recursive compact prover public key-package arity",
+                "Android Java recursive compact verifier public key-package arity",
+            ),
+        ),
+        (
+            "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
+            """
+
+public static class StaleRecursiveCompactKeyPackageArityFixture
+{
+    public static KagemushaRecursiveCompactPaymentTokenArchive ProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+        ReadOnlySpan<byte> recordBundleArchive,
+        ReadOnlySpan<byte> pallasOpenEnvelopesArchive) =>
+        throw new InvalidOperationException();
+
+    public static bool VerifyRecursiveCompactPaymentToken(
+        ReadOnlySpan<byte> compactTokenArchive) => false;
+}
+""",
+            (
+                "C# recursive compact prover public key-package arity",
+                "C# recursive compact verifier public key-package arity",
+            ),
+        ),
+    )
+    expected_labels = []
+    for target, addition, labels in stale_overloads:
+        if addition in mutated[target]:
+            raise SystemExit(f"negative control failed: stale key-package arity fixture already present in {target}")
+        mutated[target] += addition
+        expected_labels.extend(labels)
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: recursive compact key-package arity drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected ABI-7 recursive compact key-package arity drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: ABI-7 recursive compact key-package arity drift was not detected"
+    )
+
+if mode == "--negative-control-python-recursive-compact-probe-arity":
+    mutated = dict(texts)
+    target = "python/iroha_python/src/iroha_python/kagemusha.py"
+    original = read(target)
+    stale_prover_probe = (
+        "            _RECURSIVE_COMPACT_TOKEN_METHOD,\n"
+        "            _MALFORMED_NATIVE_PROBE_ARCHIVE,\n"
+        "            _MALFORMED_NATIVE_PROBE_ARCHIVE,\n"
+        "            _MALFORMED_NATIVE_PROBE_ARCHIVE,\n"
+    )
+    stale_verifier_probe = (
+        "            _RECURSIVE_COMPACT_TOKEN_VERIFY_METHOD,\n"
+        "            _MALFORMED_NATIVE_PROBE_ARCHIVE,\n"
+        "            _MALFORMED_NATIVE_PROBE_ARCHIVE,\n"
+    )
+    mutated_text = original.replace(
+        stale_prover_probe,
+        "            _RECURSIVE_COMPACT_TOKEN_METHOD,\n"
+        "            _MALFORMED_NATIVE_PROBE_ARCHIVE,\n"
+        "            _MALFORMED_NATIVE_PROBE_ARCHIVE,\n",
+        1,
+    ).replace(
+        stale_verifier_probe,
+        "            _RECURSIVE_COMPACT_TOKEN_VERIFY_METHOD,\n"
+        "            _MALFORMED_NATIVE_PROBE_ARCHIVE,\n",
+        2,
+    )
+    if mutated_text == original:
+        raise SystemExit("negative control failed: unable to mutate Python recursive compact probe arity")
+    mutated[target] = mutated_text
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        print("negative control rejected Python recursive compact probe arity drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: Python recursive compact probe arity drift was not detected"
+    )
+
+if mode == "--negative-control-js-recursive-compact-key-package-dispatch":
+    mutated = dict(texts)
+    target = "javascript/iroha_js/test/package_dist.test.js"
+    original = mutated[target]
+    updated = original.replace(
+        "package dist Kagemusha recursive compact requires key packages before native dispatch",
+        "package dist Kagemusha recursive compact allows missing key packages before native dispatch",
+        1,
+    )
+    if updated == original:
+        raise SystemExit(
+            "negative control failed: unable to mutate JavaScript recursive compact key-package dispatch test"
+        )
+    mutated[target] = updated
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        label = "JavaScript package dist recursive compact key-package dispatch coverage"
+        if label not in message:
+            raise SystemExit(
+                "negative control failed: JavaScript recursive compact key-package dispatch drift was not detected"
+            )
+        print("negative control rejected JavaScript recursive compact key-package dispatch drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: JavaScript recursive compact key-package dispatch drift was not detected"
+    )
+
+if mode == "--negative-control-js-package-dist-recursive-compact-declarations":
+    mutated = dict(texts)
+    target = "javascript/iroha_js/test/package_dist.test.js"
+    original = mutated[target]
+    updated = original.replace(
+        "package declarations expose recursive compact key-package signatures",
+        "package declarations omit recursive compact key-package signatures",
+        1,
+    )
+    if updated == original:
+        raise SystemExit(
+            "negative control failed: unable to mutate JavaScript package dist recursive compact declarations test"
+        )
+    mutated[target] = updated
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        label = "JavaScript package dist recursive compact declaration coverage"
+        if label not in message:
+            raise SystemExit(
+                "negative control failed: JavaScript package dist recursive compact declaration drift was not detected"
+            )
+        print("negative control rejected JavaScript package dist recursive compact declaration drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: JavaScript package dist recursive compact declaration drift was not detected"
+    )
+
+if mode == "--negative-control-js-package-dist-accumulator-digest-declarations":
+    mutated = dict(texts)
+    target = "javascript/iroha_js/test/package_dist.test.js"
+    original = mutated[target]
+    updated = original.replace(
+        "package declarations keep accumulator digests native-owned",
+        "package declarations allow accumulator digest inputs",
+        1,
+    )
+    if updated == original:
+        raise SystemExit(
+            "negative control failed: unable to mutate JavaScript package dist accumulator digest declarations test"
+        )
+    mutated[target] = updated
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        label = "JavaScript package dist accumulator digest declaration coverage"
+        if label not in message:
+            raise SystemExit(
+                "negative control failed: JavaScript package dist accumulator digest declaration drift was not detected"
+            )
+        print("negative control rejected JavaScript package dist accumulator digest declaration drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: JavaScript package dist accumulator digest declaration drift was not detected"
+    )
+
+if mode == "--negative-control-js-package-dist-accumulator-digest-denylist":
+    mutated = dict(texts)
+    target = "javascript/iroha_js/test/package_dist.test.js"
+    original = mutated[target]
+    updated = original.replace(
+        "appendBoundaryDigest|AppendBoundaryDigest|append_boundary_digest|",
+        "",
+        1,
+    )
+    if updated == original:
+        raise SystemExit(
+            "negative control failed: unable to mutate JavaScript package dist accumulator digest denylist"
+        )
+    mutated[target] = updated
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        label = "JavaScript package dist accumulator digest declaration coverage"
+        if label not in message:
+            raise SystemExit(
+                "negative control failed: JavaScript package dist accumulator digest denylist drift was not detected"
+            )
+        print("negative control rejected JavaScript package dist accumulator digest denylist drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: JavaScript package dist accumulator digest denylist drift was not detected"
+    )
+
+if mode == "--negative-control-js-package-dist-terminal-accumulator-digest-denylist":
+    mutated = dict(texts)
+    target = "javascript/iroha_js/test/package_dist.test.js"
+    original = mutated[target]
+    updated = original.replace(
+        "previousAccumulatorDigest|PreviousAccumulatorDigest|previous_accumulator_digest|resultingAccumulatorDigest|ResultingAccumulatorDigest|resulting_accumulator_digest|",
+        "",
+        1,
+    )
+    if updated == original:
+        raise SystemExit(
+            "negative control failed: unable to mutate JavaScript package dist terminal accumulator digest denylist"
+        )
+    mutated[target] = updated
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        label = "JavaScript package dist accumulator digest declaration coverage"
+        if label not in message:
+            raise SystemExit(
+                "negative control failed: JavaScript package dist terminal accumulator digest denylist drift was not detected"
+            )
+        print("negative control rejected JavaScript package dist terminal accumulator digest denylist drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: JavaScript package dist terminal accumulator digest denylist drift was not detected"
+    )
+
+if mode == "--negative-control-js-package-dist-declaration-sweep":
+    mutated = dict(texts)
+    target = "javascript/iroha_js/test/package_dist.test.js"
+    original = mutated[target]
+    updated = original.replace(
+        '  ["connect.browser.d.ts", readFileSync(new URL("../connect.browser.d.ts", import.meta.url), "utf8")],\n',
+        "",
+        1,
+    )
+    if updated == original:
+        raise SystemExit(
+            "negative control failed: unable to mutate JavaScript package dist declaration sweep"
+        )
+    mutated[target] = updated
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        label = "JavaScript package dist accumulator digest declaration coverage"
+        if label not in message:
+            raise SystemExit(
+                "negative control failed: JavaScript package dist declaration sweep drift was not detected"
+            )
+        print("negative control rejected JavaScript package dist declaration sweep drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: JavaScript package dist declaration sweep drift was not detected"
+    )
+
+if mode == "--negative-control-js-package-dist-nexus-declaration-sweep":
+    mutated = dict(texts)
+    target = "javascript/iroha_js/test/package_dist.test.js"
+    original = mutated[target]
+    updated = original.replace(
+        '  ["nexus-app.d.ts", readFileSync(new URL("../nexus-app.d.ts", import.meta.url), "utf8")],\n',
+        "",
+        1,
+    )
+    if updated == original:
+        raise SystemExit(
+            "negative control failed: unable to mutate JavaScript package dist Nexus declaration sweep"
+        )
+    mutated[target] = updated
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        label = "JavaScript package dist accumulator digest declaration coverage"
+        if label not in message:
+            raise SystemExit(
+                "negative control failed: JavaScript package dist Nexus declaration sweep drift was not detected"
+            )
+        print("negative control rejected JavaScript package dist Nexus declaration sweep drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: JavaScript package dist Nexus declaration sweep drift was not detected"
+    )
+
+if mode == "--negative-control-js-package-dist-kotodama-declaration-sweep":
+    mutated = dict(texts)
+    target = "javascript/iroha_js/test/package_dist.test.js"
+    original = mutated[target]
+    updated = original.replace(
+        '  ["kotodama-compiler.d.ts", readFileSync(new URL("../kotodama-compiler.d.ts", import.meta.url), "utf8")],\n',
+        "",
+        1,
+    )
+    if updated == original:
+        raise SystemExit(
+            "negative control failed: unable to mutate JavaScript package dist Kotodama declaration sweep"
+        )
+    mutated[target] = updated
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        label = "JavaScript package dist accumulator digest declaration coverage"
+        if label not in message:
+            raise SystemExit(
+                "negative control failed: JavaScript package dist Kotodama declaration sweep drift was not detected"
+            )
+        print("negative control rejected JavaScript package dist Kotodama declaration sweep drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: JavaScript package dist Kotodama declaration sweep drift was not detected"
+    )
+
+if mode == "--negative-control-js-dts-recursive-compact-key-package":
+    mutated = dict(texts)
+    target = "javascript/iroha_js/index.d.ts"
+    original = mutated[target]
+    updated = original.replace(
+        "  recursiveCompactKeyArtifactsArchive: BinaryLike,\n",
+        "  recursiveCompactKeyArtifactsArchive?: BinaryLike,\n",
+        1,
+    )
+    updated = updated.replace(
+        "  recursiveCompactVerifierKeysArchive: BinaryLike,\n",
+        "  recursiveCompactVerifierKeysArchive?: BinaryLike,\n",
+        1,
+    )
+    if updated == original:
+        raise SystemExit(
+            "negative control failed: unable to mutate JavaScript TypeScript recursive compact key-package declarations"
+        )
+    mutated[target] = updated
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "JavaScript TypeScript recursive compact prover key-package declaration",
+            "JavaScript TypeScript recursive compact verifier key-package declaration",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: JavaScript TypeScript recursive compact key-package declaration drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected JavaScript TypeScript recursive compact key-package declaration drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: JavaScript TypeScript recursive compact key-package declaration drift was not detected"
+    )
+
+if mode == "--negative-control-python-recursive-compact-root-export":
+    mutated = dict(texts)
+    target = "python/iroha_python/src/iroha_python/__init__.py"
+    updated = mutated[target]
+    for method in REQUIRED_RECURSIVE_COMPACT_PYTHON_METHODS:
+        updated = updated.replace(f'    "{method}",\n', "", 1)
+        updated = updated.replace(f"        {method},\n", "", 1)
+    if updated == mutated[target]:
+        raise SystemExit(
+            "negative control failed: unable to mutate Python recursive compact root exports"
+        )
+    mutated[target] = updated
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        label = "Python package recursive compact re-exports"
+        if label not in message:
+            raise SystemExit(
+                "negative control failed: Python recursive compact root re-export drift was not detected"
+            )
+        print("negative control rejected Python recursive compact root re-export drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: Python recursive compact root re-export drift was not detected"
     )
 
 if mode == "--negative-control-recursive-spend-compact-projection-surface":

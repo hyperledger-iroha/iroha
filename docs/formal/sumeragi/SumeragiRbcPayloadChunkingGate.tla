@@ -249,7 +249,7 @@ PayloadCoverageMatchesLength ==
     full_chunk_count * EffectiveChunkSize(candidate) + last_chunk_len =
       PayloadLen(candidate)
 
-Safety ==
+RbcPayloadChunkingCoreSafety ==
   /\ ChunkCountMatchesSpec
   /\ ChunkVectorLenMatchesCount
   /\ ChunkLengthsMatchSpec
@@ -262,5 +262,7 @@ Safety ==
   /\ LastChunkWithinEffectiveSize
   /\ FullChunksBeforeLast
   /\ PayloadCoverageMatchesLength
+
+Safety == RbcPayloadChunkingCoreSafety
 
 ====

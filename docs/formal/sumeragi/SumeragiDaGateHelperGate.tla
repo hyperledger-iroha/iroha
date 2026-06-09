@@ -140,7 +140,7 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+DaGateHelperMatchesSpec ==
   /\ \A c \in EvalCases:
        ActualEvaluate(c) = SpecEvaluate(c)
   /\ \A previous \in Reasons:
@@ -149,6 +149,8 @@ SafetyFast ==
            SpecSatisfaction(previous, current)
   /\ \A kind \in ManifestKinds:
        ActualManifestLabel(kind) = SpecManifestLabel(kind)
+
+SafetyFast == DaGateHelperMatchesSpec
 
 BugEvalDisabledAvailableBlocks ==
   ActualEvaluate("disabled_available") = SpecEvaluate("disabled_available")

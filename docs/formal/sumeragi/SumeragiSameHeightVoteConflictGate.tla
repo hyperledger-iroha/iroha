@@ -274,7 +274,7 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+SameHeightVoteConflictMatchesSpec ==
   /\ \A c \in SelectionCases:
        ActualSelectionOutput(c) = SpecSelectionOutput(c)
   /\ \A c \in SelectionCases:
@@ -287,6 +287,9 @@ SafetyFast ==
        ActualNewViewOutput(c) = SpecNewViewOutput(c)
   /\ \A c \in PendingVerificationCases:
        ActualPendingOutput(c) = SpecPendingOutput(c)
+
+SafetyFast ==
+  SameHeightVoteConflictMatchesSpec
 
 BugSelectsNonlocal ==
   ActualSelectionOutput("wrong_signer_ignored") =

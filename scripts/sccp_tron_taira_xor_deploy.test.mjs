@@ -1377,6 +1377,46 @@ test("route manifest draft binds deployment evidence, verifier material, and TAI
   });
 });
 
+test("TRON route-config refuses allow-unready for production-ready manifests", async () => {
+  await withTempDir(async (dir) => {
+    const { evidencePath, contractPath, verifierPath } = await writeRouteManifestInputs(dir);
+    const liveEvidencePath = join(dir, "live-evidence.json");
+    const verifierCodeHash = routeHash("deployed-verifier-code");
+    await writeJson(liveEvidencePath, routeLiveEvidence({ verifierCodeHash }));
+
+    const manifest = await buildTairaXorRouteManifestDraft({
+      evidence: evidencePath,
+      "taira-contract": contractPath,
+      verifier: verifierPath,
+      "verifier-code-hash": verifierCodeHash,
+      "settlement-asset-definition-id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+      "vk-backend": "halo2/ipa",
+      "vk-name": "taira_xor_burn_record_v1",
+      "live-evidence": liveEvidencePath,
+      "production-ready": "true",
+      "live-readback-checked": "true",
+      "confirm-mainnet": "taira_tron_xor",
+    });
+    const toml = buildTairaXorRouteConfigToml(manifest);
+    assert.match(toml, /production_ready = true/u);
+    assert.match(toml, /sccp_allow_unready_transparent_proofs = false/u);
+
+    assert.throws(
+      () => buildTairaXorRouteConfigToml(manifest, { "allow-unready": "true" }),
+      /production-ready route manifests cannot enable --allow-unready/u,
+    );
+    assert.throws(
+      () =>
+        buildMergedTairaXorRouteConfigToml(
+          "[zk]\nother_setting = true\n",
+          manifest,
+          { "allow-unready": "true" },
+        ),
+      /production-ready route manifests cannot enable --allow-unready/u,
+    );
+  });
+});
+
 test("route manifest draft defaults to disabled and requires production readiness acknowledgements", async () => {
   await withTempDir(async (dir) => {
     const { evidencePath, contractPath, verifierPath } = await writeRouteManifestInputs(dir);
@@ -1422,6 +1462,319 @@ test("route manifest draft defaults to disabled and requires production readines
         }),
       /live-evidence/u,
     );
+  });
+});
+
+test("TRON route-config refuses production-ready manifests with disabled reasons", async () => {
+  await withTempDir(async (dir) => {
+    const { evidencePath, contractPath, verifierPath } = await writeRouteManifestInputs(dir);
+    const liveEvidencePath = join(dir, "live-evidence.json");
+    const verifierCodeHash = routeHash("deployed-verifier-code");
+    await writeJson(liveEvidencePath, routeLiveEvidence({ verifierCodeHash }));
+    const manifest = await buildTairaXorRouteManifestDraft({
+      evidence: evidencePath,
+      "taira-contract": contractPath,
+      verifier: verifierPath,
+      "verifier-code-hash": verifierCodeHash,
+      "settlement-asset-definition-id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+      "vk-backend": "halo2/ipa",
+      "vk-name": "taira_xor_burn_record_v1",
+      "live-evidence": liveEvidencePath,
+      "production-ready": "true",
+      "live-readback-checked": "true",
+      "confirm-mainnet": "taira_tron_xor",
+    });
+
+    for (const disabledField of ["disabledReason", "disabled_reason"]) {
+      assert.throws(
+        () =>
+          buildTairaXorRouteConfigToml({
+            ...manifest,
+            [disabledField]: "operator left this route disabled",
+          }),
+        /productionReady cannot be true when disabledReason is set/u,
+      );
+    }
+    assert.throws(
+      () =>
+        buildTairaXorRouteConfigToml({
+          ...manifest,
+          productionReady: false,
+          disabledReason: "operator left this route disabled",
+          disabled_reason: "operator attempted to override disabled state",
+        }),
+      /disabledReason and disabled_reason must match/u,
+    );
+  });
+});
+
+test("TRON route-config requires post-deploy evidence for production manifests", async () => {
+  await withTempDir(async (dir) => {
+    const { evidencePath, contractPath, verifierPath } = await writeRouteManifestInputs(dir);
+    const liveEvidencePath = join(dir, "live-evidence.json");
+    const verifierCodeHash = routeHash("deployed-verifier-code");
+    await writeJson(liveEvidencePath, routeLiveEvidence({ verifierCodeHash }));
+    const manifest = await buildTairaXorRouteManifestDraft({
+      evidence: evidencePath,
+      "taira-contract": contractPath,
+      verifier: verifierPath,
+      "verifier-code-hash": verifierCodeHash,
+      "settlement-asset-definition-id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+      "vk-backend": "halo2/ipa",
+      "vk-name": "taira_xor_burn_record_v1",
+      "live-evidence": liveEvidencePath,
+      "production-ready": "true",
+      "live-readback-checked": "true",
+      "confirm-mainnet": "taira_tron_xor",
+    });
+
+    assert.throws(
+      () =>
+        buildTairaXorRouteConfigToml({
+          ...manifest,
+          postDeployLiveEvidence: undefined,
+        }),
+      /productionReady requires postDeployLiveEvidence/u,
+    );
+    assert.throws(
+      () =>
+        buildTairaXorRouteConfigToml({
+          ...manifest,
+          postDeployLiveEvidence: {
+            ...manifest.postDeployLiveEvidence,
+            fullTomlReady: false,
+          },
+        }),
+      /fullTomlReady true/u,
+    );
+    assert.throws(
+      () =>
+        buildTairaXorRouteConfigToml({
+          ...manifest,
+          postDeployLiveEvidence: {
+            ...manifest.postDeployLiveEvidence,
+            offlineFullTomlSha256: undefined,
+          },
+        }),
+      /offlineFullTomlSha256/u,
+    );
+  });
+});
+
+test("TRON route-config rejects malformed or foreign route manifests", async () => {
+  await withTempDir(async (dir) => {
+    const { evidencePath, contractPath, verifierPath } = await writeRouteManifestInputs(dir);
+    const liveEvidencePath = join(dir, "live-evidence.json");
+    const verifierCodeHash = routeHash("deployed-verifier-code");
+    await writeJson(liveEvidencePath, routeLiveEvidence({ verifierCodeHash }));
+    const manifest = await buildTairaXorRouteManifestDraft({
+      evidence: evidencePath,
+      "taira-contract": contractPath,
+      verifier: verifierPath,
+      "verifier-code-hash": verifierCodeHash,
+      "settlement-asset-definition-id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+      "vk-backend": "halo2/ipa",
+      "vk-name": "taira_xor_burn_record_v1",
+      "live-evidence": liveEvidencePath,
+      "production-ready": "true",
+      "live-readback-checked": "true",
+      "confirm-mainnet": "taira_tron_xor",
+    });
+    const cases = [
+      [{ version: 2 }, /route manifest version/u],
+      [{ routeId: "taira_bsc_xor" }, /routeId/u],
+      [{ routeId: " taira_tron_xor" }, /routeId.*without surrounding whitespace/u],
+      [{ assetKey: "dot" }, /assetKey/u],
+      [{ assetKey: "xor " }, /assetKey.*without surrounding whitespace/u],
+      [{ counterpartyDomain: 2 }, /counterpartyDomain/u],
+      [{ verifierTarget: "EvmContract" }, /verifierTarget/u],
+      [{ postDeployReadbackChecked: undefined }, /postDeployReadbackChecked true/u],
+      [{ postDeployReadbackChecked: false }, /postDeployReadbackChecked true/u],
+      [
+        { post_deploy_readback_checked: false },
+        /postDeployReadbackChecked and post_deploy_readback_checked must match/u,
+      ],
+      [
+        { sccpTronDestinationVerifierAddress: manifest.tairaXorBridgeAddress },
+        /sccpTronDestinationVerifierAddress/u,
+      ],
+      [{ tairaXorBridgeAddress: manifest.tairaXorTokenAddress }, /addresses must be distinct/u],
+      [{ sccpTronSourceBridgeAddress: manifest.tairaXorTokenAddress }, /addresses must be distinct/u],
+      [
+        {
+          tronVerifierAddress: manifest.tairaXorTokenAddress,
+          sccpTronDestinationVerifierAddress: manifest.tairaXorTokenAddress,
+        },
+        /addresses must be distinct/u,
+      ],
+      [
+        {
+          tronNetwork: "nile",
+          chain: "tron-nile",
+          chainIdHex: "0xcd8690dc",
+          networkIdHex: TRON_NILE_NETWORK_ID_HEX,
+        },
+        /productionReady requires tronNetwork mainnet/u,
+      ],
+      [{ tronNetwork: "TRON-MAINNET" }, /tronNetwork.*canonical lowercase text/u],
+      [{ tronNetwork: "tron_mainnet" }, /tronNetwork.*canonical lowercase text/u],
+      [{ chain: "tron-nile" }, /chain must match tronNetwork/u],
+      [{ chain: "TRON-MAINNET" }, /chain.*canonical lowercase text/u],
+      [{ chainIdHex: "0xcd8690dc" }, /chainIdHex must match tronNetwork/u],
+      [{ chainIdHex: "0X2B6653DC" }, /chainIdHex.*canonical lowercase hex/u],
+      [{ networkIdHex: TRON_NILE_NETWORK_ID_HEX }, /networkIdHex must match tronNetwork/u],
+      [{ networkIdHex: ` ${TRON_MAINNET_NETWORK_ID_HEX}` }, /networkIdHex.*without surrounding whitespace/u],
+      [{ networkIdHex: TRON_MAINNET_NETWORK_ID_HEX.toUpperCase() }, /networkIdHex.*canonical lowercase hex/u],
+      [{ destinationRollout: { version: 2 } }, /destinationRollout\.version/u],
+      [{ destinationRollout: { verifierBackend: "evm-groth16-bn254-v1" } }, /verifier backend/u],
+      [{ destinationRollout: { proofFamily: "debug-proof-family" } }, /proof family/u],
+      [{ destinationRollout: { destinationNetworkId: TRON_NILE_NETWORK_ID_HEX } }, /destinationNetworkId/u],
+      [
+        { destinationRollout: { destinationNetworkId: `${TRON_MAINNET_NETWORK_ID_HEX} ` } },
+        /destinationNetworkId.*without surrounding whitespace/u,
+      ],
+      [
+        { destinationRollout: { destinationNetworkId: TRON_MAINNET_NETWORK_ID_HEX.toUpperCase() } },
+        /destinationNetworkId.*canonical lowercase hex/u,
+      ],
+      [{ destinationRollout: { verifierIdentity: manifest.tairaXorBridgeAddress } }, /verifierIdentity/u],
+      [{ destinationRollout: { sourceDomain: 5 } }, /destinationRollout.*SORA -> TRON/u],
+      [{ destinationRollout: { targetDomain: 0 } }, /destinationRollout.*SORA -> TRON/u],
+      [{ destinationBinding: { sourceDomain: 5 } }, /destinationBinding.*SORA -> TRON/u],
+      [{ destinationBinding: { targetDomain: 0 } }, /destinationBinding.*SORA -> TRON/u],
+      [{ destinationBinding: { networkIdHex: TRON_NILE_NETWORK_ID_HEX } }, /networkIdHex/u],
+      [{ destinationRollout: { destinationBindingKey: "tron:stale-binding" } }, /binding key/u],
+      [{ destinationBinding: { version: 2 } }, /destinationBinding\.version/u],
+      [{ destinationBinding: { key: "tron:stale-binding" } }, /destinationBinding\.key/u],
+      [{ destinationRollout: { destinationBindingHash: routeHash("wrong-binding") } }, /binding hash/u],
+      [{ destinationBinding: { bindingHash: routeHash("wrong-binding") } }, /destinationBinding\.bindingHash/u],
+      [{ tairaXorBurnRecord: { artifactSha256: routeHash("wrong-artifact") } }, /artifact sha256/u],
+      [{ tairaXorBurnRecord: { codeHash: "not-a-bytes32" } }, /codeHash/u],
+      [{ tairaXorBurnRecord: { vkRef: { backend: "bad backend" } } }, /unsupported characters/u],
+      [{ settlement: { routeId: "taira_bsc_xor" } }, /settlement\.routeId/u],
+      [{ settlement: { assetKey: "dot" } }, /settlement\.assetKey/u],
+      [{ settlement: { submitPath: "/v1/transactions" } }, /settlement\.submitPath/u],
+      [{ settlement: { mode: "diagnostic" } }, /settlement\.mode/u],
+      [
+        {
+          postDeployLiveEvidence: {
+            sourceEventTransactionProductionBlockers: [
+              "witness seal proof required",
+            ],
+          },
+        },
+        /productionReady requires empty postDeployLiveEvidence production blocker lists.*sourceEventTransactionProductionBlockers: witness seal proof required/u,
+      ],
+      [
+        { postDeployLiveEvidence: { productionBlockers: "operator hold" } },
+        /postDeployLiveEvidence\.productionBlockers must be a list/u,
+      ],
+      [
+        {
+          postDeployLiveEvidence: {
+            route_canary_production_blockers: [" padded "],
+          },
+        },
+        /postDeployLiveEvidence\.route_canary_production_blockers\[0\].*without surrounding whitespace/u,
+      ],
+      [
+        { postDeployLiveEvidence: { full_toml_production_blockers: [123] } },
+        /postDeployLiveEvidence\.full_toml_production_blockers\[0\].*without surrounding whitespace/u,
+      ],
+      [
+        {
+          postDeployLiveEvidence: {
+            sourceEventTransactionId: ` ${routeHash("source-event-transaction")}`,
+          },
+        },
+        /postDeployLiveEvidence\.sourceEventTransactionId.*without surrounding whitespace/u,
+      ],
+      [
+        {
+          postDeployLiveEvidence: {
+            sourceEventTransactionId: routeHash("source-event-transaction").toUpperCase(),
+          },
+        },
+        /postDeployLiveEvidence\.sourceEventTransactionId.*canonical lowercase hex/u,
+      ],
+      [
+        {
+          postDeployLiveEvidence: {
+            offlineFullTomlSha256: `${routeHash("offline-full-toml")} `,
+          },
+        },
+        /postDeployLiveEvidence\.offlineFullTomlSha256.*without surrounding whitespace/u,
+      ],
+      [
+        {
+          postDeployLiveEvidence: {
+            offlineFullTomlSha256: routeHash("offline-full-toml").toUpperCase(),
+          },
+        },
+        /postDeployLiveEvidence\.offlineFullTomlSha256.*canonical lowercase hex/u,
+      ],
+    ];
+
+    for (const [overrides, error] of cases) {
+      const patchedManifest = {
+        ...manifest,
+        ...overrides,
+      };
+      if (
+        Object.prototype.hasOwnProperty.call(overrides, "destinationRollout") &&
+        overrides.destinationRollout &&
+        typeof overrides.destinationRollout === "object"
+      ) {
+        patchedManifest.destinationRollout = {
+          ...manifest.destinationRollout,
+          ...overrides.destinationRollout,
+        };
+      }
+      if (
+        Object.prototype.hasOwnProperty.call(overrides, "destinationBinding") &&
+        overrides.destinationBinding &&
+        typeof overrides.destinationBinding === "object"
+      ) {
+        patchedManifest.destinationBinding = {
+          ...manifest.destinationBinding,
+          ...overrides.destinationBinding,
+        };
+      }
+      if (
+        Object.prototype.hasOwnProperty.call(overrides, "tairaXorBurnRecord") &&
+        overrides.tairaXorBurnRecord &&
+        typeof overrides.tairaXorBurnRecord === "object"
+      ) {
+        patchedManifest.tairaXorBurnRecord = {
+          ...manifest.tairaXorBurnRecord,
+          ...overrides.tairaXorBurnRecord,
+        };
+      }
+      if (
+        Object.prototype.hasOwnProperty.call(overrides, "settlement") &&
+        overrides.settlement &&
+        typeof overrides.settlement === "object"
+      ) {
+        patchedManifest.settlement = {
+          ...manifest.settlement,
+          ...overrides.settlement,
+        };
+      }
+      if (
+        Object.prototype.hasOwnProperty.call(overrides, "postDeployLiveEvidence") &&
+        overrides.postDeployLiveEvidence &&
+        typeof overrides.postDeployLiveEvidence === "object"
+      ) {
+        patchedManifest.postDeployLiveEvidence = {
+          ...manifest.postDeployLiveEvidence,
+          ...overrides.postDeployLiveEvidence,
+        };
+      }
+      assert.throws(
+        () => buildTairaXorRouteConfigToml(patchedManifest),
+        error,
+      );
+    }
   });
 });
 
@@ -1676,6 +2029,34 @@ test("route manifest draft rejects forged or incomplete live evidence", async ()
         ];
       },
       error: /source_event_transaction_production_ready.*witness seal proof required/u,
+    },
+    {
+      name: "source event transaction contradictory blockers",
+      mutate: (live) => {
+        live.source_event_transaction.source_event_transaction_production_blockers = [
+          "witness seal proof required",
+        ];
+      },
+      error: /source_event_transaction_production_blockers must be empty.*witness seal proof required/u,
+    },
+    {
+      name: "source event transaction scalar blockers",
+      mutate: (live) => {
+        live.source_event_transaction.source_event_transaction_production_ready = false;
+        live.source_event_transaction.source_event_transaction_production_blockers =
+          "witness seal proof required";
+      },
+      error: /source_event_transaction_production_blockers must be a list/u,
+    },
+    {
+      name: "source event transaction malformed blocker entry",
+      mutate: (live) => {
+        live.source_event_transaction.source_event_transaction_production_ready = false;
+        live.source_event_transaction.source_event_transaction_production_blockers = [
+          " witness seal proof required ",
+        ];
+      },
+      error: /source_event_transaction_production_blockers\[0\].*without surrounding whitespace/u,
     },
     {
       name: "missing source event transaction id",

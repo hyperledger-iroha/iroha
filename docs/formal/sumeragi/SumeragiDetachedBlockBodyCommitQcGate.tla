@@ -101,8 +101,10 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+DetachedBlockBodyCommitQcMatchesSpec ==
   \A c \in Cases: Matches(c)
+
+SafetyFast == DetachedBlockBodyCommitQcMatchesSpec
 
 NoQcNoHandle ==
   Matches("no_qc")

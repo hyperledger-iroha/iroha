@@ -166,9 +166,12 @@ TypeInvariant ==
   /\ \A c \in Cases: SpecLabel(c) \in LabelValues
   /\ \A c \in Cases: ActualLabel(c) \in AllLabelValues
 
-SafetyFast ==
+VNextRechainErrorLabelCoreSafety ==
   /\ \A c \in Cases: Matches(c)
   /\ PayloadLabelsStable
+
+SafetyFast ==
+  VNextRechainErrorLabelCoreSafety
 
 BugEmptyEvidenceLabelWrong ==
   Matches(EmptyEvidence)

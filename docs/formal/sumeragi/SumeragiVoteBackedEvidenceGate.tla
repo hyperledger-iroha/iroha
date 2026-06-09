@@ -263,7 +263,7 @@ HeightIgnoresViewButNotHeightEpochOrPhase ==
   /\ ~ImplementationHeightEvidence(NewViewQc)
   /\ ~ImplementationHeightEvidence(NoEvidence)
 
-NoBugInvariant ==
+VoteBackedEvidenceCoreSafety ==
   /\ SlotEvidenceMatchesSpec
   /\ LocalSlotEvidenceMatchesSpec
   /\ HeightEvidenceMatchesSpec
@@ -272,6 +272,8 @@ NoBugInvariant ==
   /\ LocalSlotRequiresKnownBlock
   /\ HeightIgnoresViewButNotHeightEpochOrPhase
 
-SafetyFast == NoBugInvariant
+NoBugInvariant == VoteBackedEvidenceCoreSafety
+
+SafetyFast == VoteBackedEvidenceCoreSafety
 
 ====

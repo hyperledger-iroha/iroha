@@ -173,8 +173,10 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+ResponseDispatchMatchesSpec ==
   \A c \in Cases: Matches(c)
+
+SafetyFast == ResponseDispatchMatchesSpec
 
 UnderCapSendsCreatedCompanion ==
   Matches("created_under_no_qc")

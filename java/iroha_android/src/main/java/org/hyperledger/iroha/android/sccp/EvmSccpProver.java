@@ -1464,8 +1464,9 @@ public final class EvmSccpProver {
       String implementationArtifact,
       String implementationHash) {
     public EthereumMainnetNativeEvmProverBundleSdkArtifact {
-      if (sdk == null || sdk.isEmpty()) {
-        throw new IllegalArgumentException("nativeSdkArtifacts.sdk must be non-empty");
+      if (sdk == null || sdk.isEmpty() || !sdk.trim().equals(sdk)) {
+        throw new IllegalArgumentException(
+            "nativeSdkArtifacts.sdk must be a non-empty canonical string");
       }
       if (!Objects.equals(ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1.get(sdk), implementation)) {
         throw new IllegalArgumentException(
@@ -1799,9 +1800,9 @@ public final class EvmSccpProver {
           EthereumMainnetNativeEvmProverSelfTestFixture.fromJsonBytes(
               nativeProverSelfTestBytes, this);
 
-      if (sdk == null || sdk.isEmpty()) {
+      if (sdk == null || sdk.isEmpty() || !sdk.trim().equals(sdk)) {
         throw new IllegalArgumentException(
-            "sdk must be a non-empty string for nativeProverBundle implementation binding");
+            "sdk must be a non-empty canonical string for nativeProverBundle implementation binding");
       }
       if (implementationBytes == null) {
         throw new IllegalArgumentException(
@@ -1843,6 +1844,10 @@ public final class EvmSccpProver {
     public EthereumMainnetNativeEvmProverArtifacts verifiedArtifacts(
         final String sdk, final NativeEvmProverArtifactResolver artifactResolver) {
       Objects.requireNonNull(artifactResolver, "artifactResolver");
+      if (sdk == null || sdk.isEmpty() || !sdk.trim().equals(sdk)) {
+        throw new IllegalArgumentException(
+            "sdk must be a non-empty canonical string for nativeProverBundle implementation binding");
+      }
       if (proofArtifact == null) {
         throw new IllegalArgumentException("proofArtifact is required");
       }

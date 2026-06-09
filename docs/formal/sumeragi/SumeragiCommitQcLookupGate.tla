@@ -191,8 +191,10 @@ NoHistoryFromInvalidCases ==
         \/ ~HistoryTopologyMatches(c))) =>
       SpecSource(c) = "none"
 
-SafetyFast ==
+CommitQcLookupSourceMatchesSpec ==
   \A c \in Cases: ActualSource(c) = SpecSource(c)
+
+SafetyFast == CommitQcLookupSourceMatchesSpec
 
 CommitQcLookupCachePriorityExact ==
   \A c \in CacheCases:

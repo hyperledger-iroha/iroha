@@ -195,8 +195,11 @@ Next ==
 TypeInvariant ==
   checked = 0
 
-SafetyFast ==
+LiveVoteRosterMatchesSpec ==
   \A c \in Cases: ActualActions(c) = SpecActions(c)
+
+SafetyFast ==
+  LiveVoteRosterMatchesSpec
 
 BugAllowFuturePending ==
   ActualActions(FutureWithPendingIgnored) =

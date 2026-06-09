@@ -328,7 +328,7 @@ AllocationEntriesBoundedByTotalWhenPositive ==
     /\ min1 <= Total(candidate)
     /\ min2 <= Total(candidate)
 
-Safety ==
+RbcChunkAllocationCoreSafety ==
   /\ BaseMatchesSpec
   /\ MinMatchesSpec
   /\ EmptyWeightsReturnEmpty
@@ -344,5 +344,7 @@ Safety ==
   /\ MinWrapperNeverAllocatesZeroWeight
   /\ MinWrapperReverseTrimMatchesSpec
   /\ AllocationEntriesBoundedByTotalWhenPositive
+
+Safety == RbcChunkAllocationCoreSafety
 
 ====

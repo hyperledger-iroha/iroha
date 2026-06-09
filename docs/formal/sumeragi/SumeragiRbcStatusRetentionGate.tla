@@ -169,7 +169,7 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+RbcStatusRetentionMatchesSpec ==
   /\ \A c \in LimitCases:
        ActualLimit(c) = SpecLimit(c)
   /\ \A c \in UpdateCases:
@@ -178,6 +178,9 @@ SafetyFast ==
        /\ ActualActiveCount(c) = SpecActiveCount(c)
        /\ ActualUpdatedTimestamp(c) = SpecUpdatedTimestamp(c)
        /\ ActualSummaryTag(c) = SpecSummaryTag(c)
+
+SafetyFast ==
+  RbcStatusRetentionMatchesSpec
 
 BugLimitTtlZeroClears ==
   ActualLimit("ttl_zero_keeps_all") = SpecLimit("ttl_zero_keeps_all")

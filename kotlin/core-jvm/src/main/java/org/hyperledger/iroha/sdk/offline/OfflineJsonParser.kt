@@ -14,10 +14,18 @@ object OfflineJsonParser {
         return OfflineReadiness(
             asBoolean(obj["offline_note"], "offline_note"),
             asBoolean(obj["offline_one_use_keys"], "offline_one_use_keys"),
-            asBoolean(obj["offline_recursive_note_proof"], "offline_recursive_note_proof"),
+            asOptionalBoolean(obj["offline_recursive_note_proof"], false),
             asBoolean(obj["offline_fountain_qr"], "offline_fountain_qr"),
             asBoolean(obj["offline_sync_optional"], "offline_sync_optional"),
             asBoolean(obj["offline_telemetry"], "offline_telemetry"),
+            asOptionalBoolean(obj["offline_kagemusha_abi7"], false),
+            asOptionalString(obj["offline_kagemusha_abi7_mode"]),
+            asOptionalInt(
+                obj["offline_kagemusha_abi7_bridge_abi_version"],
+                "offline_kagemusha_abi7_bridge_abi_version",
+            ),
+            asOptionalString(obj["offline_kagemusha_abi7_circuit_id"]),
+            asOptionalBoolean(obj["offline_kagemusha_abi7_artifacts"], false),
         )
     }
 
@@ -391,6 +399,17 @@ object OfflineJsonParser {
     private fun asBoolean(value: Any?, path: String): Boolean {
         check(value is Boolean) { "$path must be a boolean" }
         return value
+    }
+
+    private fun asOptionalBoolean(value: Any?, default: Boolean): Boolean {
+        return if (value is Boolean) value else default
+    }
+
+    private fun asOptionalInt(value: Any?, path: String): Int? {
+        if (value == null) return null
+        val parsed = JsonNumbers.asLong(value, path)
+        check(parsed in Int.MIN_VALUE..Int.MAX_VALUE) { "$path is outside Int range" }
+        return parsed.toInt()
     }
 
     private fun asBytes(value: Any?, path: String): ByteArray {

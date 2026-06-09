@@ -322,8 +322,10 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+VoteDeferralMatchesSpec ==
   \A c \in Cases: Matches(c)
+
+SafetyFast == VoteDeferralMatchesSpec
 
 NoVotesContinue ==
   Matches("no_votes_continue")

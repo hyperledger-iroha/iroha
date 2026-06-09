@@ -311,8 +311,10 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+DeferredBlockSyncCacheMatchesSpec ==
   \A c \in Cases: Matches(c)
+
+SafetyFast == DeferredBlockSyncCacheMatchesSpec
 
 CacheNewClearsCommitVotes ==
   Matches("cache_new_entry")

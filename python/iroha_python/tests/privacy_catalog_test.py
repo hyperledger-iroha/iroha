@@ -619,6 +619,74 @@ def test_privacy_catalog_rejects_required_production_privacy_plan_state_token_dr
         )
 
 
+def test_privacy_catalog_rejects_required_production_privacy_plan_state_token_concatenated_false_positive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    descriptors = json.loads(json.dumps(get_privacy_algorithm_descriptors()))
+    required_state_by_id = {
+        key: tuple(value)
+        for key, value in privacy_catalog.REQUIRED_PRIVACY_PLAN_REQUIRED_STATE_BY_ALGORITHM_ID.items()
+    }
+    for descriptor in descriptors:
+        if descriptor["id"] == "anonymous-pgc-k-out-of-n-v1":
+            descriptor["required_state"][-1] = (
+                "notwallet account blinding and receiver recovery metadata"
+            )
+            required_state_by_id[descriptor["id"]] = tuple(
+                descriptor["required_state"]
+            )
+            break
+    monkeypatch.setattr(
+        privacy_catalog,
+        "REQUIRED_PRIVACY_PLAN_REQUIRED_STATE_BY_ALGORITHM_ID",
+        required_state_by_id,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "required production privacy plan row "
+            "'anonymous-pgc-k-out-of-n-v1' must retain required state token "
+            "'wallet account blinding'"
+        ),
+    ):
+        privacy_catalog._validate_required_privacy_plan_rows(tuple(descriptors))
+
+
+def test_privacy_catalog_rejects_required_production_privacy_plan_state_token_negated_bounded_false_positive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    descriptors = json.loads(json.dumps(get_privacy_algorithm_descriptors()))
+    required_state_by_id = {
+        key: tuple(value)
+        for key, value in privacy_catalog.REQUIRED_PRIVACY_PLAN_REQUIRED_STATE_BY_ALGORITHM_ID.items()
+    }
+    for descriptor in descriptors:
+        if descriptor["id"] == "anonymous-pgc-k-out-of-n-v1":
+            descriptor["required_state"][-1] = (
+                "not wallet account blinding and receiver recovery metadata"
+            )
+            required_state_by_id[descriptor["id"]] = tuple(
+                descriptor["required_state"]
+            )
+            break
+    monkeypatch.setattr(
+        privacy_catalog,
+        "REQUIRED_PRIVACY_PLAN_REQUIRED_STATE_BY_ALGORITHM_ID",
+        required_state_by_id,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "required production privacy plan row "
+            "'anonymous-pgc-k-out-of-n-v1' must retain required state token "
+            "'wallet account blinding'"
+        ),
+    ):
+        privacy_catalog._validate_required_privacy_plan_rows(tuple(descriptors))
+
+
 def test_privacy_catalog_rejects_required_production_privacy_plan_failure_modes_drift() -> None:
     descriptors = json.loads(json.dumps(get_privacy_algorithm_descriptors()))
     for descriptor in descriptors:
@@ -642,7 +710,7 @@ def test_privacy_catalog_rejects_required_production_privacy_plan_security_note_
         if descriptor["id"] == "anonymous-pgc-k-out-of-n-v1":
             descriptor["security_notes"][-1] = (
                 "Production hardening requires parser fuzzing, latency gates, "
-                "and external audit or verifier review."
+                "and internal cryptographic review."
             )
             break
 
@@ -682,6 +750,70 @@ def test_privacy_catalog_rejects_required_production_privacy_plan_failure_mode_d
         privacy_catalog._validate_required_privacy_plan_rows(
             get_privacy_algorithm_descriptors()
         )
+
+
+def test_privacy_catalog_rejects_required_production_privacy_plan_failure_mode_concatenated_false_positive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    descriptors = json.loads(json.dumps(get_privacy_algorithm_descriptors()))
+    required_failure_modes_by_id = {
+        key: tuple(value)
+        for key, value in privacy_catalog.REQUIRED_PRIVACY_PLAN_FAILURE_MODES_BY_ALGORITHM_ID.items()
+    }
+    for descriptor in descriptors:
+        if descriptor["id"] == "anonymous-pgc-k-out-of-n-v1":
+            descriptor["failure_modes"][2] = "notreceiver-set substitution"
+            required_failure_modes_by_id[descriptor["id"]] = tuple(
+                descriptor["failure_modes"]
+            )
+            break
+    monkeypatch.setattr(
+        privacy_catalog,
+        "REQUIRED_PRIVACY_PLAN_FAILURE_MODES_BY_ALGORITHM_ID",
+        required_failure_modes_by_id,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "required production privacy plan row "
+            "'anonymous-pgc-k-out-of-n-v1' must retain required "
+            "failure-mode token 'receiver-set substitution'"
+        ),
+    ):
+        privacy_catalog._validate_required_privacy_plan_rows(tuple(descriptors))
+
+
+def test_privacy_catalog_rejects_required_production_privacy_plan_failure_mode_negated_bounded_false_positive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    descriptors = json.loads(json.dumps(get_privacy_algorithm_descriptors()))
+    required_failure_modes_by_id = {
+        key: tuple(value)
+        for key, value in privacy_catalog.REQUIRED_PRIVACY_PLAN_FAILURE_MODES_BY_ALGORITHM_ID.items()
+    }
+    for descriptor in descriptors:
+        if descriptor["id"] == "anonymous-pgc-k-out-of-n-v1":
+            descriptor["failure_modes"][2] = "not receiver-set substitution"
+            required_failure_modes_by_id[descriptor["id"]] = tuple(
+                descriptor["failure_modes"]
+            )
+            break
+    monkeypatch.setattr(
+        privacy_catalog,
+        "REQUIRED_PRIVACY_PLAN_FAILURE_MODES_BY_ALGORITHM_ID",
+        required_failure_modes_by_id,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "required production privacy plan row "
+            "'anonymous-pgc-k-out-of-n-v1' must retain required "
+            "failure-mode token 'receiver-set substitution'"
+        ),
+    ):
+        privacy_catalog._validate_required_privacy_plan_rows(tuple(descriptors))
 
 
 def test_privacy_catalog_rejects_required_production_privacy_plan_source_reference_drift(
@@ -783,6 +915,8 @@ def test_privacy_catalog_rejects_required_production_privacy_plan_planned_sdk_en
         ["buildAnonymousPgcProofRequest"],
         ["buildAnonymousPgcProofCommitment"],
         ["buildAnonymousPgcDevProofFixture"],
+        ["buildAnonymousPgcNoProofBuilder"],
+        ["buildAnonymousPgcNotProofBuilder"],
     ],
 )
 def test_privacy_catalog_rejects_required_production_privacy_plan_without_proof_builder(
@@ -850,11 +984,17 @@ def test_privacy_catalog_research_targets_keep_production_readiness_notes() -> N
             continue
         security_notes_text = " ".join(descriptor["security_notes"]).lower()
         assert all(
-            token in security_notes_text
+            privacy_catalog._catalog_text_contains_affirmed_metadata_token(
+                security_notes_text,
+                token,
+            )
             for token in privacy_catalog._RESEARCH_TARGET_PRODUCTION_READINESS_TOKENS
         )
         assert any(
-            token in security_notes_text
+            privacy_catalog._catalog_text_contains_affirmed_metadata_token(
+                security_notes_text,
+                token,
+            )
             for token in privacy_catalog._RESEARCH_TARGET_READINESS_EVIDENCE_TOKENS
         )
 
@@ -891,7 +1031,7 @@ def test_privacy_catalog_loader_rejects_research_target_without_exact_protocol_s
                     publicInputsSchema="anchor,nullifiers,cmx,value_commitments,binding_signature",
                     verifierKeyId="orchard_halo2_action_bundle_v1",
                     recommendedFor=["shape validation"],
-                    chainRequirements=["Orchard note commitment tree"],
+                    chainRequirements=["Orchard shielded state tree"],
                     securityNotes=["Use only for hostile shape validation."],
                     requiredState=[
                         "Orchard note commitment tree",
@@ -942,14 +1082,130 @@ def test_privacy_catalog_loader_rejects_research_target_without_production_readi
                     securityNotes=[
                         "Orchard note semantics must remain domain-separated.",
                         "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
-                        "Hardening gates require parser fuzzing, performance review, and external audit.",
+                        "Hardening gates require deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance review, and internal cryptographic review.",
+                    ],
+                    recommendedFor=["shape research"],
+                    chainRequirements=["Orchard shielded state tree"],
+                    requiredState=[
+                        "Orchard shielded state tree",
+                        "Orchard action-bundle verifier key registry",
+                        "wallet Orchard witness store",
+                    ],
+                    failureModes=[
+                        "stale anchor",
+                        "malformed proof bytes",
+                        "wrong verifier key",
+                        "public input mismatch",
+                    ],
+                    setupSteps=["Register Orchard verifier key parameters."],
+                    executionSteps=["Build Orchard proof."],
+                    proofFamily="halo2-pasta-action-bundle",
+                    publicInputsSchema="anchor,nullifiers,cmx",
+                    verifierKeyId="orchard_halo2_action_bundle_v1",
+                    sdkEntrypoints=[],
+                    plannedSdkEntrypoints=["buildOrchardActionBundleProofV1"],
+                )
+            ]
+        ),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "security_notes' must include production readiness audit or "
+            "review gating for research targets"
+        ),
+    ):
+        privacy_catalog._load_descriptors()
+
+
+def test_privacy_catalog_loader_rejects_research_readiness_concatenated_false_positive(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        privacy_catalog,
+        "_RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON",
+        json.dumps(
+            [
+                _raw_descriptor(
+                    id="orchard-halo2-actions-v1",
+                    implementationStage="research-target-as-of-2026-05",
+                    sourceReferences=[
+                        {
+                            "label": "ZIP 224 Orchard Shielded Protocol",
+                            "url": "https://zips.z.cash/zip-0224",
+                        }
+                    ],
+                    securityNotes=[
+                        "Orchard note semantics must remain domain-separated.",
+                        "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+                        "Hardening gates require deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance review, and internal cryptographic review.",
+                        "notproduction readiness planning remains gated.",
                     ],
                     recommendedFor=["shape research"],
                     chainRequirements=["Orchard note commitment tree"],
                     requiredState=[
                         "Orchard note commitment tree",
-                        "Orchard action-bundle verifier key registry",
                         "wallet Orchard witness store",
+                        "Orchard action-bundle verifier key registry",
+                    ],
+                    failureModes=[
+                        "stale anchor",
+                        "malformed proof bytes",
+                        "wrong verifier key",
+                        "public input mismatch",
+                    ],
+                    setupSteps=["Register Orchard verifier key parameters."],
+                    executionSteps=["Build Orchard proof."],
+                    proofFamily="halo2-pasta-action-bundle",
+                    publicInputsSchema="anchor,nullifiers,cmx",
+                    verifierKeyId="orchard_halo2_action_bundle_v1",
+                    sdkEntrypoints=[],
+                    plannedSdkEntrypoints=["buildOrchardActionBundleProofV1"],
+                )
+            ]
+        ),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "security_notes' must include production readiness audit or "
+            "review gating for research targets"
+        ),
+    ):
+        privacy_catalog._load_descriptors()
+
+
+def test_privacy_catalog_loader_rejects_research_readiness_negated_bounded_false_positive(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        privacy_catalog,
+        "_RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON",
+        json.dumps(
+            [
+                _raw_descriptor(
+                    id="orchard-halo2-actions-v1",
+                    implementationStage="research-target-as-of-2026-05",
+                    sourceReferences=[
+                        {
+                            "label": "ZIP 224 Orchard Shielded Protocol",
+                            "url": "https://zips.z.cash/zip-0224",
+                        }
+                    ],
+                    securityNotes=[
+                        "Orchard note semantics must remain domain-separated.",
+                        "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+                        "Hardening gates require deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance review, and internal cryptographic review.",
+                        "not production readiness planning remains gated.",
+                    ],
+                    recommendedFor=["shape research"],
+                    chainRequirements=["Orchard note commitment tree"],
+                    requiredState=[
+                        "Orchard note commitment tree",
+                        "wallet Orchard witness store",
+                        "Orchard action-bundle verifier key registry",
                     ],
                     failureModes=[
                         "stale anchor",
@@ -1107,7 +1363,7 @@ def test_privacy_catalog_loader_rejects_additional_unsafe_ids(
         ),
         (
             "sourceReferences",
-            [{"label": "External audit signoff", "url": "https://zips.z.cash/zip-0224"}],
+            [{"label": "Internal cryptographic review signoff", "url": "https://zips.z.cash/zip-0224"}],
             "label must describe protocol source material, not audit/signoff evidence",
         ),
         (
@@ -1299,7 +1555,7 @@ def test_privacy_catalog_loader_rejects_additional_unsafe_ids(
         ),
         (
             "securityNotes",
-            ["External audit completed and production sign-off received."],
+            ["Internal cryptographic review completed and production sign-off received."],
             (
                 "describe missing audit/review gates, not completed audit "
                 "or signoff claims"
@@ -1339,7 +1595,7 @@ def test_privacy_catalog_loader_rejects_additional_unsafe_ids(
         ),
         (
             "failureModes",
-            ["External audit completed."],
+            ["Internal cryptographic review completed."],
             (
                 "describe concrete failure modes, not completed audit "
                 "or signoff claims"
@@ -2308,7 +2564,23 @@ def test_privacy_catalog_loader_rejects_post_quantum_rows_without_nist_fips_sour
             "MlDsa",
         ),
         (
+            [
+                "buildPqMaspStarkTransferProofV0",
+                "generateNotMlDsaKeyPair",
+                "encapsulateMlKem",
+            ],
+            "MlDsa",
+        ),
+        (
             ["buildPqMaspStarkTransferProofV0", "generateMlDsaKeyPair"],
+            "MlKem",
+        ),
+        (
+            [
+                "buildPqMaspStarkTransferProofV0",
+                "generateMlDsaKeyPair",
+                "encapsulateNotMlKem",
+            ],
             "MlKem",
         ),
     ],
@@ -2365,12 +2637,50 @@ def test_privacy_catalog_loader_rejects_post_quantum_rows_without_planned_pq_pri
             "ML-KEM",
         ),
         (
+            {
+                "securityNotes": [
+                    "notML-DSA and notML-KEM primitive domains require audit",
+                ]
+            },
+            "security_notes",
+            "ML-DSA",
+        ),
+        (
+            {
+                "securityNotes": [
+                    "not ML-DSA and not ML-KEM primitive domains require audit",
+                ]
+            },
+            "security_notes",
+            "ML-DSA",
+        ),
+        (
             {"failureModes": ["ML-KEM domain mismatch"]},
             "failure_modes",
             "ML-DSA",
         ),
         (
+            {"failureModes": ["notML-DSA or notML-KEM domain mismatch"]},
+            "failure_modes",
+            "ML-DSA",
+        ),
+        (
+            {"failureModes": ["not ML-DSA or not ML-KEM domain mismatch"]},
+            "failure_modes",
+            "ML-DSA",
+        ),
+        (
             {"requiredState": ["PQ nullifier set"]},
+            "required_state",
+            "ML-KEM",
+        ),
+        (
+            {"requiredState": ["notML-KEM encrypted note payload store"]},
+            "required_state",
+            "ML-KEM",
+        ),
+        (
+            {"requiredState": ["not ML-KEM encrypted note payload store"]},
             "required_state",
             "ML-KEM",
         ),
@@ -2500,7 +2810,7 @@ def test_privacy_catalog_production_gate_remains_fail_closed_for_catalog_claims(
                     securityNotes=[
                         "Review production proof constraints.",
                         "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
-                        "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review.",
+                        "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.",
                     ],
                     requiredState=[
                         "production verifier key registry",
@@ -2666,6 +2976,48 @@ def test_privacy_catalog_loader_rejects_dev_fixture_entrypoints_without_local_ve
 @pytest.mark.parametrize(
     "entrypoint",
     [
+        "verifyShapeProofNotLocalVerifier",
+        "verifyShapeProofNoLocal",
+        "verifyShapeProofNonLocalOnly",
+        "verifyShapeProofNotLocally",
+    ],
+)
+def test_privacy_catalog_loader_rejects_dev_fixture_local_verifier_near_misses(
+    monkeypatch,
+    entrypoint,
+) -> None:
+    monkeypatch.setattr(
+        privacy_catalog,
+        "_RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON",
+        json.dumps(
+            [
+                _raw_descriptor(
+                    sdkEntrypoints=[
+                        "buildShapeDevProofFixture",
+                        entrypoint,
+                    ],
+                    securityNotes=[
+                        "The SDK dev fixture is deterministic only; production Shape proofs remain unavailable.",
+                    ],
+                    plannedSdkEntrypoints=["buildShapeProductionProof"],
+                )
+            ]
+        ),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "executable DevFixture SDK entrypoints must be paired "
+            "with a local verifier entrypoint"
+        ),
+    ):
+        privacy_catalog._load_descriptors()
+
+
+@pytest.mark.parametrize(
+    "entrypoint",
+    [
         "verifyShapeProofLocally",
         "verifyShapeProofLocal",
         "verifyShapeProofLocalVerifier",
@@ -2715,6 +3067,134 @@ def test_privacy_catalog_loader_rejects_local_verifier_entrypoints_without_dev_f
         ),
     ):
         privacy_catalog._load_descriptors()
+
+
+@pytest.mark.parametrize(
+    "entrypoint",
+    [
+        "buildShapeNotDevFixture",
+        "buildShapeNoDevFixture",
+        "buildShapeNonDevFixture",
+        "buildShapeWithoutDevFixture",
+        "buildShapeNotDevProofFixture",
+        "buildShapeNoDevProofFixture",
+        "buildShapeNonDevProofFixture",
+        "buildShapeWithoutDevProofFixture",
+    ],
+)
+def test_privacy_catalog_loader_rejects_local_verifier_with_negated_dev_fixture_alias(
+    monkeypatch,
+    entrypoint,
+) -> None:
+    monkeypatch.setattr(
+        privacy_catalog,
+        "_RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON",
+        json.dumps(
+            [
+                _raw_descriptor(
+                    implementationStage="validator-scaffold-as-of-2026-05",
+                    sdkEntrypoints=[entrypoint, "verifyShapeProofLocally"],
+                    securityNotes=[
+                        "The SDK dev fixture is deterministic only; production Shape proofs remain unavailable.",
+                    ],
+                    plannedSdkEntrypoints=["buildShapeProductionProof"],
+                )
+            ]
+        ),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="fixture/mock SDK entrypoints must use explicit DevFixture names",
+    ):
+        privacy_catalog._load_descriptors()
+
+
+@pytest.mark.parametrize(
+    ("entrypoint", "expected"),
+    [
+        ("buildShapeDevFixture", True),
+        ("buildShapeDevFixtureV1", True),
+        ("buildShapeDevProofFixture", True),
+        ("buildShapeDevProofFixtureV1", True),
+        ("Iroha.Privacy.buildShapeDevProofFixture", True),
+        ("buildShapeDev.Proof.Fixture", True),
+        ("Iroha.Privacy.buildShapeDev.Proof.Fixture", True),
+        ("buildShapeNotDevFixture", False),
+        ("buildShapeNoDevFixture", False),
+        ("buildShapeNonDevFixture", False),
+        ("buildShapeWithoutDevFixture", False),
+        ("buildShapeNotDev.Proof.Fixture", False),
+        ("buildShapeNoDev.Proof.Fixture", False),
+        ("buildShapeNonDev.Proof.Fixture", False),
+        ("buildShapeWithoutDev.Proof.Fixture", False),
+        ("buildShapeNotDevProofFixture", False),
+        ("buildShapeNoDevProofFixture", False),
+        ("buildShapeNonDevProofFixture", False),
+        ("buildShapeWithoutDevProofFixture", False),
+        ("buildShapeDevFixtureFactory", False),
+        ("buildShapeDevelopmentFixture", False),
+    ],
+)
+def test_privacy_catalog_explicit_dev_fixture_classifier_requires_non_negated_terminal_evidence(
+    entrypoint,
+    expected,
+) -> None:
+    assert privacy_catalog._entrypoint_is_explicit_dev_fixture(entrypoint) is expected
+
+
+@pytest.mark.parametrize(
+    ("entrypoint", "expected"),
+    [
+        ("buildShapeTransferInstruction", True),
+        ("Iroha.Privacy.buildShapeTransferInstruction", True),
+        ("buildShapeInstructionV1", True),
+        ("buildShapeAuthorizedTransaction", True),
+        ("buildShapeTransactionV1", True),
+        ("buildSubmitShapeProof", True),
+        ("buildSubmitShapeProofV1", True),
+        ("buildShapeNoInstruction", False),
+        ("buildShapeNotInstruction", False),
+        ("buildShapeNonInstruction", False),
+        ("buildShapeWithoutInstruction", False),
+        ("buildShapeNoTransaction", False),
+        ("buildShapeNotTransaction", False),
+        ("buildMidenStarkTransactionProofV1", False),
+        ("buildNoSubmitShapeProof", False),
+        ("buildNotSubmitShapeProof", False),
+        ("buildNonSubmitShapeProof", False),
+        ("buildWithoutSubmitShapeProof", False),
+        ("buildShapeInstructionalProof", False),
+        ("buildShapeTransactionalProof", False),
+        ("buildShapeSubmitterProof", False),
+    ],
+)
+def test_privacy_catalog_planned_ledger_mutation_classifier_requires_non_negated_evidence(
+    entrypoint,
+    expected,
+) -> None:
+    assert privacy_catalog._entrypoint_is_planned_ledger_mutation(entrypoint) is expected
+
+
+@pytest.mark.parametrize(
+    ("entrypoint", "expected"),
+    [
+        ("verifyShapeProofLocally", True),
+        ("verifyShapeProofLocal", True),
+        ("verifyShapeProofLocalVerifier", True),
+        ("Iroha.Privacy.verifyShapeProofLocally", True),
+        ("Iroha.Privacy.verifyShapeProofLocalVerifier", True),
+        ("verifyShapeProofNotLocalVerifier", False),
+        ("verifyShapeProofNoLocal", False),
+        ("verifyShapeProofNonLocalOnly", False),
+        ("verifyShapeProofNotLocally", False),
+    ],
+)
+def test_privacy_catalog_local_verifier_classifier_rejects_negated_near_misses(
+    entrypoint,
+    expected,
+) -> None:
+    assert privacy_catalog._entrypoint_is_local_verifier(entrypoint) is expected
 
 
 @pytest.mark.parametrize(
@@ -2850,6 +3330,132 @@ def test_privacy_catalog_loader_rejects_planned_ledger_mutation_without_protecti
     assert "buildShapeAuthorizedTransaction" in str(error.value)
 
 
+def test_privacy_catalog_loader_rejects_planned_ledger_mutation_with_concatenated_replay_token(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        privacy_catalog,
+        "_RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON",
+        json.dumps(
+            [
+                _raw_descriptor(
+                    id="zkat-policy-private-auth-v1",
+                    category="authorization",
+                    implementationStage="sdk-builder",
+                    sourceReferences=[
+                        {
+                            "label": "zkAt source",
+                            "url": "https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.AFT.2025.2",
+                        }
+                    ],
+                    recommendedFor=["policy privacy"],
+                    chainRequirements=[
+                        "zkAt verifier key registry",
+                        "typed zk::ZkAtPolicyCommitment instruction admission",
+                    ],
+                    securityNotes=[
+                        "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+                        "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.",
+                    ],
+                    requiredState=[
+                        "policy commitment registry",
+                        "authorization notreplay guard",
+                        "wallet policy witness store",
+                        "zkAt verifier key registry",
+                    ],
+                    failureModes=[
+                        "stale notreplay state",
+                        "malformed proof bytes",
+                        "wrong verifier key",
+                        "public input mismatch",
+                    ],
+                    setupSteps=["Register zkAt verifier key."],
+                    executionSteps=[
+                        "Submit typed zk::ZkAtPolicyCommitment instruction with tx_digest.",
+                    ],
+                    proofFamily="zkat-policy-private-authenticator",
+                    publicInputsSchema="policy_commitment,tx_digest",
+                    verifierKeyId="zkat_policy_private_auth_v1",
+                    sdkEntrypoints=[],
+                    plannedSdkEntrypoints=["buildZkAtPolicyCommitmentInstruction"],
+                )
+            ]
+        ),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "planned ledger-mutating SDK entrypoints require replay, "
+            "nullifier, revocation, or link-tag protection metadata"
+        ),
+    ):
+        privacy_catalog._load_descriptors()
+
+
+def test_privacy_catalog_loader_rejects_planned_ledger_mutation_with_negated_bounded_replay_token(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        privacy_catalog,
+        "_RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON",
+        json.dumps(
+            [
+                _raw_descriptor(
+                    id="zkat-policy-private-auth-v1",
+                    category="authorization",
+                    implementationStage="sdk-builder",
+                    sourceReferences=[
+                        {
+                            "label": "zkAt source",
+                            "url": "https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.AFT.2025.2",
+                        }
+                    ],
+                    recommendedFor=["policy privacy"],
+                    chainRequirements=[
+                        "zkAt verifier key registry",
+                        "typed zk::ZkAtPolicyCommitment instruction admission",
+                    ],
+                    securityNotes=[
+                        "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+                        "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.",
+                    ],
+                    requiredState=[
+                        "policy commitment registry",
+                        "authorization not replay guard",
+                        "wallet policy witness store",
+                        "zkAt verifier key registry",
+                    ],
+                    failureModes=[
+                        "not nullifier replay state",
+                        "malformed proof bytes",
+                        "wrong verifier key",
+                        "public input mismatch",
+                    ],
+                    setupSteps=["Register zkAt verifier key."],
+                    executionSteps=[
+                        "Submit typed zk::ZkAtPolicyCommitment instruction with tx_digest.",
+                    ],
+                    proofFamily="zkat-policy-private-authenticator",
+                    publicInputsSchema="policy_commitment,tx_digest",
+                    verifierKeyId="zkat_policy_private_auth_v1",
+                    sdkEntrypoints=[],
+                    plannedSdkEntrypoints=["buildZkAtPolicyCommitmentInstruction"],
+                )
+            ]
+        ),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "planned ledger-mutating SDK entrypoints require replay, "
+            "nullifier, revocation, or link-tag protection metadata"
+        ),
+    ):
+        privacy_catalog._load_descriptors()
+
+
 def test_privacy_catalog_loader_rejects_planned_ledger_mutation_without_typed_admission_metadata(
     monkeypatch,
 ) -> None:
@@ -2888,6 +3494,159 @@ def test_privacy_catalog_loader_rejects_planned_ledger_mutation_without_typed_ad
     assert "buildShapeAuthorizedTransaction" in str(error.value)
 
 
+def test_privacy_catalog_loader_rejects_planned_ledger_mutation_with_concatenated_typed_admission_tokens(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        privacy_catalog,
+        "_RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON",
+        json.dumps(
+            [
+                _raw_descriptor(
+                    implementationStage=None,
+                    sdkEntrypoints=[],
+                    plannedSdkEntrypoints=[
+                        "buildShapeTransferInstruction",
+                        "buildShapeAuthorizedTransaction",
+                    ],
+                    requiredState=["shape replay guard"],
+                    failureModes=["shape replay"],
+                    chainRequirements=["shape verifier registry"],
+                    setupSteps=["Register shape verifier."],
+                    executionSteps=["Submit untyped shape noninstruction admission."],
+                )
+            ]
+        ),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "planned ledger-mutating SDK entrypoints require explicit typed "
+            "chain admission metadata"
+        ),
+    ):
+        privacy_catalog._load_descriptors()
+
+
+def test_privacy_catalog_loader_rejects_planned_ledger_mutation_with_concatenated_zk_namespace(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        privacy_catalog,
+        "_RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON",
+        json.dumps(
+            [
+                _raw_descriptor(
+                    implementationStage=None,
+                    sdkEntrypoints=[],
+                    plannedSdkEntrypoints=[
+                        "buildShapeTransferInstruction",
+                        "buildShapeAuthorizedTransaction",
+                    ],
+                    requiredState=["shape replay guard"],
+                    failureModes=["shape replay"],
+                    chainRequirements=["shape verifier registry"],
+                    setupSteps=["Register shape verifier."],
+                    executionSteps=["Submit notzk::ShapeTransfer admission."],
+                )
+            ]
+        ),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "planned ledger-mutating SDK entrypoints require explicit typed "
+            "chain admission metadata"
+        ),
+    ):
+        privacy_catalog._load_descriptors()
+
+
+def test_privacy_catalog_loader_rejects_planned_ledger_mutation_with_negated_bounded_typed_admission_tokens(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        privacy_catalog,
+        "_RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON",
+        json.dumps(
+            [
+                _raw_descriptor(
+                    implementationStage=None,
+                    sdkEntrypoints=[],
+                    plannedSdkEntrypoints=[
+                        "buildShapeTransferInstruction",
+                        "buildShapeAuthorizedTransaction",
+                    ],
+                    requiredState=["shape replay guard"],
+                    failureModes=["shape replay"],
+                    chainRequirements=["shape verifier registry"],
+                    setupSteps=["Register shape verifier."],
+                    executionSteps=["Submit not typed shape no instruction admission."],
+                )
+            ]
+        ),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "planned ledger-mutating SDK entrypoints require explicit typed "
+            "chain admission metadata"
+        ),
+    ):
+        privacy_catalog._load_descriptors()
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("typed zk::SubmitShapeTransfer instruction", True),
+        ("zk::SubmitShapeTransfer", True),
+        ("typed notzk::SubmitShapeTransfer instruction", False),
+        ("typed not_zk::SubmitShapeTransfer instruction", False),
+    ],
+)
+def test_privacy_catalog_zk_namespace_metadata_token_uses_prefix_boundary(
+    value,
+    expected,
+) -> None:
+    assert (
+        privacy_catalog._catalog_text_contains_metadata_token(value.lower(), "zk::")
+        is expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("value", "token", "expected"),
+    [
+        ("typed zk::SubmitShapeTransfer instruction", "typed", True),
+        ("typed zk::SubmitShapeTransfer instruction", "instruction", True),
+        ("zk::SubmitShapeTransfer", "zk::", True),
+        ("not typed shape instruction", "typed", False),
+        ("typed shape no instruction admission", "instruction", False),
+        ("not transaction admission", "transaction", False),
+        ("not zk::SubmitShapeTransfer", "zk::", False),
+        ("without zk::SubmitShapeTransfer", "zk::", False),
+        ("typed notzk::SubmitShapeTransfer instruction", "zk::", False),
+        ("typed not_zk::SubmitShapeTransfer instruction", "zk::", False),
+    ],
+)
+def test_privacy_catalog_typed_admission_metadata_rejects_negated_bounded_tokens(
+    value,
+    token,
+    expected,
+) -> None:
+    assert (
+        privacy_catalog._catalog_text_contains_typed_admission_token(
+            value.lower(),
+            token,
+        )
+        is expected
+    )
+
+
 def test_privacy_catalog_loader_rejects_stateful_ledger_mutation_without_restart_persistence(
     monkeypatch,
 ) -> None:
@@ -2913,7 +3672,7 @@ def test_privacy_catalog_loader_rejects_stateful_ledger_mutation_without_restart
                     ],
                     securityNotes=[
                         "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
-                        "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review.",
+                        "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.",
                     ],
                     requiredState=[
                         "policy commitment registry",
@@ -2942,6 +3701,201 @@ def test_privacy_catalog_loader_rejects_stateful_ledger_mutation_without_restart
             "planned ledger-mutating SDK entrypoints require "
             "restart/persistence metadata for root, nullifier, revocation, "
             "or replay state"
+        ),
+    ):
+        privacy_catalog._load_descriptors()
+
+
+def test_privacy_catalog_loader_rejects_stateful_ledger_mutation_with_negated_bounded_restart_persistence(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        privacy_catalog,
+        "_RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON",
+        json.dumps(
+            [
+                _raw_descriptor(
+                    id="zkat-policy-private-auth-v1",
+                    category="authorization",
+                    implementationStage="sdk-builder",
+                    sourceReferences=[
+                        {
+                            "label": "zkAt source",
+                            "url": "https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.AFT.2025.2",
+                        }
+                    ],
+                    recommendedFor=["policy privacy"],
+                    chainRequirements=[
+                        "zkAt verifier key registry",
+                        "typed zk::ZkAtPolicyCommitment instruction admission",
+                    ],
+                    securityNotes=[
+                        "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+                        "Replay guard must not persist across restart.",
+                        "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.",
+                    ],
+                    requiredState=[
+                        "policy commitment registry",
+                        "authorization replay guard",
+                        "wallet policy witness store",
+                        "zkAt verifier key registry",
+                    ],
+                    failureModes=[
+                        "stale replay state",
+                        "duplicate replay rejection",
+                        "malformed proof bytes",
+                        "wrong verifier key",
+                        "public input mismatch",
+                    ],
+                    setupSteps=["Register zkAt verifier key."],
+                    executionSteps=[
+                        "Submit typed zk::ZkAtPolicyCommitment instruction with tx_digest.",
+                    ],
+                    proofFamily="zkat-policy-private-authenticator",
+                    publicInputsSchema="policy_commitment,tx_digest",
+                    verifierKeyId="zkat_policy_private_auth_v1",
+                    sdkEntrypoints=[],
+                    plannedSdkEntrypoints=["buildZkAtPolicyCommitmentInstruction"],
+                )
+            ]
+        ),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "planned ledger-mutating SDK entrypoints require "
+            "restart/persistence metadata for root, nullifier, revocation, "
+            "or replay state"
+        ),
+    ):
+        privacy_catalog._load_descriptors()
+
+
+def test_privacy_catalog_loader_rejects_stateful_ledger_mutation_without_replay_failure_modes(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        privacy_catalog,
+        "_RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON",
+        json.dumps(
+            [
+                _raw_descriptor(
+                    id="zkat-policy-private-auth-v1",
+                    category="authorization",
+                    implementationStage="sdk-builder",
+                    sourceReferences=[
+                        {
+                            "label": "zkAt source",
+                            "url": "https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.AFT.2025.2",
+                        }
+                    ],
+                    recommendedFor=["policy privacy"],
+                    chainRequirements=[
+                        "zkAt verifier key registry",
+                        "typed zk::ZkAtPolicyCommitment instruction admission",
+                    ],
+                    securityNotes=[
+                        "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+                        "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.",
+                    ],
+                    requiredState=[
+                        "policy commitment registry",
+                        "authorization replay guard",
+                        "wallet policy witness store",
+                        "zkAt verifier key registry",
+                    ],
+                    failureModes=[
+                        "malformed proof bytes",
+                        "wrong verifier key",
+                        "public input mismatch",
+                    ],
+                    setupSteps=[
+                        "Register zkAt verifier key and persist replay state.",
+                    ],
+                    executionSteps=[
+                        "Submit typed zk::ZkAtPolicyCommitment instruction and update replay guard.",
+                    ],
+                    proofFamily="zkat-policy-private-authenticator",
+                    publicInputsSchema="policy_commitment,tx_digest",
+                    verifierKeyId="zkat_policy_private_auth_v1",
+                    sdkEntrypoints=[],
+                    plannedSdkEntrypoints=["buildZkAtPolicyCommitmentInstruction"],
+                )
+            ]
+        ),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "field 'failure_modes' must include stale-state and "
+            "duplicate/replay rejection"
+        ),
+    ):
+        privacy_catalog._load_descriptors()
+
+
+def test_privacy_catalog_loader_rejects_stateful_ledger_mutation_with_negated_bounded_replay_failure_modes(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        privacy_catalog,
+        "_RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON",
+        json.dumps(
+            [
+                _raw_descriptor(
+                    id="zkat-policy-private-auth-v1",
+                    category="authorization",
+                    implementationStage="sdk-builder",
+                    sourceReferences=[
+                        {
+                            "label": "zkAt source",
+                            "url": "https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.AFT.2025.2",
+                        }
+                    ],
+                    recommendedFor=["policy privacy"],
+                    chainRequirements=[
+                        "zkAt verifier key registry",
+                        "typed zk::ZkAtPolicyCommitment instruction admission",
+                    ],
+                    securityNotes=[
+                        "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+                        "Replay guard must persist across restart.",
+                        "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.",
+                    ],
+                    requiredState=[
+                        "policy commitment registry",
+                        "authorization replay guard",
+                        "wallet policy witness store",
+                        "zkAt verifier key registry",
+                    ],
+                    failureModes=[
+                        "not stale replay state",
+                        "no duplicate replay rejection",
+                        "malformed proof bytes",
+                        "wrong verifier key",
+                        "public input mismatch",
+                    ],
+                    setupSteps=["Register zkAt verifier key."],
+                    executionSteps=[
+                        "Submit typed zk::ZkAtPolicyCommitment instruction with tx_digest.",
+                    ],
+                    proofFamily="zkat-policy-private-authenticator",
+                    publicInputsSchema="policy_commitment,tx_digest",
+                    verifierKeyId="zkat_policy_private_auth_v1",
+                    sdkEntrypoints=[],
+                    plannedSdkEntrypoints=["buildZkAtPolicyCommitmentInstruction"],
+                )
+            ]
+        ),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "field 'failure_modes' must include stale-state and "
+            "duplicate/replay rejection"
         ),
     ):
         privacy_catalog._load_descriptors()
@@ -2997,6 +3951,225 @@ def test_privacy_catalog_loader_rejects_source_referenced_flow_without_wallet_st
         privacy_catalog._load_descriptors()
 
 
+def test_privacy_catalog_loader_rejects_wallet_state_concatenated_false_positive(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        privacy_catalog,
+        "_RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON",
+        json.dumps(
+            [
+                _raw_descriptor(
+                    id="zkat-policy-private-auth-v1",
+                    category="authorization",
+                    implementationStage="sdk-builder",
+                    sourceReferences=[
+                        {
+                            "label": "zkAt source",
+                            "url": "https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.AFT.2025.2",
+                        }
+                    ],
+                    recommendedFor=["policy privacy"],
+                    chainRequirements=["zkAt verifier"],
+                    securityNotes=["Policy proof review required."],
+                    requiredState=[
+                        "policy commitment registry",
+                        "notwallet policy notwitness store",
+                    ],
+                    failureModes=[
+                        "policy-root substitution",
+                        "malformed proof bytes",
+                        "wrong verifier key",
+                        "public input mismatch",
+                    ],
+                    setupSteps=["Register policy verifier."],
+                    executionSteps=["Build policy proof."],
+                    proofFamily="zkat-policy-private-authenticator",
+                    publicInputsSchema="policy_commitment,tx_digest",
+                    verifierKeyId="zkat_policy_private_auth_v1",
+                    sdkEntrypoints=[],
+                    plannedSdkEntrypoints=["buildZkAtPolicyProofV1"],
+                )
+            ]
+        ),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "required_state' must include wallet or witness state metadata "
+            "for source-referenced privacy flows"
+        ),
+    ):
+        privacy_catalog._load_descriptors()
+
+
+def test_privacy_catalog_loader_rejects_wallet_state_negated_bounded_false_positive(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        privacy_catalog,
+        "_RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON",
+        json.dumps(
+            [
+                _raw_descriptor(
+                    id="zkat-policy-private-auth-v1",
+                    category="authorization",
+                    implementationStage="sdk-builder",
+                    sourceReferences=[
+                        {
+                            "label": "zkAt source",
+                            "url": "https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.AFT.2025.2",
+                        }
+                    ],
+                    recommendedFor=["policy privacy"],
+                    chainRequirements=["zkAt verifier"],
+                    securityNotes=["Policy proof review required."],
+                    requiredState=[
+                        "policy commitment registry",
+                        "not wallet policy store",
+                        "no witness state",
+                    ],
+                    failureModes=[
+                        "policy-root substitution",
+                        "malformed proof bytes",
+                        "wrong verifier key",
+                        "public input mismatch",
+                    ],
+                    setupSteps=["Register policy verifier."],
+                    executionSteps=["Build policy proof."],
+                    proofFamily="zkat-policy-private-authenticator",
+                    publicInputsSchema="policy_commitment,tx_digest",
+                    verifierKeyId="zkat_policy_private_auth_v1",
+                    sdkEntrypoints=[],
+                    plannedSdkEntrypoints=["buildZkAtPolicyProofV1"],
+                )
+            ]
+        ),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "required_state' must include wallet or witness state metadata "
+            "for source-referenced privacy flows"
+        ),
+    ):
+        privacy_catalog._load_descriptors()
+
+
+def test_privacy_catalog_loader_rejects_witness_privacy_concatenated_false_positive(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        privacy_catalog,
+        "_RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON",
+        json.dumps(
+            [
+                _raw_descriptor(
+                    id="zkat-policy-private-auth-v1",
+                    category="authorization",
+                    implementationStage="sdk-builder",
+                    sourceReferences=[
+                        {
+                            "label": "zkAt source",
+                            "url": "https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.AFT.2025.2",
+                        }
+                    ],
+                    recommendedFor=["policy privacy"],
+                    chainRequirements=["zkAt verifier key registry"],
+                    securityNotes=[
+                        "Wallet witness material and private inputs stay notlocal and notexposed through SDK APIs.",
+                    ],
+                    requiredState=[
+                        "policy commitment registry",
+                        "wallet policy witness store",
+                        "zkAt verifier key registry",
+                    ],
+                    failureModes=[
+                        "policy-root substitution",
+                        "malformed proof bytes",
+                        "wrong verifier key",
+                        "public input mismatch",
+                    ],
+                    setupSteps=["Register zkAt verifier key."],
+                    executionSteps=["Build policy proof."],
+                    proofFamily="zkat-policy-private-authenticator",
+                    publicInputsSchema="policy_commitment,tx_digest",
+                    verifierKeyId="zkat_policy_private_auth_v1",
+                    sdkEntrypoints=[],
+                    plannedSdkEntrypoints=["buildZkAtPolicyProofV1"],
+                )
+            ]
+        ),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "security_notes' must include wallet/witness privacy notes "
+            "for source-referenced privacy flows"
+        ),
+    ):
+        privacy_catalog._load_descriptors()
+
+
+def test_privacy_catalog_loader_rejects_witness_privacy_negated_bounded_false_positive(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        privacy_catalog,
+        "_RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON",
+        json.dumps(
+            [
+                _raw_descriptor(
+                    id="zkat-policy-private-auth-v1",
+                    category="authorization",
+                    implementationStage="sdk-builder",
+                    sourceReferences=[
+                        {
+                            "label": "zkAt source",
+                            "url": "https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.AFT.2025.2",
+                        }
+                    ],
+                    recommendedFor=["policy privacy"],
+                    chainRequirements=["zkAt verifier key registry"],
+                    securityNotes=[
+                        "Wallet witness material and private inputs are not local and no private input remains protected.",
+                    ],
+                    requiredState=[
+                        "policy commitment registry",
+                        "wallet policy witness store",
+                        "zkAt verifier key registry",
+                    ],
+                    failureModes=[
+                        "policy-root substitution",
+                        "malformed proof bytes",
+                        "wrong verifier key",
+                        "public input mismatch",
+                    ],
+                    setupSteps=["Register zkAt verifier key."],
+                    executionSteps=["Build policy proof."],
+                    proofFamily="zkat-policy-private-authenticator",
+                    publicInputsSchema="policy_commitment,tx_digest",
+                    verifierKeyId="zkat_policy_private_auth_v1",
+                    sdkEntrypoints=[],
+                    plannedSdkEntrypoints=["buildZkAtPolicyProofV1"],
+                )
+            ]
+        ),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "security_notes' must include wallet/witness privacy notes "
+            "for source-referenced privacy flows"
+        ),
+    ):
+        privacy_catalog._load_descriptors()
+
+
 def test_privacy_catalog_loader_rejects_credential_flow_without_commitment_state(
     monkeypatch,
 ) -> None:
@@ -3025,6 +4198,122 @@ def test_privacy_catalog_loader_rejects_credential_flow_without_commitment_state
                         "credential issuer registry",
                         "wallet credential witness store",
                         "revocation policy",
+                    ],
+                    failureModes=[
+                        "credential replay",
+                        "malformed proof bytes",
+                        "wrong verifier key",
+                        "public input mismatch",
+                    ],
+                    setupSteps=["Register credential verifier."],
+                    executionSteps=["Build credential proof."],
+                    proofFamily="existing-credential-zk",
+                    publicInputsSchema="issuer_commitment,credential_schema",
+                    verifierKeyId="vega_existing_credential_zk_v0",
+                    sdkEntrypoints=[],
+                    plannedSdkEntrypoints=["buildVegaCredentialPredicateProofV0"],
+                )
+            ]
+        ),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "required_state' must include credential, identity, or admission "
+            "commitment/accumulator state metadata"
+        ),
+    ):
+        privacy_catalog._load_descriptors()
+
+
+def test_privacy_catalog_loader_rejects_credential_state_concatenated_false_positive(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        privacy_catalog,
+        "_RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON",
+        json.dumps(
+            [
+                _raw_descriptor(
+                    id="vega-existing-credential-zk-v0",
+                    category="credential",
+                    implementationStage="sdk-builder",
+                    sourceReferences=[
+                        {
+                            "label": "Vega source",
+                            "url": "https://www.microsoft.com/en-us/research/publication/vega-low-latency-zero-knowledge-proofs-over-existing-credentials/",
+                        }
+                    ],
+                    recommendedFor=["credential predicate proofs"],
+                    chainRequirements=["credential predicate verifier"],
+                    securityNotes=[
+                        "Credential proof review required.",
+                        "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+                    ],
+                    requiredState=[
+                        "credential issuer registry",
+                        "wallet credential witness store",
+                        "notcommitment predicate store",
+                        "notaccumulator admission state",
+                    ],
+                    failureModes=[
+                        "credential replay",
+                        "malformed proof bytes",
+                        "wrong verifier key",
+                        "public input mismatch",
+                    ],
+                    setupSteps=["Register credential verifier."],
+                    executionSteps=["Build credential proof."],
+                    proofFamily="existing-credential-zk",
+                    publicInputsSchema="issuer_commitment,credential_schema",
+                    verifierKeyId="vega_existing_credential_zk_v0",
+                    sdkEntrypoints=[],
+                    plannedSdkEntrypoints=["buildVegaCredentialPredicateProofV0"],
+                )
+            ]
+        ),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "required_state' must include credential, identity, or admission "
+            "commitment/accumulator state metadata"
+        ),
+    ):
+        privacy_catalog._load_descriptors()
+
+
+def test_privacy_catalog_loader_rejects_credential_state_negated_bounded_false_positive(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        privacy_catalog,
+        "_RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON",
+        json.dumps(
+            [
+                _raw_descriptor(
+                    id="vega-existing-credential-zk-v0",
+                    category="credential",
+                    implementationStage="sdk-builder",
+                    sourceReferences=[
+                        {
+                            "label": "Vega source",
+                            "url": "https://www.microsoft.com/en-us/research/publication/vega-low-latency-zero-knowledge-proofs-over-existing-credentials/",
+                        }
+                    ],
+                    recommendedFor=["credential predicate proofs"],
+                    chainRequirements=["credential predicate verifier"],
+                    securityNotes=[
+                        "Credential proof review required.",
+                        "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+                    ],
+                    requiredState=[
+                        "credential issuer registry",
+                        "wallet credential witness store",
+                        "not commitment predicate store",
+                        "without accumulator admission state",
                     ],
                     failureModes=[
                         "credential replay",
@@ -3110,6 +4399,120 @@ def test_privacy_catalog_loader_rejects_verifier_flow_without_key_record_metadat
         privacy_catalog._load_descriptors()
 
 
+def test_privacy_catalog_loader_rejects_verifier_key_record_concatenated_false_positive(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        privacy_catalog,
+        "_RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON",
+        json.dumps(
+            [
+                _raw_descriptor(
+                    id="zkat-policy-private-auth-v1",
+                    category="authorization",
+                    implementationStage="sdk-builder",
+                    sourceReferences=[
+                        {
+                            "label": "zkAt source",
+                            "url": "https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.AFT.2025.2",
+                        }
+                    ],
+                    recommendedFor=["policy privacy"],
+                    chainRequirements=["notverifier key registry"],
+                    securityNotes=[
+                        "Policy proof review required.",
+                        "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+                    ],
+                    requiredState=[
+                        "policy commitment registry",
+                        "wallet policy witness store",
+                        "notverifier-key registry",
+                    ],
+                    failureModes=[
+                        "policy-root substitution",
+                        "malformed proof bytes",
+                        "wrong verifier key",
+                        "public input mismatch",
+                    ],
+                    setupSteps=["Register notverifier key."],
+                    executionSteps=["Build policy proof."],
+                    proofFamily="zkat-policy-private-authenticator",
+                    publicInputsSchema="policy_commitment,tx_digest",
+                    verifierKeyId="zkat_policy_private_auth_v1",
+                    sdkEntrypoints=[],
+                    plannedSdkEntrypoints=["buildZkAtPolicyProofV1"],
+                )
+            ]
+        ),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "must include verifier-key record metadata for source-referenced "
+            "verifier entries"
+        ),
+    ):
+        privacy_catalog._load_descriptors()
+
+
+def test_privacy_catalog_loader_rejects_verifier_key_record_negated_bounded_false_positive(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        privacy_catalog,
+        "_RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON",
+        json.dumps(
+            [
+                _raw_descriptor(
+                    id="zkat-policy-private-auth-v1",
+                    category="authorization",
+                    implementationStage="sdk-builder",
+                    sourceReferences=[
+                        {
+                            "label": "zkAt source",
+                            "url": "https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.AFT.2025.2",
+                        }
+                    ],
+                    recommendedFor=["policy privacy"],
+                    chainRequirements=["not verifier key registry"],
+                    securityNotes=[
+                        "Policy proof review required.",
+                        "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+                    ],
+                    requiredState=[
+                        "policy commitment registry",
+                        "wallet policy witness store",
+                        "without verifier-key registry",
+                    ],
+                    failureModes=[
+                        "policy-root substitution",
+                        "malformed proof bytes",
+                        "wrong verifier key",
+                        "public input mismatch",
+                    ],
+                    setupSteps=["Register no verifier key."],
+                    executionSteps=["Build policy proof."],
+                    proofFamily="zkat-policy-private-authenticator",
+                    publicInputsSchema="policy_commitment,tx_digest",
+                    verifierKeyId="zkat_policy_private_auth_v1",
+                    sdkEntrypoints=[],
+                    plannedSdkEntrypoints=["buildZkAtPolicyProofV1"],
+                )
+            ]
+        ),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "must include verifier-key record metadata for source-referenced "
+            "verifier entries"
+        ),
+    ):
+        privacy_catalog._load_descriptors()
+
+
 def test_privacy_catalog_loader_rejects_verifier_flow_without_chain_domain_binding(
     monkeypatch,
 ) -> None:
@@ -3167,6 +4570,370 @@ def test_privacy_catalog_loader_rejects_verifier_flow_without_chain_domain_bindi
         privacy_catalog._load_descriptors()
 
 
+def test_privacy_catalog_loader_rejects_chain_domain_binding_concatenated_false_positive(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        privacy_catalog,
+        "_RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON",
+        json.dumps(
+            [
+                _raw_descriptor(
+                    id="zkat-policy-private-auth-v1",
+                    category="authorization",
+                    implementationStage="sdk-builder",
+                    sourceReferences=[
+                        {
+                            "label": "zkAt source",
+                            "url": "https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.AFT.2025.2",
+                        }
+                    ],
+                    recommendedFor=["policy privacy"],
+                    chainRequirements=["zkAt verifier key registry"],
+                    securityNotes=[
+                        "notdomain-separation planning remains under review.",
+                        "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+                    ],
+                    requiredState=[
+                        "policy commitment registry",
+                        "wallet policy witness store",
+                        "zkAt verifier key registry",
+                    ],
+                    failureModes=[
+                        "policy-root substitution",
+                        "malformed proof bytes",
+                        "wrong verifier key",
+                        "public input mismatch",
+                    ],
+                    setupSteps=["Register zkAt verifier key."],
+                    executionSteps=["Build policy proof."],
+                    proofFamily="zkat-policy-private-authenticator",
+                    publicInputsSchema="policy_commitment,notanchor",
+                    verifierKeyId="zkat_policy_private_auth_v1",
+                    sdkEntrypoints=[],
+                    plannedSdkEntrypoints=["buildZkAtPolicyProofV1"],
+                )
+            ]
+        ),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "must include chain/domain binding metadata for source-referenced "
+            "verifier entries"
+        ),
+    ):
+        privacy_catalog._load_descriptors()
+
+
+def test_privacy_catalog_loader_rejects_chain_domain_binding_negated_bounded_false_positive(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        privacy_catalog,
+        "_RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON",
+        json.dumps(
+            [
+                _raw_descriptor(
+                    id="zkat-policy-private-auth-v1",
+                    category="authorization",
+                    implementationStage="sdk-builder",
+                    sourceReferences=[
+                        {
+                            "label": "zkAt source",
+                            "url": "https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.AFT.2025.2",
+                        }
+                    ],
+                    recommendedFor=["policy privacy"],
+                    chainRequirements=["zkAt verifier key registry"],
+                    securityNotes=[
+                        "Policy proof is not domain separation evidence.",
+                        "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+                    ],
+                    requiredState=[
+                        "policy commitment registry",
+                        "wallet policy witness store",
+                        "zkAt verifier key registry",
+                    ],
+                    failureModes=[
+                        "without tx_digest binding",
+                        "malformed proof bytes",
+                        "wrong verifier key",
+                        "public input mismatch",
+                    ],
+                    setupSteps=["Register zkAt verifier key without anchor evidence."],
+                    executionSteps=["Build policy proof."],
+                    proofFamily="zkat-policy-private-authenticator",
+                    publicInputsSchema="policy_commitment,not_tx_digest",
+                    verifierKeyId="zkat_policy_private_auth_v1",
+                    sdkEntrypoints=[],
+                    plannedSdkEntrypoints=["buildZkAtPolicyProofV1"],
+                )
+            ]
+        ),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "must include chain/domain binding metadata for source-referenced "
+            "verifier entries"
+        ),
+    ):
+        privacy_catalog._load_descriptors()
+
+
+@pytest.mark.parametrize(
+    "public_inputs_schema",
+    [
+        "policy_commitment,policy_hash",
+        "policy_commitment,notanchor",
+        "policy_commitment,not_tx_digest",
+        "policy_commitment,no_chain_id",
+        "policy_commitment,non_chain_tag",
+        "policy_commitment,without_reference_block",
+        "policy_commitment,policy_not_tx_digest",
+        "policy_commitment,not_policy_tx_digest",
+        "policy_commitment,no_policy_domain_separator",
+        "policy_commitment,policy_without_reference_block",
+        "policy_commitment,non_policy_rollup_state",
+    ],
+)
+def test_privacy_catalog_loader_rejects_source_referenced_verifier_without_public_input_binding(
+    monkeypatch,
+    public_inputs_schema,
+) -> None:
+    monkeypatch.setattr(
+        privacy_catalog,
+        "_RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON",
+        json.dumps(
+            [
+                _raw_descriptor(
+                    id="zkat-policy-private-auth-v1",
+                    category="authorization",
+                    implementationStage="sdk-builder",
+                    sourceReferences=[
+                        {
+                            "label": "zkAt source",
+                            "url": "https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.AFT.2025.2",
+                        }
+                    ],
+                    recommendedFor=["policy privacy"],
+                    chainRequirements=["zkAt verifier key registry"],
+                    securityNotes=[
+                        "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+                        "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.",
+                    ],
+                    requiredState=[
+                        "policy commitment registry",
+                        "wallet policy witness store",
+                        "zkAt verifier key registry",
+                    ],
+                    failureModes=[
+                        "domain separator mismatch",
+                        "malformed proof bytes",
+                        "wrong verifier key",
+                        "public input mismatch",
+                    ],
+                    setupSteps=["Register zkAt verifier key."],
+                    executionSteps=["Build policy proof."],
+                    proofFamily="zkat-policy-private-authenticator",
+                    publicInputsSchema=public_inputs_schema,
+                    verifierKeyId="zkat_policy_private_auth_v1",
+                    sdkEntrypoints=[],
+                    plannedSdkEntrypoints=["buildZkAtPolicyProofV1"],
+                )
+            ]
+        ),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "field 'public_inputs_schema' must include chain/domain binding "
+            "public input for source-referenced verifier entries"
+        ),
+    ):
+        privacy_catalog._load_descriptors()
+
+
+@pytest.mark.parametrize(
+    ("public_inputs_schema", "expected"),
+    [
+        ("policy_commitment,tx_digest", True),
+        ("policy_commitment,policy_tx_digest", True),
+        ("policy_commitment,tx_digest_v1", True),
+        ("policy_commitment,domain_separator", True),
+        ("policy_commitment,policy_domain_separator_hash", True),
+        ("policy_commitment,anchor", True),
+        ("policy_commitment,reference_block_height", True),
+        ("policy_commitment,rollup_state_root", True),
+        ("policy_commitment,not_tx_digest", False),
+        ("policy_commitment,no_chain_id", False),
+        ("policy_commitment,non_chain_tag", False),
+        ("policy_commitment,without_reference_block", False),
+        ("policy_commitment,not_anchor", False),
+        ("policy_commitment,policy_not_tx_digest", False),
+        ("policy_commitment,not_policy_tx_digest", False),
+        ("policy_commitment,no_policy_domain_separator", False),
+        ("policy_commitment,policy_without_reference_block", False),
+        ("policy_commitment,non_policy_rollup_state", False),
+        ("policy_commitment,anchorless", False),
+    ],
+)
+def test_privacy_catalog_public_input_schema_chain_domain_binding_rejects_negated_fragments(
+    public_inputs_schema,
+    expected,
+) -> None:
+    assert (
+        privacy_catalog._public_inputs_schema_has_chain_domain_binding(
+            public_inputs_schema
+        )
+        is expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("value", "token", "expected"),
+    [
+        ("domain separation binds the verifier inputs", "domain separation", True),
+        ("policy tx_digest binding is explicit", "tx_digest", True),
+        ("reference-block finality is pinned", "reference-block", True),
+        ("not domain separation evidence", "domain separation", False),
+        ("without tx_digest binding", "tx_digest", False),
+        ("no policy domain separator", "domain separator", False),
+        ("non-domain-separated placeholder", "domain-separated", False),
+        ("not_anchor placeholder", "anchor", False),
+        ("not a domain separator", "domain separator", False),
+    ],
+)
+def test_privacy_catalog_chain_domain_binding_metadata_rejects_negated_bounded_tokens(
+    value,
+    token,
+    expected,
+) -> None:
+    assert (
+        privacy_catalog._catalog_text_contains_chain_domain_binding_token(value, token)
+        is expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("value", "token", "expected"),
+    [
+        ("deterministic vectors are required", "deterministic vectors", True),
+        ("negative/adversarial test cases are required", "negative/adversarial", True),
+        ("replay/nullifier rejection tests are required", "replay/nullifier", True),
+        ("parser/verifier fuzzing is required", "parser/verifier fuzzing", True),
+        ("performance gates are required", "performance", True),
+        ("internal cryptographic review is required", "review", True),
+        ("not deterministic vectors", "deterministic vectors", False),
+        ("no negative/adversarial test cases", "negative/adversarial", False),
+        ("without replay/nullifier rejection tests", "replay/nullifier", False),
+        ("not parser/verifier fuzzing", "parser/verifier fuzzing", False),
+        ("no verifier fuzzing", "verifier fuzzing", False),
+        ("not performance gates", "performance", False),
+        ("without audit review", "audit", False),
+    ],
+)
+def test_privacy_catalog_source_hardening_metadata_rejects_negated_bounded_tokens(
+    value,
+    token,
+    expected,
+) -> None:
+    assert (
+        privacy_catalog._catalog_text_contains_source_hardening_token(value, token)
+        is expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("value", "token", "expected"),
+    [
+        ("wallet witness store", "wallet", True),
+        ("credential commitment registry", "commitment", True),
+        ("accumulator state registry", "accumulator", True),
+        ("verifier key registry", "verifier key", True),
+        ("malformed proof bytes", "malformed proof", True),
+        ("wrong verifier key", "wrong verifier key", True),
+        ("public input mismatch", "public input mismatch", True),
+        ("authorization replay guard", "replay", True),
+        ("nullifier set must persist across restart", "nullifier", True),
+        ("nullifier set must persist across restart", "persist", True),
+        ("restart persistence metadata", "persist", True),
+        ("persistent replay state", "persist", True),
+        ("stale replay state", "stale", True),
+        ("duplicate nullifier rejection", "duplicate", True),
+        ("production readiness audit", "production", True),
+        ("production readiness audit", "audit", True),
+        ("ML-DSA and ML-KEM domains", "ML-DSA", True),
+        ("ML-DSA and ML-KEM domains", "ML-KEM", True),
+        ("not wallet state", "wallet", False),
+        ("no witness store", "witness", False),
+        ("non-wallet placeholder", "wallet", False),
+        ("without commitment registry", "commitment", False),
+        ("not accumulator state", "accumulator", False),
+        ("not verifier key registry", "verifier key", False),
+        ("without verifier-key registration", "verifier-key", False),
+        ("not malformed proof bytes", "malformed proof", False),
+        ("not wrong verifier key", "wrong verifier key", False),
+        ("no public input mismatch", "public input mismatch", False),
+        ("not replay guard", "replay", False),
+        ("without nullifier persistence", "nullifier", False),
+        ("without nullifier persistence", "persist", False),
+        ("non-persistent replay state", "persist", False),
+        ("not persist across restart", "persist", False),
+        ("not stale replay state", "stale", False),
+        ("no duplicate nullifier rejection", "duplicate", False),
+        ("not production readiness audit", "production", False),
+        ("no audit review", "audit", False),
+        ("not ML-DSA domain", "ML-DSA", False),
+        ("without ML-KEM state", "ML-KEM", False),
+    ],
+)
+def test_privacy_catalog_affirmed_metadata_rejects_negated_bounded_state_tokens(
+    value,
+    token,
+    expected,
+) -> None:
+    assert (
+        privacy_catalog._catalog_text_contains_affirmed_metadata_token(value, token)
+        is expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("value", "token", "expected"),
+    [
+        ("wallet witness material stays local", "wallet", True),
+        ("wallet witness material stays local", "local", True),
+        ("private inputs must not be exposed", "not be exposed", True),
+        ("plaintext must not leak", "must not leak", True),
+        ("secrets never leave the wallet", "never leave", True),
+        ("must not leak wallet note ownership", "wallet", True),
+        ("must not expose wallet witness data", "wallet", True),
+        ("never leave the wallet", "wallet", True),
+        ("wallet witness material is not local", "local", False),
+        ("no private input remains protected", "private input", False),
+        ("without wallet witness custody", "wallet", False),
+        ("not secret material", "secret", False),
+    ],
+)
+def test_privacy_catalog_wallet_witness_privacy_preserves_exposure_negation(
+    value,
+    token,
+    expected,
+) -> None:
+    assert (
+        privacy_catalog._catalog_text_contains_wallet_witness_privacy_token(
+            value,
+            token,
+        )
+        is expected
+    )
+
+
 def test_privacy_catalog_loader_rejects_source_referenced_verifier_without_negative_failure_modes(
     monkeypatch,
 ) -> None:
@@ -3189,7 +4956,7 @@ def test_privacy_catalog_loader_rejects_source_referenced_verifier_without_negat
                     chainRequirements=["zkAt verifier key registry"],
                     securityNotes=[
                         "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
-                        "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review.",
+                        "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.",
                     ],
                     requiredState=[
                         "policy commitment registry",
@@ -3198,6 +4965,122 @@ def test_privacy_catalog_loader_rejects_source_referenced_verifier_without_negat
                         "zkAt verifier key registry",
                     ],
                     failureModes=["authorization replay"],
+                    setupSteps=["Register zkAt verifier key."],
+                    executionSteps=["Build policy proof."],
+                    proofFamily="zkat-policy-private-authenticator",
+                    publicInputsSchema="policy_commitment,tx_digest",
+                    verifierKeyId="zkat_policy_private_auth_v1",
+                    sdkEntrypoints=[],
+                    plannedSdkEntrypoints=["buildZkAtPolicyProofV1"],
+                )
+            ]
+        ),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "failure_modes' must include malformed-proof, wrong-verifier-key, "
+            "and wrong-public-input rejection for source-referenced verifier "
+            "entries"
+        ),
+    ):
+        privacy_catalog._load_descriptors()
+
+
+def test_privacy_catalog_loader_rejects_source_referenced_verifier_with_concatenated_negative_failure_modes(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        privacy_catalog,
+        "_RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON",
+        json.dumps(
+            [
+                _raw_descriptor(
+                    id="zkat-policy-private-auth-v1",
+                    category="authorization",
+                    implementationStage="sdk-builder",
+                    sourceReferences=[
+                        {
+                            "label": "zkAt source",
+                            "url": "https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.AFT.2025.2",
+                        }
+                    ],
+                    recommendedFor=["policy privacy"],
+                    chainRequirements=["zkAt verifier key registry"],
+                    securityNotes=[
+                        "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+                        "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.",
+                    ],
+                    requiredState=[
+                        "policy commitment registry",
+                        "authorization replay guard",
+                        "wallet policy witness store",
+                        "zkAt verifier key registry",
+                    ],
+                    failureModes=[
+                        "notmalformed proof bytes",
+                        "notwrong verifier key",
+                        "notpublic input mismatch",
+                    ],
+                    setupSteps=["Register zkAt verifier key."],
+                    executionSteps=["Build policy proof."],
+                    proofFamily="zkat-policy-private-authenticator",
+                    publicInputsSchema="policy_commitment,tx_digest",
+                    verifierKeyId="zkat_policy_private_auth_v1",
+                    sdkEntrypoints=[],
+                    plannedSdkEntrypoints=["buildZkAtPolicyProofV1"],
+                )
+            ]
+        ),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "failure_modes' must include malformed-proof, wrong-verifier-key, "
+            "and wrong-public-input rejection for source-referenced verifier "
+            "entries"
+        ),
+    ):
+        privacy_catalog._load_descriptors()
+
+
+def test_privacy_catalog_loader_rejects_source_referenced_verifier_with_negated_bounded_failure_modes(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        privacy_catalog,
+        "_RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON",
+        json.dumps(
+            [
+                _raw_descriptor(
+                    id="zkat-policy-private-auth-v1",
+                    category="authorization",
+                    implementationStage="sdk-builder",
+                    sourceReferences=[
+                        {
+                            "label": "zkAt source",
+                            "url": "https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.AFT.2025.2",
+                        }
+                    ],
+                    recommendedFor=["policy privacy"],
+                    chainRequirements=["zkAt verifier key registry"],
+                    securityNotes=[
+                        "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+                        "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.",
+                    ],
+                    requiredState=[
+                        "policy commitment registry",
+                        "authorization replay guard",
+                        "wallet policy witness store",
+                        "zkAt verifier key registry",
+                    ],
+                    failureModes=[
+                        "not malformed proof bytes",
+                        "not wrong verifier key",
+                        "no public input mismatch",
+                    ],
                     setupSteps=["Register zkAt verifier key."],
                     executionSteps=["Build policy proof."],
                     proofFamily="zkat-policy-private-authenticator",
@@ -3270,8 +5153,128 @@ def test_privacy_catalog_loader_rejects_source_referenced_flow_without_hardening
     with pytest.raises(
         RuntimeError,
         match=(
-            "security_notes' must include audit/review, fuzzing, and "
-            "performance hardening gates for source-referenced entries"
+            "security_notes' must include deterministic vectors, "
+            "negative/adversarial cases, replay/nullifier rejection tests, "
+            "parser/verifier fuzzing, performance, and audit/review "
+            "hardening gates for source-referenced entries"
+        ),
+    ):
+        privacy_catalog._load_descriptors()
+
+
+def test_privacy_catalog_loader_rejects_hardening_note_concatenated_false_positive(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        privacy_catalog,
+        "_RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON",
+        json.dumps(
+            [
+                _raw_descriptor(
+                    id="zkat-policy-private-auth-v1",
+                    category="authorization",
+                    implementationStage="sdk-builder",
+                    sourceReferences=[
+                        {
+                            "label": "zkAt source",
+                            "url": "https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.AFT.2025.2",
+                        }
+                    ],
+                    recommendedFor=["policy privacy"],
+                    chainRequirements=["zkAt verifier key registry"],
+                    securityNotes=[
+                        "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+                        "Production hardening requires notdeterministic vectors, notnegative/adversarial test cases, notreplay/nullifier rejection tests, notparser/verifier fuzzing, notperformance gates, and notaudit queue.",
+                    ],
+                    requiredState=[
+                        "policy commitment registry",
+                        "wallet policy witness store",
+                        "zkAt verifier key registry",
+                    ],
+                    failureModes=[
+                        "policy-root substitution",
+                        "malformed proof bytes",
+                        "wrong verifier key",
+                        "public input mismatch",
+                    ],
+                    setupSteps=["Register zkAt verifier key."],
+                    executionSteps=["Build policy proof."],
+                    proofFamily="zkat-policy-private-authenticator",
+                    publicInputsSchema="policy_commitment,tx_digest",
+                    verifierKeyId="zkat_policy_private_auth_v1",
+                    sdkEntrypoints=[],
+                    plannedSdkEntrypoints=["buildZkAtPolicyProofV1"],
+                )
+            ]
+        ),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "security_notes' must include deterministic vectors, "
+            "negative/adversarial cases, replay/nullifier rejection tests, "
+            "parser/verifier fuzzing, performance, and audit/review "
+            "hardening gates for source-referenced entries"
+        ),
+    ):
+        privacy_catalog._load_descriptors()
+
+
+def test_privacy_catalog_loader_rejects_hardening_note_negated_bounded_false_positive(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        privacy_catalog,
+        "_RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON",
+        json.dumps(
+            [
+                _raw_descriptor(
+                    id="zkat-policy-private-auth-v1",
+                    category="authorization",
+                    implementationStage="sdk-builder",
+                    sourceReferences=[
+                        {
+                            "label": "zkAt source",
+                            "url": "https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.AFT.2025.2",
+                        }
+                    ],
+                    recommendedFor=["policy privacy"],
+                    chainRequirements=["zkAt verifier key registry"],
+                    securityNotes=[
+                        "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+                        "Production hardening requires not deterministic vectors, no negative/adversarial test cases, without replay/nullifier rejection tests, not parser/verifier fuzzing, no verifier fuzzing, not performance gates, and without audit review.",
+                    ],
+                    requiredState=[
+                        "policy commitment registry",
+                        "wallet policy witness store",
+                        "zkAt verifier key registry",
+                    ],
+                    failureModes=[
+                        "policy-root substitution",
+                        "malformed proof bytes",
+                        "wrong verifier key",
+                        "public input mismatch",
+                    ],
+                    setupSteps=["Register zkAt verifier key."],
+                    executionSteps=["Build policy proof."],
+                    proofFamily="zkat-policy-private-authenticator",
+                    publicInputsSchema="policy_commitment,tx_digest",
+                    verifierKeyId="zkat_policy_private_auth_v1",
+                    sdkEntrypoints=[],
+                    plannedSdkEntrypoints=["buildZkAtPolicyProofV1"],
+                )
+            ]
+        ),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "security_notes' must include deterministic vectors, "
+            "negative/adversarial cases, replay/nullifier rejection tests, "
+            "parser/verifier fuzzing, performance, and audit/review "
+            "hardening gates for source-referenced entries"
         ),
     ):
         privacy_catalog._load_descriptors()
@@ -3298,7 +5301,7 @@ def test_privacy_catalog_loader_rejects_source_referenced_flow_without_witness_p
                     recommendedFor=["policy privacy"],
                     chainRequirements=["zkAt verifier key registry"],
                     securityNotes=[
-                        "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review.",
+                        "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.",
                     ],
                     requiredState=[
                         "policy commitment registry",
@@ -3438,6 +5441,15 @@ def test_privacy_catalog_loader_rejects_research_target_executable_entrypoints(
         ["Review shape proof constraints"],
         ["The SDK dev fixture is deterministic only."],
         ["Production Shape proofs remain unavailable."],
+        [
+            "The SDK notdev fixture is deterministic only; production Shape proofs remain unavailable.",
+        ],
+        [
+            "The SDK dev fixture is deterministic only; notproduction Shape proofs remain notunavailable.",
+        ],
+        [
+            "The SDK not dev fixture is deterministic only; not production Shape proofs remain not unavailable.",
+        ],
     ],
 )
 def test_privacy_catalog_loader_rejects_dev_fixture_entrypoints_without_non_production_warning(
@@ -3704,6 +5716,9 @@ def test_privacy_catalog_loader_rejects_production_hardened_local_verifier_entry
     [
         ("buildShapeProductionProof", True),
         ("Iroha.Privacy.buildShapeProductionProof", True),
+        ("buildAnonymousPgcKOutOfNProofV1", True),
+        ("buildShapeNoProofBuilder", False),
+        ("buildShapeNotProofBuilder", False),
         ("buildShapeProofInstruction", False),
         ("buildShapeProofTransaction", False),
         ("buildSubmitShapeProof", False),
@@ -4296,7 +6311,7 @@ def test_privacy_catalog_returns_defensive_copies() -> None:
     assert fresh_descriptors[0]["production_gate"]["missing"] == (
         _expected_production_gate_missing(fresh_descriptors[0]["production_gate"])
     )
-    assert "external audit signoff is missing" in fresh_descriptors[0][
+    assert "internal cryptographic review signoff is missing" in fresh_descriptors[0][
         "production_gate"
     ]["missing"]
     assert fresh_descriptors[0]["production_gate"]["audit_references"] == []
@@ -4411,7 +6426,7 @@ def test_privacy_catalog_descriptors_are_json_safe_and_boi_stable() -> None:
         assert descriptor["production_gate"]["missing"] == (
             _expected_production_gate_missing(descriptor["production_gate"])
         )
-        assert "external audit signoff is missing" in descriptor[
+        assert "internal cryptographic review signoff is missing" in descriptor[
             "production_gate"
         ]["missing"]
         assert "Iroha production allowlist is not enabled for this audited row" in descriptor[
@@ -4459,6 +6474,18 @@ def test_privacy_catalog_enforces_execution_and_metadata_invariants() -> None:
         "buildShieldedZkAceAuthorizedTransferInstruction",
     ]
     assert "buildZkAceAuthorizationProofV0" not in zk_ace["planned_sdk_entrypoints"]
+    assert zk_ace["required_state"] == [
+        "registered ZK-ACE identity commitment",
+        "source-account allowlist",
+        "authorization policy hash registry",
+        "active ZK-ACE verifier key",
+        "chain/domain binding state",
+        "transfer digest binding",
+        "replay nullifier uniqueness set",
+        "identity rotation/revocation registry",
+        "STARK/FRI verifier parameter floors",
+        "wallet identity witness and replay-secret store",
+    ]
     assert zk_ace["verifier_key_metadata"]["pq_layers"] == {
         "proof": True,
         "authorization": True,
@@ -4692,9 +6719,11 @@ def test_privacy_catalog_enforces_execution_and_metadata_invariants() -> None:
                 for value in descriptor[field]
             ]
             assert any(
-                token in value
+                privacy_catalog._catalog_text_values_contain_affirmed_metadata_token(
+                    protection_values,
+                    token,
+                )
                 for token in privacy_catalog._LEDGER_MUTATION_PROTECTION_METADATA_TOKENS
-                for value in protection_values
             )
             typed_admission_text = " ".join(
                 value.lower()
@@ -4702,16 +6731,25 @@ def test_privacy_catalog_enforces_execution_and_metadata_invariants() -> None:
                 for value in descriptor[field]
             )
             assert any(
-                token in typed_admission_text
+                privacy_catalog._catalog_text_contains_typed_admission_token(
+                    typed_admission_text,
+                    token,
+                )
                 for token in privacy_catalog._TYPED_CHAIN_ADMISSION_TYPE_TOKENS
             )
             assert any(
-                token in typed_admission_text
+                privacy_catalog._catalog_text_contains_typed_admission_token(
+                    typed_admission_text,
+                    token,
+                )
                 for token in privacy_catalog._TYPED_CHAIN_ADMISSION_MUTATION_TOKENS
             )
             required_state_text = " ".join(descriptor["required_state"]).lower()
             if any(
-                token in required_state_text
+                privacy_catalog._catalog_text_contains_affirmed_metadata_token(
+                    required_state_text,
+                    token,
+                )
                 for token in privacy_catalog._STATEFUL_LEDGER_STATE_TOKENS
             ):
                 persistence_text = " ".join(
@@ -4724,7 +6762,24 @@ def test_privacy_catalog_enforces_execution_and_metadata_invariants() -> None:
                 for tokens in (
                     privacy_catalog._STATEFUL_LEDGER_PERSISTENCE_TOKEN_GROUPS
                 ):
-                    assert any(token in persistence_text for token in tokens)
+                    assert any(
+                        privacy_catalog._catalog_text_contains_affirmed_metadata_token(
+                            persistence_text,
+                            token,
+                        )
+                        for token in tokens
+                    )
+                failure_modes_text = " ".join(descriptor["failure_modes"]).lower()
+                for tokens in (
+                    privacy_catalog._STATEFUL_LEDGER_FAILURE_MODE_TOKEN_GROUPS
+                ):
+                    assert any(
+                        privacy_catalog._catalog_text_contains_affirmed_metadata_token(
+                            failure_modes_text,
+                            token,
+                        )
+                        for token in tokens
+                    )
         if (
             descriptor["implementation_stage"]
             in privacy_catalog._WALLET_STATE_REQUIRED_IMPLEMENTATION_STAGES
@@ -4733,12 +6788,21 @@ def test_privacy_catalog_enforces_execution_and_metadata_invariants() -> None:
         ):
             required_state_text = " ".join(descriptor["required_state"]).lower()
             assert any(
-                token in required_state_text
+                privacy_catalog._catalog_text_contains_affirmed_metadata_token(
+                    required_state_text,
+                    token,
+                )
                 for token in privacy_catalog._WALLET_STATE_METADATA_TOKENS
             )
             security_notes_text = " ".join(descriptor["security_notes"]).lower()
             for tokens in privacy_catalog._WALLET_WITNESS_PRIVACY_NOTE_TOKEN_GROUPS:
-                assert any(token in security_notes_text for token in tokens)
+                assert any(
+                    privacy_catalog._catalog_text_contains_wallet_witness_privacy_token(
+                        security_notes_text,
+                        token,
+                    )
+                    for token in tokens
+                )
         if (
             descriptor["implementation_stage"]
             in privacy_catalog._SOURCE_REFERENCED_IMPLEMENTATION_STAGES
@@ -4747,7 +6811,10 @@ def test_privacy_catalog_enforces_execution_and_metadata_invariants() -> None:
         ):
             required_state_text = " ".join(descriptor["required_state"]).lower()
             assert any(
-                token in required_state_text
+                privacy_catalog._catalog_text_contains_affirmed_metadata_token(
+                    required_state_text,
+                    token,
+                )
                 for token in privacy_catalog._CREDENTIAL_STATE_METADATA_TOKENS
             )
         if (
@@ -4770,14 +6837,23 @@ def test_privacy_catalog_enforces_execution_and_metadata_invariants() -> None:
             for tokens in (
                 privacy_catalog._VERIFIER_NEGATIVE_FAILURE_MODE_TOKEN_GROUPS
             ):
-                assert any(token in failure_modes_text for token in tokens)
+                assert any(
+                    privacy_catalog._catalog_text_contains_affirmed_metadata_token(
+                        failure_modes_text,
+                        token,
+                    )
+                    for token in tokens
+                )
             verifier_key_record_text = " ".join(
                 value.lower()
                 for field in privacy_catalog._VERIFIER_KEY_RECORD_METADATA_FIELDS
                 for value in descriptor[field]
             )
             assert any(
-                token in verifier_key_record_text
+                privacy_catalog._catalog_text_contains_affirmed_metadata_token(
+                    verifier_key_record_text,
+                    token,
+                )
                 for token in privacy_catalog._VERIFIER_KEY_RECORD_METADATA_TOKENS
             )
         if (
@@ -4795,8 +6871,14 @@ def test_privacy_catalog_enforces_execution_and_metadata_invariants() -> None:
                 )
             )
             assert any(
-                token in chain_domain_binding_text
+                privacy_catalog._catalog_text_contains_chain_domain_binding_token(
+                    chain_domain_binding_text,
+                    token,
+                )
                 for token in privacy_catalog._CHAIN_DOMAIN_BINDING_METADATA_TOKENS
+            )
+            assert privacy_catalog._public_inputs_schema_has_chain_domain_binding(
+                descriptor["public_inputs_schema"]
             )
         if (
             descriptor["implementation_stage"]
@@ -4804,7 +6886,13 @@ def test_privacy_catalog_enforces_execution_and_metadata_invariants() -> None:
         ):
             security_notes_text = " ".join(descriptor["security_notes"]).lower()
             for tokens in privacy_catalog._SOURCE_REFERENCED_HARDENING_NOTE_TOKEN_GROUPS:
-                assert any(token in security_notes_text for token in tokens)
+                assert any(
+                    privacy_catalog._catalog_text_contains_source_hardening_token(
+                        security_notes_text,
+                        token,
+                    )
+                    for token in tokens
+                )
         if descriptor["implementation_stage"] == "research-target-as-of-2026-05":
             assert not any(
                 privacy_catalog._entrypoint_is_dev_fixture(entrypoint)
@@ -4818,13 +6906,19 @@ def test_privacy_catalog_enforces_execution_and_metadata_invariants() -> None:
             assert descriptor["planned_sdk_entrypoints"]
             security_notes_text = " ".join(descriptor["security_notes"]).lower()
             assert all(
-                token in security_notes_text
+                privacy_catalog._catalog_text_contains_affirmed_metadata_token(
+                    security_notes_text,
+                    token,
+                )
                 for token in (
                     privacy_catalog._RESEARCH_TARGET_PRODUCTION_READINESS_TOKENS
                 )
             )
             assert any(
-                token in security_notes_text
+                privacy_catalog._catalog_text_contains_affirmed_metadata_token(
+                    security_notes_text,
+                    token,
+                )
                 for token in privacy_catalog._RESEARCH_TARGET_READINESS_EVIDENCE_TOKENS
             )
         if descriptor["implementation_stage"] == "catalog-as-of-2026-05":
@@ -4850,7 +6944,13 @@ def test_privacy_catalog_enforces_execution_and_metadata_invariants() -> None:
             for fragment in (
                 privacy_catalog._POST_QUANTUM_REQUIRED_PLANNED_ENTRYPOINT_FRAGMENTS
             ):
-                assert any(fragment in name for name in planned_entrypoint_names)
+                assert any(
+                    privacy_catalog._planned_entrypoint_name_has_primitive_fragment(
+                        name,
+                        fragment,
+                    )
+                    for name in planned_entrypoint_names
+                )
             post_quantum_token_fields = (
                 (
                     "security_notes",
@@ -4868,7 +6968,13 @@ def test_privacy_catalog_enforces_execution_and_metadata_invariants() -> None:
             for field, required_tokens in post_quantum_token_fields:
                 values = descriptor[field]
                 for token in required_tokens:
-                    assert any(token in value for value in values)
+                    assert any(
+                        privacy_catalog._catalog_text_contains_affirmed_metadata_token(
+                            value,
+                            token,
+                        )
+                        for value in values
+                    )
 
 
 def test_planned_privacy_sdk_entrypoints_remain_unexported_and_fail_closed() -> None:
@@ -5122,6 +7228,191 @@ def test_module_privacy_capabilities_defaults_to_static_sdk_surface() -> None:
     assert capabilities["jindo_lattice_sdk_exports_v0"] is True
     assert capabilities["sis_hints_credential_sdk_exports_v0"] is True
     assert capabilities["privacy_criteria"] == get_privacy_criteria()
+
+
+@pytest.mark.parametrize(
+    ("capability_key", "public_names", "native_name"),
+    [
+        (
+            "confidential_transfer_proof_v2",
+            (
+                "buildConfidentialTransferProofV2",
+                "build_confidential_transfer_proof_v2",
+            ),
+            "build_confidential_transfer_proof_v2",
+        ),
+        (
+            "confidential_unshield_proof_v3",
+            (
+                "buildConfidentialUnshieldProofV3",
+                "build_confidential_unshield_proof_v3",
+            ),
+            "build_confidential_unshield_proof_v3",
+        ),
+    ],
+)
+def test_confidential_python_capabilities_require_public_and_native_builders(
+    monkeypatch: pytest.MonkeyPatch,
+    capability_key: str,
+    public_names: tuple[str, str],
+    native_name: str,
+) -> None:
+    def callable_on_crypto(name: str) -> bool:
+        return name in public_names
+
+    monkeypatch.setattr(
+        privacy_catalog,
+        "_callable_on_crypto",
+        callable_on_crypto,
+    )
+    monkeypatch.setattr(
+        privacy_catalog,
+        "_callable_on_native_crypto",
+        lambda name: name == native_name,
+    )
+
+    capabilities = privacy_capabilities()
+
+    assert capabilities[capability_key] is True
+
+    monkeypatch.setattr(
+        privacy_catalog,
+        "_callable_on_native_crypto",
+        lambda _name: False,
+    )
+
+    disabled = privacy_capabilities()
+
+    assert disabled[capability_key] is False
+
+
+def test_confidential_python_exports_catalog_named_proof_builders() -> None:
+    assert "buildConfidentialTransferProofV2" in crypto.__all__
+    assert "build_confidential_transfer_proof_v2" in crypto.__all__
+    assert "buildConfidentialUnshieldProofV3" in crypto.__all__
+    assert "build_confidential_unshield_proof_v3" in crypto.__all__
+    assert "buildConfidentialTransferProofV2" in iroha_python.__all__
+    assert "buildConfidentialUnshieldProofV3" in iroha_python.__all__
+    assert (
+        crypto.buildConfidentialTransferProofV2
+        is crypto.build_confidential_transfer_proof_v2
+    )
+    assert (
+        crypto.buildConfidentialUnshieldProofV3
+        is crypto.build_confidential_unshield_proof_v3
+    )
+    assert (
+        iroha_python.buildConfidentialTransferProofV2
+        is crypto.buildConfidentialTransferProofV2
+    )
+    assert (
+        iroha_python.buildConfidentialUnshieldProofV3
+        is crypto.buildConfidentialUnshieldProofV3
+    )
+
+
+def test_confidential_transfer_python_builder_delegates_to_native(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, tuple[object, ...]] = {}
+
+    class Native:
+        @staticmethod
+        def build_confidential_transfer_proof_v2(*args: object) -> dict[str, object]:
+            captured["args"] = args
+            return {
+                "nullifiers": [b"n" * 32],
+                "output_commitments": [b"o" * 32],
+                "root": b"r" * 32,
+                "proof": b"proof",
+            }
+
+    monkeypatch.setattr(crypto, "_crypto", Native())
+
+    result = crypto.buildConfidentialTransferProofV2(
+        chain_id="wonderland",
+        asset_definition_id="xor#wonderland",
+        spend_key=b"s" * 32,
+        tree_commitments=[b"t" * 32],
+        inputs=[{"amount": "7", "rho": b"i" * 32, "leaf_index": 0}],
+        outputs=[
+            {
+                "amount": "7",
+                "rho": b"u" * 32,
+                "owner_tag": b"w" * 32,
+            }
+        ],
+        root_hint=b"r" * 32,
+        verifying_key={
+            "backend": "halo2/ipa",
+            "circuit_id": "confidential_transfer_v2",
+            "bytes": b"vk",
+        },
+    )
+
+    assert result["proof"] == b"proof"
+    assert captured["args"] == (
+        "wonderland",
+        "xor#wonderland",
+        b"s" * 32,
+        [b"t" * 32],
+        [{"amount": "7", "rho": b"i" * 32, "leaf_index": 0}],
+        [{"amount": "7", "rho": b"u" * 32, "owner_tag": b"w" * 32}],
+        b"r" * 32,
+        "halo2/ipa",
+        "confidential_transfer_v2",
+        b"vk",
+    )
+
+
+def test_confidential_unshield_python_builder_delegates_to_native(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, tuple[object, ...]] = {}
+
+    class Native:
+        @staticmethod
+        def build_confidential_unshield_proof_v3(*args: object) -> dict[str, object]:
+            captured["args"] = args
+            return {
+                "nullifiers": [b"n" * 32],
+                "output_commitments": [b"o" * 32],
+                "root": b"r" * 32,
+                "proof": b"proof",
+            }
+
+    monkeypatch.setattr(crypto, "_crypto", Native())
+
+    result = crypto.buildConfidentialUnshieldProofV3(
+        chain_id="wonderland",
+        asset_definition_id="xor#wonderland",
+        spend_key=b"s" * 32,
+        tree_commitments=[b"t" * 32],
+        inputs=[{"amount": "9", "rho": b"i" * 32, "leaf_index": 0}],
+        outputs=[{"amount": "2", "rho": b"u" * 32}],
+        public_amount=7,
+        root_hint=b"r" * 32,
+        verifying_key={
+            "backend": "halo2/ipa",
+            "circuit_id": "confidential_unshield_v3",
+            "bytes": b"vk",
+        },
+    )
+
+    assert result["proof"] == b"proof"
+    assert captured["args"] == (
+        "wonderland",
+        "xor#wonderland",
+        b"s" * 32,
+        [b"t" * 32],
+        [{"amount": "9", "rho": b"i" * 32, "leaf_index": 0}],
+        [{"amount": "2", "rho": b"u" * 32}],
+        "7",
+        b"r" * 32,
+        "halo2/ipa",
+        "confidential_unshield_v3",
+        b"vk",
+    )
 
 
 @pytest.mark.parametrize(
@@ -5536,7 +7827,7 @@ def test_privacy_capabilities_returns_defensive_copies() -> None:
             fresh["privacy_algorithms"][0]["production_gate"]
         )
     )
-    assert "external audit signoff is missing" in fresh["privacy_algorithms"][0][
+    assert "internal cryptographic review signoff is missing" in fresh["privacy_algorithms"][0][
         "production_gate"
     ]["missing"]
     assert (

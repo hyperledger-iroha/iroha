@@ -246,7 +246,11 @@ ADVERSARIAL_COVERAGE = {
                 "recursive_proof_chain_digest",
                 "proof bytes must be part of the exported recursive proof artifact digest",
                 "proof-byte splice is bound into accumulator state",
+                "per-hop fixed-window table-base digest must stream across append",
                 "kagemusha_recursive_spend_bundle_rejects_public_input_tampering",
+                "spliced previous proof folded public-input hash",
+                'field: "previous_recursive_proof.folded_public_inputs_hash"',
+                "recursive-spend-stale-previous-proof-public-input-hash",
                 "forged proof-chain public-input hash",
                 "recursive spend transition-profile binding must be initialized at the first hop",
                 "recursive-spend-forged-transition-binding-public-input",
@@ -360,16 +364,22 @@ ADVERSARIAL_COVERAGE = {
         "KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_PROOF_UNAVAILABLE",
         "multi-hop proving requires the append verifier batch to be composed into the compact proof",
         "fn kagemusha_recursive_compact_record_prover_preflights_pallas_archive_before_unavailable",
+        "fn kagemusha_recursive_compact_record_bound_pallas_preflights_before_unavailable",
+        "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1",
         "Norito-valid data-model proof envelope must not decode as Pallas openings",
-        "detached compact Pallas archive must reject before unavailable",
-        "extra compact Pallas opening must reject before unavailable",
-        "missing compact Pallas opening must reject before unavailable",
-        "duplicated multi-hop compact Pallas archive must reject before unavailable",
-        "height-aware duplicated multi-hop compact Pallas archive must reject before unavailable",
-        "forged multi-hop compact Pallas metadata must reject before unavailable",
-        "reordered multi-hop compact Pallas archive must reject before unavailable",
-        "height-aware reordered multi-hop compact Pallas archive must reject before unavailable",
-        "record-bound multi-hop compact Pallas archive must reject before the unavailable gate",
+        "detached compact Pallas archive must reject before proving",
+        "height-aware detached compact Pallas archive must reject before proving",
+        "extra compact Pallas opening must reject before proving",
+        "height-aware extra compact Pallas opening must reject before proving",
+        "missing compact Pallas opening must reject before proving",
+        "height-aware missing compact Pallas opening must reject before proving",
+        "duplicated multi-hop compact Pallas archive must reject before proving",
+        "height-aware duplicated multi-hop compact Pallas archive must reject before proving",
+        "forged multi-hop compact Pallas metadata must reject before proving",
+        "height-aware forged multi-hop compact Pallas metadata must reject before proving",
+        "reordered multi-hop compact Pallas archive must reject before proving",
+        "height-aware reordered multi-hop compact Pallas archive must reject before proving",
+        "record-bound multi-hop compact Pallas archive must produce a token",
         "missing compact one-hop proving key archive",
         "ensure_kagemusha_recursive_compact_token_public_instance_context",
         "verifier_witness_batch_digest public instance digest must be non-zero",
@@ -480,11 +490,16 @@ ADVERSARIAL_COVERAGE = {
         "preflight_kagemusha_recursive_spend_lineage_append_accumulator_opening_contract",
         "ensure_kagemusha_recursive_spend_lineage_append_boundary_matches_accumulator",
         "append_boundary.resulting_accumulator_digest",
+        "append_boundary.resulting_accumulator_digest != expected_accumulator_digest",
         "append_boundary.append_boundary_digest != accumulator.append_boundary_digest",
         "append_boundary.transition_profile_binding_digest",
+        "append_boundary.transition_profile_binding_digest\n            != accumulator.transition_profile_binding_digest",
         "append_boundary.chain_asset_binding_digest",
+        "append_boundary.chain_asset_binding_digest != expected_chain_asset_binding_digest",
         "append_boundary.final_note_binding_digest",
+        "append_boundary.final_note_binding_digest != expected_final_note_binding_digest",
         "append_boundary.resulting_public_inputs_hash",
+        "append_boundary.resulting_public_inputs_hash != expected_public_inputs_hash",
         "kagemusha_recursive_spend_append_boundary_free_public_inputs_hash",
         "requires a Reserved-lineage previous proof",
         "append public inputs append boundary digest mismatch",
@@ -596,18 +611,18 @@ ADVERSARIAL_COVERAGE = {
     ),
     "crates/connect_norito_bridge/src/lib.rs": (
         "kagemusha_recursive_compact_ffi_fails_closed_and_rejects_adversarial_inputs",
-        "malformed Pallas opening archives before the unavailable gate",
-        "detached valid Pallas opening archives before the unavailable gate",
+        "malformed Pallas opening archives before proving",
+        "detached valid Pallas opening archives before proving",
         "prove_verified_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelope_archive",
         "is_kagemusha_recursive_compact_unavailable_error",
         "Vec<iroha_zkp_halo2::OpenVerifyEnvelope>",
         "valid recursive compact Pallas envelope fixture must decode",
-        "ABI-7 compact prover must reject extra valid Pallas opening archives before the unavailable gate",
-        "ABI-7 compact prover must reject missing valid Pallas opening archives before the unavailable gate",
-        "ABI-7 compact prover must reject duplicated multi-hop valid Pallas opening archives before the unavailable gate",
-        "ABI-7 compact prover must reject forged multi-hop Pallas metadata before the unavailable gate",
-        "ABI-7 compact prover must reject reordered valid Pallas opening archives before the unavailable gate",
-        "valid multi-hop recursive compact Pallas archives must map to unavailable",
+        "ABI-7 compact prover must reject extra valid Pallas opening archives before proving",
+        "ABI-7 compact prover must reject missing valid Pallas opening archives before proving",
+        "ABI-7 compact prover must reject duplicated multi-hop valid Pallas opening archives before proving",
+        "ABI-7 compact prover must reject forged multi-hop Pallas metadata before proving",
+        "ABI-7 compact prover must reject reordered valid Pallas opening archives before proving",
+        "valid multi-hop recursive compact Pallas archives must produce a package-backed token",
         "shape-valid ABI-7 compact tokens with invalid proof bodies must return a soft invalid result",
         "ABI-7 compact verifier must reject non-canonical envelope verifier-key hashes before returning a soft invalid result",
         "non-canonical compact-token verifier-key hashes must clear stale valid flags",
@@ -702,8 +717,7 @@ ADVERSARIAL_COVERAGE = {
         "invalid Kagemusha recursive compact Pallas open-envelope archive",
         "invalid Kagemusha recursive compact record-backed Pallas preflight",
         "detached valid recursive compact Pallas archive must reject",
-        "valid multi-hop recursive compact archive must remain unavailable",
-        "KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_PROOF_UNAVAILABLE",
+        "valid multi-hop recursive compact archive must produce a token",
         "recursive compact prover must reject extra valid Pallas opening archive",
         "recursive compact prover must reject missing valid Pallas opening archive",
         "recursive compact prover must reject duplicated multi-hop valid Pallas opening archive",
@@ -815,8 +829,7 @@ ADVERSARIAL_COVERAGE = {
         "prove_verified_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelope_archive",
         "failed to decode Kagemusha recursive compact Pallas open-envelope archive",
         "detached valid Pallas archive",
-        "valid multi-hop recursive compact archive must remain unavailable",
-        "KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_PROOF_UNAVAILABLE",
+        "valid multi-hop recursive compact archive must produce a token",
         "recursive compact prover must reject extra valid Pallas opening archive",
         "recursive compact prover must reject missing valid Pallas opening archive",
         "recursive compact prover must reject duplicated multi-hop valid Pallas opening archive",
@@ -1913,6 +1926,18 @@ POLICY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-transition-profile-current-hop-sets",
     ),
     (
+        "data-model recursive spend proof public-input circuit binding negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-proof-public-input-circuit-binding",
+    ),
+    (
+        "data-model recursive spend previous-proof field binding negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-previous-proof-field-binding",
+    ),
+    (
+        "data-model recursive spend previous-proof stale hash fixture negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-previous-proof-stale-hash-fixture",
+    ),
+    (
         "core append cap direct-prover negative control",
         "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-append-cap-boundary",
     ),
@@ -1927,6 +1952,62 @@ POLICY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "core recursive spend proof-chain accumulator negative control",
         "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-proof-chain-accumulator",
+    ),
+    (
+        "core recursive spend fixed-window table-base accumulator negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-fixed-window-table-base-accumulator",
+    ),
+    (
+        "core recursive spend append-boundary accumulator negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-append-boundary-accumulator",
+    ),
+    (
+        "core recursive spend previous accumulator boundary negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-previous-accumulator-boundary",
+    ),
+    (
+        "core recursive spend resulting accumulator boundary negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-resulting-accumulator-boundary",
+    ),
+    (
+        "core recursive spend append-boundary digest match negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-append-boundary-digest-match",
+    ),
+    (
+        "core recursive spend append-boundary context match negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-append-boundary-context-matches",
+    ),
+    (
+        "core append digest unchecked surface negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-append-digest-unchecked-surface",
+    ),
+    (
+        "core append digest wrapper bypass negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-append-digest-wrapper-bypass",
+    ),
+    (
+        "core append-boundary profile comparison negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-append-boundary-profile-comparison",
+    ),
+    (
+        "core recursive aggregation public-input schema negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-recursive-public-input-schema-order",
+    ),
+    (
+        "core recursive aggregation public-input index negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-recursive-public-input-index-map",
+    ),
+    (
+        "core recursive aggregation public-input value-order negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-recursive-public-input-value-order",
+    ),
+    (
+        "core recursive aggregation public-input nonzero groups negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-recursive-public-input-nonzero-groups",
+    ),
+    (
+        "core recursive aggregation append semantic nonzero groups negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-recursive-append-semantic-nonzero-groups",
     ),
     (
         "core non-native Vesta IPA H-fold negative control",
@@ -1955,6 +2036,14 @@ POLICY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "core checked-fold input/output overlap negative control",
         "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-fold-overlap-predecode",
+    ),
+    (
+        "core checked-fold public-input preverification negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-fold-public-input-preverify-order",
+    ),
+    (
+        "core record-backed checked-fold public-input preverification negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-record-backed-fold-public-input-preverify-order",
     ),
     (
         "core lineage witness fold metadata predecode negative control",
@@ -2107,6 +2196,14 @@ POLICY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "Reserved-lineage payload reducer negative-control workflow negative control",
         "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-reserved-lineage-payload-negative-controls-workflow",
+    ),
+    (
+        "payload reducer benchmark-name negative-control workflow negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-payload-benchmark-name-negative-controls-workflow",
+    ),
+    (
+        "payload reducer hop-list negative-control workflow negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-payload-hop-list-negative-controls-workflow",
     ),
     (
         "payload reducer commented-command negative control",
@@ -2400,6 +2497,38 @@ def check_workflow_runs_payload_reducer_controls():
             "conflicting Reserved-lineage transition-profile-size negative control",
             "ci/check_kagemusha_recursive_spend_payload_bench.sh --negative-control-conflicting-reserved-lineage-transition-profile-size",
         ),
+        (
+            "malformed payload benchmark-name negative control",
+            "ci/check_kagemusha_recursive_spend_payload_bench.sh --negative-control-malformed-payload-benchmark-name",
+        ),
+        (
+            "empty expected-hop-list negative control",
+            "ci/check_kagemusha_recursive_spend_payload_bench.sh --negative-control-empty-hop-list",
+        ),
+        (
+            "blank expected-hop-list negative control",
+            "ci/check_kagemusha_recursive_spend_payload_bench.sh --negative-control-blank-hop-list",
+        ),
+        (
+            "non-integer expected-hop negative control",
+            "ci/check_kagemusha_recursive_spend_payload_bench.sh --negative-control-non-integer-hop",
+        ),
+        (
+            "zero expected-hop negative control",
+            "ci/check_kagemusha_recursive_spend_payload_bench.sh --negative-control-zero-hop",
+        ),
+        (
+            "duplicate expected-hop negative control",
+            "ci/check_kagemusha_recursive_spend_payload_bench.sh --negative-control-duplicate-hop",
+        ),
+        (
+            "unsorted expected-hop negative control",
+            "ci/check_kagemusha_recursive_spend_payload_bench.sh --negative-control-unsorted-hop",
+        ),
+        (
+            "leading-zero expected-hop negative control",
+            "ci/check_kagemusha_recursive_spend_payload_bench.sh --negative-control-leading-zero-hop",
+        ),
     )
     for label, command in required_before_benchmark:
         match = workflow_command_match(workflow, command)
@@ -2603,6 +2732,692 @@ def check_rust_reserved_lineage_policy():
                 "witnessless Reserved-lineage admission is missing verifier-slice "
                 f"coverage: {needle}"
             )
+
+
+def source_window(text, start_needle, end_needle, label):
+    start = text.find(start_needle)
+    if start < 0:
+        fail(f"missing {label}: {start_needle}")
+    end = text.find(end_needle, start + len(start_needle))
+    if end < 0:
+        fail(f"missing {label} terminator: {end_needle}")
+    return text[start:end]
+
+
+def require_ordered_needles(text, label, needles):
+    cursor = 0
+    for needle in needles:
+        index = text.find(needle, cursor)
+        if index < 0:
+            fail(f"{label} is missing ordered preverification step: {needle}")
+        cursor = index + len(needle)
+
+
+def check_checked_fold_public_input_preverification_order():
+    core = read("crates/iroha_core/src/zk.rs")
+    direct = source_window(
+        core,
+        "pub fn kagemusha_verified_folded_public_inputs(",
+        "/// Verify a serializable Kagemusha fold bundle and build folded public inputs.",
+        "checked-fold direct public-input preverification path",
+    )
+    require_ordered_needles(
+        direct,
+        "checked-fold direct public-input preverification path",
+        (
+            "validate_kagemusha_fold_metadata(steps)?;",
+            "for step in steps {",
+            "validate_required_kagemusha_confidential_v2_step_public_inputs(chain_id, asset, step)?;",
+            "verified_steps.push(kagemusha_verified_fold_step(step)?);",
+            "kagemusha_folded_public_inputs(chain_id, asset, &verified_steps)",
+        ),
+    )
+
+    record_backed = source_window(
+        core,
+        "fn kagemusha_verified_folded_public_inputs_from_bundle_with_records_at_optional_height(",
+        "/// Height-windowed verifier records require",
+        "record-backed checked-fold public-input preverification path",
+    )
+    require_ordered_needles(
+        record_backed,
+        "record-backed checked-fold public-input preverification path",
+        (
+            "validate_kagemusha_fold_metadata(&steps)?;",
+            "validate_kagemusha_hop_verifier_record_set(&steps, records)?;",
+            "for step in &steps {",
+            "validate_kagemusha_fold_verifier_record(step, record, block_height)?;",
+            "validate_required_kagemusha_confidential_v2_step_public_inputs(",
+            "kagemusha_verified_folded_public_inputs(&bundle.chain_id, &bundle.asset, &steps)",
+        ),
+    )
+
+
+def check_append_digest_helpers_are_checked():
+    data_model = read("crates/iroha_data_model/src/offline/mod.rs")
+    for helper in (
+        "kagemusha_recursive_spend_lineage_append_opening_preflight_digest_unchecked",
+        "kagemusha_recursive_spend_lineage_append_boundary_digest_unchecked",
+    ):
+        if re.search(rf"pub\s+fn\s+{re.escape(helper)}\s*\(", data_model):
+            fail(f"unchecked append digest helper must remain private: {helper}")
+
+    preflight_wrapper = source_window(
+        data_model,
+        "pub fn kagemusha_recursive_spend_lineage_append_opening_preflight_digest(",
+        "impl KagemushaRecursiveSpendLineageAppendOpeningPreflightV1 {",
+        "append opening preflight public digest wrapper",
+    )
+    require_ordered_needles(
+        preflight_wrapper,
+        "append opening preflight public digest wrapper",
+        (
+            "preflight.validate_context()?;",
+            "Ok(preflight.append_opening_preflight_digest)",
+        ),
+    )
+    if "kagemusha_recursive_spend_lineage_append_opening_preflight_digest_unchecked(preflight)" in preflight_wrapper:
+        fail("append opening preflight public digest wrapper must not bypass validate_context")
+
+    preflight_impl = source_window(
+        data_model,
+        "impl KagemushaRecursiveSpendLineageAppendOpeningPreflightV1 {",
+        "fn validate_kagemusha_recursive_spend_lineage_append_boundary_preimage",
+        "append opening preflight validation implementation",
+    )
+    preflight_validate = source_window(
+        preflight_impl,
+        "pub fn validate_context(&self) -> Result<(), KagemushaFoldError> {",
+        "    /// Return the contract digest after validating the contract.",
+        "append opening preflight validate_context",
+    )
+    require_ordered_needles(
+        preflight_validate,
+        "append opening preflight validate_context",
+        (
+            "validate_kagemusha_recursive_spend_lineage_append_opening_preflight_preimage(self)?;",
+            "if self.append_opening_preflight_digest == [0u8; Hash::LENGTH]",
+            "kagemusha_recursive_spend_lineage_append_opening_preflight_digest_unchecked(self)?;",
+            "if self.append_opening_preflight_digest != expected",
+            'field: "append_opening_preflight.append_opening_preflight_digest"',
+        ),
+    )
+
+    boundary_wrapper = source_window(
+        data_model,
+        "pub fn kagemusha_recursive_spend_lineage_append_boundary_digest(",
+        "/// Return the canonical chain/asset binding digest used by compact Reserved-lineage append boundaries.",
+        "append boundary public digest wrapper",
+    )
+    require_ordered_needles(
+        boundary_wrapper,
+        "append boundary public digest wrapper",
+        (
+            "boundary.validate_context()?;",
+            "Ok(boundary.append_boundary_digest)",
+        ),
+    )
+    if "kagemusha_recursive_spend_lineage_append_boundary_digest_unchecked(boundary)" in boundary_wrapper:
+        fail("append boundary public digest wrapper must not bypass validate_context")
+
+    boundary_impl = source_window(
+        data_model,
+        "impl KagemushaRecursiveSpendLineageAppendBoundaryV1 {",
+        "impl KagemushaRecursiveSpendTransitionProfileV1 {",
+        "append boundary validation implementation",
+    )
+    boundary_validate = source_window(
+        boundary_impl,
+        "pub fn validate_context(&self) -> Result<(), KagemushaFoldError> {",
+        "    /// Return the boundary digest after validation.",
+        "append boundary validate_context",
+    )
+    require_ordered_needles(
+        boundary_validate,
+        "append boundary validate_context",
+        (
+            "validate_kagemusha_recursive_spend_lineage_append_boundary_preimage(self)?;",
+            "if self.append_boundary_digest == [0u8; Hash::LENGTH]",
+            "kagemusha_recursive_spend_lineage_append_boundary_digest_unchecked(self)?;",
+            "if self.append_boundary_digest != expected",
+            'field: "append_boundary.append_boundary_digest"',
+        ),
+    )
+
+
+def check_append_boundary_profile_comparison_is_complete():
+    data_model = read("crates/iroha_data_model/src/offline/mod.rs")
+    body = source_window(
+        data_model,
+        "pub fn validate_against_transition_profile(",
+        "    /// Return the Norito-encoded size of this compact boundary.",
+        "append boundary transition-profile comparison",
+    )
+    require_ordered_needles(
+        body,
+        "append boundary transition-profile comparison",
+        (
+            "self.validate_context()?;",
+            "kagemusha_recursive_spend_lineage_append_boundary_from_transition_profile(profile)?;",
+            "macro_rules! ensure_field",
+            'field: concat!("append_boundary.", stringify!($field))',
+        ),
+    )
+    actual_fields = re.findall(r"ensure_field!\((\w+)\);", body)
+    expected_fields = [
+        "domain",
+        "transition_profile_digest",
+        "transition_profile_binding_digest",
+        "chain_asset_binding_digest",
+        "final_note_binding_digest",
+        "previous_accumulator_digest",
+        "previous_recursive_proof_artifact_digest",
+        "previous_recursive_proof_open_envelopes_archive_digest",
+        "append_opening_preflight_digest",
+        "previous_recursive_proof_opening_aggregate_digest",
+        "current_hop_opening_aggregate_digest",
+        "current_hop_proof_hash",
+        "resulting_accumulator_digest",
+        "resulting_public_inputs_hash",
+        "hop_count",
+        "verifier_opening_len",
+        "verifier_params_fingerprint",
+        "fixed_window_table_schedule_digest",
+        "fixed_window_shared_table_manifest_digest",
+        "append_boundary_digest",
+    ]
+    if actual_fields != expected_fields:
+        fail(
+            "append boundary transition-profile comparison fields drifted; "
+            f"expected={expected_fields} actual={actual_fields}"
+        )
+
+
+def recursive_public_input_limb_fields(prefix):
+    return [f"{prefix}_limb{index}" for index in range(4)]
+
+
+def expected_recursive_aggregation_limb_prefixes():
+    return (
+        "public_inputs_hash",
+        "evidence_digest",
+        "folded_public_inputs_hash",
+        "aggregation_transcript_digest",
+        "verifier_params_fingerprint",
+        "fixed_window_table_schedule_digest",
+        "fixed_window_shared_table_manifest_digest",
+        "fixed_window_table_base_digest",
+        "verifier_witness_batch_digest",
+        "recursive_proof_chain_digest",
+        "transition_profile_binding_digest",
+        "append_opening_preflight_digest",
+        "append_boundary_digest",
+        "recursive_verifier_scalar_projection_digest",
+    )
+
+
+def expected_recursive_aggregation_public_inputs():
+    fields = []
+    for prefix in expected_recursive_aggregation_limb_prefixes():
+        fields.extend(recursive_public_input_limb_fields(prefix))
+    fields.extend(["verifier_opening_len", "verifier_witness_count", "hop_count"])
+    return fields
+
+
+def expected_recursive_aggregation_instance_value_expressions():
+    limb_vars = {
+        "public_inputs_hash": "public_hash_limbs",
+        "evidence_digest": "evidence_limbs",
+        "folded_public_inputs_hash": "folded_hash_limbs",
+        "aggregation_transcript_digest": "aggregation_limbs",
+        "verifier_params_fingerprint": "params_limbs",
+        "fixed_window_table_schedule_digest": "schedule_limbs",
+        "fixed_window_shared_table_manifest_digest": "manifest_limbs",
+        "fixed_window_table_base_digest": "table_base_limbs",
+        "verifier_witness_batch_digest": "batch_limbs",
+        "recursive_proof_chain_digest": "proof_chain_limbs",
+        "transition_profile_binding_digest": "transition_profile_binding_limbs",
+        "append_opening_preflight_digest": "append_opening_preflight_limbs",
+        "append_boundary_digest": "append_boundary_limbs",
+        "recursive_verifier_scalar_projection_digest": "scalar_projection_limbs",
+    }
+    expressions = []
+    for prefix in expected_recursive_aggregation_limb_prefixes():
+        limb_var = limb_vars[prefix]
+        expressions.extend(f"{limb_var}[{index}]" for index in range(4))
+    expressions.extend(
+        [
+            "u64::from(public_inputs.verifier_opening_len)",
+            "u64::from(public_inputs.verifier_witness_count)",
+            "u64::from(public_inputs.hop_count)",
+        ]
+    )
+    return expressions
+
+
+def extract_usize_constant(source, name, label):
+    match = re.search(rf"\b{name}\s*:\s*usize\s*=\s*(\d+)\s*;", source)
+    if match is None:
+        fail(f"{label} is missing constant {name}")
+    return int(match.group(1))
+
+
+def extract_balanced_block(source, start, open_char, close_char, label):
+    depth = 0
+    for index in range(start, len(source)):
+        char = source[index]
+        if char == open_char:
+            depth += 1
+        elif char == close_char:
+            depth -= 1
+            if depth == 0:
+                return source[start + 1 : index]
+    fail(f"could not extract balanced {label}")
+
+
+def extract_rust_function_body(source, signature, label):
+    function_start = source.find(signature)
+    if function_start < 0:
+        fail(f"missing {label}")
+    body_start = source.find("{", function_start)
+    if body_start < 0:
+        fail(f"{label} has no function body")
+    return extract_balanced_block(source, body_start, "{", "}", label)
+
+
+def split_top_level_comma_items(source):
+    items = []
+    token_start = 0
+    depth = 0
+    pairs = {"(": ")", "[": "]", "{": "}"}
+    closing = {")": "(", "]": "[", "}": "{"}
+    stack = []
+    for index, char in enumerate(source):
+        if char in pairs:
+            stack.append(char)
+            depth += 1
+        elif char in closing:
+            if not stack or stack[-1] != closing[char]:
+                fail("recursive aggregation public-input value initializer has unbalanced delimiters")
+            stack.pop()
+            depth -= 1
+        elif char == "," and depth == 0:
+            item = source[token_start:index].strip()
+            if item:
+                items.append(re.sub(r"\s+", "", item))
+            token_start = index + 1
+    tail = source[token_start:].strip()
+    if tail:
+        items.append(re.sub(r"\s+", "", tail))
+    return items
+
+
+def extract_recursive_public_input_value_builder_body(core):
+    function_start = core.find("pub fn kagemusha_recursive_aggregation_proof_public_input_instance_values(")
+    if function_start < 0:
+        fail("missing recursive aggregation public-input value builder")
+    next_function = core.find("\npub fn ", function_start + 1)
+    if next_function < 0:
+        next_function = len(core)
+    return core[function_start:next_function]
+
+
+def extract_recursive_public_input_value_expressions(core):
+    function_body = extract_recursive_public_input_value_builder_body(core)
+    marker = "public_values: ["
+    marker_start = function_body.find(marker)
+    if marker_start < 0:
+        fail("recursive aggregation public-input value builder is missing public_values initializer")
+    array_start = function_body.find("[", marker_start)
+    if array_start < 0:
+        fail("recursive aggregation public-input value builder has no public_values array")
+    return split_top_level_comma_items(
+        extract_balanced_block(function_body, array_start, "[", "]", "public_values array")
+    )
+
+
+def check_recursive_public_input_schema_order_and_indices():
+    data_model = read("crates/iroha_data_model/src/offline/mod.rs")
+    match = re.search(
+        r"KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_PUBLIC_INPUTS_SCHEMA:\s*&\[u8\]\s*=\s*br#\"(?P<json>.*?)\"#;",
+        data_model,
+        re.S,
+    )
+    if match is None:
+        fail("missing recursive aggregation public-input schema constant")
+    try:
+        schema = json.loads(match.group("json"))
+    except json.JSONDecodeError as error:
+        fail(f"recursive aggregation public-input schema is not valid JSON: {error}")
+    if schema.get("schema") != "kagemusha_recursive_aggregation_proof_v1":
+        fail("recursive aggregation public-input schema name drifted")
+    actual_fields = schema.get("public_inputs")
+    expected_fields = expected_recursive_aggregation_public_inputs()
+    if actual_fields != expected_fields:
+        fail(
+            "recursive aggregation public-input schema order drifted; "
+            f"expected={expected_fields} actual={actual_fields}"
+        )
+
+    core = read("crates/iroha_core/src/zk.rs")
+    expected_indices = {
+        "KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS": len(expected_fields),
+        "KAGEMUSHA_RECURSIVE_AGGREGATION_FOLDED_PUBLIC_INPUTS_HASH_START_INDEX": expected_fields.index(
+            "folded_public_inputs_hash_limb0"
+        ),
+        "KAGEMUSHA_RECURSIVE_AGGREGATION_TRANSCRIPT_DIGEST_START_INDEX": expected_fields.index(
+            "aggregation_transcript_digest_limb0"
+        ),
+        "KAGEMUSHA_RECURSIVE_AGGREGATION_VERIFIER_PARAMS_START_INDEX": expected_fields.index(
+            "verifier_params_fingerprint_limb0"
+        ),
+        "KAGEMUSHA_RECURSIVE_AGGREGATION_FIXED_WINDOW_TABLE_SCHEDULE_START_INDEX": expected_fields.index(
+            "fixed_window_table_schedule_digest_limb0"
+        ),
+        "KAGEMUSHA_RECURSIVE_AGGREGATION_FIXED_WINDOW_SHARED_TABLE_MANIFEST_START_INDEX": expected_fields.index(
+            "fixed_window_shared_table_manifest_digest_limb0"
+        ),
+        "KAGEMUSHA_RECURSIVE_AGGREGATION_FIXED_WINDOW_TABLE_BASE_START_INDEX": expected_fields.index(
+            "fixed_window_table_base_digest_limb0"
+        ),
+        "KAGEMUSHA_RECURSIVE_AGGREGATION_VERIFIER_WITNESS_BATCH_START_INDEX": expected_fields.index(
+            "verifier_witness_batch_digest_limb0"
+        ),
+        "KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CHAIN_START_INDEX": expected_fields.index(
+            "recursive_proof_chain_digest_limb0"
+        ),
+        "KAGEMUSHA_RECURSIVE_AGGREGATION_TRANSITION_PROFILE_BINDING_START_INDEX": expected_fields.index(
+            "transition_profile_binding_digest_limb0"
+        ),
+        "KAGEMUSHA_RECURSIVE_AGGREGATION_APPEND_OPENING_PREFLIGHT_START_INDEX": expected_fields.index(
+            "append_opening_preflight_digest_limb0"
+        ),
+        "KAGEMUSHA_RECURSIVE_AGGREGATION_APPEND_BOUNDARY_START_INDEX": expected_fields.index(
+            "append_boundary_digest_limb0"
+        ),
+        "KAGEMUSHA_RECURSIVE_AGGREGATION_VERIFIER_SCALAR_PROJECTION_START_INDEX": expected_fields.index(
+            "recursive_verifier_scalar_projection_digest_limb0"
+        ),
+        "KAGEMUSHA_RECURSIVE_AGGREGATION_OPENING_LEN_INDEX": expected_fields.index(
+            "verifier_opening_len"
+        ),
+        "KAGEMUSHA_RECURSIVE_AGGREGATION_WITNESS_COUNT_INDEX": expected_fields.index(
+            "verifier_witness_count"
+        ),
+        "KAGEMUSHA_RECURSIVE_AGGREGATION_HOP_COUNT_INDEX": expected_fields.index("hop_count"),
+    }
+    for name, expected in expected_indices.items():
+        actual = extract_usize_constant(core, name, "recursive aggregation public-input index map")
+        if actual != expected:
+            fail(
+                "recursive aggregation public-input index map drifted: "
+                f"{name} expected {expected} actual {actual}"
+            )
+
+
+def check_recursive_public_input_value_builder_order():
+    core = read("crates/iroha_core/src/zk.rs")
+    function_body = extract_recursive_public_input_value_builder_body(core)
+    actual_values = extract_recursive_public_input_value_expressions(core)
+    expected_values = [
+        re.sub(r"\s+", "", value)
+        for value in expected_recursive_aggregation_instance_value_expressions()
+    ]
+    if actual_values != expected_values:
+        fail(
+            "recursive aggregation public-input value builder order drifted; "
+            f"expected={expected_values} actual={actual_values}"
+        )
+
+    required_derivations = {
+        "public_hash_limbs": r"let\s+public_hash_limbs\s*=\s*hash_to_u64_limbs_le\(&public_inputs_hash\)\s*;",
+        "evidence_limbs": r"let\s+evidence_limbs\s*=\s*bytes_to_u64_limbs_le\(&public_inputs\.evidence_digest\)\s*;",
+        "folded_hash_limbs": r"let\s+folded_hash_limbs\s*=\s*bytes_to_u64_limbs_le\(&public_inputs\.folded_public_inputs_hash\)\s*;",
+        "aggregation_limbs": r"let\s+aggregation_limbs\s*=\s*bytes_to_u64_limbs_le\(&public_inputs\.aggregation_transcript_digest\)\s*;",
+        "params_limbs": r"let\s+params_limbs\s*=\s*bytes_to_u64_limbs_le\(&public_inputs\.verifier_params_fingerprint\)\s*;",
+        "schedule_limbs": r"let\s+schedule_limbs\s*=\s*bytes_to_u64_limbs_le\(&public_inputs\.fixed_window_table_schedule_digest\)\s*;",
+        "manifest_limbs": r"let\s+manifest_limbs\s*=\s*bytes_to_u64_limbs_le\(&public_inputs\.fixed_window_shared_table_manifest_digest\)\s*;",
+        "table_base_limbs": r"let\s+table_base_limbs\s*=\s*bytes_to_u64_limbs_le\(&public_inputs\.fixed_window_table_base_digest\)\s*;",
+        "batch_limbs": r"let\s+batch_limbs\s*=\s*bytes_to_u64_limbs_le\(&public_inputs\.verifier_witness_batch_digest\)\s*;",
+        "proof_chain_limbs": r"let\s+proof_chain_limbs\s*=\s*bytes_to_u64_limbs_le\(&public_inputs\.recursive_proof_chain_digest\)\s*;",
+        "transition_profile_binding_limbs": r"let\s+transition_profile_binding_limbs\s*=\s*bytes_to_u64_limbs_le\(&public_inputs\.transition_profile_binding_digest\)\s*;",
+        "append_opening_preflight_limbs": r"let\s+append_opening_preflight_limbs\s*=\s*bytes_to_u64_limbs_le\(&public_inputs\.append_opening_preflight_digest\)\s*;",
+        "append_boundary_limbs": r"let\s+append_boundary_limbs\s*=\s*bytes_to_u64_limbs_le\(&public_inputs\.append_boundary_digest\)\s*;",
+        "scalar_projection_limbs": r"let\s+scalar_projection_limbs\s*=\s*bytes_to_u64_limbs_le\(&public_inputs\.recursive_verifier_scalar_projection_digest\)\s*;",
+    }
+    for label, pattern in required_derivations.items():
+        if re.search(pattern, function_body, re.S) is None:
+            fail(f"recursive aggregation public-input value builder derivation drifted for {label}")
+
+
+def check_recursive_public_input_non_zero_groups():
+    core = read("crates/iroha_core/src/zk.rs")
+    expected_prefixes = list(expected_recursive_aggregation_limb_prefixes()[:9])
+    expected_fields = expected_recursive_aggregation_public_inputs()
+    expected_groups = [
+        [expected_fields.index(f"{prefix}_limb{index}") for index in range(4)]
+        for prefix in expected_prefixes
+    ]
+
+    groups_match = re.search(
+        r"KAGEMUSHA_RECURSIVE_AGGREGATION_NON_ZERO_PUBLIC_FIELD_GROUPS:\s*\[\[usize;\s*4\];\s*9\]\s*=\s*\[(?P<body>.*?)\];",
+        core,
+        re.S,
+    )
+    if groups_match is None:
+        fail("missing recursive aggregation non-zero public field group constant")
+    actual_groups = [
+        [int(value) for value in row]
+        for row in re.findall(
+            r"\[\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\]",
+            groups_match.group("body"),
+        )
+    ]
+    if actual_groups != expected_groups:
+        fail(
+            "recursive aggregation non-zero public field groups drifted; "
+            f"expected={expected_groups} actual={actual_groups}"
+        )
+
+    labels_match = re.search(
+        r"KAGEMUSHA_RECURSIVE_AGGREGATION_NON_ZERO_PUBLIC_FIELD_GROUP_LABELS:\s*\[&str;\s*9\]\s*=\s*\[(?P<body>.*?)\];",
+        core,
+        re.S,
+    )
+    if labels_match is None:
+        fail("missing recursive aggregation non-zero public field group labels")
+    actual_labels = re.findall(r'"([^"]+)"', labels_match.group("body"))
+    if actual_labels != expected_prefixes:
+        fail(
+            "recursive aggregation non-zero public field group labels drifted; "
+            f"expected={expected_prefixes} actual={actual_labels}"
+        )
+
+    context_body = extract_rust_function_body(
+        core,
+        "fn ensure_kagemusha_recursive_compact_token_public_instance_context(",
+        "recursive compact-token public-instance context guard",
+    )
+    for needle in (
+        "KAGEMUSHA_RECURSIVE_AGGREGATION_NON_ZERO_PUBLIC_FIELD_GROUPS",
+        ".zip(KAGEMUSHA_RECURSIVE_AGGREGATION_NON_ZERO_PUBLIC_FIELD_GROUP_LABELS)",
+        "must be non-zero",
+    ):
+        if needle not in context_body:
+            fail(
+                "recursive compact-token public-instance context guard is missing "
+                f"non-zero group coverage: {needle}"
+            )
+
+
+def check_recursive_append_semantic_non_zero_groups():
+    core = read("crates/iroha_core/src/zk.rs")
+    body = extract_rust_function_body(
+        core,
+        "fn validate_append_semantic_profile(",
+        "append recursive verifier-slice semantic profile",
+    )
+    if "validate_one_hop_semantic_non_zero_witnesses(semantic)" not in body:
+        fail("append semantic profile must run the base recursive non-zero witness check")
+    expected_calls = [
+        (
+            "KAGEMUSHA_RECURSIVE_AGGREGATION_TRANSITION_PROFILE_BINDING_START_INDEX",
+            "transition-profile binding digest",
+        ),
+        (
+            "KAGEMUSHA_RECURSIVE_AGGREGATION_APPEND_OPENING_PREFLIGHT_START_INDEX",
+            "append-opening preflight digest",
+        ),
+        (
+            "KAGEMUSHA_RECURSIVE_AGGREGATION_APPEND_BOUNDARY_START_INDEX",
+            "append-boundary digest",
+        ),
+        (
+            "KAGEMUSHA_RECURSIVE_AGGREGATION_VERIFIER_SCALAR_PROJECTION_START_INDEX",
+            "scalar-projection digest",
+        ),
+    ]
+    actual_calls = re.findall(
+        r"Self::validate_public_limb_group_non_zero\(\s*semantic,\s*super::(?P<constant>KAGEMUSHA_RECURSIVE_AGGREGATION_[A-Z_]+_START_INDEX),\s*\"(?P<label>[^\"]+)\",\s*\)\??",
+        body,
+        re.S,
+    )
+    if actual_calls != expected_calls:
+        fail(
+            "append recursive verifier-slice semantic non-zero groups drifted; "
+            f"expected={expected_calls} actual={actual_calls}"
+        )
+    base_check_index = body.find("validate_one_hop_semantic_non_zero_witnesses(semantic)")
+    first_append_check_index = body.find("Self::validate_public_limb_group_non_zero(")
+    if first_append_check_index < 0 or first_append_check_index < base_check_index:
+        fail("append semantic profile must run base non-zero checks before append-only checks")
+
+
+def check_recursive_spend_proof_public_input_circuit_binding():
+    data_model = read("crates/iroha_data_model/src/offline/mod.rs")
+    body = extract_rust_function_body(
+        data_model,
+        "fn expected_kagemusha_recursive_spend_public_inputs_for_proof(",
+        "recursive spend proof public-input circuit binding",
+    )
+    require_ordered_needles(
+        body,
+        "recursive spend proof public-input circuit binding",
+        (
+            "let mut expected = accumulator.recursive_public_inputs()?;",
+            "KagemushaRecursiveSpendProofCircuit::SemanticAggregation => {",
+            "if accumulator.append_boundary_digest != [0u8; Hash::LENGTH]",
+            'field: "append_boundary_digest"',
+            "if recursive_proof.public_inputs.append_boundary_digest != [0u8; Hash::LENGTH]",
+            'field: "append_boundary_digest"',
+            "KagemushaRecursiveSpendProofCircuit::Lineage => {",
+            "let scalar_projection = recursive_proof",
+            ".recursive_verifier_scalar_projection_digest;",
+            "if scalar_projection == [0u8; Hash::LENGTH]",
+            'field: "recursive_verifier_scalar_projection_digest"',
+            "expected.recursive_verifier_scalar_projection_digest = scalar_projection;",
+            "let append_boundary_digest = recursive_proof.public_inputs.append_boundary_digest;",
+            "if expected.append_opening_preflight_digest == [0u8; Hash::LENGTH]",
+            "if append_boundary_digest != [0u8; Hash::LENGTH]",
+            'field: "append_boundary_digest"',
+            "if expected.append_boundary_digest == [0u8; Hash::LENGTH]",
+            'field: "append_boundary_digest"',
+            "if append_boundary_digest != expected.append_boundary_digest",
+            'field: "append_boundary_digest"',
+        ),
+    )
+
+
+def check_recursive_spend_previous_proof_field_binding():
+    data_model = read("crates/iroha_data_model/src/offline/mod.rs")
+    body = extract_rust_function_body(
+        data_model,
+        "fn ensure_recursive_spend_previous_proof_matches(",
+        "recursive spend previous-proof public-input field binding",
+    )
+    expected_fields = [
+        "domain",
+        "evidence_digest",
+        "folded_public_inputs_hash",
+        "aggregation_transcript_digest",
+        "verifier_params_fingerprint",
+        "fixed_window_table_schedule_digest",
+        "fixed_window_shared_table_manifest_digest",
+        "fixed_window_table_base_digest",
+        "verifier_witness_batch_digest",
+        "recursive_proof_chain_digest",
+        "transition_profile_binding_digest",
+        "append_opening_preflight_digest",
+        "append_boundary_digest",
+        "recursive_verifier_scalar_projection_digest",
+        "verifier_opening_len",
+        "verifier_witness_count",
+        "hop_count",
+    ]
+    actual_fields = re.findall(r"ensure_field!\((\w+)\);", body)
+    if actual_fields != expected_fields:
+        fail(
+            "recursive spend previous-proof public-input field binding drifted; "
+            f"expected={expected_fields} actual={actual_fields}"
+        )
+    for needle in (
+        "previous_recursive_proof.public_inputs.$field != expected.$field",
+        'field: concat!("previous_recursive_proof.", stringify!($field))',
+        "previous_recursive_proof.public_inputs_hash != expected.public_inputs_hash()?",
+        'field: "previous_recursive_proof.public_inputs_hash"',
+    ):
+        if needle not in body:
+            fail(
+                "recursive spend previous-proof public-input field binding is missing "
+                f"coverage: {needle}"
+            )
+
+
+def check_recursive_compact_record_envelope_preflight_order():
+    core = read("crates/iroha_core/src/zk.rs")
+    decode_body = extract_rust_function_body(
+        core,
+        "fn decode_kagemusha_recursive_compact_pallas_open_envelopes(",
+        "recursive compact Pallas envelope decoder",
+    )
+    for forbidden in (
+        "kagemusha_derive_pallas_ipa_witnesses_from_open_envelopes",
+        "kagemusha_pallas_ipa_batch_verifier_preflight(",
+        "kagemusha_pallas_ipa_batch_verifier_preflight_bound_to_hop_proofs",
+    ):
+        if forbidden in decode_body:
+            fail(
+                "recursive compact Pallas decoder must stay decode/shape-only "
+                f"before record-backed preflight: {forbidden}"
+            )
+    for needle in (
+        "norito::decode_from_bytes(pallas_open_envelopes_archive)",
+        "envelopes.is_empty()",
+        "KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS",
+        "validate_kagemusha_pallas_open_envelope_preflight_shape",
+    ):
+        if needle not in decode_body:
+            fail(f"recursive compact Pallas decoder lost shape preflight: {needle}")
+
+    prover_body = extract_rust_function_body(
+        core,
+        "fn prove_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelopes(",
+        "recursive compact record-backed prover",
+    )
+    require_ordered_needles(
+        prover_body,
+        "recursive compact record-backed prover preflight ordering",
+        (
+            "let hop_count = record_bundle.bundle.steps.len();",
+            "if envelopes.len() != hop_count",
+            "validate_kagemusha_recursive_compact_record_envelope_preflight(",
+            'format!("invalid Kagemusha recursive compact record-backed Pallas preflight: {err}")',
+            "if hop_count == 1",
+            "kagemusha_derive_pallas_ipa_witnesses_from_open_envelopes(envelopes)",
+            "return prove_kagemusha_recursive_compact_payment_token_one_hop_from_record_bundle_and_pallas_open_envelopes",
+            "let first_record_bundle",
+        ),
+    )
 
 
 def check_docs_reserved_lineage_policy():
@@ -2963,6 +3778,16 @@ def run_checks():
     check_workflow_runs_policy_negative_controls()
     check_core_redeem_execution_order()
     check_rust_reserved_lineage_policy()
+    check_checked_fold_public_input_preverification_order()
+    check_append_digest_helpers_are_checked()
+    check_append_boundary_profile_comparison_is_complete()
+    check_recursive_public_input_schema_order_and_indices()
+    check_recursive_public_input_value_builder_order()
+    check_recursive_public_input_non_zero_groups()
+    check_recursive_append_semantic_non_zero_groups()
+    check_recursive_spend_proof_public_input_circuit_binding()
+    check_recursive_spend_previous_proof_field_binding()
+    check_recursive_compact_record_envelope_preflight_order()
     check_docs_reserved_lineage_policy()
     check_shared_fixture_manifest()
     check_shared_archive_fixture_manifest()
@@ -3225,6 +4050,63 @@ if mode == "--negative-control-data-model-transition-profile-current-hop-sets":
         raise SystemExit(0)
     raise SystemExit("negative control failed: transition-profile current-hop set drift was not detected")
 
+if mode == "--negative-control-data-model-proof-public-input-circuit-binding":
+    target = "crates/iroha_data_model/src/offline/mod.rs"
+    source = read(target)
+    mutated = source.replace(
+        "if expected.append_opening_preflight_digest == [0u8; Hash::LENGTH] {",
+        "if expected.append_opening_preflight_digest != [0u8; Hash::LENGTH] {",
+        1,
+    )
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate proof public-input circuit binding")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected proof public-input circuit binding drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: proof public-input circuit binding drift was not detected")
+
+if mode == "--negative-control-data-model-previous-proof-field-binding":
+    target = "crates/iroha_data_model/src/offline/mod.rs"
+    source = read(target)
+    function_start = source.find("fn ensure_recursive_spend_previous_proof_matches(")
+    if function_start < 0:
+        raise SystemExit("negative control failed: unable to locate previous-proof field binding")
+    needle = "    ensure_field!(folded_public_inputs_hash);\n"
+    field_index = source.find(needle, function_start)
+    if field_index < 0:
+        raise SystemExit("negative control failed: unable to mutate previous-proof folded hash binding")
+    mutated = source[:field_index] + source[field_index + len(needle) :]
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected previous-proof field binding drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: previous-proof field binding drift was not detected")
+
+if mode == "--negative-control-data-model-previous-proof-stale-hash-fixture":
+    target = "crates/iroha_data_model/src/offline/mod.rs"
+    source = read(target)
+    mutated = source.replace(
+        '            Hash::new(b"recursive-spend-stale-previous-proof-public-input-hash");',
+        '            Hash::new(b"recursive-spend-previous-proof-public-input-hash");',
+    )
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate stale previous-proof hash fixture")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected stale previous-proof hash fixture drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: stale previous-proof hash fixture drift was not detected")
+
 if mode == "--negative-control-core-append-cap-boundary":
     target = "crates/iroha_core/src/zk.rs"
     source = read(target)
@@ -3260,7 +4142,7 @@ if mode == "--negative-control-core-lineage-profile-split":
     except PolicyError as error:
         print("negative control rejected Reserved-lineage profile split drift")
         print(str(error).splitlines()[0])
-    raise SystemExit(0)
+        raise SystemExit(0)
     raise SystemExit("negative control failed: Reserved-lineage profile split drift was not detected")
 
 if mode == "--negative-control-core-proof-chain-accumulator":
@@ -3282,6 +4164,331 @@ if mode == "--negative-control-core-proof-chain-accumulator":
         raise SystemExit(0)
     raise SystemExit("negative control failed: proof-chain accumulator drift was not detected")
 
+if mode == "--negative-control-core-fixed-window-table-base-accumulator":
+    target = "crates/iroha_data_model/src/offline/mod.rs"
+    source = read(target)
+    mutated = source.replace(
+        "per-hop fixed-window table-base digest must stream across append",
+        "per-hop fixed-window table-base digest may be detached from append",
+        1,
+    )
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate fixed-window table-base accumulator coverage")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected fixed-window table-base accumulator drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: fixed-window table-base accumulator drift was not detected")
+
+if mode == "--negative-control-core-append-boundary-accumulator":
+    target = "crates/iroha_data_model/src/offline/mod.rs"
+    source = read(target)
+    mutated = source.replace(
+        "append-boundary digest must not feed back into the accumulator digest",
+        "append-boundary digest may feed back into the accumulator digest",
+        1,
+    )
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate append-boundary accumulator coverage")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected append-boundary accumulator drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: append-boundary accumulator drift was not detected")
+
+if mode == "--negative-control-core-previous-accumulator-boundary":
+    target = "crates/iroha_data_model/src/offline/mod.rs"
+    source = read(target)
+    mutated = source.replace(
+        'field: "append_boundary.previous_accumulator_digest"',
+        'field: "append_boundary.previous_accumulator_digest_unchecked"',
+        1,
+    )
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate previous accumulator boundary coverage")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected previous accumulator boundary drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: previous accumulator boundary drift was not detected")
+
+if mode == "--negative-control-core-resulting-accumulator-boundary":
+    target = "crates/iroha_core/src/zk.rs"
+    source = read(target)
+    mutated = source.replace(
+        "append_boundary.resulting_accumulator_digest != expected_accumulator_digest",
+        "append_boundary.resulting_accumulator_digest == expected_accumulator_digest",
+        1,
+    )
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate resulting accumulator boundary coverage")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected resulting accumulator boundary drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: resulting accumulator boundary drift was not detected")
+
+if mode == "--negative-control-core-append-boundary-digest-match":
+    target = "crates/iroha_core/src/zk.rs"
+    source = read(target)
+    mutated = source.replace(
+        "append_boundary.append_boundary_digest != accumulator.append_boundary_digest",
+        "append_boundary.append_boundary_digest == accumulator.append_boundary_digest",
+        1,
+    )
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate append-boundary digest match coverage")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected append-boundary digest match drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: append-boundary digest match drift was not detected")
+
+if mode == "--negative-control-core-append-boundary-context-matches":
+    target = "crates/iroha_core/src/zk.rs"
+    source = read(target)
+    mutated = source
+    for before, after in (
+        (
+            "append_boundary.transition_profile_binding_digest\n            != accumulator.transition_profile_binding_digest",
+            "append_boundary.transition_profile_binding_digest\n            == accumulator.transition_profile_binding_digest",
+        ),
+        (
+            "append_boundary.chain_asset_binding_digest != expected_chain_asset_binding_digest",
+            "append_boundary.chain_asset_binding_digest == expected_chain_asset_binding_digest",
+        ),
+        (
+            "append_boundary.final_note_binding_digest != expected_final_note_binding_digest",
+            "append_boundary.final_note_binding_digest == expected_final_note_binding_digest",
+        ),
+        (
+            "append_boundary.resulting_public_inputs_hash != expected_public_inputs_hash",
+            "append_boundary.resulting_public_inputs_hash == expected_public_inputs_hash",
+        ),
+    ):
+        updated = mutated.replace(before, after, 1)
+        if updated == mutated:
+            raise SystemExit(f"negative control failed: unable to mutate append-boundary context coverage: {before}")
+        mutated = updated
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected append-boundary context match drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: append-boundary context match drift was not detected")
+
+if mode == "--negative-control-core-append-digest-unchecked-surface":
+    target = "crates/iroha_data_model/src/offline/mod.rs"
+    source = read(target)
+    mutated = source
+    for helper in (
+        "kagemusha_recursive_spend_lineage_append_opening_preflight_digest_unchecked",
+        "kagemusha_recursive_spend_lineage_append_boundary_digest_unchecked",
+    ):
+        updated = mutated.replace(f"fn {helper}(", f"pub fn {helper}(", 1)
+        if updated == mutated:
+            raise SystemExit(f"negative control failed: unable to expose unchecked digest helper {helper}")
+        mutated = updated
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected append digest unchecked surface drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: append digest unchecked surface drift was not detected")
+
+if mode == "--negative-control-core-append-digest-wrapper-bypass":
+    target = "crates/iroha_data_model/src/offline/mod.rs"
+    source = read(target)
+    mutated = source
+    replacements = (
+        (
+            "    preflight.validate_context()?;\n"
+            "    Ok(preflight.append_opening_preflight_digest)",
+            "    kagemusha_recursive_spend_lineage_append_opening_preflight_digest_unchecked(preflight)",
+        ),
+        (
+            "    boundary.validate_context()?;\n"
+            "    Ok(boundary.append_boundary_digest)",
+            "    kagemusha_recursive_spend_lineage_append_boundary_digest_unchecked(boundary)",
+        ),
+    )
+    for before, after in replacements:
+        updated = mutated.replace(before, after, 1)
+        if updated == mutated:
+            raise SystemExit("negative control failed: unable to bypass checked append digest wrapper")
+        mutated = updated
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected append digest wrapper bypass drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: append digest wrapper bypass drift was not detected")
+
+if mode == "--negative-control-core-append-boundary-profile-comparison":
+    target = "crates/iroha_data_model/src/offline/mod.rs"
+    source = read(target)
+    mutated = source.replace(
+        "        ensure_field!(append_boundary_digest);\n",
+        "",
+        1,
+    )
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate append-boundary profile comparison")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected append-boundary profile comparison drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: append-boundary profile comparison drift was not detected")
+
+if mode == "--negative-control-core-recursive-public-input-schema-order":
+    target = "crates/iroha_data_model/src/offline/mod.rs"
+    source = read(target)
+    before = (
+        '"append_opening_preflight_digest_limb0","append_opening_preflight_digest_limb1",'
+        '"append_opening_preflight_digest_limb2","append_opening_preflight_digest_limb3",'
+        '"append_boundary_digest_limb0","append_boundary_digest_limb1",'
+        '"append_boundary_digest_limb2","append_boundary_digest_limb3"'
+    )
+    after = (
+        '"append_boundary_digest_limb0","append_boundary_digest_limb1",'
+        '"append_boundary_digest_limb2","append_boundary_digest_limb3",'
+        '"append_opening_preflight_digest_limb0","append_opening_preflight_digest_limb1",'
+        '"append_opening_preflight_digest_limb2","append_opening_preflight_digest_limb3"'
+    )
+    mutated = source.replace(before, after, 1)
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate recursive public-input schema order")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected recursive public-input schema order drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: recursive public-input schema order drift was not detected")
+
+if mode == "--negative-control-core-recursive-public-input-index-map":
+    target = "crates/iroha_core/src/zk.rs"
+    source = read(target)
+    mutated = source.replace(
+        "const KAGEMUSHA_RECURSIVE_AGGREGATION_APPEND_BOUNDARY_START_INDEX: usize = 48;",
+        "const KAGEMUSHA_RECURSIVE_AGGREGATION_APPEND_BOUNDARY_START_INDEX: usize = 44;",
+        1,
+    )
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate recursive public-input index map")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected recursive public-input index map drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: recursive public-input index map drift was not detected")
+
+if mode == "--negative-control-core-recursive-public-input-value-order":
+    target = "crates/iroha_core/src/zk.rs"
+    source = read(target)
+    before = """            append_opening_preflight_limbs[0],
+            append_opening_preflight_limbs[1],
+            append_opening_preflight_limbs[2],
+            append_opening_preflight_limbs[3],
+            append_boundary_limbs[0],
+            append_boundary_limbs[1],
+            append_boundary_limbs[2],
+            append_boundary_limbs[3],
+"""
+    after = """            append_boundary_limbs[0],
+            append_boundary_limbs[1],
+            append_boundary_limbs[2],
+            append_boundary_limbs[3],
+            append_opening_preflight_limbs[0],
+            append_opening_preflight_limbs[1],
+            append_opening_preflight_limbs[2],
+            append_opening_preflight_limbs[3],
+"""
+    mutated = source.replace(before, after, 1)
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate recursive public-input value order")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected recursive public-input value order drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: recursive public-input value order drift was not detected")
+
+if mode == "--negative-control-core-recursive-public-input-nonzero-groups":
+    target = "crates/iroha_core/src/zk.rs"
+    source = read(target)
+    mutated = source.replace(
+        "    [32, 33, 34, 35],",
+        "    [28, 29, 30, 31],",
+        1,
+    )
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate recursive public-input nonzero groups")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected recursive public-input nonzero group drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: recursive public-input nonzero group drift was not detected")
+
+if mode == "--negative-control-core-recursive-append-semantic-nonzero-groups":
+    target = "crates/iroha_core/src/zk.rs"
+    source = read(target)
+    before = """            Self::validate_public_limb_group_non_zero(
+                semantic,
+                super::KAGEMUSHA_RECURSIVE_AGGREGATION_APPEND_BOUNDARY_START_INDEX,
+                "append-boundary digest",
+            )?;
+"""
+    after = """            Self::validate_public_limb_group_non_zero(
+                semantic,
+                super::KAGEMUSHA_RECURSIVE_AGGREGATION_APPEND_OPENING_PREFLIGHT_START_INDEX,
+                "append-boundary digest",
+            )?;
+"""
+    mutated = source.replace(before, after, 1)
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate append semantic nonzero groups")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected append semantic nonzero group drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: append semantic nonzero group drift was not detected")
+
 if mode == "--negative-control-core-vesta-ipa-h-fold":
     target = "crates/iroha_core/src/zk.rs"
     source = read(target)
@@ -3302,7 +4509,7 @@ if mode == "--negative-control-core-vesta-ipa-h-fold":
     except PolicyError as error:
         print("negative control rejected non-native Vesta IPA H-fold drift")
         print(str(error).splitlines()[0])
-    raise SystemExit(0)
+        raise SystemExit(0)
     raise SystemExit("negative control failed: non-native Vesta IPA H-fold drift was not detected")
 
 if mode == "--negative-control-core-vesta-ipa-g-fold":
@@ -3442,6 +4649,60 @@ if mode == "--negative-control-core-fold-overlap-predecode":
         raise SystemExit(0)
     raise SystemExit("negative control failed: checked-fold overlap predecode drift was not detected")
 
+if mode == "--negative-control-core-fold-public-input-preverify-order":
+    target = "crates/iroha_core/src/zk.rs"
+    source = read(target)
+    mutated = source.replace(
+        "        validate_required_kagemusha_confidential_v2_step_public_inputs(chain_id, asset, step)?;\n"
+        "        verified_steps.push(kagemusha_verified_fold_step(step)?);",
+        "        verified_steps.push(kagemusha_verified_fold_step(step)?);\n"
+        "        validate_required_kagemusha_confidential_v2_step_public_inputs(chain_id, asset, step)?;",
+        1,
+    )
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate checked-fold public-input preverification order")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected checked-fold public-input preverification order drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: checked-fold public-input preverification order drift was not detected")
+
+if mode == "--negative-control-core-record-backed-fold-public-input-preverify-order":
+    target = "crates/iroha_core/src/zk.rs"
+    source = read(target)
+    mutated = source.replace(
+        "        validate_kagemusha_fold_verifier_record(step, record, block_height)?;\n"
+        "        validate_required_kagemusha_confidential_v2_step_public_inputs(\n"
+        "            &bundle.chain_id,\n"
+        "            &bundle.asset,\n"
+        "            step,\n"
+        "        )?;",
+        "        validate_required_kagemusha_confidential_v2_step_public_inputs(\n"
+        "            &bundle.chain_id,\n"
+        "            &bundle.asset,\n"
+        "            step,\n"
+        "        )?;\n"
+        "        validate_kagemusha_fold_verifier_record(step, record, block_height)?;",
+        1,
+    )
+    if mutated == source:
+        raise SystemExit(
+            "negative control failed: unable to mutate record-backed checked-fold public-input preverification order"
+        )
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected record-backed checked-fold public-input preverification order drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: record-backed checked-fold public-input preverification order drift was not detected"
+    )
+
 if mode == "--negative-control-core-lineage-witness-fold-predecode":
     target = "crates/iroha_core/src/zk.rs"
     source = read(target)
@@ -3579,32 +4840,47 @@ if mode == "--negative-control-core-recursive-compact-pallas-count":
     target = "crates/iroha_core/src/zk.rs"
     source = read(target)
     mutated = source.replace(
-        "extra compact Pallas opening must reject before unavailable",
+        "extra compact Pallas opening must reject before proving",
         "extra compact Pallas opening may return unavailable",
         1,
     )
     mutated = mutated.replace(
-        "missing compact Pallas opening must reject before unavailable",
+        "height-aware detached compact Pallas archive must reject before proving",
+        "height-aware detached compact Pallas archive may return unavailable",
+        1,
+    )
+    mutated = mutated.replace(
+        "height-aware extra compact Pallas opening must reject before proving",
+        "height-aware extra compact Pallas opening may return unavailable",
+        1,
+    )
+    mutated = mutated.replace(
+        "missing compact Pallas opening must reject before proving",
         "missing compact Pallas opening may return unavailable",
         1,
     )
     mutated = mutated.replace(
-        "duplicated multi-hop compact Pallas archive must reject before unavailable",
+        "height-aware missing compact Pallas opening must reject before proving",
+        "height-aware missing compact Pallas opening may return unavailable",
+        1,
+    )
+    mutated = mutated.replace(
+        "duplicated multi-hop compact Pallas archive must reject before proving",
         "duplicated multi-hop compact Pallas archive may return unavailable",
         1,
     )
     mutated = mutated.replace(
-        "height-aware duplicated multi-hop compact Pallas archive must reject before unavailable",
+        "height-aware duplicated multi-hop compact Pallas archive must reject before proving",
         "height-aware duplicated multi-hop compact Pallas archive may return unavailable",
         1,
     )
     mutated = mutated.replace(
-        "reordered multi-hop compact Pallas archive must reject before unavailable",
+        "reordered multi-hop compact Pallas archive must reject before proving",
         "reordered multi-hop compact Pallas archive may return unavailable",
         1,
     )
     mutated = mutated.replace(
-        "height-aware reordered multi-hop compact Pallas archive must reject before unavailable",
+        "height-aware reordered multi-hop compact Pallas archive must reject before proving",
         "height-aware reordered multi-hop compact Pallas archive may return unavailable",
         1,
     )
@@ -3623,8 +4899,13 @@ if mode == "--negative-control-core-recursive-compact-pallas-metadata":
     target = "crates/iroha_core/src/zk.rs"
     source = read(target)
     mutated = source.replace(
-        "forged multi-hop compact Pallas metadata must reject before unavailable",
+        "forged multi-hop compact Pallas metadata must reject before proving",
         "forged multi-hop compact Pallas metadata may return unavailable",
+        1,
+    )
+    mutated = mutated.replace(
+        "height-aware forged multi-hop compact Pallas metadata must reject before proving",
+        "height-aware forged multi-hop compact Pallas metadata may return unavailable",
         1,
     )
     if mutated == source:
@@ -3642,8 +4923,8 @@ if mode == "--negative-control-core-recursive-compact-cid-spoof-key":
     target = "crates/iroha_core/src/zk.rs"
     source = read(target)
     mutated = source.replace(
-        "CID-spoofed ABI-7 compact verifier key must reject before unavailable",
-        "CID-spoofed ABI-7 compact verifier key may return unavailable",
+        "CID-spoofed ABI-7 compact verifier key must reject",
+        "CID-spoofed ABI-7 compact verifier key may pass",
         1,
     )
     if mutated == source:
@@ -3699,22 +4980,22 @@ if mode == "--negative-control-bridge-recursive-compact-pallas-count":
     target = "crates/connect_norito_bridge/src/lib.rs"
     source = read(target)
     mutated = source.replace(
-        "ABI-7 compact prover must reject extra valid Pallas opening archives before the unavailable gate",
+        "ABI-7 compact prover must reject extra valid Pallas opening archives before proving",
         "ABI-7 compact prover may accept extra valid Pallas opening archives",
         1,
     )
     mutated = mutated.replace(
-        "ABI-7 compact prover must reject missing valid Pallas opening archives before the unavailable gate",
+        "ABI-7 compact prover must reject missing valid Pallas opening archives before proving",
         "ABI-7 compact prover may accept missing valid Pallas opening archives",
         1,
     )
     mutated = mutated.replace(
-        "ABI-7 compact prover must reject duplicated multi-hop valid Pallas opening archives before the unavailable gate",
+        "ABI-7 compact prover must reject duplicated multi-hop valid Pallas opening archives before proving",
         "ABI-7 compact prover may accept duplicated multi-hop valid Pallas opening archives",
         1,
     )
     mutated = mutated.replace(
-        "ABI-7 compact prover must reject reordered valid Pallas opening archives before the unavailable gate",
+        "ABI-7 compact prover must reject reordered valid Pallas opening archives before proving",
         "ABI-7 compact prover may accept reordered valid Pallas opening archives",
         1,
     )
@@ -3733,7 +5014,7 @@ if mode == "--negative-control-bridge-recursive-compact-pallas-metadata":
     target = "crates/connect_norito_bridge/src/lib.rs"
     source = read(target)
     mutated = source.replace(
-        "ABI-7 compact prover must reject forged multi-hop Pallas metadata before the unavailable gate",
+        "ABI-7 compact prover must reject forged multi-hop Pallas metadata before proving",
         "ABI-7 compact prover may accept forged multi-hop Pallas metadata",
         1,
     )
@@ -4254,6 +5535,44 @@ if mode == "--negative-control-reserved-lineage-payload-negative-controls-workfl
         print(str(error).splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: Reserved-lineage payload reducer drift was not detected")
+
+if mode == "--negative-control-payload-hop-list-negative-controls-workflow":
+    target = WORKFLOW_PATH
+    source = read(target)
+    mutated = source.replace(
+        "ci/check_kagemusha_recursive_spend_payload_bench.sh --negative-control-duplicate-hop",
+        "ci/check_kagemusha_recursive_spend_payload_bench.sh --synthetic-duplicate-hop-check",
+        1,
+    )
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate payload hop-list reducer negative controls")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected payload hop-list reducer workflow drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: payload hop-list reducer drift was not detected")
+
+if mode == "--negative-control-payload-benchmark-name-negative-controls-workflow":
+    target = WORKFLOW_PATH
+    source = read(target)
+    mutated = source.replace(
+        "ci/check_kagemusha_recursive_spend_payload_bench.sh --negative-control-malformed-payload-benchmark-name",
+        "ci/check_kagemusha_recursive_spend_payload_bench.sh --synthetic-malformed-payload-name-check",
+        1,
+    )
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate payload benchmark-name reducer negative controls")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected payload benchmark-name reducer workflow drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: payload benchmark-name reducer drift was not detected")
 
 if mode == "--negative-control-payload-negative-controls-comment-workflow":
     target = WORKFLOW_PATH

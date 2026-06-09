@@ -1366,19 +1366,46 @@ public final class ToriiOfflineNoteOutcomeProvider: OfflineNoteOutcomeProvider {
 
 @available(iOS 15.0, macOS 12.0, *)
 public final class IrohaOfflineNoteTransactionSubmitter: OfflineNoteTransactionSubmitter {
+    public static let gasAssetIdMetadataKey = "gas_asset_id"
+    public static let feeSponsorMetadataKey = "fee_sponsor"
+
     private let sdk: IrohaSDK
     private let signingKey: SigningKey
     private let chainId: String
     private let authority: String
+    private let transactionMetadata: [String: ToriiJSONValue]
+
+    public static func gasAssetMetadata(_ gasAssetId: String) -> [String: ToriiJSONValue] {
+        feeMetadata(gasAssetId: gasAssetId, feeSponsor: nil)
+    }
+
+    public static func feeMetadata(gasAssetId: String,
+                                   feeSponsor: String?) -> [String: ToriiJSONValue] {
+        var metadata: [String: ToriiJSONValue] = [
+            gasAssetIdMetadataKey: .string(normalizedMetadataValue(gasAssetId, field: "gasAssetId"))
+        ]
+        if let feeSponsor {
+            metadata[feeSponsorMetadataKey] = .string(normalizedMetadataValue(feeSponsor, field: "feeSponsor"))
+        }
+        return metadata
+    }
+
+    private static func normalizedMetadataValue(_ value: String, field: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        precondition(!trimmed.isEmpty, "\(field) must not be blank")
+        return trimmed
+    }
 
     public init(sdk: IrohaSDK,
                 signingKey: SigningKey,
                 chainId: String,
-                authority: String) {
+                authority: String,
+                transactionMetadata: [String: ToriiJSONValue] = [:]) {
         self.sdk = sdk
         self.signingKey = signingKey
         self.chainId = chainId
         self.authority = authority
+        self.transactionMetadata = transactionMetadata
     }
 
     public func submitAudit(_ audit: OfflineNoteAuditBundle) async throws {
@@ -1386,7 +1413,8 @@ public final class IrohaOfflineNoteTransactionSubmitter: OfflineNoteTransactionS
             auditOfflineNote: AuditOfflineNoteRequest(
                 chainId: chainId,
                 authority: authority,
-                audit: audit
+                audit: audit,
+                metadata: transactionMetadata
             ),
             signingKey: signingKey
         )
@@ -1397,7 +1425,8 @@ public final class IrohaOfflineNoteTransactionSubmitter: OfflineNoteTransactionS
             redeemOfflineNote: RedeemOfflineNoteRequest(
                 chainId: chainId,
                 authority: authority,
-                redemption: redemption
+                redemption: redemption,
+                metadata: transactionMetadata
             ),
             signingKey: signingKey
         )
@@ -1410,7 +1439,8 @@ public final class IrohaOfflineNoteTransactionSubmitter: OfflineNoteTransactionS
                 chainId: chainId,
                 authority: authority,
                 bearerAuditTrail: bearerAuditTrail,
-                redemption: redemption
+                redemption: redemption,
+                metadata: transactionMetadata
             ),
             signingKey: signingKey
         )

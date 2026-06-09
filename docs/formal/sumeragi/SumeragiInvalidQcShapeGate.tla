@@ -139,7 +139,7 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+InvalidQcShapeMatchesSpec ==
   /\ Matches(EmptyBitmapNonzero)
   /\ Matches(ZeroSentinelNonempty)
   /\ Matches(BothEmptyAndZero)
@@ -147,6 +147,9 @@ SafetyFast ==
   /\ Matches(HeightZeroAloneNonempty)
   /\ Matches(ViewZeroAloneNonempty)
   /\ Matches(ValidNonemptyNonzero)
+
+SafetyFast ==
+  InvalidQcShapeMatchesSpec
 
 BugEmptyBitmapNotDetected ==
   Matches(EmptyBitmapNonzero)

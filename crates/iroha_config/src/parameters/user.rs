@@ -190,7 +190,7 @@ enum KyberKeyConfig {
 }
 use hex::FromHex;
 use iroha_crypto::{
-    Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair, PrivateKey, PublicKey,
+    Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair, PrivateKey, PublicKey, keccak256, sha256,
     soranet::handshake::{
         DEFAULT_CLIENT_CAPABILITIES, DEFAULT_DESCRIPTOR_COMMIT, DEFAULT_RELAY_CAPABILITIES,
     },
@@ -4463,6 +4463,30 @@ pub struct SccpRouteManifest {
 }
 
 impl SccpRouteManifest {
+    const SORA_COUNTERPARTY_DOMAIN: u32 = 0;
+    const BSC_COUNTERPARTY_DOMAIN: u32 = 2;
+    const TRON_COUNTERPARTY_DOMAIN: u32 = 5;
+    const TRON_DESTINATION_BINDING_LABEL: &'static [u8] = b"iroha:sccp:tron-destination-binding:v1";
+    const TRON_GROTH16_BACKEND: &'static str = "tron-groth16-bn254-v1";
+    const SCCP_PROOF_FAMILY_STARK_FRI: &'static str = "stark-fri-v1";
+    const TRON_MAINNET_NETWORK: &'static str = "mainnet";
+    const TRON_MAINNET_CHAIN: &'static str = "tron-mainnet";
+    const TRON_MAINNET_CHAIN_ID_HEX: &'static str = "0x2b6653dc";
+    const TRON_MAINNET_NETWORK_ID_HEX: &'static str =
+        "0x000000000000000000000000000000000000000000000000000000002b6653dc";
+    const TRON_ADDRESS_PREFIX: u8 = 0x41;
+    const TRON_BASE58CHECK_BYTES: usize = 25;
+    const TRON_BASE58CHECK_PAYLOAD_BYTES: usize = 21;
+    const TRON_BASE58CHECK_CHECKSUM_BYTES: usize = 4;
+    const TRON_BASE58_ALPHABET: &'static [u8; 58] =
+        b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+    const TRON_TAIRA_XOR_ROUTE_ID: &'static str = "taira_tron_xor";
+    const TAIRA_XOR_ASSET_KEY: &'static str = "xor";
+    const TRON_VERIFIER_TARGET: &'static str = "TronContract";
+    const TAIRA_XOR_SETTLEMENT_ASSET_DEFINITION_ID: &'static str = "6TEAJqbb8oEPmLncoNiMRbLEK6tw";
+    const TAIRA_BURN_RECORD_VK_BACKEND: &'static str = "halo2/ipa";
+    const TAIRA_BURN_RECORD_VK_NAME: &'static str = "taira_xor_burn_record_v1";
+    const TAIRA_BURN_RECORD_GAS_LIMIT: u64 = 2_000_000;
     const BSC_DIAGNOSTIC_DISABLED_REASON: &'static str =
         "BSC verifier material is diagnostic and must be replaced before production readiness.";
     const BSC_DIAGNOSTIC_VERIFIER_KEY_HASHES: &'static [&'static str] =
@@ -4476,6 +4500,106 @@ impl SccpRouteManifest {
             "SCCP BSC route manifest chain_id_hex must be BSC testnet 0x61"
         );
         value
+    }
+
+    fn normalize_tron_chain_id_hex(value: &str) -> String {
+        value.trim().to_ascii_lowercase()
+    }
+
+    fn tron_base58_digit(byte: u8) -> Option<u8> {
+        Self::TRON_BASE58_ALPHABET
+            .iter()
+            .position(|candidate| *candidate == byte)
+            .and_then(|idx| u8::try_from(idx).ok())
+    }
+
+    fn decode_tron_base58(field: &str, value: &str) -> Vec<u8> {
+        assert!(
+            value.trim() == value && !value.is_empty(),
+            "SCCP TRON route manifest {field} must be a canonical TRON Base58Check mainnet address"
+        );
+        let mut decoded_le = Vec::<u8>::new();
+        for byte in value.bytes() {
+            let Some(digit) = Self::tron_base58_digit(byte) else {
+                panic!(
+                    "SCCP TRON route manifest {field} must use canonical TRON Base58Check characters"
+                );
+            };
+            let mut carry = u32::from(digit);
+            for limb in &mut decoded_le {
+                let next = u32::from(*limb) * 58 + carry;
+                *limb = (next & 0xff) as u8;
+                carry = next >> 8;
+            }
+            while carry > 0 {
+                decoded_le.push((carry & 0xff) as u8);
+                carry >>= 8;
+            }
+        }
+
+        let leading_zeroes = value
+            .bytes()
+            .take_while(|byte| *byte == Self::TRON_BASE58_ALPHABET[0])
+            .count();
+        let mut decoded = Vec::with_capacity(leading_zeroes + decoded_le.len());
+        decoded.resize(leading_zeroes, 0);
+        decoded.extend(decoded_le.iter().rev().copied());
+        decoded
+    }
+
+    fn encode_tron_base58(bytes: &[u8]) -> String {
+        let leading_zeroes = bytes.iter().take_while(|byte| **byte == 0).count();
+        let mut value = bytes.to_vec();
+        let mut encoded = Vec::new();
+        let mut start = leading_zeroes;
+        while start < value.len() {
+            let mut remainder = 0_u32;
+            for byte in &mut value[start..] {
+                let next = (remainder << 8) + u32::from(*byte);
+                *byte = (next / 58) as u8;
+                remainder = next % 58;
+            }
+            encoded.push(Self::TRON_BASE58_ALPHABET[remainder as usize]);
+            while start < value.len() && value[start] == 0 {
+                start += 1;
+            }
+        }
+        for _ in 0..leading_zeroes {
+            encoded.push(Self::TRON_BASE58_ALPHABET[0]);
+        }
+        if encoded.is_empty() {
+            encoded.push(Self::TRON_BASE58_ALPHABET[0]);
+        }
+        encoded.reverse();
+        String::from_utf8(encoded).expect("TRON Base58 alphabet is ASCII")
+    }
+
+    fn normalize_tron_base58_address(field: &str, value: &str) -> String {
+        let decoded = Self::decode_tron_base58(field, value);
+        assert!(
+            decoded.len() == Self::TRON_BASE58CHECK_BYTES,
+            "SCCP TRON route manifest {field} must decode to 25 Base58Check bytes"
+        );
+        let (payload, checksum) = decoded.split_at(Self::TRON_BASE58CHECK_PAYLOAD_BYTES);
+        assert!(
+            payload.first().copied() == Some(Self::TRON_ADDRESS_PREFIX),
+            "SCCP TRON route manifest {field} must be a non-zero TRON Base58Check mainnet address"
+        );
+        assert!(
+            payload[1..].iter().copied().any(|byte| byte != 0),
+            "SCCP TRON route manifest {field} must be a non-zero TRON Base58Check mainnet address"
+        );
+        let first_hash = sha256(payload);
+        let second_hash = sha256(first_hash);
+        assert!(
+            checksum == &second_hash[..Self::TRON_BASE58CHECK_CHECKSUM_BYTES],
+            "SCCP TRON route manifest {field} checksum is invalid"
+        );
+        assert!(
+            Self::encode_tron_base58(&decoded) == value,
+            "SCCP TRON route manifest {field} must be canonical Base58Check"
+        );
+        value.to_owned()
     }
 
     fn normalize_hex32(field: &str, value: &str) -> String {
@@ -4504,6 +4628,28 @@ impl SccpRouteManifest {
                 Some(Self::normalize_hex32(field, value))
             }
         })
+    }
+
+    fn hex32_bytes(field: &str, value: &str) -> [u8; 32] {
+        let value = Self::normalize_hex32(field, value);
+        let mut bytes = [0_u8; 32];
+        hex::decode_to_slice(&value[2..], &mut bytes).expect("normalized hex32 must decode");
+        bytes
+    }
+
+    fn abi_word_u32(value: u32) -> [u8; 32] {
+        let mut word = [0_u8; 32];
+        word[28..].copy_from_slice(&value.to_be_bytes());
+        word
+    }
+
+    fn tron_abi_word_address(field: &str, value: &str) -> [u8; 32] {
+        let value = Self::normalize_tron_base58_address(field, value);
+        let decoded = Self::decode_tron_base58(field, &value);
+        let payload = &decoded[..Self::TRON_BASE58CHECK_PAYLOAD_BYTES];
+        let mut word = [0_u8; 32];
+        word[11..].copy_from_slice(payload);
+        word
     }
 
     fn normalize_evm_address(field: &str, value: &str) -> String {
@@ -4555,28 +4701,164 @@ impl SccpRouteManifest {
         Some(format!("{prefix}{expected_hash}"))
     }
 
-    fn validate_bsc_post_deploy_evidence(&self, fields: [(&str, Option<&str>); 7]) {
+    fn validate_post_deploy_evidence(
+        route_family: &str,
+        full_toml_ready: Option<bool>,
+        fields: &[(&str, Option<&str>)],
+    ) {
         assert!(
-            self.post_deploy_full_toml_ready == Some(true),
-            "SCCP BSC route manifest production_ready requires post_deploy_full_toml_ready = true"
+            full_toml_ready == Some(true),
+            "SCCP {route_family} route manifest production_ready requires post_deploy_full_toml_ready = true"
         );
         for (field, value) in fields {
             assert!(
                 value.is_some(),
-                "SCCP BSC route manifest production_ready requires {field}"
+                "SCCP {route_family} route manifest production_ready requires {field}"
             );
         }
     }
 
-    fn resolve_required_alias(role: &str, aliases: &[(&'static str, Option<&str>)]) -> String {
+    fn expected_tron_destination_binding_key(
+        network_id_hex: &str,
+        destination_verifier_address: &str,
+        verifier_code_hash: &str,
+        verifier_key_hash: &str,
+    ) -> String {
+        let network_id = network_id_hex.strip_prefix("0x").unwrap_or(network_id_hex);
+        format!(
+            "tron:{}:{}:{}:{}:{}:{}",
+            Self::SORA_COUNTERPARTY_DOMAIN,
+            Self::TRON_COUNTERPARTY_DOMAIN,
+            network_id,
+            destination_verifier_address,
+            verifier_code_hash,
+            verifier_key_hash
+        )
+    }
+
+    fn expected_tron_destination_binding_hash(
+        network_id_hex: &str,
+        destination_verifier_address: &str,
+        verifier_code_hash: &str,
+        verifier_key_hash: &str,
+    ) -> String {
+        let mut payload = Vec::with_capacity(32 * 9);
+        payload.extend_from_slice(&keccak256(Self::TRON_DESTINATION_BINDING_LABEL));
+        payload.extend_from_slice(&keccak256(Self::TRON_GROTH16_BACKEND.as_bytes()));
+        payload.extend_from_slice(&keccak256(Self::SCCP_PROOF_FAMILY_STARK_FRI.as_bytes()));
+        payload.extend_from_slice(&Self::hex32_bytes("network_id_hex", network_id_hex));
+        payload.extend_from_slice(&Self::abi_word_u32(Self::SORA_COUNTERPARTY_DOMAIN));
+        payload.extend_from_slice(&Self::abi_word_u32(Self::TRON_COUNTERPARTY_DOMAIN));
+        payload.extend_from_slice(&Self::tron_abi_word_address(
+            "destination verifier address",
+            destination_verifier_address,
+        ));
+        payload.extend_from_slice(&Self::hex32_bytes("verifier_code_hash", verifier_code_hash));
+        payload.extend_from_slice(&Self::hex32_bytes("verifier_key_hash", verifier_key_hash));
+
+        format!("0x{}", hex::encode(keccak256(payload)))
+    }
+
+    fn validate_tron_production_metadata(
+        &self,
+        chain_id_hex: &str,
+        network_id_hex: &str,
+        destination_verifier_address: &str,
+        verifier_code_hash: &str,
+        verifier_key_hash: &str,
+        destination_binding_hash: &str,
+    ) {
+        assert!(
+            self.route_id == Self::TRON_TAIRA_XOR_ROUTE_ID,
+            "SCCP TRON route manifest production_ready requires route_id = {}",
+            Self::TRON_TAIRA_XOR_ROUTE_ID
+        );
+        assert!(
+            self.asset_key == Self::TAIRA_XOR_ASSET_KEY,
+            "SCCP TRON route manifest production_ready requires asset_key = {}",
+            Self::TAIRA_XOR_ASSET_KEY
+        );
+        assert!(
+            self.tron_network == Self::TRON_MAINNET_NETWORK,
+            "SCCP TRON route manifest production_ready requires tron_network = {}",
+            Self::TRON_MAINNET_NETWORK
+        );
+        assert!(
+            self.chain == Self::TRON_MAINNET_CHAIN,
+            "SCCP TRON route manifest production_ready requires chain = {}",
+            Self::TRON_MAINNET_CHAIN
+        );
+        assert!(
+            chain_id_hex == Self::TRON_MAINNET_CHAIN_ID_HEX,
+            "SCCP TRON route manifest production_ready requires chain_id_hex = {}",
+            Self::TRON_MAINNET_CHAIN_ID_HEX
+        );
+        assert!(
+            self.verifier_target == Self::TRON_VERIFIER_TARGET,
+            "SCCP TRON route manifest production_ready requires verifier_target = {}",
+            Self::TRON_VERIFIER_TARGET
+        );
+        assert!(
+            network_id_hex == Self::TRON_MAINNET_NETWORK_ID_HEX,
+            "SCCP TRON route manifest production_ready requires network_id_hex = {}",
+            Self::TRON_MAINNET_NETWORK_ID_HEX
+        );
+        let expected_destination_binding_key = Self::expected_tron_destination_binding_key(
+            network_id_hex,
+            destination_verifier_address,
+            verifier_code_hash,
+            verifier_key_hash,
+        );
+        assert!(
+            self.destination_binding_key == expected_destination_binding_key,
+            "SCCP TRON route manifest production_ready requires destination_binding_key = {expected_destination_binding_key}"
+        );
+        let expected_destination_binding_hash = Self::expected_tron_destination_binding_hash(
+            network_id_hex,
+            destination_verifier_address,
+            verifier_code_hash,
+            verifier_key_hash,
+        );
+        assert!(
+            destination_binding_hash == expected_destination_binding_hash,
+            "SCCP TRON route manifest production_ready requires destination_binding_hash = {expected_destination_binding_hash}"
+        );
+        assert!(
+            self.taira_burn_record_settlement_asset_definition_id
+                == Self::TAIRA_XOR_SETTLEMENT_ASSET_DEFINITION_ID,
+            "SCCP TRON route manifest production_ready requires taira_burn_record_settlement_asset_definition_id = {}",
+            Self::TAIRA_XOR_SETTLEMENT_ASSET_DEFINITION_ID
+        );
+        assert!(
+            self.taira_burn_record_vk_backend == Self::TAIRA_BURN_RECORD_VK_BACKEND,
+            "SCCP TRON route manifest production_ready requires taira_burn_record_vk_backend = {}",
+            Self::TAIRA_BURN_RECORD_VK_BACKEND
+        );
+        assert!(
+            self.taira_burn_record_vk_name == Self::TAIRA_BURN_RECORD_VK_NAME,
+            "SCCP TRON route manifest production_ready requires taira_burn_record_vk_name = {}",
+            Self::TAIRA_BURN_RECORD_VK_NAME
+        );
+        assert!(
+            self.taira_burn_record_gas_limit == Self::TAIRA_BURN_RECORD_GAS_LIMIT,
+            "SCCP TRON route manifest production_ready requires taira_burn_record_gas_limit = {}",
+            Self::TAIRA_BURN_RECORD_GAS_LIMIT
+        );
+    }
+
+    fn resolve_required_alias(
+        role: &str,
+        trim_aliases: bool,
+        aliases: &[(&'static str, Option<&str>)],
+    ) -> String {
         let mut resolved: Option<(&'static str, String)> = None;
         for (name, value) in aliases {
             let Some(value) = value else {
                 continue;
             };
-            let value = value.trim();
+            let value = if trim_aliases { value.trim() } else { value };
             assert!(
-                !value.is_empty(),
+                !value.trim().is_empty(),
                 "SCCP route manifest {role} alias `{name}` must not be empty"
             );
             if let Some((previous_name, previous_value)) = resolved.as_ref() {
@@ -4599,9 +4881,10 @@ impl SccpRouteManifest {
         )
     }
 
-    fn source_bridge_address(&self) -> String {
+    fn source_bridge_address(&self, trim_aliases: bool) -> String {
         Self::resolve_required_alias(
             "source bridge address",
+            trim_aliases,
             &[
                 (
                     "source_bridge_address",
@@ -4623,9 +4906,10 @@ impl SccpRouteManifest {
         )
     }
 
-    fn destination_verifier_address(&self) -> String {
+    fn destination_verifier_address(&self, trim_aliases: bool) -> String {
         Self::resolve_required_alias(
             "destination verifier address",
+            trim_aliases,
             &[
                 (
                     "destination_verifier_address",
@@ -4647,7 +4931,7 @@ impl SccpRouteManifest {
     }
 
     fn uses_bsc_diagnostic_verifier_key_hash(&self) -> bool {
-        self.counterparty_domain == 2
+        self.counterparty_domain == Self::BSC_COUNTERPARTY_DOMAIN
             && Self::BSC_DIAGNOSTIC_VERIFIER_KEY_HASHES
                 .iter()
                 .any(|hash| self.verifier_key_hash.trim().eq_ignore_ascii_case(hash))
@@ -4698,43 +4982,57 @@ impl SccpRouteManifest {
     }
 
     fn parse(self) -> actual::SccpRouteManifest {
-        let is_bsc_route = self.counterparty_domain == 2;
+        let is_bsc_route = self.counterparty_domain == Self::BSC_COUNTERPARTY_DOMAIN;
+        let is_tron_route = self.counterparty_domain == Self::TRON_COUNTERPARTY_DOMAIN;
+        let strict_route_hashes = is_bsc_route || is_tron_route;
         let chain_id_hex = if is_bsc_route {
             Self::normalize_bsc_chain_id_hex(&self.chain_id_hex)
+        } else if is_tron_route {
+            Self::normalize_tron_chain_id_hex(&self.chain_id_hex)
         } else {
             self.chain_id_hex.trim().to_owned()
         };
-        let network_id_hex = if is_bsc_route {
+        let network_id_hex = if strict_route_hashes {
             Self::normalize_hex32("network_id_hex", &self.network_id_hex)
         } else {
             self.network_id_hex.trim().to_owned()
         };
         let taira_xor_token_address = if is_bsc_route {
             Self::normalize_evm_address("taira_xor_token_address", &self.taira_xor_token_address)
+        } else if is_tron_route {
+            Self::normalize_tron_base58_address(
+                "taira_xor_token_address",
+                &self.taira_xor_token_address,
+            )
         } else {
             self.taira_xor_token_address.trim().to_owned()
         };
         let taira_xor_bridge_address = if is_bsc_route {
             Self::normalize_evm_address("taira_xor_bridge_address", &self.taira_xor_bridge_address)
+        } else if is_tron_route {
+            Self::normalize_tron_base58_address(
+                "taira_xor_bridge_address",
+                &self.taira_xor_bridge_address,
+            )
         } else {
             self.taira_xor_bridge_address.trim().to_owned()
         };
-        let verifier_code_hash = if is_bsc_route {
+        let verifier_code_hash = if strict_route_hashes {
             Self::normalize_hex32("verifier_code_hash", &self.verifier_code_hash)
         } else {
             self.verifier_code_hash.trim().to_owned()
         };
-        let verifier_key_hash = if is_bsc_route {
+        let verifier_key_hash = if strict_route_hashes {
             Self::normalize_hex32("verifier_key_hash", &self.verifier_key_hash)
         } else {
             self.verifier_key_hash.trim().to_owned()
         };
-        let destination_binding_hash = if is_bsc_route {
+        let destination_binding_hash = if strict_route_hashes {
             Self::normalize_hex32("destination_binding_hash", &self.destination_binding_hash)
         } else {
             self.destination_binding_hash.trim().to_owned()
         };
-        let taira_burn_record_artifact_sha256 = if is_bsc_route {
+        let taira_burn_record_artifact_sha256 = if strict_route_hashes {
             Self::normalize_hex32(
                 "taira_burn_record_artifact_sha256",
                 &self.taira_burn_record_artifact_sha256,
@@ -4742,7 +5040,7 @@ impl SccpRouteManifest {
         } else {
             self.taira_burn_record_artifact_sha256.trim().to_owned()
         };
-        let taira_burn_record_code_hash = if is_bsc_route {
+        let taira_burn_record_code_hash = if strict_route_hashes {
             Self::normalize_hex32(
                 "taira_burn_record_code_hash",
                 &self.taira_burn_record_code_hash,
@@ -4752,12 +5050,12 @@ impl SccpRouteManifest {
         };
         let uses_diagnostic_verifier_key_hash = self.uses_bsc_diagnostic_verifier_key_hash();
         let proof_artifact_hash = self.proof_artifact_hash();
-        let proof_artifact_hash = if is_bsc_route {
+        let proof_artifact_hash = if strict_route_hashes {
             Self::normalize_optional_hex32("proof_artifact_hash", proof_artifact_hash.as_deref())
         } else {
             proof_artifact_hash
         };
-        let proving_key_hash = if is_bsc_route {
+        let proving_key_hash = if strict_route_hashes {
             Self::normalize_optional_hex32("proving_key_hash", self.proving_key_hash.as_deref())
         } else {
             self.proving_key_hash
@@ -4766,7 +5064,7 @@ impl SccpRouteManifest {
                 .filter(|value| !value.is_empty())
                 .map(ToOwned::to_owned)
         };
-        let post_deploy_source_bridge_config_hash = if is_bsc_route {
+        let post_deploy_source_bridge_config_hash = if strict_route_hashes {
             Self::normalize_optional_hex32(
                 "post_deploy_source_bridge_config_hash",
                 self.post_deploy_source_bridge_config_hash.as_deref(),
@@ -4774,7 +5072,7 @@ impl SccpRouteManifest {
         } else {
             self.post_deploy_source_bridge_config_hash.clone()
         };
-        let post_deploy_source_event_transaction_id = if is_bsc_route {
+        let post_deploy_source_event_transaction_id = if strict_route_hashes {
             Self::normalize_optional_hex32(
                 "post_deploy_source_event_transaction_id",
                 self.post_deploy_source_event_transaction_id.as_deref(),
@@ -4782,7 +5080,7 @@ impl SccpRouteManifest {
         } else {
             self.post_deploy_source_event_transaction_id.clone()
         };
-        let post_deploy_route_canary_evidence_hash = if is_bsc_route {
+        let post_deploy_route_canary_evidence_hash = if strict_route_hashes {
             Self::normalize_optional_hex32(
                 "post_deploy_route_canary_evidence_hash",
                 self.post_deploy_route_canary_evidence_hash.as_deref(),
@@ -4790,7 +5088,7 @@ impl SccpRouteManifest {
         } else {
             self.post_deploy_route_canary_evidence_hash.clone()
         };
-        let post_deploy_route_canary_transaction_id = if is_bsc_route {
+        let post_deploy_route_canary_transaction_id = if strict_route_hashes {
             Self::normalize_optional_hex32(
                 "post_deploy_route_canary_transaction_id",
                 self.post_deploy_route_canary_transaction_id.as_deref(),
@@ -4798,7 +5096,7 @@ impl SccpRouteManifest {
         } else {
             self.post_deploy_route_canary_transaction_id.clone()
         };
-        let post_deploy_offline_full_toml_sha256 = if is_bsc_route {
+        let post_deploy_offline_full_toml_sha256 = if strict_route_hashes {
             Self::normalize_optional_hex32(
                 "post_deploy_offline_full_toml_sha256",
                 self.post_deploy_offline_full_toml_sha256.as_deref(),
@@ -4876,10 +5174,12 @@ impl SccpRouteManifest {
                 && (proof_artifact_hash.is_none() || proving_key_hash.is_none())),
             "SCCP BSC route manifest production_ready requires proof_artifact_hash and proving_key_hash"
         );
-        let source_bridge_address = self.source_bridge_address();
-        let destination_verifier_address = self.destination_verifier_address();
+        let source_bridge_address = self.source_bridge_address(!is_tron_route);
+        let destination_verifier_address = self.destination_verifier_address(!is_tron_route);
         let source_bridge_address = if is_bsc_route {
             Self::normalize_evm_address("source bridge address", &source_bridge_address)
+        } else if is_tron_route {
+            Self::normalize_tron_base58_address("source bridge address", &source_bridge_address)
         } else {
             source_bridge_address
         };
@@ -4888,10 +5188,16 @@ impl SccpRouteManifest {
                 "destination verifier address",
                 &destination_verifier_address,
             )
+        } else if is_tron_route {
+            Self::normalize_tron_base58_address(
+                "destination verifier address",
+                &destination_verifier_address,
+            )
         } else {
             destination_verifier_address
         };
-        if is_bsc_route {
+        if is_bsc_route || is_tron_route {
+            let route_family = if is_bsc_route { "BSC" } else { "TRON" };
             assert!(
                 BTreeSet::from([
                     taira_xor_token_address.as_str(),
@@ -4901,40 +5207,87 @@ impl SccpRouteManifest {
                 ])
                 .len()
                     == 4,
-                "SCCP BSC route manifest token, bridge, source bridge, and verifier addresses must be distinct"
+                "SCCP {route_family} route manifest token, bridge, source bridge, and verifier addresses must be distinct"
             );
         }
         if self.production_ready && is_bsc_route {
-            self.validate_bsc_post_deploy_evidence([
-                (
-                    "post_deploy_source_bridge_config_hash",
-                    post_deploy_source_bridge_config_hash.as_deref(),
-                ),
-                (
-                    "post_deploy_source_event_transaction_id",
-                    post_deploy_source_event_transaction_id.as_deref(),
-                ),
-                (
-                    "post_deploy_source_event_explorer_url",
-                    post_deploy_source_event_explorer_url.as_deref(),
-                ),
-                (
-                    "post_deploy_route_canary_evidence_hash",
-                    post_deploy_route_canary_evidence_hash.as_deref(),
-                ),
-                (
-                    "post_deploy_route_canary_transaction_id",
-                    post_deploy_route_canary_transaction_id.as_deref(),
-                ),
-                (
-                    "post_deploy_route_canary_explorer_url",
-                    post_deploy_route_canary_explorer_url.as_deref(),
-                ),
-                (
-                    "post_deploy_offline_full_toml_sha256",
-                    post_deploy_offline_full_toml_sha256.as_deref(),
-                ),
-            ]);
+            Self::validate_post_deploy_evidence(
+                "BSC",
+                self.post_deploy_full_toml_ready,
+                &[
+                    (
+                        "post_deploy_source_bridge_config_hash",
+                        post_deploy_source_bridge_config_hash.as_deref(),
+                    ),
+                    (
+                        "post_deploy_source_event_transaction_id",
+                        post_deploy_source_event_transaction_id.as_deref(),
+                    ),
+                    (
+                        "post_deploy_source_event_explorer_url",
+                        post_deploy_source_event_explorer_url.as_deref(),
+                    ),
+                    (
+                        "post_deploy_route_canary_evidence_hash",
+                        post_deploy_route_canary_evidence_hash.as_deref(),
+                    ),
+                    (
+                        "post_deploy_route_canary_transaction_id",
+                        post_deploy_route_canary_transaction_id.as_deref(),
+                    ),
+                    (
+                        "post_deploy_route_canary_explorer_url",
+                        post_deploy_route_canary_explorer_url.as_deref(),
+                    ),
+                    (
+                        "post_deploy_offline_full_toml_sha256",
+                        post_deploy_offline_full_toml_sha256.as_deref(),
+                    ),
+                ],
+            );
+        }
+        assert!(
+            !(self.production_ready
+                && self.route_id == Self::TRON_TAIRA_XOR_ROUTE_ID
+                && !is_tron_route),
+            "SCCP TRON route manifest production_ready requires counterparty_domain = {}",
+            Self::TRON_COUNTERPARTY_DOMAIN
+        );
+        if self.production_ready && is_tron_route {
+            self.validate_tron_production_metadata(
+                &chain_id_hex,
+                &network_id_hex,
+                &destination_verifier_address,
+                &verifier_code_hash,
+                &verifier_key_hash,
+                &destination_binding_hash,
+            );
+            Self::validate_post_deploy_evidence(
+                "TRON",
+                self.post_deploy_full_toml_ready,
+                &[
+                    (
+                        "post_deploy_source_bridge_config_hash",
+                        post_deploy_source_bridge_config_hash.as_deref(),
+                    ),
+                    (
+                        "post_deploy_source_event_transaction_id",
+                        post_deploy_source_event_transaction_id.as_deref(),
+                    ),
+                    (
+                        "post_deploy_route_canary_evidence_hash",
+                        post_deploy_route_canary_evidence_hash.as_deref(),
+                    ),
+                    (
+                        "post_deploy_route_canary_transaction_id",
+                        post_deploy_route_canary_transaction_id.as_deref(),
+                    ),
+                    (
+                        "post_deploy_offline_full_toml_sha256",
+                        post_deploy_offline_full_toml_sha256.as_deref(),
+                    ),
+                ],
+            );
         }
         let disabled_reason = if !self.production_ready
             && uses_diagnostic_verifier_key_hash
@@ -5062,6 +5415,76 @@ mod sccp_route_manifest_user_config_tests {
         manifest.post_deploy_full_toml_ready = Some(true);
         manifest.post_deploy_offline_full_toml_sha256 = Some(format!("0x{}", "4e".repeat(32)));
         manifest
+    }
+
+    fn production_ready_tron_route_manifest() -> SccpRouteManifest {
+        let network_id_hex = SccpRouteManifest::TRON_MAINNET_NETWORK_ID_HEX;
+        let verifier_address = "TKJtY3UFssmhUSg1FPdXyxWcHKS9SWVtCJ";
+        let verifier_code_hash = format!("0x{}", "ab".repeat(32));
+        let verifier_key_hash = format!("0x{}", "ac".repeat(32));
+        let destination_binding_key = SccpRouteManifest::expected_tron_destination_binding_key(
+            network_id_hex,
+            verifier_address,
+            &verifier_code_hash,
+            &verifier_key_hash,
+        );
+        let destination_binding_hash = SccpRouteManifest::expected_tron_destination_binding_hash(
+            network_id_hex,
+            verifier_address,
+            &verifier_code_hash,
+            &verifier_key_hash,
+        );
+        SccpRouteManifest {
+            version: 1,
+            route_id: "taira_tron_xor".to_owned(),
+            asset_key: "xor".to_owned(),
+            tron_network: "mainnet".to_owned(),
+            chain: "tron-mainnet".to_owned(),
+            chain_id_hex: "0x2b6653dc".to_owned(),
+            counterparty_domain: 5,
+            verifier_target: "TronContract".to_owned(),
+            production_ready: true,
+            disabled_reason: None,
+            network_id_hex: network_id_hex.to_owned(),
+            taira_xor_token_address: "TT1DaQcqzoJEzEaHDU8nsmiKtiyhXHaSKD".to_owned(),
+            taira_xor_bridge_address: "TWvqVD8cuSTqisoDrPKfwkkrpAsziL3XFh".to_owned(),
+            source_bridge_address: None,
+            sccp_bsc_source_bridge_address: None,
+            bsc_source_bridge_address: None,
+            sccp_tron_source_bridge_address: Some("TJk5a8Y1bWkUxqLeBEKiyLEJD2ytoBrsa9".to_owned()),
+            destination_verifier_address: None,
+            verifier_address: None,
+            sccp_bsc_destination_verifier_address: None,
+            bsc_verifier_address: None,
+            evm_verifier_address: None,
+            tron_verifier_address: Some(verifier_address.to_owned()),
+            verifier_code_hash,
+            verifier_key_hash,
+            proof_artifact_hash: None,
+            prover_artifact_hash: None,
+            circuit_artifact_hash: None,
+            proving_key_hash: None,
+            destination_binding_key,
+            destination_binding_hash,
+            taira_burn_record_settlement_asset_definition_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
+                .to_owned(),
+            taira_burn_record_contract_artifact_b64: "QUJDREVGRw==".to_owned(),
+            taira_burn_record_artifact_sha256: format!("0x{}", "ae".repeat(32)),
+            taira_burn_record_code_hash: format!("0x{}", "af".repeat(32)),
+            taira_burn_record_vk_backend: "halo2/ipa".to_owned(),
+            taira_burn_record_vk_name: "taira_xor_burn_record_v1".to_owned(),
+            taira_burn_record_gas_limit: 2_000_000,
+            settlement_contract_address: None,
+            settlement_contract_alias: Some("taira_xor_burn_record".to_owned()),
+            post_deploy_full_toml_ready: Some(true),
+            post_deploy_source_bridge_config_hash: Some(format!("0x{}", "b1".repeat(32))),
+            post_deploy_source_event_transaction_id: Some(format!("0x{}", "b2".repeat(32))),
+            post_deploy_source_event_explorer_url: None,
+            post_deploy_route_canary_evidence_hash: Some(format!("0x{}", "b3".repeat(32))),
+            post_deploy_route_canary_transaction_id: Some(format!("0x{}", "b4".repeat(32))),
+            post_deploy_route_canary_explorer_url: None,
+            post_deploy_offline_full_toml_sha256: Some(format!("0x{}", "b5".repeat(32))),
+        }
     }
 
     #[test]
@@ -5328,6 +5751,313 @@ mod sccp_route_manifest_user_config_tests {
             actual.proof_artifact_hash.as_deref(),
             Some(expected_proof_hash.as_str())
         );
+    }
+
+    #[test]
+    fn production_ready_tron_route_with_post_deploy_evidence_parses() {
+        let mut manifest = production_ready_tron_route_manifest();
+        manifest.chain_id_hex = " 0X2B6653DC ".to_owned();
+        manifest.network_id_hex =
+            " 0X000000000000000000000000000000000000000000000000000000002B6653DC ".to_owned();
+        manifest.verifier_code_hash = format!("0X{}", "AB".repeat(32));
+        manifest.verifier_key_hash = format!("0X{}", "AC".repeat(32));
+        manifest.destination_binding_hash =
+            " 0X4C5B208D148CEE784D611F77434A7DFAC6B22A37B86FAF82063D371BA7D3A1BC ".to_owned();
+        manifest.post_deploy_source_bridge_config_hash = Some(format!(" 0X{} ", "B1".repeat(32)));
+
+        let actual = manifest.parse();
+
+        let expected_source_bridge_config_hash = format!("0x{}", "b1".repeat(32));
+        assert!(actual.production_ready);
+        assert_eq!(actual.counterparty_domain, 5);
+        assert_eq!(actual.chain_id_hex, "0x2b6653dc");
+        assert_eq!(
+            actual.network_id_hex,
+            SccpRouteManifest::TRON_MAINNET_NETWORK_ID_HEX
+        );
+        assert_eq!(actual.verifier_code_hash, format!("0x{}", "ab".repeat(32)));
+        assert_eq!(
+            actual.destination_binding_hash,
+            "0x4c5b208d148cee784d611f77434a7dfac6b22a37b86faf82063d371ba7d3a1bc"
+        );
+        assert_eq!(
+            actual.post_deploy_source_bridge_config_hash.as_deref(),
+            Some(expected_source_bridge_config_hash.as_str())
+        );
+        assert_eq!(actual.post_deploy_source_event_explorer_url, None);
+        assert_eq!(actual.proof_artifact_hash, None);
+        assert_eq!(actual.proving_key_hash, None);
+    }
+
+    #[test]
+    fn tron_destination_binding_hash_matches_evidence_vector() {
+        assert_eq!(
+            SccpRouteManifest::expected_tron_destination_binding_hash(
+                SccpRouteManifest::TRON_MAINNET_NETWORK_ID_HEX,
+                "TKJtY3UFssmhUSg1FPdXyxWcHKS9SWVtCJ",
+                &format!("0x{}", "ab".repeat(32)),
+                &format!("0x{}", "ac".repeat(32)),
+            ),
+            "0x4c5b208d148cee784d611f77434a7dfac6b22a37b86faf82063d371ba7d3a1bc"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "taira_xor_token_address checksum is invalid")]
+    fn tron_route_rejects_bad_token_address_checksum() {
+        let mut manifest = production_ready_tron_route_manifest();
+        manifest.taira_xor_token_address = "TT1DaQcqzoJEzEaHDU8nsmiKtiyhXHaSKE".to_owned();
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "source bridge address must be a canonical TRON Base58Check mainnet address"
+    )]
+    fn tron_route_rejects_whitespace_wrapped_source_bridge_address() {
+        let mut manifest = production_ready_tron_route_manifest();
+        manifest.sccp_tron_source_bridge_address =
+            Some(" TJk5a8Y1bWkUxqLeBEKiyLEJD2ytoBrsa9 ".to_owned());
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "destination verifier address must use canonical TRON Base58Check characters"
+    )]
+    fn tron_route_rejects_malformed_verifier_address_characters() {
+        let mut manifest = production_ready_tron_route_manifest();
+        manifest.tron_verifier_address = Some("not-a-tron-address".to_owned());
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "destination verifier address must be a non-zero TRON Base58Check mainnet address"
+    )]
+    fn tron_route_rejects_zero_payload_verifier_address() {
+        let mut manifest = production_ready_tron_route_manifest();
+        manifest.tron_verifier_address = Some("T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb".to_owned());
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(expected = "taira_xor_bridge_address must decode to 25 Base58Check bytes")]
+    fn tron_route_rejects_noncanonical_extra_leading_zero_bridge_address() {
+        let mut manifest = production_ready_tron_route_manifest();
+        manifest.taira_xor_bridge_address = "1TWvqVD8cuSTqisoDrPKfwkkrpAsziL3XFh".to_owned();
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "SCCP TRON route manifest token, bridge, source bridge, and verifier addresses must be distinct"
+    )]
+    fn tron_route_rejects_duplicate_contract_role_addresses() {
+        let mut manifest = production_ready_tron_route_manifest();
+        manifest.taira_xor_bridge_address = manifest.taira_xor_token_address.clone();
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "SCCP TRON route manifest production_ready requires route_id = taira_tron_xor"
+    )]
+    fn production_ready_tron_route_rejects_wrong_route_id() {
+        let mut manifest = production_ready_tron_route_manifest();
+        manifest.route_id = "foreign_tron_xor".to_owned();
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "SCCP TRON route manifest production_ready requires counterparty_domain = 5"
+    )]
+    fn production_ready_tron_route_rejects_wrong_counterparty_domain() {
+        let mut manifest = production_ready_tron_route_manifest();
+        manifest.counterparty_domain = 6;
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(expected = "SCCP TRON route manifest production_ready requires asset_key = xor")]
+    fn production_ready_tron_route_rejects_wrong_asset_key() {
+        let mut manifest = production_ready_tron_route_manifest();
+        manifest.asset_key = "foreign-xor".to_owned();
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "SCCP TRON route manifest production_ready requires tron_network = mainnet"
+    )]
+    fn production_ready_tron_route_rejects_testnet_network() {
+        let mut manifest = production_ready_tron_route_manifest();
+        manifest.tron_network = "nile".to_owned();
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "SCCP TRON route manifest production_ready requires chain = tron-mainnet"
+    )]
+    fn production_ready_tron_route_rejects_wrong_chain() {
+        let mut manifest = production_ready_tron_route_manifest();
+        manifest.chain = "tron-nile".to_owned();
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "SCCP TRON route manifest production_ready requires chain_id_hex = 0x2b6653dc"
+    )]
+    fn production_ready_tron_route_rejects_testnet_chain_id_hex() {
+        let mut manifest = production_ready_tron_route_manifest();
+        manifest.chain_id_hex = "0xcd8690dc".to_owned();
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "SCCP TRON route manifest production_ready requires network_id_hex = 0x000000000000000000000000000000000000000000000000000000002b6653dc"
+    )]
+    fn production_ready_tron_route_rejects_testnet_network_id_hex() {
+        let mut manifest = production_ready_tron_route_manifest();
+        manifest.network_id_hex =
+            "0x00000000000000000000000000000000000000000000000000000000cd8690dc".to_owned();
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "SCCP TRON route manifest production_ready requires destination_binding_key ="
+    )]
+    fn production_ready_tron_route_rejects_wrong_destination_binding_key() {
+        let mut manifest = production_ready_tron_route_manifest();
+        manifest.destination_binding_key = "tron:stale-binding".to_owned();
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "SCCP TRON route manifest production_ready requires destination_binding_hash = 0x4c5b208d148cee784d611f77434a7dfac6b22a37b86faf82063d371ba7d3a1bc"
+    )]
+    fn production_ready_tron_route_rejects_wrong_destination_binding_hash() {
+        let mut manifest = production_ready_tron_route_manifest();
+        manifest.destination_binding_hash = format!("0x{}", "ad".repeat(32));
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "SCCP TRON route manifest production_ready requires verifier_target = TronContract"
+    )]
+    fn production_ready_tron_route_rejects_wrong_verifier_target() {
+        let mut manifest = production_ready_tron_route_manifest();
+        manifest.verifier_target = "EvmContract".to_owned();
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "SCCP TRON route manifest production_ready requires taira_burn_record_settlement_asset_definition_id = 6TEAJqbb8oEPmLncoNiMRbLEK6tw"
+    )]
+    fn production_ready_tron_route_rejects_wrong_settlement_asset_id() {
+        let mut manifest = production_ready_tron_route_manifest();
+        manifest.taira_burn_record_settlement_asset_definition_id = "xor#universal".to_owned();
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "SCCP TRON route manifest production_ready requires taira_burn_record_vk_backend = halo2/ipa"
+    )]
+    fn production_ready_tron_route_rejects_wrong_burn_record_vk_backend() {
+        let mut manifest = production_ready_tron_route_manifest();
+        manifest.taira_burn_record_vk_backend = "halo2_ipa".to_owned();
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "SCCP TRON route manifest production_ready requires taira_burn_record_vk_name = taira_xor_burn_record_v1"
+    )]
+    fn production_ready_tron_route_rejects_wrong_burn_record_vk_name() {
+        let mut manifest = production_ready_tron_route_manifest();
+        manifest.taira_burn_record_vk_name = "stale_burn_record_v1".to_owned();
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "SCCP TRON route manifest production_ready requires taira_burn_record_gas_limit = 2000000"
+    )]
+    fn production_ready_tron_route_rejects_wrong_burn_record_gas_limit() {
+        let mut manifest = production_ready_tron_route_manifest();
+        manifest.taira_burn_record_gas_limit = 1_999_999;
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "SCCP TRON route manifest production_ready requires post_deploy_full_toml_ready = true"
+    )]
+    fn production_ready_tron_route_requires_post_deploy_full_toml_ready() {
+        let mut manifest = production_ready_tron_route_manifest();
+        manifest.post_deploy_full_toml_ready = Some(false);
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "SCCP TRON route manifest production_ready requires post_deploy_offline_full_toml_sha256"
+    )]
+    fn production_ready_tron_route_requires_offline_full_toml_hash() {
+        let mut manifest = production_ready_tron_route_manifest();
+        manifest.post_deploy_offline_full_toml_sha256 = None;
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "post_deploy_source_event_transaction_id must be a 0x-prefixed 32-byte hex value"
+    )]
+    fn tron_route_rejects_malformed_post_deploy_hashes() {
+        let mut manifest = production_ready_tron_route_manifest();
+        manifest.post_deploy_source_event_transaction_id = Some("0x1234".to_owned());
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(expected = "verifier_key_hash must be non-zero")]
+    fn tron_route_rejects_zero_core_hashes() {
+        let mut manifest = production_ready_tron_route_manifest();
+        manifest.verifier_key_hash = format!("0x{}", "00".repeat(32));
+
+        let _ = manifest.parse();
     }
 
     #[test]

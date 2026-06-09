@@ -204,6 +204,21 @@ Safety ==
     /\ vnextSlots = SpecSlots(candidate)
     /\ retainedRounds = SpecRounds(candidate)
 
+ExactInflightMatchesSpec ==
+  candidate = "none" \/ inflight = SpecInflight(candidate)
+
+ExactVNextInflightMatchesSpec ==
+  candidate = "none" \/ vnextInflight = SpecVNextInflight(candidate)
+
+ExactSupersededMatchesSpec ==
+  candidate = "none" \/ superseded = SpecSuperseded(candidate)
+
+ExactSlotsMatchSpec ==
+  candidate = "none" \/ vnextSlots = SpecSlots(candidate)
+
+ExactRetainedRoundsMatchSpec ==
+  candidate = "none" \/ retainedRounds = SpecRounds(candidate)
+
 SpecTargetRemoved ==
   candidate = "none" \/
     /\ Target \notin inflight

@@ -112,11 +112,14 @@ TypeInvariant ==
      }
   /\ checked \in 0..14
 
-SafetyFast ==
+RbcRecoveryHelperMatchesSpec ==
   /\ \A c \in CommittedCases:
        ActualCommitted(c) = SpecCommitted(c)
   /\ \A c \in PayloadCases:
        ActualNeedsPayload(c) = SpecNeedsPayload(c)
+
+SafetyFast ==
+  RbcRecoveryHelperMatchesSpec
 
 AllCommittedMatches ==
   \A c \in CommittedCases:

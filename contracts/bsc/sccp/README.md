@@ -37,6 +37,10 @@ verifier address plus the route bridge address. Live readback should record:
 - `TairaXorBscSccpBridge.verifier()`, `verifierCodeHash()`,
   `verifierKeyHash()`, `networkId()`, `expectedSourceDomain()`, and
   `expectedTargetDomain()` match rollout evidence.
+- `SccpGroth16Bn254MessageVerifier.verifyingKeyHash()` equals the
+  `verifierKeyHash()` stored by the route bridge, so deployment evidence cannot
+  trust a hand-entered verifier key hash that does not match the deployed
+  verifier contract.
 
 The raw verifier does not expose `destinationBindingHash()`. Tooling must not
 require that getter on the verifier address for BSC.
@@ -92,7 +96,14 @@ TAIRA burn-record artifact SHA-256 before writing TOML. The backend accepts
 generic/BSC route address fields and the generated overlay still mirrors the
 same EVM addresses into legacy TRON-named fields for mixed-version nodes.
 Conflicting generic, BSC-specific, and legacy aliases are rejected before the
-route is loaded.
+route is loaded. Production BSC deployment addresses, post-deploy canary
+evidence, verifier code/key, destination binding, proof/proving, and native
+bundle hash fields also reject same-object duplicate aliases even when the
+duplicate values match, so generated operator manifests cannot hide stale
+cryptographic material behind redundant field names. App-side BSC preflight
+also rejects ambiguous route identity aliases and duplicate object containers
+such as `postDeployLiveEvidence` / `post_deploy_live_evidence`; those checks
+are required by sidecar, smoke-readiness, and production-gate tooling.
 
 Quick verification:
 

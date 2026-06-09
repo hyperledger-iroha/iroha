@@ -12,6 +12,7 @@ Torii now exposes two SCCP bundle families:
 ## SCCP launch scope
 
 The active SCCP surface is limited to Ethereum, BSC, Solana, TON, and TRON.
+Substrate/Polkadot networks are explicitly outside SCCP launch support for now.
 Torii public SCCP discovery, proof manifests, route readiness, SDK helpers, and
 operator scripts must advertise only those lanes. Unsupported domain ids fail at
 the absent-manifest/backend boundary rather than routing through diagnostic
@@ -19,15 +20,65 @@ relay paths.
 Retired runtime-network families are not supported for now. Future support
 requires a new source-proof design, fresh fixtures, SDK/Torii surface review,
 and explicit governance approval rather than reviving diagnostic code paths.
-Retired platform-family lanes are explicitly outside SCCP launch support for
-now.
-Substrate/Polkadot networks are explicitly outside SCCP launch support for now.
+The retired-network surface guard requires explicit no-support launch-scope
+wording in the docs and status files before release evidence can pass.
 The active launch policy is Ethereum-mainnet lane readiness. The active Ethereum launch lane
 can open from complete mainnet source-proof, source-adapter deployment,
 destination rollout, and route-canary evidence without waiting for future
 lanes. Non-Ethereum lanes remain fail-closed until their own launch policy opens,
 with the first-release Ethereum-mainnet launch policy preserving the same
 unsupported-domain gates described above.
+The release-readiness checklist treats that active-lane identity as evidence:
+the normalized lane summary must stay on domain `1`, chain `eth`, report
+`production_ready = true`, and carry boolean `true` flags for source verifier
+material, source-adapter deployment, destination rollout, and route allowlist
+records before the required-records item can become ready.
+The no-unresolved-blockers checklist also inspects the active lane's own
+blocker list instead of trusting only the top-level aggregate, so lane-local
+operator holds or malformed blocker entries keep release readiness blocked even
+if a copied summary omits them from the aggregate list.
+Release-bundle public blocker lists are schema-owned evidence: manifest,
+readiness-report, corridor, release-checklist, embedded evidence, standalone
+all-lanes, and lane blocker arrays must contain non-empty strings with no
+surrounding whitespace, so hand-edited padded blockers cannot be normalized into
+accepted release metadata.
+Release-readiness and bundle verification pin that public blocker-list schema
+as source inventory before published bundle readiness can pass, including
+duplicate rejection, ready-surface empty-blocker checks, and invalid-marker
+rendering for malformed blocker containers.
+Public scalar metadata uses the same rule for release-checklist item
+ids/titles, cryptographic-evidence chain and route-canary source labels,
+user-prover submission surface text, all-lanes lane chain labels,
+destination-binding keys, and route-canary status/source fields.
+Release-readiness and bundle verification pin that public scalar-text schema as
+source inventory before published bundle readiness can pass.
+The all-lanes release checklist also treats route-canary `status` and
+`evidence_source` as canonical strings before semantic matching, so padded or
+non-string canary scalars stay schema blockers instead of ambiguous not-ready
+text.
+Release-readiness and bundle verification pin that all-lanes route-canary
+scalar schema as source inventory before production evidence can pass.
+Destination rollout and route allowlist blocker containers are pinned the same
+way: source inventory must retain the canonical blocker-list rejection path and
+adversarial governed-blocker tests before governed evidence can pass.
+The active launch route-canary evidence source is also schema-owned evidence:
+missing, empty, padded, or non-string values block release readiness before the
+exact `evm_message_proof_accepted_transaction` source match is checked.
+Native EVM prover SDK artifact ids also reject surrounding whitespace in both
+readiness generation and release-bundle verification, so a padded SDK name
+cannot be reported as an unknown SDK while hiding the required canonical row.
+Portal/mobile runtime SDK selectors for direct byte verification,
+resolver-backed bundle loading, and native prover self-test preflights follow
+the same canonical text policy before SDK artifact lookup or callbacks run.
+Release-readiness and bundle verification pin those canonical native SDK-id
+regressions across the public JavaScript, Kotlin/JVM, Java Android, and Swift
+SDK tests before native prover evidence can pass.
+Cryptographic-evidence rows preserve raw route-canary and source-adapter gate
+boolean/container values from the normalized evidence summary, so malformed
+truthy strings or wrong-shaped audit hash containers remain visible to release
+bundle schema checks instead of being coerced into ready-looking values.
+Missing future-lane route-canary bindings render as explicit boolean `false`;
+present malformed binding values remain preserved for verifier rejection.
 
 ## User-side prover SDKs
 
@@ -1122,7 +1173,18 @@ source-material record hash, source-adapter deployment record hash, and
 destination binding hash; any supplied `--route-allowlist-hash` that does not
 match that canonical lane evidence tuple fails before JSON or TOML is emitted,
 and route allowlist evidence requires `--expected-destination-binding-hash` even
-for JSON dry-runs. Omitting route allowlist arguments keeps JSON output in
+for JSON dry-runs. The release-readiness governed-deployment checklist also
+requires the normalized active launch summary to carry canonical non-zero
+source-material, source-deployment, destination-binding, and expected
+destination-binding hashes, with the supplied destination binding matching its
+recomputed expected value. For the active EVM launch lane, source-adapter gate
+metadata must remain absent/empty because no full-light-client source gate is
+required. The release-readiness checklist independently requires the
+normalized active launch summary to carry canonical non-zero source-material,
+source-deployment, destination-binding, route-allowlist, and expected
+route-allowlist hashes, with the route hash matching its recomputed expected
+value before the route-allowlist item can become ready. Omitting route
+allowlist arguments keeps JSON output in
 binding-only audit mode so operators can compute the expected binding before
 staging governed route evidence. Production TOML also requires replayable
 bridge-wrapper and verifier runtime bytecode, a non-zero bridge runtime code
@@ -1256,6 +1318,12 @@ blocks, or synthetic transcript-role aliases. Public release-bundle
 verification applies the same non-zero rule to each EVM route-canary
 transaction/public-input word published in readiness and all-lanes JSON. A
 manually supplied canary hash is only accepted as a pin to that derived value.
+The release-readiness checklist also gates the active launch lane on the
+normalized route-canary transaction metadata: the evidence source must be the
+EVM `MessageProofAccepted` transaction, the transaction hash, receipt block
+hash, receipts root, and message id must be canonical non-zero bytes32 values,
+the receipt block number must be positive, and the receipt block must be marked
+finalized before the route-canary item can become ready.
 The live TOML
 carries the observed RPC chain id, bridge wrapper runtime code hash, verifier
 runtime code hash, their observed
@@ -1653,6 +1721,19 @@ the production TRON -> SORA source lane (`source_domain = 5`,
 admission will reject. Full rollout TOML also fixes the destination verifier
 side to the paired SORA -> TRON lane (`destination_source_domain = 0`,
 `destination_target_domain = 5`) and the canonical `stark-fri-v1` proof family.
+Runtime route-manifest parsing applies the same launch-lane pin before accepting
+a production-ready TAIRA XOR TRON record: `route_id`, `counterparty_domain`,
+`asset_key`, `tron_network`, `chain`, `chain_id_hex`, `network_id_hex`,
+`destination_binding_key`, `verifier_target`, and the TAIRA burn-record
+settlement asset/verifier-key/gas profile must match the governed mainnet lane.
+The parser normalizes uppercase or whitespace-wrapped mainnet chain/network ids
+to their canonical values, recomputes the dynamic TRON destination-binding key
+and hash from network id, verifier address, verifier code hash, and verifier
+key hash, then rejects foreign/testnet ids or stale binding/settlement metadata. Before
+those governed metadata checks, TRON runtime parsing also requires the token,
+bridge, source bridge, and destination verifier contract literals to be
+canonical non-zero TRON Base58Check mainnet addresses and rejects duplicate
+contract-role addresses.
 The renderer also rejects template-derived TRON source trust-anchor, consensus,
 message-inclusion, or finality-policy hashes before emitting governance TOML, so
 operators must provide live deployed component hashes. The direct material and
@@ -1783,7 +1864,11 @@ receipt-only canary from satisfying the full-TOML gate when the submitted
 verifier call drifts from the emitted event, owner/signature evidence, or
 `usedMessageProofs` state is not carried. Source-event transaction readback uses
 the same single-governed-log policy for `SccpSourceEvent(bytes32)` before it can
-emit replayable offline source-event args. The offline direct TRON renderer
+emit replayable offline source-event args. TAIRA XOR route-manifest production
+readiness also requires that source-event transaction readback to carry an empty
+blocker list when `source_event_transaction_production_ready` is true; malformed
+or contradictory blocker containers fail before a production-ready route manifest
+can be rendered. The offline direct TRON renderer
 requires the same `--route-canary-transaction-*` fields plus
 `--route-canary-used-message-proof` for full TOML, rejects reused transcript
 hash roles, derives the canary hash when `--route-canary-evidence-hash` is
@@ -2082,7 +2167,12 @@ python3 scripts/sccp_all_lanes_evidence.py path/to/source-*.toml path/to/rollout
 The preflight merges the TOML snippets, requires one source verifier material,
 one source-adapter deployment, one destination rollout, and one route allowlist
 for each advertised SCCP remote domain, and exits non-zero with JSON blockers
-when any lane is incomplete. It also invokes each lane's canonical source
+when any lane is incomplete. Direct validator calls also convert malformed
+evidence roots or non-string section keys into structured blockers before
+lane-level missing-evidence diagnostics are emitted. Destination rollout and
+route allowlist `blockers` fields must be empty lists of non-empty canonical
+strings; scalar, empty, padded, or non-string blocker entries become explicit
+all-lanes blockers before launch readiness can pass. It also invokes each lane's canonical source
 evidence validator, rejecting non-canonical source-adapter verifier keys and
 template-derived component hashes before governance staging. It also rejects
 source-material, source-adapter deployment, and Solana/TON audit records that
@@ -2187,6 +2277,28 @@ repeats those cross-lane checks against the published all-lanes JSON. One
 successful post-deploy route canary therefore cannot be replayed as proof for
 another lane. The preflight is an offline operator check; it does not need
 signing keys or live-chain credentials.
+TAIRA BSC XOR route-overlay generation also treats explicit post-deploy blocker
+metadata as production evidence: `productionReady` route manifests require
+`postDeployLiveEvidence` blocker arrays such as `productionBlockers`,
+`postDeployProductionBlockers`, `sourceEventTransactionProductionBlockers`, and
+`routeCanaryProductionBlockers` to be absent or empty, and malformed blocker
+containers fail closed before Torii TOML is rendered. Route-manifest JSON string
+fields are canonical at the record boundary: surrounding whitespace in route
+ids, asset keys, network ids, post-deploy transaction ids, or offline full-TOML
+hashes is rejected instead of being trimmed into accepted production metadata.
+The release-readiness source inventory pins those BSC route-config guards,
+including lowercase bytes32, lowercase EVM address, network metadata, and
+adversarial manifest tests, before governed TAIRA XOR overlays can satisfy
+production readiness.
+TRON route-overlay generation is pinned the same way: release-readiness and
+bundle verification require the source inventory to keep canonical JSON string,
+lowercase bytes32, canonical Base58 address, network metadata, and adversarial
+manifest tests in place before governed TAIRA XOR TRON overlays can satisfy
+production readiness.
+Runtime TRON route manifests parsed from node configuration are pinned by
+source inventory as well: the Rust parser must retain mainnet metadata checks,
+dynamic destination-binding recomputation, Base58 address canonicalization, and
+post-deploy anchor rejection before runtime config evidence can pass.
 Ready lanes include the canonical source verifier material, source-adapter
 deployment record hashes, and destination binding, route canary, and route
 allowlist summaries in the JSON output for governance comparison.
@@ -2337,8 +2449,13 @@ release-report or release-bundle module hooks for the artifact shapes it owns;
 the copied-evidence summary is recomputed through the all-lanes evidence
 validator directly, while readiness Markdown, release-note attachments,
 corridor phases, phase transcripts, cryptographic evidence rows, and
-user-prover submission surfaces are verifier-owned. The manifest and
-readiness-report JSON roots reject missing or unknown top-level fields, and
+user-prover submission surfaces are verifier-owned. Release-readiness plus
+bundle verification pin the corridor phase-transcript
+checks as required source inventory: exact phase markers, traced command
+fragments, observed non-command completion and success output, dry-run
+rejection, and forged-block rejection must stay in place before corridor logs
+can satisfy public bundle readiness. The manifest and readiness-report JSON
+roots reject missing or unknown top-level fields, and
 manifest/report artifact entries reject unknown fields and require artifact
 `bytes`/`sha256` claims to keep canonical JSON
 integer/string types, so unreviewed operator claims or malformed metadata
@@ -2349,7 +2466,23 @@ production-ready flags are considered; manifest, report, embedded-evidence,
 corridor, checklist, and checklist-item readiness flags must be real JSON
 booleans; and nested readiness sections such as report `evidence`,
 `release_checklist`, `corridor`, and summary `release_checklist` must also keep
-their object shape while top-level `input_artifacts` must remain a list. The
+their object shape while top-level `input_artifacts` must remain a list.
+All-lanes source-adapter gate summaries use the same exact-boolean rule:
+malformed `required` or `ready` values become governed-deployment blockers
+instead of clearing through truthiness, and manifest comparisons against the
+recomputed active launch checklist use the exact readiness value. Malformed
+lane record, destination-binding, route-allowlist, route-canary, or lane-local
+blocker containers also become explicit checklist blockers instead of raising,
+hiding route-canary gaps, or letting no-unresolved-blockers pass. The
+standalone readiness report also requires the active launch checklist `ready`
+value to be exactly boolean `true` before top-level `production_ready` can be
+published. The public verifier's recomputed active launch checklist now mirrors
+the report generator's exact metadata blockers for required record flags,
+governed source/deployment/destination hashes, route allowlist binding, and
+route-canary transaction evidence, so hand-edited truthy or malformed values
+cannot satisfy manifest-vs-summary readiness comparisons. Release-readiness and
+bundle verification pin that active checklist schema as source inventory before
+production evidence can pass. The
 verifier recomputes the all-lanes
 summary by loading the all-lanes evidence validator directly against the copied
 TOML evidence files before comparing it with the standalone summary and
@@ -2362,7 +2495,76 @@ operator-side evidence source after the bundle is built. The
 manifest root must include the fixed readiness fields, and its
 `production_ready`, `release_checklist_ready`, `corridor_ready`, and `blockers`
 claims must match the readiness report and all-lanes summary instead of being
-accepted as standalone release-manager assertions. The
+accepted as standalone release-manager assertions. Bundle generation preserves
+the report's exact readiness values in those manifest fields instead of
+truthy-coercing malformed strings or numbers into public `true` claims, leaving
+schema validation to reject wrong-shaped readiness metadata. Release-readiness
+and bundle verification pin exact manifest readiness flag generation, verifier
+boolean rejection, manifest/report equality checks, and all-lanes readiness
+recomputation as source inventory before published bundle readiness can pass.
+Release-readiness and bundle verification also pin required artifact paths,
+manifest-root exclusion, unmanifested artifact/directory rejection,
+report-referenced artifact closure, and canonical attachment order as source
+inventory before published bundle readiness can pass.
+Release-note
+status rendering, bundle preflight publication checks, and verifier-owned
+not-ready checks use the same exact-boolean rule, so a malformed truthy
+`production_ready` value cannot publish or render as `READY`. Readiness report
+objects returned from both the initial preflight build and the copied-evidence
+bundle-local rebuild must also keep the required release-bundle structure before
+Markdown rendering or manifest generation, so malformed internal reports fail as
+explicit preflight errors instead of uncaught indexing exceptions. Readiness
+report Markdown rows also use exact booleans for checklist items, lane production
+status, lane record flags, route-canary binding labels, and native-prover
+required labels, so malformed truthy row values render as blocked, unbound, or
+record-missing rather than ready. Malformed top-level readiness blockers,
+release-note blockers, release-bundle preflight blockers, native-prover
+blockers, source-inventory blockers, or user-prover blocker containers render
+as explicit invalid blocker cells/items instead of being flattened as strings
+or raising during verifier-owned Markdown generation. Embedded readiness
+evidence and standalone all-lanes root blocker summaries plus active-lane
+blocker containers must also be list-shaped before active-launch blocker
+collection runs, so malformed strings cannot become character-by-character
+blockers or disappear from verifier checks. The active-launch checklist also
+treats malformed active-lane blocker containers as schema blockers in the
+governed-deployment, route-allowlist, and live-route-canary buckets before
+category matching runs, so non-list, padded, or non-string entries cannot leave
+category readiness looking clean while only the aggregate blocker gate fails.
+The active no-unresolved-blockers collector uses the same canonical string rule
+for embedded evidence root blockers and active-lane blockers, so empty, padded,
+or non-string entries produce schema diagnostics instead of ambiguous free-form
+blocker text.
+The all-lanes checklist uses the same canonical string policy for lane-local
+blocker summaries: scalar, padded, or non-string entries become explicit
+live-route-canary and unresolved-blocker diagnostics, while valid route-canary
+blockers remain visible in both buckets.
+Verifier-owned Markdown
+invariants also require checklist, lane, native-prover, source-inventory,
+user-prover, and top-level blocker text or invalid-marker cells/items to remain
+visible, so a hand-edited attachment cannot hide readiness blockers while
+preserving the surrounding table structure. Release-readiness and bundle
+verification pin those public Markdown invariants as required source inventory,
+so required sections, checklist/source-inventory blocker visibility,
+invalid-marker rendering, and canonical Markdown drift rejection cannot be
+dropped before public bundle readiness passes. Release-notes attachment invariants
+likewise require the canonical title, exact readiness status line, manifest
+handoff, artifact table entries, and blocker lines or invalid-marker bullets
+before the canonical attachment comparison runs. Release-readiness and bundle
+verification pin those attachment invariants as required source inventory, so
+canonical title/status rendering, manifest handoff, artifact hash rows, blocker
+visibility, and canonical drift rejection cannot be dropped before public
+bundle readiness passes. Release-readiness and bundle verification also pin the
+native EVM Groth16 prover manifest schema, readiness summary schema, artifact
+hash/path binding, and bundled-manifest drift rejection as required source
+inventory before public bundle readiness can pass. The all-lanes evidence
+summary uses exact
+booleans for release-checklist aggregation, lane record-presence gates, and the
+CLI success exit, and it requires route-canary summaries to carry canonical
+non-zero evidence hashes plus the expected live evidence source for each lane,
+so malformed truthy summary values cannot clear release preflight or CI checks.
+Release-readiness and bundle verification pin that exact-boolean all-lanes
+checklist surface plus route-canary hash replay rejection as required source
+inventory before all-lanes evidence can satisfy production readiness. The
 release checklist table must match the embedded all-lanes evidence summary, so
 public release notes cannot rename, omit, or reorder checklist gates while
 keeping the underlying evidence unchanged; checklist roots and gate rows also
@@ -2438,7 +2640,9 @@ non-canonical manifest/readiness-report/summary JSON serialization,
 duplicate keys in public JSON roots,
 non-UTF-8 public JSON and Markdown roots,
 control characters or Markdown-unsafe characters in manifest,
-readiness-report, or extracted bundle artifact paths,
+readiness-report, or extracted bundle artifact paths, surrounding whitespace in
+manifest, readiness-input, readiness-report artifact, generated artifact, or
+native prover payload paths,
 unknown corridor phase statuses or evidence keys,
 blocked corridor roots,
 non-canonical corridor phase-log paths,
@@ -2496,6 +2700,26 @@ a release-notes attachment that is not the verifier-owned canonical
 manifest/report artifact table, manifest artifact-order drift from the bundle builder's public
 attachment order, and missing, malformed, unbound, lane-mismatched, or extra-field
 per-lane cryptographic evidence rows.
+Release-readiness and bundle verification pin the copied input-provenance schema
+as required source inventory, so canonical copied input paths, unique
+input/input-artifact provenance, `evidence/NN-*.toml` layout, and recomputation
+from copied TOML cannot be dropped before public bundle readiness passes.
+Release-readiness and bundle verification also pin the public JSON-root schema
+as required source inventory, so canonical manifest/readiness/all-lanes JSON
+serialization, duplicate-key rejection, and non-UTF-8 diagnostics cannot be
+dropped before public bundle readiness passes.
+Release-readiness and bundle verification pin the public Markdown text schema
+as required source inventory, so UTF-8 readiness/release-note Markdown loading
+and canonical text drift rejection cannot be dropped before public bundle
+readiness passes.
+Release-readiness and bundle verification also pin public cryptographic-evidence
+binding as required source inventory, so production-domain row inventory,
+lane-field binding, canonical row recomputation, and active route-canary
+binding rejection cannot be dropped before public bundle readiness passes.
+Release-readiness and bundle verification also pin public submission-surface
+binding as required source inventory, so lane/backend inventory, per-SDK helper
+inventory, verifier-owned surface recomputation, and corridor-phase binding
+cannot be dropped before public bundle readiness passes.
 That final check recomputes the public cryptographic table from the embedded
 all-lanes lane evidence, requires one row for every required production domain
 with no duplicate or unknown domains, requires exact JSON domain/chain types
@@ -4374,7 +4598,10 @@ as Nexus-origin messages from block-level SCCP records.
   - SCCP artifact/job discovery, state-changing SCCP submit endpoints, and
     on-chain `SubmitBridgeProof` validation ignore
     `sccp_allow_unready_transparent_proofs`; that flag cannot make disabled
-    lanes consumable.
+    lanes consumable. BSC and TRON route-config renderers also reject
+    production-ready manifests that explicitly force `--allow-unready true`, so
+    governed runtime overlays cannot re-enable diagnostic transparent-proof
+    admission while claiming production readiness.
     On-chain admission uses a manifest-only unready allowance for configured
     deployment lanes and still fails material-only or otherwise unready
     non-SORA source-chain envelopes.

@@ -365,7 +365,7 @@ TypeInvariant ==
        /\ ImplementationSnapshotCapBytes(c) \in 0..19
        /\ ImplementationSnapshotTtlMs(c) \in 0..11
 
-SafetyFast ==
+RbcBacklogStatusMatchesSpec ==
   /\ \A c \in SummaryCases:
        /\ ImplementationSummarySessions(c) = SpecSummarySessions(c)
        /\ ImplementationSummaryMissing(c) = SpecSummaryMissing(c)
@@ -387,5 +387,8 @@ SafetyFast ==
        /\ ImplementationSnapshotCapChunks(c) = SpecSnapshotCapChunks(c)
        /\ ImplementationSnapshotCapBytes(c) = SpecSnapshotCapBytes(c)
        /\ ImplementationSnapshotTtlMs(c) = SpecSnapshotTtlMs(c)
+
+SafetyFast ==
+  RbcBacklogStatusMatchesSpec
 
 ====

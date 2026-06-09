@@ -223,8 +223,10 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+CommitQcOnlyFetchMatchesSpec ==
   \A c \in Cases: Matches(c)
+
+SafetyFast == CommitQcOnlyFetchMatchesSpec
 
 DirectQcCompanionSent ==
   Matches("direct_qc_without_certified_response")

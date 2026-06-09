@@ -130,7 +130,7 @@ Next == checked = 0 /\ checked' = 1
 
 TypeInvariant == checked \in 0..1
 
-SafetyFast ==
+VNextStakeWeightCoreSafety ==
   /\ \A c \in LookupCases: ActualWeight(c) = SpecWeight(c)
   /\ \A c \in QuorumCases: ActualQuorum(c) = SpecQuorum(c)
   /\ ActualWeight("lookup_empty") = NoWeight
@@ -144,6 +144,9 @@ SafetyFast ==
   /\ ActualQuorum("quorum_add_overflow") = FALSE
   /\ ActualQuorum("quorum_stake_mul_overflow") = FALSE
   /\ ActualQuorum("quorum_total_mul_overflow") = FALSE
+
+SafetyFast ==
+  VNextStakeWeightCoreSafety
 
 BugLookupEmptyReturnsZero ==
   ActualWeight("lookup_empty") = SpecWeight("lookup_empty")

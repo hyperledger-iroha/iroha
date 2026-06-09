@@ -120,8 +120,10 @@ TypeInvariant ==
   /\ checked = 0
   /\ MaxHeight = 5
 
-SafetyFast ==
+RosterAdmissionMatchesSpec ==
   \A c \in Cases: Matches(c)
+
+SafetyFast == RosterAdmissionMatchesSpec
 
 RequestedStaleAllowed ==
   Matches("requested_stale")

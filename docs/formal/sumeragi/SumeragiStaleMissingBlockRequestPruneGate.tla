@@ -239,7 +239,7 @@ RemovalCounterAnchors ==
   /\ RemovalCountUnchanged \in ImplementationActions(StaleDaNoPayload)
   /\ RemovalCountUnchanged \in ImplementationActions(StaleDaOtherPayloadOnly)
 
-NoBugInvariant ==
+StaleMissingBlockRequestPruneCoreSafety ==
   /\ ActionsMatchSpec
   /\ OnlyStaleSameHeightRequestsRemoved
   /\ DaModeRequiresExactPayloadBeforeRemoval
@@ -252,6 +252,8 @@ NoBugInvariant ==
   /\ ExactPayloadCheckAnchors
   /\ RemovalCounterAnchors
 
-SafetyFast == NoBugInvariant
+NoBugInvariant == StaleMissingBlockRequestPruneCoreSafety
+
+SafetyFast == StaleMissingBlockRequestPruneCoreSafety
 
 ====

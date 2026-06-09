@@ -291,8 +291,10 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+FramePreparationMatchesSpec ==
   \A c \in Cases: Matches(c)
+
+SafetyFast == FramePreparationMatchesSpec
 
 FetchRequestUsesControlCap ==
   Matches("fetch_request_control_cap")

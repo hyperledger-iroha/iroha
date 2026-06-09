@@ -8,7 +8,8 @@ final class KagemushaRecursiveCompactPaymentTokenProverTests: XCTestCase {
             try KagemushaRecursiveCompactPaymentTokenProver
                 .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
                     recordBundleArchive: Data(),
-                    pallasOpenEnvelopesArchive: validKagemushaNoritoArchive()
+                    pallasOpenEnvelopesArchive: validKagemushaNoritoArchive(),
+                    recursiveCompactKeyArtifactsArchive: validRecursiveCompactKeyArtifactsArchive()
                 )
         ) { error in
             XCTAssertEqual(
@@ -23,12 +24,68 @@ final class KagemushaRecursiveCompactPaymentTokenProverTests: XCTestCase {
             try KagemushaRecursiveCompactPaymentTokenProver
                 .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
                     recordBundleArchive: validKagemushaNoritoArchive(),
-                    pallasOpenEnvelopesArchive: Data()
+                    pallasOpenEnvelopesArchive: Data(),
+                    recursiveCompactKeyArtifactsArchive: validRecursiveCompactKeyArtifactsArchive()
                 )
         ) { error in
             XCTAssertEqual(
                 error as? KagemushaRecursiveCompactPaymentTokenProverError,
                 .emptyPallasOpenEnvelopesArchive
+            )
+        }
+    }
+
+    func testRejectsInvalidKeyArtifactsArchiveBeforeBridgeCall() {
+        let validArchive = validKagemushaNoritoArchive()
+        XCTAssertThrowsError(
+            try KagemushaRecursiveCompactPaymentTokenProver
+                .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+                    recordBundleArchive: validArchive,
+                    pallasOpenEnvelopesArchive: validArchive,
+                    recursiveCompactKeyArtifactsArchive: Data(),
+                    bridgeAvailable: false
+                ) {
+                    XCTFail("native compact-token prover body must not run for empty key artifacts")
+                    return nil
+                }
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveCompactPaymentTokenProverError,
+                .emptyKeyArtifactsArchive
+            )
+        }
+        XCTAssertThrowsError(
+            try KagemushaRecursiveCompactPaymentTokenProver
+                .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+                    recordBundleArchive: validArchive,
+                    pallasOpenEnvelopesArchive: validArchive,
+                    recursiveCompactKeyArtifactsArchive: Data([0x01, 0x02]),
+                    bridgeAvailable: false
+                ) {
+                    XCTFail("native compact-token prover body must not run for malformed key artifacts")
+                    return nil
+                }
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveCompactPaymentTokenProverError,
+                .invalidKeyArtifactsArchive
+            )
+        }
+        XCTAssertThrowsError(
+            try KagemushaRecursiveCompactPaymentTokenProver
+                .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+                    recordBundleArchive: validArchive,
+                    pallasOpenEnvelopesArchive: validArchive,
+                    recursiveCompactKeyArtifactsArchive: emptyPayloadKagemushaNoritoArchive(),
+                    bridgeAvailable: false
+                ) {
+                    XCTFail("native compact-token prover body must not run for empty key-artifact payloads")
+                    return nil
+                }
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveCompactPaymentTokenProverError,
+                .emptyKeyArtifactsPayload
             )
         }
     }
@@ -40,6 +97,7 @@ final class KagemushaRecursiveCompactPaymentTokenProverTests: XCTestCase {
                 .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
                     recordBundleArchive: Data([0x01, 0x02]),
                     pallasOpenEnvelopesArchive: validArchive,
+                    recursiveCompactKeyArtifactsArchive: validRecursiveCompactKeyArtifactsArchive(),
                     bridgeAvailable: false
                 ) {
                     XCTFail("native compact-token prover body must not run for malformed record bundles")
@@ -56,6 +114,7 @@ final class KagemushaRecursiveCompactPaymentTokenProverTests: XCTestCase {
                 .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
                     recordBundleArchive: validArchive,
                     pallasOpenEnvelopesArchive: Data([0x01, 0x02]),
+                    recursiveCompactKeyArtifactsArchive: validRecursiveCompactKeyArtifactsArchive(),
                     bridgeAvailable: false
                 ) {
                     XCTFail("native compact-token prover body must not run for malformed Pallas openings")
@@ -82,6 +141,7 @@ final class KagemushaRecursiveCompactPaymentTokenProverTests: XCTestCase {
                 .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
                     recordBundleArchive: oversizedArchive,
                     pallasOpenEnvelopesArchive: validArchive,
+                    recursiveCompactKeyArtifactsArchive: validRecursiveCompactKeyArtifactsArchive(),
                     bridgeAvailable: false
                 ) {
                     XCTFail("native recursive compact body must not run for oversized record bundles")
@@ -99,6 +159,7 @@ final class KagemushaRecursiveCompactPaymentTokenProverTests: XCTestCase {
                 .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
                     recordBundleArchive: validArchive,
                     pallasOpenEnvelopesArchive: oversizedArchive,
+                    recursiveCompactKeyArtifactsArchive: validRecursiveCompactKeyArtifactsArchive(),
                     bridgeAvailable: false
                 ) {
                     XCTFail("native recursive compact body must not run for oversized Pallas openings")
@@ -108,6 +169,24 @@ final class KagemushaRecursiveCompactPaymentTokenProverTests: XCTestCase {
             XCTAssertEqual(
                 error as? KagemushaRecursiveCompactPaymentTokenProverError,
                 .oversizedPallasOpenEnvelopesArchive
+            )
+            XCTAssertTrue(error.localizedDescription.contains(oversizedMessage))
+        }
+        XCTAssertThrowsError(
+            try KagemushaRecursiveCompactPaymentTokenProver
+                .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+                    recordBundleArchive: validArchive,
+                    pallasOpenEnvelopesArchive: validArchive,
+                    recursiveCompactKeyArtifactsArchive: oversizedArchive,
+                    bridgeAvailable: false
+                ) {
+                    XCTFail("native recursive compact body must not run for oversized key artifacts")
+                    return nil
+                }
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveCompactPaymentTokenProverError,
+                .oversizedKeyArtifactsArchive
             )
             XCTAssertTrue(error.localizedDescription.contains(oversizedMessage))
         }
@@ -121,6 +200,7 @@ final class KagemushaRecursiveCompactPaymentTokenProverTests: XCTestCase {
                 .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
                     recordBundleArchive: emptyPayloadArchive,
                     pallasOpenEnvelopesArchive: validArchive,
+                    recursiveCompactKeyArtifactsArchive: validRecursiveCompactKeyArtifactsArchive(),
                     bridgeAvailable: false
                 ) {
                     XCTFail("native compact-token prover body must not run for empty record-bundle payloads")
@@ -137,6 +217,7 @@ final class KagemushaRecursiveCompactPaymentTokenProverTests: XCTestCase {
                 .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
                     recordBundleArchive: validArchive,
                     pallasOpenEnvelopesArchive: emptyPayloadArchive,
+                    recursiveCompactKeyArtifactsArchive: validRecursiveCompactKeyArtifactsArchive(),
                     bridgeAvailable: false
                 ) {
                     XCTFail("native compact-token prover body must not run for empty Pallas payloads")
@@ -157,6 +238,7 @@ final class KagemushaRecursiveCompactPaymentTokenProverTests: XCTestCase {
                 .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
                     recordBundleArchive: validArchive,
                     pallasOpenEnvelopesArchive: validArchive,
+                    recursiveCompactKeyArtifactsArchive: validRecursiveCompactKeyArtifactsArchive(),
                     bridgeAvailable: true
                 ) {
                     Data()
@@ -176,6 +258,7 @@ final class KagemushaRecursiveCompactPaymentTokenProverTests: XCTestCase {
                 .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
                     recordBundleArchive: validArchive,
                     pallasOpenEnvelopesArchive: validArchive,
+                    recursiveCompactKeyArtifactsArchive: validRecursiveCompactKeyArtifactsArchive(),
                     bridgeAvailable: true
                 ) {
                     Data([0x01])
@@ -195,6 +278,7 @@ final class KagemushaRecursiveCompactPaymentTokenProverTests: XCTestCase {
                 .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
                     recordBundleArchive: validArchive,
                     pallasOpenEnvelopesArchive: validArchive,
+                    recursiveCompactKeyArtifactsArchive: validRecursiveCompactKeyArtifactsArchive(),
                     bridgeAvailable: true
                 ) {
                     emptyPayloadKagemushaNoritoArchive()
@@ -213,6 +297,7 @@ final class KagemushaRecursiveCompactPaymentTokenProverTests: XCTestCase {
             .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
                 recordBundleArchive: archive,
                 pallasOpenEnvelopesArchive: archive,
+                recursiveCompactKeyArtifactsArchive: validRecursiveCompactKeyArtifactsArchive(),
                 bridgeAvailable: true
             ) {
                 archive
@@ -464,6 +549,7 @@ final class KagemushaRecursiveCompactPaymentTokenProverTests: XCTestCase {
                 .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
                     recordBundleArchive: validArchive,
                     pallasOpenEnvelopesArchive: validArchive,
+                    recursiveCompactKeyArtifactsArchive: validRecursiveCompactKeyArtifactsArchive(),
                     bridgeAvailable: true
                 ) {
                     nil
@@ -483,6 +569,7 @@ final class KagemushaRecursiveCompactPaymentTokenProverTests: XCTestCase {
                 .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
                     recordBundleArchive: validArchive,
                     pallasOpenEnvelopesArchive: validArchive,
+                    recursiveCompactKeyArtifactsArchive: validRecursiveCompactKeyArtifactsArchive(),
                     bridgeAvailable: true
                 ) {
                     throw NativeBridgeError.kagemushaRecursiveCompactUnavailable
@@ -500,6 +587,7 @@ final class KagemushaRecursiveCompactPaymentTokenProverTests: XCTestCase {
             try KagemushaRecursiveCompactPaymentTokenProver
                 .verifyRecursiveCompactPaymentToken(
                     compactTokenArchive: Data(),
+                    recursiveCompactVerifierKeysArchive: validRecursiveCompactVerifierKeysArchive(),
                     bridgeAvailable: true
                 ) {
                     true
@@ -517,6 +605,7 @@ final class KagemushaRecursiveCompactPaymentTokenProverTests: XCTestCase {
             try KagemushaRecursiveCompactPaymentTokenProver
                 .verifyRecursiveCompactPaymentToken(
                     compactTokenArchive: Data([0x01]),
+                    recursiveCompactVerifierKeysArchive: validRecursiveCompactVerifierKeysArchive(),
                     bridgeAvailable: true
                 ) {
                     true
@@ -538,6 +627,7 @@ final class KagemushaRecursiveCompactPaymentTokenProverTests: XCTestCase {
             try KagemushaRecursiveCompactPaymentTokenProver
                 .verifyRecursiveCompactPaymentToken(
                     compactTokenArchive: oversizedArchive,
+                    recursiveCompactVerifierKeysArchive: validRecursiveCompactVerifierKeysArchive(),
                     bridgeAvailable: true
                 ) {
                     XCTFail("native compact-token verifier body must not run for oversized compact tokens")
@@ -561,6 +651,7 @@ final class KagemushaRecursiveCompactPaymentTokenProverTests: XCTestCase {
             try KagemushaRecursiveCompactPaymentTokenProver
                 .verifyRecursiveCompactPaymentToken(
                     compactTokenArchive: emptyPayloadKagemushaNoritoArchive(),
+                    recursiveCompactVerifierKeysArchive: validRecursiveCompactVerifierKeysArchive(),
                     bridgeAvailable: true
                 ) {
                     true
@@ -573,11 +664,92 @@ final class KagemushaRecursiveCompactPaymentTokenProverTests: XCTestCase {
         }
     }
 
+    func testVerifyRejectsInvalidVerifierKeysArchiveBeforeBridgeCall() {
+        let validArchive = validKagemushaNoritoArchive()
+        XCTAssertThrowsError(
+            try KagemushaRecursiveCompactPaymentTokenProver
+                .verifyRecursiveCompactPaymentToken(
+                    compactTokenArchive: validArchive,
+                    recursiveCompactVerifierKeysArchive: Data(),
+                    bridgeAvailable: true
+                ) {
+                    XCTFail("native compact-token verifier body must not run for empty verifier keys")
+                    return true
+                }
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveCompactPaymentTokenProverError,
+                .emptyVerifierKeysArchive
+            )
+        }
+        XCTAssertThrowsError(
+            try KagemushaRecursiveCompactPaymentTokenProver
+                .verifyRecursiveCompactPaymentToken(
+                    compactTokenArchive: validArchive,
+                    recursiveCompactVerifierKeysArchive: Data([0x01, 0x02]),
+                    bridgeAvailable: true
+                ) {
+                    XCTFail("native compact-token verifier body must not run for malformed verifier keys")
+                    return true
+                }
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveCompactPaymentTokenProverError,
+                .invalidVerifierKeysArchive
+            )
+        }
+        XCTAssertThrowsError(
+            try KagemushaRecursiveCompactPaymentTokenProver
+                .verifyRecursiveCompactPaymentToken(
+                    compactTokenArchive: validArchive,
+                    recursiveCompactVerifierKeysArchive: emptyPayloadKagemushaNoritoArchive(),
+                    bridgeAvailable: true
+                ) {
+                    XCTFail("native compact-token verifier body must not run for empty verifier-key payloads")
+                    return true
+                }
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveCompactPaymentTokenProverError,
+                .emptyVerifierKeysPayload
+            )
+        }
+    }
+
+    func testVerifyRejectsOversizedVerifierKeysArchiveBeforeBridgeCall() {
+        let oversizedArchive = Data(
+            repeating: 0x7f,
+            count: KagemushaRecursiveSpendProver.nativeArchiveMaxBytes + 1
+        )
+        XCTAssertThrowsError(
+            try KagemushaRecursiveCompactPaymentTokenProver
+                .verifyRecursiveCompactPaymentToken(
+                    compactTokenArchive: validKagemushaNoritoArchive(),
+                    recursiveCompactVerifierKeysArchive: oversizedArchive,
+                    bridgeAvailable: true
+                ) {
+                    XCTFail("native compact-token verifier body must not run for oversized verifier keys")
+                    return true
+                }
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveCompactPaymentTokenProverError,
+                .oversizedVerifierKeysArchive
+            )
+            XCTAssertTrue(
+                error.localizedDescription.contains(
+                    "must not exceed \(KagemushaRecursiveSpendProver.nativeArchiveMaxBytes) bytes"
+                )
+            )
+        }
+    }
+
     func testVerifyRequiresVerifierNativeAvailabilityAfterInputValidation() {
         XCTAssertThrowsError(
             try KagemushaRecursiveCompactPaymentTokenProver
                 .verifyRecursiveCompactPaymentToken(
                     compactTokenArchive: validKagemushaNoritoArchive(),
+                    recursiveCompactVerifierKeysArchive: validRecursiveCompactVerifierKeysArchive(),
                     bridgeAvailable: false
                 ) {
                     XCTFail("native compact-token verifier body must not run when unavailable")
@@ -596,6 +768,7 @@ final class KagemushaRecursiveCompactPaymentTokenProverTests: XCTestCase {
             try KagemushaRecursiveCompactPaymentTokenProver
                 .verifyRecursiveCompactPaymentToken(
                     compactTokenArchive: validKagemushaNoritoArchive(),
+                    recursiveCompactVerifierKeysArchive: validRecursiveCompactVerifierKeysArchive(),
                     bridgeAvailable: true
                 ) {
                     true
@@ -605,6 +778,7 @@ final class KagemushaRecursiveCompactPaymentTokenProverTests: XCTestCase {
             try KagemushaRecursiveCompactPaymentTokenProver
                 .verifyRecursiveCompactPaymentToken(
                     compactTokenArchive: validKagemushaNoritoArchive(),
+                    recursiveCompactVerifierKeysArchive: validRecursiveCompactVerifierKeysArchive(),
                     bridgeAvailable: true
                 ) {
                     false
@@ -698,6 +872,7 @@ final class KagemushaRecursiveCompactPaymentTokenProverTests: XCTestCase {
             try KagemushaRecursiveCompactPaymentTokenProver
                 .verifyRecursiveCompactPaymentToken(
                     compactTokenArchive: validKagemushaNoritoArchive(),
+                    recursiveCompactVerifierKeysArchive: validRecursiveCompactVerifierKeysArchive(),
                     bridgeAvailable: true
                 ) {
                     nil
@@ -715,6 +890,7 @@ final class KagemushaRecursiveCompactPaymentTokenProverTests: XCTestCase {
             try KagemushaRecursiveCompactPaymentTokenProver
                 .verifyRecursiveCompactPaymentToken(
                     compactTokenArchive: validKagemushaNoritoArchive(),
+                    recursiveCompactVerifierKeysArchive: validRecursiveCompactVerifierKeysArchive(),
                     bridgeAvailable: true
                 ) {
                     throw NativeBridgeError.kagemushaProve
@@ -732,6 +908,20 @@ private func validKagemushaNoritoArchive() -> Data {
     noritoEncode(
         typeName: "KagemushaRecursiveCompactPaymentTokenArchiveV1",
         payload: Data([0xa5, 0x5a, 0x11])
+    )
+}
+
+private func validRecursiveCompactKeyArtifactsArchive() -> Data {
+    noritoEncode(
+        typeName: "KagemushaRecursiveCompactKeyArtifactsV1",
+        payload: Data([0xe1, 0x7a, 0x11])
+    )
+}
+
+private func validRecursiveCompactVerifierKeysArchive() -> Data {
+    noritoEncode(
+        typeName: "KagemushaRecursiveCompactVerifierKeysV1",
+        payload: Data([0xe2, 0x7b, 0x12])
     )
 }
 

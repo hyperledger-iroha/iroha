@@ -32,6 +32,10 @@ use crate::{
     },
 };
 use iroha_crypto::{Hash, streaming::TransportCapabilityResolutionSnapshot};
+#[cfg(test)]
+use iroha_data_model::soracloud::{
+    SORACLOUD_HOST_REQUEST_VERSION_V1, SoracloudEgressFetchRequestV1,
+};
 use iroha_data_model::{
     DataSpaceId, ValidationFail,
     account::rekey::AccountAlias,
@@ -69,8 +73,7 @@ use iroha_data_model::{
     },
     smart_contract::{ContractAddress, ContractAlias, ContractInstance},
     soracloud::{
-        SORACLOUD_HOST_REQUEST_VERSION_V1, SoracloudHostOperationV1,
-        SoracloudHostRequestEnvelopeV1, SoracloudHostRequestPayloadV1,
+        SoracloudHostOperationV1, SoracloudHostRequestEnvelopeV1, SoracloudHostRequestPayloadV1,
     },
     subscription::{
         ACCOUNT_ALIAS_AUTO_RENEW_METADATA_KEY, AccountAliasAutoRenewMetadata,
@@ -1544,9 +1547,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let tlv = Self::decode_pointer_tlv(vm, vm.register(10), PointerType::SoracloudRequest)?;
         let request: SoracloudHostRequestEnvelopeV1 =
             decode_from_bytes(tlv.payload).map_err(|_| ivm::VMError::DecodeError)?;
-        if request.schema_version != SORACLOUD_HOST_REQUEST_VERSION_V1 {
-            return Err(ivm::VMError::DecodeError);
-        }
+        request.validate().map_err(|_| ivm::VMError::DecodeError)?;
         if request.operation != expected
             || !Self::soracloud_payload_matches_operation(&request.payload, expected)
         {
@@ -10765,6 +10766,34 @@ mod pointer_abi_tests {
         let err = host
             .syscall(ivm::syscalls::SYSCALL_SORACLOUD_READ_SECRET, &mut vm)
             .expect_err("operation mismatch must fail before runtime rejection");
+        assert!(matches!(err, ivm::VMError::DecodeError));
+        assert!(host.queued.is_empty());
+    }
+
+    #[test]
+    fn soracloud_syscalls_reject_zero_prehash_request_digest_before_runtime_fallback() {
+        let mut vm = ivm::IVM::new(1_000);
+        let authority: AccountId = fixture_account("alice");
+        let mut host = CoreHost::new(authority);
+        let request = SoracloudHostRequestEnvelopeV1 {
+            schema_version: SORACLOUD_HOST_REQUEST_VERSION_V1,
+            operation: SoracloudHostOperationV1::EgressFetch,
+            payload: SoracloudHostRequestPayloadV1::EgressFetch(SoracloudEgressFetchRequestV1 {
+                url: "https://example.invalid/runtime.bin".to_owned(),
+                max_bytes: 1024,
+                expected_hash: Some(Hash::prehashed([0; Hash::LENGTH])),
+            }),
+        };
+        let request_ptr = store_tlv(
+            &mut vm,
+            PointerType::SoracloudRequest,
+            &norito_blob(&request),
+        );
+        vm.set_register(10, request_ptr);
+
+        let err = host
+            .syscall(ivm::syscalls::SYSCALL_SORACLOUD_EGRESS_FETCH, &mut vm)
+            .expect_err("placeholder digest must fail request validation before runtime fallback");
         assert!(matches!(err, ivm::VMError::DecodeError));
         assert!(host.queued.is_empty());
     }

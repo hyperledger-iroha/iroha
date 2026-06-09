@@ -191,9 +191,11 @@ TypeInvariant ==
        /\ SpecRetain(c) \in BOOLEAN
        /\ ActualRetain(c) \in BOOLEAN
 
-NoBugInvariant ==
+SupersededFrontierPayloadRetentionCoreSafety ==
   \A c \in Cases:
     ActualRetain(c) = SpecRetain(c)
+
+NoBugInvariant == SupersededFrontierPayloadRetentionCoreSafety
 
 AcceptedCommitEvidenceAnchors ==
   /\ ActualRetain(RetiredSameHeight)
@@ -240,7 +242,7 @@ SafetyAnchors ==
   /\ CommitEvidenceRejectionAnchors
   /\ RetentionImpliesAllGuardsAnchors
 
-SafetyFast == SafetyAnchors
+SafetyFast == SupersededFrontierPayloadRetentionCoreSafety
 
 BugRetainDaDisabled == NoBugInvariant
 BugRetainIncomingMaterialized == NoBugInvariant

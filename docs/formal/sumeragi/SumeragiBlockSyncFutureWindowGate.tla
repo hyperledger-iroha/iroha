@@ -272,8 +272,10 @@ TypeInvariant ==
   /\ checked = 0
   /\ MaxHeight = 9
 
-SafetyFast ==
+FutureWindowMatchesSpec ==
   \A c \in Cases: Matches(c)
+
+SafetyFast == FutureWindowMatchesSpec
 
 KnownBlockAllowed ==
   Matches("known_block")

@@ -241,7 +241,7 @@ SelectionNeverExceedsRoster ==
 MissingLocalQueryReturnsFalse ==
   candidate = "missing_local_query" => ~missing_local_selected
 
-Safety ==
+RbcRebroadcastSelectionCoreSafety ==
   /\ PayloadCountMatchesSpec
   /\ ReadyCountMatchesSpec
   /\ EmptyRosterCountsZero
@@ -255,5 +255,7 @@ Safety ==
   /\ PartialSelectionKeepsRequestedCount
   /\ SelectionNeverExceedsRoster
   /\ MissingLocalQueryReturnsFalse
+
+Safety == RbcRebroadcastSelectionCoreSafety
 
 ====

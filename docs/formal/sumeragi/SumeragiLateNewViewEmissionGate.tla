@@ -240,10 +240,17 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-Safety ==
+SelectionMatchesSpec ==
   \A c \in Cases:
-    /\ SelectedMatches(c)
-    /\ OutputMatches(c)
+    SelectedMatches(c)
+
+OutputMatchesSpec ==
+  \A c \in Cases:
+    OutputMatches(c)
+
+Safety ==
+  /\ SelectionMatchesSpec
+  /\ OutputMatchesSpec
 
 FrontierViewAndLocalGates ==
   /\ SelectedMatches("non_frontier_height")

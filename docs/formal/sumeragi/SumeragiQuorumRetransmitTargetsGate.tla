@@ -251,7 +251,7 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+QuorumRetransmitTargetCoreSafety ==
   /\ ActualOutput("empty_topology") = SpecOutput("empty_topology")
   /\ ActualOutput("single_local_only") = SpecOutput("single_local_only")
   /\ ActualOutput("no_votes_four") = SpecOutput("no_votes_four")
@@ -267,6 +267,9 @@ SafetyFast ==
   /\ ActualOutput("mapping_fail") = SpecOutput("mapping_fail")
   /\ ActualOutput("local_middle_order") = SpecOutput("local_middle_order")
   /\ ActualOutput("view_mapped_missing") = SpecOutput("view_mapped_missing")
+
+SafetyFast ==
+  QuorumRetransmitTargetCoreSafety
 
 QuorumRetransmitEmptyLocalExact ==
   \A c \in EmptyLocalCases:
@@ -292,7 +295,7 @@ QuorumRetransmitOrderDistinctExact ==
     /\ ActualDistinct(c)
 
 QuorumRetransmitTargetExactness ==
-  /\ SafetyFast
+  /\ QuorumRetransmitTargetCoreSafety
   /\ QuorumRetransmitEmptyLocalExact
   /\ QuorumRetransmitMissingTargetsExact
   /\ QuorumRetransmitFanoutGateExact
@@ -340,7 +343,7 @@ BugViewMappingWrongPeer ==
   ActualOutput("view_mapped_missing") = SpecOutput("view_mapped_missing")
 
 Safety ==
-  SafetyFast
+  QuorumRetransmitTargetCoreSafety
 
 =============================================================================
 ====

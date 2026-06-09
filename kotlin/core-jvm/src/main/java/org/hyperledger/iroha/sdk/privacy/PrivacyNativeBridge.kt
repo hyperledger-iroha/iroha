@@ -59,6 +59,14 @@ class PrivacyNativeBridge private constructor() {
             call("build proof", requestArchive, ::nativeBuildProof)
 
         @JvmStatic
+        fun buildConfidentialTransferProofV2(requestArchive: ByteArray?): ByteArray =
+            buildProof(requestArchive)
+
+        @JvmStatic
+        fun buildConfidentialUnshieldProofV3(requestArchive: ByteArray?): ByteArray =
+            buildProof(requestArchive)
+
+        @JvmStatic
         fun verifyProof(requestArchive: ByteArray?): ByteArray =
             call("verify proof", requestArchive, ::nativeVerifyProof)
 
@@ -371,8 +379,13 @@ class PrivacyNativeBridge private constructor() {
         val chainAdmission: Boolean,
         val sdkParity: Boolean,
         val walletState: Boolean,
+        val witnessPrivacyChecks: Boolean,
         val deterministicTests: Boolean,
+        val negativeAdversarialTests: Boolean,
+        val replayNullifierTests: Boolean,
         val fuzzing: Boolean,
+        val parserFuzzing: Boolean,
+        val verifierFuzzing: Boolean,
         val performanceGates: Boolean,
         val externalAudit: Boolean,
         val missing: List<String>,
@@ -388,10 +401,15 @@ class PrivacyNativeBridge private constructor() {
                         "chain admission path is not enabled",
                         "cross-SDK parity is incomplete",
                         "wallet/state support is incomplete",
+                        "witness privacy checks are incomplete",
                         "deterministic tests are incomplete",
+                        "negative/adversarial tests are incomplete",
+                        "replay/nullifier rejection tests are incomplete",
                         "fuzzing gate is incomplete",
+                        "parser fuzzing gate is incomplete",
+                        "verifier fuzzing gate is incomplete",
                         "performance gate is incomplete",
-                        "external audit signoff is missing",
+                        "internal cryptographic review signoff is missing",
                         "implementation stage is not production-hardened",
                         "planned SDK entrypoints remain",
                         "dev fixture entrypoints are not production entrypoints",
@@ -411,8 +429,13 @@ class PrivacyNativeBridge private constructor() {
                     chainAdmission = false,
                     sdkParity = false,
                     walletState = false,
+                    witnessPrivacyChecks = false,
                     deterministicTests = false,
+                    negativeAdversarialTests = false,
+                    replayNullifierTests = false,
                     fuzzing = false,
+                    parserFuzzing = false,
+                    verifierFuzzing = false,
                     performanceGates = false,
                     externalAudit = false,
                     missing = MISSING_REASONS,

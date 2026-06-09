@@ -351,7 +351,6 @@ import {
   tronWitnessSchedulePayloadHash,
   sccpTransferMessageId,
   sccpPayloadHash,
-  sccpMerkleRootFromCommitment,
 } from "../src/sccp.js";
 
 const HEX32_A = `0x${"aa".repeat(32)}`;

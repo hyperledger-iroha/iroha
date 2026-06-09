@@ -1,1 +1,2 @@
 tomli_w==1.0.0
+requests>=2.31

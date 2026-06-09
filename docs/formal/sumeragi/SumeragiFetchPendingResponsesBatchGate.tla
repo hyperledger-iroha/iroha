@@ -423,8 +423,11 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+FetchPendingResponsesBatchMatchesSpec ==
   \A c \in Cases: Matches(c)
+
+SafetyFast ==
+  FetchPendingResponsesBatchMatchesSpec
 
 EmptyPeerMapReturns ==
   Matches("empty_peers")

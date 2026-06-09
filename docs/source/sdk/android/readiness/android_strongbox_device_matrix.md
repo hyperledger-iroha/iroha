@@ -6,16 +6,16 @@ This matrix gates production readiness for Android offline-offline payment
 flows. A device row is ready only after the lab attaches signed evidence for
 StrongBox/KeyMint attestation, one-use key rotation, rollback rejection, ABI-6
 recursive spend, ABI-7 one-hop recursive compact-token proof probing, and
-ABI-7 multi-hop recursive compact fail-closed probing.
+ABI-7 package-backed multi-hop recursive compact proof probing.
 
 | Device family | Minimum OS | StrongBox / KeyMint gate | Kagemusha recursive compact gate | Status |
 | --- | --- | --- | --- | --- |
-| Google Pixel 6 / 6a | Android 14 | Pending lab attestation export | One-hop `recursive_compact_v1` proof probe required; multi-hop probe must remain unavailable until append-batch composition is enabled | Blocked |
-| Google Pixel 7 / 7 Pro | Android 14 | Pending lab attestation export | One-hop `recursive_compact_v1` proof probe required; multi-hop probe must remain unavailable until append-batch composition is enabled | Blocked |
-| Google Pixel 8 / 8a / 8 Pro | Android 15 | Pending lab attestation export | One-hop `recursive_compact_v1` proof probe required; multi-hop probe must remain unavailable until append-batch composition is enabled | Blocked |
-| Google Pixel Fold / Tablet | Android 15 | Pending lab attestation export | One-hop `recursive_compact_v1` proof probe required; multi-hop probe must remain unavailable until append-batch composition is enabled | Blocked |
-| Samsung Galaxy S23 | Android 14 | Pending lab attestation export | One-hop `recursive_compact_v1` proof probe required; multi-hop probe must remain unavailable until append-batch composition is enabled | Blocked |
-| Samsung Galaxy S24 | Android 15 | Pending lab attestation export | One-hop `recursive_compact_v1` proof probe required; multi-hop probe must remain unavailable until append-batch composition is enabled | Blocked |
+| Google Pixel 6 / 6a | Android 14 | Pending lab attestation export | One-hop `recursive_compact_v1` proof probe required; package-backed multi-hop proof probe required | Blocked |
+| Google Pixel 7 / 7 Pro | Android 14 | Pending lab attestation export | One-hop `recursive_compact_v1` proof probe required; package-backed multi-hop proof probe required | Blocked |
+| Google Pixel 8 / 8a / 8 Pro | Android 15 | Pending lab attestation export | One-hop `recursive_compact_v1` proof probe required; package-backed multi-hop proof probe required | Blocked |
+| Google Pixel Fold / Tablet | Android 15 | Pending lab attestation export | One-hop `recursive_compact_v1` proof probe required; package-backed multi-hop proof probe required | Blocked |
+| Samsung Galaxy S23 | Android 14 | Pending lab attestation export | One-hop `recursive_compact_v1` proof probe required; package-backed multi-hop proof probe required | Blocked |
+| Samsung Galaxy S24 | Android 15 | Pending lab attestation export | One-hop `recursive_compact_v1` proof probe required; package-backed multi-hop proof probe required | Blocked |
 
 Production release criteria:
 
@@ -23,9 +23,9 @@ Production release criteria:
 - ABI 7 recursive compact-token JNI probes prove and verify the packaged
   one-hop LEN=4 path on every required device family.
 - ABI 7 recursive compact prover calls that require multi-hop append-batch
-  composition are reported as unavailable state, while empty, malformed, or
-  dummy-proof local archives remain caller-input errors or soft-invalid verifier
-  results. Kotlin/JVM and Java Android validate recursive compact-token and
+  composition produce package-backed compact tokens when the key package is
+  supplied, while empty, malformed, or dummy-proof local archives remain
+  caller-input errors or soft-invalid verifier results. Kotlin/JVM and Java Android validate recursive compact-token and
   record-backed recursive aggregation inputs as non-empty Norito archives before
   JNI dispatch.
 - Wallet rollback tests prove that old encrypted wallet state cannot be restored
@@ -59,9 +59,11 @@ Production release criteria:
 	  special-file slot artifacts instead of following or hashing external aliases.
 	  Scanner and rollup missing-root decisions consume `lstat()`-classified root presence
 	  instead of calling `Path.exists()`. The shared device-lab JSON
-	  loader also rejects symlinked ancestor directories before parsing JSON, so
-	  direct validation of slot metadata, attestation, transcript, or signed
-	  evidence files cannot read through aliased directories.
+	  loader also rejects symlinked ancestor directories before parsing JSON and
+	  decodes bytes from one opened regular file after path-identity
+	  revalidation, so direct validation of slot metadata, attestation,
+	  transcript, or signed evidence files cannot read through aliased directories
+	  or post-preflight leaf aliases.
 	  Lower-level direct symlink, hardlink, and regular-file artifact validators
 	  reject secret-looking slot paths before traversing, stat-ing, or
 	  classifying slot artifacts. The symlink validator now reports unreadable
@@ -73,16 +75,20 @@ Production release criteria:
 	  validator classifies nested artifacts before any `is_symlink()` preflight.
 	  Manifest artifact digest validation classifies slot-relative ancestor
 	  directories with `lstat()` before symlink checks, so nested artifact paths
-	  do not depend on `Path.is_symlink()`.
+	  do not depend on `Path.is_symlink()`, and binds each `sha256sum.txt`
+	  digest read to the opened file identity.
 	  Required-artifact shape checks, required status/runtime text reads, the
 	  D2D queue digest binding, and the signed-evidence artifact binding also
-	  classify artifacts with `lstat()` before any `is_file()` preflight.
+	  classify artifacts with `lstat()` before any `is_file()` preflight, and
+	  signed-evidence `artifact_digests` bind each hashed artifact to the opened
+	  file identity.
 	  Direct SHA-256 manifest parser and verifier helper calls reject
 	  secret-looking slot paths, unreadable slot-root metadata, symlinked slot
 	  roots, and symlinked slot ancestors before parsing `sha256sum.txt` or
 	  traversing slot artifacts, and reject unreadable-metadata and hardlinked
 	  `sha256sum.txt` manifests before reading manifest bytes or discovering slot
-	  files.
+	  files. The manifest parser binds `sha256sum.txt` bytes to the opened file
+	  identity so post-preflight regular-file swaps fail closed.
 	  Direct slot-file discovery reports unreadable slot-root and
 	  artifact-directory metadata through caller error lists, returns no artifacts
 	  for secret-looking slot paths, symlinked slot ancestors, missing roots,
@@ -102,12 +108,14 @@ Production release criteria:
 	  hashing the bytes claimed by `artifact_digests`. Slot-metadata digest
 	  checks also revalidate `slot.json`-referenced attestation-chain,
 	  offline-wallet APK, and signed-evidence artifact paths before reading bytes
-	  for SHA-256 comparison. D2D handoff and wallet-integrity transcript
-	  bindings, including `queue/pending_queue.json`, use the same digest-time
-	  revalidation before comparing SHA-256 values. Required status NDJSON and
-	  runtime log marker checks also revalidate their slot-relative files for
-	  symlinks, hardlinks, symlinked artifact directories, non-regular files, and
-	  secret-looking names immediately before text decoding.
+	  for SHA-256 comparison, then bind the bytes to the opened file identity so
+	  post-preflight regular-file swaps fail closed. D2D handoff and
+	  wallet-integrity transcript bindings, including `queue/pending_queue.json`,
+	  use the same digest-time revalidation before comparing SHA-256 values.
+	  Required status NDJSON and runtime log marker checks also revalidate their
+	  slot-relative files for symlinks, hardlinks, symlinked artifact directories,
+	  non-regular files, and secret-looking names immediately before text
+	  decoding, with the same opened-file identity binding.
 - StrongBox/KeyMint attestation chains bind the app challenge and device
   security level expected by the offline wallet policy and must come from a
   physical device attestation, not an emulator or simulator run.
@@ -187,17 +195,20 @@ Production release criteria:
 	  secret-bearing or aliased slot paths. The per-artifact digest helper also
 	  rechecks each relative artifact path for secret-looking names, unreadable
 	  leaf metadata, symlinks, hardlinks, and non-regular files immediately before
-	  digest reads used by signed evidence and manifest rewrites.
+	  digest reads used by signed evidence and manifest rewrites, then binds each
+	  digest read to the opened regular-file identity.
 		  Low-level signer output writers reject secret-looking signed-evidence and
 		  manifest paths before creating output parents or writing files, reject
 		  absolute signed-evidence output path resolver failures with the structured
 		  `signed evidence output path could not be resolved` error, reject unreadable
 		  output parent or leaf metadata before write or digest reads, classify
 		  output parents with `lstat()` before any `Path.is_dir()` preflight, reject
-		  dangling symlink output leaves before following them, rerun parent and
+		  dangling symlink output leaves before following them, bind post-write
+		  readback verification to the opened output file identity, rerun parent and
 		  ancestor checks after creating missing output parents, and the signing helper revalidates the
 		  signed-evidence output as a regular non-symlink, non-hardlinked file before
-		  hashing it back into `slot.json`.
+		  hashing it back into `slot.json`, then bind that digest read to the
+		  opened file identity.
 	  Direct SHA-256 manifest rewrites run the same slot/artifact shape preflight
 	  before hashing or replacing `sha256sum.txt`, so secret-looking artifact
 	  names cannot be serialized into the manifest. Scanner and signing-helper
@@ -262,9 +273,9 @@ Production release criteria:
   bridge function contracts: one-hop prove/preverify/verify paths must route
   through the compact verifier-slice contract, tiny dummy proof payloads must
   fail the compact proof-size floor before expensive backend verification,
-  multi-hop proving must preserve the distinct recursive-compact-unavailable
-  mapping until append-batch composition is enabled, and bridge wrappers must
-  preserve that unavailable mapping. Evidence signed before the release cutoff
+  multi-hop proving must produce package-backed compact tokens with the
+  matching key artifacts, and bridge wrappers must preserve fail-closed
+  malformed-input handling. Evidence signed before the release cutoff
   or future-dated beyond the release validator clock-skew allowance remains
   blocked even when its signature and hashes are otherwise valid. Freshness checks
   use the scanner-validated signed-evidence timestamp from the slot report rather
@@ -288,7 +299,9 @@ Production release criteria:
   last-key-wins parser behavior. Unreadable or non-UTF-8 ABI-6 manifest and
   proof-evidence JSON files fail closed as structured read blockers. The ABI-7
   compact key evidence JSON must live beside `recursive-compact-len4.vk`,
-  `recursive-compact-len4.pk`, and
+  `recursive-compact-len4.pk`,
+  `recursive-compact-key-artifacts.norito`,
+  `recursive-compact-verifier-keys.norito`, and
   `recursive-compact-len4.record.norito`, keep the canonical
   `recursive-compact-key-evidence.json` filename, advertise LEN=4, IPA `k = 8`,
   `halo2/ipa`, `kagemusha-recursive-compact-v1`, `offline_kagemusha`, record
@@ -297,8 +310,8 @@ Production release criteria:
   aliases or appended shell commands. The rollup recomputes the compact key
   artifact SHA-256 values and byte sizes from adjacent non-empty regular files
   and hash-binds `recursive-compact-key-artifacts.log`, requiring exactly the
-  canonical CLI summary line with `.vk`, `.pk`, and `.record.norito` sizes that
-  match the local artifact bytes,
+  canonical CLI summary line with `.vk`, `.pk`, package, verifier-key package,
+  and `.record.norito` sizes that match the local artifact bytes,
   and rejects stale, future-dated, renamed, symlinked, hardlinked,
   size-mismatched, digest-mismatched, extra-field, or obvious plain-text
   placeholder compact key evidence. The compact key evidence helper applies the
@@ -381,7 +394,7 @@ Production release criteria:
   status, one-use key rotation, physical device attestation, rollback rejection,
   ABI-6 recursive spend probe, ABI-7 recursive compact one-hop and multi-hop
   probe state (`abi7_recursive_compact_jni_probe = one_hop_verified` and
-  `abi7_recursive_compact_prover_state = multi_hop_proof_composition_unavailable`),
+  `abi7_recursive_compact_prover_state = multi_hop_proof_composed`),
   raw test commands, signed evidence artifact path, and signed evidence artifact
   hash.
   Production `slot.json` is a closed schema: unexpected fields are rejected

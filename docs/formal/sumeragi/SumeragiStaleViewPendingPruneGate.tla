@@ -321,7 +321,7 @@ RetainedBranchShapeAnchors ==
   /\ ~(RetainedBranchNoted \in ImplementationActions(NoDaValid))
   /\ ~(RetainedBranchNoted \in ImplementationActions(DaCommittedCleanRbc))
 
-NoBugInvariant ==
+StaleViewPendingPruneCoreSafety ==
   /\ ActionsMatchSpec
   /\ OnlyStaleCandidatesArePruned
   /\ LiveOwnerRemainsActiveAndAttached
@@ -336,6 +336,8 @@ NoBugInvariant ==
   /\ RbcPolicyAnchors
   /\ RetainedBranchShapeAnchors
 
-SafetyFast == NoBugInvariant
+NoBugInvariant == StaleViewPendingPruneCoreSafety
+
+SafetyFast == StaleViewPendingPruneCoreSafety
 
 ====

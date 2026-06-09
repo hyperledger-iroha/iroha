@@ -289,7 +289,9 @@ object SccpEvm {
             normalizeNativeEvmProverBundleHex32(implementationHash, "implementationHash")
 
         init {
-            require(sdk.isNotEmpty()) { "nativeSdkArtifacts.sdk must be non-empty" }
+            require(sdk.isNotEmpty() && sdk.trim() == sdk) {
+                "nativeSdkArtifacts.sdk must be a non-empty canonical string"
+            }
             require(ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1[sdk] == implementation) {
                 "$sdk implementation must match Ethereum native EVM prover bundle profile"
             }
@@ -476,8 +478,8 @@ object SccpEvm {
                 nativeProverSelfTestBytes,
                 this,
             )
-            require(!sdk.isNullOrEmpty()) {
-                "sdk must be a non-empty string for nativeProverBundle implementation binding"
+            require(!sdk.isNullOrEmpty() && sdk.trim() == sdk) {
+                "sdk must be a non-empty canonical string for nativeProverBundle implementation binding"
             }
             require(implementationBytes != null) {
                 "implementationBytes are required for nativeProverBundle implementation binding"
@@ -511,6 +513,9 @@ object SccpEvm {
             sdk: String,
             artifactResolver: NativeEvmProverArtifactResolver,
         ): EthereumMainnetNativeEvmProverArtifacts {
+            require(sdk.isNotEmpty() && sdk.trim() == sdk) {
+                "sdk must be a non-empty canonical string for nativeProverBundle implementation binding"
+            }
             val proofArtifactPath =
                 proofArtifact ?: throw IllegalArgumentException("proofArtifact is required")
             val provingKeyPath =
@@ -4978,7 +4983,12 @@ class EthereumMainnetSccp(
         val sdk = artifacts.sdk
         val implementation = artifacts.implementation
         val implementationHash = artifacts.implementationHash
-        require(!sdk.isNullOrEmpty() && !implementation.isNullOrEmpty() && !implementationHash.isNullOrEmpty()) {
+        require(
+            !sdk.isNullOrEmpty() &&
+                sdk.trim() == sdk &&
+                !implementation.isNullOrEmpty() &&
+                !implementationHash.isNullOrEmpty(),
+        ) {
             "nativeProverArtifacts must bind sdk implementation and implementationHash"
         }
         val artifact = artifacts.nativeProverBundle.nativeSdkArtifacts.firstOrNull { it.sdk == sdk }
@@ -4997,6 +5007,9 @@ class EthereumMainnetSccp(
         }
         val sdk = artifacts.sdk
             ?: throw IllegalArgumentException("nativeProverArtifacts sdk is required")
+        require(sdk.isNotEmpty() && sdk.trim() == sdk) {
+            "nativeProverArtifacts sdk must be a non-empty canonical string"
+        }
         val fixture = artifacts.nativeProverSelfTest
             ?: throw IllegalArgumentException("nativeProverArtifacts nativeProverSelfTest is required")
         val expectedResult = fixture.sdkResults[sdk]
@@ -5048,7 +5061,12 @@ class EthereumMainnetSccp(
         val sdk = artifacts.sdk
         val implementation = artifacts.implementation
         val implementationHash = artifacts.implementationHash
-        require(!sdk.isNullOrEmpty() && !implementation.isNullOrEmpty() && !implementationHash.isNullOrEmpty()) {
+        require(
+            !sdk.isNullOrEmpty() &&
+                sdk.trim() == sdk &&
+                !implementation.isNullOrEmpty() &&
+                !implementationHash.isNullOrEmpty(),
+        ) {
             "nativeProverArtifacts must bind sdk implementation and implementationHash"
         }
         val artifact = artifacts.nativeProverBundle.nativeSdkArtifacts.firstOrNull { it.sdk == sdk }

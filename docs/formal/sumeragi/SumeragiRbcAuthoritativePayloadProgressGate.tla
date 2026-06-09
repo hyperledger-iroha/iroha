@@ -355,7 +355,7 @@ LookupShapeMatchesShortCircuit ==
   /\ \A c \in LocalFallbackCases:
        CheckLocalPayload \in ImplementationActions(c)
 
-NoBugInvariant ==
+RbcAuthoritativePayloadProgressCoreSafety ==
   /\ ResultMatchesSpec
   /\ ActionsMatchSpec
   /\ MetadataGateRejectsIncompleteSessions
@@ -364,6 +364,8 @@ NoBugInvariant ==
   /\ LocalFallbackRequiresExactSlotAndPayloadHash
   /\ LookupShapeMatchesShortCircuit
 
-SafetyFast == NoBugInvariant
+NoBugInvariant == RbcAuthoritativePayloadProgressCoreSafety
+
+SafetyFast == RbcAuthoritativePayloadProgressCoreSafety
 
 ====

@@ -205,8 +205,11 @@ TypeInvariant ==
   /\ candidate \in Cases \cup {NoneCase}
   /\ actions \subseteq Actions
 
-Safety ==
+ActionsMatchSpec ==
   candidate = NoneCase \/ actions = SpecActions(candidate)
+
+Safety ==
+  ActionsMatchSpec
 
 =============================================================================
 ====

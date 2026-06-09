@@ -64,30 +64,29 @@ class PrivacyNativeBridgeTest {
 
     @Test
     fun rejectsEmptyRequestsBeforeNativeDispatch() {
-        assertFailsWith<IllegalArgumentException> {
-            PrivacyNativeBridge.buildProof(ByteArray(0))
-        }
-        assertFailsWith<IllegalArgumentException> {
-            PrivacyNativeBridge.verifyProof(ByteArray(0))
-        }
-        assertFailsWith<IllegalArgumentException> {
-            PrivacyNativeBridge.buildProof(null)
-        }
-        assertFailsWith<IllegalArgumentException> {
-            PrivacyNativeBridge.verifyProof(null)
+        val helpers = listOf<(ByteArray?) -> ByteArray>(
+            PrivacyNativeBridge::buildProof,
+            PrivacyNativeBridge::buildConfidentialTransferProofV2,
+            PrivacyNativeBridge::buildConfidentialUnshieldProofV3,
+            PrivacyNativeBridge::verifyProof,
+        )
+
+        for (helper in helpers) {
+            assertFailsWith<IllegalArgumentException> {
+                helper(ByteArray(0))
+            }
+            assertFailsWith<IllegalArgumentException> {
+                helper(null)
+            }
         }
         val oversized = ByteArray(PrivacyNativeBridge.PRIVACY_NATIVE_ARCHIVE_MAX_BYTES + 1)
-        assertFailsWith<IllegalArgumentException> {
-            PrivacyNativeBridge.buildProof(oversized)
-        }
-        assertFailsWith<IllegalArgumentException> {
-            PrivacyNativeBridge.verifyProof(oversized)
-        }
-        assertFailsWith<IllegalArgumentException> {
-            PrivacyNativeBridge.buildProof(privacyNoritoFrame(0x52))
-        }
-        assertFailsWith<IllegalArgumentException> {
-            PrivacyNativeBridge.verifyProof(privacyNoritoFrame(0x52))
+        for (helper in helpers) {
+            assertFailsWith<IllegalArgumentException> {
+                helper(oversized)
+            }
+            assertFailsWith<IllegalArgumentException> {
+                helper(privacyNoritoFrame(0x52))
+            }
         }
     }
 
@@ -725,8 +724,13 @@ class PrivacyNativeBridgeTest {
         assertFalse(capabilities.productionGate.chainAdmission)
         assertFalse(capabilities.productionGate.sdkParity)
         assertFalse(capabilities.productionGate.walletState)
+        assertFalse(capabilities.productionGate.witnessPrivacyChecks)
         assertFalse(capabilities.productionGate.deterministicTests)
+        assertFalse(capabilities.productionGate.negativeAdversarialTests)
+        assertFalse(capabilities.productionGate.replayNullifierTests)
         assertFalse(capabilities.productionGate.fuzzing)
+        assertFalse(capabilities.productionGate.parserFuzzing)
+        assertFalse(capabilities.productionGate.verifierFuzzing)
         assertFalse(capabilities.productionGate.performanceGates)
         assertFalse(capabilities.productionGate.externalAudit)
         assertEquals(emptyList(), capabilities.productionGate.auditReferences)
@@ -746,7 +750,32 @@ class PrivacyNativeBridgeTest {
         )
         assertTrue(
             capabilities.productionGate.missing.contains(
-                "external audit signoff is missing",
+                "witness privacy checks are incomplete",
+            ),
+        )
+        assertTrue(
+            capabilities.productionGate.missing.contains(
+                "negative/adversarial tests are incomplete",
+            ),
+        )
+        assertTrue(
+            capabilities.productionGate.missing.contains(
+                "replay/nullifier rejection tests are incomplete",
+            ),
+        )
+        assertTrue(
+            capabilities.productionGate.missing.contains(
+                "parser fuzzing gate is incomplete",
+            ),
+        )
+        assertTrue(
+            capabilities.productionGate.missing.contains(
+                "verifier fuzzing gate is incomplete",
+            ),
+        )
+        assertTrue(
+            capabilities.productionGate.missing.contains(
+                "internal cryptographic review signoff is missing",
             ),
         )
         assertTrue(

@@ -379,7 +379,7 @@ LocalPayloadPreserveRequiresExactCommitOwnerSlot ==
   /\ ~ActualPreserve(PreserveLocalWrongView)
   /\ ~ActualPreserve(PreserveNoLocalPayload)
 
-SafetyFast ==
+MissingCommitQcActionableCoreSafety ==
   /\ ActionableMatchesSpec
   /\ PreserveMatchesSpec
   /\ SubjectHeightMatchesSpec
@@ -388,6 +388,9 @@ SafetyFast ==
   /\ NonActionableDependenciesRejected
   /\ SubjectHeightMappingPreserved
   /\ LocalPayloadPreserveRequiresExactCommitOwnerSlot
+
+SafetyFast ==
+  MissingCommitQcActionableCoreSafety
 
 SpecComparisonAnchors ==
   /\ ActionableMatchesSpec

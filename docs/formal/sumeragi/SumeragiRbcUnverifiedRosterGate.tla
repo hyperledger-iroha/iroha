@@ -157,8 +157,11 @@ TypeInvariant ==
      }
   /\ checked \in 0..11
 
-SafetyFast ==
+RbcUnverifiedRosterMatchesSpec ==
   \A c \in Cases: Matches(c)
+
+SafetyFast ==
+  RbcUnverifiedRosterMatchesSpec
 
 AllCasesMatch ==
   \A c \in Cases:

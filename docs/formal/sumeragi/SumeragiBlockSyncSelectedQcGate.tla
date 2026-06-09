@@ -496,8 +496,10 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+SelectedQcMatchesSpec ==
   \A c \in Cases: Matches(c)
+
+SafetyFast == SelectedQcMatchesSpec
 
 SourcePrecedence ==
   Matches("incoming_preempts_selection")

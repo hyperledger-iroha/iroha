@@ -147,8 +147,11 @@ ActualOutput ==
     ActualStaleCommittedConflict, ActualStaleTipMissingPayloadPreserved,
     ActualStaleTipMatchingCommittedPreserved>>
 
-SafetyFast ==
+MissingRequestClearOutputMatchesSpec ==
   ActualOutput = SpecOutput
+
+SafetyFast ==
+  MissingRequestClearOutputMatchesSpec
 
 BugClearLockedHash ==
   ActualLockedSameHash = SpecLockedSameHash

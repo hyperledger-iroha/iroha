@@ -292,7 +292,7 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+EvidenceCanonicalizationMatchesSpec ==
   /\ \A c \in KeyCases:
        ActualKey(c) = SpecKey(c)
   /\ \A c \in SubjectCases:
@@ -308,6 +308,8 @@ SafetyFast ==
        /\ ActualRecordedHeight(c) = SpecRecordedHeight(c)
        /\ ActualRecordedView(c) = SpecRecordedView(c)
        /\ ActualPenaltyFlagsClear(c) = SpecPenaltyFlagsClear(c)
+
+SafetyFast == EvidenceCanonicalizationMatchesSpec
 
 BugDoubleSwappedNotCanonical ==
   ActualKey("double_swapped") = SpecKey("double_swapped")

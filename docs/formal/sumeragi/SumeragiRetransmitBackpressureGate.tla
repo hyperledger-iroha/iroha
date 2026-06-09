@@ -304,7 +304,7 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+RetransmitBackpressureCoreSafety ==
   /\ ActualOutput("capacity_zero") = SpecOutput("capacity_zero")
   /\ ActualOutput("tx_low") = SpecOutput("tx_low")
   /\ ActualOutput("tx_sixty") = SpecOutput("tx_sixty")
@@ -326,6 +326,9 @@ SafetyFast ==
   /\ ActualOutput("timeout_low_clamp") = SpecOutput("timeout_low_clamp")
   /\ ActualOutput("timeout_mid") = SpecOutput("timeout_mid")
   /\ ActualOutput("timeout_high_clamp") = SpecOutput("timeout_high_clamp")
+
+SafetyFast ==
+  RetransmitBackpressureCoreSafety
 
 RetransmitQueuePressureExact ==
   \A c \in QueuePressureCases:
@@ -382,7 +385,7 @@ RetransmitTimeoutClampExact ==
     /\ ActualOutput(c) = SpecOutput(c)
 
 RetransmitBackpressurePacingExactness ==
-  /\ SafetyFast
+  /\ RetransmitBackpressureCoreSafety
   /\ RetransmitQueuePressureExact
   /\ RetransmitRbcPressureExact
   /\ RetransmitCombinedPressureExact
@@ -458,7 +461,7 @@ BugTimeoutNoUpperClamp ==
   ActualOutput("timeout_high_clamp") = SpecOutput("timeout_high_clamp")
 
 Safety ==
-  SafetyFast
+  RetransmitBackpressureCoreSafety
 
 =============================================================================
 ====

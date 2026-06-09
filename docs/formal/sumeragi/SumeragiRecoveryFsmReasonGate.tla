@@ -286,7 +286,7 @@ RepresentativeSortTieBreaksStable ==
   /\ ActualBefore(OtherLastKnown, OtherLastOther)
   /\ ~ActualBefore(OtherLastOther, OtherLastKnown)
 
-SafetyFast ==
+RecoveryFsmReasonCoreSafety ==
   /\ FromReasonExact
   /\ KnownLabelsNotOther
   /\ UnknownLabelsFallbackOther
@@ -295,5 +295,8 @@ SafetyFast ==
   /\ RanksDistinct
   /\ SortMatchesTupleKey
   /\ RepresentativeSortTieBreaksStable
+
+SafetyFast ==
+  RecoveryFsmReasonCoreSafety
 
 ====

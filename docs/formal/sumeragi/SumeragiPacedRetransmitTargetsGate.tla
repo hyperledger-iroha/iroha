@@ -222,8 +222,10 @@ TypeInvariant ==
   /\ checked = 0
   /\ Bug \in Bugs
 
-SafetyFast ==
+PacedRetransmitTargetsCoreSafety ==
   \A c \in Cases: ActualOutput(c) = SpecOutput(c)
+
+SafetyFast == PacedRetransmitTargetsCoreSafety
 
 PacedRetransmitFailClosedExact ==
   \A c \in FailClosedCases:
@@ -271,7 +273,7 @@ PacedRetransmitLimitTruncationExact ==
        ELSE TRUE
 
 PacedRetransmitTargetSelectionExactness ==
-  /\ SafetyFast
+  /\ PacedRetransmitTargetsCoreSafety
   /\ PacedRetransmitFailClosedExact
   /\ PacedRetransmitPreCapPreservationExact
   /\ PacedRetransmitSortDedupExact

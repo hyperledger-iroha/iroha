@@ -265,10 +265,13 @@ FallbackAndComputedBytesFollowPriority ==
   /\ BytesSaturated \in ImplementationActions(TakeSaturatingComputed)
   /\ RecordedSet \in ImplementationActions(TakeSaturatingComputed)
 
-SafetyFast ==
+RbcDeliveredPayloadBytesCoreSafety ==
   /\ ActionsMatchSpec
   /\ DeliveredPayloadBytesAreGatedAndExact
   /\ TelemetryExtractionRecordsOnlySuccessfulReports
   /\ FallbackAndComputedBytesFollowPriority
+
+SafetyFast ==
+  RbcDeliveredPayloadBytesCoreSafety
 
 ====

@@ -368,11 +368,14 @@ ExpiryStable ==
   /\ ~SpecExpired(QuorumBelowCapNoExpiry)
   /\ SpecExpired(BothAtCapExpires)
 
-SafetyFast ==
+VoteBackedReassemblyStallCoreSafety ==
   /\ SelectionExact
   /\ HardCapStable
   /\ OwnerSourceStable
   /\ ExpiryStable
+
+SafetyFast ==
+  VoteBackedReassemblyStallCoreSafety
 
 VoteBackedHardCapExact ==
   \A c \in HardCapCases:
@@ -420,7 +423,7 @@ VoteBackedExpiryThresholdExact ==
     /\ ActualOutput(c) = SpecOutput(c)
 
 VoteBackedReassemblyStallExactness ==
-  /\ SafetyFast
+  /\ VoteBackedReassemblyStallCoreSafety
   /\ VoteBackedHardCapExact
   /\ VoteBackedSlotOwnerAcceptedExact
   /\ VoteBackedSlotOwnerRejectedExact
@@ -429,7 +432,7 @@ VoteBackedReassemblyStallExactness ==
   /\ VoteBackedExpiryThresholdExact
 
 Safety ==
-  SafetyFast
+  VoteBackedReassemblyStallCoreSafety
 
 =============================================================================
 ====

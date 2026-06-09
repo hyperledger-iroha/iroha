@@ -424,6 +424,10 @@ function privacyNoritoFrameFromPayload(schemaByte, payload) {
 
 const TEST_NORITO_COMPACT_LEN_FLAG = 0x02;
 const KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH = Buffer.from(
+  "c88489618a012c283ff3bb2ebabc7775",
+  "hex",
+);
+const OLD_KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH = Buffer.from(
   "119f4df38a98ef5848ad0aadb9715779",
   "hex",
 );
@@ -653,6 +657,12 @@ function malformedPrivacyNativeOutputArchives(schemaByte) {
 const LEGACY_FULLWIDTH_KANA = /[イロハニホヘトチリヌルヲワカヨタレソツネナラムウノオクヤマケフコエテアサキユメミシヒモセス]/u;
 const HALFWIDTH_KANA = /[ｲﾛﾊﾆﾎﾍﾄﾁﾘﾇﾙｦﾜｶﾖﾀﾚｿﾂﾈﾅﾗﾑｳﾉｵｸﾔﾏｹﾌｺｴﾃｱｻｷﾕﾒﾐｼﾋﾓｾｽ]/u;
 const DECLARATIONS_TEXT = readFileSync(new URL("../index.d.ts", import.meta.url), "utf8");
+const PACKAGE_DECLARATION_TEXTS = new Map([
+  ["index.d.ts", DECLARATIONS_TEXT],
+  ["connect.browser.d.ts", readFileSync(new URL("../connect.browser.d.ts", import.meta.url), "utf8")],
+  ["nexus-app.d.ts", readFileSync(new URL("../nexus-app.d.ts", import.meta.url), "utf8")],
+  ["kotodama-compiler.d.ts", readFileSync(new URL("../kotodama-compiler.d.ts", import.meta.url), "utf8")],
+]);
 const SCCP_SOURCE_TEXT = readFileSync(new URL("../src/sccp.js", import.meta.url), "utf8");
 const INDEX_SOURCE_TEXT = readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
 const DIST_SCCP_TEXT = readFileSync(new URL("../dist/sccp.js", import.meta.url), "utf8");
@@ -1347,6 +1357,18 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
       0x12,
     ),
   );
+  const oldHashProvingKey = Buffer.from(expectedProvingKey);
+  OLD_KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH.copy(oldHashProvingKey, 6);
+  assert.throws(
+    () =>
+      kagemushaRecursiveSpendLineageKeyArtifactsForInit(
+        128,
+        KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+        expectedVerifierKey,
+        oldHashProvingKey,
+      ),
+    /lineage_proving_key_archive/,
+  );
   const exposedVerifierKey = directArtifacts.lineageVerifierKey;
   const exposedProvingKey = directArtifacts.lineageProvingKeyArchive;
   exposedVerifierKey[0] = 0;
@@ -1849,16 +1871,21 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
       kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
         privacyNoritoFrameWithPayload(0x4a),
         privacyNoritoFrameWithPayload(0x4c),
-    ),
+        privacyNoritoFrameWithPayload(0x4d),
+      ),
     /recursive compact Kagemusha payment-token prover|unavailable in browser-only crypto builds|Native binding required|invalid Kagemusha record bundle archive/,
   );
   assert.throws(
-    () => kagemushaVerifyRecursiveCompactPaymentToken(privacyNoritoFrameWithPayload(0x4b)),
+    () =>
+      kagemushaVerifyRecursiveCompactPaymentToken(
+        privacyNoritoFrameWithPayload(0x4b),
+        privacyNoritoFrameWithPayload(0x4e),
+      ),
     /recursive compact Kagemusha payment-token verifier|unavailable in browser-only crypto builds|Native binding required|invalid Kagemusha recursive compact payment token archive/,
   );
   assert.throws(
     () => kagemushaRecursiveSpendCompactPaymentTokenFromBundle(privacyNoritoFrameWithPayload(0x4c)),
-    /recursive spend compact Kagemusha payment-token projection|unavailable in browser-only crypto builds|Native binding required/,
+    /recursive spend compact Kagemusha payment-token projection|unavailable in browser-only crypto builds|Native binding required|invalid Kagemusha recursive spend compact-token bundle archive/,
   );
   assert.throws(
     () =>
@@ -1866,7 +1893,7 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
         privacyNoritoFrameWithPayload(0x4c),
         privacyNoritoFrameWithPayload(0x4d),
       ),
-    /recursive spend compact Kagemusha payment-token projection verifier|unavailable in browser-only crypto builds|Native binding required/,
+    /recursive spend compact Kagemusha payment-token projection verifier|unavailable in browser-only crypto builds|Native binding required|invalid Kagemusha recursive spend compact projection token archive/,
   );
   for (const helper of [
     kagemushaRecursiveSpendInit,
@@ -1881,6 +1908,104 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
   ]) {
     assert.equal(typeof helper, "function");
   }
+});
+
+test("package dist Kagemusha recursive compact requires key packages before native dispatch", () => {
+  const previous = globalThis.__IROHA_NATIVE_BINDING__;
+  const calls = [];
+  const recordBundle = privacyNoritoFrameWithPayload(0x4a);
+  const pallasOpenEnvelopes = privacyNoritoFrameWithPayload(0x4b);
+  const keyArtifacts = privacyNoritoFrameWithPayload(0x4c);
+  const compactToken = privacyNoritoFrameWithPayload(0x4d);
+  const verifierKeys = privacyNoritoFrameWithPayload(0x4e);
+  const nativeOutput = privacyNoritoFrameWithPayload(0x4f);
+  const isProbeCall = (args) =>
+    args.every((arg) => {
+      const bytes = Buffer.from(arg);
+      return bytes.length === 1 && bytes[0] === 0;
+    });
+
+  try {
+    globalThis.__IROHA_NATIVE_BINDING__ = {
+      connectNoritoBridgeAbiVersion() {
+        return KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION;
+      },
+      kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+        ...args
+      ) {
+        if (isProbeCall(args)) {
+          throw new Error("Kagemusha probe archive rejected");
+        }
+        calls.push(["prove", args]);
+        return nativeOutput;
+      },
+      kagemushaVerifyRecursiveCompactPaymentToken(...args) {
+        if (isProbeCall(args)) {
+          throw new Error("Kagemusha probe archive rejected");
+        }
+        calls.push(["verify", args]);
+        return true;
+      },
+    };
+
+    assert.throws(
+      () =>
+        kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+          recordBundle,
+          pallasOpenEnvelopes,
+        ),
+      /recursiveCompactKeyArtifactsArchive must be a Buffer, string, or ArrayBuffer view/,
+    );
+    assert.throws(
+      () =>
+        kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+          recordBundle,
+          pallasOpenEnvelopes,
+          Buffer.alloc(0),
+        ),
+      /recursiveCompactKeyArtifactsArchive must not be empty/,
+    );
+    assert.throws(
+      () => kagemushaVerifyRecursiveCompactPaymentToken(compactToken),
+      /recursiveCompactVerifierKeysArchive must be a Buffer, string, or ArrayBuffer view/,
+    );
+    assert.throws(
+      () => kagemushaVerifyRecursiveCompactPaymentToken(compactToken, Buffer.alloc(0)),
+      /recursiveCompactVerifierKeysArchive must not be empty/,
+    );
+    assert.deepEqual(calls, []);
+
+    assert.deepEqual(
+      kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+        recordBundle,
+        pallasOpenEnvelopes,
+        keyArtifacts,
+      ),
+      nativeOutput,
+    );
+    assert.equal(kagemushaVerifyRecursiveCompactPaymentToken(compactToken, verifierKeys), true);
+  } finally {
+    if (previous === undefined) {
+      delete globalThis.__IROHA_NATIVE_BINDING__;
+    } else {
+      globalThis.__IROHA_NATIVE_BINDING__ = previous;
+    }
+  }
+
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0][0], "prove");
+  assert.equal(calls[0][1].length, 3);
+  assert.notStrictEqual(calls[0][1][2], keyArtifacts);
+  assert.deepEqual(calls[0][1][2], keyArtifacts);
+  keyArtifacts[0] ^= 0xff;
+  assert.notDeepEqual(calls[0][1][2], keyArtifacts);
+
+  assert.equal(calls[1][0], "verify");
+  assert.equal(calls[1][1].length, 2);
+  assert.notStrictEqual(calls[1][1][1], verifierKeys);
+  assert.deepEqual(calls[1][1][1], verifierKeys);
+  verifierKeys[0] ^= 0xff;
+  assert.notDeepEqual(calls[1][1][1], verifierKeys);
 });
 
 test("package dist Kagemusha recursive spend availability rejects coerced ABI versions", () => {
@@ -2025,7 +2150,7 @@ test("package dist entrypoint exports privacy native archive helpers", () => {
   assert.equal(fresh.privacyAlgorithms[0].productionGate.gates.external_audit, false);
   assert.ok(
     fresh.privacyAlgorithms[0].productionGate.missing.includes(
-      "external audit signoff is missing",
+      "internal cryptographic review signoff is missing",
     ),
   );
   assert.deepEqual(fresh.privacyCriteria, capabilities.privacyCriteria);
@@ -2054,6 +2179,12 @@ test("package dist privacy proof envelopes preserve pending production backend t
     ["lattice-pcs-sis", "LatticePcsSis"],
     ["jindo-lattice-pcs-zk", "LatticePcsSis"],
     ["jindo-lattice-pcs-zk-v0", "LatticePcsSis"],
+    ["Halo2IpaPasta", "Halo2IpaPasta"],
+    ["halo2/pasta/kagemusha-recursive-aggregation-v1", "Halo2IpaPasta"],
+    ["halo2/pasta/kagemusha-recursive-compact-v1", "Halo2IpaPasta"],
+    ["halo2/pasta/kagemusha-recursive-spend-lineage-v1", "Halo2IpaPasta"],
+    ["halo2/pasta/kagemusha-recursive-spend-lineage-onehop-v1", "Halo2IpaPasta"],
+    ["halo2/pasta/kagemusha-recursive-spend-lineage-append-v1", "Halo2IpaPasta"],
     ["stark/fri", "Stark"],
     ["stark/fri/sha256-goldilocks", "Stark"],
     ["stark/fri/poseidon2-goldilocks", "Stark"],
@@ -2371,6 +2502,7 @@ test("package dist privacy native availability clears request copies after failu
   });
   let throwingProbe;
   let badOutputProbe;
+  let badOutput;
 
   try {
     globalThis.__IROHA_NATIVE_BINDING__ = completeBinding({
@@ -2384,7 +2516,8 @@ test("package dist privacy native availability clears request copies after failu
     globalThis.__IROHA_NATIVE_BINDING__ = completeBinding({
       privacyVerifyProofV1(request) {
         badOutputProbe = request;
-        return Buffer.from([0x56]);
+        badOutput = Buffer.from([0x56]);
+        return badOutput;
       },
     });
     assert.equal(isPrivacyNativeAvailable(), false);
@@ -2398,6 +2531,7 @@ test("package dist privacy native availability clears request copies after failu
 
   assert.deepEqual(Buffer.from(throwingProbe), Buffer.alloc(privacyNoritoFrame(0x52).length));
   assert.deepEqual(Buffer.from(badOutputProbe), Buffer.alloc(privacyNoritoFrame(0x52).length));
+  assert.deepEqual(badOutput, Buffer.alloc(1));
 });
 
 test("package dist privacy native availability probes reject unsafe raw output", () => {
@@ -3277,6 +3411,40 @@ test("package declarations mark Kagemusha lineage key artifacts readonly", () =>
   assert.match(artifacts, /readonly lineageProvingKeyArchive: Buffer;/);
   assert.match(artifacts, /readonly isInitArtifact: boolean;/);
   assert.match(artifacts, /readonly isAppendArtifact: boolean;/);
+});
+
+test("package declarations expose recursive compact key-package signatures", () => {
+  const packageJson = JSON.parse(PACKAGE_JSON_TEXT);
+  assert.equal(packageJson.types, "./index.d.ts");
+  assert.equal(packageJson.exports["."].types, "./index.d.ts");
+  assert.equal(packageJson.exports["./crypto"].types, "./index.d.ts");
+  assert.deepEqual(packageJson.typesVersions["*"].crypto, ["./index.d.ts"]);
+  assert.equal(packageJson.files.includes("index.d.ts"), true);
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export function kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes\(\s*recordBundleArchive: BinaryLike,\s*pallasOpenEnvelopesArchive: BinaryLike,\s*recursiveCompactKeyArtifactsArchive: BinaryLike,\s*\): Buffer;/u,
+    "recursive compact prover declaration must require key artifacts",
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export function kagemushaVerifyRecursiveCompactPaymentToken\(\s*compactTokenArchive: BinaryLike,\s*recursiveCompactVerifierKeysArchive: BinaryLike,\s*\): boolean;/u,
+    "recursive compact verifier declaration must require verifier keys",
+  );
+  assert.doesNotMatch(
+    DECLARATIONS_TEXT,
+    /recursiveCompact(?:KeyArtifactsArchive|VerifierKeysArchive)\?:\s*BinaryLike/u,
+    "recursive compact key packages must not be optional",
+  );
+});
+
+test("package declarations keep accumulator digests native-owned", () => {
+  for (const [name, declarationsText] of PACKAGE_DECLARATION_TEXTS) {
+    assert.doesNotMatch(
+      declarationsText,
+      /\b(?:lineageDigest|LineageDigest|lineage_digest|aggregationTranscriptDigest|AggregationTranscriptDigest|aggregation_transcript_digest|fixedWindowTableScheduleDigest|FixedWindowTableScheduleDigest|fixed_window_table_schedule_digest|fixedWindowSharedTableManifestDigest|FixedWindowSharedTableManifestDigest|fixed_window_shared_table_manifest_digest|fixedWindowTableBaseDigest|FixedWindowTableBaseDigest|fixed_window_table_base_digest|verifierWitnessBatchDigest|VerifierWitnessBatchDigest|verifier_witness_batch_digest|recursiveProofChainDigest|RecursiveProofChainDigest|recursive_proof_chain_digest|proofChainDigest|ProofChainDigest|proof_chain_digest|transitionProfileBindingDigest|TransitionProfileBindingDigest|transition_profile_binding_digest|appendOpeningPreflightDigest|AppendOpeningPreflightDigest|append_opening_preflight_digest|appendBoundaryDigest|AppendBoundaryDigest|append_boundary_digest|recursiveVerifierScalarProjectionDigest|RecursiveVerifierScalarProjectionDigest|recursive_verifier_scalar_projection_digest|previousAccumulatorDigest|PreviousAccumulatorDigest|previous_accumulator_digest|resultingAccumulatorDigest|ResultingAccumulatorDigest|resulting_accumulator_digest|accumulatorDigest|AccumulatorDigest|accumulator_digest)\b/u,
+      `${name}: recursive accumulator digests must remain native-owned`,
+    );
+  }
 });
 
 test("package declarations do not advertise privacy production metadata inputs", () => {

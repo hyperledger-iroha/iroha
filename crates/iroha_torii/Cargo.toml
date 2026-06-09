@@ -4,6 +4,7 @@ name = "iroha_torii"
 edition.workspace = true
 version.workspace = true
 authors.workspace = true
+autotests = false
 
 build = "../build-support/script.rs"
 
@@ -182,306 +183,31 @@ harness = false
 required-features = ["app_api"]
 
 [[test]]
-name = "account_query_subrouter_smoke"
-path = "tests/account_query_subrouter_smoke.rs"
+name = "torii_core_routes"
+path = "tests/grouped/core_routes.rs"
 required-features = ["app_api"]
 
 [[test]]
-name = "accounts_endpoints"
-path = "tests/accounts_endpoints.rs"
+name = "torii_governance"
+path = "tests/grouped/governance.rs"
 required-features = ["app_api"]
 
 [[test]]
-name = "accounts_faucet"
-path = "tests/accounts_faucet.rs"
+name = "torii_nexus_sorafs"
+path = "tests/grouped/nexus_sorafs.rs"
 required-features = ["app_api"]
 
 [[test]]
-name = "accounts_onboard"
-path = "tests/accounts_onboard.rs"
+name = "torii_protocols"
+path = "tests/grouped/protocols.rs"
 required-features = ["app_api"]
 
 [[test]]
-name = "accounts_portfolio"
-path = "tests/accounts_portfolio.rs"
+name = "torii_sumeragi_telemetry"
+path = "tests/grouped/sumeragi_telemetry.rs"
 required-features = ["app_api"]
 
 [[test]]
-name = "address_parsing"
-path = "tests/address_parsing.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "api_versioning"
-path = "tests/api_versioning.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "app_api_router_smoke"
-path = "tests/app_api_router_smoke.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "asset_definitions_endpoints"
-path = "tests/asset_definitions_endpoints.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "bridge_finality_endpoint"
-path = "tests/bridge_finality_endpoint.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "connect_gating"
-path = "tests/connect_gating.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "configuration_endpoint"
-path = "tests/configuration_endpoint.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "contracts_call_integration"
-path = "tests/contracts_call_integration.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "contracts_deploy_integration"
-path = "tests/contracts_deploy_integration.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "domains_endpoints"
-path = "tests/domains_endpoints.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "gov_council_persist_integration"
-path = "tests/gov_council_persist_integration.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "gov_enact_handler"
-path = "tests/gov_enact_handler.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "gov_protected_endpoints"
-path = "tests/gov_protected_endpoints.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "gov_protected_endpoints_router"
-path = "tests/gov_protected_endpoints_router.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "gov_read_endpoints"
-path = "tests/gov_read_endpoints.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "kaigi_endpoints"
-path = "tests/kaigi_endpoints.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "mcp_endpoints"
-path = "tests/mcp_endpoints.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "new_view_json"
-path = "tests/new_view_json.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "new_view_sse"
-path = "tests/new_view_sse.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "nexus_dataspaces_summary"
-path = "tests/nexus_dataspaces_summary.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "nexus_lifecycle_endpoint"
-path = "tests/nexus_lifecycle_endpoint.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "nexus_public_lanes"
-path = "tests/nexus_public_lanes.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "nfts_endpoints"
-path = "tests/nfts_endpoints.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "offline_readiness_smoke"
-path = "tests/offline_readiness_smoke.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "offline_v2_readiness_smoke"
-path = "tests/offline_v2_readiness_smoke.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "push_bridge"
-path = "tests/push_bridge.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "router_feature_matrix"
-path = "tests/router_feature_matrix.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "rwas_endpoints"
-path = "tests/rwas_endpoints.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "sns_registrar"
-path = "tests/sns_registrar.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "sorafs_discovery"
-path = "tests/sorafs_discovery.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "sorafs_repair_endpoints"
-path = "tests/sorafs_repair_endpoints.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "space_directory_manifests"
-path = "tests/space_directory_manifests.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "sse_proof_callhash"
-path = "tests/sse_proof_callhash.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "sse_proof_envelope_hash"
-path = "tests/sse_proof_envelope_hash.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "sse_proof_rejected_fields"
-path = "tests/sse_proof_rejected_fields.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "sse_proof_verified_fields"
-path = "tests/sse_proof_verified_fields.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "subscriptions_endpoints"
-path = "tests/subscriptions_endpoints.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "sumeragi_pacemaker_endpoint"
-path = "tests/sumeragi_pacemaker_endpoint.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "sumeragi_params_endpoint"
-path = "tests/sumeragi_params_endpoint.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "sumeragi_rbc_endpoint"
-path = "tests/sumeragi_rbc_endpoint.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "sumeragi_status_endpoint"
-path = "tests/sumeragi_status_endpoint.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "sumeragi_status_sse_profile_gate"
-path = "tests/sumeragi_status_sse_profile_gate.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "sumeragi_tel_subrouter_smoke"
-path = "tests/sumeragi_tel_subrouter_smoke.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "sumeragi_telemetry_endpoints"
-path = "tests/sumeragi_telemetry_endpoints.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "telemetry_gating"
-path = "tests/telemetry_gating.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "torii_start"
-path = "tests/torii_start.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "webhooks_subrouter_smoke"
-path = "tests/webhooks_subrouter_smoke.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "zk_attachments_filters_integration"
-path = "tests/zk_attachments_filters_integration.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "zk_attachments_integration"
-path = "tests/zk_attachments_integration.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "zk_attachments_subprocess"
-path = "tests/zk_attachments_subprocess.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "zk_proof_get_integration"
-path = "tests/zk_proof_get_integration.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "zk_proofs_list_integration"
-path = "tests/zk_proofs_list_integration.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "zk_proofs_query_integration"
-path = "tests/zk_proofs_query_integration.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "zk_prover_integration"
-path = "tests/zk_prover_integration.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "zk_subrouter_smoke"
-path = "tests/zk_subrouter_smoke.rs"
-required-features = ["app_api"]
-
-[[test]]
-name = "zk_vk_post_integration"
-path = "tests/zk_vk_post_integration.rs"
+name = "torii_zk"
+path = "tests/grouped/zk.rs"
 required-features = ["app_api"]

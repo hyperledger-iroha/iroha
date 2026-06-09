@@ -330,7 +330,7 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+CollectorSelectionOutputMatchesSpec ==
   /\ ActualOutput("empty_k_positive") = SpecOutput("empty_k_positive")
   /\ ActualOutput("multi_zero_k") = SpecOutput("multi_zero_k")
   /\ ActualOutput("single_k_zero") = SpecOutput("single_k_zero")
@@ -344,6 +344,8 @@ SafetyFast ==
   /\ ActualOutput("perm_seed") = SpecOutput("perm_seed")
   /\ ActualOutput("npos_no_seed") = SpecOutput("npos_no_seed")
   /\ ActualOutput("npos_seed") = SpecOutput("npos_seed")
+
+SafetyFast == CollectorSelectionOutputMatchesSpec
 
 QuorumProxyTailExact ==
   \A c \in Cases:
@@ -391,7 +393,7 @@ DeterministicCollectorRoutingExact ==
     /\ ActualDeterministicDistinct(c) = SpecDeterministicDistinct(c)
 
 CollectorSelectionExactness ==
-  /\ SafetyFast
+  /\ CollectorSelectionOutputMatchesSpec
   /\ QuorumProxyTailExact
   /\ EffectiveCollectorFanoutExact
   /\ DefaultCollectorSelectionExact
