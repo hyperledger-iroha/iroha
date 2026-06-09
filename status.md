@@ -2,6 +2,58 @@
 
 Last updated: 2026-06-09
 
+## 2026-06-09 SCCP all-lanes source-gate checklist hash binding
+
+- Hardened the direct all-lanes release checklist so required
+  source-adapter gates must carry a canonical non-zero `gate_hash`, the
+  lane-policy expected audit hash roles, and a `gate_hash` value matching the
+  named final gate transcript. Lanes whose policy does not require a
+  source-adapter gate now fail the governed-deployment checklist if forged gate
+  hashes or audit maps are present.
+- Added adversarial checklist coverage for omitted required Solana gate
+  material, operator-override audit-role smuggling, missing named final gate
+  hashes, gate/audit drift, and non-required Ethereum gate material.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_all_lanes_evidence.py pytests/scripts/sccp_all_lanes_evidence_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_all_lanes_evidence_test.py -k "source_gate or release_checklist"`
+    (`15` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_all_lanes_evidence_test.py`
+    (`138` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "source_gate or release_checklist"`
+    (`15` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "source_gate or release_checklist"`
+    (`7` passed)
+  - `git diff --check -- scripts/sccp_all_lanes_evidence.py pytests/scripts/sccp_all_lanes_evidence_test.py docs/source/bridge_proofs.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" scripts/sccp_all_lanes_evidence.py pytests/scripts/sccp_all_lanes_evidence_test.py docs/source/bridge_proofs.md roadmap.md status.md`
+
+## 2026-06-09 SCCP production route-config unready toggle guard
+
+- Hardened BSC and TRON route-config renderers so production-ready route
+  manifests reject explicit `--allow-unready true` before writing runtime
+  overlays. Non-production manifests still require the diagnostic opt-in before
+  diagnostic overlays can be rendered.
+- Extended the unready transparent-proof source inventory so release readiness
+  pins the BSC/TRON production rejection code and negative route-config tests,
+  and updated bridge-proof docs/roadmap plus Required Release Evidence wording.
+- Validation:
+  - `node --check scripts/sccp_bsc_taira_xor_deploy.mjs && node --check scripts/sccp_tron_taira_xor_deploy.mjs && node --check scripts/sccp_bsc_taira_xor_deploy.test.mjs && node --check scripts/sccp_tron_taira_xor_deploy.test.mjs`
+  - `node --test scripts/sccp_bsc_taira_xor_deploy.test.mjs`
+    (`28` passed)
+  - `node --test scripts/sccp_tron_taira_xor_deploy.test.mjs`
+    (`41` passed)
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - direct verifier/readiness helper import checks for
+    `_sccp_unready_transparent_proof_config_inventory_errors` and
+    `_sccp_unready_transparent_proof_config_gate_inventory_errors`
+    (`0` blockers)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "unready_transparent_proof_config or sccp_allow_unready"`
+    (`3` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "unready_transparent_proof_config or unready_config_only or source_inventory"`
+    (`7` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`8` passed)
+  - `git diff --check -- scripts/sccp_bsc_taira_xor_deploy.mjs scripts/sccp_bsc_taira_xor_deploy.test.mjs scripts/sccp_tron_taira_xor_deploy.mjs scripts/sccp_tron_taira_xor_deploy.test.mjs scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_retired_network_surface_test.py docs/source/bridge_proofs.md docs/source/engineering_backlog.md roadmap.md status.md`
+
 ## 2026-06-09 BFV native AIR opening-shape boundary
 
 - Tightened Core's BFV-shaped native full-bootstrap AIR preflight so opened
@@ -12971,7 +13023,8 @@ Last updated: 2026-06-09
 
 ## 2026-06-08 SCCP retired runtime-network launch-scope note
 
-- Substrate/Polkadot networks are explicitly outside SCCP launch support for now.
+- Kept the explicit unsupported retired-family launch-scope note in the current
+  SCCP status surface.
 - Kept the active SCCP launch scope limited to Ethereum, BSC, Solana, TON, and
   TRON in the public bridge-proof, backlog, and roadmap notes.
 

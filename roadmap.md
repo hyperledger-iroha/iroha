@@ -7555,7 +7555,10 @@ operator-provided rollout bundles.
   policy wording is missing or stale. Public discovery documentation now has
   the same readiness-level source gate, pinning supported-lane and verifier
   target wording before Torii discovery evidence can be published as
-  production-ready.
+  production-ready. The direct all-lanes release checklist now also validates
+  required source-adapter gate hashes and expected audit hash roles, while
+  rejecting forged source-gate material on lanes whose policy does not require
+  a source-adapter gate.
 - Keep live-network signing inputs runtime-only and continue using generated
   per-validator deployment bundles rather than hand-edited production configs.
 

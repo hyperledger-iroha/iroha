@@ -6001,6 +6001,94 @@ def _release_checklist_item(
     }
 
 
+def _source_adapter_gate_requirements(
+    domain: Any,
+) -> tuple[str, tuple[str, ...]]:
+    if not isinstance(domain, int):
+        return "", ()
+    profile = LANE_PROFILES.get(domain)
+    if profile is None:
+        return "", ()
+    if profile.solana_full_light_client_audit_required:
+        return "solana_full_light_client_gate_hash", SOLANA_FULL_LIGHT_CLIENT_AUDIT_FIELDS
+    if profile.ton_full_light_client_audit_required:
+        return "ton_full_light_client_gate_hash", TON_FULL_LIGHT_CLIENT_AUDIT_FIELDS
+    if profile.tron_source_bridge_config_required:
+        return "tron_dpos_source_gate_hash", TRON_DPOS_SOURCE_GATE_FIELDS
+    return "", ()
+
+
+def _source_adapter_gate_release_metadata_blockers(
+    lane_label: str,
+    lane: dict[str, Any],
+    source_adapter_gate: dict[str, Any],
+) -> list[str]:
+    gate_field, expected_audit_fields = _source_adapter_gate_requirements(
+        lane.get("domain")
+    )
+    gate_required = source_adapter_gate.get("required")
+    blockers: list[str] = []
+    if gate_required != bool(expected_audit_fields):
+        blockers.append(
+            f"{lane_label}: source adapter gate required flag must match lane policy"
+        )
+
+    gate_hash = source_adapter_gate.get("gate_hash", "")
+    audit_hashes = source_adapter_gate.get("audit_hashes", {})
+    if gate_required is not True:
+        if gate_hash not in ("", None):
+            blockers.append(
+                f"{lane_label}: source adapter gate hash must be empty when not required"
+            )
+        if not isinstance(audit_hashes, dict):
+            blockers.append(
+                f"{lane_label}: source adapter gate audit hashes must be empty when not required"
+            )
+        elif audit_hashes:
+            blockers.append(
+                f"{lane_label}: source adapter gate audit hashes must be empty when not required"
+            )
+        return blockers
+
+    parsed_gate_hash = _hex_bytes(gate_hash, byte_length=32)
+    if parsed_gate_hash is None or not any(parsed_gate_hash):
+        blockers.append(
+            f"{lane_label}: source adapter gate hash must be a canonical non-zero bytes32 when required"
+        )
+
+    if not isinstance(audit_hashes, dict):
+        blockers.append(
+            f"{lane_label}: source adapter gate audit hashes must be an object when required"
+        )
+        return blockers
+
+    if not audit_hashes:
+        blockers.append(
+            f"{lane_label}: source adapter gate audit hashes must not be empty when required"
+        )
+    for field in sorted(set(audit_hashes) - set(expected_audit_fields)):
+        blockers.append(
+            f"{lane_label}: source adapter gate audit hashes contains unexpected field: {field}"
+        )
+    for field in expected_audit_fields:
+        value = audit_hashes.get(field)
+        parsed = _hex_bytes(value, byte_length=32)
+        if parsed is None or not any(parsed):
+            blockers.append(
+                f"{lane_label}: source adapter gate audit hashes {field} must be a canonical non-zero bytes32"
+            )
+    if (
+        gate_field
+        and parsed_gate_hash is not None
+        and any(parsed_gate_hash)
+        and audit_hashes.get(gate_field) != gate_hash
+    ):
+        blockers.append(
+            f"{lane_label}: source adapter gate hash must match audit_hashes.{gate_field}"
+        )
+    return blockers
+
+
 def _release_checklist(
     lanes: list[dict[str, Any]],
     all_blockers: list[str],
@@ -6072,21 +6160,29 @@ def _release_checklist(
                 deployment_blockers.append(
                     f"{lane_label}: source adapter gate ready flag must be boolean"
                 )
-            elif gate_required is True and gate_ready is not True:
-                gate_errors, gate_schema_errors = _canonical_blocker_list(
-                    source_adapter_gate.get("blockers", []),
-                    f"{lane_label}: source adapter gate",
+            else:
+                deployment_blockers.extend(
+                    _source_adapter_gate_release_metadata_blockers(
+                        lane_label,
+                        lane,
+                        source_adapter_gate,
+                    )
                 )
-                if gate_schema_errors:
-                    deployment_blockers.extend(gate_schema_errors)
-                elif gate_errors:
-                    deployment_blockers.extend(
-                        f"{lane_label}: {error}" for error in gate_errors
+                if gate_required is True and gate_ready is not True:
+                    gate_errors, gate_schema_errors = _canonical_blocker_list(
+                        source_adapter_gate.get("blockers", []),
+                        f"{lane_label}: source adapter gate",
                     )
-                else:
-                    deployment_blockers.append(
-                        f"{lane_label}: source adapter gate is not ready"
-                    )
+                    if gate_schema_errors:
+                        deployment_blockers.extend(gate_schema_errors)
+                    elif gate_errors:
+                        deployment_blockers.extend(
+                            f"{lane_label}: {error}" for error in gate_errors
+                        )
+                    else:
+                        deployment_blockers.append(
+                            f"{lane_label}: source adapter gate is not ready"
+                        )
         if records.get("destination_rollout") is not True:
             deployment_blockers.append(
                 f"{lane_label}: destination rollout evidence is missing"

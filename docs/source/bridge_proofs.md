@@ -2662,7 +2662,9 @@ all-lanes required-domain drift from published lane domains,
 all-lanes domain roster or chain-label drift from the production remote lanes,
 non-ready or blocked all-lanes root or lane summaries,
 missing-record lane flags,
-blocked required source-adapter gates,
+blocked required source-adapter gates, required source-adapter gate summaries
+that omit the named gate hash or expected audit hash roles, non-required gate
+summaries that carry forged hash material,
 blocked release-checklist items,
 blocked portal/mobile submission surface rows,
 malformed nested all-lanes lane
