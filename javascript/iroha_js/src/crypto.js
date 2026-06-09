@@ -61,7 +61,7 @@ const KAGEMUSHA_NORITO_COMPACT_LEN_FLAG = 0x02;
 const KAGEMUSHA_NORITO_PACKED_STRUCT_FLAG = 0x04;
 const KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_VERSION_V1 = 1;
 const KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH = Buffer.from(
-  "119f4df38a98ef5848ad0aadb9715779",
+  "c88489618a012c283ff3bb2ebabc7775",
   "hex",
 );
 const PRIVACY_CRC64_TABLE = (() => {
@@ -849,6 +849,7 @@ function hasKagemushaRecursiveCompactPaymentTokenNative(native) {
       native.kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
         KAGEMUSHA_NATIVE_PROBE_ARCHIVE,
         KAGEMUSHA_NATIVE_PROBE_ARCHIVE,
+        KAGEMUSHA_NATIVE_PROBE_ARCHIVE,
       ),
     ) && hasKagemushaRecursiveCompactPaymentTokenVerifierNative(native)
   );
@@ -865,7 +866,10 @@ function hasKagemushaRecursiveCompactPaymentTokenVerifierNative(native) {
     return false;
   }
   return expectKagemushaNativeProbeRejection(() =>
-    native.kagemushaVerifyRecursiveCompactPaymentToken(KAGEMUSHA_NATIVE_PROBE_ARCHIVE),
+    native.kagemushaVerifyRecursiveCompactPaymentToken(
+      KAGEMUSHA_NATIVE_PROBE_ARCHIVE,
+      KAGEMUSHA_NATIVE_PROBE_ARCHIVE,
+    ),
   );
 }
 
@@ -1954,6 +1958,7 @@ export function kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecords
 export function kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
   recordBundleArchive,
   pallasOpenEnvelopesArchive,
+  recursiveCompactKeyArtifactsArchive,
 ) {
   const recordBundle = toOwnedKagemushaArchiveBuffer(
     recordBundleArchive,
@@ -1962,6 +1967,10 @@ export function kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAnd
   const pallasOpenEnvelopes = toOwnedKagemushaArchiveBuffer(
     pallasOpenEnvelopesArchive,
     "pallasOpenEnvelopesArchive",
+  );
+  const recursiveCompactKeyArtifacts = toOwnedKagemushaArchiveBuffer(
+    recursiveCompactKeyArtifactsArchive,
+    "recursiveCompactKeyArtifactsArchive",
   );
   const native = resolveNativeBinding();
   if (!hasKagemushaRecursiveCompactPaymentTokenNative(native)) {
@@ -1973,6 +1982,7 @@ export function kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAnd
     native.kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
       recordBundle,
       pallasOpenEnvelopes,
+      recursiveCompactKeyArtifacts,
     );
   return kagemushaRecursiveSpendOutputToBuffer(
     result,
@@ -1980,10 +1990,17 @@ export function kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAnd
   );
 }
 
-export function kagemushaVerifyRecursiveCompactPaymentToken(compactTokenArchive) {
+export function kagemushaVerifyRecursiveCompactPaymentToken(
+  compactTokenArchive,
+  recursiveCompactVerifierKeysArchive,
+) {
   const compactToken = toOwnedKagemushaArchiveBuffer(
     compactTokenArchive,
     "compactTokenArchive",
+  );
+  const recursiveCompactVerifierKeys = toOwnedKagemushaArchiveBuffer(
+    recursiveCompactVerifierKeysArchive,
+    "recursiveCompactVerifierKeysArchive",
   );
   const native = resolveNativeBinding();
   if (!hasKagemushaRecursiveCompactPaymentTokenVerifierNative(native)) {
@@ -1991,7 +2008,10 @@ export function kagemushaVerifyRecursiveCompactPaymentToken(compactTokenArchive)
       "recursive compact Kagemusha payment-token verifier requires native bridge ABI 7 with the compact verifier symbol",
     );
   }
-  const result = native.kagemushaVerifyRecursiveCompactPaymentToken(compactToken);
+  const result = native.kagemushaVerifyRecursiveCompactPaymentToken(
+    compactToken,
+    recursiveCompactVerifierKeys,
+  );
   if (typeof result !== "boolean") {
     throw new Error(
       "kagemushaVerifyRecursiveCompactPaymentToken returned a non-boolean result",
@@ -2072,7 +2092,7 @@ function privacyNativeProbeReturnsBytes(native, operation, requestArchive = unde
       requestArchive === undefined
         ? native[operation]()
         : native[operation]((request = Buffer.from(requestArchive)));
-    privacyNativeOutputToBuffer(result, operation);
+    privacyNativeOutputToBuffer(result, operation, { clearSource: true });
     return true;
   } catch {
     return false;
@@ -2159,27 +2179,34 @@ function toPrivacyRequestArchiveBuffer(value, name) {
   return Buffer.from(request);
 }
 
-function privacyNativeOutputToBuffer(result, operation) {
+function privacyNativeOutputToBuffer(result, operation, options = {}) {
+  let output;
   if (result === undefined || result === null) {
     throw new Error(`native ${operation} returned no output`);
   }
   if (typeof result === "string") {
     throw new Error(`native ${operation} returned text instead of Norito V1 bytes`);
   }
-  const output = toPrivacyArchiveBuffer(result, `native ${operation} output`);
-  if (output.length === 0) {
-    throw new Error(`native ${operation} returned empty output`);
+  try {
+    output = toPrivacyArchiveBuffer(result, `native ${operation} output`);
+    if (output.length === 0) {
+      throw new Error(`native ${operation} returned empty output`);
+    }
+    if (output.length > PRIVACY_NATIVE_ARCHIVE_MAX_BYTES) {
+      throw new Error(`native ${operation} returned oversized output`);
+    }
+    assertPrivacyNoritoArchive(
+      output,
+      operation,
+      "native",
+      privacyExpectedResultSchemaByte(operation),
+    );
+    return Buffer.from(output);
+  } finally {
+    if (options.clearSource === true && output) {
+      output.fill(0);
+    }
   }
-  if (output.length > PRIVACY_NATIVE_ARCHIVE_MAX_BYTES) {
-    throw new Error(`native ${operation} returned oversized output`);
-  }
-  assertPrivacyNoritoArchive(
-    output,
-    operation,
-    "native",
-    privacyExpectedResultSchemaByte(operation),
-  );
-  return Buffer.from(output);
 }
 
 function privacyCrc64(payload) {

@@ -35,6 +35,16 @@ const G2 = [
   "8495653923123431417604973247489272438418190587263600148770280649306958101930",
   "4082367875863433681332203403145435568316851327593401208105741076214120093531",
 ];
+const BN254_BASE_FIELD_MODULUS =
+  "21888242871839275222246405745257275088696311157297823662689037894645226208583";
+const NEGATIVE_G1 = [
+  "1",
+  (BigInt(BN254_BASE_FIELD_MODULUS) - 2n).toString(),
+];
+const LOCAL_IC = [
+  ...Array.from({ length: 9 }, () => G1).flat(),
+  ...NEGATIVE_G1,
+];
 const PRIVATE_KEY_ENV = "SCCP_BSC_LOCAL_SMOKE_PRIVATE_KEY";
 const DEPLOY_TIMEOUT_MS = 180_000;
 const CLOSE_TIMEOUT_MS = 15_000;
@@ -81,9 +91,46 @@ function close(server) {
   });
 }
 
+function localVerifierKeyHash(ethers, material) {
+  const coder = ethers.AbiCoder.defaultAbiCoder();
+  let encoded = coder.encode(
+    [
+      "uint256",
+      "uint256",
+      "uint256[2]",
+      "uint256[2]",
+      "uint256[2]",
+      "uint256[2]",
+      "uint256[2]",
+      "uint256[2]",
+    ],
+    [
+      material.alpha1[0],
+      material.alpha1[1],
+      material.beta2.slice(0, 2),
+      material.beta2.slice(2, 4),
+      material.gamma2.slice(0, 2),
+      material.gamma2.slice(2, 4),
+      material.delta2.slice(0, 2),
+      material.delta2.slice(2, 4),
+    ],
+  );
+  for (let index = 0; index < material.ic.length; index += 2) {
+    encoded = ethers.concat([
+      encoded,
+      coder.encode(["uint256", "uint256"], [
+        material.ic[index],
+        material.ic[index + 1],
+      ]),
+    ]);
+  }
+  return ethers.keccak256(encoded);
+}
+
 async function main() {
   logPhase("starting local Ganache deployment smoke");
   const ganache = requireOptionalPackage("ganache");
+  const ethers = requireOptionalPackage("ethers");
   const server = ganache.server({
     chain: {
       chainId: 97,
@@ -109,23 +156,23 @@ async function main() {
     process.env[PRIVATE_KEY_ENV] = deployer.secretKey;
     const verifierPath = join(workDir, "verifier.json");
     const evidencePath = join(workDir, "deployment.evidence.json");
+    const verifierMaterial = {
+      alpha1: G1,
+      beta2: G2,
+      gamma2: G2,
+      delta2: G2,
+      ic: LOCAL_IC,
+      proofFamily: "stark-fri-v1",
+      networkId: BSC_TESTNET_NETWORK_ID_HEX,
+      sourceDomain: 0,
+      targetDomain: 2,
+    };
     await writeFile(
       verifierPath,
       `${JSON.stringify(
         {
-          alpha1: G1,
-          beta2: G2,
-          gamma2: G2,
-          delta2: G2,
-          ic: Array.from({ length: 10 }, () => G1).flat(),
-          // This is the verifyingKeyHash emitted by the verifier for the
-          // deterministic G1/G2 material above.
-          verifierKeyHash:
-            "0x9ef8067d260532f88e60cfa4b458fe678fc46b9c242de18fc91ba646e0857fc4",
-          proofFamily: "stark-fri-v1",
-          networkId: BSC_TESTNET_NETWORK_ID_HEX,
-          sourceDomain: 0,
-          targetDomain: 2,
+          ...verifierMaterial,
+          verifierKeyHash: localVerifierKeyHash(ethers, verifierMaterial),
         },
         null,
         2,

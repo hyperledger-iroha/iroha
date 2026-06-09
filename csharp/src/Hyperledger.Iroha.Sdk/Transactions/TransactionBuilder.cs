@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using Hyperledger.Iroha.Crypto;
 using Hyperledger.Iroha.Norito;
+using Hyperledger.Iroha.Offline;
 
 namespace Hyperledger.Iroha.Transactions;
 
@@ -139,6 +140,24 @@ public sealed class TransactionBuilder
     public TransactionBuilder ExecuteTrigger(string triggerId, JsonNode? args = null)
     {
         return AddInstruction(TransactionInstruction.ExecuteTrigger(triggerId, args));
+    }
+
+    public TransactionBuilder KagemushaInstructionArchive(
+        KagemushaInstructionType instructionType,
+        byte[] instructionArchive)
+    {
+        return AddInstruction(TransactionInstruction.KagemushaInstructionArchive(instructionType, instructionArchive));
+    }
+
+    public TransactionBuilder KagemushaRecursiveRedeem(
+        KagemushaRecursiveSpendRedeemInstructionArchive instructionArchive)
+    {
+        return AddInstruction(TransactionInstruction.KagemushaRecursiveRedeem(instructionArchive));
+    }
+
+    public TransactionBuilder KagemushaRecursiveRedeem(ReadOnlySpan<byte> redeemRequestArchive)
+    {
+        return KagemushaRecursiveRedeem(KagemushaRecursiveSpendNative.Redeem(redeemRequestArchive));
     }
 
     public TransactionBuilder SetCreationTimeMilliseconds(ulong creationTimeMilliseconds)

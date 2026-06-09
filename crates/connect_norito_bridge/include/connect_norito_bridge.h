@@ -225,27 +225,30 @@ int32_t connect_norito_kagemusha_prove_verified_recursive_aggregation_proof_bund
     unsigned long* out_proof_bundle_len);
 
 // ABI 7 recursive compact-token prover surface for `kagemusha-recursive-compact-v1`.
-// Reserved source-stable surface. It rejects malformed input archives and fails
-// closed with ERR_KAGEMUSHA_RECURSIVE_COMPACT_UNAVAILABLE until compact-token
-// proofs compose the private-hop verifier-slice relation in-circuit.
-// Input 1: Norito-archive bytes of `KagemushaVerifiedFoldRecordBundle`.
-// Input 2: Norito-archive bytes of `Vec<iroha_data_model::zk::OpenVerifyEnvelope>`.
-// Output: none in this release.
+// Input archives are Norito-encoded `KagemushaVerifiedFoldRecordBundle`,
+// ordered Pallas opening envelopes, and
+// `KagemushaRecursiveCompactKeyArtifactsV1`.
+// Output is a Norito-encoded `KagemushaCompactPaymentToken`.
 int32_t connect_norito_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes(
     const uint8_t* verified_record_bundle_norito_ptr,
     unsigned long verified_record_bundle_norito_len,
     const uint8_t* pallas_open_envelopes_norito_ptr,
     unsigned long pallas_open_envelopes_norito_len,
+    const uint8_t* recursive_compact_key_artifacts_norito_ptr,
+    unsigned long recursive_compact_key_artifacts_norito_len,
     uint8_t** out_compact_token_ptr,
     unsigned long* out_compact_token_len);
 
-// Verify an ABI 7 recursive compact Kagemusha token.
-// Input: Norito-archive bytes of `KagemushaCompactPaymentToken`.
+// Verify an ABI 7 recursive compact Kagemusha token against a verifier-key package.
+// Input 1: Norito-archive bytes of `KagemushaCompactPaymentToken`.
+// Input 2: Norito-archive bytes of `KagemushaRecursiveCompactVerifierKeysV1`.
 // Malformed archives and malformed token bindings return ERR_KAGEMUSHA_PROVE.
-// Output: `*out_valid = 0` for every shape-valid token in this release.
+// Shape-valid tokens with invalid proof bodies return success with `*out_valid = 0`.
 int32_t connect_norito_kagemusha_verify_recursive_compact_payment_token(
     const uint8_t* compact_token_norito_ptr,
     unsigned long compact_token_norito_len,
+    const uint8_t* recursive_compact_verifier_keys_norito_ptr,
+    unsigned long recursive_compact_verifier_keys_norito_len,
     uint8_t* out_valid);
 
 // Verify a projected recursive spend compact Kagemusha token against a lineage verifier record.

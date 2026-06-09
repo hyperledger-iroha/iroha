@@ -637,7 +637,9 @@ Norito-encoded `KagemushaRecursiveAggregationProofBundle`.
 `recursive_compact_v1` compact-token surface and probes
 `kagemusha-recursive-compact-v1` separately from ABI 6 recursive spend. Use
 `proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes`
-and `verifyRecursiveCompactPaymentToken`; gate them with `isNativeAvailable`
+with record-bundle, Pallas open-envelope, and recursive compact key-artifact
+archives, and `verifyRecursiveCompactPaymentToken` with compact-token and
+recursive compact verifier-key archives; gate them with `isNativeAvailable`
 and `isVerifierNativeAvailable`. The recursive-spend compact projection
 verifier is exposed separately as
 `verifyRecursiveSpendCompactPaymentTokenProjection(compactTokenArchive:verifierRecordArchive:blockHeight:)`;
@@ -671,6 +673,15 @@ legacy checked pre-fold runtimes. `transitionProfileInit(requestArchive:)` and
 `transitionProfileAppend(requestArchive:)` return the canonical
 Reserved-lineage accumulator transition profile as raw Norito archives for
 fixture generation and circuit preflight.
+Transaction builders expose the same Kagemusha instruction surface without
+asking wallet code to reframe native archives. Use
+`KagemushaInstructionTransactionRequest` for a typed `KagemushaTransfer` or
+`RedeemKagemushaRecursive` instruction archive, and use
+`IrohaSDK.buildKagemushaRecursiveRedeem(...)` to derive the redeem instruction
+from a native recursive redeem request before signing. These builders require
+valid Norito archives, reject empty, malformed, tampered, or wrong-type
+instruction archives, and keep recursive redeem derivation inside the native
+bridge.
 `lineageAppendBoundary(profileArchive:)` derives the compact append-boundary
 Norito archive from a full append transition profile with native opening
 preflight material; wallet code should treat the boundary bytes as opaque
@@ -716,9 +727,13 @@ material: Swift wallet code must pass it through Norito unchanged and must not
 construct, rewrite, or mutate it. The native bridge validates `vk_commitment`,
 `public_inputs_schema_hash`, and `domain_tag` against the exact previous bundle
 before proving or returning output bytes.
-Native append streams the previous recursive proof bytes into
-`recursive_proof_chain_digest`; SDK code must not derive or patch the
-accumulator state. Verify request archives must pass the
+Native append streams the previous recursive proof bytes and per-hop accumulator
+material into native-owned accumulator digests (`recursive_proof_chain_digest`,
+lineage/aggregation transcript, fixed-window schedule/shared-manifest/table-base,
+verifier-witness batch, transition-profile, append-opening-preflight,
+append-boundary, scalar-projection, and previous/resulting accumulator digests);
+SDK code must not derive, supply, or patch accumulator state.
+Verify request archives must pass the
 same public-binding preflight before the native bridge returns a
 `KagemushaRecursiveSpendVerifyResultV1`: Reserved-lineage bundles require a
 matching active `lineage_verifier_record`, semantic bundles must omit it, and
@@ -755,8 +770,10 @@ Swift validates archive magic, length, CRC, the 64 MiB native size cap, and the
 operation-specific result schema before returning bytes to callers. Capability
 metadata reports `privacy-production-gate-v1`, keeps `productionReady = false`,
 and remains fail-closed with missing production gates and no audit references
-until real proving, verification, chain admission, deterministic testing,
-fuzzing, performance gates, and external audit signoff are complete.
+until real proving, verification, chain admission, witness privacy checks,
+deterministic testing, negative/adversarial testing, replay/nullifier rejection
+testing, parser/verifier fuzzing, performance gates, and external audit signoff
+are complete.
 
 Swift also exposes the deterministic privacy FFI status/error-code contract for
 diagnostics and cross-language parity: `ffiStatusError`, `ffiErrorNullPointer`,

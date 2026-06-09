@@ -54,6 +54,10 @@ function browserNoritoFrameFromPayload(schemaByte, payload) {
 
 const TEST_NORITO_COMPACT_LEN_FLAG = 0x02;
 const KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH = Buffer.from(
+  "c88489618a012c283ff3bb2ebabc7775",
+  "hex",
+);
+const OLD_KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH = Buffer.from(
   "119f4df38a98ef5848ad0aadb9715779",
   "hex",
 );
@@ -402,6 +406,20 @@ test("browser crypto exposes native-only helpers as safe stubs", () => {
         provingKeyArchive,
       ),
       /lineage_verifier_key/,
+    );
+    const oldHashProvingKeyArchive = Buffer.from(provingKeyArchive);
+    OLD_KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH.copy(
+      oldHashProvingKeyArchive,
+      6,
+    );
+    assert.throws(
+      () => crypto.kagemushaRecursiveSpendLineageKeyArtifactsForInit(
+        128,
+        crypto.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+        verifierKey,
+        oldHashProvingKeyArchive,
+      ),
+      /lineage_proving_key_archive/,
     );
     assert.throws(
       () => crypto.kagemushaRecursiveSpendLineageKeyArtifactsForAppend(

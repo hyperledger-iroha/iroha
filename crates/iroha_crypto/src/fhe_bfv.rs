@@ -27831,6 +27831,42 @@ mod tests {
     }
 
     #[test]
+    fn full_bootstrap_native_stark_air_domain_tag_binds_statement_hash() {
+        let statement_hash = Hash::new(b"bfv-native-air-domain-tag-statement");
+        let alternate_statement_hash = Hash::new(b"bfv-native-air-domain-tag-alternate");
+
+        let tag = bfv_full_bootstrap_native_stark_air_domain_tag_v1(statement_hash);
+        let repeated_tag = bfv_full_bootstrap_native_stark_air_domain_tag_v1(statement_hash);
+        let alternate_tag =
+            bfv_full_bootstrap_native_stark_air_domain_tag_v1(alternate_statement_hash);
+
+        assert_eq!(tag, repeated_tag);
+        assert_ne!(
+            tag, alternate_tag,
+            "native STARK/AIR domain tags must bind the execution statement hash"
+        );
+        assert_eq!(tag.len(), Hash::LENGTH * 2);
+        assert!(tag.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        assert!(
+            tag.bytes()
+                .all(|byte| !byte.is_ascii_alphabetic() || byte.is_ascii_lowercase()),
+            "native STARK/AIR domain tags must use canonical lowercase hex"
+        );
+
+        let statement_hash_bytes: [u8; Hash::LENGTH] = statement_hash.into();
+        let expected_digest: [u8; Hash::LENGTH] = Hash::new_from_chunks(&[
+            BFV_FULL_BOOTSTRAP_NATIVE_STARK_AIR_DOMAIN_TAG_DOMAIN,
+            &statement_hash_bytes,
+        ])
+        .into();
+        assert_eq!(tag, hex::encode(expected_digest));
+        assert_eq!(
+            BFV_FULL_BOOTSTRAP_NATIVE_STARK_AIR_TRANSCRIPT_LABEL_V1,
+            "IROHA-BFV-FULL-BOOTSTRAP-AIR-V1"
+        );
+    }
+
+    #[test]
     fn refresh_key_generators_preflight_metadata_and_public_key_before_masks() {
         fn assert_error_contains<T>(result: Result<T, BfvError>, expected: &str, context: &str) {
             let Err(err) = result else {

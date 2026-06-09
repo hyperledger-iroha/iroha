@@ -40,10 +40,15 @@ public final class PrivacyNativeBridge {
               "chain admission path is not enabled",
               "cross-SDK parity is incomplete",
               "wallet/state support is incomplete",
+              "witness privacy checks are incomplete",
               "deterministic tests are incomplete",
+              "negative/adversarial tests are incomplete",
+              "replay/nullifier rejection tests are incomplete",
               "fuzzing gate is incomplete",
+              "parser fuzzing gate is incomplete",
+              "verifier fuzzing gate is incomplete",
               "performance gate is incomplete",
-              "external audit signoff is missing",
+              "internal cryptographic review signoff is missing",
               "implementation stage is not production-hardened",
               "planned SDK entrypoints remain",
               "dev fixture entrypoints are not production entrypoints",
@@ -71,6 +76,14 @@ public final class PrivacyNativeBridge {
 
   public static byte[] buildProof(final byte[] requestArchive) {
     return call("build proof", requestArchive, PrivacyNativeBridge::nativeBuildProof);
+  }
+
+  public static byte[] buildConfidentialTransferProofV2(final byte[] requestArchive) {
+    return buildProof(requestArchive);
+  }
+
+  public static byte[] buildConfidentialUnshieldProofV3(final byte[] requestArchive) {
+    return buildProof(requestArchive);
   }
 
   public static byte[] verifyProof(final byte[] requestArchive) {
@@ -412,8 +425,13 @@ public final class PrivacyNativeBridge {
     private final boolean chainAdmission;
     private final boolean sdkParity;
     private final boolean walletState;
+    private final boolean witnessPrivacyChecks;
     private final boolean deterministicTests;
+    private final boolean negativeAdversarialTests;
+    private final boolean replayNullifierTests;
     private final boolean fuzzing;
+    private final boolean parserFuzzing;
+    private final boolean verifierFuzzing;
     private final boolean performanceGates;
     private final boolean externalAudit;
     private final List<String> missingProductionGates;
@@ -431,8 +449,13 @@ public final class PrivacyNativeBridge {
       this.chainAdmission = false;
       this.sdkParity = false;
       this.walletState = false;
+      this.witnessPrivacyChecks = false;
       this.deterministicTests = false;
+      this.negativeAdversarialTests = false;
+      this.replayNullifierTests = false;
       this.fuzzing = false;
+      this.parserFuzzing = false;
+      this.verifierFuzzing = false;
       this.performanceGates = false;
       this.externalAudit = false;
       this.missingProductionGates = PRODUCTION_GATE_MISSING;
@@ -475,12 +498,32 @@ public final class PrivacyNativeBridge {
       return walletState;
     }
 
+    public boolean hasWitnessPrivacyChecks() {
+      return witnessPrivacyChecks;
+    }
+
     public boolean hasDeterministicTests() {
       return deterministicTests;
     }
 
+    public boolean hasNegativeAdversarialTests() {
+      return negativeAdversarialTests;
+    }
+
+    public boolean hasReplayNullifierTests() {
+      return replayNullifierTests;
+    }
+
     public boolean hasFuzzing() {
       return fuzzing;
+    }
+
+    public boolean hasParserFuzzing() {
+      return parserFuzzing;
+    }
+
+    public boolean hasVerifierFuzzing() {
+      return verifierFuzzing;
     }
 
     public boolean hasPerformanceGates() {

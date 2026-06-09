@@ -3365,6 +3365,22 @@ final class OfflineNoteTests: XCTestCase {
         XCTAssertNotEqual(redeem.transactionHash, defund.transactionHash)
     }
 
+    func testOfflineNoteTransactionSubmitterFeeMetadataHelper() {
+        let metadata = IrohaOfflineNoteTransactionSubmitter.feeMetadata(
+            gasAssetId: " xor#universal ",
+            feeSponsor: " sponsor-i105 "
+        )
+
+        XCTAssertEqual(
+            metadata[IrohaOfflineNoteTransactionSubmitter.gasAssetIdMetadataKey],
+            .string("xor#universal")
+        )
+        XCTAssertEqual(
+            metadata[IrohaOfflineNoteTransactionSubmitter.feeSponsorMetadataKey],
+            .string("sponsor-i105")
+        )
+    }
+
     func testRedeemBuilderRejectsMismatchedProofBinding() throws {
         let fixture = try Self.loadFixture()
         let redeem = try Self.redeem(fixture)

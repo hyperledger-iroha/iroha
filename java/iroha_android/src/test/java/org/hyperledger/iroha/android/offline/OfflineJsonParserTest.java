@@ -33,6 +33,11 @@ public final class OfflineJsonParserTest {
     assert readiness.offlineFountainQr();
     assert readiness.offlineSyncOptional();
     assert !readiness.offlineTelemetry();
+    assert !readiness.offlineKagemushaAbi7();
+    assert readiness.offlineKagemushaAbi7Mode() == null;
+    assert readiness.offlineKagemushaAbi7BridgeAbiVersion() == null;
+    assert readiness.offlineKagemushaAbi7CircuitId() == null;
+    assert !readiness.offlineKagemushaAbi7Artifacts();
   }
 
   private static void parsesOfflineTransfers() {

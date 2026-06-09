@@ -664,7 +664,7 @@ fn offline_paths() -> Map {
         Value::Object(json_get_operation(
             "Offline",
             "Report Offline feature readiness.",
-            "Returns readiness signals for device-bound one-use notes and Fountain QR transport.",
+            "Returns readiness signals for device-bound one-use notes, Fountain QR transport, and Kagemusha ABI-7 bearer-cash runtime support.",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),

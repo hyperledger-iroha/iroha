@@ -13650,6 +13650,63 @@ export interface TransactionAssemblyInput {
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
 }
 
+export type KagemushaInstructionArchiveType =
+  | "KagemushaTransfer"
+  | "RedeemKagemushaRecursive";
+
+export interface KagemushaInstructionArchiveInput {
+  type?: KagemushaInstructionArchiveType;
+  instructionType?: KagemushaInstructionArchiveType;
+  instruction_type?: KagemushaInstructionArchiveType;
+  instructionArchive?: BinaryLike;
+  instruction_archive?: BinaryLike;
+  archive?: BinaryLike;
+  bytes?: BinaryLike;
+  bytesBase64?: string;
+  bytes_base64?: string;
+}
+
+export interface KagemushaInstructionTransactionInput
+  extends KagemushaInstructionArchiveInput {
+  chainId: string;
+  authority: string;
+  metadata?: MetadataLike;
+  creationTimeMs?: number | null;
+  ttlMs?: number | null;
+  nonce?: number | null;
+  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
+}
+
+export interface KagemushaRecursiveRedeemTransactionBaseInput {
+  chainId: string;
+  authority: string;
+  metadata?: MetadataLike;
+  creationTimeMs?: number | null;
+  ttlMs?: number | null;
+  nonce?: number | null;
+  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
+}
+
+export type KagemushaRecursiveRedeemArchiveInput =
+  | {
+      redeemRequestArchive: BinaryLike;
+      redeem_request_archive?: never;
+      requestArchive?: never;
+    }
+  | {
+      redeemRequestArchive?: never;
+      redeem_request_archive: BinaryLike;
+      requestArchive?: never;
+    }
+  | {
+      redeemRequestArchive?: never;
+      redeem_request_archive?: never;
+      requestArchive: BinaryLike;
+    };
+
+export type KagemushaRecursiveRedeemTransactionInput =
+  KagemushaRecursiveRedeemTransactionBaseInput & KagemushaRecursiveRedeemArchiveInput;
+
 export interface IvmProvedTransactionAssemblyInput {
   chainId: string;
   authority: string;
@@ -17603,9 +17660,11 @@ export function kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecords
 export function kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
   recordBundleArchive: BinaryLike,
   pallasOpenEnvelopesArchive: BinaryLike,
+  recursiveCompactKeyArtifactsArchive: BinaryLike,
 ): Buffer;
 export function kagemushaVerifyRecursiveCompactPaymentToken(
   compactTokenArchive: BinaryLike,
+  recursiveCompactVerifierKeysArchive: BinaryLike,
 ): boolean;
 export function kagemushaRecursiveSpendCompactPaymentTokenFromBundle(
   bundleArchive: BinaryLike,
@@ -18054,6 +18113,23 @@ export function buildTransaction(
  */
 export function buildIvmProvedTransaction(
   input: IvmProvedTransactionAssemblyInput,
+): SignedTransactionResult;
+
+export function buildKagemushaInstructionArchiveInstruction(
+  input: KagemushaInstructionArchiveInput,
+): {
+  KagemushaInstructionArchive: {
+    type: KagemushaInstructionArchiveType;
+    bytes_base64: string;
+  };
+};
+
+export function buildKagemushaInstructionTransaction(
+  input: KagemushaInstructionTransactionInput,
+): SignedTransactionResult;
+
+export function buildKagemushaRecursiveRedeemTransaction(
+  input: KagemushaRecursiveRedeemTransactionInput,
 ): SignedTransactionResult;
 
 /**

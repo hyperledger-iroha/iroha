@@ -77,6 +77,7 @@ SECRET_IDENTIFIER_PATTERN = re.compile(
     r"(?![a-z0-9])",
     re.IGNORECASE,
 )
+SAFE_OUTPUT_CONTROL_CHARS = {"\t", "\n", "\r"}
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 
@@ -239,8 +240,11 @@ def _reject_output_path_smuggling(path: Path, label: str) -> None:
         raise CanaryError(f"{label} must use forward slashes")
     if ";" in raw:
         raise CanaryError(f"{label} must not contain semicolon path parameters")
+    if ":" in raw:
+        raise CanaryError(f"{label} must not contain URI or drive prefixes")
     if _contains_secret_material(raw) or _contains_secret_identifier_material(raw):
         raise CanaryError(f"{label} must not contain secret-looking material")
+    _reject_percent_encoded_path_smuggling(raw, label)
     parts = path.parts[1:] if path.is_absolute() else path.parts
     if any(part.startswith("-") for part in parts if part):
         raise CanaryError(f"{label} must not contain leading-dash path segments")
@@ -263,8 +267,11 @@ def _reject_raw_output_path_smuggling(raw: str, label: str) -> None:
         raise CanaryError(f"{label} must use forward slashes")
     if ";" in raw:
         raise CanaryError(f"{label} must not contain semicolon path parameters")
+    if ":" in raw:
+        raise CanaryError(f"{label} must not contain URI or drive prefixes")
     if _contains_secret_material(raw) or _contains_secret_identifier_material(raw):
         raise CanaryError(f"{label} must not contain secret-looking material")
+    _reject_percent_encoded_path_smuggling(raw, label)
     parts = raw.split("/")
     checked_parts = parts[1:] if raw.startswith("/") else parts
     if any(part == "" for part in checked_parts):
@@ -275,17 +282,52 @@ def _reject_raw_output_path_smuggling(raw: str, label: str) -> None:
         raise CanaryError(f"{label} must not contain dot or parent segments")
 
 
+def _reject_percent_encoded_path_smuggling(raw: str, label: str) -> None:
+    index = 0
+    while True:
+        index = raw.find("%", index)
+        if index == -1:
+            return
+        token = raw[index + 1 : index + 3]
+        if len(token) != 2 or any(ch not in "0123456789abcdefABCDEF" for ch in token):
+            raise CanaryError(f"{label} must not contain malformed percent escapes")
+        byte = int(token, 16)
+        if byte <= 0x20 or byte == 0x7F:
+            raise CanaryError(
+                f"{label} must not contain percent-encoded control or space characters"
+            )
+        if byte in {0x2E, 0x2F, 0x5C}:
+            raise CanaryError(
+                f"{label} must not contain encoded dot or separator characters"
+            )
+        if byte == 0x3B:
+            raise CanaryError(f"{label} must not contain encoded semicolon parameters")
+        if byte in {0x23, 0x3A, 0x3F, 0x40, 0x5B, 0x5D}:
+            raise CanaryError(
+                f"{label} must not contain encoded URL delimiter characters"
+            )
+        if byte == 0x25:
+            raise CanaryError(f"{label} must not contain encoded percent characters")
+        index += 3
+
+
 def _preflight_raw_cli_secrets(argv: list[str] | None, value_flags: set[str]) -> None:
     raw_args = sys.argv[1:] if argv is None else argv
     index = 0
     while index < len(raw_args):
         arg = raw_args[index]
+        if arg == "--":
+            raise CanaryError("argument terminator is not supported")
         if arg in value_flags:
             index += 2
             continue
         if any(arg.startswith(f"{flag}=") for flag in value_flags):
             index += 1
             continue
+        if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in arg):
+            raise CanaryError("CLI argument must not contain control characters")
+        if any(ord(ch) > 0x7E for ch in arg):
+            raise CanaryError("CLI argument must use printable ASCII")
         if _contains_secret_material(arg) or _contains_secret_identifier_material(arg):
             raise CanaryError("CLI argument must not contain secret-looking material")
         index += 1
@@ -296,6 +338,8 @@ def _preflight_boolean_cli_flags(argv: list[str] | None, flags: set[str]) -> Non
     index = 0
     while index < len(raw_args):
         arg = raw_args[index]
+        if arg == "--":
+            raise CanaryError("argument terminator is not supported")
         flag, separator, _value = arg.partition("=")
         if separator and flag in flags:
             raise CanaryError(f"{flag} does not take a value")
@@ -314,7 +358,7 @@ def _preflight_output_cli_paths(argv: list[str] | None, flags: set[str]) -> None
     while index < len(raw_args):
         arg = raw_args[index]
         if arg == "--":
-            return
+            raise CanaryError("argument terminator is not supported")
         matched = False
         for flag in flags:
             if arg == flag:
@@ -343,6 +387,8 @@ def _preflight_output_cli_paths(argv: list[str] | None, flags: set[str]) -> None
 def _reject_raw_numeric_cli_value(raw: str, flag: str, *, integer: bool) -> None:
     if raw != raw.strip() or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
         raise CanaryError(f"{flag} must be a numeric value")
+    if any(ord(ch) > 0x7E for ch in raw):
+        raise CanaryError(f"{flag} must use printable ASCII")
     try:
         int(raw, 10) if integer else float(raw)
     except ValueError as error:
@@ -361,7 +407,7 @@ def _preflight_numeric_cli_values(
     while index < len(raw_args):
         arg = raw_args[index]
         if arg == "--":
-            return
+            raise CanaryError("argument terminator is not supported")
         matched = False
         for flag in flags:
             if arg == flag:
@@ -532,7 +578,13 @@ def _require_object(value: Any, label: str) -> dict[str, Any]:
 def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -> None:
     unknown = sorted(set(value) - allowed)
     if unknown:
-        if any(_is_secret_looking_key(key) for key in unknown):
+        if any(
+            _is_secret_looking_key(key)
+            or _is_control_bearing_key(key)
+            or len(str(key)) > 128
+            or any(ord(ch) > 0x7E for ch in str(key))
+            for key in unknown
+        ) or len(unknown) > 8 or sum(len(str(key)) for key in unknown) > 256:
             raise CanaryError(f"{label} contains unknown keys")
         raise CanaryError(f"{label} contains unknown keys: {', '.join(unknown)}")
 
@@ -567,6 +619,10 @@ def _is_secret_looking_key(value: Any) -> bool:
     )
 
 
+def _is_control_bearing_key(value: Any) -> bool:
+    return any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in str(value))
+
+
 def _is_secret_looking_identifier(value: Any) -> bool:
     return any(
         SECRET_IDENTIFIER_PATTERN.search(candidate)
@@ -577,6 +633,18 @@ def _is_secret_looking_identifier(value: Any) -> bool:
 def _reject_secret_looking_identifier(value: str, label: str) -> None:
     if _contains_secret_material(value) or _is_secret_looking_identifier(value):
         raise CanaryError(f"{label} must not contain secret-looking material")
+
+
+def _reject_non_ascii_context(value: str, label: str) -> None:
+    if any(ord(ch) > 0x7E for ch in value):
+        raise CanaryError(f"{label} must use printable ASCII")
+
+
+def _required_context_string(value: dict[str, Any], key: str, label: str) -> str:
+    raw = _required_string(value, key, label)
+    _reject_non_ascii_context(raw, f"{label}.{key}")
+    _reject_secret_looking_identifier(raw, f"{label}.{key}")
+    return raw
 
 
 def _required_string(value: dict[str, Any], key: str, label: str) -> str:
@@ -714,22 +782,58 @@ def _reject_duplicate_paths(paths: list[Path], label: str) -> None:
         seen[key] = offset
 
 
+def _reject_receipts_covered_by_dirs(
+    receipts: list[Path],
+    receipt_dirs: list[Path],
+) -> None:
+    dirs_by_key = {
+        str(receipt_dir.resolve()): offset
+        for offset, receipt_dir in enumerate(receipt_dirs)
+    }
+    for offset, receipt in enumerate(receipts):
+        dir_offset = dirs_by_key.get(str(receipt.parent.resolve()))
+        if dir_offset is not None:
+            raise CanaryError(
+                f"verify.receipts[{offset}] is already covered by "
+                f"verify.receipt_dirs[{dir_offset}]"
+            )
+
+
+def _reject_receipts_from_stage_dirs(
+    receipts: list[Path],
+    stage_receipt_dirs: list[Path],
+) -> None:
+    stage_dirs = {str(receipt_dir.resolve()) for receipt_dir in stage_receipt_dirs}
+    for offset, receipt in enumerate(receipts):
+        if str(receipt.parent.resolve()) in stage_dirs:
+            raise CanaryError(
+                f"verify.receipts[{offset}] must not replace a generated "
+                "stage receipt_dir"
+            )
+
+
 def _validate_path_string(
     raw: str,
     label: str,
     *,
     allow_runtime_secret_path: bool = False,
 ) -> None:
+    _reject_control_chars(raw, label)
+    if any(ord(ch) > 0x7E for ch in raw):
+        raise CanaryError(f"{label} must use printable ASCII")
     if any(ch.isspace() for ch in raw):
         raise CanaryError(f"{label} must not contain whitespace")
     if "\\" in raw:
         raise CanaryError(f"{label} must use forward slashes")
     if ";" in raw:
         raise CanaryError(f"{label} must not contain semicolon path parameters")
+    if ":" in raw:
+        raise CanaryError(f"{label} must not contain URI or drive prefixes")
     if not allow_runtime_secret_path and (
         _contains_secret_material(raw) or _contains_secret_identifier_material(raw)
     ):
         raise CanaryError(f"{label} must not contain secret-looking material")
+    _reject_percent_encoded_path_smuggling(raw, label)
     parts = raw.split("/")
     for offset, part in enumerate(parts):
         if part == "" and offset != 0:
@@ -811,6 +915,8 @@ def _validate_endpoint_url(
         raise CanaryError(f"{label} host must be lowercase")
     if raw_host.endswith("."):
         raise CanaryError(f"{label} host must not end with a dot")
+    if any(ord(ch) > 0x7E for ch in raw_host):
+        raise CanaryError(f"{label} host must use printable ASCII")
     _reject_secret_looking_identifier(raw_host, f"{label} host")
     _validate_host_labels(raw_host, label)
     _reject_local_url_host(parsed, label, allow_insecure_http=allow_insecure_http)
@@ -982,10 +1088,14 @@ def _address_embeds_non_global_ipv4(address: ipaddress.IPv4Address | ipaddress.I
 
 def _validate_url_path(parsed: urllib.parse.ParseResult, label: str) -> None:
     path = parsed.path
+    if any(ord(ch) > 0x7E for ch in path):
+        raise CanaryError(f"{label} path must use printable ASCII")
     if "\\" in path:
         raise CanaryError(f"{label} path must use forward slashes")
     if ";" in path:
         raise CanaryError(f"{label} path must not contain semicolon parameters")
+    if any(token in path for token in (":", "@", "[", "]")):
+        raise CanaryError(f"{label} path must not contain URL delimiter characters")
     segments = path.split("/")
     checked_segments = segments[1:] if path.startswith("/") else segments
     if any(segment == "" for segment in checked_segments[:-1]):
@@ -1003,6 +1113,8 @@ def _validate_url_path(parsed: urllib.parse.ParseResult, label: str) -> None:
         raise CanaryError(f"{label} path must not contain encoded URL delimiter characters")
     if "%25" in lowered:
         raise CanaryError(f"{label} path must not contain encoded percent characters")
+    if re.search(r"%[89a-f][0-9a-f]", lowered):
+        raise CanaryError(f"{label} path must not contain percent-encoded non-ASCII bytes")
 
 
 def _script(name: str) -> str:
@@ -1277,6 +1389,8 @@ def _build_verify_stage(
     ]
     _reject_duplicate_paths(receipt_dirs, "verify.receipt_dirs")
     _reject_duplicate_paths(receipts, "verify.receipts")
+    _reject_receipts_covered_by_dirs(receipts, receipt_dirs)
+    _reject_receipts_from_stage_dirs(receipts, stage_receipt_dirs)
     if not receipt_dirs and not receipts:
         raise CanaryError("verify requires generated stage receipts or explicit receipts/receipt_dirs")
 
@@ -1498,16 +1612,40 @@ def _contains_secret_output_material(value: str) -> bool:
     return _contains_secret_material(value) or _contains_secret_identifier_material(value)
 
 
-def _reject_secret_stage_output(results: list[StageResult]) -> None:
+def _contains_unsafe_control_chars(value: str) -> bool:
+    return any(
+        (ord(ch) < 0x20 or ord(ch) == 0x7F) and ch not in SAFE_OUTPUT_CONTROL_CHARS
+        for ch in value
+    )
+
+
+def _reject_unsafe_stage_output(results: list[StageResult]) -> None:
     for result in results:
+        if _contains_unsafe_control_chars(result.stdout_preview):
+            raise CanaryError(
+                f"stage {result.name} stdout_preview contains unsafe control characters"
+            )
         if _contains_secret_output_material(result.stdout_preview):
             raise CanaryError(
                 f"stage {result.name} stdout_preview contains secret-looking material"
+            )
+        if _contains_unsafe_control_chars(result.stderr_preview):
+            raise CanaryError(
+                f"stage {result.name} stderr_preview contains unsafe control characters"
             )
         if _contains_secret_output_material(result.stderr_preview):
             raise CanaryError(
                 f"stage {result.name} stderr_preview contains secret-looking material"
             )
+
+
+def _stage_failed(result: StageResult) -> bool:
+    return (
+        result.returncode != 0
+        or result.stdout_truncated
+        or result.stderr_truncated
+        or (result.returncode == 0 and bool(result.stderr_preview.strip()))
+    )
 
 
 def _skipped_verify_result(reason: str) -> StageResult:
@@ -1566,10 +1704,8 @@ def build_stage_plans(
     """Validate a runbook and return provider metadata plus non-verify stages."""
 
     _reject_unknown_keys(config, TOP_LEVEL_KEYS, "config")
-    provider = _required_string(config, "provider", "config")
-    environment = _required_string(config, "environment", "config")
-    _reject_secret_looking_identifier(provider, "config.provider")
-    _reject_secret_looking_identifier(environment, "config.environment")
+    provider = _required_context_string(config, "provider", "config")
+    environment = _required_context_string(config, "environment", "config")
     config_dir = config_path.resolve().parent
 
     stages: list[StagePlan] = []
@@ -1668,7 +1804,7 @@ def run(args: argparse.Namespace) -> int:
         results.append(result)
         if stage.receipt_dir is not None and not stage.dry_run:
             stage_receipt_dirs.append(stage.receipt_dir)
-        if result.returncode != 0:
+        if _stage_failed(result):
             prior_failure = True
 
     verify_stage = _build_verify_stage(
@@ -1688,10 +1824,10 @@ def run(args: argparse.Namespace) -> int:
                 stage_timeout_secs,
             )
             results.append(verify_result)
-            if verify_result.returncode != 0:
+            if _stage_failed(verify_result):
                 prior_failure = True
 
-    _reject_secret_stage_output(results)
+    _reject_unsafe_stage_output(results)
 
     summary: dict[str, Any] = {
         "version": CANARY_SUMMARY_VERSION,
@@ -1717,7 +1853,8 @@ def run(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Run ISO 20022 rail/notary adapters and verify canary receipts."
+        description="Run ISO 20022 rail/notary adapters and verify canary receipts.",
+        allow_abbrev=False,
     )
     parser.add_argument(
         "--config",

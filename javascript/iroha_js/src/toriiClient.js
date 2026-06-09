@@ -26968,10 +26968,10 @@ function isStarkFriProductionBackendLabel(backend) {
 }
 
 function isPortableVerifierBackendLabel(backend) {
-  if (!/^[a-z0-9/_.:-]+$/u.test(backend)) {
+  if (!/^[A-Za-z0-9/_.:+-]+$/u.test(backend)) {
     return false;
   }
-  if (!/^[a-z0-9]/u.test(backend) || !/[a-z0-9]$/u.test(backend)) {
+  if (!/^[A-Za-z0-9]/u.test(backend) || !/[A-Za-z0-9]$/u.test(backend)) {
     return false;
   }
   return !["//", "::", "..", "/:", ":/", "/.", "./", ":.", ".:"].some((separator) =>

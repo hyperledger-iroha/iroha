@@ -13,7 +13,7 @@ MAX_BYTES="${KAGEMUSHA_RECURSIVE_SPEND_PAYLOAD_MAX_BYTES:-2048}"
 MAX_TRANSITION_PROFILE_BYTES="${KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_MAX_BYTES:-3072}"
 MAX_RESERVED_LINEAGE_BYTES="${KAGEMUSHA_RECURSIVE_SPEND_RESERVED_LINEAGE_PAYLOAD_MAX_BYTES:-8192}"
 MAX_RESERVED_LINEAGE_TRANSITION_PROFILE_BYTES="${KAGEMUSHA_RECURSIVE_SPEND_RESERVED_LINEAGE_TRANSITION_PROFILE_MAX_BYTES:-4096}"
-EXPECTED_HOPS="${KAGEMUSHA_RECURSIVE_SPEND_PAYLOAD_HOPS:-1,2,3,5,8,13,21,34,55,64}"
+EXPECTED_HOPS="${KAGEMUSHA_RECURSIVE_SPEND_PAYLOAD_HOPS-1,2,3,5,8,13,21,34,55,64}"
 SKIP_BENCH="${KAGEMUSHA_RECURSIVE_SPEND_PAYLOAD_SKIP_BENCH:-0}"
 
 if [[ "${MODE}" == "--self-test" || "${MODE}" == --negative-control-* ]]; then
@@ -27,7 +27,6 @@ import sys
 from pathlib import Path
 
 criterion_out = Path(sys.argv[1])
-expected_hops = [int(part) for part in sys.argv[2].split(",") if part]
 mode = sys.argv[3]
 
 payload_baseline = 1751
@@ -35,8 +34,40 @@ transition_profile_baseline = 2094
 reserved_lineage_payload_baseline = 3847
 reserved_lineage_transition_profile_baseline = 2817
 
+def parse_expected_hops(raw):
+    parts = raw.split(",")
+    if not raw or any(part.strip() == "" for part in parts):
+        raise SystemExit(
+            "expected recursive Kagemusha payload hops must be a non-empty "
+            "comma-separated list of positive integers"
+        )
+    try:
+        hops = [int(part) for part in parts]
+    except ValueError as error:
+        raise SystemExit(
+            "expected recursive Kagemusha payload hops must be positive integers"
+        ) from error
+    if any(len(part) > 1 and part.startswith("0") for part in parts):
+        raise SystemExit(
+            "expected recursive Kagemusha payload hops must use canonical decimal integers"
+        )
+    if any(hop <= 0 for hop in hops):
+        raise SystemExit("expected recursive Kagemusha payload hops must be positive")
+    if len(set(hops)) != len(hops):
+        raise SystemExit("expected recursive Kagemusha payload hops must be unique")
+    if hops != sorted(hops):
+        raise SystemExit(
+            "expected recursive Kagemusha payload hops must be sorted in ascending order"
+        )
+    return hops
+
+expected_hops = parse_expected_hops(sys.argv[2])
+
 def write_benchmark(group, hop, size):
-    path = criterion_out / group / f"{hop}_hops_{size}_bytes" / "new"
+    write_named_benchmark(group, f"{hop}_hops_{size}_bytes")
+
+def write_named_benchmark(group, benchmark_name):
+    path = criterion_out / group / benchmark_name / "new"
     path.mkdir(parents=True, exist_ok=True)
     (path / "benchmark.json").write_text("{}\n", encoding="utf-8")
 
@@ -125,6 +156,11 @@ if mode == "--negative-control-conflicting-reserved-lineage-transition-profile-s
         expected_hops[-1],
         reserved_lineage_transition_profile_baseline + 1,
     )
+if mode == "--negative-control-malformed-payload-benchmark-name":
+    write_named_benchmark(
+        "kagemusha_recursive_spend_payload_bytes",
+        f"{expected_hops[0]}_hop_{payload_baseline}_bytes",
+    )
 
 if mode not in {
     "--self-test",
@@ -148,15 +184,48 @@ if mode not in {
     "--negative-control-conflicting-transition-profile-size",
     "--negative-control-conflicting-reserved-lineage-payload-size",
     "--negative-control-conflicting-reserved-lineage-transition-profile-size",
+    "--negative-control-malformed-payload-benchmark-name",
+    "--negative-control-empty-hop-list",
+    "--negative-control-blank-hop-list",
+    "--negative-control-non-integer-hop",
+    "--negative-control-zero-hop",
+    "--negative-control-duplicate-hop",
+    "--negative-control-unsorted-hop",
+    "--negative-control-leading-zero-hop",
 }:
     raise SystemExit(f"unknown synthetic benchmark mode: {mode}")
 PY
+
+  REDUCER_EXPECTED_HOPS="${EXPECTED_HOPS}"
+  case "${MODE}" in
+    --negative-control-empty-hop-list)
+      REDUCER_EXPECTED_HOPS=""
+      ;;
+    --negative-control-blank-hop-list)
+      REDUCER_EXPECTED_HOPS="1,,2"
+      ;;
+    --negative-control-non-integer-hop)
+      REDUCER_EXPECTED_HOPS="1,two,3"
+      ;;
+    --negative-control-zero-hop)
+      REDUCER_EXPECTED_HOPS="0,1,2"
+      ;;
+    --negative-control-duplicate-hop)
+      REDUCER_EXPECTED_HOPS="1,2,2"
+      ;;
+    --negative-control-unsorted-hop)
+      REDUCER_EXPECTED_HOPS="1,3,2"
+      ;;
+    --negative-control-leading-zero-hop)
+      REDUCER_EXPECTED_HOPS="1,02,3"
+      ;;
+  esac
 
   if [[ "${MODE}" == "--self-test" ]]; then
     KAGEMUSHA_RECURSIVE_SPEND_PAYLOAD_SKIP_BENCH=1 \
       KAGEMUSHA_RECURSIVE_SPEND_PAYLOAD_CRITERION_OUT="${NEGATIVE_CRITERION_OUT}" \
       KAGEMUSHA_RECURSIVE_SPEND_PAYLOAD_ARTIFACTS_DIR="${NEGATIVE_ARTIFACTS_DIR}" \
-      KAGEMUSHA_RECURSIVE_SPEND_PAYLOAD_HOPS="${EXPECTED_HOPS}" \
+      KAGEMUSHA_RECURSIVE_SPEND_PAYLOAD_HOPS="${REDUCER_EXPECTED_HOPS}" \
       KAGEMUSHA_RECURSIVE_SPEND_PAYLOAD_MAX_BYTES="${MAX_BYTES}" \
       KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_MAX_BYTES="${MAX_TRANSITION_PROFILE_BYTES}" \
       "$0"
@@ -172,7 +241,7 @@ PY
   if KAGEMUSHA_RECURSIVE_SPEND_PAYLOAD_SKIP_BENCH=1 \
     KAGEMUSHA_RECURSIVE_SPEND_PAYLOAD_CRITERION_OUT="${NEGATIVE_CRITERION_OUT}" \
     KAGEMUSHA_RECURSIVE_SPEND_PAYLOAD_ARTIFACTS_DIR="${NEGATIVE_ARTIFACTS_DIR}" \
-    KAGEMUSHA_RECURSIVE_SPEND_PAYLOAD_HOPS="${EXPECTED_HOPS}" \
+    KAGEMUSHA_RECURSIVE_SPEND_PAYLOAD_HOPS="${REDUCER_EXPECTED_HOPS}" \
     KAGEMUSHA_RECURSIVE_SPEND_PAYLOAD_MAX_BYTES="${MAX_BYTES}" \
     KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_MAX_BYTES="${MAX_TRANSITION_PROFILE_BYTES}" \
     "$0" >"${TMP_DIR}/stdout" 2>"${TMP_DIR}/stderr"; then
@@ -250,12 +319,40 @@ payload_bytes_file = Path(sys.argv[5])
 transition_profile_bytes_file = Path(sys.argv[6])
 reserved_lineage_payload_bytes_file = Path(sys.argv[7])
 reserved_lineage_transition_profile_bytes_file = Path(sys.argv[8])
-expected_hops = [int(part) for part in sys.argv[9].split(",") if part]
 max_bytes = int(sys.argv[10])
 max_transition_profile_bytes = int(sys.argv[11])
 max_reserved_lineage_bytes = int(sys.argv[12])
 max_reserved_lineage_transition_profile_bytes = int(sys.argv[13])
 pattern = re.compile(r"^(\d+)_hops_(\d+)_bytes$")
+
+def parse_expected_hops(raw):
+    parts = raw.split(",")
+    if not raw or any(part.strip() == "" for part in parts):
+        raise SystemExit(
+            "expected recursive Kagemusha payload hops must be a non-empty "
+            "comma-separated list of positive integers"
+        )
+    try:
+        hops = [int(part) for part in parts]
+    except ValueError as error:
+        raise SystemExit(
+            "expected recursive Kagemusha payload hops must be positive integers"
+        ) from error
+    if any(len(part) > 1 and part.startswith("0") for part in parts):
+        raise SystemExit(
+            "expected recursive Kagemusha payload hops must use canonical decimal integers"
+        )
+    if any(hop <= 0 for hop in hops):
+        raise SystemExit("expected recursive Kagemusha payload hops must be positive")
+    if len(set(hops)) != len(hops):
+        raise SystemExit("expected recursive Kagemusha payload hops must be unique")
+    if hops != sorted(hops):
+        raise SystemExit(
+            "expected recursive Kagemusha payload hops must be sorted in ascending order"
+        )
+    return hops
+
+expected_hops = parse_expected_hops(sys.argv[9])
 
 def parse_benchmark_dir(label, path):
     if not path.is_dir():
@@ -266,7 +363,10 @@ def parse_benchmark_dir(label, path):
         benchmark_name = benchmark_json.parent.parent.name
         match = pattern.fullmatch(benchmark_name)
         if match is None:
-            continue
+            raise SystemExit(
+                f"unexpected recursive Kagemusha {label} benchmark name: "
+                f"{benchmark_name}"
+            )
         hop_count = int(match.group(1))
         payload_bytes = int(match.group(2))
         previous = observed.setdefault(hop_count, payload_bytes)

@@ -13,6 +13,16 @@ ALLOW_BACKUP_CONFS=0
 SKIP_NGINX_TEST=0
 ALIAS_ROUTES=()
 REQUIRED_ALIASES=()
+NGINX_TEST_DIRS=()
+
+cleanup_nginx_test_dirs() {
+  local path
+  for path in "${NGINX_TEST_DIRS[@]:-}"; do
+    [[ -n "$path" && -e "$path" ]] && rm -rf "$path"
+  done
+}
+
+trap cleanup_nginx_test_dirs EXIT
 
 usage() {
   cat <<'EOF'
@@ -185,6 +195,49 @@ alias_path_regex() {
   printf '%s' "$output"
 }
 
+validate_rendered_nginx_conf() {
+  local test_dir
+  local test_conf
+  local output_abs
+  local rendered_include
+
+  test_dir="$(mktemp -d "${TMPDIR:-/tmp}/taira-edge-nginx-test.XXXXXX")"
+  NGINX_TEST_DIRS+=("$test_dir")
+  test_conf="${test_dir}/nginx.conf"
+  rendered_include="${test_dir}/rendered.conf"
+  output_abs="$(cd -- "$(dirname -- "$OUTPUT")" && pwd)/$(basename -- "$OUTPUT")"
+
+  ln -s "$output_abs" "$rendered_include"
+  mkdir -p \
+    "${test_dir}/client_body_temp" \
+    "${test_dir}/fastcgi_temp" \
+    "${test_dir}/logs" \
+    "${test_dir}/proxy_temp" \
+    "${test_dir}/scgi_temp" \
+    "${test_dir}/uwsgi_temp"
+
+  cat >"$test_conf" <<EOF
+worker_processes 1;
+error_log logs/error.log;
+pid logs/nginx.pid;
+
+events {
+  worker_connections 1024;
+}
+
+http {
+  client_body_temp_path client_body_temp;
+  fastcgi_temp_path fastcgi_temp;
+  proxy_temp_path proxy_temp;
+  scgi_temp_path scgi_temp;
+  uwsgi_temp_path uwsgi_temp;
+  include ${rendered_include};
+}
+EOF
+
+  "$NGINX_BIN" -t -c "$test_conf" -p "${test_dir}/"
+}
+
 require_in_rendered_conf 'server_name[[:space:]]+mon\.taira\.sora\.net;' 'Mon apex server block'
 require_in_rendered_conf 'server_name[[:space:]]+\*\.mon\.taira\.sora\.net[[:space:]]+~\^\.\+\\\.mon\\\.taira\\\.sora\\\.net\$;' 'Mon wildcard/regex fallback'
 require_in_rendered_conf 'proxy_next_upstream[[:space:]].*non_idempotent' 'shared-edge retry policy'
@@ -226,11 +279,16 @@ if [[ $ALLOW_BACKUP_CONFS -ne 1 && -d "$target_dir" ]]; then
   fi
 fi
 
+if [[ $INSTALL -eq 1 && ! -d "$target_dir" ]]; then
+  echo "target nginx include directory does not exist: $target_dir" >&2
+  exit 1
+fi
+
+if [[ $SKIP_NGINX_TEST -ne 1 ]]; then
+  validate_rendered_nginx_conf
+fi
+
 if [[ $INSTALL -eq 1 ]]; then
-  if [[ ! -d "$target_dir" ]]; then
-    echo "target nginx include directory does not exist: $target_dir" >&2
-    exit 1
-  fi
   if [[ ! -w "$target_dir" ]]; then
     sudo cp "$OUTPUT" "$TARGET_CONF"
   else
@@ -243,7 +301,7 @@ else
   echo "dry run only; rerun with --install to copy and --reload to reload nginx"
 fi
 
-if [[ $SKIP_NGINX_TEST -ne 1 ]]; then
+if [[ $INSTALL -eq 1 && $SKIP_NGINX_TEST -ne 1 ]]; then
   "$NGINX_BIN" -t
 fi
 

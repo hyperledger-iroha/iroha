@@ -18,6 +18,8 @@ use norito::json::{self, FastJsonWrite, JsonDeserialize};
 use norito::literal;
 #[cfg(not(feature = "ffi_import"))]
 use sha2::Sha256;
+#[cfg(not(feature = "ffi_import"))]
+use sha3::Keccak256;
 
 use crate::{ParseError, hex_decode};
 
@@ -60,6 +62,13 @@ impl Hash {
 #[must_use]
 pub fn sha256(bytes: impl AsRef<[u8]>) -> [u8; Hash::LENGTH] {
     Sha256::digest(bytes.as_ref()).into()
+}
+
+/// Compute raw Keccak-256 bytes without Iroha hash marker semantics.
+#[cfg(not(feature = "ffi_import"))]
+#[must_use]
+pub fn keccak256(bytes: impl AsRef<[u8]>) -> [u8; Hash::LENGTH] {
+    Keccak256::digest(bytes.as_ref()).into()
 }
 
 impl Hash {
@@ -477,6 +486,14 @@ mod tests {
         assert_eq!(
             sha256(b"abc"),
             hex_literal::hex!("BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD")
+        );
+    }
+
+    #[test]
+    fn keccak256_returns_raw_digest_bytes() {
+        assert_eq!(
+            keccak256(b""),
+            hex_literal::hex!("C5D2460186F7233C927E7DB2DCC703C0E500B653CA82273B7BFAD8045D85A470")
         );
     }
 

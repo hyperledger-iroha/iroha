@@ -69,7 +69,7 @@ use iroha_data_model::{
     peer::PeerId,
     permission::Permission,
     prelude::{AccountId, ChainId},
-    proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId},
+    proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyBox, VerifyingKeyId},
     repo::prelude::{RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
     rwa::{NewRwa, RwaControlPolicy, RwaId, RwaParentRef},
     transaction::{
@@ -4060,6 +4060,365 @@ fn zk_ace_build_transfer_authorization_v1_py(
     )
 }
 
+fn py_sequence_items<'py>(
+    value: &Bound<'py, PyAny>,
+    context: &str,
+) -> PyResult<Vec<Bound<'py, PyAny>>> {
+    if let Ok(items) = value.cast::<PyList>() {
+        return Ok(items.iter().collect());
+    }
+    if let Ok(items) = value.cast::<PyTuple>() {
+        return Ok(items.iter().collect());
+    }
+    Err(PyTypeError::new_err(format!(
+        "{context} must be a list or tuple"
+    )))
+}
+
+fn dict_require_alias<'py>(
+    dict: &Bound<'py, PyDict>,
+    aliases: &[&str],
+    context: &str,
+) -> PyResult<Bound<'py, PyAny>> {
+    dict_get_alias(dict, aliases)?
+        .ok_or_else(|| PyValueError::new_err(format!("{context} is required")))
+}
+
+fn parse_confidential_amount_py(value: &Bound<'_, PyAny>, context: &str) -> PyResult<u128> {
+    if let Ok(text) = value.extract::<String>() {
+        return parse_u128_text(&text, context);
+    }
+    value
+        .extract::<u128>()
+        .map_err(|_| PyTypeError::new_err(format!("{context} must be a whole-number amount")))
+}
+
+fn parse_optional_confidential_diversifier_py(
+    value: Option<Bound<'_, PyAny>>,
+    context: &str,
+) -> PyResult<[u8; 32]> {
+    match value {
+        Some(value) => py_fixed_array::<32>(&value, context),
+        None => Ok(iroha_core::zk::confidential_v2::default_confidential_diversifier_v2()),
+    }
+}
+
+fn parse_confidential_leaf_index_py(
+    value: Option<Bound<'_, PyAny>>,
+    context: &str,
+) -> PyResult<usize> {
+    let Some(value) = value else {
+        return Ok(0);
+    };
+    value
+        .extract::<usize>()
+        .map_err(|_| PyTypeError::new_err(format!("{context} must be an unsigned integer")))
+}
+
+fn parse_confidential_transfer_input_py(
+    item: &Bound<'_, PyAny>,
+    index: usize,
+) -> PyResult<iroha_core::zk::confidential_v2::ConfidentialTransferInputV2> {
+    let dict = item
+        .cast::<PyDict>()
+        .map_err(|_| PyTypeError::new_err(format!("inputs[{index}] must be a mapping")))?;
+    let amount = dict_require_alias(dict, &["amount"], &format!("inputs[{index}].amount"))?;
+    let rho = dict_require_alias(
+        dict,
+        &["rho", "rho_hex", "rhoHex"],
+        &format!("inputs[{index}].rho"),
+    )?;
+    let diversifier = dict_get_alias(dict, &["diversifier", "diversifier_hex", "diversifierHex"])?;
+    let leaf_index = dict_get_alias(dict, &["leaf_index", "leafIndex"])?;
+    Ok(
+        iroha_core::zk::confidential_v2::ConfidentialTransferInputV2 {
+            amount: parse_confidential_amount_py(&amount, &format!("inputs[{index}].amount"))?,
+            rho: py_fixed_array::<32>(&rho, &format!("inputs[{index}].rho"))?,
+            diversifier: parse_optional_confidential_diversifier_py(
+                diversifier,
+                &format!("inputs[{index}].diversifier"),
+            )?,
+            leaf_index: parse_confidential_leaf_index_py(
+                leaf_index,
+                &format!("inputs[{index}].leaf_index"),
+            )?,
+        },
+    )
+}
+
+fn parse_confidential_transfer_inputs_py(
+    value: &Bound<'_, PyAny>,
+) -> PyResult<Vec<iroha_core::zk::confidential_v2::ConfidentialTransferInputV2>> {
+    py_sequence_items(value, "inputs")?
+        .iter()
+        .enumerate()
+        .map(|(index, item)| parse_confidential_transfer_input_py(item, index))
+        .collect()
+}
+
+fn parse_confidential_unshield_inputs_py(
+    value: &Bound<'_, PyAny>,
+) -> PyResult<Vec<iroha_core::zk::confidential_v2::ConfidentialUnshieldInputV2>> {
+    parse_confidential_transfer_inputs_py(value).map(|inputs| {
+        inputs
+            .into_iter()
+            .map(
+                |input| iroha_core::zk::confidential_v2::ConfidentialUnshieldInputV2 {
+                    amount: input.amount,
+                    rho: input.rho,
+                    diversifier: input.diversifier,
+                    leaf_index: input.leaf_index,
+                },
+            )
+            .collect()
+    })
+}
+
+fn parse_confidential_transfer_output_py(
+    item: &Bound<'_, PyAny>,
+    index: usize,
+) -> PyResult<iroha_core::zk::confidential_v2::ConfidentialTransferOutputV2> {
+    let dict = item
+        .cast::<PyDict>()
+        .map_err(|_| PyTypeError::new_err(format!("outputs[{index}] must be a mapping")))?;
+    let amount = dict_require_alias(dict, &["amount"], &format!("outputs[{index}].amount"))?;
+    let rho = dict_require_alias(
+        dict,
+        &["rho", "rho_hex", "rhoHex"],
+        &format!("outputs[{index}].rho"),
+    )?;
+    let owner_tag = dict_require_alias(
+        dict,
+        &["owner_tag", "owner_tag_hex", "ownerTag", "ownerTagHex"],
+        &format!("outputs[{index}].owner_tag"),
+    )?;
+    Ok(
+        iroha_core::zk::confidential_v2::ConfidentialTransferOutputV2 {
+            amount: parse_confidential_amount_py(&amount, &format!("outputs[{index}].amount"))?,
+            rho: py_fixed_array::<32>(&rho, &format!("outputs[{index}].rho"))?,
+            owner_tag: py_fixed_array::<32>(&owner_tag, &format!("outputs[{index}].owner_tag"))?,
+        },
+    )
+}
+
+fn parse_confidential_transfer_outputs_py(
+    value: &Bound<'_, PyAny>,
+) -> PyResult<Vec<iroha_core::zk::confidential_v2::ConfidentialTransferOutputV2>> {
+    py_sequence_items(value, "outputs")?
+        .iter()
+        .enumerate()
+        .map(|(index, item)| parse_confidential_transfer_output_py(item, index))
+        .collect()
+}
+
+fn parse_confidential_unshield_output_py(
+    item: &Bound<'_, PyAny>,
+    index: usize,
+) -> PyResult<iroha_core::zk::confidential_v2::ConfidentialUnshieldOutputV3> {
+    let dict = item
+        .cast::<PyDict>()
+        .map_err(|_| PyTypeError::new_err(format!("outputs[{index}] must be a mapping")))?;
+    let amount = dict_require_alias(dict, &["amount"], &format!("outputs[{index}].amount"))?;
+    let rho = dict_require_alias(
+        dict,
+        &["rho", "rho_hex", "rhoHex"],
+        &format!("outputs[{index}].rho"),
+    )?;
+    Ok(
+        iroha_core::zk::confidential_v2::ConfidentialUnshieldOutputV3 {
+            amount: parse_confidential_amount_py(&amount, &format!("outputs[{index}].amount"))?,
+            rho: py_fixed_array::<32>(&rho, &format!("outputs[{index}].rho"))?,
+        },
+    )
+}
+
+fn parse_confidential_unshield_outputs_py(
+    value: &Bound<'_, PyAny>,
+) -> PyResult<Vec<iroha_core::zk::confidential_v2::ConfidentialUnshieldOutputV3>> {
+    py_sequence_items(value, "outputs")?
+        .iter()
+        .enumerate()
+        .map(|(index, item)| parse_confidential_unshield_output_py(item, index))
+        .collect()
+}
+
+fn confidential_bytes_list_py<const N: usize>(
+    py: Python<'_>,
+    items: &[[u8; N]],
+) -> PyResult<Py<PyList>> {
+    let list = PyList::empty(py);
+    for item in items {
+        list.append(PyBytes::new(py, item))?;
+    }
+    Ok(list.unbind())
+}
+
+fn confidential_transfer_proof_v2_py_dict(
+    py: Python<'_>,
+    proof: iroha_core::zk::confidential_v2::ConfidentialTransferProofV2,
+) -> PyResult<Py<PyDict>> {
+    let result = PyDict::new(py);
+    result.set_item(
+        "nullifiers",
+        confidential_bytes_list_py(py, &proof.nullifiers)?,
+    )?;
+    result.set_item(
+        "output_commitments",
+        confidential_bytes_list_py(py, &proof.output_commitments)?,
+    )?;
+    result.set_item("root", PyBytes::new(py, &proof.root))?;
+    result.set_item("proof", PyBytes::new(py, &proof.proof.bytes))?;
+    Ok(result.unbind())
+}
+
+fn confidential_unshield_proof_v3_py_dict(
+    py: Python<'_>,
+    proof: iroha_core::zk::confidential_v2::ConfidentialUnshieldProofV3,
+) -> PyResult<Py<PyDict>> {
+    let result = PyDict::new(py);
+    result.set_item(
+        "nullifiers",
+        confidential_bytes_list_py(py, &proof.nullifiers)?,
+    )?;
+    result.set_item(
+        "output_commitments",
+        confidential_bytes_list_py(py, &proof.output_commitments)?,
+    )?;
+    result.set_item("root", PyBytes::new(py, &proof.root))?;
+    result.set_item("proof", PyBytes::new(py, &proof.proof.bytes))?;
+    Ok(result.unbind())
+}
+
+#[pyfunction]
+#[pyo3(name = "build_confidential_transfer_proof_v2", signature = (
+    chain_id,
+    asset_definition_id,
+    spend_key,
+    tree_commitments,
+    inputs,
+    outputs,
+    root_hint,
+    vk_backend,
+    vk_circuit_id,
+    vk_bytes
+))]
+#[allow(clippy::too_many_arguments)]
+fn build_confidential_transfer_proof_v2_py(
+    py: Python<'_>,
+    chain_id: &str,
+    asset_definition_id: &str,
+    spend_key: &Bound<'_, PyAny>,
+    tree_commitments: &Bound<'_, PyAny>,
+    inputs: &Bound<'_, PyAny>,
+    outputs: &Bound<'_, PyAny>,
+    root_hint: &Bound<'_, PyAny>,
+    vk_backend: &str,
+    vk_circuit_id: &str,
+    vk_bytes: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyDict>> {
+    let chain_id = parse_chain_id(chain_id)?;
+    let asset_definition_id: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
+        PyValueError::new_err(format!(
+            "invalid asset definition id `{asset_definition_id}`: {err}"
+        ))
+    })?;
+    let spend_key = py_fixed_array::<32>(spend_key, "spend_key")?;
+    let tree_commitments = py_fixed_array_list(tree_commitments, "tree_commitments")?;
+    let inputs = parse_confidential_transfer_inputs_py(inputs)?;
+    let outputs = parse_confidential_transfer_outputs_py(outputs)?;
+    let root_hint = py_fixed_array::<32>(root_hint, "root_hint")?;
+    let vk_backend = vk_backend.trim();
+    if vk_backend.is_empty() {
+        return Err(PyValueError::new_err("vk_backend must be non-empty"));
+    }
+    let vk_circuit_id = vk_circuit_id.trim();
+    if vk_circuit_id.is_empty() {
+        return Err(PyValueError::new_err("vk_circuit_id must be non-empty"));
+    }
+    let vk_bytes = py_bytes_or_base64(vk_bytes, "vk_bytes")?;
+    let vk_box = VerifyingKeyBox::new(vk_backend.to_owned(), vk_bytes);
+    let proof = iroha_core::zk::confidential_v2::build_confidential_transfer_proof_v2(
+        &chain_id,
+        &asset_definition_id.to_string(),
+        &spend_key,
+        &tree_commitments,
+        &inputs,
+        &outputs,
+        root_hint,
+        vk_circuit_id,
+        &vk_box,
+    )
+    .map_err(PyValueError::new_err)?;
+    confidential_transfer_proof_v2_py_dict(py, proof)
+}
+
+#[pyfunction]
+#[pyo3(name = "build_confidential_unshield_proof_v3", signature = (
+    chain_id,
+    asset_definition_id,
+    spend_key,
+    tree_commitments,
+    inputs,
+    outputs,
+    public_amount,
+    root_hint,
+    vk_backend,
+    vk_circuit_id,
+    vk_bytes
+))]
+#[allow(clippy::too_many_arguments)]
+fn build_confidential_unshield_proof_v3_py(
+    py: Python<'_>,
+    chain_id: &str,
+    asset_definition_id: &str,
+    spend_key: &Bound<'_, PyAny>,
+    tree_commitments: &Bound<'_, PyAny>,
+    inputs: &Bound<'_, PyAny>,
+    outputs: &Bound<'_, PyAny>,
+    public_amount: &Bound<'_, PyAny>,
+    root_hint: &Bound<'_, PyAny>,
+    vk_backend: &str,
+    vk_circuit_id: &str,
+    vk_bytes: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyDict>> {
+    let chain_id = parse_chain_id(chain_id)?;
+    let asset_definition_id: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
+        PyValueError::new_err(format!(
+            "invalid asset definition id `{asset_definition_id}`: {err}"
+        ))
+    })?;
+    let spend_key = py_fixed_array::<32>(spend_key, "spend_key")?;
+    let tree_commitments = py_fixed_array_list(tree_commitments, "tree_commitments")?;
+    let inputs = parse_confidential_unshield_inputs_py(inputs)?;
+    let outputs = parse_confidential_unshield_outputs_py(outputs)?;
+    let public_amount = parse_confidential_amount_py(public_amount, "public_amount")?;
+    let root_hint = py_fixed_array::<32>(root_hint, "root_hint")?;
+    let vk_backend = vk_backend.trim();
+    if vk_backend.is_empty() {
+        return Err(PyValueError::new_err("vk_backend must be non-empty"));
+    }
+    let vk_circuit_id = vk_circuit_id.trim();
+    if vk_circuit_id.is_empty() {
+        return Err(PyValueError::new_err("vk_circuit_id must be non-empty"));
+    }
+    let vk_bytes = py_bytes_or_base64(vk_bytes, "vk_bytes")?;
+    let vk_box = VerifyingKeyBox::new(vk_backend.to_owned(), vk_bytes);
+    let proof = iroha_core::zk::confidential_v2::build_confidential_unshield_proof_v3(
+        &chain_id,
+        &asset_definition_id.to_string(),
+        &spend_key,
+        &tree_commitments,
+        &inputs,
+        &outputs,
+        public_amount,
+        root_hint,
+        vk_circuit_id,
+        &vk_box,
+    )
+    .map_err(PyValueError::new_err)?;
+    confidential_unshield_proof_v3_py_dict(py, proof)
+}
+
 const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: usize = 64 * 1024 * 1024;
 
 fn ensure_kagemusha_recursive_archive_len(archive_len: usize, archive_name: &str) -> PyResult<()> {
@@ -4188,21 +4547,27 @@ fn kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pal
     py: Python<'_>,
     record_bundle_archive: &[u8],
     pallas_open_envelopes_archive: &[u8],
+    recursive_compact_key_artifacts_archive: &[u8],
 ) -> PyResult<Py<PyBytes>> {
     let record_bundle: iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle =
         decode_kagemusha_recursive_archive(
             record_bundle_archive,
             "Kagemusha recursive compact record bundle",
         )?;
+    let key_artifacts: iroha_data_model::offline::KagemushaRecursiveCompactKeyArtifactsV1 =
+        decode_kagemusha_recursive_archive(
+            recursive_compact_key_artifacts_archive,
+            "Kagemusha recursive compact key artifacts",
+        )?;
     ensure_kagemusha_recursive_archive_len(
         pallas_open_envelopes_archive.len(),
         "pallas_open_envelopes_archive",
     )?;
     let token =
-        iroha_core::zk::prove_verified_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelope_archive(
+        iroha_core::zk::prove_verified_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelope_archive_with_key_artifacts(
             &record_bundle,
             pallas_open_envelopes_archive,
-            None,
+            &key_artifacts,
         )
         .map_err(|err| {
             if err.starts_with(
@@ -4316,22 +4681,32 @@ fn kagemusha_verify_recursive_spend_compact_payment_token_projection_at_height_p
 #[pyo3(name = "kagemusha_verify_recursive_compact_payment_token")]
 fn kagemusha_verify_recursive_compact_payment_token_py(
     compact_token_archive: &[u8],
+    recursive_compact_verifier_keys_archive: &[u8],
 ) -> PyResult<bool> {
     let token: iroha_data_model::offline::KagemushaCompactPaymentToken =
         decode_kagemusha_recursive_archive(
             compact_token_archive,
             "Kagemusha recursive compact payment token",
         )?;
-    let vk_box = iroha_core::zk::kagemusha_recursive_compact_payment_token_vk_box()
+    let verifier_keys: iroha_data_model::offline::KagemushaRecursiveCompactVerifierKeysV1 =
+        decode_kagemusha_recursive_archive(
+            recursive_compact_verifier_keys_archive,
+            "Kagemusha recursive compact verifier keys",
+        )?;
+    let vk_box =
+        iroha_core::zk::kagemusha_recursive_compact_payment_token_verifier_key_from_package(
+            &token,
+            &verifier_keys,
+        )
         .map_err(PyRuntimeError::new_err)?;
-    match iroha_core::zk::preverify_kagemusha_recursive_compact_payment_token(&token, &vk_box) {
+    match iroha_core::zk::preverify_kagemusha_recursive_compact_payment_token(&token, vk_box) {
         Err(err) if is_kagemusha_recursive_compact_unavailable_error(&err) => {
             return Ok(false);
         }
         Err(err) => return Err(PyValueError::new_err(err)),
         Ok(()) => {}
     }
-    if iroha_core::zk::verify_kagemusha_recursive_compact_payment_token(&token, &vk_box) {
+    if iroha_core::zk::verify_kagemusha_recursive_compact_payment_token(&token, vk_box) {
         return Ok(true);
     }
     Ok(false)
@@ -4797,7 +5172,11 @@ fn kagemusha_recursive_spend_redeem_instruction_from_request(
                     )?;
                 }
             }
-            iroha_core::zk::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID => {
+            circuit_id
+                if iroha_data_model::offline::is_kagemusha_recursive_spend_lineage_proof_circuit_id(
+                    circuit_id,
+                ) =>
+            {
                 let record = request.lineage_verifier_record.as_ref().ok_or_else(|| {
                     "reserved-lineage Kagemusha recursive spend redeem requires a lineage verifier record"
                         .to_owned()
@@ -4841,9 +5220,9 @@ fn kagemusha_recursive_spend_redeem_instruction_from_request(
         iroha_core::zk::ensure_kagemusha_recursive_spend_chain_admission_proves_lineage(
             &request.bundle,
         )?;
-        if request.bundle.recursive_proof.verifier_key_id.name
-            == iroha_core::zk::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID
-        {
+        if iroha_data_model::offline::is_kagemusha_recursive_spend_lineage_proof_circuit_id(
+            &request.bundle.recursive_proof.verifier_key_id.name,
+        ) {
             let record = request.lineage_verifier_record.as_ref().ok_or_else(|| {
                 "reserved-lineage Kagemusha recursive spend redeem requires a lineage verifier record"
                     .to_owned()
@@ -5024,6 +5403,7 @@ fn open_connect_payload_py(py: Python<'_>, key: &[u8], frame_bytes: &[u8]) -> Py
 mod tests {
     use std::{fs, sync::OnceLock};
 
+    use base64::Engine as _;
     use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
     use ed25519_dalek::SigningKey;
     use http::StatusCode;
@@ -5032,6 +5412,8 @@ mod tests {
     use iroha_data_model::offline::{
         KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
         KAGEMUSHA_RECURSIVE_SPEND_ACCUMULATOR_DOMAIN,
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
         KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, KagemushaCompactPaymentToken,
         KagemushaRecursiveAggregationProof, KagemushaRecursiveSpendAccumulatorV1,
         KagemushaRecursiveSpendAppendRequestV1, KagemushaRecursiveSpendBundleV1,
@@ -5054,8 +5436,9 @@ mod tests {
     use once_cell::sync::OnceCell;
     use pyo3::{
         Python,
-        types::{PyBytes, PyDict, PyList},
+        types::{PyBytes, PyDict, PyList, PyString},
     };
+    use sha2::{Digest, Sha256};
     use sorafs_car::{CarWriter, multi_fetch::PolicyBlockEvidence};
     use sorafs_manifest::{
         BLAKE3_256_MULTIHASH_CODE, CouncilSignature, DagCodecId, GovernanceProofs, ManifestBuilder,
@@ -5075,6 +5458,11 @@ mod tests {
         });
     }
 
+    fn py_err_message(err: pyo3::PyErr) -> String {
+        ensure_python();
+        Python::attach(|py| err.value(py).to_string())
+    }
+
     fn canonical_i105_from_seed(seed: u8) -> String {
         AccountId::new(PublicKey::from(parse_private_key(&[seed; 32]).unwrap()))
             .canonical_i105()
@@ -5084,6 +5472,101 @@ mod tests {
     fn sample_account(seed: u8) -> AccountId {
         let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
         AccountId::new(keypair.public_key().clone())
+    }
+
+    fn sample_kagemusha_transfer_instruction() -> iroha_data_model::isi::offline::KagemushaTransfer
+    {
+        let asset = AssetDefinitionId::new(
+            DomainId::try_new("offline", "universal").expect("domain id"),
+            "kgmpy".parse().expect("asset definition name"),
+        );
+        iroha_data_model::isi::offline::KagemushaTransfer::new(
+            asset,
+            vec![[0x11; 32]],
+            vec![[0x22; 32]],
+            ProofAttachment::new_ref(
+                "halo2/ipa".into(),
+                ProofBox::new("halo2/ipa".into(), vec![0xCA, 0xFE]),
+                VerifyingKeyId::new("halo2/ipa", "python-kagemusha-transfer"),
+            ),
+            Some([0x33; 32]),
+        )
+    }
+
+    #[test]
+    fn kagemusha_instruction_archive_box_accepts_transfer_and_redeem_archives() {
+        let transfer = sample_kagemusha_transfer_instruction();
+        let transfer_archive = to_bytes(&transfer).expect("encode KagemushaTransfer");
+        let transfer_box =
+            kagemusha_instruction_archive_box("KagemushaTransfer", &transfer_archive)
+                .expect("transfer archive accepted");
+        let decoded_transfer = transfer_box
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::offline::KagemushaTransfer>()
+            .expect("KagemushaTransfer instruction box");
+        assert_eq!(decoded_transfer.asset, transfer.asset);
+        assert_eq!(decoded_transfer.inputs, transfer.inputs);
+        assert_eq!(decoded_transfer.outputs, transfer.outputs);
+
+        let fixture = committed_recursive_spend_abi7_fixture_value();
+        let redeem_archive = shared_recursive_spend_abi7_fixture_archive_bytes(
+            &fixture,
+            "redeem_instruction",
+            "redeem",
+            "RedeemKagemushaRecursive",
+        );
+        let redeem_instruction: iroha_data_model::isi::offline::RedeemKagemushaRecursive =
+            norito::decode_from_bytes(&redeem_archive).expect("decode redeem instruction fixture");
+        let redeem_box =
+            kagemusha_instruction_archive_box("RedeemKagemushaRecursive", &redeem_archive)
+                .expect("redeem archive accepted");
+        let decoded_redeem = redeem_box
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::offline::RedeemKagemushaRecursive>()
+            .expect("RedeemKagemushaRecursive instruction box");
+        assert_eq!(
+            decoded_redeem.public_amount,
+            redeem_instruction.public_amount
+        );
+        assert_eq!(decoded_redeem.recipient, redeem_instruction.recipient);
+    }
+
+    #[test]
+    fn kagemusha_instruction_archive_box_rejects_adversarial_archives() {
+        let transfer = sample_kagemusha_transfer_instruction();
+        let transfer_archive = to_bytes(&transfer).expect("encode KagemushaTransfer");
+
+        let err = kagemusha_instruction_archive_box("RedeemKagemushaRecursive", &transfer_archive)
+            .expect_err("wrong Kagemusha instruction type must fail");
+        let message = py_err_message(err);
+        assert!(
+            message.contains("invalid RedeemKagemushaRecursive instruction archive"),
+            "unexpected wrong-type error: {message}"
+        );
+
+        let err = kagemusha_instruction_archive_box("KagemushaTransfer", &[])
+            .expect_err("empty archive must fail");
+        let message = py_err_message(err);
+        assert!(
+            message.contains("Kagemusha instruction archive must not be empty"),
+            "unexpected empty-archive error: {message}"
+        );
+
+        let err = kagemusha_instruction_archive_box("KagemushaTransfer", &[0])
+            .expect_err("malformed archive must fail");
+        let message = py_err_message(err);
+        assert!(
+            message.contains("invalid KagemushaTransfer instruction archive"),
+            "unexpected malformed-archive error: {message}"
+        );
+
+        let err = kagemusha_instruction_archive_box("Unsupported", &transfer_archive)
+            .expect_err("unsupported type must fail");
+        let message = py_err_message(err);
+        assert!(
+            message.contains("unsupported Kagemusha instruction archive type"),
+            "unexpected unsupported-type error: {message}"
+        );
     }
 
     fn fixed_bytes(label: &[u8]) -> [u8; Hash::LENGTH] {
@@ -6357,7 +6840,7 @@ mod tests {
                     .production_gate
                     .missing
                     .iter()
-                    .any(|missing| missing.contains("external audit")),
+                    .any(|missing| missing.contains("internal cryptographic review")),
             );
             assert!(
                 algorithm
@@ -6461,6 +6944,64 @@ mod tests {
             verify_result.error_code,
             PRIVACY_FFI_ERROR_PRODUCTION_DISABLED
         );
+    }
+
+    #[test]
+    fn python_confidential_native_builders_reject_empty_vk_backend_before_proving() {
+        Python::initialize();
+        Python::attach(|py| {
+            let spend_key = PyBytes::new(py, &[0x11; Hash::LENGTH]);
+            let empty_list = PyList::empty(py);
+            let root_hint = PyBytes::new(py, &[0x22; Hash::LENGTH]);
+            let vk_bytes = PyBytes::new(py, &[0x33; Hash::LENGTH]);
+            let asset_definition_id = AssetDefinitionId::new(
+                DomainId::try_new("wonderland", "universal").expect("domain id"),
+                "xor".parse().expect("asset definition name"),
+            )
+            .to_string();
+
+            let transfer_err = build_confidential_transfer_proof_v2_py(
+                py,
+                "wonderland",
+                &asset_definition_id,
+                spend_key.as_any(),
+                empty_list.as_any(),
+                empty_list.as_any(),
+                empty_list.as_any(),
+                root_hint.as_any(),
+                " ",
+                "confidential_transfer_v2",
+                vk_bytes.as_any(),
+            )
+            .expect_err("empty transfer vk backend must reject before proving");
+            let transfer_message = py_err_message(transfer_err);
+            assert!(
+                transfer_message.contains("vk_backend must be non-empty"),
+                "unexpected transfer error: {transfer_message}",
+            );
+
+            let public_amount = PyString::new(py, "0");
+            let unshield_err = build_confidential_unshield_proof_v3_py(
+                py,
+                "wonderland",
+                &asset_definition_id,
+                spend_key.as_any(),
+                empty_list.as_any(),
+                empty_list.as_any(),
+                empty_list.as_any(),
+                public_amount.as_any(),
+                root_hint.as_any(),
+                " ",
+                "confidential_unshield_v3",
+                vk_bytes.as_any(),
+            )
+            .expect_err("empty unshield vk backend must reject before proving");
+            let unshield_message = py_err_message(unshield_err);
+            assert!(
+                unshield_message.contains("vk_backend must be non-empty"),
+                "unexpected unshield error: {unshield_message}",
+            );
+        });
     }
 
     #[test]
@@ -6651,10 +7192,10 @@ mod tests {
         missing_audit
             .production_gate
             .missing
-            .retain(|missing| missing != "external audit signoff is missing");
+            .retain(|missing| missing != "internal cryptographic review signoff is missing");
         assert!(
             !privacy_capability_invariants_hold(&missing_audit),
-            "removed external-audit evidence must be rejected",
+            "removed internal-review evidence must be rejected",
         );
 
         let mut missing_engine = base.clone();
@@ -6688,7 +7229,7 @@ mod tests {
         forged_missing_reason
             .production_gate
             .missing
-            .push("external audit signoff passed without evidence".to_owned());
+            .push("internal cryptographic review signoff passed without evidence".to_owned());
         assert!(
             !privacy_capability_invariants_hold(&forged_missing_reason),
             "unknown production-gate missing reasons must be rejected",
@@ -7915,10 +8456,15 @@ mod tests {
             "chain admission",
             "cross-SDK parity",
             "wallet/state support",
+            "witness privacy checks",
             "deterministic tests",
+            "negative/adversarial tests",
+            "replay/nullifier rejection tests",
             "fuzzing",
+            "parser fuzzing",
+            "verifier fuzzing",
             "performance gates",
-            "external audit",
+            "internal cryptographic review",
             "real protocol engine",
             "Iroha production allowlist",
         ] {
@@ -7979,10 +8525,15 @@ mod tests {
             "chain admission",
             "cross-SDK parity",
             "wallet/state support",
+            "witness privacy checks",
             "deterministic tests",
+            "negative/adversarial tests",
+            "replay/nullifier rejection tests",
             "fuzzing",
+            "parser fuzzing",
+            "verifier fuzzing",
             "performance gates",
-            "external audit",
+            "internal cryptographic review",
             "real protocol engine",
             "Iroha production allowlist",
         ] {
@@ -8638,9 +9189,9 @@ mod tests {
     fn attach_reserved_lineage_envelope(
         request: &mut KagemushaRecursiveSpendRedeemRequestV1,
         include_lineage_slice: bool,
+        circuit_id: &str,
     ) {
-        request.bundle.recursive_proof.verifier_key_id.name =
-            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1.to_owned();
+        request.bundle.recursive_proof.verifier_key_id.name = circuit_id.to_owned();
         request
             .bundle
             .recursive_proof
@@ -8672,7 +9223,7 @@ mod tests {
         append_zk1_raw_instance_columns(&mut proof_bytes, instance_columns);
         let envelope = OpenVerifyEnvelope {
             backend: BackendTag::Halo2IpaPasta,
-            circuit_id: KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1.to_owned(),
+            circuit_id: circuit_id.to_owned(),
             vk_hash: fixed_bytes(b"python-recursive-lineage-envelope-vk"),
             public_inputs:
                 iroha_data_model::offline::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_PUBLIC_INPUTS_SCHEMA
@@ -8689,7 +9240,11 @@ mod tests {
     fn attach_strict_reserved_lineage_envelope(
         request: &mut KagemushaRecursiveSpendRedeemRequestV1,
     ) {
-        attach_reserved_lineage_envelope(request, true);
+        attach_reserved_lineage_envelope(
+            request,
+            true,
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+        );
     }
 
     fn sample_pallas_coeffs(n: usize) -> Vec<iroha_zkp_halo2::pallas::Scalar> {
@@ -9144,6 +9699,226 @@ mod tests {
             .clone()
     }
 
+    fn shared_recursive_spend_abi7_archive_entry_json(
+        name: &str,
+        operation: &str,
+        norito_type: &str,
+        bytes: &[u8],
+    ) -> String {
+        let sha256_hex = hex::encode(Sha256::digest(bytes));
+        format!(
+            concat!(
+                "    {{\n",
+                "      \"name\": \"{name}\",\n",
+                "      \"operation\": \"{operation}\",\n",
+                "      \"norito_type\": \"{norito_type}\",\n",
+                "      \"byte_len\": {byte_len},\n",
+                "      \"sha256_hex\": \"{sha256_hex}\",\n",
+                "      \"bytes_base64\": \"{bytes_base64}\"\n",
+                "    }}"
+            ),
+            name = name,
+            operation = operation,
+            norito_type = norito_type,
+            byte_len = bytes.len(),
+            sha256_hex = sha256_hex,
+            bytes_base64 = BASE64_STANDARD.encode(bytes),
+        )
+    }
+
+    fn shared_recursive_spend_abi7_archive_fixture_json() -> String {
+        let (bundle, witness) = sample_verifying_semantic_recursive_spend_lineage_fixture();
+        let append_bundle = norito::to_bytes(&bundle).expect("encode ABI-7 append bundle");
+        let verify_request = KagemushaRecursiveSpendVerifyRequestV1::new(bundle.clone())
+            .expect("build ABI-7 verify request");
+        let verify_request =
+            norito::to_bytes(&verify_request).expect("encode ABI-7 verify request");
+        let verify_result =
+            iroha_core::zk::kagemusha_recursive_spend_verify_result_with_lineage_record(
+                &bundle, None,
+            )
+            .expect("build ABI-7 verify result");
+        let verify_result = norito::to_bytes(&verify_result).expect("encode ABI-7 verify result");
+        let mut redeem_request = sample_recursive_spend_redeem_request(7);
+        redeem_request.bundle = bundle;
+        redeem_request.lineage_witness = Some(witness);
+        let redeem_instruction =
+            kagemusha_recursive_spend_redeem_instruction_from_request(redeem_request.clone())
+                .expect("build ABI-7 native redeem instruction");
+        let redeem_request =
+            norito::to_bytes(&redeem_request).expect("encode ABI-7 redeem request");
+        let redeem_instruction =
+            norito::to_bytes(&redeem_instruction).expect("encode ABI-7 redeem instruction");
+        let archives = [
+            (
+                "append_bundle",
+                "append",
+                "KagemushaRecursiveSpendBundleV1",
+                append_bundle,
+            ),
+            (
+                "verify_request",
+                "verify",
+                "KagemushaRecursiveSpendVerifyRequestV1",
+                verify_request,
+            ),
+            (
+                "verify_result",
+                "verify",
+                "KagemushaRecursiveSpendVerifyResultV1",
+                verify_result,
+            ),
+            (
+                "redeem_request",
+                "redeem",
+                "KagemushaRecursiveSpendRedeemRequestV1",
+                redeem_request,
+            ),
+            (
+                "redeem_instruction",
+                "redeem",
+                "RedeemKagemushaRecursive",
+                redeem_instruction,
+            ),
+        ];
+        let entries = archives
+            .iter()
+            .map(|(name, operation, norito_type, bytes)| {
+                shared_recursive_spend_abi7_archive_entry_json(name, operation, norito_type, bytes)
+            })
+            .collect::<Vec<_>>()
+            .join(",\n");
+        format!(
+            concat!(
+                "{{\n",
+                "  \"schema\": \"iroha.kagemusha.recursive_spend.abi7.archive_fixtures.v1\",\n",
+                "  \"fixture_kind\": \"native_bridge_norito_archives\",\n",
+                "  \"bridge_abi_version\": 7,\n",
+                "  \"archives\": [\n",
+                "{entries}\n",
+                "  ]\n",
+                "}}\n"
+            ),
+            entries = entries,
+        )
+    }
+
+    fn shared_recursive_spend_abi7_fixture_archive_entry<'a>(
+        fixture: &'a norito::json::Value,
+        name: &str,
+    ) -> &'a norito::json::Value {
+        fixture
+            .get("archives")
+            .and_then(norito::json::Value::as_array)
+            .and_then(|archives| {
+                archives.iter().find(|entry| {
+                    entry.get("name").and_then(norito::json::Value::as_str) == Some(name)
+                })
+            })
+            .unwrap_or_else(|| panic!("ABI-7 recursive spend fixture missing `{name}` archive"))
+    }
+
+    fn shared_recursive_spend_abi7_fixture_archive_entry_mut<'a>(
+        fixture: &'a mut norito::json::Value,
+        name: &str,
+    ) -> &'a mut norito::json::Value {
+        fixture
+            .get_mut("archives")
+            .and_then(norito::json::Value::as_array_mut)
+            .and_then(|archives| {
+                archives.iter_mut().find(|entry| {
+                    entry.get("name").and_then(norito::json::Value::as_str) == Some(name)
+                })
+            })
+            .unwrap_or_else(|| panic!("ABI-7 recursive spend fixture missing `{name}` archive"))
+    }
+
+    fn committed_recursive_spend_abi7_fixture_value() -> norito::json::Value {
+        let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../fixtures/kagemusha_recursive_spend_abi7/archives.json");
+        let committed = fs::read_to_string(&fixture_path)
+            .unwrap_or_else(|err| panic!("read {}: {err}", fixture_path.display()));
+        norito::json::parse_value(&committed).expect("parse recursive spend ABI-7 fixture")
+    }
+
+    fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
+        match payload.downcast::<String>() {
+            Ok(message) => *message,
+            Err(payload) => match payload.downcast::<&'static str>() {
+                Ok(message) => (*message).to_owned(),
+                Err(_) => "<non-string panic payload>".to_owned(),
+            },
+        }
+    }
+
+    fn assert_shared_recursive_spend_abi7_fixture_archive_rejects(
+        fixture: norito::json::Value,
+        name: &str,
+        operation: &str,
+        norito_type: &str,
+        expected_message: &str,
+    ) {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            shared_recursive_spend_abi7_fixture_archive_bytes(
+                &fixture,
+                name,
+                operation,
+                norito_type,
+            );
+        }));
+        let message = panic_message(result.expect_err("tampered ABI-7 fixture must reject"));
+        assert!(
+            message.contains(expected_message),
+            "expected ABI-7 fixture rejection containing `{expected_message}`, got `{message}`"
+        );
+    }
+
+    fn shared_recursive_spend_abi7_fixture_archive_bytes(
+        fixture: &norito::json::Value,
+        name: &str,
+        operation: &str,
+        norito_type: &str,
+    ) -> Vec<u8> {
+        let entry = shared_recursive_spend_abi7_fixture_archive_entry(fixture, name);
+        assert_eq!(
+            entry.get("operation").and_then(norito::json::Value::as_str),
+            Some(operation),
+            "unexpected operation for ABI-7 recursive spend `{name}` archive"
+        );
+        assert_eq!(
+            entry
+                .get("norito_type")
+                .and_then(norito::json::Value::as_str),
+            Some(norito_type),
+            "unexpected Norito type for ABI-7 recursive spend `{name}` archive"
+        );
+        let encoded = entry
+            .get("bytes_base64")
+            .and_then(norito::json::Value::as_str)
+            .unwrap_or_else(|| panic!("ABI-7 recursive spend `{name}` archive missing bytes"));
+        let bytes = BASE64_STANDARD
+            .decode(encoded)
+            .unwrap_or_else(|err| panic!("decode ABI-7 recursive spend `{name}` archive: {err}"));
+        assert!(
+            bytes.starts_with(b"NRT0"),
+            "ABI-7 recursive spend `{name}` archive must be a Norito archive"
+        );
+        assert_eq!(
+            entry.get("byte_len").and_then(norito::json::Value::as_u64),
+            Some(bytes.len() as u64),
+            "stale byte length for ABI-7 recursive spend `{name}` archive"
+        );
+        let sha256_hex = hex::encode(Sha256::digest(&bytes));
+        assert_eq!(
+            entry
+                .get("sha256_hex")
+                .and_then(norito::json::Value::as_str),
+            Some(sha256_hex.as_str()),
+            "stale SHA-256 digest for ABI-7 recursive spend `{name}` archive"
+        );
+        bytes
+    }
+
     fn empty_kagemusha_record_bundle_archive() -> Vec<u8> {
         let record_bundle = iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle {
             bundle: iroha_data_model::offline::KagemushaVerifiedFoldBundle {
@@ -9351,6 +10126,40 @@ mod tests {
             },
         };
         norito::to_bytes(&token).expect("encode Python multi-row recursive compact token")
+    }
+
+    fn recursive_compact_key_artifacts_for_python()
+    -> &'static iroha_data_model::offline::KagemushaRecursiveCompactKeyArtifactsV1 {
+        static KEY_ARTIFACTS: OnceLock<
+            iroha_data_model::offline::KagemushaRecursiveCompactKeyArtifactsV1,
+        > = OnceLock::new();
+        KEY_ARTIFACTS.get_or_init(|| {
+            iroha_core::zk::kagemusha_recursive_compact_payment_token_key_artifacts()
+                .expect("Python recursive compact key artifacts")
+        })
+    }
+
+    fn recursive_compact_key_artifacts_archive_for_python() -> &'static [u8] {
+        static ARCHIVE: OnceLock<Vec<u8>> = OnceLock::new();
+        ARCHIVE
+            .get_or_init(|| {
+                norito::to_bytes(recursive_compact_key_artifacts_for_python())
+                    .expect("encode Python recursive compact key artifacts")
+            })
+            .as_slice()
+    }
+
+    fn recursive_compact_verifier_keys_archive_for_python() -> &'static [u8] {
+        static ARCHIVE: OnceLock<Vec<u8>> = OnceLock::new();
+        ARCHIVE
+            .get_or_init(|| {
+                let verifier_keys = recursive_compact_key_artifacts_for_python()
+                    .verifier_keys()
+                    .expect("Python recursive compact verifier keys");
+                norito::to_bytes(&verifier_keys)
+                    .expect("encode Python recursive compact verifier keys")
+            })
+            .as_slice()
     }
 
     fn provider_metadata(provider_id: &str) -> PyProviderMetadata {
@@ -9985,14 +10794,214 @@ mod tests {
     }
 
     #[test]
+    fn kagemusha_recursive_spend_abi7_archive_fixture_matches_python_native_bridge() {
+        if std::env::var_os("KAGEMUSHA_RECURSIVE_SPEND_PRINT_ABI7_ARCHIVES").is_some() {
+            let generated = shared_recursive_spend_abi7_archive_fixture_json();
+            println!("{generated}");
+            return;
+        }
+        let fixture = committed_recursive_spend_abi7_fixture_value();
+        assert_eq!(
+            fixture.get("schema").and_then(norito::json::Value::as_str),
+            Some("iroha.kagemusha.recursive_spend.abi7.archive_fixtures.v1")
+        );
+        assert_eq!(
+            fixture
+                .get("fixture_kind")
+                .and_then(norito::json::Value::as_str),
+            Some("native_bridge_norito_archives")
+        );
+        assert_eq!(
+            fixture
+                .get("bridge_abi_version")
+                .and_then(norito::json::Value::as_u64),
+            Some(7)
+        );
+        assert_eq!(
+            fixture
+                .get("archives")
+                .and_then(norito::json::Value::as_array)
+                .map(Vec::len),
+            Some(5)
+        );
+
+        let append_bundle_archive = shared_recursive_spend_abi7_fixture_archive_bytes(
+            &fixture,
+            "append_bundle",
+            "append",
+            "KagemushaRecursiveSpendBundleV1",
+        );
+        let verify_request_archive = shared_recursive_spend_abi7_fixture_archive_bytes(
+            &fixture,
+            "verify_request",
+            "verify",
+            "KagemushaRecursiveSpendVerifyRequestV1",
+        );
+        let verify_result_archive = shared_recursive_spend_abi7_fixture_archive_bytes(
+            &fixture,
+            "verify_result",
+            "verify",
+            "KagemushaRecursiveSpendVerifyResultV1",
+        );
+        let redeem_request_archive = shared_recursive_spend_abi7_fixture_archive_bytes(
+            &fixture,
+            "redeem_request",
+            "redeem",
+            "KagemushaRecursiveSpendRedeemRequestV1",
+        );
+        let redeem_instruction_archive = shared_recursive_spend_abi7_fixture_archive_bytes(
+            &fixture,
+            "redeem_instruction",
+            "redeem",
+            "RedeemKagemushaRecursive",
+        );
+
+        let append_bundle: KagemushaRecursiveSpendBundleV1 =
+            norito::decode_from_bytes(&append_bundle_archive)
+                .expect("decode ABI-7 append bundle archive");
+        let verify_request: KagemushaRecursiveSpendVerifyRequestV1 =
+            norito::decode_from_bytes(&verify_request_archive)
+                .expect("decode ABI-7 verify request archive");
+        verify_request
+            .validate_public_binding()
+            .expect("ABI-7 verify request public binding is valid");
+        assert_eq!(
+            norito::to_bytes(&verify_request.bundle).expect("encode ABI-7 verify request bundle"),
+            norito::to_bytes(&append_bundle).expect("encode ABI-7 append bundle"),
+            "ABI-7 verify request must wrap the committed append bundle"
+        );
+        let committed_verify_result: KagemushaRecursiveSpendVerifyResultV1 =
+            norito::decode_from_bytes(&verify_result_archive)
+                .expect("decode ABI-7 verify result archive");
+        let native_verify_result = match verify_request.block_height {
+            Some(block_height) => {
+                iroha_core::zk::kagemusha_recursive_spend_verify_result_with_lineage_record_at_height(
+                    &verify_request.bundle,
+                    verify_request.lineage_verifier_record.as_ref(),
+                    block_height,
+                )
+            }
+            None => iroha_core::zk::kagemusha_recursive_spend_verify_result_with_lineage_record(
+                &verify_request.bundle,
+                verify_request.lineage_verifier_record.as_ref(),
+            ),
+        }
+        .expect("native ABI-7 recursive spend verify result");
+        assert_eq!(
+            norito::to_bytes(&native_verify_result).expect("encode native verify result"),
+            norito::to_bytes(&committed_verify_result).expect("encode committed verify result"),
+            "committed ABI-7 verify result must be produced by the native bridge"
+        );
+
+        let redeem_request: KagemushaRecursiveSpendRedeemRequestV1 =
+            norito::decode_from_bytes(&redeem_request_archive)
+                .expect("decode ABI-7 redeem request archive");
+        assert_eq!(
+            norito::to_bytes(&redeem_request.bundle).expect("encode ABI-7 redeem request bundle"),
+            norito::to_bytes(&append_bundle).expect("encode ABI-7 append bundle"),
+            "ABI-7 redeem request must wrap the committed append bundle"
+        );
+        let committed_redeem_instruction: iroha_data_model::isi::offline::RedeemKagemushaRecursive =
+            norito::decode_from_bytes(&redeem_instruction_archive)
+                .expect("decode ABI-7 redeem instruction archive");
+        let native_redeem_instruction =
+            kagemusha_recursive_spend_redeem_instruction_from_request(redeem_request)
+                .expect("native ABI-7 recursive spend redeem instruction");
+        assert_eq!(
+            norito::to_bytes(&native_redeem_instruction).expect("encode native redeem instruction"),
+            norito::to_bytes(&committed_redeem_instruction)
+                .expect("encode committed redeem instruction"),
+            "committed ABI-7 redeem instruction must be produced by the native bridge"
+        );
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_abi7_archive_fixture_rejects_tampered_metadata() {
+        for (field, value, expected_message) in [
+            (
+                "operation",
+                norito::json::Value::String("append".to_owned()),
+                "unexpected operation",
+            ),
+            (
+                "norito_type",
+                norito::json::Value::String("RedeemKagemushaRecursive".to_owned()),
+                "unexpected Norito type",
+            ),
+            (
+                "byte_len",
+                norito::json::Value::Number(norito::json::Number::U64(0)),
+                "stale byte length",
+            ),
+            (
+                "sha256_hex",
+                norito::json::Value::String("0".repeat(64)),
+                "stale SHA-256 digest",
+            ),
+        ] {
+            let mut fixture = committed_recursive_spend_abi7_fixture_value();
+            let entry = shared_recursive_spend_abi7_fixture_archive_entry_mut(
+                &mut fixture,
+                "verify_result",
+            )
+            .as_object_mut()
+            .expect("ABI-7 verify_result entry is an object");
+            entry.insert(field.to_owned(), value);
+
+            assert_shared_recursive_spend_abi7_fixture_archive_rejects(
+                fixture,
+                "verify_result",
+                "verify",
+                "KagemushaRecursiveSpendVerifyResultV1",
+                expected_message,
+            );
+        }
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_abi7_archive_fixture_rejects_non_norito_archive_bytes() {
+        let mut fixture = committed_recursive_spend_abi7_fixture_value();
+        let replacement = b"not-a-norito-archive";
+        let entry = shared_recursive_spend_abi7_fixture_archive_entry_mut(
+            &mut fixture,
+            "redeem_instruction",
+        )
+        .as_object_mut()
+        .expect("ABI-7 redeem_instruction entry is an object");
+        entry.insert(
+            "bytes_base64".to_owned(),
+            norito::json::Value::String(BASE64_STANDARD.encode(replacement)),
+        );
+        entry.insert(
+            "byte_len".to_owned(),
+            norito::json::Value::Number(norito::json::Number::U64(replacement.len() as u64)),
+        );
+        entry.insert(
+            "sha256_hex".to_owned(),
+            norito::json::Value::String(hex::encode(Sha256::digest(replacement))),
+        );
+
+        assert_shared_recursive_spend_abi7_fixture_archive_rejects(
+            fixture,
+            "redeem_instruction",
+            "redeem",
+            "RedeemKagemushaRecursive",
+            "must be a Norito archive",
+        );
+    }
+
+    #[test]
     fn kagemusha_recursive_compact_python_function_rejects_malformed_record_bundle() {
         ensure_python();
         Python::attach(|py| {
+            let key_artifacts_archive = recursive_compact_key_artifacts_archive_for_python();
+            let verifier_keys_archive = recursive_compact_verifier_keys_archive_for_python();
             let err =
             kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes_py(
                 py,
                 &[1],
                 &[2],
+                key_artifacts_archive,
             )
             .expect_err("recursive compact prover must reject malformed record bundle")
             .to_string();
@@ -10007,6 +11016,7 @@ mod tests {
                 py,
                 &oversized_archive,
                 &[2],
+                key_artifacts_archive,
             )
             .expect_err("oversized recursive compact record bundle must reject before Norito decode")
             .to_string();
@@ -10021,6 +11031,7 @@ mod tests {
                 py,
                 &record_archive,
                 &[2],
+                key_artifacts_archive,
             )
             .expect_err("recursive compact prover must reject malformed Pallas archive")
             .to_string();
@@ -10034,6 +11045,7 @@ mod tests {
                 py,
                 &record_archive,
                 &oversized_archive,
+                key_artifacts_archive,
             )
             .expect_err("oversized recursive compact Pallas archive must reject before core preflight")
             .to_string();
@@ -10060,6 +11072,7 @@ mod tests {
                 py,
                 &record_archive,
                 &detached_pallas_archive,
+                key_artifacts_archive,
             )
             .expect_err("recursive compact prover must reject detached valid Pallas archive")
             .to_string();
@@ -10091,6 +11104,7 @@ mod tests {
                 py,
                 &one_hop_record_archive,
                 &extra_pallas_archive,
+                key_artifacts_archive,
             )
             .expect_err("recursive compact prover must reject extra valid Pallas opening archive")
             .to_string();
@@ -10116,6 +11130,7 @@ mod tests {
                 py,
                 &multi_hop_record_archive,
                 &missing_pallas_archive,
+                key_artifacts_archive,
             )
             .expect_err("recursive compact prover must reject missing valid Pallas opening archive")
             .to_string();
@@ -10138,6 +11153,7 @@ mod tests {
                 py,
                 &multi_hop_record_archive,
                 &duplicated_pallas_archive,
+                key_artifacts_archive,
             )
             .expect_err("recursive compact prover must reject duplicated multi-hop valid Pallas opening archive")
             .to_string();
@@ -10163,6 +11179,7 @@ mod tests {
                     py,
                     &multi_hop_record_archive,
                     &forged_metadata_pallas_archive,
+                    key_artifacts_archive,
                 )
                 .expect_err("recursive compact prover must reject forged multi-hop Pallas metadata")
                 .to_string();
@@ -10181,6 +11198,7 @@ mod tests {
                 py,
                 &multi_hop_record_archive,
                 &reordered_pallas_archive,
+                key_artifacts_archive,
             )
             .expect_err("recursive compact prover must reject reordered valid Pallas opening archive")
             .to_string();
@@ -10191,41 +11209,46 @@ mod tests {
                     ),
                 "unexpected recursive compact reordered-Pallas error: {err}"
             );
-            let err =
+            let token_archive =
             kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes_py(
                 py,
                 &multi_hop_record_archive,
                 &multi_hop_pallas_archive,
+                key_artifacts_archive,
             )
-            .expect_err("valid multi-hop recursive compact archive must remain unavailable")
-            .to_string();
+            .expect("valid multi-hop recursive compact archive must produce a token");
             assert!(
-                err.contains(
-                    iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_PROOF_UNAVAILABLE
-                ),
-                "unexpected recursive compact multi-hop error: {err}"
+                !token_archive.bind(py).as_bytes().is_empty(),
+                "multi-hop recursive compact token archive must not be empty"
             );
 
-            let err = kagemusha_verify_recursive_compact_payment_token_py(&[1])
-                .expect_err("recursive compact verifier must reject malformed payment token")
-                .to_string();
+            let err =
+                kagemusha_verify_recursive_compact_payment_token_py(&[1], verifier_keys_archive)
+                    .expect_err("recursive compact verifier must reject malformed payment token")
+                    .to_string();
             assert!(
                 err.contains("invalid Kagemusha recursive compact payment token archive"),
                 "unexpected recursive compact verifier malformed-input error: {err}"
             );
 
-            let err = kagemusha_verify_recursive_compact_payment_token_py(&oversized_archive)
-                .expect_err("oversized recursive compact token must reject before Norito decode")
-                .to_string();
+            let err = kagemusha_verify_recursive_compact_payment_token_py(
+                &oversized_archive,
+                verifier_keys_archive,
+            )
+            .expect_err("oversized recursive compact token must reject before Norito decode")
+            .to_string();
             assert!(
                 err.contains("Kagemusha recursive compact payment token archive must not exceed"),
                 "unexpected recursive compact verifier oversized-token error: {err}"
             );
 
             let malformed_token = malformed_recursive_compact_token_archive_for_python();
-            let err = kagemusha_verify_recursive_compact_payment_token_py(&malformed_token)
-                .expect_err("recursive compact verifier must reject malformed token binding")
-                .to_string();
+            let err = kagemusha_verify_recursive_compact_payment_token_py(
+                &malformed_token,
+                verifier_keys_archive,
+            )
+            .expect_err("recursive compact verifier must reject malformed token binding")
+            .to_string();
             assert!(
                 err.contains("public-input hash mismatch"),
                 "unexpected recursive compact malformed-binding error: {err}"
@@ -10234,9 +11257,12 @@ mod tests {
             let one_hop_record_bundle = sample_one_hop_recursive_compact_record_bundle_for_python();
             let forged_vk_hash_token =
                 recursive_compact_forged_vk_hash_token_archive_for_python(&one_hop_record_bundle);
-            let err = kagemusha_verify_recursive_compact_payment_token_py(&forged_vk_hash_token)
-                .expect_err("recursive compact token with forged verifier-key hash must reject")
-                .to_string();
+            let err = kagemusha_verify_recursive_compact_payment_token_py(
+                &forged_vk_hash_token,
+                verifier_keys_archive,
+            )
+            .expect_err("recursive compact token with forged verifier-key hash must reject")
+            .to_string();
             assert!(
                 err.contains("envelope verifier-key hash mismatch"),
                 "unexpected recursive compact forged verifier-key hash error: {err}"
@@ -10244,11 +11270,12 @@ mod tests {
 
             let multi_row_token =
                 recursive_compact_multi_row_token_archive_for_python(&one_hop_record_bundle);
-            let err = kagemusha_verify_recursive_compact_payment_token_py(&multi_row_token)
-                .expect_err(
-                    "Python recursive compact verifier must reject multi-row public instances",
-                )
-                .to_string();
+            let err = kagemusha_verify_recursive_compact_payment_token_py(
+                &multi_row_token,
+                verifier_keys_archive,
+            )
+            .expect_err("Python recursive compact verifier must reject multi-row public instances")
+            .to_string();
             assert!(
                 err.contains("exactly one row"),
                 "unexpected Python recursive compact multi-row error: {err}"
@@ -10256,9 +11283,12 @@ mod tests {
 
             let sentinel_spoofed_token =
                 sentinel_spoofed_recursive_compact_token_archive_for_python();
-            let err = kagemusha_verify_recursive_compact_payment_token_py(&sentinel_spoofed_token)
-                .expect_err("sentinel-spoofed recursive compact token must reject")
-                .to_string();
+            let err = kagemusha_verify_recursive_compact_payment_token_py(
+                &sentinel_spoofed_token,
+                verifier_keys_archive,
+            )
+            .expect_err("sentinel-spoofed recursive compact token must reject")
+            .to_string();
             assert!(
                 err.contains("circuit id `forged::"),
                 "unexpected recursive compact sentinel-spoofed error: {err}"
@@ -10680,10 +11710,10 @@ mod tests {
                     "previous_recursive_proof_open_envelopes_archive.domain_tag",
                 ),
             ] {
-                let previous_bundle = sample_reserved_lineage_previous_bundle();
+                let mut request = sample_recursive_spend_transition_profile_append_request();
                 let mut previous_open_envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
                     norito::decode_from_bytes(
-                        &sample_previous_recursive_proof_open_envelopes_archive(&previous_bundle),
+                        &request.previous_recursive_proof_open_envelopes_archive,
                     )
                     .expect("decode Python previous proof open envelopes");
                 let envelope = previous_open_envelopes
@@ -10704,32 +11734,9 @@ mod tests {
                     }
                     _ => unreachable!("covered previous-proof opening metadata case"),
                 }
-
-                let request = KagemushaRecursiveSpendAppendRequestV1 {
-                    previous_bundle: previous_bundle.clone(),
-                    previous_lineage_verifier_record: Some(
-                        sample_recursive_spend_lineage_verifier_record(),
-                    ),
-                    record_bundle: KagemushaVerifiedFoldRecordBundle {
-                        bundle: KagemushaVerifiedFoldBundle {
-                            chain_id: previous_bundle.accumulator.chain_id.clone(),
-                            asset: previous_bundle.accumulator.asset.clone(),
-                            steps: Vec::new(),
-                        },
-                        verifier_records: Vec::new(),
-                    },
-                    pallas_open_envelopes_archive: Vec::new(),
-                    current_note: previous_bundle.accumulator.current_note.clone(),
-                    output_proof_circuit_id: KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
-                        .to_owned(),
-                    lineage_verifier_key: None,
-                    lineage_proving_key_archive: None,
-                    previous_recursive_proof_open_envelopes_archive: norito::to_bytes(
-                        &previous_open_envelopes,
-                    )
-                    .expect("encode forged Python previous proof open archive"),
-                    block_height: None,
-                };
+                request.previous_recursive_proof_open_envelopes_archive =
+                    norito::to_bytes(&previous_open_envelopes)
+                        .expect("encode forged Python previous proof open archive");
                 let archive =
                     norito::to_bytes(&request).expect("encode Python append request archive");
 
@@ -10880,9 +11887,10 @@ mod tests {
     fn kagemusha_recursive_spend_append_python_rejects_malformed_previous_proof_opening_archives() {
         ensure_python();
         Python::attach(|py| {
-            let previous_bundle = sample_reserved_lineage_previous_bundle();
-            let canonical_archive =
-                sample_previous_recursive_proof_open_envelopes_archive(&previous_bundle);
+            let base_request = sample_recursive_spend_transition_profile_append_request();
+            let canonical_archive = base_request
+                .previous_recursive_proof_open_envelopes_archive
+                .clone();
             let previous_open_envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
                 norito::decode_from_bytes(&canonical_archive)
                     .expect("decode Python previous proof open envelopes");
@@ -10910,28 +11918,9 @@ mod tests {
                     .expect("encode Python over-count previous proof open archive"),
                 ),
             ] {
-                let request = KagemushaRecursiveSpendAppendRequestV1 {
-                    previous_bundle: previous_bundle.clone(),
-                    previous_lineage_verifier_record: Some(
-                        sample_recursive_spend_lineage_verifier_record(),
-                    ),
-                    record_bundle: KagemushaVerifiedFoldRecordBundle {
-                        bundle: KagemushaVerifiedFoldBundle {
-                            chain_id: previous_bundle.accumulator.chain_id.clone(),
-                            asset: previous_bundle.accumulator.asset.clone(),
-                            steps: Vec::new(),
-                        },
-                        verifier_records: Vec::new(),
-                    },
-                    pallas_open_envelopes_archive: Vec::new(),
-                    current_note: previous_bundle.accumulator.current_note.clone(),
-                    output_proof_circuit_id: KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
-                        .to_owned(),
-                    lineage_verifier_key: None,
-                    lineage_proving_key_archive: None,
-                    previous_recursive_proof_open_envelopes_archive: previous_proof_open_archive,
-                    block_height: None,
-                };
+                let mut request = base_request.clone();
+                request.previous_recursive_proof_open_envelopes_archive =
+                    previous_proof_open_archive;
                 let archive =
                     norito::to_bytes(&request).expect("encode Python append request archive");
 
@@ -10951,9 +11940,8 @@ mod tests {
     fn kagemusha_recursive_spend_append_python_rejects_stale_previous_proof_payload_opening() {
         ensure_python();
         Python::attach(|py| {
-            let mut previous_bundle = sample_reserved_lineage_previous_bundle();
-            let previous_proof_open_archive =
-                sample_previous_recursive_proof_open_envelopes_archive(&previous_bundle);
+            let mut request = sample_recursive_spend_transition_profile_append_request();
+            let mut previous_bundle = request.previous_bundle.clone();
             let mut previous_proof_envelope: iroha_data_model::zk::OpenVerifyEnvelope =
                 norito::decode_from_bytes(&previous_bundle.recursive_proof.proof.bytes)
                     .expect("decode Python previous recursive proof envelope");
@@ -10961,29 +11949,7 @@ mod tests {
             previous_bundle.recursive_proof.proof.bytes =
                 norito::to_bytes(&previous_proof_envelope)
                     .expect("encode Python stale previous recursive proof envelope");
-
-            let request = KagemushaRecursiveSpendAppendRequestV1 {
-                previous_bundle: previous_bundle.clone(),
-                previous_lineage_verifier_record: Some(
-                    sample_recursive_spend_lineage_verifier_record(),
-                ),
-                record_bundle: KagemushaVerifiedFoldRecordBundle {
-                    bundle: KagemushaVerifiedFoldBundle {
-                        chain_id: previous_bundle.accumulator.chain_id.clone(),
-                        asset: previous_bundle.accumulator.asset.clone(),
-                        steps: Vec::new(),
-                    },
-                    verifier_records: Vec::new(),
-                },
-                pallas_open_envelopes_archive: Vec::new(),
-                current_note: previous_bundle.accumulator.current_note.clone(),
-                output_proof_circuit_id: KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
-                    .to_owned(),
-                lineage_verifier_key: None,
-                lineage_proving_key_archive: None,
-                previous_recursive_proof_open_envelopes_archive: previous_proof_open_archive,
-                block_height: None,
-            };
+            request.previous_bundle = previous_bundle;
             let archive = norito::to_bytes(&request).expect("encode Python append request archive");
 
             let err = match kagemusha_recursive_spend_append_py(py, &archive) {
@@ -11001,9 +11967,8 @@ mod tests {
     fn kagemusha_recursive_spend_append_python_rejects_forged_previous_proof_circuit_id() {
         ensure_python();
         Python::attach(|py| {
-            let mut previous_bundle = sample_reserved_lineage_previous_bundle();
-            let previous_proof_open_archive =
-                sample_previous_recursive_proof_open_envelopes_archive(&previous_bundle);
+            let mut request = sample_recursive_spend_transition_profile_append_request();
+            let mut previous_bundle = request.previous_bundle.clone();
             let mut previous_proof_envelope: OpenVerifyEnvelope =
                 norito::decode_from_bytes(&previous_bundle.recursive_proof.proof.bytes)
                     .expect("decode Python previous recursive proof envelope");
@@ -11013,29 +11978,7 @@ mod tests {
                 &previous_proof_envelope,
             )
             .expect("encode Python previous recursive proof envelope with forged circuit id");
-
-            let request = KagemushaRecursiveSpendAppendRequestV1 {
-                previous_bundle: previous_bundle.clone(),
-                previous_lineage_verifier_record: Some(
-                    sample_recursive_spend_lineage_verifier_record(),
-                ),
-                record_bundle: KagemushaVerifiedFoldRecordBundle {
-                    bundle: KagemushaVerifiedFoldBundle {
-                        chain_id: previous_bundle.accumulator.chain_id.clone(),
-                        asset: previous_bundle.accumulator.asset.clone(),
-                        steps: Vec::new(),
-                    },
-                    verifier_records: Vec::new(),
-                },
-                pallas_open_envelopes_archive: Vec::new(),
-                current_note: previous_bundle.accumulator.current_note.clone(),
-                output_proof_circuit_id: KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
-                    .to_owned(),
-                lineage_verifier_key: None,
-                lineage_proving_key_archive: None,
-                previous_recursive_proof_open_envelopes_archive: previous_proof_open_archive,
-                block_height: None,
-            };
+            request.previous_bundle = previous_bundle;
             let archive = norito::to_bytes(&request).expect("encode Python append request archive");
 
             let err = match kagemusha_recursive_spend_append_py(py, &archive) {
@@ -11647,7 +12590,11 @@ mod tests {
         );
 
         let mut missing_lineage_slice = sample_recursive_spend_redeem_request(42);
-        attach_reserved_lineage_envelope(&mut missing_lineage_slice, false);
+        attach_reserved_lineage_envelope(
+            &mut missing_lineage_slice,
+            false,
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+        );
         missing_lineage_slice.lineage_verifier_record =
             Some(sample_recursive_spend_lineage_verifier_record());
         let err = kagemusha_recursive_spend_redeem_instruction_from_request(missing_lineage_slice)
@@ -11685,6 +12632,30 @@ mod tests {
             err.contains("failed to decode recursive spend lineage proof envelope"),
             "unexpected malformed-lineage-envelope error: {err}"
         );
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_redeem_python_native_supports_reserved_lineage_circuit_family() {
+        for circuit_id in [
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+        ] {
+            let mut request = sample_recursive_spend_redeem_request(42);
+            attach_reserved_lineage_envelope(&mut request, true, circuit_id);
+            let mut record = sample_recursive_spend_lineage_verifier_record();
+            record.circuit_id = circuit_id.to_owned();
+            request.lineage_verifier_record = Some(record);
+            request.validate_public_binding().unwrap_or_else(|err| {
+                panic!("{circuit_id} Reserved-lineage redeem must validate publicly: {err}")
+            });
+
+            let err = kagemusha_recursive_spend_redeem_instruction_from_request(request)
+                .expect_err("fixture proof is backend-invalid but dispatch must reach verifier");
+            assert!(
+                !err.contains("supported proof circuit id"),
+                "{circuit_id} was rejected by dispatch instead of verifier semantics: {err}"
+            );
+        }
     }
 
     #[test]
@@ -14447,6 +15418,39 @@ struct Instruction {
     inner: InstructionBox,
 }
 
+fn kagemusha_instruction_archive_box(
+    instruction_type: &str,
+    instruction_archive: &[u8],
+) -> PyResult<InstructionBox> {
+    ensure_kagemusha_recursive_archive_len(
+        instruction_archive.len(),
+        "Kagemusha instruction archive",
+    )?;
+    match instruction_type.trim() {
+        "KagemushaTransfer" => {
+            let instruction: iroha_data_model::isi::offline::KagemushaTransfer =
+                decode_from_bytes(instruction_archive).map_err(|err| {
+                    PyValueError::new_err(format!(
+                        "invalid KagemushaTransfer instruction archive: {err}"
+                    ))
+                })?;
+            Ok(InstructionBox::from(instruction))
+        }
+        "RedeemKagemushaRecursive" => {
+            let instruction: iroha_data_model::isi::offline::RedeemKagemushaRecursive =
+                decode_from_bytes(instruction_archive).map_err(|err| {
+                    PyValueError::new_err(format!(
+                        "invalid RedeemKagemushaRecursive instruction archive: {err}"
+                    ))
+                })?;
+            Ok(InstructionBox::from(instruction))
+        }
+        other => Err(PyValueError::new_err(format!(
+            "unsupported Kagemusha instruction archive type `{other}`; expected KagemushaTransfer or RedeemKagemushaRecursive"
+        ))),
+    }
+}
+
 impl Instruction {
     fn new(inner: InstructionBox) -> Self {
         Self { inner }
@@ -14475,6 +15479,37 @@ impl Instruction {
         let value = loads.call1((json_str,))?;
         let dict: Py<PyDict> = value.extract()?;
         Ok(dict)
+    }
+
+    #[classmethod]
+    fn kagemusha_instruction_archive(
+        _cls: &Bound<'_, PyType>,
+        instruction_type: &str,
+        instruction_archive: &[u8],
+    ) -> PyResult<Self> {
+        Ok(Instruction::new(kagemusha_instruction_archive_box(
+            instruction_type,
+            instruction_archive,
+        )?))
+    }
+
+    #[classmethod]
+    fn kagemusha_recursive_redeem(
+        _cls: &Bound<'_, PyType>,
+        request_archive: &[u8],
+    ) -> PyResult<Self> {
+        let request: iroha_data_model::offline::KagemushaRecursiveSpendRedeemRequestV1 =
+            decode_kagemusha_recursive_archive(
+                request_archive,
+                "Kagemusha recursive spend redeem",
+            )?;
+        let instruction = kagemusha_recursive_spend_redeem_instruction_from_request(request)
+            .map_err(|err| {
+                PyValueError::new_err(format!(
+                    "invalid Kagemusha recursive spend redeem request: {err}"
+                ))
+            })?;
+        Ok(Instruction::new(InstructionBox::from(instruction)))
     }
 
     #[classmethod]
@@ -16826,7 +17861,7 @@ const PRIVACY_PRODUCTION_GATE_MISSING_ENGINE: &str =
     "real protocol engine is not production-enabled";
 const PRIVACY_PRODUCTION_GATE_MISSING_ALLOWLIST: &str =
     "Iroha production allowlist is not enabled for this audited row";
-const PRIVACY_PRODUCTION_DISABLED_MESSAGE: &str = "privacy production is disabled until exact protocol implementation, real proving, real verification, chain admission, cross-SDK parity, wallet/state support, deterministic tests, fuzzing, performance gates, external audit, real protocol engine enablement, and Iroha production allowlist evidence all pass";
+const PRIVACY_PRODUCTION_DISABLED_MESSAGE: &str = "privacy production is disabled until exact protocol implementation, real proving, real verification, chain admission, cross-SDK parity, wallet/state support, witness privacy checks, deterministic tests, negative/adversarial tests, replay/nullifier rejection tests, fuzzing, parser fuzzing, verifier fuzzing, performance gates, internal cryptographic review, real protocol engine enablement, and Iroha production allowlist evidence all pass";
 #[cfg(test)]
 const PRIVACY_NATIVE_AVAILABILITY_PROBE_ARCHIVE: &[u8] =
     b"iroha-privacy-native-availability-probe-v1";
@@ -16870,10 +17905,27 @@ const PRIVACY_PRODUCTION_GATE_REQUIREMENTS: &[(&str, &str)] = &[
     ("chain_admission", "chain admission path is not enabled"),
     ("sdk_parity", "cross-SDK parity is incomplete"),
     ("wallet_state", "wallet/state support is incomplete"),
+    (
+        "witness_privacy_checks",
+        "witness privacy checks are incomplete",
+    ),
     ("deterministic_tests", "deterministic tests are incomplete"),
+    (
+        "negative_adversarial_tests",
+        "negative/adversarial tests are incomplete",
+    ),
+    (
+        "replay_nullifier_tests",
+        "replay/nullifier rejection tests are incomplete",
+    ),
     ("fuzzing", "fuzzing gate is incomplete"),
+    ("parser_fuzzing", "parser fuzzing gate is incomplete"),
+    ("verifier_fuzzing", "verifier fuzzing gate is incomplete"),
     ("performance_gates", "performance gate is incomplete"),
-    ("external_audit", "external audit signoff is missing"),
+    (
+        "external_audit",
+        "internal cryptographic review signoff is missing",
+    ),
 ];
 
 const PRIVACY_REQUIRED_PRODUCTION_PLAN_ROWS: &[(&str, &str, &str)] = &[
@@ -16984,7 +18036,7 @@ const PRIVACY_EXPOSED_PRODUCTION_CLAIM_FRAGMENTS: &[&str] = &[
     "thirdpartyaudited",
     "boiaudited",
     "auditedmainnet",
-    "externalaudit",
+    "internalcryptographicreview",
     "auditpassed",
     "auditapproved",
     "auditsignoff",
@@ -18470,6 +19522,14 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     module.add_function(wrap_pyfunction!(
         zk_ace_build_transfer_authorization_v1_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        build_confidential_transfer_proof_v2_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        build_confidential_unshield_proof_v3_py,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(

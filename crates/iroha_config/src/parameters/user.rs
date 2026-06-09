@@ -190,7 +190,7 @@ enum KyberKeyConfig {
 }
 use hex::FromHex;
 use iroha_crypto::{
-    Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair, PrivateKey, PublicKey, sha256,
+    Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair, PrivateKey, PublicKey, keccak256, sha256,
     soranet::handshake::{
         DEFAULT_CLIENT_CAPABILITIES, DEFAULT_DESCRIPTOR_COMMIT, DEFAULT_RELAY_CAPABILITIES,
     },
@@ -4466,6 +4466,9 @@ impl SccpRouteManifest {
     const SORA_COUNTERPARTY_DOMAIN: u32 = 0;
     const BSC_COUNTERPARTY_DOMAIN: u32 = 2;
     const TRON_COUNTERPARTY_DOMAIN: u32 = 5;
+    const TRON_DESTINATION_BINDING_LABEL: &'static [u8] = b"iroha:sccp:tron-destination-binding:v1";
+    const TRON_GROTH16_BACKEND: &'static str = "tron-groth16-bn254-v1";
+    const SCCP_PROOF_FAMILY_STARK_FRI: &'static str = "stark-fri-v1";
     const TRON_MAINNET_NETWORK: &'static str = "mainnet";
     const TRON_MAINNET_CHAIN: &'static str = "tron-mainnet";
     const TRON_MAINNET_CHAIN_ID_HEX: &'static str = "0x2b6653dc";
@@ -4627,6 +4630,28 @@ impl SccpRouteManifest {
         })
     }
 
+    fn hex32_bytes(field: &str, value: &str) -> [u8; 32] {
+        let value = Self::normalize_hex32(field, value);
+        let mut bytes = [0_u8; 32];
+        hex::decode_to_slice(&value[2..], &mut bytes).expect("normalized hex32 must decode");
+        bytes
+    }
+
+    fn abi_word_u32(value: u32) -> [u8; 32] {
+        let mut word = [0_u8; 32];
+        word[28..].copy_from_slice(&value.to_be_bytes());
+        word
+    }
+
+    fn tron_abi_word_address(field: &str, value: &str) -> [u8; 32] {
+        let value = Self::normalize_tron_base58_address(field, value);
+        let decoded = Self::decode_tron_base58(field, &value);
+        let payload = &decoded[..Self::TRON_BASE58CHECK_PAYLOAD_BYTES];
+        let mut word = [0_u8; 32];
+        word[11..].copy_from_slice(payload);
+        word
+    }
+
     fn normalize_evm_address(field: &str, value: &str) -> String {
         let value = value.trim().to_ascii_lowercase();
         assert!(
@@ -4711,6 +4736,29 @@ impl SccpRouteManifest {
         )
     }
 
+    fn expected_tron_destination_binding_hash(
+        network_id_hex: &str,
+        destination_verifier_address: &str,
+        verifier_code_hash: &str,
+        verifier_key_hash: &str,
+    ) -> String {
+        let mut payload = Vec::with_capacity(32 * 9);
+        payload.extend_from_slice(&keccak256(Self::TRON_DESTINATION_BINDING_LABEL));
+        payload.extend_from_slice(&keccak256(Self::TRON_GROTH16_BACKEND.as_bytes()));
+        payload.extend_from_slice(&keccak256(Self::SCCP_PROOF_FAMILY_STARK_FRI.as_bytes()));
+        payload.extend_from_slice(&Self::hex32_bytes("network_id_hex", network_id_hex));
+        payload.extend_from_slice(&Self::abi_word_u32(Self::SORA_COUNTERPARTY_DOMAIN));
+        payload.extend_from_slice(&Self::abi_word_u32(Self::TRON_COUNTERPARTY_DOMAIN));
+        payload.extend_from_slice(&Self::tron_abi_word_address(
+            "destination verifier address",
+            destination_verifier_address,
+        ));
+        payload.extend_from_slice(&Self::hex32_bytes("verifier_code_hash", verifier_code_hash));
+        payload.extend_from_slice(&Self::hex32_bytes("verifier_key_hash", verifier_key_hash));
+
+        format!("0x{}", hex::encode(keccak256(payload)))
+    }
+
     fn validate_tron_production_metadata(
         &self,
         chain_id_hex: &str,
@@ -4718,6 +4766,7 @@ impl SccpRouteManifest {
         destination_verifier_address: &str,
         verifier_code_hash: &str,
         verifier_key_hash: &str,
+        destination_binding_hash: &str,
     ) {
         assert!(
             self.route_id == Self::TRON_TAIRA_XOR_ROUTE_ID,
@@ -4763,6 +4812,16 @@ impl SccpRouteManifest {
         assert!(
             self.destination_binding_key == expected_destination_binding_key,
             "SCCP TRON route manifest production_ready requires destination_binding_key = {expected_destination_binding_key}"
+        );
+        let expected_destination_binding_hash = Self::expected_tron_destination_binding_hash(
+            network_id_hex,
+            destination_verifier_address,
+            verifier_code_hash,
+            verifier_key_hash,
+        );
+        assert!(
+            destination_binding_hash == expected_destination_binding_hash,
+            "SCCP TRON route manifest production_ready requires destination_binding_hash = {expected_destination_binding_hash}"
         );
         assert!(
             self.taira_burn_record_settlement_asset_definition_id
@@ -5201,6 +5260,7 @@ impl SccpRouteManifest {
                 &destination_verifier_address,
                 &verifier_code_hash,
                 &verifier_key_hash,
+                &destination_binding_hash,
             );
             Self::validate_post_deploy_evidence(
                 "TRON",
@@ -5368,6 +5428,12 @@ mod sccp_route_manifest_user_config_tests {
             &verifier_code_hash,
             &verifier_key_hash,
         );
+        let destination_binding_hash = SccpRouteManifest::expected_tron_destination_binding_hash(
+            network_id_hex,
+            verifier_address,
+            &verifier_code_hash,
+            &verifier_key_hash,
+        );
         SccpRouteManifest {
             version: 1,
             route_id: "taira_tron_xor".to_owned(),
@@ -5399,7 +5465,7 @@ mod sccp_route_manifest_user_config_tests {
             circuit_artifact_hash: None,
             proving_key_hash: None,
             destination_binding_key,
-            destination_binding_hash: format!("0x{}", "ad".repeat(32)),
+            destination_binding_hash,
             taira_burn_record_settlement_asset_definition_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
                 .to_owned(),
             taira_burn_record_contract_artifact_b64: "QUJDREVGRw==".to_owned(),
@@ -5695,7 +5761,8 @@ mod sccp_route_manifest_user_config_tests {
             " 0X000000000000000000000000000000000000000000000000000000002B6653DC ".to_owned();
         manifest.verifier_code_hash = format!("0X{}", "AB".repeat(32));
         manifest.verifier_key_hash = format!("0X{}", "AC".repeat(32));
-        manifest.destination_binding_hash = format!("0X{}", "AD".repeat(32));
+        manifest.destination_binding_hash =
+            " 0X4C5B208D148CEE784D611F77434A7DFAC6B22A37B86FAF82063D371BA7D3A1BC ".to_owned();
         manifest.post_deploy_source_bridge_config_hash = Some(format!(" 0X{} ", "B1".repeat(32)));
 
         let actual = manifest.parse();
@@ -5710,12 +5777,29 @@ mod sccp_route_manifest_user_config_tests {
         );
         assert_eq!(actual.verifier_code_hash, format!("0x{}", "ab".repeat(32)));
         assert_eq!(
+            actual.destination_binding_hash,
+            "0x4c5b208d148cee784d611f77434a7dfac6b22a37b86faf82063d371ba7d3a1bc"
+        );
+        assert_eq!(
             actual.post_deploy_source_bridge_config_hash.as_deref(),
             Some(expected_source_bridge_config_hash.as_str())
         );
         assert_eq!(actual.post_deploy_source_event_explorer_url, None);
         assert_eq!(actual.proof_artifact_hash, None);
         assert_eq!(actual.proving_key_hash, None);
+    }
+
+    #[test]
+    fn tron_destination_binding_hash_matches_evidence_vector() {
+        assert_eq!(
+            SccpRouteManifest::expected_tron_destination_binding_hash(
+                SccpRouteManifest::TRON_MAINNET_NETWORK_ID_HEX,
+                "TKJtY3UFssmhUSg1FPdXyxWcHKS9SWVtCJ",
+                &format!("0x{}", "ab".repeat(32)),
+                &format!("0x{}", "ac".repeat(32)),
+            ),
+            "0x4c5b208d148cee784d611f77434a7dfac6b22a37b86faf82063d371ba7d3a1bc"
+        );
     }
 
     #[test]
@@ -5864,6 +5948,17 @@ mod sccp_route_manifest_user_config_tests {
     fn production_ready_tron_route_rejects_wrong_destination_binding_key() {
         let mut manifest = production_ready_tron_route_manifest();
         manifest.destination_binding_key = "tron:stale-binding".to_owned();
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "SCCP TRON route manifest production_ready requires destination_binding_hash = 0x4c5b208d148cee784d611f77434a7dfac6b22a37b86faf82063d371ba7d3a1bc"
+    )]
+    fn production_ready_tron_route_rejects_wrong_destination_binding_hash() {
+        let mut manifest = production_ready_tron_route_manifest();
+        manifest.destination_binding_hash = format!("0x{}", "ad".repeat(32));
 
         let _ = manifest.parse();
     }

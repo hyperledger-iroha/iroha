@@ -2611,6 +2611,8 @@ fn verify_soracloud_fhe_full_bootstrap_execution_proof_backend(
     governed_verifier_key: &iroha_data_model::proof::VerifyingKeyBox,
     state_transaction: &mut StateTransaction<'_, '_>,
 ) -> Result<(), InstructionExecutionError> {
+    #[cfg(not(feature = "zk-stark"))]
+    let _ = public_padding_context;
     let attachment_vk_commitment = attachment.vk_commitment.ok_or_else(|| {
         invalid_parameter("FHE full-bootstrap execution proof requires vk_commitment")
     })?;
@@ -16963,16 +16965,24 @@ mod tests {
     }
 
     #[cfg(feature = "zk-stark")]
+    fn sample_full_bootstrap_bfv_native_air_public_padding_context()
+    -> BfvFullBootstrapNativeAirPublicPaddingContext {
+        BfvFullBootstrapNativeAirPublicPaddingContext {
+            slot_index: 0,
+            bound_mode: BfvFullBootstrapExecutionProofBoundModeV1::ExactResidualMultiple,
+        }
+    }
+
+    #[cfg(feature = "zk-stark")]
     fn sample_full_bootstrap_bfv_native_air_envelope(
         statement_hash: Hash,
     ) -> crate::zk_stark::StarkVerifyEnvelopeV1 {
         let query_count =
             usize::from(iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_QUERIES_V1);
-        let row_width =
-            usize::from(iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_ROW_WIDTH_V1);
         let public_start = u32::from(
             iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PRIVATE_ROW_COUNT_V1,
         );
+        let public_padding_context = sample_full_bootstrap_bfv_native_air_public_padding_context();
         let trace_root = [0xB4; Hash::LENGTH];
         let composition_root = [0xB5; Hash::LENGTH];
         let openings = (0..query_count)
@@ -16986,8 +16996,22 @@ mod tests {
                         ));
                 crate::zk_stark::StarkAirOpeningV1 {
                     index,
-                    row: vec![0; row_width],
-                    next_row: vec![0; row_width],
+                    row:
+                        iroha_crypto::fhe_bfv::bfv_full_bootstrap_arithmetic_trace_public_padding_row_v1(
+                            index,
+                            statement_hash,
+                            public_padding_context.slot_index,
+                            public_padding_context.bound_mode,
+                        )
+                        .expect("sample BFV AIR public padding row"),
+                    next_row:
+                        iroha_crypto::fhe_bfv::bfv_full_bootstrap_arithmetic_trace_public_padding_row_v1(
+                            next_index,
+                            statement_hash,
+                            public_padding_context.slot_index,
+                            public_padding_context.bound_mode,
+                        )
+                        .expect("sample BFV AIR public padding next row"),
                     row_path: sample_full_bootstrap_bfv_native_air_merkle_path(index),
                     next_row_path: sample_full_bootstrap_bfv_native_air_merkle_path(next_index),
                     composition_value: 0,
@@ -17751,10 +17775,13 @@ mod tests {
         let label = "FHE full-bootstrap execution proof";
         let statement_hash = Hash::new(b"full-bootstrap-bfv-air-boundary");
         let native = sample_full_bootstrap_bfv_native_air_envelope(statement_hash);
+        let public_padding_context =
+            Some(sample_full_bootstrap_bfv_native_air_public_padding_context());
         validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
             label,
             statement_hash,
             &native,
+            public_padding_context,
         )
         .expect("BFV AIR boundary accepts public padding-row openings");
 
@@ -17772,6 +17799,7 @@ mod tests {
             label,
             statement_hash,
             &private_opening,
+            public_padding_context,
         )
         .expect_err("BFV AIR boundary must reject unmasked private-row openings");
         assert_invalid_parameter_contains(err, "unmasked private row");
@@ -17795,6 +17823,7 @@ mod tests {
             label,
             statement_hash,
             &wrapped_private_next,
+            public_padding_context,
         )
         .expect_err("BFV AIR boundary must reject wraparound private next-row openings");
         assert_invalid_parameter_contains(err, "unmasked private row");
@@ -17805,6 +17834,7 @@ mod tests {
             label,
             statement_hash,
             &stale_params,
+            public_padding_context,
         )
         .expect_err("BFV AIR boundary must pin canonical FRI query count");
         assert_invalid_parameter_contains(err, "query count mismatch");
@@ -17815,6 +17845,7 @@ mod tests {
             label,
             statement_hash,
             &stale_transcript_label,
+            public_padding_context,
         )
         .expect_err("BFV AIR boundary must pin canonical transcript label");
         assert_invalid_parameter_contains(err, "transcript label mismatch");
@@ -17828,6 +17859,7 @@ mod tests {
             label,
             statement_hash,
             &stale_domain_tag,
+            public_padding_context,
         )
         .expect_err("BFV AIR boundary must bind the domain tag to the statement hash");
         assert_invalid_parameter_contains(err, "domain tag mismatch");
@@ -17843,6 +17875,7 @@ mod tests {
             label,
             statement_hash,
             &stale_public_digest,
+            public_padding_context,
         )
         .expect_err("BFV AIR boundary must bind public digest to statement hash");
         assert_invalid_parameter_contains(err, "public digest mismatch");
@@ -17854,10 +17887,13 @@ mod tests {
         let label = "FHE full-bootstrap execution proof";
         let statement_hash = Hash::new(b"full-bootstrap-bfv-air-opening-shape");
         let native = sample_full_bootstrap_bfv_native_air_envelope(statement_hash);
+        let public_padding_context =
+            Some(sample_full_bootstrap_bfv_native_air_public_padding_context());
         validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
             label,
             statement_hash,
             &native,
+            public_padding_context,
         )
         .expect("BFV AIR boundary accepts well-shaped public openings");
 
@@ -17884,6 +17920,7 @@ mod tests {
             label,
             statement_hash,
             &short_row,
+            public_padding_context,
         )
         .expect_err("BFV AIR boundary must reject short opened rows");
         assert_invalid_parameter_contains(err, "row width mismatch");
@@ -17896,6 +17933,7 @@ mod tests {
             label,
             statement_hash,
             &wide_next_row,
+            public_padding_context,
         )
         .expect_err("BFV AIR boundary must reject wide next rows");
         assert_invalid_parameter_contains(err, "next row width mismatch");
@@ -17909,6 +17947,7 @@ mod tests {
             label,
             statement_hash,
             &non_field_row,
+            public_padding_context,
         )
         .expect_err("BFV AIR boundary must reject non-field row elements");
         assert_invalid_parameter_contains(err, "row field element");
@@ -17922,9 +17961,36 @@ mod tests {
             label,
             statement_hash,
             &non_field_composition,
+            public_padding_context,
         )
         .expect_err("BFV AIR boundary must reject non-field composition values");
         assert_invalid_parameter_contains(err, "composition field element");
+
+        let mut stale_public_row_slot = native.clone();
+        mutate_first_opening(&mut stale_public_row_slot, |opening| {
+            opening.row[3] = opening.row[3].saturating_add(1);
+        });
+        let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
+            label,
+            statement_hash,
+            &stale_public_row_slot,
+            public_padding_context,
+        )
+        .expect_err("BFV AIR boundary must reject stale public row slot headers");
+        assert_invalid_parameter_contains(err, "public padding rows failed validation");
+
+        let mut stale_next_row_statement = native.clone();
+        mutate_first_opening(&mut stale_next_row_statement, |opening| {
+            opening.next_row[5] = opening.next_row[5].saturating_add(1);
+        });
+        let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
+            label,
+            statement_hash,
+            &stale_next_row_statement,
+            public_padding_context,
+        )
+        .expect_err("BFV AIR boundary must reject stale public next-row statement limbs");
+        assert_invalid_parameter_contains(err, "public padding rows failed validation");
 
         let mut short_row_path = native.clone();
         mutate_first_opening(&mut short_row_path, |opening| {
@@ -17934,6 +18000,7 @@ mod tests {
             label,
             statement_hash,
             &short_row_path,
+            public_padding_context,
         )
         .expect_err("BFV AIR boundary must reject short row Merkle paths");
         assert_invalid_parameter_contains(err, "row Merkle path depth mismatch");
@@ -17946,6 +18013,7 @@ mod tests {
             label,
             statement_hash,
             &missing_next_path_dirs,
+            public_padding_context,
         )
         .expect_err("BFV AIR boundary must reject malformed next-row path dirs");
         assert_invalid_parameter_contains(
@@ -17965,6 +18033,7 @@ mod tests {
             label,
             statement_hash,
             &nonzero_padding_bits,
+            public_padding_context,
         )
         .expect_err("BFV AIR boundary must reject non-zero Merkle path padding bits");
         assert_invalid_parameter_contains(err, "direction padding bits");
@@ -17977,6 +18046,7 @@ mod tests {
             label,
             statement_hash,
             &row_path_index_drift,
+            public_padding_context,
         )
         .expect_err("BFV AIR boundary must reject row path index drift");
         assert_invalid_parameter_contains(err, "row Merkle path index mismatch");
@@ -18004,12 +18074,15 @@ mod tests {
         };
 
         let safe_native = sample_full_bootstrap_bfv_native_air_envelope(statement_hash);
+        let public_padding_context =
+            Some(sample_full_bootstrap_bfv_native_air_public_padding_context());
         let safe_envelope = envelope_from_native(&safe_native);
         let err = reject_soracloud_fhe_full_bootstrap_generic_binding_air(
             label,
             FHE_INPUT_ADMISSION_BACKEND,
             &safe_envelope,
             statement_hash,
+            public_padding_context,
         )
         .expect_err("safe BFV AIR still requires the unavailable dedicated verifier");
         assert_invalid_parameter_contains(err, FHE_FULL_BOOTSTRAP_DEDICATED_PROVER_UNAVAILABLE);
@@ -18030,6 +18103,7 @@ mod tests {
             FHE_INPUT_ADMISSION_BACKEND,
             &private_envelope,
             statement_hash,
+            public_padding_context,
         )
         .expect_err("private-row BFV AIR must fail before dedicated-verifier fallback");
         assert_invalid_parameter_contains(err, "privacy boundary failed validation");

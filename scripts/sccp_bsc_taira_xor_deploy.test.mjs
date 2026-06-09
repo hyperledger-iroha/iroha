@@ -176,6 +176,7 @@ const readyReadback = (overrides = {}) => ({
   tokenBridgeAddress: BSC_BRIDGE_ADDRESS,
   tokenBridgeLocked: true,
   sourceBridgeOwner: BSC_BRIDGE_ADDRESS,
+  verifierKeyHash: HASH_22,
   bridgeDestinationBindingHash: bindingHash(),
   bridgeVerifierAddress: BSC_VERIFIER_ADDRESS,
   bridgeVerifierCodeHash: HASH_11,
@@ -568,6 +569,7 @@ test("BSC deployment evidence accepts only matching live readback", () => {
     bindingHash(),
   );
   assert.equal(evidence.bscContractReadback.bridgeVerifierKeyHash, HASH_22);
+  assert.equal(evidence.bscContractReadback.verifierKeyHash, HASH_22);
   assert.doesNotMatch(
     JSON.stringify(evidence),
     /private[_-]?key|mnemonic|seed/iu,
@@ -610,6 +612,7 @@ test("BSC deployment readback rejects drift and incomplete contracts", () => {
     ],
     [readyReadback({ bridgeVerifierCodeHash: HASH_33 }), /verifier code hash/u],
     [readyReadback({ bridgeVerifierKeyHash: HASH_33 }), /verifier key hash/u],
+    [readyReadback({ verifierKeyHash: HASH_33 }), /deployed verifier key hash/u],
     [
       readyReadback({ bridgeNetworkId: `0x${"38".padStart(64, "0")}` }),
       /network id/u,
@@ -1290,6 +1293,37 @@ test("BSC native-prover-bundle rejects forged or incomplete artifact inputs", as
       }),
     /proof artifact must stay under artifact-root/u,
   );
+  const aliasFixture = await writeNativeProverFixtureFiles();
+  const aliasSmuggledRoute = JSON.parse(
+    await readFile(aliasFixture.routeManifestPath, "utf8"),
+  );
+  aliasSmuggledRoute.proofArtifactHash = aliasFixture.proofArtifactHash;
+  aliasSmuggledRoute.proof_artifact_hash = aliasFixture.proofArtifactHash;
+  await writeFile(
+    aliasFixture.routeManifestPath,
+    `${JSON.stringify(aliasSmuggledRoute, null, 2)}\n`,
+  );
+  await assert.rejects(
+    () => buildBscNativeEvmProverBundleFromArtifacts(aliasFixture.options),
+    /BSC route manifest proofArtifactHash must not use multiple aliases in BSC route manifest/u,
+  );
+  const verifierAliasFixture = await writeNativeProverFixtureFiles();
+  const verifierAliasSmuggledRoute = JSON.parse(
+    await readFile(verifierAliasFixture.routeManifestPath, "utf8"),
+  );
+  verifierAliasSmuggledRoute.verifierKeyHash =
+    verifierAliasFixture.verifierKeyHash;
+  verifierAliasSmuggledRoute.verifier_key_hash =
+    verifierAliasFixture.verifierKeyHash;
+  await writeFile(
+    verifierAliasFixture.routeManifestPath,
+    `${JSON.stringify(verifierAliasSmuggledRoute, null, 2)}\n`,
+  );
+  await assert.rejects(
+    () =>
+      buildBscNativeEvmProverBundleFromArtifacts(verifierAliasFixture.options),
+    /BSC route manifest verifierKeyHash must not use multiple aliases in BSC route manifest/u,
+  );
   await assert.rejects(
     () => {
       const { "dotnet-implementation": _drop, ...options } = fixture.options;
@@ -1356,6 +1390,23 @@ test("BSC native-prover-bundle rejects forged or incomplete artifact inputs", as
         arithmeticProofFixture.options,
       ),
     /proof artifact looks like placeholder proof material: arithmetic byte sequence with step 17/u,
+  );
+
+  const sparsePaddedProof = Buffer.alloc(96 * 1024, 0);
+  for (let index = 0; index < 128; index += 1) {
+    sparsePaddedProof[sparsePaddedProof.length - 128 + index] = index & 0xff;
+  }
+  const sparsePaddedProofFixture = await writeNativeProverFixtureFiles({
+    artifactByteOverrides: {
+      proofArtifact: sparsePaddedProof,
+    },
+  });
+  await assert.rejects(
+    () =>
+      buildBscNativeEvmProverBundleFromArtifacts(
+        sparsePaddedProofFixture.options,
+      ),
+    /proof artifact looks like placeholder proof material: byte 0x00 dominates/u,
   );
 
   const tinyImplementation = await writeNativeProverFixtureFiles({
@@ -1472,6 +1523,7 @@ test("BSC canonical production output guard rejects diagnostic or draft material
     readback: readyReadback({
       bridgeDestinationBindingHash: diagnosticBindingHash(),
       bridgeVerifierKeyHash: DIAGNOSTIC_BSC_VERIFIER_KEY_HASH,
+      verifierKeyHash: DIAGNOSTIC_BSC_VERIFIER_KEY_HASH,
     }),
   });
   assert.match(
@@ -1623,11 +1675,39 @@ test("BSC route-config rejects malformed or foreign route manifests", () => {
       /verifier address.*canonical lowercase hex/u,
     ],
     [{ bscBridgeAddress: BSC_TOKEN_ADDRESS }, /bridge address aliases disagree|distinct/u],
-    [{ tokenAddress: BSC_SOURCE_BRIDGE_ADDRESS }, /token address aliases disagree/u],
-    [{ bridgeAddress: BSC_SOURCE_BRIDGE_ADDRESS }, /bridge address aliases disagree/u],
+    [
+      { tokenAddress: BSC_SOURCE_BRIDGE_ADDRESS },
+      /BSC token address must not use multiple aliases in route manifest/u,
+    ],
+    [
+      { bscTokenAddress: BSC_TOKEN_ADDRESS, token_address: BSC_TOKEN_ADDRESS },
+      /BSC token address must not use multiple aliases in route manifest/u,
+    ],
+    [
+      { bridgeAddress: BSC_SOURCE_BRIDGE_ADDRESS },
+      /BSC bridge address must not use multiple aliases in route manifest/u,
+    ],
+    [
+      { bscBridgeAddress: BSC_BRIDGE_ADDRESS, bridge_address: BSC_BRIDGE_ADDRESS },
+      /BSC bridge address must not use multiple aliases in route manifest/u,
+    ],
     [
       { destinationRollout: { destinationBridgeAddress: BSC_SOURCE_BRIDGE_ADDRESS } },
       /bridge address aliases disagree/u,
+    ],
+    [
+      {
+        sccpBscSourceBridgeAddress: BSC_SOURCE_BRIDGE_ADDRESS,
+        source_bridge_address: BSC_SOURCE_BRIDGE_ADDRESS,
+      },
+      /BSC source bridge address must not use multiple aliases in route manifest/u,
+    ],
+    [
+      {
+        bscVerifierAddress: BSC_VERIFIER_ADDRESS,
+        verifier_address: BSC_VERIFIER_ADDRESS,
+      },
+      /BSC verifier address must not use multiple aliases in route manifest/u,
     ],
     [{ destinationRollout: { targetDomain: 1 } }, /SORA -> BSC/u],
     [
@@ -1639,6 +1719,14 @@ test("BSC route-config rejects malformed or foreign route manifests", () => {
     [{ verifierKeyHash: HASH_77 }, /verifierKeyHash aliases disagree/u],
     [{ destinationRollout: { verifierKeyHash: HASH_55.toUpperCase() } }, /verifierKeyHash.*canonical lowercase hex/u],
     [
+      { verifierCodeHash: HASH_11, verifier_code_hash: HASH_11 },
+      /verifierCodeHash must not use multiple aliases in route manifest/u,
+    ],
+    [
+      { verifierKeyHash: HASH_22, verifier_key_hash: HASH_22 },
+      /verifierKeyHash must not use multiple aliases in route manifest/u,
+    ],
+    [
       { destinationRollout: { destinationBindingHash: HASH_33 } },
       /binding hash/u,
     ],
@@ -1648,8 +1736,37 @@ test("BSC route-config rejects malformed or foreign route manifests", () => {
     ],
     [{ destinationBindingHash: HASH_77 }, /destination binding hash aliases disagree/u],
     [{ destinationBindingKey: "stale-binding-key" }, /destination binding key aliases disagree/u],
+    [
+      {
+        destinationBinding: {
+          bindingHash: bindingHash(),
+          binding_hash: bindingHash(),
+        },
+      },
+      /destinationBindingHash must not use multiple aliases in route manifest destinationBinding/u,
+    ],
     [{ proofArtifactHash: HASH_77 }, /proofArtifactHash aliases disagree/u],
     [{ provingKeyHash: HASH_77 }, /provingKeyHash aliases disagree/u],
+    [
+      { proofArtifactHash: HASH_44, proof_artifact_hash: HASH_44 },
+      /proofArtifactHash must not use multiple aliases in route manifest/u,
+    ],
+    [
+      {
+        destinationRollout: {
+          provingKeyHash: HASH_55,
+          proving_key_hash: HASH_55,
+        },
+      },
+      /provingKeyHash must not use multiple aliases in route manifest destinationRollout/u,
+    ],
+    [
+      {
+        nativeEvmProverBundleHash: HASH_66,
+        native_evm_prover_bundle_hash: HASH_66,
+      },
+      /nativeEvmProverBundleHash must not use multiple aliases in route manifest/u,
+    ],
     [
       { destinationRollout: { proofArtifactHash: undefined } },
       /supplied together/u,
@@ -1675,19 +1792,28 @@ test("BSC route-config rejects malformed or foreign route manifests", () => {
     ],
     [
       { sourceBridgeAddress: BSC_BRIDGE_ADDRESS },
-      /source bridge address aliases disagree/u,
+      /BSC source bridge address must not use multiple aliases in route manifest/u,
     ],
     [
       { destinationVerifierAddress: BSC_BRIDGE_ADDRESS },
-      /verifier address aliases disagree/u,
+      /BSC verifier address must not use multiple aliases in route manifest/u,
     ],
     [
       { postDeployLiveEvidence: { full_toml_ready: true } },
-      /fullTomlReady aliases disagree/u,
+      /fullTomlReady must not use multiple aliases in route manifest postDeployLiveEvidence/u,
     ],
     [
       { postDeployLiveEvidence: { source_bridge_config_hash: HASH_77 } },
-      /sourceBridgeConfigHash aliases disagree/u,
+      /sourceBridgeConfigHash must not use multiple aliases in route manifest postDeployLiveEvidence/u,
+    ],
+    [
+      {
+        postDeployLiveEvidence: {
+          routeCanaryExplorerUrl: ROUTE_CANARY_EXPLORER_URL,
+          route_canary_explorer_url: ROUTE_CANARY_EXPLORER_URL,
+        },
+      },
+      /routeCanaryExplorerUrl must not use multiple aliases in route manifest postDeployLiveEvidence/u,
     ],
     [
       { postDeployLiveEvidence: { sourceEventTransactionId: ` ${HASH_55}` } },

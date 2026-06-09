@@ -152,6 +152,10 @@ __all__ = [
     "verify_sm2",
     "derive_confidential_keyset",
     "derive_confidential_keyset_from_hex",
+    "build_confidential_transfer_proof_v2",
+    "buildConfidentialTransferProofV2",
+    "build_confidential_unshield_proof_v3",
+    "buildConfidentialUnshieldProofV3",
     "build_zk_ace_authorization_proof_v1",
     "zk_ace_build_transfer_authorization_v1",
     "privacy_bridge_abi_version",
@@ -968,6 +972,138 @@ def _normalize_positive_u128_literal(value: int | str, name: str) -> str:
     return str(amount)
 
 
+def _normalize_u128_literal(value: int | str, name: str) -> str:
+    if isinstance(value, bool):
+        raise ValueError(f"{name} must be a whole-number u128 string")
+    if isinstance(value, int):
+        amount = value
+    elif isinstance(value, str):
+        normalized = value.strip()
+        if not normalized.isdecimal():
+            raise ValueError(f"{name} must be a whole-number u128 string")
+        amount = int(normalized, 10)
+    else:
+        raise TypeError(f"{name} must be a whole-number u128 string")
+    if amount < 0 or amount > _U128_MAX:
+        raise ValueError(f"{name} must be a whole-number u128 string")
+    return str(amount)
+
+
+def _confidential_verifying_key_parts(
+    verifying_key: Mapping[str, Any],
+    context: str,
+) -> tuple[str, str, Any]:
+    if not isinstance(verifying_key, Mapping):
+        raise TypeError(f"{context} must be a mapping")
+    backend = (
+        verifying_key.get("backend")
+        or verifying_key.get("vk_backend")
+        or verifying_key.get("vkBackend")
+    )
+    circuit_id = (
+        verifying_key.get("circuit_id")
+        or verifying_key.get("circuitId")
+        or verifying_key.get("vk_circuit_id")
+        or verifying_key.get("vkCircuitId")
+    )
+    vk_bytes = (
+        verifying_key.get("bytes")
+        or verifying_key.get("vk_bytes")
+        or verifying_key.get("vkBytes")
+    )
+    if not isinstance(backend, str) or not backend.strip():
+        raise ValueError(f"{context}.backend must be a non-empty string")
+    if not isinstance(circuit_id, str) or not circuit_id.strip():
+        raise ValueError(f"{context}.circuit_id must be a non-empty string")
+    if vk_bytes is None:
+        raise ValueError(f"{context}.bytes is required")
+    return backend.strip(), circuit_id.strip(), vk_bytes
+
+
+def _confidential_native_result(result: Any, context: str) -> Dict[str, Any]:
+    if not isinstance(result, dict):
+        raise RuntimeError(f"{context} returned a non-object payload")
+    return result
+
+
+def build_confidential_transfer_proof_v2(
+    *,
+    chain_id: str,
+    asset_definition_id: str,
+    spend_key: bytes | bytearray | memoryview | str,
+    tree_commitments: Iterable[bytes | bytearray | memoryview | str],
+    inputs: Iterable[Mapping[str, Any]],
+    outputs: Iterable[Mapping[str, Any]],
+    root_hint: bytes | bytearray | memoryview | str,
+    verifying_key: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """Build a confidential transfer v2 proof envelope with the native Halo2 prover."""
+
+    if not hasattr(_crypto, "build_confidential_transfer_proof_v2"):
+        raise RuntimeError(
+            "iroha_python._crypto is missing confidential transfer v2 prover support; rebuild the extension"
+        )
+    vk_backend, vk_circuit_id, vk_bytes = _confidential_verifying_key_parts(
+        verifying_key,
+        "verifying_key",
+    )
+    result = _crypto.build_confidential_transfer_proof_v2(
+        str(chain_id),
+        str(asset_definition_id),
+        spend_key,
+        list(tree_commitments),
+        list(inputs),
+        list(outputs),
+        root_hint,
+        vk_backend,
+        vk_circuit_id,
+        vk_bytes,
+    )
+    return _confidential_native_result(result, "confidential transfer v2 prover")
+
+
+def build_confidential_unshield_proof_v3(
+    *,
+    chain_id: str,
+    asset_definition_id: str,
+    spend_key: bytes | bytearray | memoryview | str,
+    tree_commitments: Iterable[bytes | bytearray | memoryview | str],
+    inputs: Iterable[Mapping[str, Any]],
+    outputs: Iterable[Mapping[str, Any]],
+    public_amount: int | str,
+    root_hint: bytes | bytearray | memoryview | str,
+    verifying_key: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """Build a confidential unshield v3 proof envelope with optional private change."""
+
+    if not hasattr(_crypto, "build_confidential_unshield_proof_v3"):
+        raise RuntimeError(
+            "iroha_python._crypto is missing confidential unshield v3 prover support; rebuild the extension"
+        )
+    vk_backend, vk_circuit_id, vk_bytes = _confidential_verifying_key_parts(
+        verifying_key,
+        "verifying_key",
+    )
+    result = _crypto.build_confidential_unshield_proof_v3(
+        str(chain_id),
+        str(asset_definition_id),
+        spend_key,
+        list(tree_commitments),
+        list(inputs),
+        list(outputs),
+        _normalize_u128_literal(public_amount, "public_amount"),
+        root_hint,
+        vk_backend,
+        vk_circuit_id,
+        vk_bytes,
+    )
+    return _confidential_native_result(result, "confidential unshield v3 prover")
+
+
+buildConfidentialTransferProofV2 = build_confidential_transfer_proof_v2
+buildConfidentialUnshieldProofV3 = build_confidential_unshield_proof_v3
+
+
 def zk_ace_build_transfer_authorization_v1(
     *,
     from_account_id: str,
@@ -1088,6 +1224,25 @@ def _privacy_output_archive(operation: str, result: object) -> bytes:
         expected_schema_byte=_privacy_expected_result_schema_byte(operation),
     )
     return archive
+
+
+def _clear_privacy_native_output(result: object) -> None:
+    if result is None or isinstance(result, str):
+        return
+    try:
+        view = _privacy_unsigned_byte_view(
+            result,
+            bytes_like_message="native privacy output must be bytes-like",
+            typed_message="native privacy output must use unsigned byte elements",
+        )
+    except TypeError:
+        return
+    if view.readonly or view.nbytes == 0:
+        return
+    try:
+        view[:] = b"\x00" * view.nbytes
+    except (TypeError, ValueError, BufferError):
+        return
 
 
 def _privacy_crc64_table() -> tuple[int, ...]:
@@ -1278,6 +1433,7 @@ def _privacy_native_probe_returns_bytes(
     if not callable(method):
         return False
     request = bytearray(request_archive) if request_archive is not None else None
+    result: object | None = None
     try:
         if request is None:
             result = method()
@@ -1288,6 +1444,7 @@ def _privacy_native_probe_returns_bytes(
     except Exception:
         return False
     finally:
+        _clear_privacy_native_output(result)
         if request is not None:
             _clear_privacy_request_archive(request)
 
