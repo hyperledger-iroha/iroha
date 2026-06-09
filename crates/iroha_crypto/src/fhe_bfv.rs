@@ -1800,6 +1800,8 @@ pub struct BfvFullBootstrapProofPublicInputSchemaV1 {
     pub binds_execution_witness_trace_bounds: bool,
     /// Digest of the native arithmetic trace profile this schema targets.
     pub arithmetic_trace_profile_digest: Hash,
+    /// Whether release prover input must bind the caller-supplied verifier key.
+    pub binds_release_prover_verifier_key: bool,
     /// Number of hash public inputs expected by the proof backend.
     pub public_input_hash_count: u16,
     /// Byte length of each hash public input.
@@ -7137,6 +7139,7 @@ pub fn bfv_full_bootstrap_proof_public_input_schema_v1() -> BfvFullBootstrapProo
         binds_execution_witness_trace_bounds: true,
         arithmetic_trace_profile_digest:
             canonical_bfv_full_bootstrap_arithmetic_trace_profile_digest_v1(),
+        binds_release_prover_verifier_key: true,
         public_input_hash_count: BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUT_HASH_COUNT_V1,
         public_input_hash_bytes: BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUT_HASH_BYTES_V1,
         supports_exact_residual_multiple: true,
@@ -7161,6 +7164,12 @@ pub fn validate_bfv_full_bootstrap_proof_public_input_schema_v1(
         "BFV full-bootstrap proof public-input schema arithmetic trace profile digest",
         &schema.arithmetic_trace_profile_digest,
     )?;
+    if !schema.binds_release_prover_verifier_key {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap proof public-input schema must bind release prover verifier key"
+                .to_owned(),
+        ));
+    }
     validate_bfv_full_bootstrap_proof_public_input_schema_hash_shape_v1(schema)?;
     validate_bfv_full_bootstrap_proof_public_input_schema_capabilities_v1(schema)
 }
@@ -24526,6 +24535,10 @@ mod tests {
         let params = ram_lfe_bfv_parameters_v1();
         let schema = bfv_full_bootstrap_proof_public_input_schema_v1();
         assert_eq!(schema.arithmetic_trace_profile_digest, profile_digest);
+        assert!(
+            schema.binds_release_prover_verifier_key,
+            "proof schema must advertise release-prover verifier-key binding"
+        );
         let mut stale_schema = schema.clone();
         stale_schema.arithmetic_trace_profile_digest =
             Hash::new(b"stale-full-bootstrap-arithmetic-trace-profile-schema");
@@ -24748,6 +24761,28 @@ mod tests {
             "arithmetic trace profile",
             "proof public-input schemas must pin the arithmetic trace profile",
         );
+        let mut wrong_public_input_hash_count = schema.clone();
+        wrong_public_input_hash_count.public_input_hash_count = wrong_public_input_hash_count
+            .public_input_hash_count
+            .saturating_add(1);
+        assert_error_contains(
+            validate_bfv_full_bootstrap_proof_public_input_schema_v1(
+                &wrong_public_input_hash_count,
+            ),
+            "hash count",
+            "proof public-input schemas must pin the public-input hash count",
+        );
+        let mut wrong_public_input_hash_bytes = schema.clone();
+        wrong_public_input_hash_bytes.public_input_hash_bytes = wrong_public_input_hash_bytes
+            .public_input_hash_bytes
+            .saturating_add(1);
+        assert_error_contains(
+            validate_bfv_full_bootstrap_proof_public_input_schema_v1(
+                &wrong_public_input_hash_bytes,
+            ),
+            "hash byte length",
+            "proof public-input schemas must pin the public-input hash byte length",
+        );
 
         expect_schema_flag_rejection!(
             binds_parameters,
@@ -24818,6 +24853,11 @@ mod tests {
             binds_execution_witness_trace_bounds,
             "execution witness trace bounds",
             "proof public-input schemas must bind execution witness trace bounds"
+        );
+        expect_schema_flag_rejection!(
+            binds_release_prover_verifier_key,
+            "release prover verifier key",
+            "proof public-input schemas must bind release-prover verifier keys"
         );
         expect_schema_flag_rejection!(
             supports_exact_residual_multiple,
@@ -25216,7 +25256,7 @@ mod tests {
         let schema_digest = Hash::new(&schema_artifact);
         assert_eq!(
             schema_digest.to_string(),
-            "5051389a4afd938fb4cd0455901b1168598fe9fd60f639999d6894b372d1e055",
+            "c8d49e6649d0f8513b207d237a26c130215b8f8ed59c553837dd11760ec2121b",
             "canonical proof public-input schema artifact digest drifted"
         );
         let (canonical_prover_key, _) =
@@ -25269,7 +25309,7 @@ mod tests {
             .expect("derive canonical prover-key material commitment");
         assert_eq!(
             prover_commitment.to_string(),
-            "84c6eac40d68aa47fd37bae64e6fd4763e23f7cb49d25efb7aa844d3a7dc0265",
+            "d4291c0935b25063f4e25b90c50df891803646f13d1d584e1cff90c68e9b6cad",
             "canonical prover-key material commitment drifted"
         );
     }
@@ -27301,6 +27341,19 @@ mod tests {
             "prover input material must reject stale prover proof-key commitments",
         );
 
+        let mut stale_verifier_key_input = prover_input_material.clone();
+        stale_verifier_key_input
+            .verifier_key
+            .key_material_commitment =
+            Hash::new(b"stale BFV full-bootstrap verifier key material commitment");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_prover_input_material_v1(
+                &stale_verifier_key_input,
+            ),
+            "material commitment",
+            "prover input material must reject stale verifier proof-key commitments",
+        );
+
         let mut stale_pair_commitment_input = prover_input_material.clone();
         stale_pair_commitment_input
             .verifier_key
@@ -27322,6 +27375,14 @@ mod tests {
             "trace material must reject stale layout versions",
         );
 
+        let mut stale_trace_field_count = trace_material.clone();
+        stale_trace_field_count.field_count += 1;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_arithmetic_trace_material_v1(&stale_trace_field_count),
+            "field count",
+            "trace material must reject stale layout field counts",
+        );
+
         let mut stale_trace_profile = trace_material.clone();
         stale_trace_profile.arithmetic_trace_profile_digest =
             Hash::new(b"stale row-major arithmetic trace profile digest");
@@ -27337,6 +27398,38 @@ mod tests {
             validate_bfv_full_bootstrap_arithmetic_trace_material_v1(&stale_trace_width),
             "row width",
             "trace material must reject stale row widths",
+        );
+
+        let mut stale_trace_active_row_count = trace_material.clone();
+        stale_trace_active_row_count.active_row_count += 1;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_arithmetic_trace_material_v1(&stale_trace_active_row_count),
+            "active row count",
+            "trace material must reject stale active-row counts",
+        );
+
+        let mut stale_trace_padded_row_count = trace_material.clone();
+        stale_trace_padded_row_count.padded_row_count += 1;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_arithmetic_trace_material_v1(&stale_trace_padded_row_count),
+            "padded row count",
+            "trace material must reject stale padded-row counts",
+        );
+
+        let mut truncated_trace_rows = trace_material.clone();
+        truncated_trace_rows.rows.pop();
+        assert_error_contains(
+            validate_bfv_full_bootstrap_arithmetic_trace_material_v1(&truncated_trace_rows),
+            "row count",
+            "trace material must reject truncated row vectors",
+        );
+
+        let mut truncated_trace_row = trace_material.clone();
+        truncated_trace_row.rows[0].pop();
+        assert_error_contains(
+            validate_bfv_full_bootstrap_arithmetic_trace_material_v1(&truncated_trace_row),
+            "row 0 width",
+            "trace material must reject truncated rows",
         );
 
         let mut non_field_trace_value = trace_material.clone();

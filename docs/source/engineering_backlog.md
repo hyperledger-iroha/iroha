@@ -586,7 +586,10 @@ redistributable schemas, and official trust/revocation bundles.
   input, canonical row-major arithmetic trace material/digest, and governed
   generated prover/verifier proof-key pair before the dedicated prover boundary.
   Crypto and Core reject stale trace digests, stale trace rows, and unrelated
-  proof-key material or pair commitments before proof generation is attempted.
+  proof-key material or pair commitments before proof generation is attempted,
+  and the direct typed Core prover-input path now requires the caller-supplied
+  verifier key to match the verifier proof key embedded in the release prover
+  package.
   Core material and execution proof helpers now derive and validate typed input
   material before crossing the current fail-closed dedicated-prover boundary.
   The typed execution proof helper also derives and validates the canonical
@@ -631,11 +634,14 @@ redistributable schemas, and official trust/revocation bundles.
 	  BFV-shaped native AIR envelopes now also preflight the canonical
 	  transcript label, statement-bound domain tag, STARK/FRI parameters, public
 	  digest binding, proof/commitment version tags, commitment/root shape,
-	  opened row/path shape, Merkle path-to-root binding, FRI query-chain
-	  Merkle/fold validation, optional final-layer composition-value root/value
-	  authentication, opened public padding-row semantics, and the
-	  no-unmasked-private-row policy before Core reports the current dedicated
-	  verifier boundary.
+		  opened row/path shape, Merkle path-to-root binding, FRI query-chain
+		  Merkle/fold validation, optional final-layer composition-value root/value
+		  authentication, AIR-to-FRI base value binding, opened public padding-row
+		  semantics, and the
+		  no-unmasked-private-row policy before Core reports the current dedicated
+		  verifier boundary; non-generic full-bootstrap native envelopes with
+		  missing or foreign AIR sections now fail before that unavailable-verifier
+		  boundary.
 	  Remaining production work is the audited full-bootstrap arithmetic
 	  proof-producing backend plus release-grade prover/verifier artifacts, not the
 	  Core verifier gate, arithmetic trace-profile digest binding,
@@ -643,9 +649,9 @@ redistributable schemas, and official trust/revocation bundles.
 	  helper and constructor verifier-key/statement-hash preflights, material runtime verifier-key
   payload preflight, canonical native proof-key circuit enforcement, governed
   material derivation from release artifacts, artifact-bound public typed
-  material prover input validation, public typed execution prover input and
-  proof-key-bound prover package validation, canonical row-major arithmetic
-  trace material/digest validation, native BFV AIR metadata/privacy-boundary
+  material prover input validation, public typed execution prover input,
+  proof-key-bound prover package validation, caller verifier-key binding,
+  canonical row-major arithmetic trace material/digest validation, native BFV AIR metadata/privacy-boundary
   preflight, public typed execution witness material reconstruction,
   validation, hashing, self-describing material and execution statement
   material, or statement-recomputation policy path.

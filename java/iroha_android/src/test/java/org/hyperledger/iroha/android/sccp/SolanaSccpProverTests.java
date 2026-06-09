@@ -83,7 +83,8 @@ public final class SolanaSccpProverTests {
 
   @Test
   public void normalizesWitnessAndBuildsDeterministicRequest() {
-    final SolanaSccpProver.WitnessInput input = sampleWitnessInput();
+    final SolanaSccpProver.WitnessInput input =
+        sampleWitnessInput(repeat("cc", 32), new byte[0][], repeat("ab", 32), repeat("cd", 32));
     final SolanaSccpProver.Witness witness = SolanaSccpProver.normalizeWitness(input);
 
     assertEquals(SolanaSccpProver.DOMAIN_SOLANA, witness.sourceDomain());
@@ -113,9 +114,9 @@ public final class SolanaSccpProverTests {
     assertEquals("0x" + repeat("cc", 32), first.publicInputs().messageProofHash());
     assertEquals("0x" + repeat("56", 32), first.publicInputs().statementHash());
     assertEquals("0x" + repeat("78", 32), first.publicInputs().destinationBindingHash());
-    assertEquals(SolanaSccpProver.ZERO_HASH_V1, first.publicInputs().sourceAdapterDeploymentHash());
+    assertEquals("0x" + repeat("ab", 32), first.publicInputs().sourceAdapterDeploymentHash());
     assertEquals(
-        SolanaSccpProver.ZERO_HASH_V1,
+        "0x" + repeat("cd", 32),
         first.publicInputs().sourceAdapterDeploymentReceiptHash());
     assertEquals(
         SolanaSccpProver.MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1,
@@ -160,8 +161,8 @@ public final class SolanaSccpProverTests {
             repeat("56", 32),
             repeat("78", 32),
             new byte[0][],
-            SolanaSccpProver.ZERO_HASH_V1,
-            SolanaSccpProver.ZERO_HASH_V1);
+            repeat("ab", 32),
+            repeat("cd", 32));
     assertNotEquals(
         first.witnessHash(), SolanaSccpProver.buildProofRequest(changedDigest).witnessHash());
   }
@@ -4007,7 +4008,7 @@ public final class SolanaSccpProverTests {
     final IllegalStateException ex =
         assertThrows(
             IllegalStateException.class,
-            () -> new SolanaSccpProver().prove(sampleWitnessInput()));
+            () -> new SolanaSccpProver().prove(sampleProductionWitnessInput()));
     assertTrue(ex.getMessage().contains("not linked"));
   }
 
@@ -4144,6 +4145,21 @@ public final class SolanaSccpProverTests {
 
   @Test
   public void bindsSourceAdapterDeploymentContextForUiProvers() {
+    final SolanaSccpProver.SourceAdapterDeploymentBinding zeroBinding =
+        SolanaSccpProver.normalizeSourceAdapterDeploymentBinding(
+            SolanaSccpProver.ZERO_HASH_V1, SolanaSccpProver.ZERO_HASH_V1);
+    assertEquals(SolanaSccpProver.ZERO_HASH_V1, zeroBinding.sourceAdapterDeploymentHash());
+    assertEquals(
+        SolanaSccpProver.ZERO_HASH_V1, zeroBinding.sourceAdapterDeploymentReceiptHash());
+    final IllegalArgumentException zeroRequest =
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> SolanaSccpProver.buildProofRequest(sampleWitnessInput()));
+    assertTrue(
+        zeroRequest
+            .getMessage()
+            .contains("requires non-zero source adapter deployment binding"));
+
     final SolanaSccpProver.ProofRequest request =
         SolanaSccpProver.buildProofRequest(
             sampleWitnessInput(repeat("cc", 32), new byte[0][], repeat("ab", 32), repeat("cd", 32)));
@@ -4703,7 +4719,12 @@ public final class SolanaSccpProverTests {
                         ignored -> {
                           throw new AssertionError("local prover should not be invoked");
                         })
-                    .prove(sampleWitnessInput()));
+                    .prove(
+                        sampleWitnessInput(
+                            repeat("cc", 32),
+                            new byte[0][],
+                            repeat("ab", 32),
+                            repeat("cd", 32))));
     assertTrue(missingProductionBinding.getMessage().contains("sourceStateVerifierHash"));
     final IllegalArgumentException templateProductionBinding =
         assertThrows(

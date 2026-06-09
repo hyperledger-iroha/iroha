@@ -196,7 +196,12 @@ class SolanaSccpProverTest {
 
     @Test
     fun buildsSolanaSccpProofRequest() {
-        val request = SccpSolana.buildProofRequest(sampleWitness())
+        val request = SccpSolana.buildProofRequest(
+            sampleWitness(
+                sourceAdapterDeploymentHash = "ab".repeat(32),
+                sourceAdapterDeploymentReceiptHash = "cd".repeat(32),
+            ),
+        )
 
         assertEquals(1, request.version)
         assertEquals(SccpSolana.RECURSIVE_PROOF_BACKEND_V1, request.backend)
@@ -204,7 +209,11 @@ class SolanaSccpProverTest {
         assertEquals(SccpSolana.DOMAIN_SORA, request.targetDomain)
         assertTrue(request.witness.blockhash.matches(Regex("0x[0-9a-f]{64}")))
         val canonicalBlockhashRequest = SccpSolana.buildProofRequest(
-            sampleWitness(blockhash = request.witness.blockhash),
+            sampleWitness(
+                blockhash = request.witness.blockhash,
+                sourceAdapterDeploymentHash = "ab".repeat(32),
+                sourceAdapterDeploymentReceiptHash = "cd".repeat(32),
+            ),
         )
         assertEquals(request.witnessHash, canonicalBlockhashRequest.witnessHash)
         assertContentEquals(
@@ -217,9 +226,9 @@ class SolanaSccpProverTest {
         assertEquals("0x" + "cc".repeat(32), request.publicInputs.messageProofHash)
         assertEquals("0x" + "56".repeat(32), request.publicInputs.statementHash)
         assertEquals("0x" + "78".repeat(32), request.publicInputs.destinationBindingHash)
-        assertEquals(SccpSolana.ZERO_HASH_V1, request.publicInputs.sourceAdapterDeploymentHash)
+        assertEquals("0x" + "ab".repeat(32), request.publicInputs.sourceAdapterDeploymentHash)
         assertEquals(
-            SccpSolana.ZERO_HASH_V1,
+            "0x" + "cd".repeat(32),
             request.publicInputs.sourceAdapterDeploymentReceiptHash,
         )
         assertEquals(SccpSolana.MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1, request.sourceStateVerifierId)
@@ -3452,7 +3461,7 @@ class SolanaSccpProverTest {
     @Test
     fun proverRequiresLinkedProofEngine() {
         val error = assertFailsWith<IllegalStateException> {
-            SolanaSccpProver().prove(sampleWitness())
+            SolanaSccpProver().prove(sampleProductionWitness())
         }
         assertTrue(error.message?.contains("not linked") == true)
     }
@@ -3518,6 +3527,13 @@ class SolanaSccpProverTest {
     fun bindsSourceAdapterDeploymentContextForUiProvers() {
         val deploymentHash = "ab".repeat(32)
         val receiptHash = "cd".repeat(32)
+        val zeroBinding = SccpSolana.normalizeSourceAdapterDeploymentBinding()
+        assertEquals(SccpSolana.ZERO_HASH_V1, zeroBinding.sourceAdapterDeploymentHash)
+        assertEquals(SccpSolana.ZERO_HASH_V1, zeroBinding.sourceAdapterDeploymentReceiptHash)
+        val zeroRequest = assertFailsWith<IllegalArgumentException> {
+            SccpSolana.buildProofRequest(sampleWitness())
+        }
+        assertTrue(zeroRequest.message?.contains("requires non-zero source adapter deployment binding") == true)
         val request = SccpSolana.buildProofRequest(
             sampleWitness(
                 sourceAdapterDeploymentHash = deploymentHash,
@@ -4042,7 +4058,12 @@ class SolanaSccpProverTest {
                 proofEngine = SolanaSccpProofEngine {
                     error("local prover should not be invoked")
                 },
-            ).prove(sampleWitness())
+            ).prove(
+                sampleWitness(
+                    sourceAdapterDeploymentHash = "ab".repeat(32),
+                    sourceAdapterDeploymentReceiptHash = "cd".repeat(32),
+                ),
+            )
         }
         assertTrue(missingProductionBinding.message?.contains("sourceStateVerifierHash") == true)
         val templateProductionBinding = assertFailsWith<IllegalArgumentException> {

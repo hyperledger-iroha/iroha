@@ -2,6 +2,7 @@ package org.hyperledger.iroha.sdk.offline
 
 import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.InstructionBox
+import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.norito.SchemaHash
@@ -62,7 +63,7 @@ object KagemushaInstructionArchives {
         executable = Executable.instructions(listOf(instructionBox(instructionType, instructionArchive))),
         timeToLiveMs = timeToLiveMs,
         nonce = nonce,
-        metadata = metadata,
+        metadata = metadata.mapValues { JsonValue.string(it.value) },
     )
 
     @JvmStatic

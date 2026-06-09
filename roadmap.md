@@ -45,6 +45,11 @@ and completed history lives in [`status.md`](./status.md).
   and destination chain ids in readiness summaries are decimal-only (`1` for
   Ethereum mainnet, `56` for BSC mainnet), so JSON-RPC quantity spellings such
   as `0x1` and padded values such as `01` remain evidence blockers.
+- SCCP Solana UI prover requests must stay deployment-bound: JavaScript,
+  Python, Swift, Kotlin, and Java Android request builders reject zero/zero
+  source-adapter deployment bindings, while the low-level binding normalizers
+  keep zero/zero available only for diagnostic fixtures and canonical hashing
+  checks.
 - SCCP BSC TAIRA XOR route-config generation must reject contradictory
   post-deploy readiness: production-ready route manifests cannot carry non-empty
   `postDeployLiveEvidence` production blocker arrays, and malformed blocker
@@ -3403,6 +3408,7 @@ and completed history lives in [`status.md`](./status.md).
 	  RBC DELIVER pending-branch missing-commit-evidence matching,
 	  RBC DELIVER pending-step commit-artifact preservation,
 	  RBC DELIVER pending-step delivered-evidence/no-finality handoff,
+	  RBC DELIVER pending-step complete wait-state entry,
 	  RBC DELIVER commit-evidence branch handoff,
 	  RBC delivered-pending commit-evidence wait-state handoff,
 	  RBC delivered-pending commit-vote preservation handoff,
@@ -3444,6 +3450,8 @@ and completed history lives in [`status.md`](./status.md).
 	  RBC delivered-pending spec-step stable-artifact timer footprint,
 	  RBC delivered-pending spec-step stable-artifact view/evidence footprint,
 	  RBC delivered-pending spec-step stable-artifact finality footprint,
+	  RBC delivered-pending spec-step stable-artifact RBC surface,
+	  RBC delivered-pending spec-step stable-artifact complete wait state,
 	  Byzantine fault corruptible-RBC gate matching,
 	  Byzantine fault digest-only corruption step,
 	  RBC INIT gate repairable-state matching,
@@ -7607,10 +7615,14 @@ fixtures behind explicit diagnostic `allow_unready` paths. Proof-byte job
 builders also require the bundle-derived counterparty domain, manifest
 counterparty domain, and supplied job counterparty domain to match even in
 diagnostic mode, so callers cannot combine another lane's manifest with
-otherwise valid proof bytes. Rust EVM/TRON Groth16 proof-request builders now
-reject non-canonical bundle bytes, bundle/public-input mismatches, and omitted
-source-proof witness bytes for non-SORA source bundles before local UI proving
-or wrapped proof-result submission. The Rust TON native-recursive
+otherwise valid proof bytes. Reusable transparent-statement, FastPQ proof-byte,
+and submission-package builders now apply the same bundle-to-manifest
+counterparty binding before deriving statements or relay envelopes, so inbound
+SORA-target messages cannot be packaged under another remote lane's manifest.
+Rust EVM/TRON Groth16 proof-request builders now reject non-canonical bundle
+bytes, bundle/public-input mismatches, and omitted source-proof witness bytes
+for non-SORA source bundles before local UI proving or wrapped proof-result
+submission. The Rust TON native-recursive
 proof-request builder and proof-result wrapper now apply the same canonical
 SCCP bundle/public-input/source-proof gate before local proof generation or
 wallet/liteserver packaging, and the JavaScript, Python, Swift, Kotlin/JVM, and
@@ -7622,6 +7634,10 @@ transparent-proof verification now reject source verifier material and
 source-adapter deployment context before deriving public inputs, so external
 source-adapter evidence cannot be spliced into Nexus-finality-backed outbound
 bundles.
+Material-only source-verifier evidence now has to keep both deployment fields
+zero under the material-only verifier; deployment-looking hashes are accepted
+only on the deployment-bound path that recomputes the configured
+source-adapter deployment hash and receipt hash.
 Transparent OpenVerify summary helpers now apply the same production-shaped
 wrapper policy before reporting proof metadata, so metadata-only or aux-bearing
 envelopes cannot be normalized into release/readiness summaries. The
@@ -9201,7 +9217,9 @@ or ABI behavior.
 								  governed generated prover/verifier proof-key pair before the dedicated
 								  prover boundary. Crypto and Core reject stale trace digests, stale trace
 								  rows, and unrelated proof-key material or pair commitments before proof
-								  generation is attempted.
+								  generation is attempted, and the direct typed Core prover-input path now
+								  requires the caller-supplied verifier key to match the verifier proof key
+								  embedded in the release prover package.
 								  Core material and execution proof helpers now derive and validate typed
 								  material before crossing the fail-closed dedicated-prover boundary. The
 								  typed execution proof helper also derives and validates the canonical
@@ -9233,12 +9251,16 @@ or ABI behavior.
 									  public-key drift before hashing or proof-helper execution.
 									  BFV-shaped native AIR envelopes now preflight the canonical
 									  transcript label, statement-bound domain tag, STARK/FRI metadata,
-									  public digest binding, proof/commitment version tags,
-									  commitment/root shape, opened row/path shape, Merkle path-to-root
-									  binding, FRI query-chain Merkle/fold validation, optional
-									  composition-value final-layer root/value authentication, opened public
-									  padding-row semantics, and the no-unmasked-private-row-opening policy
-									  before the current dedicated verifier boundary is reported.
+										  public digest binding, proof/commitment version tags,
+										  commitment/root shape, opened row/path shape, Merkle path-to-root
+										  binding, FRI query-chain Merkle/fold validation, optional
+										  composition-value final-layer root/value authentication, AIR-to-FRI
+										  base value binding, execution public-padding context, opened public
+										  padding-row semantics, and the no-unmasked-private-row-opening policy
+										  before the current dedicated verifier boundary is reported;
+										  non-generic full-bootstrap native envelopes with missing, foreign, or
+										  contextless BFV AIR sections now fail before that unavailable-verifier
+										  boundary.
 								  Refresh-only proof and execution paths still reject `FullBootstrapV1`.
 										  Remaining work is the audited full-bootstrap arithmetic witness
 									  constraint/proof-producing backend plus release-grade generated
@@ -9252,8 +9274,8 @@ or ABI behavior.
 									  material runtime verifier-key payload preflight, canonical native
 									  proof-key circuit enforcement, governed material derivation from
 									  release artifacts, artifact-bound material prover input validation,
-									  typed execution prover input and proof-key-bound prover package
-									  validation, canonical row-major arithmetic trace material/digest
+									  typed execution prover input, proof-key-bound prover package
+									  validation, caller verifier-key binding, canonical row-major arithmetic trace material/digest
 									  validation, native BFV AIR metadata/privacy-boundary preflight,
 									  typed execution witness material reconstruction,
 									  validation, and hashing, self-describing material and execution
@@ -9940,7 +9962,11 @@ fixture corridor into broader release validation.
   exact commit-vote source; any delivered-pending commit-certificate artifact
   delta must install the certified committed-delivery bundle with delivered
   RBC evidence, finality-stack witnesses, exact commit evidence, and closed
-  progress gates; that certified bundle must be attributed to the exact honest
+  progress gates; non-final RBC DELIVER entries from `ReadyQuorum` must install
+  the complete delivered-pending wait-state envelope immediately, preserving
+  delivered evidence, keeping commit artifacts and finality certificates absent,
+  and exposing only the consensus/GST timeout surface with RBC/fault gates
+  closed; that certified bundle must be attributed to the exact honest
   or Byzantine commit-vote source with the source-specific `CanCommit` witness
   and vote/stake deltas; delivered-pending spec steps that do not change commit
   artifacts must remain non-final handoff states with delivered RBC evidence,
@@ -9965,7 +9991,14 @@ fixture corridor into broader release validation.
   branches as view/evidence preserving; stable-artifact delivered-pending
   finality footprints must keep post-states outside `Committed`, without commit
   certificate artifacts, finality-certificate stacks, or live commit gates, while
-  preserving finality/certificate/gate matching invariants; nonzero
+  preserving finality/certificate/gate matching invariants; stable-artifact
+  delivered-pending RBC surfaces must preserve delivered RBC evidence exactly
+  and keep RBC INIT/CHUNK/READY/DELIVER plus Byzantine-fault gates closed;
+  stable-artifact delivered-pending complete wait states must compose the source,
+  counter, phase/gate, timer, view/evidence, finality, and RBC-surface
+  obligations into one non-final envelope with commit artifacts absent and only
+  consensus/GST/stutter actions exposed;
+  nonzero
   CHUNK/READY counters
   must retain digest validity unless they are in the explicit corrupted repair
   state, while invalid digests must remain confined to idle or corrupted repair

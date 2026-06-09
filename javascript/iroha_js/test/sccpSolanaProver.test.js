@@ -2231,9 +2231,19 @@ test("normalizes Solana SCCP witness input for local proof requests", () => {
     ),
   );
   assert.equal(
-    buildSolanaSccpProofRequest(sampleWitness()).witnessHash,
-    buildSolanaSccpProofRequest(sampleWitness({ blockhash: witness.blockhash }))
-      .witnessHash,
+    buildSolanaSccpProofRequest(
+      sampleWitness({
+        sourceAdapterDeploymentHash: HEX32_A,
+        sourceAdapterDeploymentReceiptHash: HEX32_B,
+      }),
+    ).witnessHash,
+    buildSolanaSccpProofRequest(
+      sampleWitness({
+        blockhash: witness.blockhash,
+        sourceAdapterDeploymentHash: HEX32_A,
+        sourceAdapterDeploymentReceiptHash: HEX32_B,
+      }),
+    ).witnessHash,
   );
   assert.equal(
     witness.accountsLtHashProofPublicInputsHash,
@@ -7333,7 +7343,12 @@ test("builds EVM-family and TRON Groth16 contract-call submissions", () => {
 });
 
 test("builds deterministic Solana SCCP proof requests", () => {
-  const request = buildSolanaSccpProofRequest(sampleWitness());
+  const request = buildSolanaSccpProofRequest(
+    sampleWitness({
+      sourceAdapterDeploymentHash: HEX32_A,
+      sourceAdapterDeploymentReceiptHash: HEX32_B,
+    }),
+  );
 
   assert.equal(Object.isFrozen(request), true);
   assert.equal(Object.isFrozen(request.publicInputs), true);
@@ -7367,11 +7382,11 @@ test("builds deterministic Solana SCCP proof requests", () => {
   assert.equal(request.publicInputs.sourceStateVerifierHash, SCCP_ZERO_HASH_V1);
   assert.equal(
     request.publicInputs.sourceAdapterDeploymentHash,
-    SCCP_ZERO_HASH_V1,
+    HEX32_A,
   );
   assert.equal(
     request.publicInputs.sourceAdapterDeploymentReceiptHash,
-    SCCP_ZERO_HASH_V1,
+    HEX32_B,
   );
   assert.equal(
     request.sourceAdapterDeploymentBindingHash,
@@ -7457,6 +7472,17 @@ test("requires Solana SCCP proof context for local proof requests", () => {
 });
 
 test("binds source adapter deployment context for UI provers", () => {
+  const zeroBinding = normalizeSccpSourceAdapterDeploymentBinding({});
+  assert.equal(zeroBinding.sourceAdapterDeploymentHash, SCCP_ZERO_HASH_V1);
+  assert.equal(
+    zeroBinding.sourceAdapterDeploymentReceiptHash,
+    SCCP_ZERO_HASH_V1,
+  );
+  assert.throws(
+    () => buildSolanaSccpProofRequest(sampleWitness()),
+    /requires non-zero source adapter deployment binding/,
+  );
+
   const request = buildSolanaSccpProofRequest(
     sampleWitness({
       sourceAdapterDeploymentHash: HEX32_A,
@@ -9746,7 +9772,7 @@ test("does not generate Solana SCCP proofs without a linked local prover", async
   const prover = new SolanaSccpProver();
 
   await assert.rejects(
-    () => prover.prove(sampleWitness()),
+    () => prover.prove(sampleProductionWitness()),
     (error) => error?.code === "ERR_SCCP_SOLANA_PROVER_UNAVAILABLE",
   );
 });
@@ -9922,7 +9948,12 @@ test("wraps externally generated Solana SCCP proof bytes", async () => {
         prove: async () => {
           throw new Error("local prover should not be invoked");
         },
-      }).prove(sampleWitness()),
+      }).prove(
+        sampleWitness({
+          sourceAdapterDeploymentHash: HEX32_A,
+          sourceAdapterDeploymentReceiptHash: HEX32_B,
+        }),
+      ),
     /sourceStateVerifierHash must not be zero for Solana production proofs/,
   );
 

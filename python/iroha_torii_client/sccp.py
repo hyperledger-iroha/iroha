@@ -22475,6 +22475,10 @@ def build_solana_sccp_proof_request(input_value: Any) -> Mapping[str, Any]:
             ],
         }
     )
+    if deployment_binding["source_adapter_deployment_hash"] == SCCP_ZERO_HASH_V1:
+        raise TypeError(
+            "Solana SCCP proof request requires non-zero source adapter deployment binding"
+        )
     witness_hash = _bytes_to_hex(
         _prefixed_blake2b(
             b"sccp:solana:witness:v1",

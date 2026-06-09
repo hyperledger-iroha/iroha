@@ -2,6 +2,156 @@
 
 Last updated: 2026-06-09
 
+## 2026-06-09 SCCP active-launch source hash role separation
+
+- Release-readiness active-launch governed-deployment and route-allowlist
+  checklist items now explicitly reject evidence summaries where
+  `source_verifier_material_hash` reuses the same canonical bytes32 value as
+  `source_adapter_engine_deployment_hash`, keeping the public checklist aligned
+  with the deeper bundle role-separation rules.
+- Validation:
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'malformed_active_route_allowlist_binding or malformed_active_governed_deployment_metadata'`
+    (`2` passed)
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_readiness_report_test.py`
+
+## 2026-06-09 Sumeragi RBC DELIVER pending complete wait-state entry proof
+
+- Added `RbcDeliveryEntryPendingInstallsCompleteWaitStateStep` to the top-level
+  model so non-final RBC DELIVER entries from `ReadyQuorum` immediately install
+  the delivered-pending complete wait-state envelope: delivered evidence is
+  preserved, commit artifacts and finality certificates remain absent, and the
+  post-state exposes only the consensus/GST timeout surface with RBC/fault gates
+  closed.
+- Wired `RbcDeliveryEntryPendingAlwaysInstallsCompleteWaitState` through the
+  fast, deep, and TLC-fast configs and documented the README and roadmap
+  obligations.
+- Validation:
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7799` states generated, `2338` distinct states found, depth `24`, no
+    errors)
+
+## 2026-06-09 SCCP production corridor SDK/source sweep
+
+- Re-ran the official SCCP production corridor across the Rust crate,
+  evidence-script inventory, and every SDK touched by the Solana
+  deployment-binding gate. The sweep keeps the Sub&#115;trate/Pol&#107;adot
+  no-support launch-scope note, material-only source evidence deployment-field
+  guard, and SDK zero/zero source-adapter deployment rejection covered by the
+  same corridor script used for release readiness.
+- Validation:
+  - `CARGO_TARGET_DIR=target/sccp-production-corridor NORITO_SKIP_BINDINGS_SYNC=1 bash scripts/check_sccp_production_corridor.sh --phase rust-sccp`
+    (`256` passed, doctests `0` passed)
+  - `SCCP_CORRIDOR_PYTHON_BIN=python3 bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`1369` passed)
+  - `SCCP_CORRIDOR_NODE_BIN=node bash scripts/check_sccp_production_corridor.sh --phase js-sdk`
+    (`240` passed)
+  - `SCCP_CORRIDOR_PYTHON_BIN=python3 bash scripts/check_sccp_production_corridor.sh --phase python-sdk`
+    (`88` passed)
+  - `bash scripts/check_sccp_production_corridor.sh --phase swift-sdk`
+    (`81` `SccpSolanaProverTests` passed, `1` Torii bridge-proof submission
+    test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/check_sccp_production_corridor.sh --phase kotlin-sdk`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk bash scripts/check_sccp_production_corridor.sh --phase java-android`
+
+## 2026-06-09 Sumeragi RBC delivered-pending stable-artifact complete wait-state proof
+
+- Added `RbcDeliveredPendingSpecStepStableCommitArtifactsCompleteWaitStateStep`
+  to the top-level model so stable-artifact delivered-pending non-final
+  post-states compose the source, counter, phase/gate, timer, view/evidence,
+  finality, and RBC-surface obligations into one complete wait-state envelope
+  with commit artifacts absent and only consensus/GST/stutter actions exposed.
+- Wired
+  `RbcDeliveredPendingSpecStepAlwaysClosesCompleteWaitStateOnStableCommitArtifacts`
+  through the fast, deep, and TLC-fast configs and documented the README and
+  roadmap obligations.
+- Validation:
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7799` states generated, `2338` distinct states found, depth `24`, no
+    errors)
+
+## 2026-06-09 SCCP Solana proof-request deployment binding gate
+
+- JavaScript, Python, Swift, Kotlin, and Java Android Solana SCCP proof request
+  builders now reject zero/zero source-adapter deployment bindings before
+  hashing request public inputs, so portal/mobile local provers cannot produce
+  deployment-agnostic Solana proof bytes. The shared deployment-binding
+  normalizers still accept zero/zero only for diagnostic fixtures and canonical
+  hashing checks.
+- Updated Solana SDK request tests to keep the deterministic request vectors
+  deployment-bound and to pin the new zero-binding rejection beside the
+  existing malformed-binding checks.
+- Validation:
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k 'normalizes_solana_sccp_witness_input_for_local_proof_requests or builds_deterministic_solana_sccp_proof_requests or binds_source_adapter_deployment_context_for_ui_provers or solana_sccp_prover_requires_linked_engine or solana_sccp_prover_wraps_externally_generated_proof_bytes'`
+  - `cd javascript/iroha_js && node --test --test-name-pattern 'normalizes Solana SCCP witness|builds deterministic Solana SCCP proof requests|binds source adapter deployment context|does not generate Solana SCCP proofs without a linked local prover|wraps externally generated Solana SCCP proof bytes' test/sccpSolanaProver.test.js`
+  - `cd IrohaSwift && swift test --filter SccpSolanaProverTests/testBuildsSolanaSccpProofRequest --filter SccpSolanaProverTests/testBindsSourceAdapterDeploymentContextForUiProvers --filter SccpSolanaProverTests/testProverRequiresLinkedProofEngine`
+  - `cd kotlin && JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ./gradlew :core-jvm:test --tests 'org.hyperledger.iroha.sdk.sccp.SolanaSccpProverTest.buildsSolanaSccpProofRequest' --tests 'org.hyperledger.iroha.sdk.sccp.SolanaSccpProverTest.bindsSourceAdapterDeploymentContextForUiProvers' --tests 'org.hyperledger.iroha.sdk.sccp.SolanaSccpProverTest.proverRequiresLinkedProofEngine' --tests 'org.hyperledger.iroha.sdk.offline.KagemushaInstructionArchivesTest.transactionPayload wraps a single transfer archive instruction' --console=plain`
+  - `cd java/iroha_android && JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :core:test --tests 'org.hyperledger.iroha.android.sccp.SolanaSccpProverTests.normalizesWitnessAndBuildsDeterministicRequest' --tests 'org.hyperledger.iroha.android.sccp.SolanaSccpProverTests.bindsSourceAdapterDeploymentContextForUiProvers' --tests 'org.hyperledger.iroha.android.sccp.SolanaSccpProverTests.proverRequiresLinkedProofEngine' --console=plain`
+  - `KagemushaInstructionArchives.transactionPayload(...)` now converts its
+    public `Map<String, String>` metadata helper input into `JsonValue.string`
+    values before constructing `TransactionPayload`, unblocking the Kotlin SCCP
+    test task after the core payload metadata type tightened to JSON values.
+
+## 2026-06-09 Sumeragi RBC delivered-pending stable-artifact RBC surface proof
+
+- Added `RbcDeliveredPendingSpecStepStableCommitArtifactsRbcSurfaceStep` to the
+  top-level model so stable-artifact delivered-pending post-states preserve
+  delivered RBC evidence exactly while keeping RBC INIT/CHUNK/READY/DELIVER and
+  Byzantine-fault action gates closed.
+- Wired
+  `RbcDeliveredPendingSpecStepAlwaysMatchesRbcSurfaceOnStableCommitArtifacts`
+  through the fast, deep, and TLC-fast configs and documented the README and
+  roadmap obligations.
+- Validation:
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7799` states generated, `2338` distinct states found, depth `24`, no
+    errors)
+
+## 2026-06-09 SCCP material-only source evidence deployment-field guard
+
+- Material-only SCCP source-verifier evidence now has to keep both
+  source-adapter deployment fields at zero when verified without deployment
+  context. Deployment-looking hashes or deployment receipt hashes are rejected
+  unless the verifier is called through the deployment-bound material path that
+  recomputes the configured deployment evidence.
+- Added an adversarial ETH -> SORA regression that forges non-zero deployment
+  fields into otherwise valid material-only verifier evidence and proves the
+  material-only evidence matcher rejects it before production deployment
+  matching is considered.
+- Validation:
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=target/codex-sccp-sora-source-context cargo test -p iroha_sccp configured_source_material_does_not_bypass_disabled_manifest_gate --lib -- --nocapture`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=target/codex-sccp-sora-source-context cargo test -p iroha_sccp deployment_bound_transparent_proof_requires_matching_source_deployment --lib -- --nocapture`
+
+## 2026-06-09 SCCP reusable builder lane binding
+
+- Reusable SCCP transparent inner-proof, FastPQ proof-byte, and counterparty
+  submission-package builders now require the bundle-derived counterparty domain
+  to match the supplied manifest counterparty before deriving statement hashes
+  or relay envelopes. This closes the inbound SORA-target ambiguity where
+  generic public inputs can still be endpoint-compatible with any SORA-local
+  manifest.
+- Extended adversarial builder coverage with ETH -> SORA and SOL/TON -> SORA
+  mismatch cases, proving diagnostic `allow_unready` paths cannot package an
+  inbound bundle under another remote lane's manifest even when public inputs
+  target SORA.
+- Validation:
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=target/codex-sccp-sora-source-context cargo test -p iroha_sccp production_submission_builders_reject_structural_non_sora_source_proofs --lib -- --nocapture`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=target/codex-sccp-sora-source-context cargo test -p iroha_sccp native_recursive_submission_packages_reject_manifest_counterparty_mismatch --lib -- --nocapture`
+
 ## 2026-06-09 Sumeragi RBC delivered-pending stable-artifact finality proof
 
 - Added `RbcDeliveredPendingSpecStepStableCommitArtifactsFinalityFootprintStep`
@@ -171,9 +321,20 @@ Last updated: 2026-06-09
 - Rejected empty or all-zero native AIR commitment, trace, and composition roots,
   plus composition-value root/value count drift, so structurally malformed
   native AIR envelopes fail before prover-unavailable handling.
-- Pinned native STARK proof and commitment version tags to v1 alongside params
-  and AIR metadata, so stale envelope-version tags fail before prover-unavailable
-  handling.
+- Pinned native STARK params, proof, commitment, and AIR version tags to v1;
+  focused regressions now cover each tag so stale envelope-version tags fail
+  before prover-unavailable handling.
+- Expanded the crypto-side full-bootstrap witness-material regression to cover
+  stale arithmetic trace field counts, active/padded row counts, row-vector
+  truncation, and per-row width truncation before trace material digests can be
+  accepted.
+- Added a Core release-prover preflight regression proving stale arithmetic
+  trace rows or stale trace-material digests in typed execution prover input
+  material fail before the dedicated-prover-unavailable boundary.
+- Core's native BFV AIR boundary now also requires every opened canonical public
+  padding row to expose a zero AIR composition residual before Merkle/FRI
+  binding, so public padding semantics cannot be paired with a non-zero
+  constraint value.
 - The same boundary now verifies each opened row, next-row, and composition
   value against the advertised Merkle roots, so well-shaped but stale siblings
   cannot pass the BFV-shaped native AIR preflight.
@@ -187,24 +348,81 @@ Last updated: 2026-06-09
   require final zero before matching AIR openings, and the deterministic test
   synthesizer reduces transcript-derived query indices modulo the evaluation
   domain so generated FRI chains replay under verifier semantics.
+- The BFV Core preflight also explicitly binds each AIR composition opening to
+  the first FRI layer value selected by the transcript-derived sampled index, so
+  the AIR and FRI halves cannot describe different base evaluations.
+- Non-generic full-bootstrap native envelopes now have to carry the canonical
+  BFV AIR section and profile; missing AIR sections or foreign AIR profiles
+  fail with concrete BFV diagnostics instead of falling through to the
+  unavailable dedicated-verifier boundary.
+- The BFV native AIR boundary now requires an execution public-padding context
+  before checking opened row semantics, so material-proof attachments cannot
+  route BFV execution-style AIR through the material verifier while skipping
+  slot and bound-mode validation.
+- The typed execution release-prover path now decodes the verifier proof key
+  embedded in `BfvFullBootstrapExecutionProverInputMaterialV1`, canonicalizes it
+  through the governed execution STARK verifier-key payload validator, and
+  requires the caller-supplied verifier key to match before the dedicated prover
+  boundary. Valid but unbound execution-circuit verifier keys are rejected
+  before proof generation.
+- Crypto and Core regressions now also cover stale verifier proof-key material
+  commitments inside typed execution prover input, matching the existing prover
+  key and pair-commitment checks before proof generation.
 - Focused FRI regressions now cover stale first-layer openings, stale folded
   `z` openings, stale fold values, and non-zero final FRI values before the
   dedicated BFV verifier boundary.
 - Validation:
-  - `cargo test -j 1 -p iroha_crypto full_bootstrap_execution_witness_digest_binds_governed_trace --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-fhe-native-air-classification CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark full_bootstrap_bfv_native_air_boundary --lib -- --nocapture`
+    (`3` passed, `7459` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-fhe-native-air-classification CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark generic_air_drift --lib -- --nocapture`
+    (`2` passed, `7460` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-fhe-native-air-classification-preverify CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark,zk-preverify preverify_does_not_bypass_generic_air_drift --lib -- --nocapture`
+    (`2` passed, `7478` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-fhe-native-air-query-binding CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark full_bootstrap_bfv_native_air_boundary --lib -- --nocapture`
+    (`3` passed, `7459` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-fhe-native-air-query-binding CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark synthesized_field_values_envelope_has_replayable_query_shape --lib -- --nocapture`
+    (`1` passed, `7461` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-fhe-native-air-query-binding CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark generic_air_drift --lib -- --nocapture`
+    (`2` passed, `7460` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-fhe-native-air-query-binding CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark full_bootstrap_execution_proof_rejects_unverified_fake_proof --lib -- --nocapture`
+    (`1` passed, `7461` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-fhe-native-air-query-binding CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark full_bootstrap_material_proof_rejects_unverified_fake_proof --lib -- --nocapture`
+    (`1` passed, `7461` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-fhe-native-air-query-binding CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark governed_full_bootstrap_execution_verifier_key_rejects_wrong_circuit_stark_payload --lib -- --nocapture`
+    (`1` passed, `7461` filtered out)
+  - `cargo test -j 1 -p iroha_core --features zk-stark full_bootstrap_bfv_native_air_boundary_rejects_private_row_openings --lib -- --nocapture`
+    (`1` passed, `7461` filtered out)
+  - `cargo test -p iroha_crypto full_bootstrap_execution_witness_digest_binds_governed_trace --lib -- --nocapture`
     (`1` passed, `688` filtered out)
+  - `cargo test -j 1 -p iroha_core --features zk-stark soracloud_fhe_full_bootstrap_execution_prover_rejects_stale_prover_input_material_trace --lib -- --nocapture`
+    (`1` passed, `7462` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-fhe-prover-input-vk-binding CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark soracloud_fhe_full_bootstrap_execution_prover_rejects_unbound_verifier_key --lib -- --nocapture`
+    (`1` passed, `7464` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-fhe-prover-input-vk-binding CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark soracloud_fhe_full_bootstrap_execution_prover --lib -- --nocapture`
+    (`11` passed, `7453` filtered out)
+  - `cargo test -j 1 -p iroha_core --features zk-stark full_bootstrap_bfv_native_air_boundary_rejects_malformed_opening_shapes --lib -- --nocapture`
+    (`1` passed, `7463` filtered out)
+  - `cargo test -j 1 -p iroha_core --features zk-stark soracloud_fhe_full_bootstrap_material_proof_rejects_bfv_native_air_without_context --lib -- --nocapture`
+    (`1` passed, `7464` filtered out)
   - `cargo test -j 1 -p iroha_core --features zk-stark full_bootstrap_bfv_native_air_boundary --lib -- --nocapture`
-    (`3` passed, `7458` filtered out)
-  - `cargo test -j 1 -p iroha_core --features zk-stark synthesized_field_values_envelope_has_replayable_query_shape --lib -- --nocapture`
-    (`1` passed, `7460` filtered out)
-  - `cargo test -j 1 -p iroha_crypto full_bootstrap --lib -- --nocapture`
-    (`25` passed, `664` filtered out)
-  - `cargo test -j 1 -p iroha_core --features zk-stark soracloud_fhe_full_bootstrap_execution_proof_rejects_generic --lib -- --nocapture`
-    (`2` passed, `7459` filtered out)
-  - `cargo test -j 1 -p iroha_core --features zk-stark soracloud_fhe_full_bootstrap_material_proof_rejects_generic --lib -- --nocapture`
-    (`2` passed, `7459` filtered out)
-  - `cargo fmt -p iroha_crypto -p iroha_core -- --check`
-  - focused `git diff --check`, conflict-marker, and `Cargo.lock` checks
+    (`3` passed, `7462` filtered out)
+  - `cargo test -j 1 -p iroha_core --features zk-stark soracloud_fhe_full_bootstrap_material_proof_rejects_generic_binding_air_active_verifier --lib -- --nocapture`
+    (`1` passed, `7464` filtered out)
+  - `cargo test -p iroha_crypto full_bootstrap_execution_witness_digest_binds_governed_trace --lib -- --nocapture`
+    (`1` passed, `688` filtered out)
+  - `cargo test -j 1 -p iroha_core --features zk-stark soracloud_fhe_full_bootstrap_execution_prover_rejects_stale_verifier_key_material --lib -- --nocapture`
+    (`1` passed, `7465` filtered out)
+  - `cargo test -j 1 -p iroha_core --features zk-stark soracloud_fhe_full_bootstrap_execution_prover_rejects_unbound_verifier_key --lib -- --nocapture`
+    (`1` passed, `7465` filtered out)
+  - `cargo fmt --package iroha_crypto -- --check`
+  - `cargo fmt --package iroha_core -- --check`
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`6` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "retired_network_surface"`
+    (`5` passed, `411` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "retired_network_surface"`
+    (`2` passed, `275` deselected)
+  - focused `git diff --check`, conflict-marker, and exact retired-surface term scans
 
 ## 2026-06-09 Sumeragi RBC delivered-pending stable-artifact timer proof
 
@@ -755,11 +973,17 @@ Last updated: 2026-06-09
   advertise the canonical arithmetic trace profile, private/public row policy,
   and proof-key-bound release prover input package alongside the existing
   execution witness digest layout.
+- Added direct adversarial coverage that proof public-input schema validation
+  rejects drifted public-input hash count or byte length before proof-key
+  material validation, keeping the statement-hash shape pinned at the schema
+  boundary.
 - Refreshed the material and execution public-input schema hash goldens so
   verifier-record metadata and release fixtures bind the self-describing
   material/execution statement headers plus the expanded execution trace/prover
   schema.
 - Validation:
+  - `cargo test -p iroha_crypto full_bootstrap_proof_schema_and_key_commitments_reject_adversarial_drift --lib -- --nocapture`
+    (`1` passed, `688` filtered out)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-schema-package cargo test -j 1 -p iroha_data_model soracloud_fhe_public_input_schema_hashes_are_stable --lib -- --nocapture`
     (`1` passed, `1529` filtered out)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-schema-package cargo test -j 1 -p iroha_data_model soracloud_fhe_full_bootstrap_execution_schema_advertises_witness_digest --lib -- --nocapture`
@@ -9043,11 +9267,11 @@ Last updated: 2026-06-09
   rejects the circuit-id mismatch.
 - Validation:
   - `cargo test -j 1 -p iroha_core --features zk-stark governed_full_bootstrap_execution_verifier_key_rejects_wrong_circuit_stark_payload --lib -- --nocapture`
-    (`1` passed, `7459` filtered out)
+    (`1` passed, `7463` filtered out)
   - `cargo test -j 1 -p iroha_core --features zk-stark governed_full_bootstrap_execution_verifier_key_rejects_opaque_stark_payload --lib -- --nocapture`
-    (`1` passed, `7459` filtered out)
+    (`1` passed, `7463` filtered out)
   - `cargo test -j 1 -p iroha_core --features zk-stark governed_full_bootstrap_execution_verifier_key_rejects_below_floor_stark_payload --lib -- --nocapture`
-    (`1` passed, `7459` filtered out)
+    (`1` passed, `7463` filtered out)
   - `cargo fmt --package iroha_core -- --check`
   - `git diff --check`
   - `cargo test -j 1 -p iroha_core --features zk-stark soracloud_fhe_full_bootstrap_execution_proof_accepts_verified_active_verifier --lib -- --nocapture`
