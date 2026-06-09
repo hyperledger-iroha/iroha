@@ -646,6 +646,137 @@ mod tests {
     }
 
     #[test]
+    fn synthesized_field_values_envelope_has_replayable_query_shape() {
+        let params = StarkFriParamsV1 {
+            version: 1,
+            n_log2: 4,
+            blowup_log2: 2,
+            fold_arity: 2,
+            queries: 2,
+            merkle_arity: 2,
+            hash_fn: STARK_HASH_SHA256_V1,
+            domain_tag: "iroha:test:field-values".to_owned(),
+        };
+        let values = vec![0; 1_usize << usize::from(params.n_log2)];
+        let extra_query_roots = [[0xA1; 32], [0xA2; 32], [0xA3; 32]];
+        let envelope = stark_synthesize_fri_envelope_from_field_values_v1(
+            params.clone(),
+            "IROHA-TEST-STARK".to_owned(),
+            &values,
+            &extra_query_roots,
+        )
+        .expect("synthesize field-value FRI envelope");
+        let indices = validate_stark_fri_query_shape_and_indices_v1(
+            &params,
+            &envelope.transcript_label,
+            &envelope.proof.commits.roots,
+            &extra_query_roots,
+            &envelope.proof.queries,
+        )
+        .expect("query shape replays");
+        assert_eq!(indices.len(), usize::from(params.queries));
+
+        let mut stale_merkle = envelope.clone();
+        stale_merkle.proof.queries[0][0].path_y0.siblings[0][0] ^= 1;
+        assert_eq!(
+            validate_stark_fri_query_shape_and_indices_v1(
+                &params,
+                &stale_merkle.transcript_label,
+                &stale_merkle.proof.commits.roots,
+                &extra_query_roots,
+                &stale_merkle.proof.queries,
+            )
+            .expect_err("stale FRI Merkle openings must be rejected"),
+            "FRI query Merkle root mismatch"
+        );
+
+        let mut stale_folded_merkle = envelope.clone();
+        stale_folded_merkle.proof.queries[0][0].path_z.siblings[0][0] ^= 1;
+        assert_eq!(
+            validate_stark_fri_query_shape_and_indices_v1(
+                &params,
+                &stale_folded_merkle.transcript_label,
+                &stale_folded_merkle.proof.commits.roots,
+                &extra_query_roots,
+                &stale_folded_merkle.proof.queries,
+            )
+            .expect_err("stale folded FRI Merkle openings must be rejected"),
+            "FRI query folded Merkle root mismatch"
+        );
+
+        let mut stale_fold = envelope;
+        stale_fold.proof.queries[0][0].z = stale_fold.proof.queries[0][0].z.saturating_add(1);
+        assert_eq!(
+            validate_stark_fri_query_shape_and_indices_v1(
+                &params,
+                &stale_fold.transcript_label,
+                &stale_fold.proof.commits.roots,
+                &extra_query_roots,
+                &stale_fold.proof.queries,
+            )
+            .expect_err("stale FRI fold values must be rejected"),
+            "FRI query fold relation mismatch"
+        );
+
+        let nonzero_values = vec![1; 1_usize << usize::from(params.n_log2)];
+        let nonzero_final = stark_synthesize_fri_envelope_from_field_values_v1(
+            params.clone(),
+            "IROHA-TEST-STARK".to_owned(),
+            &nonzero_values,
+            &extra_query_roots,
+        )
+        .expect("synthesize non-zero field-value FRI envelope");
+        assert_eq!(
+            validate_stark_fri_query_shape_and_indices_v1(
+                &params,
+                &nonzero_final.transcript_label,
+                &nonzero_final.proof.commits.roots,
+                &extra_query_roots,
+                &nonzero_final.proof.queries,
+            )
+            .expect_err("non-zero final FRI values must be rejected"),
+            "FRI query final value mismatch"
+        );
+    }
+
+    #[test]
+    fn air_opening_first_fri_value_binding_uses_sampled_parity() {
+        let empty_path = || MerklePath {
+            dirs: Vec::new(),
+            siblings: Vec::new(),
+        };
+        let opening = StarkAirOpeningV1 {
+            index: 0,
+            row: Vec::new(),
+            next_row: Vec::new(),
+            row_path: empty_path(),
+            next_row_path: empty_path(),
+            composition_value: 11,
+            composition_path: empty_path(),
+        };
+        let decommit = FoldDecommitV1 {
+            j: 0,
+            y0: 11,
+            y1: 17,
+            path_y0: empty_path(),
+            path_y1: empty_path(),
+            z: 0,
+            path_z: empty_path(),
+        };
+        validate_stark_air_opening_first_fri_value_v1(&opening, 0, &decommit)
+            .expect("even sampled index binds y0");
+        let mut odd_opening = opening.clone();
+        odd_opening.composition_value = 17;
+        validate_stark_air_opening_first_fri_value_v1(&odd_opening, 1, &decommit)
+            .expect("odd sampled index binds y1");
+        assert_eq!(
+            validate_stark_air_opening_first_fri_value_v1(&opening, 1, &decommit)
+                .expect_err("wrong FRI side must fail"),
+            "AIR/FRI composition value mismatch"
+        );
+    }
+
+    #[test]
     fn synthesized_envelope_verifies_poseidon2() {
         let params = StarkFriParamsV1 {
             version: 1,
@@ -1292,6 +1423,263 @@ fn merkle_verify_hash(
     &acc == root
 }
 
+/// Compute the native STARK AIR trace-row leaf hash used by v1 commitments.
+#[cfg(test)]
+pub(crate) fn stark_air_trace_leaf_hash_v1(
+    params: &StarkFriParamsV1,
+    row: &[u64],
+) -> Option<[u8; 32]> {
+    stark_air_trace_leaf_hash(params, row)
+}
+
+/// Build a v1 STARK Merkle root and path from already-hashed leaves.
+#[cfg(test)]
+pub(crate) fn stark_merkle_root_and_path_from_hashes_v1(
+    params: &StarkFriParamsV1,
+    leaves: Vec<[u8; 32]>,
+    index: usize,
+) -> Option<([u8; 32], MerklePath)> {
+    let levels = merkle_levels_from_hashes(params, leaves)?;
+    Some((
+        merkle_root_from_levels(&levels)?,
+        merkle_path_from_levels(index, &levels)?,
+    ))
+}
+
+/// Build a v1 STARK Merkle root and path from canonical field values.
+#[cfg(test)]
+pub(crate) fn stark_merkle_root_and_path_from_field_values_v1(
+    params: &StarkFriParamsV1,
+    values: &[u64],
+    index: usize,
+) -> Option<([u8; 32], MerklePath)> {
+    let values = values
+        .iter()
+        .copied()
+        .map(Fq::from_canonical_u64)
+        .collect::<Option<Vec<_>>>()?;
+    let levels = merkle_levels_from_values(params, &values)?;
+    Some((
+        merkle_root_from_levels(&levels)?,
+        merkle_path_from_levels(index, &levels)?,
+    ))
+}
+
+/// Build a deterministic V1 STARK/FRI envelope from canonical field values.
+#[cfg(test)]
+pub(crate) fn stark_synthesize_fri_envelope_from_field_values_v1(
+    params: StarkFriParamsV1,
+    transcript_label: String,
+    values: &[u64],
+    extra_query_roots: &[[u8; 32]],
+) -> Option<StarkVerifyEnvelopeV1> {
+    let values = values
+        .iter()
+        .copied()
+        .map(Fq::from_canonical_u64)
+        .collect::<Option<Vec<_>>>()?;
+    synthesize_stark_fri_envelope_from_values(params, transcript_label, values, extra_query_roots)
+        .ok()
+}
+
+/// Verify that one native AIR opening is bound to its trace and composition roots.
+pub(crate) fn validate_stark_air_opening_commitment_roots_v1(
+    params: &StarkFriParamsV1,
+    air: &StarkAirProofV1,
+    opening: &StarkAirOpeningV1,
+) -> Result<(), &'static str> {
+    let row_leaf = stark_air_trace_leaf_hash(params, &opening.row).ok_or("row leaf hash failed")?;
+    if !merkle_verify_hash(params, &air.trace_root, &row_leaf, &opening.row_path) {
+        return Err("row Merkle root mismatch");
+    }
+    let next_row_leaf =
+        stark_air_trace_leaf_hash(params, &opening.next_row).ok_or("next-row leaf hash failed")?;
+    if !merkle_verify_hash(
+        params,
+        &air.trace_root,
+        &next_row_leaf,
+        &opening.next_row_path,
+    ) {
+        return Err("next-row Merkle root mismatch");
+    }
+    let composition =
+        Fq::from_canonical_u64(opening.composition_value).ok_or("composition field element")?;
+    if !merkle_verify(
+        params,
+        &air.composition_root,
+        composition,
+        &opening.composition_path,
+    ) {
+        return Err("composition Merkle root mismatch");
+    }
+    Ok(())
+}
+
+/// Validate FRI query-chain shape, commitments, folds, and return transcript-derived base indices.
+pub(crate) fn validate_stark_fri_query_shape_and_indices_v1(
+    params: &StarkFriParamsV1,
+    transcript_label: &str,
+    roots: &[[u8; 32]],
+    extra_query_roots: &[[u8; 32]],
+    queries: &[Vec<FoldDecommitV1>],
+) -> Result<Vec<usize>, &'static str> {
+    let limits = StarkVerifierLimits::default();
+    let expected_chain_len = validate_params(params, roots.len(), queries.len(), &limits)
+        .ok_or("FRI parameter/root/query shape mismatch")?;
+    let total_domain = 1_usize
+        .checked_shl(u32::from(params.n_log2))
+        .ok_or("FRI domain size overflow")?;
+    let fold_arity = usize::from(params.fold_arity);
+    let mut query_roots = roots.to_vec();
+    query_roots.extend_from_slice(extra_query_roots);
+    let mut base_indices = Vec::with_capacity(queries.len());
+    for (query_number, chain) in queries.iter().enumerate() {
+        if chain.len() != expected_chain_len {
+            return Err("FRI query chain length mismatch");
+        }
+        let mut idx_layer =
+            derive_query_index(transcript_label, params, &query_roots, query_number)
+                .ok_or("FRI query index derivation failed")?
+                % total_domain;
+        base_indices.push(idx_layer);
+        let mut layer_domain = total_domain;
+        for (round, decommit) in chain.iter().enumerate() {
+            if layer_domain < fold_arity {
+                return Err("FRI query layer domain underflow");
+            }
+            let expected_pairs = layer_domain / fold_arity;
+            let expected_j = idx_layer / fold_arity;
+            if expected_j >= expected_pairs || usize::try_from(decommit.j).ok() != Some(expected_j)
+            {
+                return Err("FRI query fold index mismatch");
+            }
+            let depth_current =
+                log2_usize(layer_domain).ok_or("FRI query current layer depth mismatch")?;
+            let depth_next = log2_usize(layer_domain / fold_arity)
+                .ok_or("FRI query next layer depth mismatch")?;
+            if !merkle_path_depth_ok(&decommit.path_y0, depth_current, &limits)
+                || !merkle_path_depth_ok(&decommit.path_y1, depth_current, &limits)
+                || !merkle_path_depth_ok(&decommit.path_z, depth_next, &limits)
+            {
+                return Err("FRI query Merkle path depth mismatch");
+            }
+            let expected_y0 = expected_j
+                .checked_mul(fold_arity)
+                .ok_or("FRI query y0 index overflow")?;
+            let expected_y1 = expected_y0
+                .checked_add(1)
+                .ok_or("FRI query y1 index overflow")?;
+            if merkle_path_index(&decommit.path_y0) != Some(expected_y0)
+                || merkle_path_index(&decommit.path_y1) != Some(expected_y1)
+                || merkle_path_index(&decommit.path_z) != Some(expected_j)
+            {
+                return Err("FRI query Merkle path index mismatch");
+            }
+            let y0 = Fq::from_canonical_u64(decommit.y0).ok_or("FRI query y0 field element")?;
+            let y1 = Fq::from_canonical_u64(decommit.y1).ok_or("FRI query y1 field element")?;
+            let z = Fq::from_canonical_u64(decommit.z).ok_or("FRI query z field element")?;
+            let current_root = roots.get(round).ok_or("FRI query current root missing")?;
+            let next_root = roots.get(round + 1).ok_or("FRI query next root missing")?;
+            if !merkle_verify(params, current_root, y0, &decommit.path_y0)
+                || !merkle_verify(params, current_root, y1, &decommit.path_y1)
+            {
+                return Err("FRI query Merkle root mismatch");
+            }
+            let beta = fri_round_challenge(params, transcript_label, current_root)
+                .ok_or("FRI query challenge derivation failed")?;
+            let x = domain_x_for_pair(layer_domain, expected_j)
+                .ok_or("FRI query domain element derivation failed")?;
+            if fri_fold_pair(y0, y1, beta, x) != Some(z) {
+                return Err("FRI query fold relation mismatch");
+            }
+            if !merkle_verify(params, next_root, z, &decommit.path_z) {
+                return Err("FRI query folded Merkle root mismatch");
+            }
+            layer_domain /= fold_arity;
+            idx_layer = expected_j;
+        }
+        if layer_domain != 1 || idx_layer != 0 {
+            return Err("FRI query does not collapse to final layer");
+        }
+        let final_z = chain
+            .last()
+            .and_then(|decommit| Fq::from_canonical_u64(decommit.z))
+            .ok_or("FRI query final field element")?;
+        if final_z != Fq::zero() {
+            return Err("FRI query final value mismatch");
+        }
+    }
+    Ok(base_indices)
+}
+
+/// Verify that an AIR opening is the value opened by the first FRI layer.
+pub(crate) fn validate_stark_air_opening_first_fri_value_v1(
+    opening: &StarkAirOpeningV1,
+    base_index: usize,
+    first_decommit: &FoldDecommitV1,
+) -> Result<(), &'static str> {
+    let opened_fri_value = if base_index.is_multiple_of(2) {
+        first_decommit.y0
+    } else {
+        first_decommit.y1
+    };
+    if opened_fri_value != opening.composition_value {
+        return Err("AIR/FRI composition value mismatch");
+    }
+    Ok(())
+}
+
+/// Verify that one optional composition value is bound to its commitment root.
+pub(crate) fn validate_stark_composition_value_commitment_v1(
+    params: &StarkFriParamsV1,
+    comp_root: &[u8; 32],
+    comp_entry: &StarkCompositionValueV1,
+    expected_depth: usize,
+    expected_index: usize,
+) -> Result<(), &'static str> {
+    if !merkle_path_depth_ok(
+        &comp_entry.path,
+        expected_depth,
+        &StarkVerifierLimits::default(),
+    ) {
+        return Err("composition value Merkle path depth mismatch");
+    }
+    if merkle_path_index(&comp_entry.path) != Some(expected_index) {
+        return Err("composition value Merkle path index mismatch");
+    }
+    let cv_f =
+        Fq::from_canonical_u64(comp_entry.leaf).ok_or("composition value leaf field element")?;
+    let constant = Fq::from_canonical_u64(comp_entry.constant)
+        .ok_or("composition value constant field element")?;
+    Fq::from_canonical_u64(comp_entry.z_coeff).ok_or("composition value z coefficient")?;
+    if comp_entry.z_coeff != 0 {
+        return Err("composition value z coefficient requires final fold");
+    }
+    if comp_entry.aux_terms.len() > StarkVerifierLimits::default().max_aux_terms {
+        return Err("composition value auxiliary term count");
+    }
+    let mut expected = constant;
+    let mut last_wire: Option<u32> = None;
+    for term in &comp_entry.aux_terms {
+        if last_wire.is_some_and(|prev| term.wire_index <= prev) {
+            return Err("composition value auxiliary wire ordering");
+        }
+        last_wire = Some(term.wire_index);
+        let coeff = Fq::from_canonical_u64(term.coeff)
+            .ok_or("composition value auxiliary coefficient field element")?;
+        let value = Fq::from_canonical_u64(term.value)
+            .ok_or("composition value auxiliary field element")?;
+        expected = expected.add(coeff.mul(value));
+    }
+    if cv_f != expected {
+        return Err("composition value leaf mismatch");
+    }
+    if !merkle_verify(params, comp_root, cv_f, &comp_entry.path) {
+        return Err("composition value Merkle root mismatch");
+    }
+    Ok(())
+}
+
 fn stark_air_trace_width() -> usize {
     usize::from(STARK_BINDING_AIR_TRACE_WIDTH_V1)
 }
@@ -1786,7 +2174,8 @@ fn synthesize_stark_fri_envelope_from_values(
     let mut queries = Vec::with_capacity(query_count);
     for qi in 0..query_count {
         let mut idx_layer = derive_query_index(&transcript_label, &params, &query_roots, qi)
-            .ok_or_else(|| "failed to derive STARK query index".to_owned())?;
+            .ok_or_else(|| "failed to derive STARK query index".to_owned())?
+            % total_domain;
         let mut chain = Vec::with_capacity(required_layers);
         for k in 0..required_layers {
             let j = idx_layer / 2;

@@ -36,6 +36,7 @@ and completed history lives in [`status.md`](./status.md).
   helpers, and production readiness surfaces must stay limited to those lanes.
   Retired runtime-network families outside that launch scope are explicitly
   unsupported for now.
+  Sub&#115;trate/Pol&#107;adot networks are explicitly outside SCCP launch support for now.
   The retired-network surface guard must require explicit no-support
   launch-scope wording in each launch-scope file.
   Reintroducing any such family requires a new design pass, fresh fixtures, and
@@ -148,6 +149,15 @@ and completed history lives in [`status.md`](./status.md).
   semantics: malformed `required` or `ready` fields must produce governed
   deployment blockers rather than clearing through truthiness, and manifest
   comparisons against recomputed active launch readiness must use exact values.
+  The all-lanes evidence-root schema is release-critical: malformed roots,
+  unknown sections, and non-string section keys must remain structured blockers
+  and are now pinned in release-readiness and strict bundle source inventories.
+  The strict release-bundle verifier must also invoke that root-schema
+  source-marker sweep directly, so missing implementation or adversarial-test
+  markers cannot be hidden behind a present `source_inventory` row.
+  Source-adapter gate hash/audit replay regressions are part of the required
+  release source inventory, so deleting the direct replay tests blocks readiness
+  and strict release-bundle verification.
   Source-adapter gate `blockers` containers must also stay schema-aware:
   scalar, empty, padded, or non-string entries become explicit governed
   deployment blockers, while valid gate blockers remain visible instead of
@@ -3422,6 +3432,9 @@ and completed history lives in [`status.md`](./status.md).
 	  RBC delivered-pending spec-step stable-artifact non-final source,
 	  RBC delivered-pending spec-step stable-artifact counter footprint,
 	  RBC delivered-pending spec-step stable-artifact phase/gate footprint,
+	  RBC delivered-pending spec-step stable-artifact timer footprint,
+	  RBC delivered-pending spec-step stable-artifact view/evidence footprint,
+	  RBC delivered-pending spec-step stable-artifact finality footprint,
 	  Byzantine fault corruptible-RBC gate matching,
 	  Byzantine fault digest-only corruption step,
 	  RBC INIT gate repairable-state matching,
@@ -7578,18 +7591,28 @@ chain rules. Shared source-state proof admission now rejects opaque nonzero
 bytes and requires canonical STARK OpenVerify/FastPQ capsules before lane-local
 verification work, and the Solana/TON source-state transcript hash helpers now
 reuse the same canonical-envelope gate before audit-statement binding.
-Strict SCCP production package builders now require non-SORA source bundles to
-pass the production source-proof gate before destination submissions can be
-constructed, leaving structural source-proof fixtures behind explicit
-diagnostic `allow_unready` paths. Rust EVM/TRON Groth16 proof-request builders
-now reject non-canonical bundle bytes, bundle/public-input mismatches, and
-omitted source-proof witness bytes for non-SORA source bundles before local UI
-proving or wrapped proof-result submission. The Rust TON native-recursive
+Strict SCCP production package and proof-job builders now require non-SORA
+source bundles to pass the production source-proof gate before destination
+submissions or prover jobs can be constructed, leaving structural source-proof
+fixtures behind explicit diagnostic `allow_unready` paths. Proof-byte job
+builders also require the bundle-derived counterparty domain, manifest
+counterparty domain, and supplied job counterparty domain to match even in
+diagnostic mode, so callers cannot combine another lane's manifest with
+otherwise valid proof bytes. Rust EVM/TRON Groth16 proof-request builders now
+reject non-canonical bundle bytes, bundle/public-input mismatches, and omitted
+source-proof witness bytes for non-SORA source bundles before local UI proving
+or wrapped proof-result submission. The Rust TON native-recursive
 proof-request builder and proof-result wrapper now apply the same canonical
 SCCP bundle/public-input/source-proof gate before local proof generation or
 wallet/liteserver packaging, and the JavaScript, Python, Swift, Kotlin/JVM, and
 Java Android SDK TON request paths now mirror that gate before local prover
 callbacks or wrapped-result submission.
+SORA-origin message bundle validation, public-input derivation, package
+builders, proof-job builders, transparent-proof builders, and final
+transparent-proof verification now reject source verifier material and
+source-adapter deployment context before deriving public inputs, so external
+source-adapter evidence cannot be spliced into Nexus-finality-backed outbound
+bundles.
 Transparent OpenVerify summary helpers now apply the same production-shaped
 wrapper policy before reporting proof metadata, so metadata-only or aux-bearing
 envelopes cannot be normalized into release/readiness summaries. The
@@ -9152,7 +9175,10 @@ or ABI behavior.
 								  verifier-key canonicalization. The profile now also binds active
 								  coefficient rows as private witness rows, public deterministic padding
 								  rows, and the rule that transparent native proofs must not open unmasked
-								  private rows.
+								  private rows; Core's native BFV AIR boundary also validates opened
+								  public padding rows against canonical statement/slot/mode headers and
+								  rejects empty/all-zero AIR roots or unauthenticated optional
+								  composition-value commitments before the dedicated verifier fallback.
 								  Release prover input now has a typed
 								  `BfvFullBootstrapMaterialProofInputMaterialV1` boundary for governed
 								  full-bootstrap material proofs that binds concrete artifact bundles
@@ -9198,9 +9224,12 @@ or ABI behavior.
 									  public-key drift before hashing or proof-helper execution.
 									  BFV-shaped native AIR envelopes now preflight the canonical
 									  transcript label, statement-bound domain tag, STARK/FRI metadata,
-									  public digest binding, opened row/path shape, and the
-									  no-unmasked-private-row-opening policy before the current dedicated
-									  verifier boundary is reported.
+									  public digest binding, proof/commitment version tags,
+									  commitment/root shape, opened row/path shape, Merkle path-to-root
+									  binding, FRI query-chain Merkle/fold validation, optional
+									  composition-value final-layer root/value authentication, opened public
+									  padding-row semantics, and the no-unmasked-private-row-opening policy
+									  before the current dedicated verifier boundary is reported.
 								  Refresh-only proof and execution paths still reject `FullBootstrapV1`.
 										  Remaining work is the audited full-bootstrap arithmetic witness
 									  constraint/proof-producing backend plus release-grade generated
@@ -9916,7 +9945,18 @@ fixture corridor into broader release validation.
   preserving counters on stutter/GST branches; stable-artifact delivered-pending
   phase/gate footprints must match the exact non-final source, so proposal,
   prepare, commit-vote, timeout, NewView, GST, and stuttering branches expose
-  only their checked post-phase and enabled-action surfaces; nonzero
+  only their checked post-phase and enabled-action surfaces; stable-artifact
+  delivered-pending timer footprints must match the post-state GST/progress
+  status, keeping pre-GST GST/timeout open, closing timeout for post-GST live
+  progress, leaving timeout open for post-GST stalls, and preserving timer gates
+  across GST/stuttering branches; stable-artifact delivered-pending
+  view/evidence footprints must expose timeout as the only view-advancing and
+  view-evidence-clearing branch, quorum-forming NewView handoffs as complete
+  view-evidence installers that preserve the view, and all other stable-artifact
+  branches as view/evidence preserving; stable-artifact delivered-pending
+  finality footprints must keep post-states outside `Committed`, without commit
+  certificate artifacts, finality-certificate stacks, or live commit gates, while
+  preserving finality/certificate/gate matching invariants; nonzero
   CHUNK/READY counters
   must retain digest validity unless they are in the explicit corrupted repair
   state, while invalid digests must remain confined to idle or corrupted repair

@@ -10358,6 +10358,23 @@ Temporal properties:
   post-phase and gate footprint for their handoff: proposal, prepare,
   commit-vote, timeout, NewView, GST, and stuttering branches expose only the
   enabled action surface expected for that branch.
+- `RbcDeliveredPendingSpecStepAlwaysMatchesTimerFootprintOnStableCommitArtifacts`
+  proves that the same stable-artifact non-final surface exposes the exact
+  GST/timeout footprint for the post-state: pre-GST states keep GST and timeout
+  open, post-GST live progress closes timeout, post-GST stalled states leave
+  timeout open, and GST/stuttering branches preserve the expected timer
+  surface.
+- `RbcDeliveredPendingSpecStepAlwaysMatchesViewFootprintOnStableCommitArtifacts`
+  proves that stable-artifact delivered-pending non-final steps expose the exact
+  view/view-evidence footprint: timeout handoffs are the only branch that can
+  advance the view and clear view evidence, quorum-forming NewView handoffs
+  install complete view evidence without changing the view, and all other
+  stable-artifact branches preserve both view fields.
+- `RbcDeliveredPendingSpecStepAlwaysMatchesFinalityFootprintOnStableCommitArtifacts`
+  proves that stable-artifact delivered-pending post-states keep finality
+  excluded: they remain outside `Committed`, carry no commit certificate
+  artifacts, expose no finality certificate stack or live commit gate, and keep
+  the finality/certificate/gate matching invariants satisfied.
 - `PendingProtocolStepsNeverChangeGst` proves that non-final NewView,
   prepare-vote, honest commit-vote, Byzantine commit-vote, and RBC DELIVER
   pending branches preserve the GST observation flag; synchrony observation
