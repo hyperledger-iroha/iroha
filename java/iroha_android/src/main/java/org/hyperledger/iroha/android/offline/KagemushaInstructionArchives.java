@@ -69,7 +69,7 @@ public final class KagemushaInstructionArchives {
       final long creationTimeMs,
       final Long timeToLiveMs,
       final Integer nonce,
-      final Map<String, String> metadata) {
+      final Map<String, ?> metadata) {
     return TransactionPayload.builder()
         .setChainId(chainId)
         .setAuthority(authority)
@@ -88,7 +88,7 @@ public final class KagemushaInstructionArchives {
       final long creationTimeMs,
       final Long timeToLiveMs,
       final Integer nonce,
-      final Map<String, String> metadata) {
+      final Map<String, ?> metadata) {
     return transactionPayload(
         InstructionType.REDEEM_RECURSIVE,
         instructionArchive,
@@ -107,7 +107,7 @@ public final class KagemushaInstructionArchives {
       final long creationTimeMs,
       final Long timeToLiveMs,
       final Integer nonce,
-      final Map<String, String> metadata) {
+      final Map<String, ?> metadata) {
     return recursiveRedeemTransactionPayload(
         KagemushaRecursiveSpendProver.redeemSpend(redeemRequestArchive),
         chainId,

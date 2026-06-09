@@ -7,6 +7,7 @@ import java.util.Base64
 import org.hyperledger.iroha.sdk.address.AccountAddress
 import org.hyperledger.iroha.sdk.client.JsonParser
 import org.hyperledger.iroha.sdk.core.model.Executable
+import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.core.model.WirePayload
 import org.hyperledger.iroha.sdk.norito.NoritoAdapters
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
@@ -42,7 +43,12 @@ class KagemushaInstructionArchivesTest {
             creationTimeMs = 1_735_000_000_000L,
             timeToLiveMs = 3_500L,
             nonce = 17,
-            metadata = mapOf("mode" to "kagemusha"),
+            metadata = mapOf(
+                "mode" to JsonValue.string("kagemusha"),
+                "legacy" to "string metadata",
+                "enabled" to true,
+                "attempt" to 3,
+            ),
         )
 
         val executable = assertIs<Executable.Instructions>(payload.executable)
@@ -50,7 +56,21 @@ class KagemushaInstructionArchivesTest {
         val wire = assertIs<WirePayload>(box.payload)
         assertEquals("iroha_data_model::isi::offline::KagemushaTransfer", wire.wireName)
         assertContentEquals(archive, wire.payloadBytes)
-        assertEquals("kagemusha", payload.metadata["mode"])
+        assertEquals(JsonValue.string("kagemusha"), payload.metadata["mode"])
+        assertEquals(JsonValue.string("string metadata"), payload.metadata["legacy"])
+        assertEquals(JsonValue.bool(true), payload.metadata["enabled"])
+        assertEquals(JsonValue.raw("3"), payload.metadata["attempt"])
+
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaInstructionArchives.transactionPayload(
+                instructionType = KagemushaInstructionType.TRANSFER,
+                instructionArchive = archive,
+                chainId = "00000042",
+                authority = sampleAuthority(),
+                creationTimeMs = 1_735_000_000_000L,
+                metadata = mapOf("bad" to Double.NaN),
+            )
+        }
     }
 
     @Test

@@ -16,6 +16,7 @@ import java.util.Objects;
 import java.util.Optional;
 import org.hyperledger.iroha.android.model.Executable;
 import org.hyperledger.iroha.android.model.InstructionBox;
+import org.hyperledger.iroha.android.model.JsonValue;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.testing.SimpleJson;
@@ -202,10 +203,26 @@ final class TransactionPayloadFixtures {
       final Map<String, Object> metadataRaw = payload.get("metadata") == null
           ? Collections.emptyMap()
           : asMap(payload.get("metadata"), "metadata", name);
-      final Map<String, String> metadata = new LinkedHashMap<>();
-      metadataRaw.forEach((key, value) -> metadata.put(key, Objects.toString(value)));
+      final Map<String, JsonValue> metadata = new LinkedHashMap<>();
+      metadataRaw.forEach((key, value) -> metadata.put(key, jsonValue(value)));
       builder.setMetadata(metadata);
       return builder.build();
+    }
+
+    private static JsonValue jsonValue(final Object value) {
+      if (value == null) {
+        return JsonValue.raw("null");
+      }
+      if (value instanceof String) {
+        return JsonValue.string((String) value);
+      }
+      if (value instanceof Number) {
+        return JsonValue.raw(value.toString());
+      }
+      if (value instanceof Boolean) {
+        return JsonValue.bool((Boolean) value);
+      }
+      throw new IllegalStateException("Unsupported metadata JSON value type: " + value.getClass());
     }
 
     private static TransactionPayload decodePayload(final String name, final String encoded) {

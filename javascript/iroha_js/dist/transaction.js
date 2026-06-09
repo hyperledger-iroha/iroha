@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { getNativeBinding } from "./native.js";
 import { ToriiClient } from "./toriiClient.js";
 import {
@@ -115,10 +116,39 @@ function normalizeMetadataPayload(metadata, context) {
   throw new TypeError(`${context} must be an object or JSON string when provided`);
 }
 
-const KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPES = new Set([
-  "KagemushaTransfer",
-  "RedeemKagemushaRecursive",
+const KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPES = new Map([
+  [
+    "KagemushaTransfer",
+    "iroha_data_model::isi::offline::KagemushaTransfer",
+  ],
+  [
+    "RedeemKagemushaRecursive",
+    "iroha_data_model::isi::offline::RedeemKagemushaRecursive",
+  ],
 ]);
+const KAGEMUSHA_INSTRUCTION_ARCHIVE_MAX_BYTES = 64 * 1024 * 1024;
+const NORITO_HEADER_BYTES = 40;
+const NORITO_MAX_HEADER_PADDING_BYTES = 64;
+const NORITO_MAGIC = Buffer.from("NRT0", "ascii");
+const NORITO_SUPPORTED_FLAGS_MASK = 0x27;
+const NORITO_FIELD_BITSET_FLAG = 0x20;
+const NORITO_FIELD_BITSET_REQUIRED_FLAGS = 0x06;
+const NORITO_CRC64_MASK = 0xffff_ffff_ffff_ffffn;
+const NORITO_CRC64_REFLECTED_POLY = 0xc96c_5795_d787_0f42n;
+const NORITO_CRC64_TABLE = (() => {
+  const table = new Array(256);
+  for (let index = 0; index < table.length; index += 1) {
+    let crc = BigInt(index);
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc =
+        (crc & 1n) !== 0n
+          ? (crc >> 1n) ^ NORITO_CRC64_REFLECTED_POLY
+          : crc >> 1n;
+    }
+    table[index] = crc;
+  }
+  return table;
+})();
 
 function normalizeKagemushaInstructionArchiveType(type, context) {
   const normalized = String(type ?? "").trim();
@@ -149,11 +179,106 @@ function kagemushaArchiveBuffer(source, context) {
       `${context}.instructionArchive or ${context}.bytesBase64 is required`,
     );
   }
-  const buffer = Buffer.from(encoded, "base64");
+  const normalized = encoded.trim();
+  const canonicalBase64Pattern =
+    /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u;
+  if (encoded !== normalized || !canonicalBase64Pattern.test(normalized)) {
+    throw new TypeError(`${context}.bytesBase64 must be canonical standard base64`);
+  }
+  const buffer = Buffer.from(normalized, "base64");
+  if (buffer.toString("base64") !== normalized) {
+    throw new TypeError(`${context}.bytesBase64 must be canonical standard base64`);
+  }
   if (buffer.length === 0) {
     throw new TypeError(`${context}.bytesBase64 must decode to non-empty bytes`);
   }
   return buffer;
+}
+
+function noritoSchemaHash(typeName) {
+  return createHash("sha256")
+    .update("norito:v1:type-name\0", "utf8")
+    .update(typeName, "utf8")
+    .digest()
+    .subarray(0, 16);
+}
+
+function noritoCrc64(payload) {
+  let crc = NORITO_CRC64_MASK;
+  for (const byte of payload) {
+    const index = Number((crc ^ BigInt(byte)) & 0xffn);
+    crc = NORITO_CRC64_TABLE[index] ^ (crc >> 8n);
+  }
+  return BigInt.asUintN(64, crc ^ NORITO_CRC64_MASK);
+}
+
+function validateKagemushaInstructionArchive(type, archive, context) {
+  const invalidMessage = `${context}.instructionArchive must be a valid ${type} Norito archive`;
+  const fail = () => {
+    throw new TypeError(invalidMessage);
+  };
+  if (archive.length > KAGEMUSHA_INSTRUCTION_ARCHIVE_MAX_BYTES) {
+    throw new TypeError(
+      `${context}.instructionArchive must not exceed ${KAGEMUSHA_INSTRUCTION_ARCHIVE_MAX_BYTES} bytes`,
+    );
+  }
+  if (archive.length < NORITO_HEADER_BYTES) {
+    fail();
+  }
+  if (!archive.subarray(0, 4).equals(NORITO_MAGIC)) {
+    fail();
+  }
+  if (archive[4] !== 0 || archive[5] !== 0) {
+    fail();
+  }
+  const wireName = KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPES.get(type);
+  const expectedSchema = noritoSchemaHash(wireName);
+  if (!archive.subarray(6, 22).equals(expectedSchema)) {
+    throw new TypeError(
+      `${context}.instructionArchive schema must match ${type}`,
+    );
+  }
+  if (archive[22] !== 0) {
+    throw new TypeError(`${context}.instructionArchive must not be compressed`);
+  }
+  const flags = archive[39];
+  if (
+    (flags & ~NORITO_SUPPORTED_FLAGS_MASK) !== 0 ||
+    ((flags & NORITO_FIELD_BITSET_FLAG) !== 0 &&
+      (flags & NORITO_FIELD_BITSET_REQUIRED_FLAGS) !==
+        NORITO_FIELD_BITSET_REQUIRED_FLAGS)
+  ) {
+    fail();
+  }
+  const payloadLengthBig = archive.readBigUInt64LE(23);
+  if (payloadLengthBig > BigInt(Number.MAX_SAFE_INTEGER)) {
+    fail();
+  }
+  const payloadLength = Number(payloadLengthBig);
+  if (payloadLength === 0) {
+    throw new TypeError(
+      `${context}.instructionArchive must contain a non-empty Norito payload`,
+    );
+  }
+  const minimumLength = NORITO_HEADER_BYTES + payloadLength;
+  if (archive.length < minimumLength) {
+    fail();
+  }
+  const paddingLength = archive.length - minimumLength;
+  if (paddingLength > NORITO_MAX_HEADER_PADDING_BYTES) {
+    fail();
+  }
+  const padding = archive.subarray(
+    NORITO_HEADER_BYTES,
+    NORITO_HEADER_BYTES + paddingLength,
+  );
+  if (padding.some((byte) => byte !== 0)) {
+    fail();
+  }
+  const payload = archive.subarray(NORITO_HEADER_BYTES + paddingLength);
+  if (noritoCrc64(payload) !== archive.readBigUInt64LE(31)) {
+    throw new TypeError(`${context}.instructionArchive checksum is invalid`);
+  }
 }
 
 /**
@@ -171,6 +296,11 @@ export function buildKagemushaInstructionArchiveInstruction(input) {
     "kagemushaInstructionArchive",
   );
   const archive = kagemushaArchiveBuffer(input, "kagemushaInstructionArchive");
+  validateKagemushaInstructionArchive(
+    type,
+    archive,
+    "kagemushaInstructionArchive",
+  );
   return {
     KagemushaInstructionArchive: {
       type,

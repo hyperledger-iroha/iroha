@@ -6,8 +6,8 @@ The integration tests [`sumeragi_rbc_da_large_payload_four_peers`] and
 with `sumeragi.da.enabled = true` (DA + RBC). Each run uses the integration
 harness default `LARGE_PAYLOAD_BYTES = 1024`, observes RBC delivery and
 commit, verifies the protocol READY quorum (four peers: ≥3 votes; six peers:
-≥4 votes), and prints a structured summary that can be ingested by dashboards
-or regression tooling.
+≥5 votes, derived from the commit quorum), and prints a structured summary
+that can be ingested by dashboards or regression tooling.
 
 For light-client driven sampling of RBC payloads see
 [`light_client_da.md`](light_client_da.md), which documents the authenticated
@@ -122,7 +122,7 @@ chunks fit within the consensus frame plaintext cap derived from
 | Scenario | Chunk count | READY threshold | Per-peer counters | Timing budgets |
 | --- | --- | --- | --- | --- |
 | Four peers | 1 chunk in plain mode, 4 chunks in RS16 mode | READY votes ≥3 (2f+1 for *f* = 1) | `payload_bytes_delivered_total ≥ 1024`, `deliver_broadcasts_total ≥ 1`, and `ready_broadcasts_total ≥ 1` or equivalent persisted READY evidence | Harness delivery/commit budgets |
-| Six peers | 1 chunk in plain mode, 6 chunks in RS16 mode | READY votes ≥4 (2f+1 for *f* = 2) | Same counters as above | Same budgets as above |
+| Six peers | 1 chunk in plain mode, 6 chunks in RS16 mode | READY votes ≥5 (`Topology::min_votes_for_commit()` / `commit_quorum_from_len(6)`) | Same counters as above | Same budgets as above |
 
 These smoke runs are primarily quorum, transport, and queue-regression checks.
 Operators should alert if delivery latency approaches the harness budget, if
@@ -158,7 +158,7 @@ alert when real runs drift beyond these ceilings:
 
 | Metric | Budget | Enforcement | Alert guidance |
 | --- | --- | --- | --- |
-| RBC delivery latency | 30 s base budget, plus 60 s per peer beyond four and a 40 s RS16 premium | `sumeragi_rbc_da_large_payload_*` | Alert when routine smoke runs approach the computed budget; investigate collector saturation. |
+| RBC delivery latency | 35 s effective base budget (30 s base + 5 s delivery grace), plus 60 s per peer beyond four and a 40 s RS16 premium | `sumeragi_rbc_da_large_payload_*` | Alert when routine smoke runs approach the computed budget; investigate collector saturation. |
 | Commit latency | RBC delivery budget + 40 s headroom | Same as above | Alert when commit latency approaches the computed budget; check pacemaker deadlines and view changes. |
 | Effective throughput | At least min(payload/delivery-budget, 0.1 MiB/s) | Same as above | Alert when throughput falls below the computed floor for two consecutive runs. |
 | Sumeragi background-post queue depth | ≤ 32 inflight tasks | Same as above | Alert when depth ≥ 24 to catch growing backlog early. |

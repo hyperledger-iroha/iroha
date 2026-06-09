@@ -98,7 +98,10 @@ MAX_PROFILE_CATALOG_BYTES = 4 * 1024 * 1024
 MAX_SCHEMA_BYTES = 8 * 1024 * 1024
 MAX_FIXTURE_XML_BYTES = 8 * 1024 * 1024
 MAX_XMLLINT_OUTPUT_BYTES = 64 * 1024
+MAX_XMLLINT_TIMEOUT_SECS = 300.0
+MAX_LOCAL_PATH_CHARS = 4096
 MAX_SOURCE_REPOSITORY_CHARS = 2048
+MAX_SOURCE_PATH_CHARS = 2048
 MAX_REVIEWED_GAP_REASON_CHARS = 1024
 MAX_XML_IDENTIFIER_CHARS = 256
 MAX_PROFILE_CATALOG_IDENTIFIER_CHARS = 128
@@ -312,6 +315,10 @@ def _reject_output_path_smuggling(path: Path, label: str) -> None:
     raw = str(path)
     if not raw or not path.name:
         raise FixtureManifestError(f"{label} must be a non-empty path")
+    if len(raw) > MAX_LOCAL_PATH_CHARS:
+        raise FixtureManifestError(
+            f"{label} must be no longer than {MAX_LOCAL_PATH_CHARS} characters"
+        )
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
         raise FixtureManifestError(f"{label} must not contain control characters")
     if raw != raw.strip():
@@ -339,6 +346,10 @@ def _reject_output_path_smuggling(path: Path, label: str) -> None:
 def _reject_raw_output_path_smuggling(raw: str, label: str) -> None:
     if not raw:
         raise FixtureManifestError(f"{label} must be a non-empty path")
+    if len(raw) > MAX_LOCAL_PATH_CHARS:
+        raise FixtureManifestError(
+            f"{label} must be no longer than {MAX_LOCAL_PATH_CHARS} characters"
+        )
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
         raise FixtureManifestError(f"{label} must not contain control characters")
     if raw != raw.strip():
@@ -665,7 +676,10 @@ def _run_command_bounded(
         or output_limit_bytes <= 0
     ):
         raise FixtureManifestError("output limit bytes must be positive")
-    timeout_secs = _require_positive_finite_number(timeout_secs, "xmllint timeout seconds")
+    timeout_secs = _require_bounded_xmllint_timeout_secs(
+        timeout_secs,
+        "xmllint timeout seconds",
+    )
     process = subprocess.Popen(
         argv,
         stdout=subprocess.PIPE,
@@ -721,6 +735,15 @@ def _require_positive_finite_number(value: Any, label: str) -> float:
     parsed = float(value)
     if not math.isfinite(parsed) or parsed <= 0:
         raise FixtureManifestError(f"{label} must be a positive finite number")
+    return parsed
+
+
+def _require_bounded_xmllint_timeout_secs(value: Any, label: str) -> float:
+    parsed = _require_positive_finite_number(value, label)
+    if parsed > MAX_XMLLINT_TIMEOUT_SECS:
+        raise FixtureManifestError(
+            f"{label} must be no more than {MAX_XMLLINT_TIMEOUT_SECS:g} seconds"
+        )
     return parsed
 
 
@@ -1410,10 +1433,15 @@ def _required_sha256(value: dict[str, Any], key: str, label: str) -> str:
 
 
 def _validate_source_path(raw: str, label: str) -> str:
+    if len(raw) > MAX_SOURCE_PATH_CHARS:
+        raise FixtureManifestError(
+            f"{label} must be no longer than {MAX_SOURCE_PATH_CHARS} characters"
+        )
     if "\\" in raw:
         raise FixtureManifestError(f"{label} must use forward slashes")
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
         raise FixtureManifestError(f"{label} must not contain control characters")
+    _reject_non_ascii_identifier(raw, label)
     if any(ch.isspace() for ch in raw):
         raise FixtureManifestError(f"{label} must not contain whitespace")
     if raw.startswith("-"):
@@ -1787,10 +1815,15 @@ def _validate_relative_path(
     *,
     allow_parent_segments: bool,
 ) -> Path:
+    if len(raw) > MAX_SOURCE_PATH_CHARS:
+        raise FixtureManifestError(
+            f"{label} must be no longer than {MAX_SOURCE_PATH_CHARS} characters"
+        )
     if "\\" in raw:
         raise FixtureManifestError(f"{label} must use forward slashes")
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
         raise FixtureManifestError(f"{label} must not contain control characters")
+    _reject_non_ascii_identifier(raw, label)
     if any(ch.isspace() for ch in raw):
         raise FixtureManifestError(f"{label} must not contain whitespace")
     if raw.startswith("-"):
@@ -2276,7 +2309,7 @@ def verify_profile_catalog(
 def verify_manifest(path: Path, args: argparse.Namespace) -> dict[str, Any]:
     """Verify the ISO fixture manifest and return a digest-bound summary."""
 
-    xmllint_timeout_secs = _require_positive_finite_number(
+    xmllint_timeout_secs = _require_bounded_xmllint_timeout_secs(
         getattr(args, "xmllint_timeout_secs", DEFAULT_XMLLINT_TIMEOUT_SECS),
         "--xmllint-timeout-secs",
     )
@@ -2554,7 +2587,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--xmllint-timeout-secs",
         type=float,
         default=DEFAULT_XMLLINT_TIMEOUT_SECS,
-        help="Maximum wall-clock seconds allowed for each xmllint validation.",
+        help=(
+            "Maximum wall-clock seconds allowed for each xmllint validation "
+            f"(1-{MAX_XMLLINT_TIMEOUT_SECS:g})."
+        ),
     )
     return parser
 

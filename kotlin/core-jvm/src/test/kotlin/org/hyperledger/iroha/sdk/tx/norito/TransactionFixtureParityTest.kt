@@ -59,6 +59,17 @@ class TransactionFixtureParityTest {
     }
 
     @Test
+    fun `typed metadata fixture preserves gas limit as json number`() {
+        val fixture = AndroidFixtureSupport.loadPayloadFixtures()
+            .single { it.name == "typed_metadata_gas_limit" }
+        val payload = fixture.materializePayload(adapter)
+
+        assertEquals(JsonValue.string("xor#universal"), payload.metadata["gas_asset_id"])
+        assertEquals(JsonValue.number(1000), payload.metadata["gas_limit"])
+        assertEquals(JsonValue.bool(true), payload.metadata["checked"])
+    }
+
+    @Test
     fun `transaction fixture manifest remains canonical for kotlin codec`() {
         val payloadFixturesByName = AndroidFixtureSupport.loadPayloadFixtures().associateBy { it.name }
 

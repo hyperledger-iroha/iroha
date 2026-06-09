@@ -784,7 +784,20 @@ class IsoProductionReadinessTest(unittest.TestCase):
                 self.assertNotIn("readiness-path-leak", message)
 
     def test_local_path_validators_reject_percent_encoded_smuggling(self):
+        overlong_path = "out/" + ("a" * (READINESS.MAX_LOCAL_PATH_CHARS + 1))
         cases = (
+            (
+                "raw overlong",
+                lambda raw: READINESS._reject_raw_output_path_smuggling(raw, "raw path"),
+                overlong_path,
+                f"no longer than {READINESS.MAX_LOCAL_PATH_CHARS} characters",
+            ),
+            (
+                "output overlong",
+                lambda raw: READINESS._reject_output_path_smuggling(Path(raw), "output path"),
+                overlong_path,
+                f"no longer than {READINESS.MAX_LOCAL_PATH_CHARS} characters",
+            ),
             (
                 "raw encoded dot",
                 lambda raw: READINESS._reject_raw_output_path_smuggling(raw, "raw path"),
@@ -808,6 +821,27 @@ class IsoProductionReadinessTest(unittest.TestCase):
                 lambda raw: READINESS._reject_path_smuggling(raw, "config_path"),
                 "C:/ops/readiness.json",
                 "URI or drive prefixes",
+            ),
+            (
+                "xsd source drive prefix",
+                lambda raw: READINESS._validate_schema_source_path(raw, "source.path"),
+                "C:/schemas/camt.052.xsd",
+                "URI or drive prefixes",
+            ),
+            (
+                "xsd source encoded dot",
+                lambda raw: READINESS._validate_schema_source_path(raw, "source.path"),
+                "schemas/camt%2e052.xsd",
+                "encoded dot or separator",
+            ),
+            (
+                "xsd relative encoded semicolon",
+                lambda raw: READINESS._validate_fixture_summary_path(
+                    raw,
+                    "fixtures[0].path",
+                ),
+                "fixtures/%3b/pacs.xml",
+                "encoded semicolon",
             ),
             (
                 "input encoded semicolon",
@@ -2405,6 +2439,97 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
                     self.assertIn(code, codes)
 
+    def test_xsd_gap_list_entries_reject_malformed_strings_without_echo(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            hidden_unicode_path = "unicod\u0435-gap-list-path"
+            hidden_unicode_reason = "reviewed schem\u0430 gap"
+            hidden_long_reason = "R" * (READINESS.MAX_REVIEWED_GAP_REASON_CHARS + 1)
+            cases = (
+                (
+                    lambda body: body["missing_schema_fixtures"].append(
+                        {
+                            "path": f"../fixtures/{hidden_unicode_path}/ghost.xml",
+                            "message_def_id": "fooo.001.001.01",
+                            "reason": "reviewed missing schema package",
+                        }
+                    ),
+                    "missing_schema_fixtures[0].path must use printable ASCII",
+                    hidden_unicode_path,
+                ),
+                (
+                    lambda body: body["missing_schema_fixtures"].append(
+                        {
+                            "path": "../fixtures/ghost.xml",
+                            "message_def_id": "fooo.001.001.01",
+                            "reason": hidden_unicode_reason,
+                        }
+                    ),
+                    "missing_schema_fixtures[0].reason must use printable ASCII",
+                    hidden_unicode_reason,
+                ),
+                (
+                    lambda body: body["schema_only_entries"].append(
+                        {
+                            "path": "iso/%3f/fooo.001.001.01.xsd",
+                            "message_def_id": "fooo.001.001.01",
+                            "reason": "reviewed standalone fixture gap",
+                        }
+                    ),
+                    "schema_only_entries[0].path must not contain encoded URL delimiter characters",
+                    "%3f",
+                ),
+                (
+                    lambda body: body["schema_only_entries"].append(
+                        {
+                            "path": "C:/iso/fooo.001.001.01.xsd",
+                            "message_def_id": "fooo.001.001.01",
+                            "reason": "reviewed standalone fixture gap",
+                        }
+                    ),
+                    "schema_only_entries[0].path must not contain URI or drive prefixes",
+                    "C:/iso",
+                ),
+                (
+                    lambda body: body["schema_only_entries"].append(
+                        {
+                            "path": "iso/fooo.001.001.01.xsd",
+                            "message_def_id": "fooo.001.001.01",
+                            "reason": hidden_long_reason,
+                        }
+                    ),
+                    "schema_only_entries[0].reason must be no longer than 1024 characters",
+                    hidden_long_reason,
+                ),
+            )
+            for offset, (mutate, message, hidden) in enumerate(cases):
+                with self.subTest(offset=offset):
+                    body = json.loads(xsd_summary.read_text(encoding="utf-8"))
+                    mutate(body)
+                    refresh_digest(body)
+                    mutated_path = write_json(
+                        root / f"malformed-xsd-gap-list-{offset}.summary.json",
+                        body,
+                    )
+
+                    rc, stdout, stderr = run_readiness(
+                        [
+                            "--xsd-summary",
+                            str(mutated_path),
+                            "--evidence-summary",
+                            str(evidence_summary),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(message, stderr)
+                    self.assertNotIn(hidden, stderr)
+
     def test_forged_xsd_summary_fixture_metadata_blocks_readiness(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -2961,6 +3086,178 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
 
+    def test_xsd_relative_paths_reject_non_ascii_and_overlong_without_echo(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            hidden_unicode = "unicod\u0435-readiness-path"
+            hidden_long = "x" * (READINESS.MAX_SOURCE_PATH_CHARS + 1)
+            cases = (
+                (
+                    lambda body: body["schemas"][0].__setitem__(
+                        "path",
+                        f"iso/{hidden_unicode}/fooo.001.001.01.xsd",
+                    ),
+                    "schemas[0].path must use printable ASCII",
+                    hidden_unicode,
+                ),
+                (
+                    lambda body: body["schemas"][0].__setitem__(
+                        "path",
+                        "iso/" + hidden_long + "/fooo.001.001.01.xsd",
+                    ),
+                    "schemas[0].path must be no longer than 2048 characters",
+                    hidden_long,
+                ),
+                (
+                    lambda body: body["fixtures"][0].__setitem__(
+                        "path",
+                        f"../{hidden_unicode}/foo_fixture.xml",
+                    ),
+                    "fixtures[0].path must use printable ASCII",
+                    hidden_unicode,
+                ),
+                (
+                    lambda body: body["fixtures"][0].__setitem__(
+                        "path",
+                        "../" + hidden_long + "/foo_fixture.xml",
+                    ),
+                    "fixtures[0].path must be no longer than 2048 characters",
+                    hidden_long,
+                ),
+                (
+                    lambda body: body["fixtures"][0].__setitem__(
+                        "schema",
+                        f"iso/{hidden_unicode}/fooo.001.001.01.xsd",
+                    ),
+                    "fixtures[0].schema must use printable ASCII",
+                    hidden_unicode,
+                ),
+                (
+                    lambda body: body["fixtures"][0].__setitem__(
+                        "schema",
+                        "iso/" + hidden_long + "/fooo.001.001.01.xsd",
+                    ),
+                    "fixtures[0].schema must be no longer than 2048 characters",
+                    hidden_long,
+                ),
+            )
+            for offset, (mutate, message, hidden) in enumerate(cases):
+                with self.subTest(offset=offset):
+                    body = json.loads(xsd_summary.read_text(encoding="utf-8"))
+                    mutate(body)
+                    refresh_digest(body)
+                    mutated_path = write_json(
+                        root / f"malformed-xsd-relative-path-{offset}.summary.json",
+                        body,
+                    )
+
+                    rc, stdout, stderr = run_readiness(
+                        [
+                            "--xsd-summary",
+                            str(mutated_path),
+                            "--evidence-summary",
+                            str(evidence_summary),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(message, stderr)
+                    self.assertNotIn(hidden, stderr)
+
+    def test_xsd_summary_paths_reject_encoded_smuggling_without_echo(self):
+        def attach_blocked_sources(body, entries):
+            body["blocked_schema_sources"] = entries
+            body["blocked_schema_source_count"] = len(entries)
+            return body
+
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            cases = (
+                (
+                    lambda body: body["schemas"][0].__setitem__(
+                        "path",
+                        "file:iso/fooo.001.001.01.xsd",
+                    ),
+                    "schemas[0].path must not contain URI or drive prefixes",
+                    "file:iso",
+                ),
+                (
+                    lambda body: body["schemas"][0].__setitem__(
+                        "path",
+                        "iso/%2e/fooo.001.001.01.xsd",
+                    ),
+                    "schemas[0].path must not contain encoded dot or separator characters",
+                    "%2e",
+                ),
+                (
+                    lambda body: body["fixtures"][0].__setitem__(
+                        "path",
+                        "../fixtures/%3b/foo_fixture.xml",
+                    ),
+                    "fixtures[0].path must not contain encoded semicolon parameters",
+                    "%3b",
+                ),
+                (
+                    lambda body: body["fixtures"][0].__setitem__(
+                        "schema",
+                        "iso/%3f/fooo.001.001.01.xsd",
+                    ),
+                    "fixtures[0].schema must not contain encoded URL delimiter characters",
+                    "%3f",
+                ),
+                (
+                    lambda body: body["schemas"][0]["source"].__setitem__(
+                        "path",
+                        "xsd/iso/fooo%2e001.001.01.xsd",
+                    ),
+                    "source.path must not contain encoded dot or separator characters",
+                    "%2e",
+                ),
+                (
+                    lambda body: (
+                        attach_blocked_sources(body, [xsd_test.blocked_schema_source()]),
+                        body["blocked_schema_sources"][0]["source"].__setitem__(
+                            "path",
+                            "xsd/%2f/barr.001.001.01.xsd",
+                        ),
+                    ),
+                    "source.path must not contain encoded dot or separator characters",
+                    "%2f",
+                ),
+            )
+            for offset, (mutate, message, hidden) in enumerate(cases):
+                with self.subTest(offset=offset):
+                    body = json.loads(xsd_summary.read_text(encoding="utf-8"))
+                    mutate(body)
+                    refresh_digest(body)
+                    mutated_path = write_json(
+                        root / f"encoded-xsd-summary-path-{offset}.summary.json",
+                        body,
+                    )
+
+                    rc, stdout, stderr = run_readiness(
+                        [
+                            "--xsd-summary",
+                            str(mutated_path),
+                            "--evidence-summary",
+                            str(evidence_summary),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(message, stderr)
+                    self.assertNotIn(hidden, stderr)
+
     def test_rejected_xsd_summary_paths_do_not_echo_secret_absolute_paths(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -3170,6 +3467,84 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     self.assertEqual(rc, 1, stderr)
                     codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
                     self.assertIn(code, codes)
+
+    def test_xsd_source_paths_reject_non_ascii_and_overlong_without_echo(self):
+        def attach_blocked_sources(body, entries):
+            body["blocked_schema_sources"] = entries
+            body["blocked_schema_source_count"] = len(entries)
+            return body
+
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            hidden_unicode = "unicod\u0435-readiness-source-path"
+            hidden_long = "x" * (READINESS.MAX_SOURCE_PATH_CHARS + 1)
+            cases = (
+                (
+                    lambda body: body["schemas"][0]["source"].__setitem__(
+                        "path",
+                        f"xsd/{hidden_unicode}/fooo.001.001.01.xsd",
+                    ),
+                    "source.path must use printable ASCII",
+                    hidden_unicode,
+                ),
+                (
+                    lambda body: body["schemas"][0]["source"].__setitem__(
+                        "path",
+                        "xsd/" + hidden_long + "/fooo.001.001.01.xsd",
+                    ),
+                    "source.path must be no longer than 2048 characters",
+                    hidden_long,
+                ),
+                (
+                    lambda body: (
+                        attach_blocked_sources(body, [xsd_test.blocked_schema_source()]),
+                        body["blocked_schema_sources"][0]["source"].__setitem__(
+                            "path",
+                            f"xsd/{hidden_unicode}/barr.001.001.01.xsd",
+                        ),
+                    ),
+                    "source.path must use printable ASCII",
+                    hidden_unicode,
+                ),
+                (
+                    lambda body: (
+                        attach_blocked_sources(body, [xsd_test.blocked_schema_source()]),
+                        body["blocked_schema_sources"][0]["source"].__setitem__(
+                            "path",
+                            "xsd/" + hidden_long + "/barr.001.001.01.xsd",
+                        ),
+                    ),
+                    "source.path must be no longer than 2048 characters",
+                    hidden_long,
+                ),
+            )
+            for offset, (mutate, message, hidden) in enumerate(cases):
+                with self.subTest(offset=offset):
+                    body = json.loads(xsd_summary.read_text(encoding="utf-8"))
+                    mutate(body)
+                    refresh_digest(body)
+                    mutated_path = write_json(
+                        root / f"malformed-xsd-source-path-{offset}.summary.json",
+                        body,
+                    )
+
+                    rc, stdout, stderr = run_readiness(
+                        [
+                            "--xsd-summary",
+                            str(mutated_path),
+                            "--evidence-summary",
+                            str(evidence_summary),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(message, stderr)
+                    self.assertNotIn(hidden, stderr)
 
     def test_forged_xsd_blocked_schema_source_metadata_blocks_readiness(self):
         def attach_blocked_sources(body, entries):
@@ -3462,6 +3837,84 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
 
+    def test_archived_path_strings_reject_overlong_without_echo(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            hidden = "x" * (READINESS.MAX_SOURCE_PATH_CHARS + 1)
+            cases = (
+                (
+                    "manifest",
+                    "xsd",
+                    lambda body: body.__setitem__("manifest", f"/ops/iso/{hidden}.json"),
+                    "manifest must be no longer than 2048 characters",
+                ),
+                (
+                    "profile-catalog",
+                    "xsd",
+                    lambda body: body["profile_catalog"].__setitem__(
+                        "path",
+                        f"/ops/iso/{hidden}.rs",
+                    ),
+                    "profile_catalog.path must be no longer than 2048 characters",
+                ),
+                (
+                    "canary-summary",
+                    "evidence",
+                    lambda body: body["canary_summaries"][0].__setitem__(
+                        "path",
+                        f"/ops/iso/{hidden}.summary.json",
+                    ),
+                    "canary_summaries[0].path must be no longer than 2048 characters",
+                ),
+                (
+                    "canary-config",
+                    "evidence",
+                    lambda body: body["canary_summaries"][0].__setitem__(
+                        "config_path",
+                        f"/ops/iso/{hidden}.json",
+                    ),
+                    "canary_summaries[0].config_path must be no longer than 2048 characters",
+                ),
+            )
+            for offset, (name, target, mutate, message) in enumerate(cases):
+                with self.subTest(name=name):
+                    xsd = json.loads(xsd_summary.read_text(encoding="utf-8"))
+                    evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+                    body = xsd if target == "xsd" else evidence
+                    mutate(body)
+                    if target == "xsd":
+                        refresh_digest(xsd)
+                        mutated_xsd = write_json(
+                            root / f"overlong-xsd-path-{offset}.summary.json",
+                            xsd,
+                        )
+                        mutated_evidence = evidence_summary
+                    else:
+                        refresh_digest(evidence)
+                        mutated_xsd = xsd_summary
+                        mutated_evidence = write_json(
+                            root / f"overlong-evidence-path-{offset}.summary.json",
+                            evidence,
+                        )
+
+                    rc, stdout, stderr = run_readiness(
+                        [
+                            "--xsd-summary",
+                            str(mutated_xsd),
+                            "--evidence-summary",
+                            str(mutated_evidence),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(message, stderr)
+                    self.assertNotIn(hidden, stderr)
+
     def test_forged_xsd_profile_catalog_metadata_blocks_readiness(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -3684,6 +4137,63 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     self.assertIn(message, stderr)
                     self.assertNotIn(hidden, stderr)
                     self.assertNotIn(unicode_digit_message_def_id, stderr)
+
+    def test_xsd_profile_skipped_versions_reject_malformed_aliases_without_echo(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            hidden_digit = "\u0660"
+            hidden_secret = "token-readiness-skipped-version-secret"
+            cases = (
+                (
+                    f"fooo.{hidden_digit}01",
+                    "skipped_family_versions[0].version must use printable ASCII",
+                    hidden_digit,
+                ),
+                (
+                    " fooo.001",
+                    "skipped_family_versions[0].version must not have surrounding whitespace",
+                    " fooo.001",
+                ),
+                (
+                    hidden_secret,
+                    "skipped_family_versions[0].version contains secret-looking material",
+                    hidden_secret,
+                ),
+            )
+            for offset, (version, message, hidden) in enumerate(cases):
+                with self.subTest(offset=offset):
+                    body = json.loads(xsd_summary.read_text(encoding="utf-8"))
+                    body["profile_catalog"]["skipped_family_versions"].append(
+                        {
+                            "profile_id": "minimal-profile",
+                            "message_type": "fooo.001",
+                            "direction": "inbound",
+                            "version": version,
+                        }
+                    )
+                    refresh_digest(body)
+                    mutated_path = write_json(
+                        root / f"malformed-skipped-profile-version-{offset}.summary.json",
+                        body,
+                    )
+
+                    rc, stdout, stderr = run_readiness(
+                        [
+                            "--xsd-summary",
+                            str(mutated_path),
+                            "--evidence-summary",
+                            str(evidence_summary),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(message, stderr)
+                    self.assertNotIn(hidden, stderr)
 
     def test_xsd_profile_catalog_path_is_canonical(self):
         cases = (

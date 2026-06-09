@@ -12,6 +12,7 @@ import org.hyperledger.iroha.android.IrohaKeyManager;
 import org.hyperledger.iroha.android.KeyManagementException;
 import org.hyperledger.iroha.android.model.Executable;
 import org.hyperledger.iroha.android.model.InstructionBox;
+import org.hyperledger.iroha.android.model.JsonValue;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.crypto.Blake2b;
 import org.hyperledger.iroha.android.tx.MultisigSignature;
@@ -33,6 +34,8 @@ public final class NoritoCodecAdapterTests {
 
   private static final TypeAdapter<byte[]> BYTE_VECTOR_ADAPTER = NoritoAdapters.byteVecAdapter();
   private static final TypeAdapter<byte[]> RAW_BYTE_VECTOR_ADAPTER = NoritoAdapters.rawByteVecAdapter();
+  private static final TypeAdapter<List<RawMetadataEntry>> RAW_METADATA_ADAPTER =
+      NoritoAdapters.sequence(new RawMetadataEntryAdapter());
 
   @Test
   public void runCodecScenarios() throws NoritoException {
@@ -54,6 +57,7 @@ public final class NoritoCodecAdapterTests {
     javaCodecSupportsWireInstructionPayloads();
     javaCodecEncodesIvmBytecodeLayout();
     javaCodecEncodesInstructionLayout();
+    javaCodecEncodesTypedMetadata();
     System.out.println("[IrohaAndroid] Norito codec scaffolding tests passed.");
   }
 
@@ -81,8 +85,38 @@ public final class NoritoCodecAdapterTests {
         : "Decoded payload should match original instructions";
     assert decoded.timeToLiveMs().orElseThrow() == 5_000L : "TTL must round-trip";
     assert decoded.nonce().orElseThrow() == 42 : "Nonce must round-trip";
-    assert "unit-test".equals(decoded.metadata().get("purpose")) : "Metadata must round-trip";
+    assert JsonValue.string("unit-test").equals(decoded.metadata().get("purpose"))
+        : "Metadata must round-trip";
     assertBarePayload(encoded);
+  }
+
+  private static void javaCodecEncodesTypedMetadata() throws NoritoException {
+    final TransactionPayload payload =
+        TransactionPayload.builder()
+            .setChainId("00000014")
+            .setAuthority(sampleAuthority((byte) 0x08))
+            .setCreationTimeMs(1_735_333_333_123L)
+            .setExecutable(Executable.ivm(new byte[] {0x05}))
+            .putMetadata("gas_asset_id", "xor#universal")
+            .putMetadata("gas_limit", JsonValue.number(1000L))
+            .putMetadata("checked", JsonValue.bool(true))
+            .build();
+
+    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
+    final byte[] encoded = adapter.encodeTransaction(payload);
+    final TransactionPayload decoded = adapter.decodeTransaction(encoded);
+
+    assert JsonValue.string("xor#universal").equals(decoded.metadata().get("gas_asset_id"))
+        : "gas_asset_id must remain a JSON string";
+    assert JsonValue.number(1000L).equals(decoded.metadata().get("gas_limit"))
+        : "gas_limit must round-trip as a JSON number";
+    assert JsonValue.bool(true).equals(decoded.metadata().get("checked"))
+        : "boolean metadata must round-trip";
+
+    final Map<String, String> rawMetadata = rawMetadata(encoded);
+    assert "1000".equals(rawMetadata.get("gas_limit")) : "gas_limit must be encoded without quotes";
+    assert !"\"1000\"".equals(rawMetadata.get("gas_limit"))
+        : "gas_limit must not be encoded as a JSON string";
   }
 
   private static void javaCodecEncodesAccountIdAuthority() throws NoritoException {
@@ -487,6 +521,99 @@ public final class NoritoCodecAdapterTests {
       throw new IllegalArgumentException(field + " length too large: " + length);
     }
     return decoder.readBytes((int) length);
+  }
+
+  private static <T> void encodeFieldPayload(
+      final NoritoEncoder encoder, final TypeAdapter<T> adapter, final T value) {
+    final NoritoEncoder fieldEncoder = encoder.childEncoder();
+    adapter.encode(fieldEncoder, value);
+    final byte[] payload = fieldEncoder.toByteArray();
+    final boolean compact = (encoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
+    encoder.writeLength(payload.length, compact);
+    encoder.writeBytes(payload);
+  }
+
+  private static Map<String, String> rawMetadata(final byte[] encoded) {
+    final NoritoDecoder payloadDecoder = canonicalDecoder(encoded);
+    readField(payloadDecoder, "payload.chain_id");
+    readField(payloadDecoder, "payload.authority");
+    readField(payloadDecoder, "payload.creation_time_ms");
+    readField(payloadDecoder, "payload.executable");
+    readField(payloadDecoder, "payload.time_to_live_ms");
+    readField(payloadDecoder, "payload.nonce");
+    final byte[] metadataField = readField(payloadDecoder, "payload.metadata");
+    assert payloadDecoder.remaining() == 0 : "Payload has trailing bytes";
+
+    final NoritoDecoder metadataDecoder = canonicalDecoder(metadataField);
+    final List<RawMetadataEntry> entries = RAW_METADATA_ADAPTER.decode(metadataDecoder);
+    assert metadataDecoder.remaining() == 0 : "Metadata field has trailing bytes";
+    final Map<String, String> values = new LinkedHashMap<>();
+    for (final RawMetadataEntry entry : entries) {
+      values.put(entry.key(), entry.value());
+    }
+    return values;
+  }
+
+  private static final class RawMetadataEntry {
+    private final String key;
+    private final String value;
+
+    private RawMetadataEntry(final String key, final String value) {
+      this.key = key;
+      this.value = value;
+    }
+
+    private String key() {
+      return key;
+    }
+
+    private String value() {
+      return value;
+    }
+  }
+
+  private static final class RawMetadataEntryAdapter implements TypeAdapter<RawMetadataEntry> {
+    private static final TypeAdapter<String> RAW_JSON_ADAPTER = new RawJsonAdapter();
+
+    @Override
+    public void encode(final NoritoEncoder encoder, final RawMetadataEntry value) {
+      encodeFieldPayload(encoder, NoritoAdapters.stringAdapter(), value.key());
+      encodeFieldPayload(encoder, RAW_JSON_ADAPTER, value.value());
+    }
+
+    @Override
+    public RawMetadataEntry decode(final NoritoDecoder decoder) {
+      final String key =
+          decodeFieldPayload(readField(decoder, "metadata.key"), NoritoAdapters.stringAdapter(), "metadata.key");
+      final String value =
+          decodeFieldPayload(readField(decoder, "metadata.value"), RAW_JSON_ADAPTER, "metadata.value");
+      return new RawMetadataEntry(key, value);
+    }
+
+    @Override
+    public boolean isSelfDelimiting() {
+      return true;
+    }
+  }
+
+  private static final class RawJsonAdapter implements TypeAdapter<String> {
+    @Override
+    public void encode(final NoritoEncoder encoder, final String value) {
+      encodeFieldPayload(encoder, NoritoAdapters.stringAdapter(), value);
+    }
+
+    @Override
+    public String decode(final NoritoDecoder decoder) {
+      return decodeFieldPayload(
+          readField(decoder, "metadata.value.json"),
+          NoritoAdapters.stringAdapter(),
+          "metadata.value.json");
+    }
+
+    @Override
+    public boolean isSelfDelimiting() {
+      return true;
+    }
   }
 
   private static byte[] readSequenceElement(

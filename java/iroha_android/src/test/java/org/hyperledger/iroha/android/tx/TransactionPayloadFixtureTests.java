@@ -10,8 +10,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import org.hyperledger.iroha.android.address.AccountAddress;
-import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.model.InstructionBox;
+import org.hyperledger.iroha.android.model.JsonValue;
+import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.norito.NoritoAdapters;
 import org.hyperledger.iroha.norito.NoritoCodec;
@@ -130,6 +131,14 @@ public final class TransactionPayloadFixtureTests {
           : name + ": TTL mismatch vs fixture metadata";
       assert Objects.equals(fixture.nonce(), payload.nonce())
           : name + ": nonce mismatch vs fixture metadata";
+      if ("typed_metadata_gas_limit".equals(name)) {
+        assert JsonValue.string("xor#universal").equals(payload.metadata().get("gas_asset_id"))
+            : name + ": gas asset metadata must be a JSON string";
+        assert JsonValue.number(1000L).equals(payload.metadata().get("gas_limit"))
+            : name + ": gas limit metadata must be a JSON number";
+        assert JsonValue.bool(true).equals(payload.metadata().get("checked"))
+            : name + ": boolean metadata must be preserved";
+      }
       final byte[] encoded = adapter.encodeTransaction(payload);
       fixture.encoded().ifPresent(expected -> {
         if (payload.executable().isInstructions()) {

@@ -47,6 +47,8 @@ DEFAULT_STAGE_TIMEOUT_SECS = 300.0
 CANARY_SUMMARY_VERSION = 1
 MAX_CONFIG_JSON_BYTES = 64 * 1024
 MAX_HTTP_URL_CHARS = 2048
+MAX_LOCAL_PATH_CHARS = 4096
+MAX_CLEAN_STRING_CHARS = 4096
 LOCAL_REBINDING_HOST_SUFFIXES = {"localtest.me", "lvh.me", "nip.io", "sslip.io", "vcap.me"}
 RESERVED_PLACEHOLDER_HOST_SUFFIXES = {
     "example",
@@ -228,6 +230,8 @@ def _reject_output_path_smuggling(path: Path, label: str) -> None:
     raw = str(path)
     if not raw or not path.name:
         raise CanaryError(f"{label} must be a non-empty path")
+    if len(raw) > MAX_LOCAL_PATH_CHARS:
+        raise CanaryError(f"{label} must be no longer than {MAX_LOCAL_PATH_CHARS} characters")
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
         raise CanaryError(f"{label} must not contain control characters")
     if raw != raw.strip():
@@ -255,6 +259,8 @@ def _reject_output_path_smuggling(path: Path, label: str) -> None:
 def _reject_raw_output_path_smuggling(raw: str, label: str) -> None:
     if not raw:
         raise CanaryError(f"{label} must be a non-empty path")
+    if len(raw) > MAX_LOCAL_PATH_CHARS:
+        raise CanaryError(f"{label} must be no longer than {MAX_LOCAL_PATH_CHARS} characters")
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
         raise CanaryError(f"{label} must not contain control characters")
     if raw != raw.strip():
@@ -651,6 +657,8 @@ def _required_string(value: dict[str, Any], key: str, label: str) -> str:
     raw = value.get(key)
     if not isinstance(raw, str) or not raw.strip():
         raise CanaryError(f"{label}.{key} must be a non-empty string")
+    if len(raw) > MAX_CLEAN_STRING_CHARS:
+        raise CanaryError(f"{label}.{key} must be no longer than {MAX_CLEAN_STRING_CHARS} characters")
     _reject_control_chars(raw, f"{label}.{key}")
     if raw != raw.strip():
         raise CanaryError(f"{label}.{key} must not have surrounding whitespace")
@@ -663,6 +671,8 @@ def _optional_string(value: dict[str, Any], key: str, label: str) -> str | None:
     raw = value.get(key)
     if not isinstance(raw, str) or not raw.strip():
         raise CanaryError(f"{label}.{key} must be a non-empty string when provided")
+    if len(raw) > MAX_CLEAN_STRING_CHARS:
+        raise CanaryError(f"{label}.{key} must be no longer than {MAX_CLEAN_STRING_CHARS} characters")
     _reject_control_chars(raw, f"{label}.{key}")
     if raw != raw.strip():
         raise CanaryError(f"{label}.{key} must not have surrounding whitespace")
@@ -755,6 +765,10 @@ def _string_list(
     for offset, item in enumerate(raw):
         if not isinstance(item, str) or not item.strip():
             raise CanaryError(f"{label}.{key}[{offset}] must be a non-empty string")
+        if len(item) > MAX_CLEAN_STRING_CHARS:
+            raise CanaryError(
+                f"{label}.{key}[{offset}] must be no longer than {MAX_CLEAN_STRING_CHARS} characters"
+            )
         _reject_control_chars(item, f"{label}.{key}[{offset}]")
         if item != item.strip():
             raise CanaryError(
@@ -818,6 +832,8 @@ def _validate_path_string(
     *,
     allow_runtime_secret_path: bool = False,
 ) -> None:
+    if len(raw) > MAX_LOCAL_PATH_CHARS:
+        raise CanaryError(f"{label} must be no longer than {MAX_LOCAL_PATH_CHARS} characters")
     _reject_control_chars(raw, label)
     if any(ord(ch) > 0x7E for ch in raw):
         raise CanaryError(f"{label} must use printable ASCII")

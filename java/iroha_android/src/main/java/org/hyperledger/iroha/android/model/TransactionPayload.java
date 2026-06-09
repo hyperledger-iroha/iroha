@@ -24,7 +24,7 @@ public final class TransactionPayload {
   private final Executable executable;
   private final Optional<Long> timeToLiveMs;
   private final Optional<Integer> nonce;
-  private final Map<String, String> metadata;
+  private final Map<String, JsonValue> metadata;
 
   private TransactionPayload(final Builder builder) {
     this.chainId = builder.chainId;
@@ -60,7 +60,7 @@ public final class TransactionPayload {
     return nonce;
   }
 
-  public Map<String, String> metadata() {
+  public Map<String, JsonValue> metadata() {
     return metadata;
   }
 
@@ -88,7 +88,7 @@ public final class TransactionPayload {
     private Executable executable = Executable.ivm(new byte[0]);
     private Optional<Long> timeToLiveMs = Optional.empty();
     private Optional<Integer> nonce = Optional.empty();
-    private final Map<String, String> metadata = new LinkedHashMap<>();
+    private final Map<String, JsonValue> metadata = new LinkedHashMap<>();
 
     public Builder setChainId(final String chainId) {
       this.chainId = normalize(chainId, "chainId");
@@ -144,16 +144,42 @@ public final class TransactionPayload {
     }
 
     public Builder putMetadata(final String key, final String value) {
+      return putMetadata(key, JsonValue.string(Objects.requireNonNull(value, "metadata value")));
+    }
+
+    public Builder putMetadata(final String key, final JsonValue value) {
       metadata.put(normalize(key, "metadata key"), Objects.requireNonNull(value, "metadata value"));
       return this;
     }
 
-    public Builder setMetadata(final Map<String, String> metadata) {
+    public Builder setMetadata(final Map<String, ?> metadata) {
       this.metadata.clear();
       if (metadata != null) {
-        metadata.forEach(this::putMetadata);
+        metadata.forEach((key, value) -> putMetadata(key, metadataValue(value)));
       }
       return this;
+    }
+
+    private static JsonValue metadataValue(final Object value) {
+      if (value instanceof JsonValue) {
+        return (JsonValue) value;
+      }
+      if (value instanceof String) {
+        return JsonValue.string((String) value);
+      }
+      if (value instanceof Boolean) {
+        return JsonValue.bool((Boolean) value);
+      }
+      if (value instanceof Number) {
+        if (value instanceof Double && !Double.isFinite((Double) value)) {
+          throw new IllegalArgumentException("metadata number must be finite");
+        }
+        if (value instanceof Float && !Float.isFinite((Float) value)) {
+          throw new IllegalArgumentException("metadata number must be finite");
+        }
+        return JsonValue.raw(value.toString());
+      }
+      throw new IllegalArgumentException("Unsupported metadata value type: " + value);
     }
 
     public TransactionPayload build() {
