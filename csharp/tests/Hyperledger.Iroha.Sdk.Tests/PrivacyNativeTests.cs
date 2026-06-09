@@ -83,6 +83,9 @@ public sealed class PrivacyNativeTests
 
         var missing = Assert.IsAssignableFrom<IList<string>>(bridgeAvailable.ProductionGate.Missing);
         Assert.Throws<NotSupportedException>(() => missing.Add("tampered"));
+        var requiredGates = Assert.IsAssignableFrom<IList<string>>(
+            bridgeAvailable.ProductionGate.RequiredGates);
+        Assert.Throws<NotSupportedException>(() => requiredGates.Add("tampered"));
         var auditReferences = Assert.IsAssignableFrom<IList<string>>(
             bridgeAvailable.ProductionGate.AuditReferences);
         Assert.Throws<NotSupportedException>(() =>
@@ -90,9 +93,11 @@ public sealed class PrivacyNativeTests
 
         var fresh = PrivacyNative.GetPrivacyCapabilities(bridgeAvailable: true);
         Assert.DoesNotContain("tampered", fresh.ProductionGate.Missing);
+        Assert.DoesNotContain("tampered", fresh.ProductionGate.RequiredGates);
         Assert.DoesNotContain(
             "https://audit.example/forged-signoff",
             fresh.ProductionGate.AuditReferences);
+        Assert.Equal(PrivacyProductionGate.RequiredGateKeys, fresh.ProductionGate.RequiredGates);
         Assert.Equal(PrivacyProductionGate.MissingReasons, fresh.ProductionGate.Missing);
     }
 
@@ -1007,6 +1012,7 @@ public sealed class PrivacyNativeTests
         Assert.False(capabilities.ProductionGate.PerformanceGates);
         Assert.False(capabilities.ProductionGate.ExternalAudit);
         Assert.Empty(capabilities.ProductionGate.AuditReferences);
+        Assert.Equal(PrivacyProductionGate.RequiredGateKeys, capabilities.ProductionGate.RequiredGates);
         Assert.Equal(PrivacyProductionGate.MissingReasons, capabilities.ProductionGate.Missing);
         Assert.Contains(
             "real proving engine is not registered",

@@ -68,6 +68,42 @@ System.out.println(formats.i105Warning);
 Use `displayFormats()` whenever UI layers need to render or copy addresses so the warning text and
 network prefix stay aligned with `docs/source/sns/address_display_guidelines.md`.
 
+## Offline cash lifecycle
+
+Use `OfflineCashLifecycle.Controller` around the app's offline wallet for load
+actions. It syncs pending audit receipts before issuing more cash, while local
+device-to-device send/receive code should use cached setup state instead of
+fetching fresh capabilities.
+
+```java
+import org.hyperledger.iroha.android.offline.OfflineCashLifecycle;
+
+OfflineCashLifecycle.ConfigurationSnapshot snapshot =
+    new OfflineCashLifecycle.ConfigurationSnapshot(
+        true,
+        cachedIssuerPublicKeyBase64,
+        7,
+        expiresAtMs);
+snapshot.requireUsableForOfflineExchange(System.currentTimeMillis(), 7);
+
+OfflineCashLifecycle.Controller controller =
+    new OfflineCashLifecycle.Controller(offlineWallet, auditReceiptSynchronizer);
+controller.load("pkr#sbp", "500").join();
+
+OfflineCashLifecycle.TransportCapabilities transports =
+    new OfflineCashLifecycle.TransportCapabilities(
+        true,
+        appHasHceEntitlement && deviceSupportsNfc
+            ? OfflineCashLifecycle.NfcCapability.supported()
+            : OfflineCashLifecycle.NfcCapability.unavailable("missing HCE"),
+        true);
+System.out.println(transports.supportedTransportKinds());
+```
+
+UI layers must not render NFC actions when `supportedTransportKinds()` omits
+`nfc`; non-NFC devices and app builds without HCE should expose QR or Nearby
+only.
+
 ## Multisig specs and TTL preview
 
 ```java

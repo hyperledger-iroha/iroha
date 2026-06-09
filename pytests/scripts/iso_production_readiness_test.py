@@ -4753,6 +4753,51 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     self.assertIn("must use printable ASCII", stderr)
                     self.assertNotIn(hidden, stderr)
 
+    def test_overlong_compact_trust_source_identity_values_are_rejected_without_echo(self):
+        def set_nested(evidence, parts, value):
+            target = evidence
+            for part in parts[:-1]:
+                target = target[part]
+            target[parts[-1]] = value
+
+        hidden = "A" * (READINESS.MAX_TRUST_SOURCE_TEXT_CHARS + 1)
+        cases = (
+            (
+                "trust-source-authority",
+                ("trust_summaries", 0, "profiles", 0, "source", "authority"),
+                "source.authority must be no longer than 256 characters",
+            ),
+            (
+                "trust-source-version",
+                ("trust_summaries", 0, "profiles", 0, "source", "version"),
+                "source.version must be no longer than 256 characters",
+            ),
+        )
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            for name, parts, message in cases:
+                with self.subTest(name=name):
+                    evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+                    set_nested(evidence, parts, hidden)
+                    refresh_digest(evidence)
+                    mutated_path = write_json(
+                        root / f"overlong-{name}.summary.json",
+                        evidence,
+                    )
+
+                    rc, stdout, stderr = run_readiness(
+                        ["--xsd-summary", str(xsd_summary), "--evidence-summary", str(mutated_path)]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(message, stderr)
+                    self.assertNotIn(hidden, stderr)
+
     def test_secret_or_non_ascii_compact_receipt_kind_values_are_rejected_without_echo(self):
         def mutate_nested(evidence, parts, value):
             target = evidence
@@ -5311,6 +5356,82 @@ class IsoProductionReadinessTest(unittest.TestCase):
 
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
+
+    def test_overlong_compact_timestamps_are_rejected_without_echo(self):
+        def set_nested(value, parts):
+            target = value
+            for part in parts[:-1]:
+                target = target[part]
+            target[parts[-1]] = hidden
+
+        hidden = "2" * (READINESS.MAX_TIMESTAMP_CHARS + 1)
+        cases = (
+            (
+                "xsd-verified-at",
+                "xsd",
+                ("verified_at",),
+                "verified_at must be no longer than 128 characters",
+            ),
+            (
+                "evidence-verified-at",
+                "evidence",
+                ("verified_at",),
+                "verified_at must be no longer than 128 characters",
+            ),
+            (
+                "canary-started-at",
+                "evidence",
+                ("canary_summaries", 0, "started_at"),
+                "started_at must be no longer than 128 characters",
+            ),
+            (
+                "canary-stage-finished-at",
+                "evidence",
+                ("canary_summaries", 0, "stage_windows", 0, "finished_at"),
+                "finished_at must be no longer than 128 characters",
+            ),
+            (
+                "trust-verified-at",
+                "evidence",
+                ("trust_summaries", 0, "verified_at"),
+                "verified_at must be no longer than 128 characters",
+            ),
+            (
+                "trust-source-retrieved-at",
+                "evidence",
+                ("trust_summaries", 0, "profiles", 0, "source", "retrieved_at"),
+                "source.retrieved_at must be no longer than 128 characters",
+            ),
+        )
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            for name, target_name, parts, message in cases:
+                with self.subTest(name=name):
+                    xsd_path = xsd_summary
+                    evidence_path = evidence_summary
+                    if target_name == "xsd":
+                        body = json.loads(xsd_summary.read_text(encoding="utf-8"))
+                        set_nested(body, parts)
+                        refresh_digest(body)
+                        xsd_path = write_json(root / f"{name}.summary.json", body)
+                    else:
+                        body = json.loads(evidence_summary.read_text(encoding="utf-8"))
+                        set_nested(body, parts)
+                        refresh_digest(body)
+                        evidence_path = write_json(root / f"{name}.summary.json", body)
+
+                    rc, stdout, stderr = run_readiness(
+                        ["--xsd-summary", str(xsd_path), "--evidence-summary", str(evidence_path)]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(message, stderr)
+                    self.assertNotIn(hidden, stderr)
 
     def test_compact_trust_source_is_required_and_rechecked_by_readiness(self):
         def set_source(evidence, value):
@@ -6102,6 +6223,46 @@ class IsoProductionReadinessTest(unittest.TestCase):
             self.assertIn("embedded_signature_policy must use printable ASCII", stderr)
             self.assertNotIn(hidden, stderr)
             self.assertNotIn("uses unsupported policy", stderr)
+
+    def test_overlong_compact_trust_identity_values_are_rejected_without_echo(self):
+        cases = (
+            (
+                "profile-id",
+                "profile_id",
+                "a" * (READINESS.MAX_PROFILE_ID_CHARS + 1),
+                "profile_id must be no longer than 128 characters",
+                "trust profile",
+            ),
+            (
+                "policy",
+                "embedded_signature_policy",
+                "record-" + ("a" * READINESS.MAX_TRUST_POLICY_CHARS),
+                "embedded_signature_policy must be no longer than 128 characters",
+                "uses unsupported policy",
+            ),
+        )
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            for name, field, hidden, message, forbidden in cases:
+                with self.subTest(name=name):
+                    evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+                    evidence["trust_summaries"][0]["profiles"][0][field] = hidden
+                    refresh_digest(evidence)
+                    mutated_path = write_json(root / f"overlong-{name}.summary.json", evidence)
+
+                    rc, stdout, stderr = run_readiness(
+                        ["--xsd-summary", str(xsd_summary), "--evidence-summary", str(mutated_path)]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(message, stderr)
+                    self.assertNotIn(hidden, stderr)
+                    self.assertNotIn(forbidden, stderr)
 
     def test_missing_trust_revocation_proof_is_malformed(self):
         with tempfile.TemporaryDirectory() as raw_root:

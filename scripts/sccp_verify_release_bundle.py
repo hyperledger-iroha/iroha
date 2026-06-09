@@ -380,8 +380,10 @@ READINESS_MARKDOWN_REQUIRED_RELEASE_EVIDENCE_MARKERS = (
     "SCCP TRON runtime route-manifest source inventory",
     "TRON runtime route-manifest parser",
     "SCCP all-lanes route-canary scalar source inventory",
+    "SCCP all-lanes evidence-root schema source inventory",
     "SCCP all-lanes governed blocker schema source inventory",
     "SCCP all-lanes release-checklist exact-boolean source inventory",
+    "source-adapter gate hash/audit replay rejection",
     "destination-rollout and route-allowlist blocker container rejection",
     "SCCP active-launch checklist schema source inventory",
     "active launch checklist ready value",
@@ -629,6 +631,7 @@ SOURCE_INVENTORY_REQUIRED_GATES = {
     "tron_route_config_canonical_manifest_gate",
     "tron_runtime_route_manifest_gate",
     "all_lanes_route_canary_scalar_gate",
+    "all_lanes_evidence_root_schema_gate",
     "all_lanes_governed_blocker_schema_gate",
     "all_lanes_release_checklist_exact_boolean_gate",
     "active_launch_checklist_schema_gate",
@@ -3599,16 +3602,11 @@ SCCP_RETIRED_NETWORK_SURFACE_GUARD_MARKERS = (
             "def test_retired_network_patterns_catch_adversarial_examples",
             "def test_retired_network_surface_scan_covers_expected_files",
             "def test_retired_network_surface_scan_covers_pipeline_translations",
-            "def test_retired_network_surface_scan_flags_family_specific_notes",
             "def test_generic_no_support_note_stays_in_launch_scope_files",
             "def test_active_tree_excludes_retired_network_surface_tokens",
             "BANNED_PATTERNS",
             "SCCP_GENERIC_UNSUPPORTED_SCOPE_NOTE_FILES",
             "SCCP_GENERIC_UNSUPPORTED_SCOPE_NOTE",
-            "SCCP_FAMILY_SPECIFIC_UNSUPPORTED_SCOPE_NOTE_FILES",
-            "SCCP_FAMILY_SPECIFIC_UNSUPPORTED_SCOPE_NOTE",
-            "def _is_allowed_family_specific_scope_note_match",
-            "if not _is_allowed_family_specific_scope_note_match(",
             '_literal("sub", "strate")',
             '_literal("pol", "kadot")',
             '_literal("ku", "sama")',
@@ -3648,6 +3646,11 @@ SCCP_RETIRED_NETWORK_SURFACE_GUARD_FORBIDDEN_MARKERS = (
     "_CHAIN_NAMES_PHRASE",
     "SCCP_EXPLICIT_UNSUPPORTED_SCOPE_NOTE_SNIPPETS",
     "def _is_explicit_unsupported_scope_note_match",
+    "SCCP_" "FAMILY" "_SPECIFIC_UNSUPPORTED_SCOPE_NOTE_FILES",
+    "SCCP_" "FAMILY" "_SPECIFIC_UNSUPPORTED_SCOPE_NOTE_TEXT",
+    "SCCP_" "FAMILY" "_SPECIFIC_UNSUPPORTED_SCOPE_NOTE",
+    "def _is_allowed_" "family" "_specific_scope_note_match",
+    "def test_retired_network_surface_scan_flags_" "family" "_specific_notes",
 )
 BSC_ROUTE_CONFIG_CANONICAL_MANIFEST_MARKERS = (
     (
@@ -3846,6 +3849,59 @@ ALL_LANES_ROUTE_CANARY_SCALAR_MARKERS = (
         ),
     ),
 )
+ALL_LANES_EVIDENCE_ROOT_SCHEMA_MARKERS = (
+    (
+        "scripts/sccp_all_lanes_evidence.py",
+        (
+            "def _evidence_bundle_root_errors(records: Any)",
+            "evidence bundle root must be an object",
+            "evidence section name must be a string",
+            "unsupported evidence section",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_all_lanes_evidence_test.py",
+        (
+            "def test_all_lanes_evidence_rejects_unknown_sections",
+            "def test_all_lanes_evidence_rejects_malformed_root_inputs",
+            "def test_all_lanes_evidence_rejects_non_string_section_keys",
+            "records[1] = []",
+            "evidence bundle root must be an object",
+            "evidence section name must be a string: 1",
+        ),
+    ),
+    (
+        "scripts/sccp_verify_release_bundle.py",
+        (
+            "def _all_lanes_evidence_root_schema_inventory_errors(",
+            "errors.extend(_all_lanes_evidence_root_schema_inventory_errors())",
+        ),
+    ),
+    (
+        "scripts/sccp_release_readiness_report.py",
+        (
+            "def _all_lanes_evidence_root_schema_gate_inventory_errors(",
+            '"all_lanes_evidence_root_schema_gate"',
+            "SCCP all-lanes evidence-root schema source inventory",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+        (
+            "def test_release_readiness_report_guards_all_lanes_evidence_root_schema_gate_inventory",
+            "def test_release_readiness_report_blocks_missing_all_lanes_evidence_root_schema_gate",
+            "all_lanes_evidence_root_schema_gate",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "def test_release_bundle_verifier_guards_all_lanes_evidence_root_schema_inventory",
+            "def test_release_bundle_verifier_runs_all_lanes_evidence_root_schema_inventory_sweep",
+            "def test_release_bundle_verifier_rejects_missing_all_lanes_evidence_root_schema_inventory_gate",
+        ),
+    ),
+)
 ALL_LANES_GOVERNED_BLOCKER_SCHEMA_MARKERS = (
     (
         "scripts/sccp_all_lanes_evidence.py",
@@ -3902,6 +3958,10 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             '"ready": all(item["ready"] is True for item in items)',
             '"production_ready": not all_blockers',
             'return 0 if summary["production_ready"] is True else 1',
+            "source_adapter_gate hash role",
+            'label=f"{lane_label}: source adapter gate hash role"',
+            "source adapter gate hash must match audit_hashes.",
+            "source adapter gate audit hashes contains unexpected field",
         ),
     ),
     (
@@ -3917,6 +3977,12 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             "def test_all_lanes_evidence_rejects_cross_lane_route_canary_source_hash_replay",
             "def test_all_lanes_evidence_rejects_cross_lane_route_canary_governed_hash_replay",
             "route canary evidence hash for domain 2 must be distinct from domain 1",
+            "def test_all_lanes_release_checklist_requires_source_gate_hash_and_audits",
+            "def test_all_lanes_release_checklist_rejects_source_gate_hash_role_replay",
+            "def test_all_lanes_release_checklist_rejects_non_required_source_gate_material",
+            "source adapter gate hash role",
+            "audit_hashes.solana_full_light_client_gate_hash must not reuse",
+            "route_canary_evidence_hash",
         ),
     ),
     (
@@ -8013,6 +8079,19 @@ def _all_lanes_route_canary_scalar_inventory_errors(
     )
 
 
+def _all_lanes_evidence_root_schema_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return inventory errors for all-lanes evidence-root schemas."""
+
+    if inventory is None:
+        inventory = ALL_LANES_EVIDENCE_ROOT_SCHEMA_MARKERS
+    return _source_marker_inventory_errors(
+        inventory,
+        label="SCCP all-lanes evidence-root schema",
+    )
+
+
 def _all_lanes_governed_blocker_schema_inventory_errors(
     inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
 ) -> list[str]:
@@ -10463,8 +10542,9 @@ def _render_readiness_markdown(
             "- SCCP TRON route-config canonical-manifest source inventory must pin canonical JSON string, lowercase bytes32, canonical Base58 address, and network metadata rejection before governed TAIRA XOR overlays can satisfy production readiness.",
             "- SCCP TRON runtime route-manifest source inventory must pin the TRON runtime route-manifest parser, mainnet metadata checks, dynamic destination-binding recomputation, and post-deploy anchor rejection before runtime config evidence can satisfy production readiness.",
             "- SCCP all-lanes route-canary scalar source inventory must pin canonical status/evidence-source schema blockers before all-lanes release-checklist route-canary readiness can pass.",
+            "- SCCP all-lanes evidence-root schema source inventory must pin malformed evidence root, unknown section, and non-string section-key blockers before all-lanes evidence can satisfy production readiness.",
             "- SCCP all-lanes governed blocker schema source inventory must pin destination-rollout and route-allowlist blocker container rejection before governed evidence can satisfy production readiness.",
-            "- SCCP all-lanes release-checklist exact-boolean source inventory must pin exact checklist-item aggregation, record-presence gates, CLI production-ready exits, and route-canary hash replay rejection before all-lanes evidence can satisfy production readiness.",
+            "- SCCP all-lanes release-checklist exact-boolean source inventory must pin exact checklist-item aggregation, record-presence gates, CLI production-ready exits, source-adapter gate hash/audit replay rejection, and route-canary hash replay rejection before all-lanes evidence can satisfy production readiness.",
             "- SCCP active-launch checklist schema source inventory must pin the active launch checklist ready value, malformed lane metadata, and verifier recomputation before production readiness can pass.",
             "- SCCP release manifest readiness-flags source inventory must pin exact boolean manifest generation, verifier boolean rejection, manifest/report equality checks, and all-lanes readiness recomputation before published bundle readiness can pass.",
             "- SCCP release manifest artifact-set/order source inventory must pin required artifact paths, manifest-root exclusion, unmanifested artifact/directory rejection, report-referenced artifact closure, and canonical attachment order before published bundle readiness can pass.",
@@ -14390,6 +14470,7 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
     errors.extend(_tron_route_config_canonical_manifest_inventory_errors())
     errors.extend(_tron_runtime_route_manifest_inventory_errors())
     errors.extend(_all_lanes_route_canary_scalar_inventory_errors())
+    errors.extend(_all_lanes_evidence_root_schema_inventory_errors())
     errors.extend(_all_lanes_governed_blocker_schema_inventory_errors())
     errors.extend(_all_lanes_release_checklist_exact_boolean_inventory_errors())
     errors.extend(_active_launch_checklist_schema_inventory_errors())

@@ -11,6 +11,7 @@ import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import org.hyperledger.iroha.android.model.Executable;
@@ -31,6 +32,7 @@ import org.hyperledger.iroha.android.client.JsonParser;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoCodecAdapter;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
+import org.hyperledger.iroha.android.offline.OfflineCashLifecycle;
 import org.hyperledger.iroha.android.offline.KagemushaInstructionArchives;
 import org.hyperledger.iroha.android.testing.TestAccountIds;
 import org.hyperledger.iroha.norito.NoritoAdapters;
@@ -51,6 +53,7 @@ public final class TransactionBuilderTests {
     kagemushaInstructionArchivesBuildPayloads();
     kagemushaInstructionArchivesAcceptAbi7Fixtures();
     kagemushaInstructionArchivesRejectAdversarialInputs();
+    offlineCashLifecycleAndTransportGuards();
     encodeAndSignEnvelopeWithAttestationBundle();
     encodeAndSignEnvelopeWithAttestationWithoutHardware();
     System.out.println("[IrohaAndroid] Transaction builder tests passed.");
@@ -190,6 +193,12 @@ public final class TransactionBuilderTests {
         : "Transfer instruction wire name must be canonical";
     assert Arrays.equals(transferArchive, transferWire.payloadBytes())
         : "Transfer archive bytes must be preserved";
+    assert KagemushaInstructionArchives.TRANSFER_INSTRUCTION_WIRE_NAME.equals(
+            KagemushaInstructionArchives.InstructionType.TRANSFER.wireName())
+        : "Transfer wire-name constant must match enum";
+    assert KagemushaInstructionArchives.RECURSIVE_REDEEM_REQUEST_WIRE_NAME.equals(
+            "iroha_data_model::offline::model::KagemushaRecursiveSpendRedeemRequestV1")
+        : "Redeem request wire-name constant must be canonical";
   }
 
   private static void kagemushaInstructionArchivesAcceptAbi7Fixtures() {
@@ -241,6 +250,144 @@ public final class TransactionBuilderTests {
     assertThrows(
         () -> KagemushaInstructionArchives.recursiveRedeemInstructionBox(tampered),
         "checksum drift must be rejected");
+  }
+
+  private static void offlineCashLifecycleAndTransportGuards() throws Exception {
+    final OfflineCashLifecycle.TransportCapabilities capabilities =
+        new OfflineCashLifecycle.TransportCapabilities(
+            true,
+            OfflineCashLifecycle.NfcCapability.unavailable("missing HCE"),
+            true);
+    assert capabilities.supportedTransportKinds().equals(List.of("qr", "nearby"))
+        : "Unsupported NFC must be hidden from app-facing transport choices";
+
+    final OfflineCashLifecycle.ConfigurationSnapshot snapshot =
+        new OfflineCashLifecycle.ConfigurationSnapshot(true, "issuer-key", 7, 1_000L);
+    snapshot.requireUsableForOfflineExchange(999L, 7);
+    assertThrowsRuntime(
+        () ->
+            new OfflineCashLifecycle.ConfigurationSnapshot(true, " ", 7, null)
+                .requireUsableForOfflineExchange(200L, 7),
+        "cached issuer key must be required before offline exchange");
+    assertSnapshotRejected(
+        new OfflineCashLifecycle.ConfigurationSnapshot(false, "issuer-key", 7, null),
+        200L,
+        7,
+        "offline_payments_disabled");
+    assertSnapshotRejected(
+        new OfflineCashLifecycle.ConfigurationSnapshot(true, "issuer-key", 6, null),
+        200L,
+        7,
+        "unsupported_bridge_abi");
+    assertSnapshotRejected(
+        new OfflineCashLifecycle.ConfigurationSnapshot(true, "issuer-key", 7, 1_000L),
+        1_000L,
+        7,
+        "expired");
+
+    final List<String> events = new java.util.ArrayList<>();
+    final OfflineCashLifecycle.Controller controller =
+        new OfflineCashLifecycle.Controller(
+            new OfflineCashLifecycle.Wallet() {
+              @Override
+              public CompletableFuture<Object> load(
+                  final String assetDefinitionId, final String amount) {
+                events.add("load:" + assetDefinitionId + ":" + amount);
+                return CompletableFuture.completedFuture("ok");
+              }
+
+              @Override
+              public Object prepareReceive(final String assetDefinitionId, final String amount) {
+                throw new UnsupportedOperationException();
+              }
+
+              @Override
+              public Object createPayment(final Object receiveRequest) {
+                throw new UnsupportedOperationException();
+              }
+
+              @Override
+              public Object acceptPayment(final Object paymentToken) {
+                throw new UnsupportedOperationException();
+              }
+
+              @Override
+              public CompletableFuture<Object> redeem(final Object note, final String recipient) {
+                throw new UnsupportedOperationException();
+              }
+            },
+            new OfflineCashLifecycle.AuditReceiptSynchronizer() {
+              @Override
+              public CompletableFuture<Boolean> hasPendingAuditReceipts() {
+                events.add("hasPending");
+                return CompletableFuture.completedFuture(true);
+              }
+
+              @Override
+              public CompletableFuture<Void> syncPendingAuditReceipts() {
+                events.add("sync");
+                return CompletableFuture.completedFuture(null);
+              }
+            });
+
+    assert "ok".equals(controller.load("pkr#sbp", "10").get())
+        : "Lifecycle controller must return wallet load result";
+    assert events.equals(List.of("hasPending", "sync", "load:pkr#sbp:10"))
+        : "Lifecycle controller must sync pending receipts before loading";
+
+    final List<String> failedEvents = new java.util.ArrayList<>();
+    final OfflineCashLifecycle.Controller failingController =
+        new OfflineCashLifecycle.Controller(
+            new OfflineCashLifecycle.Wallet() {
+              @Override
+              public CompletableFuture<Object> load(
+                  final String assetDefinitionId, final String amount) {
+                failedEvents.add("load:" + assetDefinitionId + ":" + amount);
+                return CompletableFuture.completedFuture("unexpected");
+              }
+
+              @Override
+              public Object prepareReceive(final String assetDefinitionId, final String amount) {
+                throw new UnsupportedOperationException();
+              }
+
+              @Override
+              public Object createPayment(final Object receiveRequest) {
+                throw new UnsupportedOperationException();
+              }
+
+              @Override
+              public Object acceptPayment(final Object paymentToken) {
+                throw new UnsupportedOperationException();
+              }
+
+              @Override
+              public CompletableFuture<Object> redeem(final Object note, final String recipient) {
+                throw new UnsupportedOperationException();
+              }
+            },
+            new OfflineCashLifecycle.AuditReceiptSynchronizer() {
+              @Override
+              public CompletableFuture<Boolean> hasPendingAuditReceipts() {
+                failedEvents.add("hasPending");
+                return CompletableFuture.completedFuture(true);
+              }
+
+              @Override
+              public CompletableFuture<Void> syncPendingAuditReceipts() {
+                failedEvents.add("sync");
+                return CompletableFuture.failedFuture(new IllegalStateException("audit sync failed"));
+              }
+            });
+    try {
+      failingController.load("pkr#sbp", "10").get();
+      throw new AssertionError("Lifecycle controller must not load when audit sync fails");
+    } catch (final java.util.concurrent.ExecutionException expected) {
+      assert expected.getCause() instanceof IllegalStateException
+          : "Expected audit sync failure to propagate";
+    }
+    assert failedEvents.equals(List.of("hasPending", "sync"))
+        : "Lifecycle controller must stop before wallet load after sync failure";
   }
 
   private static void encodeAndSignEnvelopeWithAttestationBundle() throws Exception {
@@ -434,5 +581,29 @@ public final class TransactionBuilderTests {
       return;
     }
     throw new AssertionError(message);
+  }
+
+  private static void assertThrowsRuntime(final Runnable runnable, final String message) {
+    try {
+      runnable.run();
+    } catch (final RuntimeException expected) {
+      return;
+    }
+    throw new AssertionError(message);
+  }
+
+  private static void assertSnapshotRejected(
+      final OfflineCashLifecycle.ConfigurationSnapshot snapshot,
+      final long nowMs,
+      final Integer requiredBridgeAbiVersion,
+      final String expectedCode) {
+    try {
+      snapshot.requireUsableForOfflineExchange(nowMs, requiredBridgeAbiVersion);
+    } catch (final OfflineCashLifecycle.ConfigurationSnapshotException expected) {
+      assert expectedCode.equals(expected.code())
+          : "Expected snapshot rejection code " + expectedCode + ", got " + expected.code();
+      return;
+    }
+    throw new AssertionError("Expected snapshot rejection " + expectedCode);
   }
 }

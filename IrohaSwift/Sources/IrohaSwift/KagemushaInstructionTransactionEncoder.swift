@@ -31,14 +31,20 @@ public enum KagemushaInstructionType: String, Equatable, Sendable {
         try KagemushaInstructionTransactionEncoder.validateInstructionArchive(archive)
     }
 
-    var wireName: String {
+    public var wireName: String {
         switch self {
         case .transfer:
-            return "iroha_data_model::isi::offline::KagemushaTransfer"
+            return KagemushaWireNames.transferInstruction
         case .redeemRecursive:
-            return "iroha_data_model::isi::offline::RedeemKagemushaRecursive"
+            return KagemushaWireNames.redeemRecursiveInstruction
         }
     }
+}
+
+public enum KagemushaWireNames {
+    public static let transferInstruction = "iroha_data_model::isi::offline::KagemushaTransfer"
+    public static let redeemRecursiveInstruction = "iroha_data_model::isi::offline::RedeemKagemushaRecursive"
+    public static let recursiveRedeemRequest = "iroha_data_model::offline::model::KagemushaRecursiveSpendRedeemRequestV1"
 }
 
 public struct KagemushaInstructionTransactionRequest: Sendable {
@@ -308,7 +314,7 @@ enum KagemushaInstructionTransactionEncoder {
 
 public enum KagemushaRecursiveRedeemRequestArchive {
     public static let typeName = "KagemushaRecursiveSpendRedeemRequestV1"
-    static let schemaName = "iroha_data_model::offline::model::KagemushaRecursiveSpendRedeemRequestV1"
+    public static let schemaName = KagemushaWireNames.recursiveRedeemRequest
 
     public static func validate(_ archive: Data) throws {
         guard !archive.isEmpty else {

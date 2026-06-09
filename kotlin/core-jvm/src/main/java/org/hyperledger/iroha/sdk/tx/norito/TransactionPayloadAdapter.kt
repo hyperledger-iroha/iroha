@@ -13,6 +13,7 @@ import org.hyperledger.iroha.sdk.address.decodeCompactPublicKeyPayload
 import org.hyperledger.iroha.sdk.address.requireCanonicalI105Address
 import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.InstructionBox
+import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.core.model.WirePayload
 import org.hyperledger.iroha.sdk.norito.NoritoAdapters
@@ -302,23 +303,23 @@ internal class TransactionPayloadAdapter : TypeAdapter<TransactionPayload> {
         }
     }
 
-    private class JsonAdapter : TypeAdapter<String> {
+    private class JsonValueFieldAdapter : TypeAdapter<String> {
         override fun encode(encoder: NoritoEncoder, value: String) {
-            encodeSizedField(encoder, JSON_STRING_ADAPTER, value)
+            encodeSizedField(encoder, STRING_ADAPTER, value)
         }
 
         override fun decode(decoder: NoritoDecoder): String {
-            return decodeSizedField(decoder, JSON_STRING_ADAPTER)
+            return decodeSizedField(decoder, STRING_ADAPTER)
         }
 
         override fun isSelfDelimiting(): Boolean = true
     }
 
-    private class MetadataAdapter : TypeAdapter<Map<String, String>> {
+    private class MetadataAdapter : TypeAdapter<Map<String, JsonValue>> {
         private val entryListAdapter: TypeAdapter<List<MetadataEntry>> =
             NoritoAdapters.sequence(MetadataEntryAdapter())
 
-        override fun encode(encoder: NoritoEncoder, value: Map<String, String>) {
+        override fun encode(encoder: NoritoEncoder, value: Map<String, JsonValue>) {
             val keys = value.keys.sorted()
             val entries = keys.map { key ->
                 val entryValue = value[key]
@@ -328,9 +329,9 @@ internal class TransactionPayloadAdapter : TypeAdapter<TransactionPayload> {
             entryListAdapter.encode(encoder, entries)
         }
 
-        override fun decode(decoder: NoritoDecoder): Map<String, String> {
+        override fun decode(decoder: NoritoDecoder): Map<String, JsonValue> {
             val entries = entryListAdapter.decode(decoder)
-            val decoded = LinkedHashMap<String, String>(entries.size)
+            val decoded = LinkedHashMap<String, JsonValue>(entries.size)
             for (entry in entries) {
                 require(decoded.put(entry.key, entry.value) == null) { "Duplicate metadata key" }
             }
@@ -338,40 +339,26 @@ internal class TransactionPayloadAdapter : TypeAdapter<TransactionPayload> {
         }
     }
 
-    private class MetadataEntry(val key: String, val value: String)
+    private class MetadataEntry(val key: String, val value: JsonValue)
 
     private class MetadataEntryAdapter : TypeAdapter<MetadataEntry> {
         override fun encode(encoder: NoritoEncoder, value: MetadataEntry) {
             encodeSizedField(encoder, STRING_ADAPTER, value.key)
-            encodeSizedField(encoder, JSON_ADAPTER, value.value)
+            encodeSizedField(encoder, JSON_VALUE_ADAPTER, value.value.rawJson)
         }
 
         override fun decode(decoder: NoritoDecoder): MetadataEntry {
             val key = decodeSizedField(decoder, STRING_ADAPTER)
-            val value = decodeSizedField(decoder, JSON_ADAPTER)
-            return MetadataEntry(key, value)
+            val raw = decodeSizedField(decoder, JSON_VALUE_ADAPTER)
+            return MetadataEntry(key, JsonValue.raw(raw))
         }
-    }
-
-    private class JsonStringAdapter : TypeAdapter<String> {
-        override fun encode(encoder: NoritoEncoder, value: String) {
-            STRING_ADAPTER.encode(encoder, encodeJsonString(value))
-        }
-
-        override fun decode(decoder: NoritoDecoder): String {
-            val raw = STRING_ADAPTER.decode(decoder)
-            return decodeJsonString(raw)
-        }
-
-        override fun isSelfDelimiting(): Boolean = true
     }
 
     companion object {
         private val STRING_ADAPTER: TypeAdapter<String> = NoritoAdapters.stringAdapter()
         private val ACCOUNT_ID_ADAPTER: TypeAdapter<String> = AccountIdAdapter()
         private val CHAIN_ID_ADAPTER: TypeAdapter<String> = ChainIdAdapter()
-        private val JSON_STRING_ADAPTER: TypeAdapter<String> = JsonStringAdapter()
-        private val JSON_ADAPTER: TypeAdapter<String> = JsonAdapter()
+        private val JSON_VALUE_ADAPTER: TypeAdapter<String> = JsonValueFieldAdapter()
         private val UINT64_ADAPTER: TypeAdapter<Long> = NoritoAdapters.uint(64)
         private val UINT16_ADAPTER: TypeAdapter<Long> = NoritoAdapters.uint(16)
         private val UINT8_ADAPTER: TypeAdapter<Long> = NoritoAdapters.uint(8)
@@ -388,10 +375,8 @@ internal class TransactionPayloadAdapter : TypeAdapter<TransactionPayload> {
         private val TTL_ADAPTER: TypeAdapter<Optional<Long>> = NoritoAdapters.option(NoritoAdapters.uint(64))
         private val NONCE_ADAPTER: TypeAdapter<Optional<Long>> = NoritoAdapters.option(NoritoAdapters.uint(32))
         private val EXECUTABLE_ADAPTER: TypeAdapter<Executable> = ExecutableAdapter()
-        private val METADATA_ADAPTER: TypeAdapter<Map<String, String>> = MetadataAdapter()
+        private val METADATA_ADAPTER: TypeAdapter<Map<String, JsonValue>> = MetadataAdapter()
         private const val INSTRUCTION_BOX_SCHEMA = "iroha.data_model.isi.InstructionBox.v1"
-
-        private val HEX_DIGITS = "0123456789ABCDEF".toCharArray()
 
         internal fun encodeInstructionBox(value: InstructionBox): ByteArray =
             NoritoCodec.encode(value, INSTRUCTION_BOX_SCHEMA, InstructionAdapter())
@@ -478,86 +463,6 @@ internal class TransactionPayloadAdapter : TypeAdapter<TransactionPayload> {
             } catch (_: IllegalArgumentException) {
                 false
             }
-        }
-
-        private fun encodeJsonString(value: String): String {
-            val builder = StringBuilder(value.length + 2)
-            builder.append('"')
-            for (c in value) {
-                when (c) {
-                    '"' -> builder.append("\\\"")
-                    '\\' -> builder.append("\\\\")
-                    '\b' -> builder.append("\\b")
-                    '\u000C' -> builder.append("\\f")
-                    '\n' -> builder.append("\\n")
-                    '\r' -> builder.append("\\r")
-                    '\t' -> builder.append("\\t")
-                    else -> {
-                        if (c < '\u0020') {
-                            builder.append("\\u00")
-                            builder.append(HEX_DIGITS[(c.code shr 4) and 0xF])
-                            builder.append(HEX_DIGITS[c.code and 0xF])
-                        } else {
-                            builder.append(c)
-                        }
-                    }
-                }
-            }
-            builder.append('"')
-            return builder.toString()
-        }
-
-        private fun decodeJsonString(raw: String?): String {
-            if (raw == null) return raw.toString()
-            val trimmed = raw.trim()
-            if (trimmed.length < 2 || trimmed[0] != '"' || trimmed[trimmed.length - 1] != '"') return raw
-            return try {
-                parseJsonString(trimmed)
-            } catch (_: IllegalArgumentException) {
-                raw
-            }
-        }
-
-        private fun parseJsonString(input: String): String {
-            val builder = StringBuilder()
-            var i = 1
-            while (i < input.length - 1) {
-                val c = input[i++]
-                if (c == '\\') {
-                    require(i < input.length - 1) { "Invalid JSON escape" }
-                    val esc = input[i++]
-                    when (esc) {
-                        '"' -> builder.append('"')
-                        '\\' -> builder.append('\\')
-                        '/' -> builder.append('/')
-                        'b' -> builder.append('\b')
-                        'f' -> builder.append('\u000C')
-                        'n' -> builder.append('\n')
-                        'r' -> builder.append('\r')
-                        't' -> builder.append('\t')
-                        'u' -> {
-                            require(i + 4 <= input.length - 1) { "Invalid unicode escape" }
-                            var codePoint = 0
-                            for (j in 0 until 4) {
-                                codePoint = (codePoint shl 4) or hexNibble(input[i + j])
-                            }
-                            builder.append(codePoint.toChar())
-                            i += 4
-                        }
-                        else -> throw IllegalArgumentException("Unsupported escape: \\$esc")
-                    }
-                } else {
-                    builder.append(c)
-                }
-            }
-            return builder.toString()
-        }
-
-        private fun hexNibble(c: Char): Int = when (c) {
-            in '0'..'9' -> c - '0'
-            in 'a'..'f' -> 10 + (c - 'a')
-            in 'A'..'F' -> 10 + (c - 'A')
-            else -> throw IllegalArgumentException("Invalid hex digit: $c")
         }
     }
 }

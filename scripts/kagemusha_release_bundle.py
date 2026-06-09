@@ -232,11 +232,21 @@ def _validate_bundle_root(root: Path) -> list[dict[str, Any]]:
     ]
 
 
+def _validate_local_file_for_read(
+    path: Path,
+    label: str,
+    code: str,
+) -> tuple[os.stat_result | None, list[dict[str, Any]]]:
+    expected_stat, errors = readiness._validate_lineage_local_file_for_read(  # type: ignore[attr-defined]
+        path,
+        label,
+    )
+    return expected_stat, [_blocker(code, error) for error in errors]
+
+
 def _validate_local_file(path: Path, label: str, code: str) -> list[dict[str, Any]]:
-    return [
-        _blocker(code, error)
-        for error in readiness.validate_lineage_local_file(path, label)
-    ]
+    _expected_stat, blockers = _validate_local_file_for_read(path, label, code)
+    return blockers
 
 
 def _read_local_json_text(
@@ -246,10 +256,12 @@ def _read_local_json_text(
     shape_code: str,
     unreadable_code: str,
 ) -> tuple[str | None, list[dict[str, Any]]]:
-    file_blockers = _validate_local_file(path, label, shape_code)
+    expected_stat, file_blockers = _validate_local_file_for_read(path, label, shape_code)
     if file_blockers:
         return None, file_blockers
+    assert expected_stat is not None
     chunks: list[bytes] = []
+    release_json_expected_identity = (expected_stat.st_dev, expected_stat.st_ino)
     try:
         with path.open("rb") as handle:
             open_stat = os.fstat(handle.fileno())
@@ -258,10 +270,11 @@ def _read_local_json_text(
                 return None, [_blocker(shape_code, f"{label} must not be a symlink")]
             if not stat.S_ISREG(path_stat.st_mode) or not stat.S_ISREG(open_stat.st_mode):
                 return None, [_blocker(shape_code, f"{label} must be a regular file")]
-            if (path_stat.st_dev, path_stat.st_ino) != (
-                open_stat.st_dev,
-                open_stat.st_ino,
-            ):
+            release_json_open_identity = (open_stat.st_dev, open_stat.st_ino)
+            if release_json_open_identity != release_json_expected_identity or (
+                path_stat.st_dev,
+                path_stat.st_ino,
+            ) != release_json_expected_identity:
                 return None, [_blocker(shape_code, f"{label} changed while being read")]
             if open_stat.st_nlink > 1:
                 return None, [_blocker(shape_code, f"{label} must not be hardlinked")]
@@ -269,8 +282,7 @@ def _read_local_json_text(
                 chunks.append(chunk)
             final_path_stat = path.lstat()
             if (final_path_stat.st_dev, final_path_stat.st_ino) != (
-                open_stat.st_dev,
-                open_stat.st_ino,
+                release_json_expected_identity
             ):
                 return None, [_blocker(shape_code, f"{label} changed while being read")]
     except OSError:
@@ -319,14 +331,36 @@ def _load_local_json(path: Path, label: str, code_prefix: str) -> tuple[dict[str
 
 
 def _sha256_file(path: Path, label: str, code: str) -> tuple[str | None, list[dict[str, Any]]]:
-    file_blockers = _validate_local_file(path, label, code)
+    expected_stat, file_blockers = _validate_local_file_for_read(path, label, code)
     if file_blockers:
         return None, file_blockers
+    assert expected_stat is not None
+    digest_expected_identity = (expected_stat.st_dev, expected_stat.st_ino)
     digest = hashlib.sha256()
     try:
         with path.open("rb") as handle:
+            open_stat = os.fstat(handle.fileno())
+            path_stat = path.lstat()
+            if stat.S_ISLNK(path_stat.st_mode):
+                return None, [_blocker(code, f"{label} must not be a symlink")]
+            if not stat.S_ISREG(path_stat.st_mode) or not stat.S_ISREG(open_stat.st_mode):
+                return None, [_blocker(code, f"{label} must be a regular file")]
+            digest_open_identity = (open_stat.st_dev, open_stat.st_ino)
+            if digest_open_identity != digest_expected_identity or (
+                path_stat.st_dev,
+                path_stat.st_ino,
+            ) != digest_expected_identity:
+                return None, [_blocker(code, f"{label} changed while being read")]
+            if open_stat.st_nlink > 1:
+                return None, [_blocker(code, f"{label} must not be hardlinked")]
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                 digest.update(chunk)
+            final_path_stat = path.lstat()
+            if (
+                final_path_stat.st_dev,
+                final_path_stat.st_ino,
+            ) != digest_expected_identity:
+                return None, [_blocker(code, f"{label} changed while being read")]
     except OSError:
         return None, [_blocker(code, f"{label} could not be read")]
     return digest.hexdigest(), []
@@ -337,9 +371,11 @@ def _sha256_file_with_size(
     label: str,
     code: str,
 ) -> tuple[str | None, int | None, list[dict[str, Any]]]:
-    file_blockers = _validate_local_file(path, label, code)
+    expected_stat, file_blockers = _validate_local_file_for_read(path, label, code)
     if file_blockers:
         return None, None, file_blockers
+    assert expected_stat is not None
+    sized_digest_expected_identity = (expected_stat.st_dev, expected_stat.st_ino)
     digest = hashlib.sha256()
     size = 0
     try:
@@ -350,10 +386,11 @@ def _sha256_file_with_size(
                 return None, None, [_blocker(code, f"{label} must not be a symlink")]
             if not stat.S_ISREG(path_stat.st_mode) or not stat.S_ISREG(open_stat.st_mode):
                 return None, None, [_blocker(code, f"{label} must be a regular file")]
-            if (path_stat.st_dev, path_stat.st_ino) != (
-                open_stat.st_dev,
-                open_stat.st_ino,
-            ):
+            sized_digest_open_identity = (open_stat.st_dev, open_stat.st_ino)
+            if sized_digest_open_identity != sized_digest_expected_identity or (
+                path_stat.st_dev,
+                path_stat.st_ino,
+            ) != sized_digest_expected_identity:
                 return None, None, [_blocker(code, f"{label} changed while being read")]
             if open_stat.st_nlink > 1:
                 return None, None, [_blocker(code, f"{label} must not be hardlinked")]
@@ -362,8 +399,7 @@ def _sha256_file_with_size(
                 digest.update(chunk)
             final_path_stat = path.lstat()
             if (final_path_stat.st_dev, final_path_stat.st_ino) != (
-                open_stat.st_dev,
-                open_stat.st_ino,
+                sized_digest_expected_identity
             ):
                 return None, None, [_blocker(code, f"{label} changed while being read")]
     except OSError:
@@ -1819,6 +1855,56 @@ def verify_release_bundle(
     return verification, blockers
 
 
+def _release_bundle_out_blocker(message: str) -> dict[str, Any]:
+    return _blocker("kagemusha_release_bundle_out_invalid", message)
+
+
+def _read_output_text(
+    path: Path,
+    expected_stat: os.stat_result,
+) -> tuple[str | None, list[dict[str, Any]]]:
+    """Read release-bundle output text without trusting a stale path."""
+
+    chunks: list[bytes] = []
+    output_expected_identity = (expected_stat.st_dev, expected_stat.st_ino)
+    try:
+        with path.open("rb") as handle:
+            open_stat = os.fstat(handle.fileno())
+            path_stat = path.lstat()
+            if stat.S_ISLNK(path_stat.st_mode):
+                return None, [_release_bundle_out_blocker("--out must not be a symlink")]
+            if not stat.S_ISREG(path_stat.st_mode) or not stat.S_ISREG(
+                open_stat.st_mode
+            ):
+                return None, [_release_bundle_out_blocker("--out must be a regular file")]
+            output_open_identity = (open_stat.st_dev, open_stat.st_ino)
+            if output_open_identity != output_expected_identity or (
+                path_stat.st_dev,
+                path_stat.st_ino,
+            ) != output_expected_identity:
+                return None, [_release_bundle_out_blocker("--out changed while being read")]
+            if open_stat.st_nlink > 1:
+                return None, [_release_bundle_out_blocker("--out must not be hardlinked")]
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                chunks.append(chunk)
+            final_path_stat = path.lstat()
+            if (
+                final_path_stat.st_dev,
+                final_path_stat.st_ino,
+            ) != output_expected_identity:
+                return None, [_release_bundle_out_blocker("--out changed while being read")]
+    except OSError:
+        return None, [
+            _release_bundle_out_blocker("--out could not be read back after writing")
+        ]
+    try:
+        return b"".join(chunks).decode("utf-8"), []
+    except UnicodeDecodeError:
+        return None, [
+            _release_bundle_out_blocker("--out could not be read back after writing")
+        ]
+
+
 def write_release_bundle(path: Path, bundle: dict[str, Any], bundle_root: Path) -> list[dict[str, Any]]:
     """Write a validated release bundle manifest."""
 
@@ -1888,18 +1974,17 @@ def write_release_bundle(path: Path, bundle: dict[str, Any], bundle_root: Path) 
         finally:
             os.close(parent_fd)
     try:
-        readback = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
+        expected_stat = path.lstat()
+    except (FileNotFoundError, OSError):
         return [
-            _blocker(
-                "kagemusha_release_bundle_out_invalid",
-                "--out could not be read back after writing",
-            )
+            _release_bundle_out_blocker("--out could not be read back after writing")
         ]
+    readback, readback_blockers = _read_output_text(path, expected_stat)
+    if readback_blockers:
+        return readback_blockers
     if readback != manifest_text:
         return [
-            _blocker(
-                "kagemusha_release_bundle_out_invalid",
+            _release_bundle_out_blocker(
                 "--out readback did not match the generated manifest",
             )
         ]

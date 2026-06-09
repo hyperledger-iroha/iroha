@@ -12,7 +12,9 @@ Torii now exposes two SCCP bundle families:
 ## SCCP launch scope
 
 The active SCCP surface is limited to Ethereum, BSC, Solana, TON, and TRON.
-Substrate/Polkadot networks are explicitly outside SCCP launch support for now.
+Retired runtime-network families outside that launch scope are not supported
+for now.
+Sub&#115;trate/Pol&#107;adot networks are explicitly outside SCCP launch support for now.
 Torii public SCCP discovery, proof manifests, route readiness, SDK helpers, and
 operator scripts must advertise only those lanes. Unsupported domain ids fail at
 the absent-manifest/backend boundary rather than routing through diagnostic
@@ -58,6 +60,10 @@ non-string canary scalars stay schema blockers instead of ambiguous not-ready
 text.
 Release-readiness and bundle verification pin that all-lanes route-canary
 scalar schema as source inventory before production evidence can pass.
+All-lanes evidence-root schema rejection is pinned the same way and must remain
+part of the strict release-bundle verifier's global source-marker sweep, so
+malformed roots, unknown sections, or non-string section-key tests cannot be
+removed while a hand-edited source-inventory row still claims readiness.
 Destination rollout and route allowlist blocker containers are pinned the same
 way: source inventory must retain the canonical blocker-list rejection path and
 adversarial governed-blocker tests before governed evidence can pass.
@@ -504,10 +510,15 @@ artifacts.
   validates every validator PoP, and enforces the same two-thirds-plus-one
   signer quorum used by core finality checks. Builds without the SCCP `bls`
   feature fail closed for this cryptographic helper.
-  SORA/Nexus or another supported target`) carry a Norito-encoded
-  `SccpSourceChainProofEnvelopeV1`. Raw Nexus finality bytes are rejected for
-  these messages, and source-chain envelopes are rejected for SORA-origin
-  messages.
+- Non-SORA-origin messages (`remote -> SORA/Nexus or another supported target`)
+  carry a Norito-encoded `SccpSourceChainProofEnvelopeV1`. Raw Nexus finality
+  bytes are rejected for these messages, and source-chain envelopes are rejected
+  for SORA-origin messages. Source-aware bundle validation, public-input
+  derivation, package builders, proof-job builders, transparent-proof builders,
+  and final transparent-proof verification also reject any caller-supplied
+  source verifier material or source-adapter deployment context on SORA-origin
+  bundles before deriving public inputs, so external source-adapter evidence
+  cannot be spliced into Nexus-finality-backed outbound messages.
 
 `SccpSourceChainProofEnvelopeV1` has this canonical data shape:
 
@@ -2563,8 +2574,13 @@ CLI success exit, and it requires route-canary summaries to carry canonical
 non-zero evidence hashes plus the expected live evidence source for each lane,
 so malformed truthy summary values cannot clear release preflight or CI checks.
 Release-readiness and bundle verification pin that exact-boolean all-lanes
-checklist surface plus route-canary hash replay rejection as required source
-inventory before all-lanes evidence can satisfy production readiness. The
+checklist surface, source-adapter gate hash/audit replay rejection, and
+route-canary hash replay rejection as required source inventory before all-lanes
+evidence can satisfy production readiness. The all-lanes evidence-root schema
+is also pinned as release-critical source
+inventory: malformed roots, unknown sections, and non-string section keys must
+become structured blockers rather than raising or disappearing before lane-level
+blockers are emitted. The
 release checklist table must match the embedded all-lanes evidence summary, so
 public release notes cannot rename, omit, or reorder checklist gates while
 keeping the underlying evidence unchanged; checklist roots and gate rows also
@@ -2662,7 +2678,10 @@ all-lanes required-domain drift from published lane domains,
 all-lanes domain roster or chain-label drift from the production remote lanes,
 non-ready or blocked all-lanes root or lane summaries,
 missing-record lane flags,
-blocked required source-adapter gates,
+blocked required source-adapter gates, required source-adapter gate summaries
+that omit the named gate hash or expected audit hash roles, duplicate or
+governed-hash-replayed source-gate audit roles, non-required gate summaries
+that carry forged hash material,
 blocked release-checklist items,
 blocked portal/mobile submission surface rows,
 malformed nested all-lanes lane
@@ -4519,12 +4538,19 @@ as Nexus-origin messages from block-level SCCP records.
     helpers additionally reject locally supplied EVM/TRON Groth16 tuples whose
     version, message id, SORA source-domain word, or commitment root does not
     match the accompanying `message_bundle`.
-  - current production behavior: this route can expose production packaging for
-    the active Ethereum mainnet launch lane only when the configured Ethereum
-    source-chain finality/inclusion material, immutable destination verifier
-    deployment, active cryptographic anchors, route allowlist, and route canary
-    are all present. Other counterparty lanes remain behind their future lane
-    launch policies.
+	  - current production behavior: this route can expose production packaging for
+	    the active Ethereum mainnet launch lane only when the configured Ethereum
+	    source-chain finality/inclusion material, immutable destination verifier
+	    deployment, active cryptographic anchors, route allowlist, and route canary
+	    are all present. Other counterparty lanes remain behind their future lane
+	    launch policies. Strict proof-job builders also apply the production
+	    source-proof gate: non-SORA source bundles must carry production-ready
+	    source-chain evidence before a job can be exposed without the explicit
+	    diagnostic `allow_unready` path, while SORA-origin jobs do not require
+	    source-chain evidence. The internal proof-byte job path also requires the
+	    bundle-derived counterparty domain, manifest counterparty domain, and
+	    supplied job counterparty domain to match, so diagnostic callers cannot
+	    mix a bundle with another lane's manifest or job metadata.
 - `GET /v1/sccp/jobs/message/{message_id}` returns the normalized SCCP counterparty proof job for the same canonical message id. Each job bundles:
   - the chain family, chain key, backend labels, verifier backend, manifest seed, finality model, verifier target, and canonical SCCP public inputs;
   - the same SCCP security model / cryptographic anchor mode and destination binding that the artifact and manifest commit into the canonical statement hash;

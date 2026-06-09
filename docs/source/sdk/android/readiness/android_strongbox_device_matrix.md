@@ -1,6 +1,6 @@
 # Android StrongBox Offline Payments Device Matrix
 
-Last updated: 2026-06-07
+Last updated: 2026-06-09
 
 This matrix gates production readiness for Android offline-offline payment
 flows. A device row is ready only after the lab attaches signed evidence for
@@ -159,7 +159,9 @@ Production release criteria:
 		  operator-local tokens cannot be echoed by key parsing diagnostics. Signature
 		  verification preserves key-path validation failures separately from
 		  private/public key mismatch failures, and temporary OpenSSL staging or
-		  signature-output failures become structured signer/verifier errors. The
+		  signature-output failures become structured signer/verifier errors after
+		  staged-byte readback and signature-output reads are bound to opened file
+		  identities. The
 		  signer helper also rejects secret-looking `--slot`, `--output`, and
 	  `--signer-key-id` runtime arguments before reading slot metadata.
 	  Device-lab JSON summaries also carry a local root label instead of the
@@ -168,11 +170,14 @@ Production release criteria:
 	  strings are rejected before root discovery or summary writes, and the
 	  direct root validator repeats the secret-path and readable-metadata checks
 	  before slot discovery.
-	  The direct summary writer repeats the `--json-out` secret-path check before
-	  writing JSON. Symlinked, hardlinked, non-regular, or unreadable-metadata
-	  `--json-out` aliases are rejected before the scanner writes a summary.
-	  Discovered slot directory names that contain
-	  secret-looking material are rejected and redacted before artifact traversal
+		  The direct summary writer repeats the `--json-out` secret-path check before
+		  writing JSON, then binds summary readback to the opened file identity.
+		  Symlinked, hardlinked, non-regular, or unreadable-metadata `--json-out`
+		  aliases are rejected before the scanner writes a summary.
+		  The shared slot JSON loader binds parsed JSON bytes to the preflight
+		  `lstat()` identity so post-preflight regular-file swaps fail closed.
+		  Discovered slot directory names that contain
+		  secret-looking material are rejected and redacted before artifact traversal
 	  or summary serialization. The helper also rechecks the signed-evidence and
 	  SHA-256 manifest output ancestors, parents, and leaves immediately before
 	  writing, so symlinked, hardlinked, or non-regular output aliases are rejected
@@ -326,13 +331,15 @@ Production release criteria:
 		  `YYYY-MM-DDTHH:MM:SSZ` form. The lineage evidence helper rejects
 		  noncanonical `--generated-at-utc` input, including `+00:00` offsets or
 		  surrounding whitespace, instead of normalizing it, and rejects symlinked
-		  output ancestors before creating missing `--out` parent directories or
-		  reading release artifact and proof-log inputs. It also rejects dangling
-		  symlink and unreadable-metadata output parents or leaves before following
-		  or writing them, classifies `--out` parents with `lstat()` before any
-		  `Path.is_dir()` preflight, and rechecks created output parents before
-		  direct helper preflight returns. Input and output corridor resolver failures become structured
-		  helper blockers instead of tracebacks.
+			  output ancestors before creating missing `--out` parent directories or
+			  reading release artifact and proof-log inputs. It also rejects dangling
+			  symlink and unreadable-metadata output parents or leaves before following
+			  or writing them, classifies `--out` parents with `lstat()` before any
+			  `Path.is_dir()` preflight, binds output readback to the opened file
+			  identity, rejects post-replace regular-file swaps as changed output, and
+			  rechecks created output parents before
+			  direct helper preflight returns. Input and output corridor resolver failures become structured
+			  helper blockers instead of tracebacks.
 		  The shared evidence builder
 	  also rejects secret-looking artifact/proof-log paths and detached proof logs
 	  before hashing artifacts or reading the proof log; direct artifact-dir,
@@ -355,7 +362,8 @@ Production release criteria:
 			  secret-path, dangling-symlink, and unreadable-metadata parent/leaf checks before
 			  creating or writing the JSON file, classifies summary output parents
 			  with `lstat()` before any `Path.is_dir()` preflight, then rechecks
-			  created output parents and ancestors before writing; final summary write failures become structured
+			  created output parents and ancestors before writing, and binds
+			  post-write readback to the opened summary file identity; final summary write failures become structured
 			  `--summary-out` blockers. Scanner slot inventory also classifies expected
 			  directories, `sha256sum.txt`, and recursive file-count entries with
 			  `lstat()`, so summary presence/count fields do not follow symlinks or

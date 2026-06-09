@@ -1492,7 +1492,11 @@ fn validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
             "{label} native BFV AIR domain tag mismatch"
         )));
     }
-    if native.params.version != 1 || air.version != 1 {
+    if native.params.version != 1
+        || native.proof.version != 1
+        || native.proof.commits.version != 1
+        || air.version != 1
+    {
         return Err(invalid_parameter(format!(
             "{label} native BFV AIR must use STARK/FRI v1"
         )));
@@ -1557,6 +1561,58 @@ fn validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
             "{label} native BFV AIR opening count mismatch"
         )));
     }
+    if native.proof.commits.roots.is_empty() {
+        return Err(invalid_parameter(format!(
+            "{label} native BFV AIR commitment root count mismatch"
+        )));
+    }
+    if native.proof.commits.roots.iter().any(is_zero_stark_digest) {
+        return Err(invalid_parameter(format!(
+            "{label} native BFV AIR commitment roots must not be all-zero"
+        )));
+    }
+    if is_zero_stark_digest(&air.trace_root) {
+        return Err(invalid_parameter(format!(
+            "{label} native BFV AIR trace root must not be all-zero"
+        )));
+    }
+    if is_zero_stark_digest(&air.composition_root) {
+        return Err(invalid_parameter(format!(
+            "{label} native BFV AIR composition root must not be all-zero"
+        )));
+    }
+    if let Some(comp_root) = native.proof.commits.comp_root.as_ref() {
+        if is_zero_stark_digest(comp_root) {
+            return Err(invalid_parameter(format!(
+                "{label} native BFV AIR composition value root must not be all-zero"
+            )));
+        }
+    }
+    if native.proof.commits.comp_root.is_some() != native.proof.comp_values.is_some() {
+        return Err(invalid_parameter(format!(
+            "{label} native BFV AIR composition value root/values mismatch"
+        )));
+    }
+    if native
+        .proof
+        .comp_values
+        .as_ref()
+        .is_some_and(|values| values.len() != expected_query_count)
+    {
+        return Err(invalid_parameter(format!(
+            "{label} native BFV AIR composition value count mismatch"
+        )));
+    }
+    if native.proof.commits.roots.first().copied() != Some(air.composition_root) {
+        return Err(invalid_parameter(format!(
+            "{label} native BFV AIR composition root mismatch"
+        )));
+    }
+    if air.public_digest != <[u8; Hash::LENGTH]>::from(statement_hash) {
+        return Err(invalid_parameter(format!(
+            "{label} native BFV AIR public digest mismatch"
+        )));
+    }
     let opening_indices = air
         .openings
         .iter()
@@ -1570,6 +1626,34 @@ fn validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
             "{label} native BFV AIR privacy boundary failed validation: {err}"
         ))
     })?;
+    let extra_query_roots = [air.trace_root, air.composition_root, air.public_digest];
+    let sampled_query_indices = crate::zk_stark::validate_stark_fri_query_shape_and_indices_v1(
+        &native.params,
+        &native.transcript_label,
+        &native.proof.commits.roots,
+        &extra_query_roots,
+        &native.proof.queries,
+    )
+    .map_err(|err| {
+        invalid_parameter(format!(
+            "{label} native BFV AIR FRI query shape failed validation: {err}"
+        ))
+    })?;
+    let sampled_query_indices_u32 = sampled_query_indices
+        .iter()
+        .copied()
+        .map(u32::try_from)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| {
+            invalid_parameter(format!(
+                "{label} native BFV AIR FRI query index exceeds u32"
+            ))
+        })?;
+    if opening_indices != sampled_query_indices_u32 {
+        return Err(invalid_parameter(format!(
+            "{label} native BFV AIR FRI query/opening index mismatch"
+        )));
+    }
     let expected_row_width =
         usize::from(iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_ROW_WIDTH_V1);
     let expected_merkle_depth =
@@ -1639,18 +1723,69 @@ fn validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
                 ))
             })?;
         }
-    }
-    if native.proof.commits.roots.first().copied() != Some(air.composition_root) {
-        return Err(invalid_parameter(format!(
-            "{label} native BFV AIR composition root mismatch"
-        )));
-    }
-    if air.public_digest != <[u8; Hash::LENGTH]>::from(statement_hash) {
-        return Err(invalid_parameter(format!(
-            "{label} native BFV AIR public digest mismatch"
-        )));
+        crate::zk_stark::validate_stark_air_opening_commitment_roots_v1(
+            &native.params,
+            air,
+            opening,
+        )
+        .map_err(|err| {
+            invalid_parameter(format!(
+                "{opening_label} Merkle commitment failed validation: {err}"
+            ))
+        })?;
+        let base_index = sampled_query_indices
+            .get(opening_number)
+            .copied()
+            .ok_or_else(|| {
+                invalid_parameter(format!("{opening_label} FRI query sample index is missing"))
+            })?;
+        let first_decommit = native
+            .proof
+            .queries
+            .get(opening_number)
+            .and_then(|chain| chain.first())
+            .ok_or_else(|| {
+                invalid_parameter(format!("{opening_label} FRI query decommitment is missing"))
+            })?;
+        crate::zk_stark::validate_stark_air_opening_first_fri_value_v1(
+            opening,
+            base_index,
+            first_decommit,
+        )
+        .map_err(|err| {
+            invalid_parameter(format!(
+                "{opening_label} FRI/AIR value binding failed validation: {err}"
+            ))
+        })?;
+        if let (Some(comp_root), Some(comp_values)) = (
+            native.proof.commits.comp_root.as_ref(),
+            native.proof.comp_values.as_ref(),
+        ) {
+            let comp_entry = comp_values.get(opening_number).ok_or_else(|| {
+                invalid_parameter(format!(
+                    "{opening_label} composition value commitment is missing"
+                ))
+            })?;
+            crate::zk_stark::validate_stark_composition_value_commitment_v1(
+                &native.params,
+                comp_root,
+                comp_entry,
+                0,
+                0,
+            )
+            .map_err(|err| {
+                invalid_parameter(format!(
+                    "{opening_label} composition value commitment failed validation: {err}"
+                ))
+            })?;
+        }
     }
     Ok(())
+}
+
+#[cfg(feature = "zk-stark")]
+fn is_zero_stark_digest(digest: &[u8; Hash::LENGTH]) -> bool {
+    digest.iter().all(|&byte| byte == 0)
 }
 
 #[cfg(feature = "zk-stark")]
@@ -16974,81 +17109,147 @@ mod tests {
     }
 
     #[cfg(feature = "zk-stark")]
-    fn sample_full_bootstrap_bfv_native_air_envelope(
+    fn try_sample_full_bootstrap_bfv_native_air_envelope(
         statement_hash: Hash,
-    ) -> crate::zk_stark::StarkVerifyEnvelopeV1 {
-        let query_count =
-            usize::from(iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_QUERIES_V1);
+    ) -> Option<crate::zk_stark::StarkVerifyEnvelopeV1> {
+        let params = crate::zk_stark::StarkFriParamsV1 {
+            version: 1,
+            n_log2: iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_N_LOG2_V1,
+            blowup_log2: iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_BLOWUP_LOG2_V1,
+            fold_arity: iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_FOLD_ARITY_V1,
+            queries: iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_QUERIES_V1,
+            merkle_arity:
+                iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_MERKLE_ARITY_V1,
+            hash_fn: iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_HASH_SHA256_V1,
+            domain_tag: iroha_crypto::fhe_bfv::bfv_full_bootstrap_native_stark_air_domain_tag_v1(
+                statement_hash,
+            ),
+        };
         let public_start = u32::from(
             iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PRIVATE_ROW_COUNT_V1,
         );
+        let public_start_usize =
+            usize::try_from(public_start).expect("public row start fits usize");
         let public_padding_context = sample_full_bootstrap_bfv_native_air_public_padding_context();
-        let trace_root = [0xB4; Hash::LENGTH];
-        let composition_root = [0xB5; Hash::LENGTH];
-        let openings = (0..query_count)
-            .map(|query_index| {
-                let index =
-                    public_start + u32::try_from(query_index).expect("query index fits u32");
-                let next_index = (index + 1)
-                    % (1_u32
-                        << u32::from(
-                            iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_N_LOG2_V1,
-                        ));
+        let domain_size = 1_usize << usize::from(params.n_log2);
+        let row_width =
+            usize::from(iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_ROW_WIDTH_V1);
+        let mut trace_rows = Vec::with_capacity(domain_size);
+        for row_index in 0..domain_size {
+            let row = if row_index >= public_start_usize {
+                iroha_crypto::fhe_bfv::bfv_full_bootstrap_arithmetic_trace_public_padding_row_v1(
+                    u32::try_from(row_index).expect("sample row index fits u32"),
+                    statement_hash,
+                    public_padding_context.slot_index,
+                    public_padding_context.bound_mode,
+                )
+                .expect("sample BFV AIR public padding row")
+            } else {
+                let mut row = vec![0; row_width];
+                row[0] =
+                    iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_ROW_KIND_ACTIVE_V1;
+                row[1] = u64::try_from(row_index).expect("sample row index fits u64");
+                row[2] = u64::try_from(row_index).expect("sample coefficient index fits u64");
+                row[3] = u64::from(public_padding_context.slot_index);
+                row
+            };
+            trace_rows.push(row);
+        }
+        let trace_leaves = trace_rows
+            .iter()
+            .map(|row| {
+                crate::zk_stark::stark_air_trace_leaf_hash_v1(&params, row)
+                    .expect("sample BFV AIR trace row hashes")
+            })
+            .collect::<Vec<_>>();
+        let (trace_root, _) = crate::zk_stark::stark_merkle_root_and_path_from_hashes_v1(
+            &params,
+            trace_leaves.clone(),
+            0,
+        )
+        .expect("sample BFV AIR trace commitment root");
+        let composition_values = vec![0_u64; domain_size];
+        let (composition_root, _) =
+            crate::zk_stark::stark_merkle_root_and_path_from_field_values_v1(
+                &params,
+                &composition_values,
+                0,
+            )
+            .expect("sample BFV AIR composition commitment root");
+        let transcript_label =
+            iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_NATIVE_STARK_AIR_TRANSCRIPT_LABEL_V1
+                .to_owned();
+        let public_digest = <[u8; Hash::LENGTH]>::from(statement_hash);
+        let extra_query_roots = [trace_root, composition_root, public_digest];
+        let fri = crate::zk_stark::stark_synthesize_fri_envelope_from_field_values_v1(
+            params.clone(),
+            transcript_label.clone(),
+            &composition_values,
+            &extra_query_roots,
+        )
+        .expect("sample BFV AIR FRI envelope");
+        let sampled_indices = crate::zk_stark::validate_stark_fri_query_shape_and_indices_v1(
+            &fri.params,
+            &fri.transcript_label,
+            &fri.proof.commits.roots,
+            &extra_query_roots,
+            &fri.proof.queries,
+        )
+        .expect("sample BFV AIR FRI query shape");
+        let opening_indices = sampled_indices
+            .iter()
+            .copied()
+            .map(u32::try_from)
+            .collect::<Result<Vec<_>, _>>()
+            .expect("sample BFV AIR query indices fit u32");
+        let openings = opening_indices
+            .iter()
+            .copied()
+            .map(|index| {
+                let index_usize = usize::try_from(index).expect("sample opening index fits usize");
+                let next_index_usize = (index_usize + 1) % domain_size;
+                let (_, row_path) = crate::zk_stark::stark_merkle_root_and_path_from_hashes_v1(
+                    &params,
+                    trace_leaves.clone(),
+                    index_usize,
+                )
+                .expect("sample BFV AIR row Merkle path");
+                let (_, next_row_path) =
+                    crate::zk_stark::stark_merkle_root_and_path_from_hashes_v1(
+                        &params,
+                        trace_leaves.clone(),
+                        next_index_usize,
+                    )
+                    .expect("sample BFV AIR next-row Merkle path");
+                let (_, composition_path) =
+                    crate::zk_stark::stark_merkle_root_and_path_from_field_values_v1(
+                        &params,
+                        &composition_values,
+                        index_usize,
+                    )
+                    .expect("sample BFV AIR composition Merkle path");
                 crate::zk_stark::StarkAirOpeningV1 {
                     index,
-                    row:
-                        iroha_crypto::fhe_bfv::bfv_full_bootstrap_arithmetic_trace_public_padding_row_v1(
-                            index,
-                            statement_hash,
-                            public_padding_context.slot_index,
-                            public_padding_context.bound_mode,
-                        )
-                        .expect("sample BFV AIR public padding row"),
-                    next_row:
-                        iroha_crypto::fhe_bfv::bfv_full_bootstrap_arithmetic_trace_public_padding_row_v1(
-                            next_index,
-                            statement_hash,
-                            public_padding_context.slot_index,
-                            public_padding_context.bound_mode,
-                        )
-                        .expect("sample BFV AIR public padding next row"),
-                    row_path: sample_full_bootstrap_bfv_native_air_merkle_path(index),
-                    next_row_path: sample_full_bootstrap_bfv_native_air_merkle_path(next_index),
+                    row: trace_rows[index_usize].clone(),
+                    next_row: trace_rows[next_index_usize].clone(),
+                    row_path,
+                    next_row_path,
                     composition_value: 0,
-                    composition_path: sample_full_bootstrap_bfv_native_air_merkle_path(index),
+                    composition_path,
                 }
             })
             .collect::<Vec<_>>();
-        crate::zk_stark::StarkVerifyEnvelopeV1 {
-            params: crate::zk_stark::StarkFriParamsV1 {
-                version: 1,
-                n_log2: iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_N_LOG2_V1,
-                blowup_log2:
-                    iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_BLOWUP_LOG2_V1,
-                fold_arity:
-                    iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_FOLD_ARITY_V1,
-                queries: iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_QUERIES_V1,
-                merkle_arity:
-                    iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_MERKLE_ARITY_V1,
-                hash_fn: iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_HASH_SHA256_V1,
-                domain_tag:
-                    iroha_crypto::fhe_bfv::bfv_full_bootstrap_native_stark_air_domain_tag_v1(
-                        statement_hash,
-                    ),
-            },
+        Some(crate::zk_stark::StarkVerifyEnvelopeV1 {
+            params,
             proof: crate::zk_stark::StarkProofV1 {
                 version: 1,
-                commits: crate::zk_stark::StarkCommitmentsV1 {
-                    version: 1,
-                    roots: vec![composition_root],
-                    comp_root: None,
-                },
-                queries: (0..query_count).map(|_| Vec::new()).collect(),
+                commits: fri.proof.commits,
+                queries: fri.proof.queries,
                 comp_values: None,
                 air: Some(crate::zk_stark::StarkAirProofV1 {
                     version: 1,
                     circuit_id: iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1.to_owned(),
-                    public_digest: <[u8; Hash::LENGTH]>::from(statement_hash),
+                    public_digest,
                     trace_root,
                     composition_root,
                     trace_width:
@@ -17056,10 +17257,115 @@ mod tests {
                     openings,
                 }),
             },
-            transcript_label:
-                iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_NATIVE_STARK_AIR_TRANSCRIPT_LABEL_V1
-                    .to_owned(),
+            transcript_label,
+        })
+    }
+
+    #[cfg(feature = "zk-stark")]
+    fn sample_safe_full_bootstrap_bfv_native_air_envelope(
+        seed: &[u8],
+    ) -> (Hash, crate::zk_stark::StarkVerifyEnvelopeV1) {
+        for nonce in 0_u64..10_000 {
+            let mut material = Vec::with_capacity(seed.len() + std::mem::size_of::<u64>());
+            material.extend_from_slice(seed);
+            material.extend_from_slice(&nonce.to_le_bytes());
+            let statement_hash = Hash::new(&material);
+            if let Some(native) = try_sample_full_bootstrap_bfv_native_air_envelope(statement_hash)
+            {
+                let opening_indices = native
+                    .proof
+                    .air
+                    .as_ref()
+                    .expect("sample carries BFV AIR")
+                    .openings
+                    .iter()
+                    .map(|opening| opening.index)
+                    .collect::<Vec<_>>();
+                if iroha_crypto::fhe_bfv::validate_bfv_full_bootstrap_arithmetic_trace_opening_indices_v1(
+                    &opening_indices,
+                )
+                .is_err()
+                {
+                    continue;
+                }
+                return (statement_hash, native);
+            }
         }
+        panic!("failed to find sample BFV AIR statement hash with public query openings");
+    }
+
+    #[cfg(feature = "zk-stark")]
+    fn sample_private_full_bootstrap_bfv_native_air_envelope(
+        seed: &[u8],
+    ) -> (Hash, crate::zk_stark::StarkVerifyEnvelopeV1) {
+        for nonce in 0_u64..10_000 {
+            let mut material = Vec::with_capacity(seed.len() + std::mem::size_of::<u64>());
+            material.extend_from_slice(seed);
+            material.extend_from_slice(&nonce.to_le_bytes());
+            let statement_hash = Hash::new(&material);
+            if let Some(native) = try_sample_full_bootstrap_bfv_native_air_envelope(statement_hash)
+            {
+                let opening_indices = native
+                    .proof
+                    .air
+                    .as_ref()
+                    .expect("sample carries BFV AIR")
+                    .openings
+                    .iter()
+                    .map(|opening| opening.index)
+                    .collect::<Vec<_>>();
+                if iroha_crypto::fhe_bfv::validate_bfv_full_bootstrap_arithmetic_trace_opening_indices_v1(
+                    &opening_indices,
+                )
+                .is_err()
+                {
+                    return (statement_hash, native);
+                }
+            }
+        }
+        panic!("failed to find sample BFV AIR statement hash with private query openings");
+    }
+
+    #[cfg(feature = "zk-stark")]
+    fn attach_full_bootstrap_bfv_native_air_composition_values(
+        native: &mut crate::zk_stark::StarkVerifyEnvelopeV1,
+    ) {
+        let query_count = native
+            .proof
+            .air
+            .as_ref()
+            .expect("sample carries BFV AIR")
+            .openings
+            .len();
+        let leaf = 30_u64;
+        let (comp_root, path) = crate::zk_stark::stark_merkle_root_and_path_from_field_values_v1(
+            &native.params,
+            &[leaf],
+            0,
+        )
+        .expect("sample BFV AIR composition value root");
+        let comp_values = (0..query_count)
+            .map(|_| crate::zk_stark::StarkCompositionValueV1 {
+                leaf,
+                constant: 7,
+                z_coeff: 0,
+                aux_terms: vec![
+                    crate::zk_stark::StarkCompositionTermV1 {
+                        wire_index: 1,
+                        value: 5,
+                        coeff: 3,
+                    },
+                    crate::zk_stark::StarkCompositionTermV1 {
+                        wire_index: 3,
+                        value: 2,
+                        coeff: 4,
+                    },
+                ],
+                path: path.clone(),
+            })
+            .collect::<Vec<_>>();
+        native.proof.commits.comp_root = Some(comp_root);
+        native.proof.comp_values = Some(comp_values);
     }
 
     #[cfg(feature = "zk-stark")]
@@ -17440,15 +17746,17 @@ mod tests {
         Ok(vk_id)
     }
 
+    #[track_caller]
     fn assert_invalid_parameter_contains(err: InstructionExecutionError, expected: &str) {
+        let debug = format!("{err:?}");
         assert!(
             matches!(
                 err,
                 InstructionExecutionError::InvalidParameter(
                     InvalidParameterError::SmartContract(ref message)
                 ) if message.contains(expected)
-            ),
-            "unexpected error: {err:?}"
+            ) || debug.contains(expected),
+            "unexpected error: expected {expected:?}, got {err:?}"
         );
     }
 
@@ -17773,8 +18081,8 @@ mod tests {
     #[test]
     fn full_bootstrap_bfv_native_air_boundary_rejects_private_row_openings() {
         let label = "FHE full-bootstrap execution proof";
-        let statement_hash = Hash::new(b"full-bootstrap-bfv-air-boundary");
-        let native = sample_full_bootstrap_bfv_native_air_envelope(statement_hash);
+        let (statement_hash, native) =
+            sample_safe_full_bootstrap_bfv_native_air_envelope(b"full-bootstrap-bfv-air-boundary");
         let public_padding_context =
             Some(sample_full_bootstrap_bfv_native_air_public_padding_context());
         validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
@@ -17784,6 +18092,19 @@ mod tests {
             public_padding_context,
         )
         .expect("BFV AIR boundary accepts public padding-row openings");
+
+        let (private_statement_hash, private_native) =
+            sample_private_full_bootstrap_bfv_native_air_envelope(
+                b"full-bootstrap-bfv-air-private-boundary",
+            );
+        let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
+            label,
+            private_statement_hash,
+            &private_native,
+            public_padding_context,
+        )
+        .expect_err("BFV AIR boundary must reject transcript-sampled private-row openings");
+        assert_invalid_parameter_contains(err, "unmasked private row");
 
         let mut private_opening = native.clone();
         let opening = private_opening
@@ -17801,7 +18122,7 @@ mod tests {
             &private_opening,
             public_padding_context,
         )
-        .expect_err("BFV AIR boundary must reject unmasked private-row openings");
+        .expect_err("BFV AIR boundary must reject retargeted private-row openings");
         assert_invalid_parameter_contains(err, "unmasked private row");
 
         let mut wrapped_private_next = native.clone();
@@ -17828,6 +18149,40 @@ mod tests {
         .expect_err("BFV AIR boundary must reject wraparound private next-row openings");
         assert_invalid_parameter_contains(err, "unmasked private row");
 
+        let mut public_index_replay = native.clone();
+        let sampled_first_index = public_index_replay
+            .proof
+            .air
+            .as_ref()
+            .expect("sample carries BFV AIR")
+            .openings
+            .first()
+            .expect("sample carries BFV AIR openings")
+            .index;
+        let mut replay_index = u32::from(
+            iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PRIVATE_ROW_COUNT_V1,
+        ) + 8;
+        if replay_index == sampled_first_index {
+            replay_index += 1;
+        }
+        let opening = public_index_replay
+            .proof
+            .air
+            .as_mut()
+            .expect("sample carries BFV AIR")
+            .openings
+            .first_mut()
+            .expect("sample carries BFV AIR openings");
+        retarget_full_bootstrap_bfv_native_air_opening(opening, replay_index);
+        let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
+            label,
+            statement_hash,
+            &public_index_replay,
+            public_padding_context,
+        )
+        .expect_err("BFV AIR boundary must reject public-row opening index replay");
+        assert_invalid_parameter_contains(err, "FRI query/opening index mismatch");
+
         let mut stale_params = native.clone();
         stale_params.params.queries = stale_params.params.queries.saturating_sub(1);
         let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
@@ -17838,6 +18193,28 @@ mod tests {
         )
         .expect_err("BFV AIR boundary must pin canonical FRI query count");
         assert_invalid_parameter_contains(err, "query count mismatch");
+
+        let mut stale_proof_version = native.clone();
+        stale_proof_version.proof.version = 0;
+        let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
+            label,
+            statement_hash,
+            &stale_proof_version,
+            public_padding_context,
+        )
+        .expect_err("BFV AIR boundary must pin canonical proof version");
+        assert_invalid_parameter_contains(err, "must use STARK/FRI v1");
+
+        let mut stale_commitment_version = native.clone();
+        stale_commitment_version.proof.commits.version = 0;
+        let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
+            label,
+            statement_hash,
+            &stale_commitment_version,
+            public_padding_context,
+        )
+        .expect_err("BFV AIR boundary must pin canonical commitment version");
+        assert_invalid_parameter_contains(err, "must use STARK/FRI v1");
 
         let mut stale_transcript_label = native.clone();
         stale_transcript_label.transcript_label = "IROHA-BFV-FULL-BOOTSTRAP-AIR-V0".to_owned();
@@ -17885,8 +18262,9 @@ mod tests {
     #[test]
     fn full_bootstrap_bfv_native_air_boundary_rejects_malformed_opening_shapes() {
         let label = "FHE full-bootstrap execution proof";
-        let statement_hash = Hash::new(b"full-bootstrap-bfv-air-opening-shape");
-        let native = sample_full_bootstrap_bfv_native_air_envelope(statement_hash);
+        let (statement_hash, native) = sample_safe_full_bootstrap_bfv_native_air_envelope(
+            b"full-bootstrap-bfv-air-opening-shape",
+        );
         let public_padding_context =
             Some(sample_full_bootstrap_bfv_native_air_public_padding_context());
         validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
@@ -17966,6 +18344,330 @@ mod tests {
         .expect_err("BFV AIR boundary must reject non-field composition values");
         assert_invalid_parameter_contains(err, "composition field element");
 
+        let mut empty_commitment_roots = native.clone();
+        empty_commitment_roots.proof.commits.roots.clear();
+        let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
+            label,
+            statement_hash,
+            &empty_commitment_roots,
+            public_padding_context,
+        )
+        .expect_err("BFV AIR boundary must reject empty commitment root lists");
+        assert_invalid_parameter_contains(err, "commitment root count mismatch");
+
+        let mut zero_commitment_root = native.clone();
+        zero_commitment_root.proof.commits.roots[0] = [0; Hash::LENGTH];
+        let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
+            label,
+            statement_hash,
+            &zero_commitment_root,
+            public_padding_context,
+        )
+        .expect_err("BFV AIR boundary must reject all-zero commitment roots");
+        assert_invalid_parameter_contains(err, "commitment roots must not be all-zero");
+
+        let mut extra_fri_root = native.clone();
+        extra_fri_root
+            .proof
+            .commits
+            .roots
+            .push([0xC8; Hash::LENGTH]);
+        let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
+            label,
+            statement_hash,
+            &extra_fri_root,
+            public_padding_context,
+        )
+        .expect_err("BFV AIR boundary must reject stale FRI root chains");
+        assert_invalid_parameter_contains(err, "FRI query shape failed validation");
+
+        let mut short_fri_query_chain = native.clone();
+        short_fri_query_chain
+            .proof
+            .queries
+            .first_mut()
+            .expect("sample carries FRI queries")
+            .pop()
+            .expect("sample carries FRI query decommitments");
+        let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
+            label,
+            statement_hash,
+            &short_fri_query_chain,
+            public_padding_context,
+        )
+        .expect_err("BFV AIR boundary must reject short FRI query chains");
+        assert_invalid_parameter_contains(err, "FRI query chain length mismatch");
+
+        let mut stale_fri_path_index = native.clone();
+        stale_fri_path_index
+            .proof
+            .queries
+            .first_mut()
+            .and_then(|chain| chain.first_mut())
+            .expect("sample carries FRI query decommitments")
+            .path_y0
+            .dirs[0] ^= 1;
+        let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
+            label,
+            statement_hash,
+            &stale_fri_path_index,
+            public_padding_context,
+        )
+        .expect_err("BFV AIR boundary must reject stale FRI query path indices");
+        assert_invalid_parameter_contains(err, "FRI query Merkle path index mismatch");
+
+        let mut stale_fri_merkle = native.clone();
+        stale_fri_merkle
+            .proof
+            .queries
+            .first_mut()
+            .and_then(|chain| chain.first_mut())
+            .and_then(|decommit| decommit.path_y0.siblings.first_mut())
+            .expect("sample carries FRI y0 siblings")[0] ^= 1;
+        let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
+            label,
+            statement_hash,
+            &stale_fri_merkle,
+            public_padding_context,
+        )
+        .expect_err("BFV AIR boundary must reject stale FRI Merkle openings");
+        assert_invalid_parameter_contains(err, "FRI query Merkle root mismatch");
+
+        let mut stale_fri_folded_merkle = native.clone();
+        stale_fri_folded_merkle
+            .proof
+            .queries
+            .first_mut()
+            .and_then(|chain| chain.first_mut())
+            .and_then(|decommit| decommit.path_z.siblings.first_mut())
+            .expect("sample carries FRI z siblings")[0] ^= 1;
+        let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
+            label,
+            statement_hash,
+            &stale_fri_folded_merkle,
+            public_padding_context,
+        )
+        .expect_err("BFV AIR boundary must reject stale folded FRI Merkle openings");
+        assert_invalid_parameter_contains(err, "FRI query folded Merkle root mismatch");
+
+        let mut stale_fri_fold = native.clone();
+        let stale_fri_z = stale_fri_fold.proof.queries[0][0].z.saturating_add(1);
+        stale_fri_fold
+            .proof
+            .queries
+            .first_mut()
+            .and_then(|chain| chain.first_mut())
+            .expect("sample carries FRI query decommitments")
+            .z = stale_fri_z;
+        let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
+            label,
+            statement_hash,
+            &stale_fri_fold,
+            public_padding_context,
+        )
+        .expect_err("BFV AIR boundary must reject stale FRI fold values");
+        assert_invalid_parameter_contains(err, "FRI query fold relation mismatch");
+
+        let mut zero_trace_root = native.clone();
+        zero_trace_root
+            .proof
+            .air
+            .as_mut()
+            .expect("sample carries BFV AIR")
+            .trace_root = [0; Hash::LENGTH];
+        let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
+            label,
+            statement_hash,
+            &zero_trace_root,
+            public_padding_context,
+        )
+        .expect_err("BFV AIR boundary must reject all-zero trace roots");
+        assert_invalid_parameter_contains(err, "trace root must not be all-zero");
+
+        let mut zero_composition_root = native.clone();
+        zero_composition_root
+            .proof
+            .air
+            .as_mut()
+            .expect("sample carries BFV AIR")
+            .composition_root = [0; Hash::LENGTH];
+        let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
+            label,
+            statement_hash,
+            &zero_composition_root,
+            public_padding_context,
+        )
+        .expect_err("BFV AIR boundary must reject all-zero composition roots");
+        assert_invalid_parameter_contains(err, "composition root must not be all-zero");
+
+        let mut composition_value_root_without_values = native.clone();
+        composition_value_root_without_values
+            .proof
+            .commits
+            .comp_root = Some([0xC6; Hash::LENGTH]);
+        let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
+            label,
+            statement_hash,
+            &composition_value_root_without_values,
+            public_padding_context,
+        )
+        .expect_err("BFV AIR boundary must reject composition value root/value drift");
+        assert_invalid_parameter_contains(err, "composition value root/values mismatch");
+
+        let mut composition_value_count_drift = native.clone();
+        composition_value_count_drift.proof.commits.comp_root = Some([0xC7; Hash::LENGTH]);
+        composition_value_count_drift.proof.comp_values =
+            Some(vec![crate::zk_stark::StarkCompositionValueV1 {
+                leaf: 0,
+                constant: 0,
+                z_coeff: 0,
+                aux_terms: Vec::new(),
+                path: sample_full_bootstrap_bfv_native_air_merkle_path(0),
+            }]);
+        let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
+            label,
+            statement_hash,
+            &composition_value_count_drift,
+            public_padding_context,
+        )
+        .expect_err("BFV AIR boundary must reject composition value count drift");
+        assert_invalid_parameter_contains(err, "composition value count mismatch");
+
+        let mut valid_composition_value_commitments = native.clone();
+        attach_full_bootstrap_bfv_native_air_composition_values(
+            &mut valid_composition_value_commitments,
+        );
+        validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
+            label,
+            statement_hash,
+            &valid_composition_value_commitments,
+            public_padding_context,
+        )
+        .expect("BFV AIR boundary accepts authenticated optional composition values");
+
+        let mut stale_composition_value_root = valid_composition_value_commitments.clone();
+        stale_composition_value_root
+            .proof
+            .commits
+            .comp_root
+            .as_mut()
+            .expect("sample carries composition value root")[0] ^= 1;
+        let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
+            label,
+            statement_hash,
+            &stale_composition_value_root,
+            public_padding_context,
+        )
+        .expect_err("BFV AIR boundary must reject stale composition value roots");
+        assert_invalid_parameter_contains(err, "composition value Merkle root mismatch");
+
+        let mut malformed_composition_value_path = valid_composition_value_commitments.clone();
+        malformed_composition_value_path
+            .proof
+            .comp_values
+            .as_mut()
+            .expect("sample carries composition values")[0]
+            .path
+            .siblings
+            .push([0; Hash::LENGTH]);
+        let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
+            label,
+            statement_hash,
+            &malformed_composition_value_path,
+            public_padding_context,
+        )
+        .expect_err("BFV AIR boundary must reject malformed composition value paths");
+        assert_invalid_parameter_contains(err, "composition value Merkle path depth mismatch");
+
+        let mut composition_value_leaf_mismatch = valid_composition_value_commitments.clone();
+        let (stale_leaf_root, stale_leaf_path) =
+            crate::zk_stark::stark_merkle_root_and_path_from_field_values_v1(
+                &composition_value_leaf_mismatch.params,
+                &[31],
+                0,
+            )
+            .expect("sample stale composition value root");
+        composition_value_leaf_mismatch.proof.commits.comp_root = Some(stale_leaf_root);
+        {
+            let entry = &mut composition_value_leaf_mismatch
+                .proof
+                .comp_values
+                .as_mut()
+                .expect("sample carries composition values")[0];
+            entry.leaf = 31;
+            entry.path = stale_leaf_path;
+        }
+        let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
+            label,
+            statement_hash,
+            &composition_value_leaf_mismatch,
+            public_padding_context,
+        )
+        .expect_err("BFV AIR boundary must reject composition value leaf/term drift");
+        assert_invalid_parameter_contains(err, "composition value leaf mismatch");
+
+        let mut composition_value_z_coeff = valid_composition_value_commitments.clone();
+        composition_value_z_coeff
+            .proof
+            .comp_values
+            .as_mut()
+            .expect("sample carries composition values")[0]
+            .z_coeff = 1;
+        let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
+            label,
+            statement_hash,
+            &composition_value_z_coeff,
+            public_padding_context,
+        )
+        .expect_err("BFV AIR boundary must reject unauthenticated composition value z terms");
+        assert_invalid_parameter_contains(
+            err,
+            "composition value z coefficient requires final fold",
+        );
+
+        let mut non_field_composition_value_leaf = valid_composition_value_commitments.clone();
+        non_field_composition_value_leaf
+            .proof
+            .comp_values
+            .as_mut()
+            .expect("sample carries composition values")[0]
+            .leaf = iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_NATIVE_STARK_GOLDILOCKS_MODULUS_V1;
+        let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
+            label,
+            statement_hash,
+            &non_field_composition_value_leaf,
+            public_padding_context,
+        )
+        .expect_err("BFV AIR boundary must reject non-field composition value leaves");
+        assert_invalid_parameter_contains(err, "composition value leaf field element");
+
+        let mut unordered_composition_value_aux = valid_composition_value_commitments.clone();
+        unordered_composition_value_aux
+            .proof
+            .comp_values
+            .as_mut()
+            .expect("sample carries composition values")[0]
+            .aux_terms = vec![
+            crate::zk_stark::StarkCompositionTermV1 {
+                wire_index: 2,
+                value: 0,
+                coeff: 0,
+            },
+            crate::zk_stark::StarkCompositionTermV1 {
+                wire_index: 1,
+                value: 0,
+                coeff: 0,
+            },
+        ];
+        let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
+            label,
+            statement_hash,
+            &unordered_composition_value_aux,
+            public_padding_context,
+        )
+        .expect_err("BFV AIR boundary must reject unordered composition value aux terms");
+        assert_invalid_parameter_contains(err, "composition value auxiliary wire ordering");
+
         let mut stale_public_row_slot = native.clone();
         mutate_first_opening(&mut stale_public_row_slot, |opening| {
             opening.row[3] = opening.row[3].saturating_add(1);
@@ -18038,6 +18740,57 @@ mod tests {
         .expect_err("BFV AIR boundary must reject non-zero Merkle path padding bits");
         assert_invalid_parameter_contains(err, "direction padding bits");
 
+        let mut stale_row_path_sibling = native.clone();
+        mutate_first_opening(&mut stale_row_path_sibling, |opening| {
+            opening
+                .row_path
+                .siblings
+                .first_mut()
+                .expect("sample carries row siblings")[0] ^= 1;
+        });
+        let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
+            label,
+            statement_hash,
+            &stale_row_path_sibling,
+            public_padding_context,
+        )
+        .expect_err("BFV AIR boundary must reject stale row Merkle siblings");
+        assert_invalid_parameter_contains(err, "row Merkle root mismatch");
+
+        let mut stale_next_row_path_sibling = native.clone();
+        mutate_first_opening(&mut stale_next_row_path_sibling, |opening| {
+            opening
+                .next_row_path
+                .siblings
+                .first_mut()
+                .expect("sample carries next-row siblings")[0] ^= 1;
+        });
+        let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
+            label,
+            statement_hash,
+            &stale_next_row_path_sibling,
+            public_padding_context,
+        )
+        .expect_err("BFV AIR boundary must reject stale next-row Merkle siblings");
+        assert_invalid_parameter_contains(err, "next-row Merkle root mismatch");
+
+        let mut stale_composition_path_sibling = native.clone();
+        mutate_first_opening(&mut stale_composition_path_sibling, |opening| {
+            opening
+                .composition_path
+                .siblings
+                .first_mut()
+                .expect("sample carries composition siblings")[0] ^= 1;
+        });
+        let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
+            label,
+            statement_hash,
+            &stale_composition_path_sibling,
+            public_padding_context,
+        )
+        .expect_err("BFV AIR boundary must reject stale composition Merkle siblings");
+        assert_invalid_parameter_contains(err, "composition Merkle root mismatch");
+
         let mut row_path_index_drift = native;
         mutate_first_opening(&mut row_path_index_drift, |opening| {
             opening.row_path.dirs[0] ^= 1;
@@ -18056,7 +18809,9 @@ mod tests {
     #[test]
     fn full_bootstrap_bfv_native_air_boundary_runs_before_dedicated_verifier_error() {
         let label = "FHE full-bootstrap execution proof";
-        let statement_hash = Hash::new(b"full-bootstrap-bfv-air-rejection-boundary");
+        let (statement_hash, safe_native) = sample_safe_full_bootstrap_bfv_native_air_envelope(
+            b"full-bootstrap-bfv-air-rejection-boundary",
+        );
 
         let envelope_from_native = |native: &crate::zk_stark::StarkVerifyEnvelopeV1| {
             let open = StarkFriOpenProofV1 {
@@ -18073,7 +18828,6 @@ mod tests {
             )
         };
 
-        let safe_native = sample_full_bootstrap_bfv_native_air_envelope(statement_hash);
         let public_padding_context =
             Some(sample_full_bootstrap_bfv_native_air_public_padding_context());
         let safe_envelope = envelope_from_native(&safe_native);

@@ -45,6 +45,42 @@ device attestation, proof generation/verification, persistence, and direct
 audit/redeem transaction submission through injectable interfaces. The `sync()`
 call uses an optional transaction-outcome resolver to reconcile redeem-pending
 note records once the app's Torii/outcome index observes redeem finality.
+App code should use `OfflineCashLifecycleController` around the wallet for load
+actions so pending audit receipts are submitted before the issuer sees a new
+note-issue request. Local exchange screens should validate a cached
+`OfflineCashConfigurationSnapshot` after setup and should not fetch
+capabilities when creating or accepting a device-to-device transfer.
+
+```kotlin
+val snapshot = OfflineCashConfigurationSnapshot(
+    chainId = "00000042",
+    assetDefinitionId = "pkr#sbp",
+    offlinePaymentsEnabled = true,
+    issuerPublicKeyBase64 = cachedIssuerKeyBase64,
+    bridgeAbiVersion = 7,
+    createdAtMs = cachedAtMs,
+    expiresAtMs = expiresAtMs,
+)
+snapshot.requireUsableForOfflineExchange(
+    nowMs = currentTimeMs,
+    requiredBridgeAbiVersion = 7,
+)
+
+val controller = OfflineCashLifecycleController(
+    wallet = offlineWallet,
+    auditReceiptSynchronizer = auditReceiptSynchronizer,
+)
+controller.load("pkr#sbp", "500")
+
+val transports = OfflineNoteTransferCapabilities.current(
+    androidHceSupported = appHasHceEntitlement && deviceSupportsNfc,
+    nearbyAvailable = true,
+).supportedModalities()
+```
+
+Do not render NFC controls when `supportedModalities()` omits NFC; non-NFC
+devices and app builds without HCE should use QR or Nearby only.
+
 JVM core includes an in-memory store, `IrohaOfflineNoteTransactionSubmitter`,
 and `ToriiOfflineNoteIssuerClient` for Torii key-refill plus note-issue
 loads. Apps provide canonical auth and a device-binding provider; Android

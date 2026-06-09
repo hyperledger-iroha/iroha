@@ -30,6 +30,7 @@ import org.hyperledger.iroha.sdk.client.TransportSecurity
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.InstructionBox
+import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.crypto.Signer
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
@@ -1216,7 +1217,7 @@ class IrohaOfflineNoteTransactionSubmitter @JvmOverloads constructor(
             authority = authority,
             creationTimeMs = clock.getAsLong(),
             executable = Executable.instructions(instructions),
-            metadata = transactionMetadata,
+            metadata = transactionMetadata.mapValues { JsonValue.string(it.value) },
         )
         return client.submitTransaction(transactionBuilder.encodeAndSign(payload, signer))
     }

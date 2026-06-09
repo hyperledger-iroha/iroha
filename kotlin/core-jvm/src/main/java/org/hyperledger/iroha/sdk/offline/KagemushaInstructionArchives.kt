@@ -6,17 +6,24 @@ import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.norito.SchemaHash
 
+object KagemushaWireNames {
+    const val TRANSFER_INSTRUCTION: String = "iroha_data_model::isi::offline::KagemushaTransfer"
+    const val REDEEM_RECURSIVE_INSTRUCTION: String = "iroha_data_model::isi::offline::RedeemKagemushaRecursive"
+    const val RECURSIVE_REDEEM_REQUEST: String =
+        "iroha_data_model::offline::model::KagemushaRecursiveSpendRedeemRequestV1"
+}
+
 enum class KagemushaInstructionType(
     val archiveTypeName: String,
     val wireName: String,
 ) {
     TRANSFER(
         "KagemushaTransfer",
-        "iroha_data_model::isi::offline::KagemushaTransfer",
+        KagemushaWireNames.TRANSFER_INSTRUCTION,
     ),
     REDEEM_RECURSIVE(
         "RedeemKagemushaRecursive",
-        "iroha_data_model::isi::offline::RedeemKagemushaRecursive",
+        KagemushaWireNames.REDEEM_RECURSIVE_INSTRUCTION,
     ),
 }
 

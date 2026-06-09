@@ -11,16 +11,22 @@ import org.hyperledger.iroha.norito.SchemaHash;
 
 /** Helpers for embedding native Kagemusha instruction archives in signed transactions. */
 public final class KagemushaInstructionArchives {
+  public static final String TRANSFER_INSTRUCTION_WIRE_NAME =
+      "iroha_data_model::isi::offline::KagemushaTransfer";
+  public static final String REDEEM_RECURSIVE_INSTRUCTION_WIRE_NAME =
+      "iroha_data_model::isi::offline::RedeemKagemushaRecursive";
+  public static final String RECURSIVE_REDEEM_REQUEST_WIRE_NAME =
+      "iroha_data_model::offline::model::KagemushaRecursiveSpendRedeemRequestV1";
 
   private KagemushaInstructionArchives() {}
 
   public enum InstructionType {
     TRANSFER(
         "KagemushaTransfer",
-        "iroha_data_model::isi::offline::KagemushaTransfer"),
+        TRANSFER_INSTRUCTION_WIRE_NAME),
     REDEEM_RECURSIVE(
         "RedeemKagemushaRecursive",
-        "iroha_data_model::isi::offline::RedeemKagemushaRecursive");
+        REDEEM_RECURSIVE_INSTRUCTION_WIRE_NAME);
 
     private final String archiveTypeName;
     private final String wireName;

@@ -198,6 +198,8 @@ final class PrivacyNativeBridgeTests: XCTestCase {
 
     func testPrivacyCapabilitiesReturnValueCopies() {
         let capabilities = PrivacyNativeBridge.privacyCapabilities(bridgeAvailable: true)
+        var requiredGates = capabilities.productionGate.requiredGates
+        requiredGates.append("tampered")
         var missing = capabilities.productionGate.missing
         missing.append("tampered")
         var auditReferences = capabilities.productionGate.auditReferences
@@ -206,11 +208,13 @@ final class PrivacyNativeBridgeTests: XCTestCase {
         let fresh = PrivacyNativeBridge.privacyCapabilities(bridgeAvailable: true)
 
         XCTAssertFalse(fresh.productionGate.missing.contains("tampered"))
+        XCTAssertFalse(fresh.productionGate.requiredGates.contains("tampered"))
         XCTAssertFalse(
             fresh.productionGate.auditReferences.contains(
                 "https://audit.example/forged-signoff"
             )
         )
+        XCTAssertEqual(fresh.productionGate.requiredGates, PrivacyProductionGate.requiredGateKeys)
         XCTAssertEqual(fresh.productionGate.missing, PrivacyProductionGate.missingReasons)
         XCTAssertEqual(fresh.productionGate.auditReferences, [])
     }
@@ -960,6 +964,7 @@ final class PrivacyNativeBridgeTests: XCTestCase {
         XCTAssertFalse(capabilities.productionGate.performanceGates)
         XCTAssertFalse(capabilities.productionGate.externalAudit)
         XCTAssertEqual(capabilities.productionGate.auditReferences, [])
+        XCTAssertEqual(capabilities.productionGate.requiredGates, PrivacyProductionGate.requiredGateKeys)
         XCTAssertEqual(capabilities.productionGate.missing, PrivacyProductionGate.missingReasons)
         XCTAssertTrue(
             capabilities.productionGate.missing.contains(

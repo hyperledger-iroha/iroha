@@ -4959,6 +4959,14 @@ pub fn sccp_counterparty_domain_for_message_payload(payload: &SccpPayloadV1) -> 
     }
 }
 
+fn sccp_message_bundle_matches_manifest_counterparty(
+    bundle: &NexusSccpMessageProofV1,
+    manifest: &SccpProofManifestV1,
+) -> bool {
+    sccp_counterparty_domain_for_message_payload(&bundle.payload)
+        == Some(manifest.counterparty_domain)
+}
+
 pub fn sccp_counterparty_domain_from_backend(backend: &str) -> Option<u32> {
     SCCP_CORE_REMOTE_DOMAINS.into_iter().find(|domain| {
         let Some(manifest) = sccp_proof_manifest_for_domain(*domain) else {
@@ -8935,6 +8943,15 @@ fn build_sccp_counterparty_proof_job_from_bundle_internal(
     ) {
         return None;
     }
+    if !allow_unready
+        && !sccp_bundle_source_proof_satisfies_production_build_gate(
+            bundle,
+            source_material,
+            source_deployment,
+        )
+    {
+        return None;
+    }
     let counterparty_domain = sccp_counterparty_domain_for_message_payload(&bundle.payload)?;
     let manifest = sccp_proof_manifest_for_domain(counterparty_domain)?;
     let proof_bytes = build_sccp_message_transparent_fastpq_proof_bytes_internal(
@@ -8972,6 +8989,21 @@ fn build_sccp_counterparty_proof_job_from_bundle_with_proof_bytes_internal(
         source_material,
         source_deployment,
     ) {
+        return None;
+    }
+    if !allow_unready
+        && !sccp_bundle_source_proof_satisfies_production_build_gate(
+            bundle,
+            source_material,
+            source_deployment,
+        )
+    {
+        return None;
+    }
+    if counterparty_domain != manifest.counterparty_domain
+        || sccp_counterparty_domain_for_message_payload(&bundle.payload)
+            != Some(counterparty_domain)
+    {
         return None;
     }
     if !sccp_manifest_allows_transparent_proofs(manifest, allow_unready) {
@@ -18205,6 +18237,9 @@ fn build_sccp_counterparty_submission_package_internal(
     if !sccp_manifest_allows_transparent_proofs(manifest, allow_unready) {
         return None;
     }
+    if !sccp_message_bundle_matches_manifest_counterparty(bundle, manifest) {
+        return None;
+    }
     if !allow_unready
         && !sccp_bundle_source_proof_satisfies_production_build_gate(
             bundle,
@@ -18378,6 +18413,9 @@ fn build_sccp_message_transparent_inner_proof_internal(
         source_material,
         source_deployment,
     )?;
+    if !sccp_message_bundle_matches_manifest_counterparty(bundle, manifest) {
+        return None;
+    }
     if !sccp_transparent_public_inputs_match_manifest(manifest, &public_inputs) {
         return None;
     }
@@ -18420,7 +18458,7 @@ fn sccp_bundle_source_proof_satisfies_production_build_gate(
 ) -> bool {
     let source_domain = sccp_message_source_domain(&bundle.payload);
     if source_domain == SCCP_DOMAIN_SORA {
-        return true;
+        return source_material.is_none() && source_deployment.is_none();
     }
 
     let target_domain = sccp_message_target_domain(&bundle.payload);
@@ -19942,7 +19980,9 @@ fn verify_nexus_sccp_message_transparent_proof_structure_internal(
             return false;
         }
     }
-    if source_material.is_some() && source_domain == SCCP_DOMAIN_SORA {
+    if source_domain == SCCP_DOMAIN_SORA
+        && (source_material.is_some() || source_deployment.is_some())
+    {
         return false;
     }
     if !sccp_manifest_allows_transparent_proofs(&manifest, allow_unready_manifest)
@@ -35020,6 +35060,11 @@ fn verify_message_bundle_structure_internal_with_deployment(
 
     let source_domain = sccp_message_source_domain(&bundle.payload);
     let target_domain = sccp_message_target_domain(&bundle.payload);
+    if source_domain == SCCP_DOMAIN_SORA
+        && (source_material.is_some() || source_deployment.is_some())
+    {
+        return false;
+    }
     let payload_bytes = canonical_sccp_payload_bytes(&bundle.payload);
     if !verify_sccp_payload_structure(&bundle.payload)
         || bundle.commitment.kind != sccp_message_kind(&bundle.payload)
@@ -41740,6 +41785,102 @@ mod tests {
             .is_some(),
             "diagnostic allow-unready builders may still render structural fixtures"
         );
+        assert!(
+            build_sccp_counterparty_proof_job_from_bundle_with_proof_bytes_internal(
+                &remote_to_remote,
+                &manifest,
+                SCCP_DOMAIN_BSC,
+                &remote_to_remote_proof_bytes,
+                Some(&deployment_binding),
+                None,
+                false,
+                None,
+                None,
+            )
+            .is_none(),
+            "strict production proof jobs must not expose structural-only source proofs"
+        );
+        assert!(
+            build_sccp_counterparty_proof_job_from_bundle_with_proof_bytes_internal(
+                &remote_to_remote,
+                &manifest,
+                SCCP_DOMAIN_BSC,
+                &remote_to_remote_proof_bytes,
+                Some(&deployment_binding),
+                None,
+                true,
+                None,
+                None,
+            )
+            .is_some(),
+            "diagnostic allow-unready proof jobs may still render structural fixtures"
+        );
+        assert!(
+            build_sccp_counterparty_proof_job_from_bundle_with_proof_bytes_internal(
+                &remote_to_remote,
+                &manifest,
+                SCCP_DOMAIN_ETH,
+                &remote_to_remote_proof_bytes,
+                Some(&deployment_binding),
+                None,
+                true,
+                None,
+                None,
+            )
+            .is_none(),
+            "diagnostic proof jobs must not rewrite the bundle counterparty domain"
+        );
+        let mut mismatched_manifest =
+            sccp_proof_manifest_for_domain(SCCP_DOMAIN_ETH).expect("ETH manifest");
+        mismatched_manifest.production_ready = true;
+        mismatched_manifest.disabled_reason = None;
+        assert!(
+            build_sccp_counterparty_proof_job_from_bundle_with_proof_bytes_internal(
+                &remote_to_remote,
+                &mismatched_manifest,
+                SCCP_DOMAIN_BSC,
+                &remote_to_remote_proof_bytes,
+                Some(&deployment_binding),
+                None,
+                true,
+                None,
+                None,
+            )
+            .is_none(),
+            "diagnostic proof jobs must not mix a bundle with another lane's manifest"
+        );
+        let inbound = sample_transfer_bundle(SCCP_DOMAIN_ETH, SCCP_DOMAIN_SORA, 329);
+        let inbound_public_inputs =
+            sccp_message_transparent_public_inputs(&inbound).expect("inbound public inputs");
+        assert_eq!(inbound_public_inputs.target_domain, SCCP_DOMAIN_SORA);
+        assert_eq!(
+            sccp_counterparty_domain_for_message_payload(&inbound.payload),
+            Some(SCCP_DOMAIN_ETH)
+        );
+        assert!(
+            sccp_transparent_public_inputs_match_manifest(&manifest, &inbound_public_inputs),
+            "SORA-target public inputs can match a SORA-local manifest before bundle lane binding"
+        );
+        let inbound_proof_bytes =
+            sample_evm_groth16_proof_bytes(&inbound_public_inputs, manifest.local_domain);
+        assert!(
+            build_sccp_message_transparent_inner_proof(&inbound, &manifest).is_none(),
+            "inbound bundles must not build transparent statements under another lane's manifest"
+        );
+        assert!(
+            build_sccp_counterparty_submission_package_internal(
+                &inbound,
+                &manifest,
+                &inbound_proof_bytes,
+                Some(&deployment_binding),
+                None,
+                true,
+                None,
+                None,
+            )
+            .is_none(),
+            "diagnostic packages must not mix inbound bundles with another lane's manifest"
+        );
 
         let outbound = sample_transfer_bundle(SCCP_DOMAIN_SORA, SCCP_DOMAIN_BSC, 327);
         let outbound_public_inputs =
@@ -41759,6 +41900,21 @@ mod tests {
             )
             .is_some(),
             "SORA-origin production packages must not require a source-chain proof"
+        );
+        assert!(
+            build_sccp_counterparty_proof_job_from_bundle_with_proof_bytes_internal(
+                &outbound,
+                &manifest,
+                SCCP_DOMAIN_BSC,
+                &outbound_proof_bytes,
+                Some(&deployment_binding),
+                None,
+                false,
+                None,
+                None,
+            )
+            .is_some(),
+            "SORA-origin production proof jobs must not require a source-chain proof"
         );
     }
 
@@ -63928,6 +64084,169 @@ mod tests {
     }
 
     #[test]
+    fn sora_origin_message_paths_reject_source_adapter_context() {
+        let manifest = sccp_proof_manifest_for_domain(SCCP_DOMAIN_SOL).expect("sol manifest");
+        let bundle = sample_transfer_bundle(SCCP_DOMAIN_SORA, SCCP_DOMAIN_SOL, 8_806);
+        let source_material =
+            sccp_evm_family_mainnet_source_verifier_material_with_hashes_and_emitter_v1(
+                SCCP_DOMAIN_ETH,
+                sample_eth_sync_committee_hash(),
+                [0x22; 32],
+                [0x23; 32],
+                [0x24; 32],
+                sample_evm_message_emitter_address(SCCP_DOMAIN_ETH),
+                sample_evm_source_bridge_code_hash(SCCP_DOMAIN_ETH),
+            )
+            .expect("ETH source material");
+        let source_deployment =
+            sccp_source_adapter_engine_deployment_from_material_v1(&source_material, [0x25; 32])
+                .expect("ETH source deployment");
+
+        assert!(verify_message_bundle_structure(&bundle));
+        assert!(sccp_message_transparent_public_inputs(&bundle).is_some());
+        assert!(sccp_bundle_source_proof_satisfies_production_build_gate(
+            &bundle, None, None
+        ));
+
+        assert!(
+            !verify_message_bundle_structure_with_source_verifier_material(
+                &bundle,
+                &source_material
+            ),
+            "SORA-origin bundles must not accept source material meant for external sources"
+        );
+        assert!(
+            !verify_message_bundle_structure_internal_with_deployment(
+                &bundle,
+                None,
+                Some(&source_deployment)
+            ),
+            "SORA-origin bundles must not accept deployment-only source context"
+        );
+        assert!(
+            !verify_message_bundle_structure_with_source_verifier_material_and_deployment(
+                &bundle,
+                &source_material,
+                &source_deployment
+            ),
+            "SORA-origin bundles must not accept deployment-bound source context"
+        );
+
+        assert!(
+            sccp_message_transparent_public_inputs_with_source_verifier_material(
+                &bundle,
+                &source_material
+            )
+            .is_none()
+        );
+        assert!(
+            sccp_message_transparent_public_inputs_internal_with_deployment(
+                &bundle,
+                None,
+                Some(&source_deployment)
+            )
+            .is_none()
+        );
+        assert!(
+            sccp_message_transparent_public_inputs_with_source_verifier_material_and_deployment(
+                &bundle,
+                &source_material,
+                &source_deployment
+            )
+            .is_none()
+        );
+
+        assert!(!sccp_bundle_source_proof_satisfies_production_build_gate(
+            &bundle,
+            Some(&source_material),
+            None
+        ));
+        assert!(!sccp_bundle_source_proof_satisfies_production_build_gate(
+            &bundle,
+            None,
+            Some(&source_deployment)
+        ));
+        assert!(!sccp_bundle_source_proof_satisfies_production_build_gate(
+            &bundle,
+            Some(&source_material),
+            Some(&source_deployment)
+        ));
+
+        assert!(
+            build_sccp_message_transparent_inner_proof_with_source_verifier_material(
+                &bundle,
+                &manifest,
+                &source_material
+            )
+            .is_none()
+        );
+        assert!(
+            build_sccp_message_transparent_inner_proof_with_source_verifier_material_and_deployment(
+                &bundle,
+                &manifest,
+                &source_material,
+                &source_deployment
+            )
+            .is_none()
+        );
+        assert!(
+            build_sccp_counterparty_submission_package_with_source_verifier_material_allow_unready(
+                &bundle,
+                &manifest,
+                &[0xAA],
+                &source_material,
+                true
+            )
+            .is_none()
+        );
+        assert!(
+            build_sccp_counterparty_submission_package_with_source_verifier_material_and_deployment_allow_unready(
+                &bundle,
+                &manifest,
+                &[0xAA],
+                &source_material,
+                &source_deployment,
+                true
+            )
+            .is_none()
+        );
+        assert!(
+            build_sccp_counterparty_proof_job_from_bundle_with_source_verifier_material_allow_unready(
+                &bundle,
+                &source_material,
+                true
+            )
+            .is_none()
+        );
+        assert!(
+            build_sccp_counterparty_proof_job_from_bundle_with_source_verifier_material_and_deployment_allow_unready(
+                &bundle,
+                &source_material,
+                &source_deployment,
+                true
+            )
+            .is_none()
+        );
+        assert!(
+            build_nexus_sccp_message_transparent_proof_with_source_verifier_material_allow_unready(
+                &bundle,
+                &source_material,
+                true
+            )
+            .is_none()
+        );
+        assert!(
+            build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready(
+                &bundle,
+                &source_material,
+                &source_deployment,
+                true
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
     fn verify_transparent_proof_structure_rejects_disabled_lane_even_if_shape_matches_manifest() {
         let bundle = sample_message_bundle(SccpPayloadV1::Transfer(TransferPayloadV1 {
             version: 1,
@@ -68461,6 +68780,40 @@ mod tests {
                 )
                 .is_none(),
                 "bundle domain {bundle_domain} must not package under manifest domain {manifest_domain}",
+            );
+        }
+        for (source_domain, manifest_domain) in [
+            (SCCP_DOMAIN_SOL, SCCP_DOMAIN_TON),
+            (SCCP_DOMAIN_TON, SCCP_DOMAIN_SOL),
+        ] {
+            let bundle = sample_transfer_bundle(source_domain, SCCP_DOMAIN_SORA, 65);
+            let manifest =
+                sccp_proof_manifest_for_domain(manifest_domain).expect("mismatched manifest");
+            let public_inputs =
+                sccp_message_transparent_public_inputs(&bundle).expect("inbound public inputs");
+
+            assert_eq!(public_inputs.target_domain, SCCP_DOMAIN_SORA);
+            assert!(
+                sccp_transparent_public_inputs_match_manifest(&manifest, &public_inputs),
+                "SORA-target public inputs should remain manifest-compatible until bundle lane binding"
+            );
+            assert!(
+                build_sccp_message_transparent_inner_proof(&bundle, &manifest).is_none(),
+                "inbound source domain {source_domain} must not build an inner proof under manifest domain {manifest_domain}",
+            );
+            assert!(
+                build_sccp_message_transparent_fastpq_proof_bytes(&bundle, &manifest).is_none(),
+                "inbound source domain {source_domain} must not build proof bytes under manifest domain {manifest_domain}",
+            );
+            assert!(
+                build_sccp_counterparty_submission_package_allow_unready(
+                    &bundle,
+                    &manifest,
+                    &[0xAA, 0xBB],
+                    true,
+                )
+                .is_none(),
+                "inbound source domain {source_domain} must not package under manifest domain {manifest_domain}",
             );
         }
     }

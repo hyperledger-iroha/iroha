@@ -83,7 +83,11 @@ SUPPORTED_RAIL_MESSAGE_TYPES = {
 MAX_TRUST_DER_BLOBS = 8
 MAX_TRUST_DER_BYTES = 1024 * 1024
 MAX_TRUST_DER_BASE64_CHARS = ((MAX_TRUST_DER_BYTES + 2) // 3) * 4
+MAX_PROFILE_ID_CHARS = 128
+MAX_TRUST_POLICY_CHARS = 128
+MAX_TRUST_SOURCE_TEXT_CHARS = 256
 MAX_RAIL_MESSAGE_ID_CHARS = 128
+MAX_TIMESTAMP_CHARS = 128
 MAX_SUMMARY_JSON_BYTES = 4 * 1024 * 1024
 MAX_RECEIPT_VERIFIER_OUTPUT_BYTES = 4 * 1024 * 1024
 MAX_HTTP_URL_CHARS = 2048
@@ -1055,6 +1059,20 @@ def _reject_non_ascii_context(value: str, label: str) -> None:
         raise EvidenceError(f"{label} must use printable ASCII")
 
 
+def _reject_overlong_trust_policy(value: str, label: str) -> None:
+    if len(value) > MAX_TRUST_POLICY_CHARS:
+        raise EvidenceError(
+            f"{label} must be no longer than {MAX_TRUST_POLICY_CHARS} characters"
+        )
+
+
+def _reject_overlong_trust_source_text(value: str, label: str) -> None:
+    if len(value) > MAX_TRUST_SOURCE_TEXT_CHARS:
+        raise EvidenceError(
+            f"{label} must be no longer than {MAX_TRUST_SOURCE_TEXT_CHARS} characters"
+        )
+
+
 def _require_list(value: Any, label: str) -> list[Any]:
     if not isinstance(value, list):
         raise EvidenceError(f"{label} must be a JSON array")
@@ -1088,6 +1106,10 @@ def _required_positive_int_field(value: dict[str, Any], key: str, label: str) ->
 
 def _required_profile_id(value: dict[str, Any], key: str, label: str) -> str:
     raw = _required_string(value, key, label)
+    if len(raw) > MAX_PROFILE_ID_CHARS:
+        raise EvidenceError(
+            f"{label}.{key} must be no longer than {MAX_PROFILE_ID_CHARS} characters"
+        )
     if PROFILE_ID_RE.fullmatch(raw) is None:
         raise EvidenceError(f"{label}.{key} must be a canonical lowercase profile id")
     _reject_secret_looking_identifier(raw, f"{label}.{key}")
@@ -3131,6 +3153,10 @@ def _reject_placeholder_trust_source_url(url: str, label: str) -> None:
 def _parse_timestamp(value: Any, label: str) -> dt.datetime:
     if not isinstance(value, str):
         raise EvidenceError(f"{label} must be recorded")
+    if len(value) > MAX_TIMESTAMP_CHARS:
+        raise EvidenceError(
+            f"{label} must be no longer than {MAX_TIMESTAMP_CHARS} characters"
+        )
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value):
         raise EvidenceError(f"{label} must not contain control characters")
     if not value.strip():
@@ -3224,6 +3250,7 @@ def _check_trust_bundle(
             f"{label}.environment does not match expected environment"
         )
     policy = _required_string(bundle, "embedded_signature_policy", label)
+    _reject_overlong_trust_policy(policy, f"{label}.embedded_signature_policy")
     _reject_non_ascii_context(policy, f"{label}.embedded_signature_policy")
     _reject_secret_looking_identifier(policy, f"{label}.embedded_signature_policy")
     if policy not in TRUST_SIGNATURE_POLICIES:
@@ -3248,6 +3275,8 @@ def _check_trust_bundle(
         _reject_unknown_keys(source_obj, TRUST_SOURCE_KEYS, f"{label}.source")
         authority = _required_string(source_obj, "authority", f"{label}.source")
         version = _required_string(source_obj, "version", f"{label}.source")
+        _reject_overlong_trust_source_text(authority, f"{label}.source.authority")
+        _reject_overlong_trust_source_text(version, f"{label}.source.version")
         _reject_non_ascii_context(authority, f"{label}.source.authority")
         _reject_non_ascii_context(version, f"{label}.source.version")
         _reject_secret_looking_identifier(authority, f"{label}.source.authority")
@@ -3339,7 +3368,7 @@ def _check_trust_bundle(
         TRUST_PROFILE_OVERRIDE_KEYS,
         f"{label}.profile_overrides",
     )
-    override_id = _required_string(
+    override_id = _required_profile_id(
         profile_overrides,
         "id",
         f"{label}.profile_overrides",
@@ -3357,6 +3386,10 @@ def _check_trust_bundle(
         profile_overrides,
         "embedded_signature_policy",
         f"{label}.profile_overrides",
+    )
+    _reject_overlong_trust_policy(
+        override_policy,
+        f"{label}.profile_overrides.embedded_signature_policy",
     )
     _reject_secret_looking_identifier(
         override_policy,

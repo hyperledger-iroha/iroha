@@ -207,6 +207,7 @@ const EXPECTED_PRIVACY_PRODUCTION_GATE_FIELDS = Object.freeze([
   Object.freeze(["version", "String"]),
   Object.freeze(["ready", "bool"]),
   Object.freeze(["gates", "Vec<PrivacyProductionGateStatusV1>"]),
+  Object.freeze(["required_gates", "Vec<String>"]),
   Object.freeze(["missing", "Vec<String>"]),
   Object.freeze(["audit_references", "Vec<String>"]),
 ]);
@@ -373,6 +374,8 @@ const EXPECTED_SWIFT_PRIVACY_BRIDGE_METHODS = Object.freeze([
   "privacyCapabilities",
   "capabilitiesV1",
   "buildProofV1",
+  "buildConfidentialTransferProofV2",
+  "buildConfidentialUnshieldProofV3",
   "verifyProofV1",
 ]);
 const EXPECTED_JAVA_PRIVACY_BRIDGE_METHODS = Object.freeze([
@@ -380,6 +383,8 @@ const EXPECTED_JAVA_PRIVACY_BRIDGE_METHODS = Object.freeze([
   "privacyCapabilities",
   "capabilitiesArchive",
   "buildProof",
+  "buildConfidentialTransferProofV2",
+  "buildConfidentialUnshieldProofV3",
   "verifyProof",
 ]);
 const EXPECTED_KOTLIN_PRIVACY_BRIDGE_METHODS = Object.freeze([
@@ -387,6 +392,8 @@ const EXPECTED_KOTLIN_PRIVACY_BRIDGE_METHODS = Object.freeze([
   "privacyCapabilities",
   "capabilitiesArchive",
   "buildProof",
+  "buildConfidentialTransferProofV2",
+  "buildConfidentialUnshieldProofV3",
   "verifyProof",
 ]);
 const EXPECTED_CSHARP_PRIVACY_BRIDGE_METHODS = Object.freeze([
@@ -394,6 +401,10 @@ const EXPECTED_CSHARP_PRIVACY_BRIDGE_METHODS = Object.freeze([
   "GetPrivacyCapabilities",
   "CapabilitiesV1",
   "BuildProofV1",
+  "buildConfidentialTransferProofV2",
+  "BuildConfidentialTransferProofV2",
+  "buildConfidentialUnshieldProofV3",
+  "BuildConfidentialUnshieldProofV3",
   "VerifyProofV1",
 ]);
 
@@ -1427,7 +1438,7 @@ test("privacy FFI public symbol names stay stable across native bindings", () =>
   assert.match(kotlinBridge, /private\s+external\s+fun\s+nativeVerifyProof\(requestArchive:\s+ByteArray\):\s+ByteArray\?/);
 });
 
-test("SDK privacy native bridges expose only generic archive operations", () => {
+test("SDK privacy native bridges expose generic archive operations and typed proof aliases", () => {
   const swiftBridge = source("IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift");
   assert.deepEqual(
     namesFromMatches(swiftBridge, /public\s+static\s+func\s+([A-Za-z][A-Za-z0-9_]*)\s*\(/g),
@@ -2233,6 +2244,11 @@ test("native privacy FFI capabilities keep production gates fail-closed", () => 
     );
     assert.match(
       text,
+      /PRIVACY_TRANSPARENT_TRANSFER_BASELINE_WAIVED_GATE_KEYS[\s\S]*"real_proving"[\s\S]*"real_verification"[\s\S]*"witness_privacy_checks"[\s\S]*"verifier_fuzzing"/,
+      `${label} must waive proof-only production gates for transparent-transfer baseline payments`,
+    );
+    assert.match(
+      text,
       /fn\s+privacy_production_gate_key_is_required\([^)]*\)\s*->\s*bool\s*\{[\s\S]*PRIVACY_PRODUCTION_GATE_REQUIREMENTS[\s\S]*required_key[\s\S]*\}/,
       `${label} must classify allowed production gate keys`,
     );
@@ -2248,12 +2264,12 @@ test("native privacy FFI capabilities keep production gates fail-closed", () => 
     );
     assert.match(
       text,
-      /fn\s+privacy_gate_missing_reasons_match_requirements\([^)]*\)\s*->\s*bool\s*\{[\s\S]*take\(PRIVACY_PRODUCTION_GATE_REQUIREMENTS\.len\(\)\)[\s\S]*missing\.as_str\(\)\s*==\s*\*label[\s\S]*PRIVACY_PRODUCTION_GATE_MISSING_ENGINE[\s\S]*PRIVACY_PRODUCTION_GATE_MISSING_ALLOWLIST[\s\S]*\}/,
+      /fn\s+privacy_gate_missing_reasons_match_requirements\([^)]*\)\s*->\s*bool\s*\{[\s\S]*required_count[\s\S]*take\(required_count\)[\s\S]*missing\.as_str\(\)\s*==\s*\*label[\s\S]*PRIVACY_PRODUCTION_GATE_MISSING_ENGINE[\s\S]*PRIVACY_PRODUCTION_GATE_MISSING_ALLOWLIST[\s\S]*\}/,
       `${label} must require deterministic production gate missing-reason ordering`,
     );
     assert.match(
       text,
-      /fn\s+privacy_production_gate_invariants_hold\([^)]*\)\s*->\s*bool\s*\{[\s\S]*!gate\.ready[\s\S]*audit_references\.is_empty\(\)[\s\S]*PRIVACY_PRODUCTION_GATE_REQUIREMENTS\.len\(\)[\s\S]*privacy_gate_statuses_match_requirements[\s\S]*privacy_gate_missing_reasons_match_requirements[\s\S]*!privacy_gate_status_keys_have_duplicates[\s\S]*!privacy_string_vec_has_duplicates[\s\S]*privacy_production_gate_key_is_required[\s\S]*!status\.passed[\s\S]*privacy_production_gate_missing_reason_is_required[\s\S]*PRIVACY_PRODUCTION_GATE_MISSING_ENGINE[\s\S]*PRIVACY_PRODUCTION_GATE_MISSING_ALLOWLIST[\s\S]*\}/,
+      /fn\s+privacy_production_gate_invariants_hold\([^)]*\)\s*->\s*bool\s*\{[\s\S]*!gate\.ready[\s\S]*audit_references\.is_empty\(\)[\s\S]*PRIVACY_PRODUCTION_GATE_REQUIREMENTS\.len\(\)[\s\S]*required_gates\.len\(\)[\s\S]*privacy_gate_statuses_match_requirements[\s\S]*privacy_required_gate_keys_match_entry[\s\S]*privacy_gate_missing_reasons_match_requirements[\s\S]*!privacy_gate_status_keys_have_duplicates[\s\S]*!privacy_string_vec_has_duplicates\(&gate\.required_gates\)[\s\S]*privacy_production_gate_key_is_required[\s\S]*!status\.passed[\s\S]*privacy_production_gate_missing_reason_is_required[\s\S]*PRIVACY_PRODUCTION_GATE_MISSING_ENGINE[\s\S]*PRIVACY_PRODUCTION_GATE_MISSING_ALLOWLIST[\s\S]*\}/,
       `${label} must validate fail-closed production gate state`,
     );
     assert.match(

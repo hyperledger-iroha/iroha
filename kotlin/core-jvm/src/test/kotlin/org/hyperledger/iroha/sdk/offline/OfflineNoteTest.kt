@@ -40,6 +40,7 @@ import org.hyperledger.iroha.sdk.client.JsonParser
 import org.hyperledger.iroha.sdk.client.ToriiCanonicalRequestAuth
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
+import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.core.model.WirePayload
 import org.hyperledger.iroha.sdk.crypto.Signer
 import org.hyperledger.iroha.sdk.tx.SignedTransaction
@@ -2788,7 +2789,7 @@ class OfflineNoteTest {
 
         val signed = assertNotNull(client.submittedTransaction)
         val payload = codec.decodeTransaction(signed.encodedPayload())
-        assertEquals(metadata, payload.metadata)
+        assertEquals(metadata.mapValues { JsonValue.string(it.value) }, payload.metadata)
     }
 
     @Test

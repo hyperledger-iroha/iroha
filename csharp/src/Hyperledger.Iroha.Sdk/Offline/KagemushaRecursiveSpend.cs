@@ -1360,6 +1360,16 @@ public static class KagemushaRecursiveSpendNative
 
     internal static byte[] ReadBridgeOutput(string symbol, int code, IntPtr outPtr, UIntPtr outLen)
     {
+        return ReadBridgeOutput(symbol, code, outPtr, outLen, NativeFree);
+    }
+
+    internal static byte[] ReadBridgeOutput(
+        string symbol,
+        int code,
+        IntPtr outPtr,
+        UIntPtr outLen,
+        Action<IntPtr> free)
+    {
         if (code != 0)
         {
             if (code == RecursiveCompactUnavailableBridgeErrorCode)
@@ -1396,7 +1406,7 @@ public static class KagemushaRecursiveSpendNative
         {
             if (shouldFree)
             {
-                NativeFree(outPtr);
+                free(outPtr);
             }
         }
     }

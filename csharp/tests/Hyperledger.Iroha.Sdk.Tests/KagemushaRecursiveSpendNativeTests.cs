@@ -1795,6 +1795,7 @@ public sealed class KagemushaRecursiveSpendNativeTests
             "connect_norito_kagemusha_recursive_spend_redeem",
             0,
             pointer,
-            (UIntPtr)bytes.Length);
+            (UIntPtr)bytes.Length,
+            Marshal.FreeHGlobal);
     }
 }

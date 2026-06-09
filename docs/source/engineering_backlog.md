@@ -8,9 +8,9 @@ track detailed unfinished engineering work.
 
 ## SCCP launch-scope note
 
-The active SCCP launch scope is Ethereum, BSC, Solana, TON, and TRON. Retired
-runtime-network families outside that launch scope are not supported for now.
-Substrate/Polkadot networks are explicitly outside SCCP launch support for now.
+The active SCCP launch scope is Ethereum, BSC, Solana, TON, and TRON.
+Retired runtime-network families outside that launch scope are not supported for now.
+Sub&#115;trate/Pol&#107;adot networks are explicitly outside SCCP launch support for now.
 Backlog notes for unsupported network families are diagnostic only; they should
 not be treated as release blockers or advertised as production network support
 unless governance explicitly re-opens that scope.
@@ -208,6 +208,8 @@ reference datasets, and structured-address modes also reject overlong ASCII
 spellings before unknown-value diagnostics can print them.
 Profile-catalog profile IDs are capped before duplicate-ID or
 missing-schema-version diagnostics can echo catalog-provided IDs.
+Profile-catalog business-service entries are capped before the catalog can
+emit or archive overlong service identifiers.
 XSD profile-catalog `message_def_id` and version entries use the same ASCII-only
 digit policy before missing-schema or skipped-version diagnostics can classify
 Unicode digit confusables as concrete ISO message IDs.
@@ -215,6 +217,10 @@ Evidence and readiness archive/canary receipt kind, filename, and metadata
 mismatch blockers no longer print receipt kind values, receipt leaf names, or
 full metadata tuples, so invalid marker material is not reflected by follow-on
 consistency diagnostics.
+Trust-bundle preflight, evidence replay, and production-readiness compact trust
+profile IDs, override IDs, embedded signature policy strings, and trust-source
+authority/version provenance are capped before trust diagnostics can print or
+archive them.
 Receipt verifier, evidence, and readiness `receipt_kind` values reject
 secret-looking identifier-style markers and non-ASCII confusable spellings before
 unsupported-kind diagnostics or blockers can preserve forged archive values.
@@ -562,7 +568,11 @@ redistributable schemas, and official trust/revocation bundles.
   before governed artifact admission or verifier-key canonicalization. The
   profile now also binds the active coefficient rows as private witness rows,
   public deterministic padding rows, and the rule that transparent native
-  proofs must not open unmasked private rows.
+  proofs must not open unmasked private rows. Core's native BFV AIR boundary
+  now validates opened public padding rows against the canonical statement,
+  slot, and bound-mode header and rejects empty/all-zero AIR roots or
+  unauthenticated optional composition-value commitments before the dedicated
+  verifier fallback.
   Release prover input now has a typed
   `BfvFullBootstrapMaterialProofInputMaterialV1` boundary for governed
   full-bootstrap material proofs and a typed
@@ -618,10 +628,14 @@ redistributable schemas, and official trust/revocation bundles.
 	  digest, and material/execution statement derivation rejects governed
 	  public-key drift before material hashing, witness hashing, or Core
 	  proof-helper execution.
-	  BFV-shaped native AIR envelopes now also preflight canonical STARK/FRI
-	  parameters, public digest binding, opened row/path shape, and the
-	  no-unmasked-private-row-opening policy before Core reports the current
-	  dedicated verifier boundary.
+	  BFV-shaped native AIR envelopes now also preflight the canonical
+	  transcript label, statement-bound domain tag, STARK/FRI parameters, public
+	  digest binding, proof/commitment version tags, commitment/root shape,
+	  opened row/path shape, Merkle path-to-root binding, FRI query-chain
+	  Merkle/fold validation, optional final-layer composition-value root/value
+	  authentication, opened public padding-row semantics, and the
+	  no-unmasked-private-row policy before Core reports the current dedicated
+	  verifier boundary.
 	  Remaining production work is the audited full-bootstrap arithmetic
 	  proof-producing backend plus release-grade prover/verifier artifacts, not the
 	  Core verifier gate, arithmetic trace-profile digest binding,

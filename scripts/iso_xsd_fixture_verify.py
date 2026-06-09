@@ -1358,6 +1358,11 @@ def _validate_amount_minor_units(message: dict[str, Any], label: str) -> None:
 
 def _validate_profile_catalog_message_fields(message: dict[str, Any], label: str) -> None:
     business_services = _optional_string_list(message, "business_services", label)
+    for offset, service in enumerate(business_services):
+        _reject_overlong_profile_catalog_identifier(
+            service,
+            f"{label}.business_services[{offset}]",
+        )
     require_app_header = _optional_bool(message, "require_app_header", label)
     require_business_service = _optional_bool(message, "require_business_service", label)
     _optional_bool(message, "require_uetr", label)

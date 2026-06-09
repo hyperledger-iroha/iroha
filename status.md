@@ -99,6 +99,599 @@ Last updated: 2026-06-09
   - Manifest-guard stale wording scan for advisory-only or non-blocking strict
     lane claims returned no matches in `docs/source/sumeragi*.md`.
 
+## 2026-06-09 Sumeragi RBC delivered-pending stable-artifact finality proof
+
+- Added `RbcDeliveredPendingSpecStepStableCommitArtifactsFinalityFootprintStep`
+  to the top-level model so stable-artifact delivered-pending post-states remain
+  outside `Committed`, keep commit certificate artifacts at zero, expose no
+  finality certificate stack or live commit gate, and still satisfy the
+  finality/certificate/gate matching invariants.
+- Wired
+  `RbcDeliveredPendingSpecStepAlwaysMatchesFinalityFootprintOnStableCommitArtifacts`
+  through the fast, deep, and TLC-fast configs and documented the README and
+  roadmap obligations.
+- Validation:
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7799` states generated, `2338` distinct states found, depth `24`, no
+    errors)
+
+## 2026-06-09 SCCP proof-job production source-proof gate
+
+- Strict SCCP counterparty proof-job builders now apply the same production
+  source-proof gate as submission/proof package builders: non-SORA source
+  bundles must carry production-ready source-chain evidence before a prover job
+  can be emitted without the explicit diagnostic `allow_unready` path, while
+  SORA-origin jobs stay exempt from source-chain evidence. The proof-byte job
+  path also requires the supplied job counterparty domain to match both the
+  bundle-derived domain and manifest domain, even in diagnostic mode.
+- Extended the production submission-builder regression to cover strict
+  proof-job rejection for structural-only remote source proofs, diagnostic
+  `allow_unready` proof-job rendering for those fixtures, SORA-origin proof-job
+  acceptance without source-chain evidence, and adversarial mismatched
+  counterparty-domain/manifest inputs.
+- Validation:
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=target/codex-sccp-sora-source-context cargo test -p iroha_sccp production_submission_builders_reject_structural_non_sora_source_proofs --lib -- --nocapture`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=target/codex-sccp-sora-source-context cargo test -p iroha_sccp deployment_bound_counterparty_job_uses_configured_source_deployment --lib -- --nocapture`
+
+## 2026-06-09 SCCP SORA-origin source-adapter context guard
+
+- SORA-origin SCCP message bundle validation, public-input derivation, package
+  builders, proof-job builders, transparent-proof builders, and
+  transparent-proof verification now reject caller-supplied source verifier
+  material or source-adapter deployment context before deriving public inputs,
+  keeping external source-adapter
+  evidence limited to non-SORA source-chain envelopes.
+- Added an adversarial regression covering material-only, deployment-only, and
+  material-plus-deployment attempts against a SORA-origin bundle while proving
+  the normal SORA-origin path still validates without source context.
+- Validation:
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=target/codex-sccp-sora-source-context cargo test -p iroha_sccp sora_origin_message_paths_reject_source_adapter_context --lib -- --nocapture`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=target/codex-sccp-sora-source-context cargo test -p iroha_sccp configured_source_material_does_not_bypass_disabled_manifest_gate --lib -- --nocapture`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=target/codex-sccp-sora-source-context cargo test -p iroha_sccp deployment_bound_transparent_proof_requires_matching_source_deployment --lib -- --nocapture`
+
+## 2026-06-09 Sumeragi RBC delivered-pending stable-artifact view proof
+
+- Added `RbcDeliveredPendingSpecStepStableCommitArtifactsViewFootprintStep` to
+  the top-level model so stable-artifact delivered-pending non-final steps have
+  an exact view/view-evidence footprint: timeout is the only view-advancing and
+  view-evidence-clearing branch, quorum-forming NewView installs complete view
+  evidence without changing the view, and all other stable-artifact branches
+  preserve both view fields.
+- Wired
+  `RbcDeliveredPendingSpecStepAlwaysMatchesViewFootprintOnStableCommitArtifacts`
+  through the fast, deep, and TLC-fast configs and documented the README and
+  roadmap obligations.
+- Validation:
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7799` states generated, `2338` distinct states found, depth `24`, no
+    errors)
+
+## 2026-06-09 SCCP evidence-root strict verifier sweep
+
+- Strict release-bundle verification now runs the all-lanes evidence-root schema
+  source-inventory helper in its global source-marker sweep, so deleting
+  malformed-root, unknown-section, or non-string section-key implementation/test
+  markers blocks bundle verification even when the `source_inventory` row is
+  still present.
+- Added runtime and deletion-style verifier coverage for the missing sweep call,
+  and updated the SCCP roadmap/bridge-proof docs with the stricter release-gate
+  requirement.
+- Validation: `python3 -m py_compile scripts/sccp_verify_release_bundle.py
+  scripts/sccp_release_readiness_report.py
+  pytests/scripts/sccp_release_bundle_test.py
+  pytests/scripts/sccp_release_readiness_report_test.py
+  pytests/scripts/sccp_all_lanes_evidence_test.py`; `python3 -m pytest -q
+  pytests/scripts/sccp_release_bundle_test.py -k
+  "all_lanes_evidence_root_schema"`; `python3 -m pytest -q
+  pytests/scripts/sccp_release_readiness_report_test.py -k
+  "all_lanes_evidence_root_schema"`; `python3 -m pytest -q
+  pytests/scripts/sccp_all_lanes_evidence_test.py -k
+  "malformed_root_inputs or non_string_section_keys or unknown_sections"`.
+
+## 2026-06-09 SCCP all-lanes evidence-root schema inventory
+
+- Added a release-readiness and strict bundle source-inventory gate for the
+  all-lanes evidence-root schema, pinning malformed root, unknown section, and
+  non-string section-key blockers before all-lanes evidence can satisfy
+  production readiness.
+- Added deletion-style readiness and bundle tests proving the root-schema
+  implementation and adversarial all-lanes tests cannot be removed silently.
+- Validation: `python3 -m py_compile scripts/sccp_release_readiness_report.py
+  scripts/sccp_verify_release_bundle.py
+  pytests/scripts/sccp_release_readiness_report_test.py
+  pytests/scripts/sccp_release_bundle_test.py
+  pytests/scripts/sccp_all_lanes_evidence_test.py`; `python3 -m pytest -q
+  pytests/scripts/sccp_all_lanes_evidence_test.py -k "malformed_root_inputs or
+  non_string_section_keys or unknown_sections"`; `python3 -m pytest -q
+  pytests/scripts/sccp_release_readiness_report_test.py -k
+  "all_lanes_evidence_root_schema"`; `python3 -m pytest -q
+  pytests/scripts/sccp_release_bundle_test.py -k
+  "all_lanes_evidence_root_schema"`.
+
+## 2026-06-09 SCCP Sub&#115;trate/Pol&#107;adot launch-scope note
+
+- Sub&#115;trate/Pol&#107;adot networks are explicitly outside SCCP launch support for now.
+- Validation: `python3 -m py_compile
+  pytests/scripts/sccp_retired_network_surface_test.py
+  scripts/sccp_verify_release_bundle.py
+  pytests/scripts/sccp_release_bundle_test.py
+  pytests/scripts/sccp_release_readiness_report_test.py
+  scripts/sccp_release_readiness_report.py`;
+  `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`;
+  `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k
+  "retired_network_surface"`; `python3 -m pytest -q
+  pytests/scripts/sccp_release_readiness_report_test.py -k
+  "retired_network_surface or no_support_note_guard"`.
+
+## 2026-06-09 SCCP release evidence source-gate replay wording
+
+- Updated the generated Required Release Evidence section and strict Markdown
+  verifier markers so public readiness reports must explicitly name
+  source-adapter gate hash/audit replay rejection alongside route-canary replay
+  rejection for the all-lanes release-checklist inventory.
+- Added generation and strict-verifier regressions proving that removing this
+  public release-evidence phrase is detected.
+- Validation: `python3 -m py_compile scripts/sccp_release_readiness_report.py
+  scripts/sccp_verify_release_bundle.py
+  pytests/scripts/sccp_release_readiness_report_test.py
+  pytests/scripts/sccp_release_bundle_test.py`;
+  `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k
+  "blocks_without_evidence_or_corridor_results or
+  all_lanes_release_checklist_exact_boolean"`; `python3 -m pytest -q
+  pytests/scripts/sccp_release_bundle_test.py -k
+  "requires_native_sdk_id_readiness_evidence or
+  all_lanes_release_checklist_exact_boolean"`.
+
+## 2026-06-09 BFV native AIR public padding/root boundary
+
+- Hardened the Core native BFV full-bootstrap AIR boundary so transparent
+  public-row openings must match canonical deterministic padding rows for the
+  statement hash, slot index, bound mode, sampled row index, and zero-material
+  tail before the fail-closed dedicated verifier fallback.
+- Added a crypto-side canonical public padding-row builder/validator and wired
+  the Core execution-proof verifier path to pass the expected public slot and
+  bound-mode context for BFV-shaped native AIR openings.
+- Rejected empty or all-zero native AIR commitment, trace, and composition roots,
+  plus composition-value root/value count drift, so structurally malformed
+  native AIR envelopes fail before prover-unavailable handling.
+- Pinned native STARK proof and commitment version tags to v1 alongside params
+  and AIR metadata, so stale envelope-version tags fail before prover-unavailable
+  handling.
+- The same boundary now verifies each opened row, next-row, and composition
+  value against the advertised Merkle roots, so well-shaped but stale siblings
+  cannot pass the BFV-shaped native AIR preflight.
+- Optional proof-level composition-value entries, when present, must now carry
+  canonical field values, ordered auxiliary wires, final-layer Merkle paths,
+  paths that authenticate against the advertised composition-value root, and
+  leaves that match their public constant plus auxiliary terms; unauthenticated
+  `z_coeff` terms are rejected before the dedicated verifier fallback.
+- BFV-shaped FRI query chains now replay transcript-derived indices, authenticate
+  y0/y1/z openings against each FRI layer root, enforce the binary fold relation,
+  require final zero before matching AIR openings, and the deterministic test
+  synthesizer reduces transcript-derived query indices modulo the evaluation
+  domain so generated FRI chains replay under verifier semantics.
+- Focused FRI regressions now cover stale first-layer openings, stale folded
+  `z` openings, stale fold values, and non-zero final FRI values before the
+  dedicated BFV verifier boundary.
+- Validation:
+  - `cargo test -j 1 -p iroha_crypto full_bootstrap_execution_witness_digest_binds_governed_trace --lib -- --nocapture`
+    (`1` passed, `688` filtered out)
+  - `cargo test -j 1 -p iroha_core --features zk-stark full_bootstrap_bfv_native_air_boundary --lib -- --nocapture`
+    (`3` passed, `7458` filtered out)
+  - `cargo test -j 1 -p iroha_core --features zk-stark synthesized_field_values_envelope_has_replayable_query_shape --lib -- --nocapture`
+    (`1` passed, `7460` filtered out)
+  - `cargo test -j 1 -p iroha_crypto full_bootstrap --lib -- --nocapture`
+    (`25` passed, `664` filtered out)
+  - `cargo test -j 1 -p iroha_core --features zk-stark soracloud_fhe_full_bootstrap_execution_proof_rejects_generic --lib -- --nocapture`
+    (`2` passed, `7459` filtered out)
+  - `cargo test -j 1 -p iroha_core --features zk-stark soracloud_fhe_full_bootstrap_material_proof_rejects_generic --lib -- --nocapture`
+    (`2` passed, `7459` filtered out)
+  - `cargo fmt -p iroha_crypto -p iroha_core -- --check`
+  - focused `git diff --check`, conflict-marker, and `Cargo.lock` checks
+
+## 2026-06-09 Sumeragi RBC delivered-pending stable-artifact timer proof
+
+- Added `RbcDeliveredPendingSpecStepStableCommitArtifactsTimerFootprintStep` to
+  the top-level model so stable-artifact delivered-pending non-final post-states
+  expose the exact GST/timeout footprint for their GST/progress status.
+- Wired
+  `RbcDeliveredPendingSpecStepAlwaysMatchesTimerFootprintOnStableCommitArtifacts`
+  through the fast, deep, and TLC-fast configs and documented the README
+  obligation.
+- Validation:
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7799` states generated, `2338` distinct states found, depth `24`, no
+    errors)
+
+## 2026-06-09 SCCP all-lanes source-gate replay inventory
+
+- Expanded the all-lanes release-checklist source inventory so readiness and
+  strict bundle verification pin the direct source-adapter gate hash/audit replay
+  regressions, including route-canary replay and forged non-required gate
+  material.
+- Added negative source-inventory checks proving that removing the direct
+  source-gate replay regression blocks both release-readiness generation and
+  strict release-bundle verification.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_all_lanes_evidence_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_all_lanes_evidence_test.py -k "source_gate or release_checklist"`
+    (`16` passed, `123` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "all_lanes_release_checklist_exact_boolean"`
+    (`2` passed, `411` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "all_lanes_release_checklist_exact_boolean"`
+    (`2` passed, `273` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`7` passed)
+
+## 2026-06-09 SCCP approved retired-family launch-scope note
+
+- Added explicit approved family-specific launch-scope wording across
+  bridge-proof docs, the engineering backlog, roadmap, and status history.
+- Kept the retired-network guard fail-closed by allowing only that exact
+  approved no-support sentence in launch-scope files while continuing to reject
+  other retired-network tokens in active SCCP surfaces.
+- Validation:
+  - `python3 -m py_compile pytests/scripts/sccp_retired_network_surface_test.py scripts/sccp_verify_release_bundle.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`7` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "retired_network_surface"`
+    (`5` passed, `408` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "retired_network_surface"`
+    (`2` passed, `273` deselected)
+
+## 2026-06-09 Kagemusha default-test de-heavying
+
+- Found a WSL-crash root cause in the normal `iroha_core kagemusha` test
+  filter: `kagemusha_recursive_aggregation_proof_vk_record_from_box_canonicalizes_record`
+  used the production ABI-7 recursive compact verifier-key helper, which enters
+  the 4 GiB-stack recursive compact key-generation path during default tests.
+- Re-routed that assertion through the existing shape-only recursive compact VK
+  helper. The remaining production compact VK calls are public artifact/record
+  generation paths or ignored heavy proof tests.
+- Found a second default-suite pressure source in
+  `crates/iroha_core/src/smartcontracts/isi/offline.rs`: several Kagemusha
+  transfer and recursive redeem tests were ordinary `#[test]` cases even though
+  they call real Halo2 IPA proof builders, recursive spend proof generation, and
+  512 MiB recursive redeem test stacks. Marked those real-proof coverage cases
+  ignored so broad default filters keep the lightweight policy/metadata checks
+  while real proof coverage remains opt-in via `--ignored --test-threads=1`.
+- Found a third default-suite pressure source in the non-native Vesta/IPA
+  Kagemusha circuit tests: ordinary tests were still entering
+  `run_vesta_affine_ipa_verifier_test` and
+  `run_vesta_affine_ipa_one_round_test`, which reserve 4 GiB and 3 GiB test
+  stacks respectively. Marked the tests that call those large-stack MockProver
+  wrappers ignored; lower-stack builder checks remain in the default suite.
+- Follow-up scan found 17 more default tests still entering the 1 GiB, 1.5 GiB,
+  or 2 GiB Kagemusha Vesta/IPA stack wrappers. Marked those tests ignored as
+  well so no default test body calls a 1 GiB-or-larger Kagemusha Vesta/IPA
+  stack wrapper.
+- Validation:
+  - `CARGO_BUILD_JOBS=1 CARGO_PROFILE_TEST_DEBUG=0 CARGO_PROFILE_TEST_SPLIT_DEBUGINFO=off cargo test -p iroha_core kagemusha_recursive_aggregation_proof_vk_record_from_box_canonicalizes_record --lib -- --test-threads=1 --nocapture`
+    (`1` test passed; rebuild plus test completed without `RUST_MIN_STACK`)
+  - `CARGO_BUILD_JOBS=1 CARGO_PROFILE_TEST_DEBUG=0 CARGO_PROFILE_TEST_SPLIT_DEBUGINFO=off cargo test -p iroha_core kagemusha_transfer_executes_real_confidential_transfer_v2_proof --lib -- --test-threads=1 --nocapture`
+    (`1` test ignored by the default runner)
+  - `CARGO_BUILD_JOBS=1 CARGO_PROFILE_TEST_DEBUG=0 CARGO_PROFILE_TEST_SPLIT_DEBUGINFO=off cargo test -p iroha_core kagemusha_recursive_redeem_rejects_verifier_and_policy_misconfigurations --lib -- --test-threads=1 --nocapture`
+    (`1` test ignored by the default runner)
+  - `CARGO_BUILD_JOBS=1 CARGO_PROFILE_TEST_DEBUG=0 CARGO_PROFILE_TEST_SPLIT_DEBUGINFO=off cargo test -p iroha_core kagemusha_transfer_rejects_unbound_asset_verifier --lib -- --test-threads=1 --nocapture`
+    (`1` lightweight default Kagemusha test passed)
+  - `CARGO_BUILD_JOBS=1 CARGO_PROFILE_TEST_DEBUG=0 CARGO_PROFILE_TEST_SPLIT_DEBUGINFO=off cargo test -p iroha_core kagemusha_non_native_vesta_ipa_verifier_batch_preflight_accepts_multiple_real_openings --lib -- --test-threads=1 --nocapture`
+    (`1` 4 GiB-wrapper Kagemusha test ignored by the default runner)
+  - `CARGO_BUILD_JOBS=1 CARGO_PROFILE_TEST_DEBUG=0 CARGO_PROFILE_TEST_SPLIT_DEBUGINFO=off cargo test -p iroha_core kagemusha_recursive_aggregation_one_hop_verifier_slice_builder_accepts_two_round_profile --lib -- --test-threads=1 --nocapture`
+    (`1` 3 GiB-wrapper Kagemusha test ignored by the default runner)
+  - `CARGO_BUILD_JOBS=1 CARGO_PROFILE_TEST_DEBUG=0 CARGO_PROFILE_TEST_SPLIT_DEBUGINFO=off cargo test -p iroha_core kagemusha_non_native_vesta_ipa_final_windowed_msm_rejects_product_high_bit_builder --lib -- --test-threads=1 --nocapture`
+    (`1` 2 GiB-wrapper Kagemusha test ignored by the default runner)
+  - Source scan: no non-ignored test body calls `run_vesta_affine_*` Kagemusha
+    helpers with 1 GiB-or-larger stack reservations.
+  - `cargo fmt -p iroha_core --check`
+
+## 2026-06-09 Kagemusha release-bundle input read identity binding
+
+- Hardened `scripts/kagemusha_release_bundle.py` so release-bundle JSON inputs,
+  summary/evidence digest reads, and evidence inventory size/digest reads carry
+  the preflight `lstat()` identity into the opened-file read. Post-preflight
+  regular-file swaps now fail as `<label> changed while being read` instead of
+  letting the manifest parse or hash replacement bytes.
+- Added JSON-input, digest-input, and evidence-entry regular-file-swap
+  regressions; promoted the JSON, digest, and evidence-entry open-path bindings
+  into the production-readiness guard and PR workflow.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_release_bundle.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_evidence_entry_rejects_symlink_swap_after_preflight scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_json_input_rejects_regular_file_swap_after_preflight scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_digest_rejects_regular_file_swap_after_preflight scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_evidence_entry_rejects_regular_file_swap_after_preflight`
+    (`4` tests passed, latest run 0.004s)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-json-input-open-path-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-digest-open-path-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-evidence-entry-open-path-binding`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test`
+    (`393` tests passed, latest run 31.421s)
+  - `python3 scripts/kagemusha_production_readiness.py --repo-root .`
+    (blocked only by `lineage_proof_evidence_missing`,
+    `compact_key_evidence_missing`, and `android_device_lab_root_missing`)
+
+## 2026-06-09 Kagemusha Android JSON loader read identity binding
+
+- Hardened `scripts/check_android_device_lab_slot.py` so the shared slot JSON
+  loader binds parsed bytes to the preflight `lstat()` identity. Post-preflight
+  regular-file swaps of `slot.json`, attestation, signed-evidence, handoff, or
+  wallet-integrity JSON now fail as `<label> changed while being read`.
+- Added a JSON-loader regular-file-swap regression and retargeted the existing
+  JSON-load open-path and metadata-failure negative controls.
+- Validation:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_load_json_rejects_symlink_swap_after_preflight scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_load_json_rejects_regular_file_swap_after_preflight scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_load_json_rejects_non_utf8_bytes_without_traceback scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_load_json_rejects_file_metadata_failure_before_missing`
+    (`4` tests passed, latest run 0.006s)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-load-open-path-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-load-file-metadata-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-load-read-failure`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`364` tests passed, latest run 8.574s)
+  - `python3 scripts/kagemusha_production_readiness.py --repo-root .`
+    (blocked only by `lineage_proof_evidence_missing`,
+    `compact_key_evidence_missing`, and `android_device_lab_root_missing`)
+  - `git diff --check -- .github/workflows/pr_kagemusha_payload_bench.yml ci/check_kagemusha_production_readiness.sh docs/source/offline_kagemusha.md docs/source/sdk/android/readiness/android_strongbox_device_matrix.md roadmap.md scripts/check_android_device_lab_slot.py scripts/kagemusha_production_readiness.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_recursive_compact_key_evidence.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py status.md`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' .github/workflows/pr_kagemusha_payload_bench.yml ci/check_kagemusha_production_readiness.sh docs/source/offline_kagemusha.md docs/source/sdk/android/readiness/android_strongbox_device_matrix.md roadmap.md scripts/check_android_device_lab_slot.py scripts/kagemusha_production_readiness.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_recursive_compact_key_evidence.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py status.md`
+    (no matches)
+
+## 2026-06-09 Kagemusha source-marker read identity binding
+
+- Hardened `scripts/kagemusha_production_readiness.py` so checked-in ABI-7 and
+  Reserved-lineage source-marker text reads carry the preflight `lstat()`
+  identity into the opened-file read. Post-preflight regular-file marker swaps
+  now fail as `... changed while being read` instead of satisfying readiness from
+  replacement source bytes.
+- Added ABI-7 direct marker and Reserved-lineage release-tooling regular-file
+  swap regressions, and retargeted the source-marker open-path and non-UTF-8
+  negative controls to the current helper implementation.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_repo_source_marker_text_rejects_symlink_swap_after_preflight scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_repo_source_marker_text_rejects_regular_file_swap_after_preflight scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_key_release_tooling_rejects_marker_regular_file_swap_after_preflight scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_repo_source_marker_text_rejects_non_utf8_without_traceback scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_key_release_tooling_rejects_non_utf8_marker_without_traceback`
+    (`5` tests passed, latest run 0.008s)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-source-marker-open-path-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-source-marker-non-utf8-read`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-key-release-source-marker-non-utf8-read`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test`
+    (`390` tests passed, latest run 32.789s)
+  - `python3 scripts/kagemusha_production_readiness.py --repo-root .`
+    (blocked only by `lineage_proof_evidence_missing`,
+    `compact_key_evidence_missing`, and `android_device_lab_root_missing`)
+  - `git diff --check -- .github/workflows/pr_kagemusha_payload_bench.yml ci/check_kagemusha_production_readiness.sh docs/source/offline_kagemusha.md docs/source/sdk/android/readiness/android_strongbox_device_matrix.md roadmap.md scripts/kagemusha_production_readiness.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_recursive_compact_key_evidence.py scripts/tests/kagemusha_production_readiness_test.py status.md`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' .github/workflows/pr_kagemusha_payload_bench.yml ci/check_kagemusha_production_readiness.sh docs/source/offline_kagemusha.md docs/source/sdk/android/readiness/android_strongbox_device_matrix.md roadmap.md scripts/kagemusha_production_readiness.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_recursive_compact_key_evidence.py scripts/tests/kagemusha_production_readiness_test.py status.md`
+    (no matches)
+
+## 2026-06-09 Kagemusha evidence-helper output readback binding
+
+- Hardened `scripts/kagemusha_lineage_proof_evidence.py` and
+  `scripts/kagemusha_recursive_compact_key_evidence.py` so helper `--out`
+  readback captures the post-replace `lstat()` identity and verifies the same
+  opened regular file before reporting success. A post-replace regular-file swap
+  now fails as `--out changed while being read`; plain read/decode failures and
+  content mismatches keep the existing `--out write verification failed` result.
+- Added lineage and compact-key regular-file-swap regressions and promoted both
+  helper output readback open-path bindings into the production-readiness guard
+  and PR workflow.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_recursive_compact_key_evidence.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_write_evidence_rejects_readback_mismatch scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_write_evidence_rejects_readback_failure scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_write_evidence_rejects_regular_file_swap_before_readback scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_write_evidence_rejects_readback_mismatch scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_write_evidence_rejects_readback_failure scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_write_evidence_rejects_regular_file_swap_before_readback`
+    (`6` tests passed, latest run 0.008s)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-readback-verification`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-readback-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-readback-open-path-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-post-write-preflight`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-readback-verification`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-readback-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-readback-open-path-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-post-write-preflight`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test`
+    (`388` tests passed, latest run 39.449s)
+  - `python3 scripts/kagemusha_production_readiness.py --repo-root .`
+    (blocked only by `lineage_proof_evidence_missing`,
+    `compact_key_evidence_missing`, and `android_device_lab_root_missing`)
+  - `git diff --check -- .github/workflows/pr_kagemusha_payload_bench.yml ci/check_kagemusha_production_readiness.sh docs/source/offline_kagemusha.md docs/source/sdk/android/readiness/android_strongbox_device_matrix.md roadmap.md scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_recursive_compact_key_evidence.py scripts/tests/kagemusha_production_readiness_test.py status.md`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' .github/workflows/pr_kagemusha_payload_bench.yml ci/check_kagemusha_production_readiness.sh docs/source/offline_kagemusha.md docs/source/sdk/android/readiness/android_strongbox_device_matrix.md roadmap.md scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_recursive_compact_key_evidence.py scripts/tests/kagemusha_production_readiness_test.py status.md`
+    (no matches)
+
+## 2026-06-09 Kagemusha release-bundle output readback binding
+
+- Hardened `scripts/kagemusha_release_bundle.py` so release-bundle `--out`
+  readback is bound to the opened output file identity after atomic replacement.
+  Plain read/decode failures still report
+  `--out could not be read back after writing`, mismatch keeps the generated
+  manifest comparison error, and post-preflight output swaps fail as
+  `--out changed while being read`.
+- Added a release-bundle regular-file-swap regression and promoted the output
+  readback open-path binding into the production-readiness guard and workflow.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_release_bundle.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_write_release_bundle_rejects_readback_mismatch scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_write_release_bundle_rejects_readback_failure scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_write_release_bundle_rejects_regular_file_swap_before_readback`
+    (`3` tests passed, latest run 0.005s)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-readback-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-readback-open-path-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-post-write-preflight`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test`
+    (`386` tests passed, latest run 33.386s)
+  - `python3 scripts/kagemusha_production_readiness.py --repo-root .`
+    (blocked only by `lineage_proof_evidence_missing`,
+    `compact_key_evidence_missing`, and `android_device_lab_root_missing`)
+
+## 2026-06-09 Kagemusha readiness summary readback open-file binding
+
+- Hardened `scripts/kagemusha_production_readiness.py` so `write_summary(...)`
+  verifies `--summary-out` through an opened-file identity check after atomic
+  replacement. Plain read or UTF-8 decode failures still report
+  `--summary-out write verification failed`, while post-preflight output swaps
+  fail as `--summary-out changed while being read`.
+- Added a readiness summary regular-file-swap regression and promoted the
+  summary readback open-path binding into the production-readiness guard and
+  workflow.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_write_summary_rejects_readback_mismatch scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_write_summary_rejects_readback_failure scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_write_summary_rejects_regular_file_swap_before_readback`
+    (`3` tests passed, latest run 0.003s)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-readback-verification`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-readback-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-readback-open-path-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-post-write-preflight`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test`
+    (`385` tests passed, latest run 32.108s)
+  - `python3 scripts/kagemusha_production_readiness.py --repo-root .`
+    (blocked only by `lineage_proof_evidence_missing`,
+    `compact_key_evidence_missing`, and `android_device_lab_root_missing`)
+
+## 2026-06-09 Kagemusha Android summary readback open-file binding
+
+- Hardened `scripts/check_android_device_lab_slot.py` so `write_summary(...)`
+  verifies `--json-out` through an opened-file identity check after atomic
+  replacement. Plain read or UTF-8 decode failures still report
+  `--json-out write verification failed`, while post-preflight output swaps fail
+  as `--json-out changed while being read`.
+- Added a scanner summary regular-file-swap regression and promoted the summary
+  readback open-path binding into the production-readiness guard and workflow.
+- Validation:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_write_summary_rejects_readback_mismatch scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_write_summary_rejects_readback_failure scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_write_summary_rejects_regular_file_swap_before_readback`
+    (`3` tests passed, latest run 0.004s)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-readback-verification`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-readback-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-readback-open-path-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-post-write-preflight`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`363` tests passed, latest run 10.000s)
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test`
+    (`384` tests passed, latest run 34.145s)
+  - `python3 scripts/kagemusha_production_readiness.py --repo-root .`
+    (blocked only by `lineage_proof_evidence_missing`,
+    `compact_key_evidence_missing`, and `android_device_lab_root_missing`)
+
+## 2026-06-09 Kagemusha signer signature-output read binding
+
+- Hardened the signing helper so OpenSSL `signature.bin` output is read through
+  an opened-file identity check before the Ed25519 64-byte shape check. Missing,
+  unreadable, non-regular, aliased, or post-OpenSSL swapped signature outputs
+  now fail as `signature output could not be read`.
+- Added a signature-output regular-file-swap regression and promoted the
+  signature output open-path binding into the production-readiness guard and
+  workflow alongside the existing read-failure and shape controls.
+- Validation:
+  - `python3 -m py_compile scripts/sign_android_device_lab_evidence.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_sign_ed25519_rejects_signature_read_failure_after_openssl scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_sign_ed25519_rejects_signature_output_swap_after_openssl scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_sign_ed25519_rejects_short_signature_output_after_openssl`
+    (`3` tests passed, latest run 0.004s)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-signature-read-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-signature-open-path-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`362` tests passed, latest run 9.094s)
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test`
+    (`384` tests passed, latest run 31.805s)
+  - `python3 scripts/kagemusha_production_readiness.py --repo-root .`
+    (blocked only by `lineage_proof_evidence_missing`,
+    `compact_key_evidence_missing`, and `android_device_lab_root_missing`)
+
+## 2026-06-09 Kagemusha OpenSSL staged-byte readback binding
+
+- Hardened `_write_staged_bytes(...)` so OpenSSL payload/signature staging
+  captures the exclusive-write descriptor identity and validates readback through
+  the same opened-file identity before any verification or signing subprocess can
+  run. Staged path swaps now produce the existing staging verification errors
+  instead of letting replaced bytes reach OpenSSL.
+- Added a direct staged-file regular-swap regression, retargeted payload and
+  signature readback-mismatch tests to the staged-byte reader, and added the
+  staged-byte open-path binding negative control to the guard and workflow.
+- Validation:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_verify_signature_rejects_payload_staging_readback_mismatch_before_openssl scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_verify_signature_rejects_signature_staging_readback_mismatch_before_openssl scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_write_staged_bytes_rejects_regular_file_swap_before_readback scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_sign_ed25519_rejects_payload_staging_readback_mismatch_before_openssl`
+    (`4` tests passed, latest run 0.067s)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-staged-bytes-open-path-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`361` tests passed, latest run 9.149s)
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test`
+    (`384` tests passed, latest run 31.402s)
+  - `python3 scripts/kagemusha_production_readiness.py --repo-root .`
+    (blocked only by `lineage_proof_evidence_missing`,
+    `compact_key_evidence_missing`, and `android_device_lab_root_missing`)
+
+## 2026-06-09 SCCP all-lanes source-gate checklist hash binding
+
+- Hardened the direct all-lanes release checklist so required
+  source-adapter gates must carry a canonical non-zero `gate_hash`, the
+  lane-policy expected audit hash roles, and a `gate_hash` value matching the
+  named final gate transcript. Lanes whose policy does not require a
+  source-adapter gate now fail the governed-deployment checklist if forged gate
+  hashes or audit maps are present. Source-gate audit hashes must also stay
+  distinct from governed source/deployment, destination-binding, route-allowlist,
+  route-canary, and sibling source-gate audit roles.
+- Added adversarial checklist coverage for omitted required Solana gate
+  material, operator-override audit-role smuggling, missing named final gate
+  hashes, gate/audit drift, duplicate audit-role hashes, route-canary hash
+  replay, and non-required Ethereum gate material.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_all_lanes_evidence.py pytests/scripts/sccp_all_lanes_evidence_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_all_lanes_evidence_test.py -k "source_gate or release_checklist"`
+    (`16` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_all_lanes_evidence_test.py`
+    (`139` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "source_gate or release_checklist"`
+    (`15` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "source_gate or release_checklist"`
+    (`7` passed)
+  - `git diff --check -- scripts/sccp_all_lanes_evidence.py pytests/scripts/sccp_all_lanes_evidence_test.py docs/source/bridge_proofs.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" scripts/sccp_all_lanes_evidence.py pytests/scripts/sccp_all_lanes_evidence_test.py docs/source/bridge_proofs.md roadmap.md status.md`
+
+## 2026-06-09 SCCP production route-config unready toggle guard
+
+- Hardened BSC and TRON route-config renderers so production-ready route
+  manifests reject explicit `--allow-unready true` before writing runtime
+  overlays. Non-production manifests still require the diagnostic opt-in before
+  diagnostic overlays can be rendered.
+- Extended the unready transparent-proof source inventory so release readiness
+  pins the BSC/TRON production rejection code and negative route-config tests,
+  and updated bridge-proof docs/roadmap plus Required Release Evidence wording.
+- Validation:
+  - `node --check scripts/sccp_bsc_taira_xor_deploy.mjs && node --check scripts/sccp_tron_taira_xor_deploy.mjs && node --check scripts/sccp_bsc_taira_xor_deploy.test.mjs && node --check scripts/sccp_tron_taira_xor_deploy.test.mjs`
+  - `node --test scripts/sccp_bsc_taira_xor_deploy.test.mjs`
+    (`28` passed)
+  - `node --test scripts/sccp_tron_taira_xor_deploy.test.mjs`
+    (`41` passed)
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - direct verifier/readiness helper import checks for
+    `_sccp_unready_transparent_proof_config_inventory_errors` and
+    `_sccp_unready_transparent_proof_config_gate_inventory_errors`
+    (`0` blockers)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "unready_transparent_proof_config or sccp_allow_unready"`
+    (`3` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "unready_transparent_proof_config or unready_config_only or source_inventory"`
+    (`7` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`8` passed)
+  - `git diff --check -- scripts/sccp_bsc_taira_xor_deploy.mjs scripts/sccp_bsc_taira_xor_deploy.test.mjs scripts/sccp_tron_taira_xor_deploy.mjs scripts/sccp_tron_taira_xor_deploy.test.mjs scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_retired_network_surface_test.py docs/source/bridge_proofs.md docs/source/engineering_backlog.md roadmap.md status.md`
+
 ## 2026-06-09 Kagemusha signer output readback open-file binding
 
 - Hardened signer output write verification so `signed-evidence.json` and
@@ -224,25 +817,34 @@ Last updated: 2026-06-09
   - `python3 scripts/kagemusha_production_readiness.py --repo-root .`
     (blocked only by `lineage_proof_evidence_missing`,
     `compact_key_evidence_missing`, and `android_device_lab_root_missing`)
+
 ## 2026-06-09 BFV native AIR opening-shape boundary
 
 - Tightened Core's BFV-shaped native full-bootstrap AIR preflight so opened
   rows must match the canonical trace width, row/composition field elements must
   stay inside the Goldilocks field, and row/next-row/composition Merkle paths
   must have the canonical depth, direction-byte shape, zero padding bits, and
-  direction bits matching the sampled row index.
+  direction bits matching the sampled row index. The same boundary now also
+  requires the canonical BFV transcript label and a statement-bound native AIR
+  domain tag before accepting BFV-shaped AIR metadata, rejects empty/all-zero
+  commitment roots, all-zero trace/composition roots, and unauthenticated
+  optional composition-value commitments.
 - Added adversarial coverage for short/wide opened rows, non-field row and
   composition values, truncated paths, missing path direction bytes, non-zero
   direction padding bits, row-path index drift, unmasked private rows,
   wraparound private next-row exposure, query-count drift, and public-digest
-  drift before the current dedicated verifier boundary.
+  drift, plus stale transcript-label/domain-tag, empty/all-zero roots,
+  optional composition-value shape rejection, and unauthenticated composition
+  value root/path rejection before the current dedicated verifier boundary.
 - Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-fhe-native-air-shape cargo test -j 1 -p iroha_crypto full_bootstrap_native_stark_air_domain_tag --lib -- --nocapture`
+    (`1` passed, `688` filtered out)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-fhe-native-air-shape cargo test -j 1 -p iroha_core --features zk-stark full_bootstrap_bfv_native_air_boundary --lib -- --nocapture`
-    (`3` passed, `7364` filtered out)
+    (`3` passed, `7457` filtered out)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-fhe-native-air-shape cargo test -j 1 -p iroha_core --features zk-stark generic_air_drift --lib -- --nocapture`
-    (`2` passed, `7365` filtered out)
+    (`2` passed, `7366` filtered out)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-fhe-native-air-shape cargo test -j 1 -p iroha_core --features zk-stark full_bootstrap_execution_proof_rejects_unverified_fake_proof --lib -- --nocapture`
-    (`1` passed, `7366` filtered out)
+    (`1` passed, `7367` filtered out)
 
 ## 2026-06-09 BFV execution public-input schema trace/prover package binding
 
@@ -295,7 +897,8 @@ Last updated: 2026-06-09
   public bundle readiness.
 - Required Release Evidence now names the corridor phase-transcript source
   inventory, and the bridge-proof docs/roadmap record the gate.
-- Kept the launch-scope note explicit: Substrate/Polkadot networks are explicitly outside SCCP launch support for now.
+- Kept the launch-scope note explicit for retired runtime-network families
+  outside the current SCCP launch support scope.
 - Validation:
   - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_retired_network_surface_test.py`
   - direct verifier/readiness helper import checks for the corridor
@@ -3496,7 +4099,7 @@ Last updated: 2026-06-09
 - Started a smaller diagnostic
   `lineage-key-artifacts --profile init --opening-len 2` run under
   `target/kagemusha-diagnostic/`; as of the latest check it was still CPU-bound
-  after more than 135 minutes, had emitted no output after startup, and had not
+  after roughly 200 minutes, had emitted no output after startup, and had not
   created partial artifact files.
 - Fixed the production-readiness guard after the source moved evidence artifact
   hashing to `_sha256_file_with_size(...)`: the stale direct `_sha256_file(...)`
@@ -4108,9 +4711,9 @@ Last updated: 2026-06-09
   policies, required reference datasets, structured-address modes, and business
   services, must now remain printable ASCII before unknown-value diagnostics or
   summary recording can preserve Unicode-confusable spellings. Core
-  profile-catalog IDs and enum values also reject overlong ASCII spellings before
-  duplicate-ID, missing-schema-version, or unknown-value diagnostics can print
-  them.
+  profile-catalog IDs, enum values, and business-service entries also reject
+  overlong ASCII spellings before duplicate-ID, missing-schema-version,
+  unknown-value, or summary diagnostics can print them.
 - XSD manifest `payload_root` values, checked-in schema `targetNamespace`
   attributes, schema payload element names/types, XML fixture namespace/name
   identifiers, and schema-root attribute names must now remain printable ASCII
@@ -4135,6 +4738,12 @@ Last updated: 2026-06-09
 - Evidence and readiness canary rail trust-coverage blockers no longer print
   compact receipt profile IDs or canary environment labels when a rail receipt
   lacks matching trust material.
+- Trust-bundle preflight, evidence-verifier archive replay, and
+  production-readiness compact trust profile IDs, override IDs, and embedded
+  signature policy strings must now be no longer than 128 characters, and
+  trust-source authority/version provenance must be no longer than 256
+  characters, before preflight/replay diagnostics, archived compact trust
+  summaries, or readiness blockers can print them.
 - Provider/environment context labels must now remain printable ASCII at the
   canary runbook, trust-bundle environment, evidence-verifier CLI/archive, and
   production-readiness CLI/archive layers, so Unicode-confusable release
@@ -4196,18 +4805,26 @@ Last updated: 2026-06-09
     (`4` tests passed, latest run 2.249s)
   - `python3 -m unittest pytests.scripts.iso_trust_bundle_verify_test.IsoTrustBundleVerifyTest.test_secret_material_and_unknown_keys_are_rejected pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_unsupported_trust_policy_is_rejected_even_with_record_only_override pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_non_ascii_compact_trust_policy_is_rejected_without_echo`
     (`3` tests passed, latest focused runs 0.017s, 0.014s, and 1.130s)
+  - `python3 -m unittest pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_overlong_compact_trust_identity_values_are_rejected_without_echo pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_non_ascii_compact_trust_policy_is_rejected_without_echo pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_nonproduction_trust_policy_and_zero_pins_block_readiness`
+    (`3` tests passed, latest run 3.606s)
+  - `python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_overlong_trust_profile_identity_values_are_rejected_without_echo`
+    (`1` test passed, latest run 0.036s)
+  - `python3 -m unittest pytests.scripts.iso_trust_bundle_verify_test.IsoTrustBundleVerifyTest.test_overlong_trust_profile_identity_values_are_rejected_without_echo pytests.scripts.iso_trust_bundle_verify_test.IsoTrustBundleVerifyTest.test_trust_profile_identity_fields_are_canonical pytests.scripts.iso_trust_bundle_verify_test.IsoTrustBundleVerifyTest.test_secret_material_and_unknown_keys_are_rejected pytests.scripts.iso_trust_bundle_verify_test.IsoTrustBundleVerifyTest.test_record_only_policy_requires_explicit_nonproduction_override pytests.scripts.iso_trust_bundle_verify_test.IsoTrustBundleVerifyTest.test_embedded_signature_policy_must_be_explicit`
+    (`5` tests passed, latest run 0.038s)
   - `python3 -m unittest pytests.scripts.iso_trust_bundle_verify_test.IsoTrustBundleVerifyTest.test_secret_material_and_unknown_keys_are_rejected pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_non_ascii_trust_source_identity_values_are_rejected_without_echo pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_non_ascii_compact_trust_source_identity_values_are_rejected_without_echo`
     (`3` tests passed, latest focused runs 0.020s, 0.011s, and 1.133s)
+  - `python3 -m unittest pytests.scripts.iso_trust_bundle_verify_test.IsoTrustBundleVerifyTest.test_overlong_source_identity_values_are_rejected_without_echo pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_overlong_trust_source_identity_values_are_rejected_without_echo pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_overlong_compact_trust_source_identity_values_are_rejected_without_echo`
+    (`3` tests passed, latest run 1.138s)
   - `python3 -m unittest pytests.scripts.iso_trust_bundle_verify_test.IsoTrustBundleVerifyTest.test_non_ascii_der_label_is_rejected_without_echo pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_non_ascii_trust_source_identity_values_are_rejected_without_echo`
     (`2` tests passed, latest focused runs 0.002s and 0.018s)
   - `python3 -m unittest pytests.scripts.iso_trust_bundle_verify_test`
-    (`72` tests passed, latest run 0.395s)
-  - `python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_profile_catalog_non_ascii_enum_values_are_rejected_without_echo pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_profile_catalog_overlong_id_is_rejected_without_echo pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_profile_catalog_overlong_enum_values_are_rejected_without_echo pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_profile_catalog_shape_is_fail_closed`
-    (`4` tests passed, latest run 0.348s)
+    (`75` tests passed, latest run 0.388s)
+  - `python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_profile_catalog_non_ascii_enum_values_are_rejected_without_echo pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_profile_catalog_overlong_id_is_rejected_without_echo pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_profile_catalog_overlong_business_services_are_rejected_without_echo pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_profile_catalog_overlong_enum_values_are_rejected_without_echo pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_profile_catalog_shape_is_fail_closed`
+    (`5` tests passed, latest run 0.342s)
   - `python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_overlong_schema_and_fixture_identifiers_are_rejected_without_echo pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_non_ascii_schema_and_fixture_identifiers_are_rejected_without_echo pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_secret_looking_schema_and_fixture_payload_roots_are_rejected_without_echo`
     (`3` tests passed, latest run 0.030s)
   - `python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test`
-    (`81` tests passed, latest run 1.817s)
+    (`82` tests passed, latest run 1.753s)
   - `python3 -m unittest pytests.scripts.iso_rail_gateway_adapter_test.IsoRailGatewayAdapterTest.test_non_ascii_sidecar_message_type_is_rejected_without_echo pytests.scripts.iso_rail_gateway_adapter_test.IsoRailGatewayAdapterTest.test_malformed_sidecar_message_type_is_rejected_without_echo pytests.scripts.iso_rail_gateway_adapter_test.IsoRailGatewayAdapterTest.test_secret_material_in_sidecar_fields_is_rejected_without_echo pytests.scripts.iso_rail_gateway_adapter_test.IsoRailGatewayAdapterTest.test_unknown_sidecar_fields_are_rejected_before_network_delivery`
     (`4` tests passed, latest run 0.520s)
   - `python3 -m unittest pytests.scripts.iso_rail_gateway_adapter_test`
@@ -4220,6 +4837,8 @@ Last updated: 2026-06-09
     (`6` tests passed, latest run 4.510s)
   - `python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_reviewed_xsd_gap_reasons_are_length_capped_without_echo pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_xsd_reviewed_gap_reasons_are_length_capped_without_echo`
     (`2` tests passed, latest run 1.137s)
+  - `python3 -m unittest pytests.scripts.iso_production_readiness_test`
+    (`147` tests passed, latest run 142.425s)
   - `python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test pytests.scripts.iso_production_readiness_test`
     (`216` tests passed, latest run 142.120s)
   - `python3 -m unittest pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_production_readiness_test pytests.scripts.iso_xsd_fixture_verify_test`
@@ -4233,7 +4852,7 @@ Last updated: 2026-06-09
     (`3` tests passed, latest run 2.321s)
   - `python3 -m py_compile scripts/iso_*.py pytests/scripts/iso_*_test.py`
   - `python3 -m unittest discover -s pytests/scripts -p 'iso_*_test.py'`
-    (`743` tests passed, latest run 299.131s)
+    (`751` tests passed, latest run 299.306s)
 
 ## 2026-06-09 Kagemusha Reserved-lineage proof-log exactness guard
 
@@ -8521,11 +9140,11 @@ Last updated: 2026-06-09
   rejects the circuit-id mismatch.
 - Validation:
   - `cargo test -j 1 -p iroha_core --features zk-stark governed_full_bootstrap_execution_verifier_key_rejects_wrong_circuit_stark_payload --lib -- --nocapture`
-    (`1` passed, `7366` filtered out)
+    (`1` passed, `7459` filtered out)
   - `cargo test -j 1 -p iroha_core --features zk-stark governed_full_bootstrap_execution_verifier_key_rejects_opaque_stark_payload --lib -- --nocapture`
-    (`1` passed, `7366` filtered out)
+    (`1` passed, `7459` filtered out)
   - `cargo test -j 1 -p iroha_core --features zk-stark governed_full_bootstrap_execution_verifier_key_rejects_below_floor_stark_payload --lib -- --nocapture`
-    (`1` passed, `7366` filtered out)
+    (`1` passed, `7459` filtered out)
   - `cargo fmt --package iroha_core -- --check`
   - `git diff --check`
   - `cargo test -j 1 -p iroha_core --features zk-stark soracloud_fhe_full_bootstrap_execution_proof_accepts_verified_active_verifier --lib -- --nocapture`
@@ -15149,7 +15768,8 @@ Last updated: 2026-06-09
 
 ## 2026-06-08 SCCP retired runtime-network launch-scope note
 
-- Substrate/Polkadot networks are explicitly outside SCCP launch support for now.
+- Kept the explicit unsupported retired-family launch-scope note in the current
+  SCCP status surface.
 - Kept the active SCCP launch scope limited to Ethereum, BSC, Solana, TON, and
   TRON in the public bridge-proof, backlog, and roadmap notes.
 
@@ -58635,6 +59255,36 @@ Last updated: 2026-06-09
   profile-advertised version gaps, real rail PKI/revocation bundles, and live
   provider canary evidence.
 - Validation:
+  - `python3 -m py_compile scripts/iso_trust_bundle_verify.py pytests/scripts/iso_trust_bundle_verify_test.py`
+    (passed)
+  - `python3 -m unittest pytests.scripts.iso_trust_bundle_verify_test.IsoTrustBundleVerifyTest.test_overlong_trust_profile_identity_values_are_rejected_without_echo pytests.scripts.iso_trust_bundle_verify_test.IsoTrustBundleVerifyTest.test_trust_profile_identity_fields_are_canonical pytests.scripts.iso_trust_bundle_verify_test.IsoTrustBundleVerifyTest.test_secret_material_and_unknown_keys_are_rejected pytests.scripts.iso_trust_bundle_verify_test.IsoTrustBundleVerifyTest.test_record_only_policy_requires_explicit_nonproduction_override pytests.scripts.iso_trust_bundle_verify_test.IsoTrustBundleVerifyTest.test_embedded_signature_policy_must_be_explicit`
+    (`5` passed)
+  - `python3 -m unittest pytests.scripts.iso_trust_bundle_verify_test.IsoTrustBundleVerifyTest.test_overlong_source_identity_values_are_rejected_without_echo pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_overlong_trust_source_identity_values_are_rejected_without_echo pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_overlong_compact_trust_source_identity_values_are_rejected_without_echo`
+    (`3` passed)
+  - `python3 -m unittest pytests.scripts.iso_trust_bundle_verify_test`
+    (`75` passed, latest run 0.388s)
+  - `python3 -m py_compile scripts/iso_operator_evidence_verify.py pytests/scripts/iso_operator_evidence_verify_test.py`
+    (passed)
+  - `python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_overlong_trust_profile_identity_values_are_rejected_without_echo`
+    (`1` passed)
+  - `python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_unsupported_trust_policy_is_rejected_even_with_record_only_override pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_trust_profile_identity_fields_are_rechecked_in_archives pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_trust_profile_overrides_must_match_material_summary pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_trust_profile_override_values_must_remain_canonical`
+    (`4` passed)
+  - `python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_secret_looking_trust_identity_values_are_rejected_without_echo`
+    (`1` passed)
+  - `python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test`
+    (`182` passed, latest run 44.849s)
+  - `python3 -m unittest pytests.scripts.iso_production_readiness_test`
+    (`147` passed, latest run 142.425s)
+  - `python3 -m py_compile scripts/iso_*.py pytests/scripts/iso_*_test.py`
+    (passed)
+  - `python3 -m unittest discover -s pytests/scripts -p 'iso_*_test.py'`
+    (`751` passed, latest run 299.306s)
+  - `git diff --check -- scripts/iso_trust_bundle_verify.py scripts/iso_operator_evidence_verify.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py scripts/iso_production_readiness.py pytests/scripts/iso_production_readiness_test.py docs/source/engineering_backlog.md docs/source/finance/tradfi_interop_audit.md status.md roadmap.md`
+    (passed)
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' scripts/iso_trust_bundle_verify.py scripts/iso_operator_evidence_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py docs/source/engineering_backlog.md docs/source/finance/tradfi_interop_audit.md status.md roadmap.md`
+    (no conflict markers)
+  - `git diff -- Cargo.lock`
+    (no diff)
   - `python3 -m unittest pytests.scripts.iso_trust_bundle_verify_test.IsoTrustBundleVerifyTest.test_declared_der_digest_must_be_recorded_as_string pytests.scripts.iso_trust_bundle_verify_test.IsoTrustBundleVerifyTest.test_declared_der_digest_mismatch_is_rejected pytests.scripts.iso_trust_bundle_verify_test.IsoTrustBundleVerifyTest.test_checked_in_trust_bundle_templates_verify`
     (`3` passed)
   - `python3 -m unittest pytests.scripts.iso_trust_bundle_verify_test.IsoTrustBundleVerifyTest.test_embedded_signature_policy_must_be_explicit pytests.scripts.iso_trust_bundle_verify_test.IsoTrustBundleVerifyTest.test_record_only_policy_requires_explicit_nonproduction_override`

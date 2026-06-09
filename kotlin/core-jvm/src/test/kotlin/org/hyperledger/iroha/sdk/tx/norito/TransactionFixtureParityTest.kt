@@ -5,6 +5,7 @@ import java.util.Base64
 import org.hyperledger.iroha.sdk.address.AccountAddress
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
 import org.hyperledger.iroha.sdk.core.model.Executable
+import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.core.model.WirePayload
 import org.hyperledger.iroha.sdk.norito.NoritoAdapters
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
@@ -269,7 +270,7 @@ class TransactionFixtureParityTest {
                     "chain" to "00000001",
                     "authority" to sampleAuthority(0x51),
                     "creation_time_ms" to 0L,
-                    "metadata" to emptyMap<String, String>(),
+                    "metadata" to emptyMap<String, JsonValue>(),
                     "executable" to mapOf(
                         "Instructions" to listOf(
                             mapOf(
@@ -307,7 +308,7 @@ class TransactionFixtureParityTest {
                     "chain" to "00000001",
                     "authority" to sampleAuthority(0x52),
                     "creation_time_ms" to 0L,
-                    "metadata" to emptyMap<String, String>(),
+                    "metadata" to emptyMap<String, JsonValue>(),
                     "executable" to mapOf(
                         "Instructions" to listOf(
                             mapOf(
@@ -341,7 +342,7 @@ class TransactionFixtureParityTest {
                     "chain" to "00000002",
                     "authority" to sampleAuthority(0x53),
                     "creation_time_ms" to 1_735_000_000_000L,
-                    "metadata" to emptyMap<String, String>(),
+                    "metadata" to emptyMap<String, JsonValue>(),
                     "executable" to mapOf(
                         "Instructions" to listOf(
                             mapOf("wire_name" to "iroha.register"),

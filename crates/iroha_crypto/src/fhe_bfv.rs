@@ -123,7 +123,7 @@ pub const BFV_FULL_BOOTSTRAP_EXECUTION_PREFIX_TRACE_BOUNDS_FIELD_COUNT_V1: u16 =
 /// Version of the typed BFV full-bootstrap arithmetic trace profile.
 pub const BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PROFILE_VERSION_V1: u16 = 1;
 /// Number of top-level fields in the BFV full-bootstrap arithmetic trace profile.
-pub const BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PROFILE_FIELD_COUNT_V1: u16 = 34;
+pub const BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PROFILE_FIELD_COUNT_V1: u16 = 33;
 /// Number of fields in the BFV full-bootstrap raw extracted sample witness.
 pub const BFV_FULL_BOOTSTRAP_RAW_EXTRACTED_SAMPLE_FIELD_COUNT_V1: u16 = 3;
 /// Version of the typed BFV full-bootstrap arithmetic trace material.
@@ -24462,6 +24462,10 @@ mod tests {
     #[test]
     fn full_bootstrap_arithmetic_trace_profile_digest_binds_schema_and_native_material() {
         let profile = bfv_full_bootstrap_arithmetic_trace_profile_v1();
+        assert_eq!(
+            profile.field_count, 33,
+            "canonical arithmetic trace profile must advertise its actual top-level field count"
+        );
         validate_bfv_full_bootstrap_arithmetic_trace_profile_v1(&profile)
             .expect("canonical arithmetic trace profile");
         let profile_digest = bfv_full_bootstrap_arithmetic_trace_profile_digest_v1()

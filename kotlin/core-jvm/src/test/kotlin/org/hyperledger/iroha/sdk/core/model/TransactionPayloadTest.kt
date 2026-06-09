@@ -93,28 +93,28 @@ class TransactionPayloadTest {
     @Test
     fun `blank metadata key throws`() {
         assertFailsWith<IllegalArgumentException> {
-            TransactionPayload(metadata = mapOf("  " to "value"), creationTimeMs = 1000L)
+            TransactionPayload(metadata = mapOf("  " to JsonValue.string("value")), creationTimeMs = 1000L)
         }
     }
 
     @Test
     fun `defensive copy on metadata input`() {
-        val original = mutableMapOf("key" to "value")
+        val original = mutableMapOf("key" to JsonValue.string("value"))
         val payload = TransactionPayload(metadata = original, creationTimeMs = 1000L)
-        original["injected"] = "bad"
+        original["injected"] = JsonValue.string("bad")
         assertEquals(1, payload.metadata.size)
-        assertEquals("value", payload.metadata["key"])
+        assertEquals(JsonValue.string("value"), payload.metadata["key"])
     }
 
     @Test
     fun `metadata getter returns immutable snapshot`() {
         val payload = TransactionPayload(
-            metadata = mapOf("a" to "1"),
+            metadata = mapOf("a" to JsonValue.string("1")),
             creationTimeMs = 1000L,
         )
         val meta = payload.metadata
         assertFailsWith<UnsupportedOperationException> {
-            (meta as MutableMap)["b"] = "2"
+            (meta as MutableMap)["b"] = JsonValue.string("2")
         }
     }
 
@@ -151,7 +151,7 @@ class TransactionPayloadTest {
             executable = executable,
             timeToLiveMs = 500,
             nonce = 1,
-            metadata = mapOf("k" to "v"),
+            metadata = mapOf("k" to JsonValue.string("v")),
         )
         val b = TransactionPayload(
             chainId = "c",
@@ -160,7 +160,7 @@ class TransactionPayloadTest {
             executable = executable,
             timeToLiveMs = 500,
             nonce = 1,
-            metadata = mapOf("k" to "v"),
+            metadata = mapOf("k" to JsonValue.string("v")),
         )
         assertEquals(a, b)
         assertEquals(a.hashCode(), b.hashCode())

@@ -146,6 +146,7 @@ public sealed class PrivacyProductionGate
         bool verifierFuzzing,
         bool performanceGates,
         bool externalAudit,
+        IReadOnlyList<string> requiredGates,
         IReadOnlyList<string> missing,
         IReadOnlyList<string> auditReferences)
     {
@@ -165,9 +166,29 @@ public sealed class PrivacyProductionGate
         VerifierFuzzing = verifierFuzzing;
         PerformanceGates = performanceGates;
         ExternalAudit = externalAudit;
+        RequiredGates = requiredGates;
         Missing = missing;
         AuditReferences = auditReferences;
     }
+
+    public static IReadOnlyList<string> RequiredGateKeys { get; } =
+        Array.AsReadOnly(new[]
+        {
+            "real_proving",
+            "real_verification",
+            "chain_admission",
+            "sdk_parity",
+            "wallet_state",
+            "witness_privacy_checks",
+            "deterministic_tests",
+            "negative_adversarial_tests",
+            "replay_nullifier_tests",
+            "fuzzing",
+            "parser_fuzzing",
+            "verifier_fuzzing",
+            "performance_gates",
+            "external_audit",
+        });
 
     public static IReadOnlyList<string> MissingReasons { get; } =
         Array.AsReadOnly(new[]
@@ -224,6 +245,8 @@ public sealed class PrivacyProductionGate
 
     public bool ExternalAudit { get; }
 
+    public IReadOnlyList<string> RequiredGates { get; }
+
     public IReadOnlyList<string> Missing { get; }
 
     public IReadOnlyList<string> AuditReferences { get; }
@@ -247,6 +270,7 @@ public sealed class PrivacyProductionGate
             verifierFuzzing: false,
             performanceGates: false,
             externalAudit: false,
+            requiredGates: RequiredGateKeys,
             missing: MissingReasons,
             auditReferences: EmptyAuditReferences);
     }
@@ -510,6 +534,7 @@ public static class PrivacyNative
         Action<IntPtr> free,
         params byte[] expectedSchemaBytes)
     {
+        var shouldClearNativeOutput = false;
         try
         {
             if (code != 0)
@@ -524,6 +549,7 @@ public static class PrivacyNative
                 throw new InvalidOperationException($"{symbol} returned a null output pointer.");
             }
 
+            shouldClearNativeOutput = true;
             var length = CheckedArchiveLength(symbol, outLen);
             var result = new byte[length];
             Marshal.Copy(outPtr, result, 0, length);
@@ -547,7 +573,10 @@ public static class PrivacyNative
         {
             if (outPtr != IntPtr.Zero)
             {
-                ClearNativeBuffer(outPtr, outLen);
+                if (shouldClearNativeOutput)
+                {
+                    ClearNativeBuffer(outPtr, outLen);
+                }
                 free(outPtr);
             }
         }
@@ -579,8 +608,7 @@ public static class PrivacyNative
         if (code != 0
             || outPtr == IntPtr.Zero
             || length == 0
-            || length > PrivacyNativeArchiveMaxBytes
-            || expectedSchemaBytes.Length == 0)
+            || length > PrivacyNativeArchiveMaxBytes)
         {
             return false;
         }
@@ -588,6 +616,10 @@ public static class PrivacyNative
         var output = new byte[(int)length];
         try
         {
+            if (expectedSchemaBytes.Length == 0)
+            {
+                return false;
+            }
             Marshal.Copy(outPtr, output, 0, output.Length);
             return IsNoritoV1Archive(output)
                 && HasNonEmptyPrivacyNoritoPayload(output)
