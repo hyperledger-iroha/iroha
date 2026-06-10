@@ -1183,6 +1183,74 @@ class KagemushaRecursiveSpendProverTest {
                 )
             }.message,
         )
+        val circuitIdBytes =
+            KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1
+                .toByteArray(Charsets.UTF_8)
+        val overlongVersionLengthArchive = kagemushaNoritoFrameFromSchemaHash(
+            lineageProvingKeyArchiveSchemaHash,
+            kagemushaOverlongCompactLength(2) +
+                byteArrayOf(1, 0) +
+                kagemushaNoritoField(
+                    kagemushaNoritoString(
+                        KagemushaRecursiveSpendProver
+                            .RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+                    ),
+                ) +
+                kagemushaNoritoField(verifierKeyCommitment(initVerifierKey)) +
+                kagemushaNoritoField(kagemushaNoritoByteVec(ByteArray(64) { 0xad.toByte() })),
+            TEST_NORITO_COMPACT_LEN_FLAG,
+        )
+        assertEquals(
+            "lineage_proving_key_archive",
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
+                    2,
+                    KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND,
+                    initVerifierKey,
+                    overlongVersionLengthArchive,
+                )
+            }.message,
+        )
+        val overlongCircuitStringArchive = kagemushaNoritoFrameFromSchemaHash(
+            lineageProvingKeyArchiveSchemaHash,
+            kagemushaNoritoField(byteArrayOf(1, 0)) +
+                kagemushaNoritoField(kagemushaOverlongCompactLength(circuitIdBytes.size) + circuitIdBytes) +
+                kagemushaNoritoField(verifierKeyCommitment(initVerifierKey)) +
+                kagemushaNoritoField(kagemushaNoritoByteVec(ByteArray(64) { 0xae.toByte() })),
+            TEST_NORITO_COMPACT_LEN_FLAG,
+        )
+        assertEquals(
+            "lineage_proving_key_archive",
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
+                    2,
+                    KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND,
+                    initVerifierKey,
+                    overlongCircuitStringArchive,
+                )
+            }.message,
+        )
+        val invalidUtf8CircuitArchive = kagemushaNoritoFrameFromSchemaHash(
+            lineageProvingKeyArchiveSchemaHash,
+            kagemushaNoritoField(byteArrayOf(1, 0)) +
+                kagemushaNoritoField(kagemushaNoritoLength(1) + byteArrayOf(0xff.toByte())) +
+                kagemushaNoritoField(verifierKeyCommitment(initVerifierKey)) +
+                kagemushaNoritoField(
+                    kagemushaNoritoByteVec(circuitIdBytes + ByteArray(64) { 0xaf.toByte() }),
+                ),
+            TEST_NORITO_COMPACT_LEN_FLAG,
+        )
+        assertEquals(
+            "lineage_proving_key_archive",
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
+                    2,
+                    KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND,
+                    initVerifierKey,
+                    invalidUtf8CircuitArchive,
+                )
+            }.message,
+        )
         assertEquals(
             "lineage_proving_key_archive",
             assertFailsWith<IllegalArgumentException> {
@@ -2076,6 +2144,13 @@ class KagemushaRecursiveSpendProverTest {
         }
         bytes.add(remaining.toByte())
         return bytes.toByteArray()
+    }
+
+    private fun kagemushaOverlongCompactLength(value: Int): ByteArray {
+        require(value in 0 until 0x80) {
+            "test helper only encodes small overlong lengths"
+        }
+        return byteArrayOf(((value or 0x80).toByte()), 0)
     }
 
     private fun kagemushaNoritoField(
