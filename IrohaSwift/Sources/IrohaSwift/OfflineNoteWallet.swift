@@ -351,7 +351,7 @@ public struct Ed25519OfflineNoteCertificateVerifier: OfflineNoteCertificateVerif
     private let trustedIssuerPublicKeys: [Data]
 
     public init(trustedIssuerPublicKeys: [Data]) {
-        self.trustedIssuerPublicKeys = trustedIssuerPublicKeys
+        self.trustedIssuerPublicKeys = trustedIssuerPublicKeys.map { Data(Array($0)) }
     }
 
     public func verifyIssuerCertificate(_ certificate: OfflineNoteKeyCertificate) throws -> Bool {
@@ -2159,8 +2159,13 @@ public final class OfflineNoteWallet {
             }
             try requireTrustedEitherCertificate(audit.senderKeyCertificate, expectedAccountId: assetAccount(from: claim.assetId))
         }
+        var outputCertificateHashes = Set<String>()
         for output in audit.outputClaims {
             // Chain (#5589) requires P2P audit OUTPUT key certs to be owner-self-signed.
+            let certificateHash = try output.keyCertificate.payloadHash().hexLowercased()
+            guard outputCertificateHashes.insert(certificateHash).inserted else {
+                throw OfflineNoteWalletError.certificateVerificationFailed
+            }
             try requireTrustedOwnerCertificate(output.keyCertificate, expectedAccountId: assetAccount(from: output.assetId))
         }
     }
