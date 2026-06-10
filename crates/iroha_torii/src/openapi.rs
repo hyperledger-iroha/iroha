@@ -5200,7 +5200,7 @@ fn sumeragi_paths() -> Map {
         Value::Object(json_get_operation(
             "Sumeragi",
             "List RBC sessions.",
-            "Return RBC session snapshots.",
+            "Return RBC session snapshots, including raw DELIVER and complete-delivery status.",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
@@ -11938,6 +11938,17 @@ mod tests {
         assert!(paths.contains_key("/v1/sccp/jobs/message/{message_id}"));
         assert!(paths.contains_key("/v1/sumeragi/validator-sets"));
         assert!(paths.contains_key("/v1/sumeragi/validator-sets/{height}"));
+        assert!(paths.contains_key("/v1/sumeragi/rbc/sessions"));
+        let sumeragi_rbc_sessions_description = paths
+            .get("/v1/sumeragi/rbc/sessions")
+            .and_then(Value::as_object)
+            .and_then(|path| path.get("get"))
+            .and_then(Value::as_object)
+            .and_then(|get| get.get("description"))
+            .and_then(Value::as_str)
+            .expect("Sumeragi RBC sessions description");
+        assert!(sumeragi_rbc_sessions_description.contains("raw DELIVER"));
+        assert!(sumeragi_rbc_sessions_description.contains("complete-delivery"));
         assert!(paths.contains_key("/v1/contracts/view/batch"));
         assert!(paths.contains_key("/v1/contracts/rollups/swaps/fills"));
         assert!(paths.contains_key("/v1/contracts/rollups/swaps/candles"));

@@ -1,6 +1,343 @@
 # Status
 
-Last updated: 2026-06-09
+Last updated: 2026-06-10
+
+## 2026-06-10 Sumeragi adversarial docs and Torii RBC status test hygiene
+
+- Synced `docs/source/sumeragi_da.md` with the eleven-entry
+  `integration_tests/tests/sumeragi_adversarial.rs` suite. The operator docs
+  now include the selective validator drop, chunk equivocation, conflicting
+  READY, locked-QC conflict gate, partial chunk withholding, and
+  all-chunks-corrupted scenarios alongside the original chunk loss, reorder,
+  witness corruption, duplicate INIT, and drop-then-recovery rows.
+- Updated the adversarial integration test crate documentation so it describes
+  the broader Sumeragi DA/RBC debug-knob surface instead of only the original
+  chunk-drop, reorder, and witness-corruption coverage.
+- Feature-gated the grouped Torii RBC status test lock behind `telemetry`, so
+  the lock remains available for the global RBC status endpoint tests without
+  producing dead-code warnings when the telemetry-gated modules are compiled
+  out.
+- Added Torii delivered-endpoint negative coverage for invalid and zero-chunk
+  RBC summaries. The endpoint keeps those rows visible as diagnostics, but still
+  reports `delivered=false` even when the raw summary carries `delivered=true`.
+- Added `complete_delivery` to the Torii RBC session snapshot so operator
+  tooling can distinguish raw DELIVER state from a non-invalid, positive,
+  count-complete session summary. The OpenAPI route summary, MCP tool
+  description, operator docs, and endpoint tests now cover the distinction.
+- Tightened the permissioned unverified-roster escape hatch so exact active
+  topology bytes are not enough on their own: the cached session roster must
+  have a recorded non-authoritative INIT source. Source-less cache entries and
+  already-derived session rosters now stay out of the unverified READY/DELIVER
+  acceptance path.
+- Extended direct inbound READY/DELIVER coverage so a source-less cached roster
+  that exactly matches the canonical active topology is still stashed for
+  recovery instead of being accepted as unverified live RBC evidence.
+- Validation:
+  - `cargo fmt -p iroha_core -- --check`
+  - `cargo fmt -p integration_tests -- --check`
+  - `cargo fmt -p iroha_torii -- --check`
+  - `cargo test -p iroha_core allow_unverified_rbc_roster --lib -- --nocapture`
+    (`11` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core unverified_roster --lib -- --nocapture`
+    (`6` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core handle_rbc_deliver_force_quorum_one_still_requires_protocol_quorum_for_external_payload --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_torii --test torii_sumeragi_telemetry -- --list`
+    (default feature set listed `9` non-telemetry tests; emitted only the
+    pre-existing unrelated `soracloud.rs` warning)
+  - `cargo test -p iroha_torii --features app_api,telemetry --test torii_sumeragi_telemetry sumeragi_rbc -- --nocapture`
+    (`4` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warning)
+  - `cargo test -p iroha_torii --features app_api,telemetry --test torii_sumeragi_telemetry sumeragi_rbc_delivered_endpoint -- --nocapture`
+    (`3` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warning)
+  - `cargo test -p iroha_torii --features app_api,telemetry --test torii_sumeragi_telemetry rbc_sessions_endpoint -- --nocapture`
+    (`2` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warning)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh`
+  - `rg -n "rbc-status-lookup-bug-is-delivered-(requires-complete|accepts-incomplete|accepts-invalid)|is_delivered_requires_complete|is_delivered_accepts_incomplete|is_delivered_accepts_invalid" ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi scripts/formal`
+    (confirmed the new `accepts-*` mutation configs and no stale
+    `requires-complete` references)
+  - `java -version` (failed: no Java runtime available, so the full Apalache
+    expected-failure sweep was not run in this environment)
+  - `git diff --check`
+  - `git diff -- Cargo.lock` (empty)
+  - `rg -n "^(<<<<<<< .+|=======$|>>>>>>> .+)$" docs/source/sumeragi_da.md integration_tests/tests/sumeragi_adversarial.rs status.md roadmap.md ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi crates/iroha_torii/tests/grouped/sumeragi_telemetry.rs crates/iroha_torii/tests/sumeragi_rbc_delivered_endpoint.rs crates/iroha_torii/tests/sumeragi_rbc_sessions_endpoint.rs`
+    (no matches)
+
+## 2026-06-09 RBC verified complete-delivery wake-up guards
+
+- Hardened `handle_rbc_chunk` so an incomplete `delivered=true` session is not
+  treated as already terminal before chunk ingestion. When the final missing
+  chunk arrives and completes the local payload, Sumeragi now wakes the commit
+  pipeline instead of suppressing recovery behind the stale raw DELIVER marker.
+- Hardened `handle_rbc_ready` with the same complete-delivery guard. A raw
+  DELIVER marker on a chunk-incomplete session no longer suppresses accepted
+  READY progress or the commit-pipeline wake-up needed to resume repair, while
+  fully complete delivered sessions still ignore duplicate late READY progress.
+- Tightened the shared complete-delivery helper so live RBC sessions must have
+  verified complete payload bytes, not merely `received_chunks == total_chunks`.
+  Count-complete chunk sets whose bytes do not match the advertised payload hash
+  remain availability-incomplete even with READY quorum.
+- Hardened the stale-pending DA/RBC reschedule gate to derive
+  `complete_delivery` from verified live session bytes. A delivered,
+  count-complete session with READY quorum but mismatched payload bytes now stays
+  availability-unresolved until repair verifies the advertised payload or the
+  availability timeout releases the gate.
+- Hardened local RBC DELIVER emission so raw `delivered=true` is no longer
+  terminal unless the live session also has verified complete payload bytes.
+  Delivered-but-incomplete sessions now keep DELIVER deferral bookkeeping and
+  continue through the repair/deferral branches instead of dropping throttling
+  state early.
+- Hardened inbound duplicate/deferred RBC DELIVER cleanup with the same
+  complete-delivery predicate. Duplicate DELIVER frames for raw-delivered
+  incomplete sessions no longer bypass READY/repair bookkeeping or clear
+  DELIVER deferral state just because the raw marker is present.
+- Hardened inbound RBC DELIVER READY-bundle handling for the same incomplete
+  raw-delivered boundary. Valid bundled READY signatures now refresh pending
+  progress and wake the commit pipeline for partial raw-delivered sessions,
+  while conflicting bundled READY evidence marks the session invalid and clears
+  pending RBC state through the same path as direct READY conflicts.
+- Hardened operator RBC backlog aggregation so invalid sessions no longer
+  contribute to generic pending-session/missing-chunk counters or lane/dataspace
+  backlog gauges. Invalid RBC evidence remains diagnosable through session
+  status and mismatch/invalid counters without creating false live repair
+  pressure.
+- Hardened pending-block validation priority so live RBC DELIVER evidence and
+  retained delivered summaries must bind to the pending block's exact payload
+  hash. Complete retained summaries without a payload hash, or with a hash for a
+  different payload, no longer schedule validation as `rbc_deliver`.
+- Hardened committed-block RBC cleanup so raw delivered sessions are retained
+  after commit until the local chunks verify against the advertised payload
+  hash. Verified delivered payloads still drain runtime session state and keep
+  the final retained status snapshot for observability/restart recovery.
+- Hardened committed-delivery repair suppression and committed-tip scheduling
+  with the same verified boundary. Raw-delivered incomplete sessions at the
+  committed tip remain repair-active and can schedule RBC work, while verified
+  complete delivered sessions stay idle.
+- Aligned the `SumeragiRbcStatusLookupGate` formal model and formal README with
+  the current `rbc_status::Handle::is_delivered` contract: delivered,
+  non-invalid, complete chunk metadata is required, but payload-hash equality is
+  not. The expected-failure set now mutates incomplete/invalid acceptance rather
+  than the obsolete "requires complete" behavior.
+- Hardened roster-promotion retry gates with the same complete-delivery
+  predicate. Once an init or missing-source RBC roster is promoted to an
+  authoritative derived roster, raw-delivered incomplete sessions can retry
+  local READY/DELIVER repair instead of treating the raw marker as terminal.
+- Hardened the permissioned unverified-roster escape hatch so local
+  READY/DELIVER signing and inbound READY/DELIVER acceptance only use an
+  INIT-carried roster when that roster exactly matches the canonical current
+  active topology and is recorded with a non-authoritative INIT source.
+  Source-less cache entries, tiny self-consistent future-height rosters,
+  foreign-validator rosters, same-quorum active subsets, and duplicate
+  non-canonical rosters now stay stashed for recovery instead of shrinking or
+  reshaping the effective RBC certificate set. Already-derived rosters remain
+  outside the unverified escape hatch and follow the authoritative-roster path.
+- Stopped caching INIT-carried unverified rosters into the vote-roster cache.
+  Only authoritative derived rosters seed that cache, so a future-height INIT
+  cannot make its own unverified signer set authoritative by side effect.
+- Hardened the periodic stalled-RBC repair loop with the same predicate for
+  local READY re-attempts. Raw-delivered incomplete sessions can now emit READY
+  during scheduled repair after a roster becomes authoritative, rather than
+  stalling behind an unverified DELIVER marker.
+- Added an adversarial regression where a delivered-but-empty two-chunk session
+  accepts chunk `0` without waking commit, then accepts chunk `1` and wakes the
+  pipeline only after the local chunk set is complete.
+- Added a four-peer signed-READY regression where a delivered-but-incomplete
+  session refreshes pending progress and wakes commit after accepting a remote
+  READY.
+- Added an availability-matrix adversarial row for delivered, count-complete
+  chunks that fail payload-hash verification.
+- Added a four-peer actor regression where a live delivered session with no
+  local block body, READY quorum, and mismatched complete bytes keeps RBC
+  availability unresolved; replacing it with matching bytes resolves the gate.
+- Added a DELIVER deferral regression where an incomplete raw-delivered session
+  keeps and refreshes deferral state, while a verified complete delivered
+  session still clears deferral state as terminal.
+- Added an inbound duplicate-DELIVER regression where a signed duplicate for a
+  raw-delivered incomplete session leaves pending progress untouched while
+  preserving DELIVER deferral state for future repair.
+- Added a signed DELIVER READY-bundle regression where a duplicate DELIVER for a
+  raw-delivered incomplete session records the newly bundled READY signature,
+  refreshes pending progress, wakes commit, and still preserves DELIVER deferral
+  state for future chunk repair.
+- Added a signed DELIVER READY-bundle negative regression where a conflicting
+  sender signature inside the bundle invalidates the session without
+  overwriting the original sender evidence and clears pending RBC state.
+- Added an operator backlog negative regression where an invalid, partial
+  raw-delivered session with lane/dataspace allocations contributes zero generic
+  pending sessions, missing chunks, lane backlog, and dataspace backlog.
+- Added validation-priority negative regressions for complete live RBC evidence
+  with the wrong payload, retained delivered summaries without payload hashes,
+  and retained delivered summaries with mismatched payload hashes.
+- Added committed-cleanup regressions where raw delivered sessions without
+  complete chunks and delivered sessions with mismatched complete bytes remain
+  retained after commit, while exact delivered payloads still settle cleanup.
+- Added a committed-tip deadline regression where a raw-delivered partial
+  session still schedules RBC repair, plus retained the complete-delivery idle
+  cases for committed sessions.
+- Added formal expected-failure configs for `is_delivered` accepting incomplete
+  or invalid summaries, replacing the obsolete `is_delivered_requires_complete`
+  mutation.
+- Added a roster-promotion regression where a raw-delivered incomplete session
+  emits local READY and keeps DELIVER deferral state after source promotion,
+  while existing verified delivered-session promotion cases still skip retries.
+- Added unverified-roster regressions where a permissioned future-height roster
+  that exactly matches the canonical active topology remains usable, while
+  source-less cached rosters, already-derived rosters, one-peer,
+  foreign-validator, same-quorum subset, and duplicate INIT rosters are rejected
+  by the escape hatch. Direct inbound READY/DELIVER coverage pins source-less
+  exact-active, tiny, same-quorum subset, and duplicate non-canonical rosters as
+  stashed recovery evidence instead of accepted live session evidence, while
+  already-derived rosters stay covered by the authoritative-roster path.
+- Added INIT roster-cache regressions proving authoritative INIT rosters still
+  populate the vote-roster cache, while foreign unverified INIT rosters do not.
+- Added a periodic repair regression where a raw-delivered incomplete session
+  emits local READY during `rebroadcast_stalled_rbc_payloads` once the roster is
+  authoritative.
+- Validation:
+  - `cargo test -p iroha_core rbc_availability --lib -- --nocapture`
+    (`4` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core maybe_emit_rbc_deliver_keeps_deferral_for_incomplete_delivered_session --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core maybe_emit_rbc_deliver --lib -- --nocapture`
+    (`11` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core duplicate_rbc_deliver_on_incomplete_delivered_session_keeps_deferral_state --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core duplicate_rbc_deliver --lib -- --nocapture`
+    (`4` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core rbc_deliver_bundle_ready_on_incomplete_delivered_session_refreshes_progress_and_wakes_commit_pipeline --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core rbc_deliver_bundle --lib -- --nocapture`
+    (`2` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core handle_rbc_deliver --lib -- --nocapture`
+    (`17` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core promote_rbc_session_roster_and_retry_retries_ready_for_incomplete_delivered_session --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core promote_rbc_session_roster_and_retry --lib -- --nocapture`
+    (`15` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core allow_unverified_rbc_roster --lib -- --nocapture`
+    (`9` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core tiny_permissioned_unverified_roster_stashes_ready_and_deliver --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core permissioned_unverified_roster_stashes_ready_and_deliver --lib -- --nocapture`
+    (`3` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core unverified_roster --lib -- --nocapture`
+    (`5` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core allow_unverified_rbc_roster_rejects_foreign_permissioned_future_roster --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core handle_rbc_init_does_not_cache_foreign_unverified_roster --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core handle_rbc_init_caches_vote_roster --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core handle_rbc_ready_refreshes_roster --lib -- --nocapture`
+    (`2` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core handle_rbc_deliver_refreshes_roster --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core block_created_promotes_same_epoch_rbc_roster_and_flushes_stashed_ready_and_deliver --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core rbc_ready_on_incomplete_delivered_session_refreshes_progress_and_wakes_commit_pipeline --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core late_rbc_ready_after_delivery_does_not_refresh_pending_progress_or_rerun_commit_pipeline --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core rbc_ready_reaching_quorum_after_authoritative_delivery_wakes_commit_pipeline --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core rbc_ready_commit_processing_gate_requires_state_change --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core rbc_ready --lib -- --nocapture`
+    (`57` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core invalid_rbc_session_does_not_count_as_operator_backlog --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core backlog --lib -- --nocapture`
+    (`83` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core rbc_chunk_commit_pipeline_runs --lib -- --nocapture`
+    (`2` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core rbc_session_availability_incomplete_requires_complete_delivered_ready_evidence --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core pending_block_validation_priority_requires_complete_rbc_delivery_evidence --lib -- --nocapture`
+    (`1` test passed; tightened fixture now covers missing chunks, wrong live
+    payloads, no-hash retained summaries, mismatched retained summaries, and
+    matching retained summaries; emitted the pre-existing unrelated
+    `soracloud.rs` warnings)
+  - `cargo test -p iroha_core pending_block_validation_priority --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core frontier_missing_qc_cleanup_preserves_rbc_ready_frontier_repair_state --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core committed_rbc_cleanup --lib -- --nocapture`
+    (`9` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core retain_rbc_sessions_after_commit_when_undelivered --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core rebroadcast_stalled_rbc_payloads_retries_ready_for_incomplete_delivered_session --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core rebroadcast_stalled_rbc_payloads --lib -- --nocapture`
+    (`18` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core actor_next_tick_deadline_tracks_incomplete_delivered_committed_tip_rbc_session --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core actor_next_tick_deadline --lib -- --nocapture`
+    (`13` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core delivered_rbc_session_at --lib -- --nocapture`
+    (`2` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core rbc_status --lib -- --nocapture`
+    (`18` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `bash scripts/formal/sumeragi_apalache.sh rbc-status-lookup-fast`
+    (not run: this environment has only the macOS `/usr/bin/java` stub and no
+    usable Java runtime/JDK, so Apalache could not start)
+  - `cargo test -p iroha_core incomplete_delivered --lib -- --nocapture`
+    (`11` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core rbc_payload_matches --lib -- --nocapture`
+    (`6` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo fmt -p iroha_core`
+  - `cargo fmt -p iroha_core -- --check`
+  - `git diff --check`
+  - `git diff -- Cargo.lock`
+    (empty diff)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh`
+  - Conflict-marker scan over the touched code, formal, and status/docs files
+    found no matches.
 
 ## 2026-06-09 RBC rebroadcast and roster complete-delivery guard
 
@@ -138,12 +475,14 @@ Last updated: 2026-06-09
 
 - Hardened pending-block validation priority so `rbc_deliver` priority is only
   granted when live RBC sessions or retained RBC status summaries are
-  non-invalid, marked delivered, and have a positive complete chunk set. Raw
-  `delivered=true` evidence with missing chunks no longer elevates validation
-  scheduling.
+  non-invalid, marked delivered, have a positive complete chunk set, and bind to
+  the pending block's payload hash. Raw `delivered=true` evidence with missing
+  chunks, absent retained payload hashes, or mismatched payload hashes no longer
+  elevates validation scheduling.
 - Added regression coverage for both live sessions and retained status-summary
-  evidence: incomplete delivered evidence stays unprioritized, while complete
-  delivered evidence still returns `rbc_deliver`.
+  evidence: incomplete delivered evidence and wrong/no-hash payload evidence
+  stay unprioritized, while exact-payload delivered evidence still returns
+  `rbc_deliver`.
 - Validation:
   - `cargo test -p iroha_core pending_block_validation_priority_requires_complete_rbc_delivery_evidence --lib -- --nocapture`
     (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`

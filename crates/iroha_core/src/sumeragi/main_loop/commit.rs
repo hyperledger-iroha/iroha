@@ -8636,7 +8636,7 @@ impl Actor {
                 key.0 == block_hash
                     && key.1 == height
                     && !session.is_invalid()
-                    && !session.delivered
+                    && !rbc_session_has_complete_delivery(session)
             })
     }
 

@@ -395,7 +395,8 @@ expected-failure configs as Apalache.
 `SumeragiRbcStatusLookupGate.tla` captures RBC status lookup helpers used by
 payload recovery and cleanup:
 - `is_delivered(...)` scans all views for a matching block hash and height and
-  intentionally does not require chunk completeness or payload equality,
+  requires delivered, non-invalid, complete chunks without requiring payload
+  equality,
 - `delivered_payload_matches(...)` scans all views but requires delivered,
   non-invalid, complete chunks, and a present matching payload hash,
 - `complete_payload_matches(...)` checks one exact `(block, height, view)` key,
@@ -17591,7 +17592,8 @@ bash scripts/formal/sumeragi_apalache.sh commit-inflight-status-bug-json-queue-d
 bash scripts/formal/sumeragi_apalache.sh commit-inflight-status-bug-typed-core-mismatch
 bash scripts/formal/sumeragi_apalache.sh commit-inflight-status-bug-typed-timeout-mismatch
 bash scripts/formal/sumeragi_apalache.sh commit-inflight-status-bug-typed-queue-depth-mismatch
-bash scripts/formal/sumeragi_apalache.sh rbc-status-lookup-bug-is-delivered-requires-complete
+bash scripts/formal/sumeragi_apalache.sh rbc-status-lookup-bug-is-delivered-accepts-incomplete
+bash scripts/formal/sumeragi_apalache.sh rbc-status-lookup-bug-is-delivered-accepts-invalid
 bash scripts/formal/sumeragi_apalache.sh rbc-status-lookup-bug-is-delivered-checks-payload
 bash scripts/formal/sumeragi_apalache.sh rbc-status-lookup-bug-is-delivered-ignores-other-view
 bash scripts/formal/sumeragi_apalache.sh rbc-status-lookup-bug-delivered-accepts-incomplete

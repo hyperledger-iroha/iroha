@@ -10071,7 +10071,9 @@ fn iroha_sumeragi_rbc_sessions_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.rbc.sessions".to_owned(),
         effect: manual_tool_effect_from_name("iroha.sumeragi.rbc.sessions"),
-        description: "List Sumeragi RBC sessions (`/v1/sumeragi/rbc/sessions`).".to_owned(),
+        description:
+            "List Sumeragi RBC sessions with raw DELIVER and complete-delivery status (`/v1/sumeragi/rbc/sessions`)."
+                .to_owned(),
         method: Method::GET,
         path_template: "/v1/sumeragi/rbc/sessions".to_owned(),
         input_schema: norito::json!({
@@ -14849,6 +14851,12 @@ mod tests {
             assert_eq!(tool.effect, ToolEffect::Read, "{}", tool.name);
             assert!(is_tool_allowed_by_policy(&cfg, &tool), "{}", tool.name);
         }
+
+        let sessions = iroha_sumeragi_rbc_sessions_tool();
+        assert_eq!(sessions.effect, ToolEffect::Read);
+        assert!(is_tool_allowed_by_policy(&cfg, &sessions));
+        assert!(sessions.description.contains("raw DELIVER"));
+        assert!(sessions.description.contains("complete-delivery"));
 
         let submit = iroha_sumeragi_evidence_submit_tool();
         assert_eq!(submit.effect, ToolEffect::Operator);

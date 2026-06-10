@@ -10260,10 +10260,11 @@ fixture corridor into broader release validation.
   deferrals: `finalize_pending_block` relies on the refresh path's gate record,
   and telemetry-enabled coverage pins exactly one `missing_local_data` block
   event per held finalization attempt.
-  Pending-block validation priority now uses the same delivered-and-complete
-  chunk-shape invariant for both live RBC sessions and retained RBC status
-  summaries, so malformed `delivered=true` evidence with missing chunks cannot
-  schedule validation as `rbc_deliver`.
+  Pending-block validation priority now uses the same exact-payload
+  complete-delivery invariant for both live RBC sessions and retained RBC
+  status summaries, so malformed `delivered=true` evidence with missing chunks,
+  missing payload hashes, or mismatched payload hashes cannot schedule
+  validation as `rbc_deliver`.
   The Torii `/v1/sumeragi/rbc/delivered/{height}/{view}` operator endpoint now
   applies that same non-invalid positive-complete chunk invariant to its
   `delivered` flag while keeping incomplete matches visible as diagnostics.
@@ -10288,6 +10289,55 @@ fixture corridor into broader release validation.
   missing-chunk repair deadlines active. Authoritative roster refreshes use the
   same complete-delivery guard before ignoring updates, so partial delivered
   sessions clear stale READY/DELIVER evidence when the roster changes.
+  RBC chunk ingestion now uses verified complete-delivery state before
+  suppressing commit-pipeline wakeups, so a partial delivered session that
+  receives its final missing chunk still wakes validation/recovery once local
+  chunks become complete and match the advertised payload hash. RBC READY
+  ingestion uses the same boundary: accepted READY evidence still refreshes
+  progress and wakes commit for delivered-but-incomplete sessions, while
+  verified complete delivered sessions continue to suppress duplicate late READY
+  churn. Local DELIVER emission and deferral bookkeeping use that same terminal
+  boundary, so partial raw-delivered sessions keep repair/deferral state until
+  the advertised payload is locally verified. Inbound duplicate/deferred
+  DELIVER cleanup now follows the same boundary, recording valid bundled READY
+  signatures and keeping READY/repair bookkeeping alive for raw-delivered
+  incomplete sessions. Roster-promotion retry gates now also distinguish raw
+  from complete delivery, so an init-roster
+  source upgrade can retry local READY/DELIVER repair for partial raw-delivered
+  sessions while verified delivered sessions still skip duplicate retries. The
+  permissioned unverified-roster escape hatch now also requires an exact match
+  to the canonical active topology before local READY/DELIVER signing or
+  inbound READY/DELIVER acceptance can use an INIT-carried roster, and the
+  cached roster source must be recorded as non-authoritative INIT evidence;
+  source-less entries, tiny, foreign, same-quorum subset, duplicate, or
+  otherwise non-canonical future-height rosters are stashed for recovery instead
+  of reducing or reshaping the RBC certificate set. Already-derived rosters stay
+  outside the unverified escape hatch and follow the authoritative-roster path.
+  INIT-carried unverified rosters no longer
+  populate the vote-roster cache; only authoritative derived rosters can seed
+  cached vote validation.
+  The periodic stalled-RBC repair loop now applies the same rule before
+  re-attempting local READY, so raw delivered partial sessions do not stall
+  simply because a DELIVER marker arrived before all chunks were verified.
+  Count-complete chunk sets whose bytes fail payload-hash verification remain
+  availability-incomplete even with READY quorum, including in the stale-pending
+  DA/RBC reschedule gate that decides whether reduced timeout recovery may
+  proceed before the configured availability timeout.
+  Committed-block RBC cleanup now shares that exact complete-delivery boundary:
+  raw delivered sessions with missing chunks or mismatched complete bytes remain
+  retained after commit, while verified delivered payloads still drain runtime
+  session state and retain the final status snapshot. Committed-tip repair
+  scheduling and committed-delivery suppression use the same verified boundary,
+  so retained raw-delivered tip sessions remain repair-active until chunks
+  verify.
+  The RBC status lookup formal model now matches the current helper contract:
+  `is_delivered` requires delivered, non-invalid, complete chunk metadata while
+  intentionally not checking payload equality, and the expected-failure configs
+  now mutate incomplete/invalid acceptance instead of the obsolete
+  "requires complete" case.
+  Operator backlog aggregation now ignores invalid RBC sessions, so conflicting
+  or mismatched evidence stays diagnosable through invalid/mismatch status
+  without inflating generic, lane, or dataspace missing-chunk pressure.
   Exact-frontier slot tracking no longer carries a
   compatibility mirror layer: callers now observe canonical nested candidate,
   body, timer, and repair state directly. The live vNext

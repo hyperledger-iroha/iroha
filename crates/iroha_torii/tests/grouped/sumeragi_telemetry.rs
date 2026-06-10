@@ -2,6 +2,16 @@
 
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
+#[cfg(feature = "telemetry")]
+static RBC_STATUS_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(feature = "telemetry")]
+fn rbc_status_test_guard() -> std::sync::MutexGuard<'static, ()> {
+    RBC_STATUS_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 #[path = "../metrics_registry.rs"]
 mod metrics_registry;
 #[path = "../metrics_registry_reset.rs"]
