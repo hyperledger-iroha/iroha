@@ -13433,7 +13433,7 @@ fn sccp_source_adapter_verification_open_verify_envelope_shape(
     {
         return None;
     }
-    let (env, open) = decode_sccp_stark_open_verify_envelope(&proof.proof_bytes)?;
+    let (env, open, _) = decode_sccp_stark_open_verify_proof(&proof.proof_bytes)?;
     if env.circuit_id != SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1
         || !h256_is_nonzero(&env.vk_hash)
         || env.public_inputs.is_empty()
@@ -13451,6 +13451,28 @@ pub fn sccp_source_chain_proof_adapter_verifier_commitment(
     proof: &SccpSourceChainProofEnvelopeV1,
 ) -> Option<H256> {
     let consensus = decode_sccp_source_consensus_proof(&proof.consensus_proof)?;
+    let expected_adapter_transcript_hash = sccp_source_adapter_transcript_hash(
+        proof.source_domain,
+        proof.target_domain,
+        proof.source_proof_plan,
+        proof.finality_model,
+        proof.finality_height,
+        proof.finality_block_hash,
+        proof.receipt_or_message_root,
+        proof.source_event_digest,
+        &consensus.adapter_proof,
+    );
+    if consensus.adapter_transcript_hash != expected_adapter_transcript_hash
+        || !verify_sccp_source_adapter_verification_proof(
+            proof,
+            &consensus.adapter_proof,
+            expected_adapter_transcript_hash,
+            &consensus.verifier_evidence,
+            &consensus.adapter_verification_proof,
+        )
+    {
+        return None;
+    }
     let (env, _) = sccp_source_adapter_verification_open_verify_envelope_shape(
         &consensus.adapter_verification_proof,
     )?;
@@ -22441,7 +22463,7 @@ fn sccp_source_state_verification_proof_shape_is_bounded(
         && !proof.circuit_id.is_empty()
         && !proof.proof_bytes.is_empty()
         && proof.proof_bytes.iter().any(|byte| *byte != 0)
-        && decode_sccp_stark_open_verify_envelope(&proof.proof_bytes).is_some_and(|(env, open)| {
+        && decode_sccp_stark_open_verify_proof(&proof.proof_bytes).is_some_and(|(env, open, _)| {
             env.circuit_id == proof.circuit_id
                 && h256_is_nonzero(&env.vk_hash)
                 && !env.public_inputs.is_empty()
@@ -23784,7 +23806,12 @@ fn sccp_tron_transaction_info_value_contains_source_event(
                 ) else {
                     return false;
                 };
-                matched |= log_matches;
+                if log_matches {
+                    if matched {
+                        return false;
+                    }
+                    matched = true;
+                }
             }
             (9, 0) => {
                 if result_seen {
@@ -50908,6 +50935,26 @@ mod tests {
             )
         );
 
+        let mut duplicate_source_event_info = Vec::new();
+        push_protobuf_bytes(
+            &mut duplicate_source_event_info,
+            8,
+            &matching_log_without_result,
+        );
+        push_protobuf_bytes(
+            &mut duplicate_source_event_info,
+            8,
+            &matching_log_without_result,
+        );
+        push_protobuf_u64(&mut duplicate_source_event_info, 9, 0);
+        assert!(
+            !sccp_tron_transaction_info_value_contains_source_event_digest(
+                &duplicate_source_event_info,
+                source_event_digest,
+            ),
+            "TRON transaction-info receipts must not contain duplicate matching SCCP logs"
+        );
+
         let (transaction_root, receipt_trie_proof_nodes) =
             sample_tron_receipt_mpt_proof_with_value(receipt_root_index, &transaction_info_value);
         let placeholder_material =
@@ -50952,6 +50999,33 @@ mod tests {
             source_event_digest,
             &production_material,
         ));
+        let (duplicate_source_event_root, duplicate_source_event_proof_nodes) =
+            sample_tron_receipt_mpt_proof_with_value(
+                receipt_root_index,
+                &duplicate_source_event_info,
+            );
+        assert!(
+            !verify_sccp_tron_receipt_mpt_source_value(
+                duplicate_source_event_root,
+                receipt_root_index,
+                &duplicate_source_event_proof_nodes,
+                receipt_root,
+                source_event_digest,
+                &placeholder_material,
+            ),
+            "TRON placeholder receipt admission must still reject duplicate matching SCCP logs"
+        );
+        assert!(
+            !verify_sccp_tron_receipt_mpt_source_value(
+                duplicate_source_event_root,
+                receipt_root_index,
+                &duplicate_source_event_proof_nodes,
+                receipt_root,
+                source_event_digest,
+                &production_material,
+            ),
+            "TRON production receipt admission must reject duplicate matching SCCP logs"
+        );
 
         let typed_value = sample_tron_receipt_root_mpt_value(receipt_root);
         let (typed_transaction_root, typed_receipt_trie_proof_nodes) =
@@ -52723,10 +52797,33 @@ mod tests {
         ));
 
         let circuit_id = "sccp-test-source-state-v1";
+        let mut batch = FastpqTransitionBatch::new(
+            SCCP_SOURCE_ADAPTER_FASTPQ_PARAMETER_SET_V1,
+            FastpqPublicInputs {
+                dsid: [0x10; 16],
+                slot: 1,
+                old_root: [0x11; 32],
+                new_root: [0x12; 32],
+                perm_root: [0x13; 32],
+                tx_set_hash: [0x14; 32],
+            },
+        );
+        batch.push(FastpqStateTransition::new(
+            b"sccp:source-state:test".to_vec(),
+            vec![0x21],
+            vec![0x22],
+            FastpqOperationKind::MetaSet,
+        ));
+        batch.sort();
+        let raw_proof = FastpqProver::canonical(SCCP_SOURCE_ADAPTER_FASTPQ_PARAMETER_SET_V1)
+            .expect("canonical source-state preflight FASTPQ parameter set")
+            .prove(&batch)
+            .expect("source-state preflight FASTPQ proof");
+        let raw_proof_bytes = to_bytes(&raw_proof).expect("canonical FASTPQ proof bytes");
         let open = StarkFriOpenProofV1 {
             version: 1,
             public_inputs: vec![vec![[0x11; 32]]],
-            envelope_bytes: vec![0xA5],
+            envelope_bytes: raw_proof_bytes,
         };
         let open_bytes = to_bytes(&open).expect("canonical STARK open proof bytes");
         let env = OpenVerifyEnvelope {
@@ -52746,6 +52843,32 @@ mod tests {
         };
         assert!(sccp_source_state_verification_proof_shape_is_bounded(
             &canonical
+        ));
+
+        let mut opaque_backend_open = open.clone();
+        opaque_backend_open.envelope_bytes = vec![0xA5];
+        let mut opaque_backend_env = env.clone();
+        opaque_backend_env.proof_bytes =
+            to_bytes(&opaque_backend_open).expect("canonical open proof with opaque backend");
+        let mut opaque_backend_proof = canonical.clone();
+        opaque_backend_proof.proof_bytes =
+            to_bytes(&opaque_backend_env).expect("OpenVerify envelope with opaque backend");
+        assert!(!sccp_source_state_verification_proof_shape_is_bounded(
+            &opaque_backend_proof
+        ));
+
+        let mut compressed_backend_open = open.clone();
+        compressed_backend_open.envelope_bytes =
+            norito::to_compressed_bytes(&raw_proof, Some(norito::CompressionConfig::default()))
+                .expect("compressed FASTPQ proof bytes");
+        let mut compressed_backend_env = env.clone();
+        compressed_backend_env.proof_bytes = to_bytes(&compressed_backend_open)
+            .expect("canonical open proof with compressed backend");
+        let mut compressed_backend_proof = canonical.clone();
+        compressed_backend_proof.proof_bytes =
+            to_bytes(&compressed_backend_env).expect("OpenVerify envelope with compressed backend");
+        assert!(!sccp_source_state_verification_proof_shape_is_bounded(
+            &compressed_backend_proof
         ));
 
         let mut legacy_version = canonical.clone();
@@ -54945,6 +55068,25 @@ mod tests {
                 "adapter verifier commitment helper must reject opaque proof bytes"
             );
 
+            let mut opaque_nested_adapter_proof = valid.clone();
+            mutate_source_adapter_verification_proof(
+                &mut opaque_nested_adapter_proof,
+                |adapter_proof| {
+                    let (mut env, mut open) =
+                        decode_sccp_stark_open_verify_envelope(&adapter_proof.proof_bytes)
+                            .expect("decode adapter OpenVerify envelope");
+                    open.envelope_bytes = vec![0xA5];
+                    env.proof_bytes = to_bytes(&open).expect("encode opaque nested FastPQ proof");
+                    adapter_proof.proof_bytes =
+                        to_bytes(&env).expect("encode OpenVerify envelope with opaque backend");
+                },
+            );
+            assert!(
+                sccp_source_chain_proof_adapter_verifier_commitment(&opaque_nested_adapter_proof)
+                    .is_none(),
+                "adapter verifier commitment helper must reject opaque nested FastPQ proof bytes"
+            );
+
             let mut zero_vk_adapter_proof = valid.clone();
             mutate_source_adapter_verification_proof(&mut zero_vk_adapter_proof, |adapter_proof| {
                 let (mut env, _) =
@@ -54986,6 +55128,37 @@ mod tests {
             assert!(
                 sccp_source_chain_proof_adapter_verifier_commitment(&empty_open_inputs).is_none(),
                 "adapter verifier commitment helper must reject empty STARK public inputs"
+            );
+
+            let mut tampered_nested_fastpq = valid.clone();
+            mutate_source_adapter_verification_proof(
+                &mut tampered_nested_fastpq,
+                |adapter_proof| {
+                    let (mut env, mut open, mut raw_proof) =
+                        decode_sccp_stark_open_verify_proof(&adapter_proof.proof_bytes)
+                            .expect("decode adapter OpenVerify proof");
+                    raw_proof.public_io.tx_set_hash[0] ^= 0x01;
+                    open.envelope_bytes =
+                        to_bytes(&raw_proof).expect("encode tampered FastPQ proof");
+                    env.proof_bytes = to_bytes(&open).expect("encode tampered STARK open proof");
+                    adapter_proof.proof_bytes =
+                        to_bytes(&env).expect("encode OpenVerify envelope with invalid backend");
+                },
+            );
+            assert!(
+                sccp_source_chain_proof_adapter_verifier_commitment(&tampered_nested_fastpq)
+                    .is_none(),
+                "adapter verifier commitment helper must verify canonical nested FastPQ proof bytes"
+            );
+
+            let mut stale_adapter_transcript = valid.clone();
+            let mut stale_consensus = source_consensus_proof_from_envelope(&valid);
+            stale_consensus.adapter_transcript_hash[0] ^= 0x01;
+            replace_source_consensus_proof(&mut stale_adapter_transcript, &stale_consensus);
+            assert!(
+                sccp_source_chain_proof_adapter_verifier_commitment(&stale_adapter_transcript)
+                    .is_none(),
+                "adapter verifier commitment helper must reject stale adapter transcript hashes"
             );
 
             let replay_domain = SCCP_CORE_REMOTE_DOMAINS
@@ -60483,6 +60656,10 @@ mod tests {
         assert!(!sccp_source_adapter_engine_deployment_matches_material(
             &material,
             &replayed_vk_hash
+        ));
+        assert!(!sccp_source_chain_proof_matches_adapter_deployment(
+            &deployment_bound_proof,
+            &replayed_vk_hash,
         ));
         assert!(
             !verify_sccp_source_chain_proof_envelope_production_with_material_and_deployment(

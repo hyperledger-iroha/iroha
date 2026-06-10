@@ -8,6 +8,10 @@ CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-target/sccp-production-corridor}"
 NORITO_SKIP_BINDINGS_SYNC="${NORITO_SKIP_BINDINGS_SYNC:-1}"
 SCCP_CORRIDOR_NODE_BIN="${SCCP_CORRIDOR_NODE_BIN:-node}"
 SCCP_CORRIDOR_PYTHON_BIN="${SCCP_CORRIDOR_PYTHON_BIN:-python3}"
+SCCP_GRADLE_JVMARGS="${SCCP_GRADLE_JVMARGS:--Xmx6g}"
+SCCP_KOTLIN_DAEMON_JVMARGS="${SCCP_KOTLIN_DAEMON_JVMARGS:-$SCCP_GRADLE_JVMARGS}"
+SCCP_GRADLE_OPTS_DEFAULT="-Dorg.gradle.jvmargs=$SCCP_GRADLE_JVMARGS -Dkotlin.daemon.jvmargs=$SCCP_KOTLIN_DAEMON_JVMARGS -Dkotlin.daemon.jvm.options=$SCCP_KOTLIN_DAEMON_JVMARGS"
+SCCP_GRADLE_OPTS="${GRADLE_OPTS:-$SCCP_GRADLE_OPTS_DEFAULT}"
 DRY_RUN=0
 LOG_DIR=""
 
@@ -54,6 +58,12 @@ Environment:
   DOTNET_ROOT                  .NET SDK root for the native C# SCCP phase.
                                Falls back to /tmp/iroha-dotnet/sdk, then dotnet
                                on PATH.
+  SCCP_GRADLE_JVMARGS          Default Gradle heap for Kotlin/Android phases
+                               when GRADLE_OPTS is unset. Defaults to -Xmx6g.
+  SCCP_KOTLIN_DAEMON_JVMARGS   Default Kotlin daemon heap when GRADLE_OPTS is
+                               unset. Defaults to SCCP_GRADLE_JVMARGS.
+  GRADLE_OPTS                  Overrides the corridor Gradle/Kotlin heap
+                               defaults when set by the operator.
   SCCP_CORRIDOR_NODE_BIN       Node runtime for JavaScript and contract phases.
                                Defaults to node.
   SCCP_CORRIDOR_PYTHON_BIN     Python runtime for evidence and Python SDK phases.
@@ -371,7 +381,7 @@ phase_kotlin_sdk() {
   java_home="$(resolve_java_home)"
   run_java_version_check "$java_home"
   run_in_dir "$ROOT/kotlin" \
-    env "JAVA_HOME=$java_home" "PATH=$java_home/bin:$PATH" \
+    env "JAVA_HOME=$java_home" "GRADLE_OPTS=$SCCP_GRADLE_OPTS" "PATH=$java_home/bin:$PATH" \
     ./gradlew :core-jvm:test --console=plain \
       --tests 'org.hyperledger.iroha.sdk.sccp.*' \
       --tests 'org.hyperledger.iroha.sdk.sccp.TonSccpProverTest'
@@ -388,11 +398,11 @@ phase_java_android() {
   android_harness_mains="org.hyperledger.iroha.android.sccp.EvmSccpProverTests,org.hyperledger.iroha.android.sccp.SourceSccpProofsTests,org.hyperledger.iroha.android.sccp.TonSccpProverTests,org.hyperledger.iroha.android.sccp.TronSccpProverTests"
   run_java_version_check "$java_home"
   run_in_dir "$ROOT/java/iroha_android" \
-    env "JAVA_HOME=$java_home" "ANDROID_HOME=$android_home" "ANDROID_SDK_ROOT=$android_sdk_root" "PATH=$java_home/bin:$PATH" \
+    env "JAVA_HOME=$java_home" "ANDROID_HOME=$android_home" "ANDROID_SDK_ROOT=$android_sdk_root" "GRADLE_OPTS=$SCCP_GRADLE_OPTS" "PATH=$java_home/bin:$PATH" \
     "ANDROID_HARNESS_MAINS=$android_harness_mains" \
     ./gradlew :core:test --console=plain --tests org.hyperledger.iroha.android.GradleHarnessTests
   run_in_dir "$ROOT/java/iroha_android" \
-    env "JAVA_HOME=$java_home" "ANDROID_HOME=$android_home" "ANDROID_SDK_ROOT=$android_sdk_root" "PATH=$java_home/bin:$PATH" \
+    env "JAVA_HOME=$java_home" "ANDROID_HOME=$android_home" "ANDROID_SDK_ROOT=$android_sdk_root" "GRADLE_OPTS=$SCCP_GRADLE_OPTS" "PATH=$java_home/bin:$PATH" \
     ./gradlew :core:test --console=plain --tests org.hyperledger.iroha.android.sccp.SolanaSccpProverTests
 }
 

@@ -16015,9 +16015,8 @@ pub fn prove_stark_fri_zk_ace_open_verify_envelope(
     let vk_payload: crate::zk_stark::StarkFriVerifyingKeyV1 =
         norito::decode_from_bytes(&vk_box.bytes)
             .map_err(|err| format!("invalid STARK verifying key payload: {err}"))?;
-    if vk_payload.version != 1 {
-        return Err("unsupported STARK verifying key payload version".to_owned());
-    }
+    crate::zk_stark::validate_zk_ace_stark_fri_verifying_key_payload(&vk_payload)
+        .map_err(|err| format!("invalid ZK-ACE STARK verifying key payload: {err}"))?;
     let env_circuit_id = normalize_stark_fri_circuit_id_for_backend(backend, circuit_id)
         .ok_or_else(|| "invalid STARK circuit_id".to_owned())?;
     let vk_circuit_id = normalize_stark_fri_circuit_id_for_backend(backend, &vk_payload.circuit_id)
@@ -16088,6 +16087,119 @@ pub fn prove_stark_fri_zk_ace_open_verify_envelope(
     let bytes = norito::to_bytes(&env)
         .map_err(|err| format!("failed to encode OpenVerifyEnvelope: {err}"))?;
     Ok(ProofBox::new(backend.to_owned(), bytes))
+}
+
+#[cfg(all(test, feature = "zk-stark"))]
+mod zk_ace_stark_prover_tests {
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_data_model::{
+        account::AccountId,
+        asset::AssetDefinitionId,
+        domain::DomainId,
+        proof::{VerifyingKeyBox, VerifyingKeyId},
+        zk::{
+            ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER, ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND,
+            ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID, ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG,
+            ZkAcePublicInputsV1, ZkAceWitnessV1,
+        },
+    };
+
+    use super::*;
+
+    fn account(seed: u8) -> AccountId {
+        let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        AccountId::new(key_pair.public_key().clone())
+    }
+
+    fn asset_definition_id() -> AssetDefinitionId {
+        AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").expect("domain"),
+            "xor".parse().expect("asset name"),
+        )
+    }
+
+    fn public_inputs_and_witness() -> (ZkAcePublicInputsV1, ZkAceWitnessV1) {
+        let witness = ZkAceWitnessV1 {
+            identity_root: [0x11; 32],
+            identity_blinding: [0x22; 32],
+            replay_secret: [0x33; 32],
+        };
+        let policy_hash = [0x44; 32];
+        let chain_id: iroha_data_model::ChainId = "zk-ace-test-chain".parse().expect("chain id");
+        let from = account(1);
+        let to = account(2);
+        let asset = asset_definition_id();
+        let amount = 17;
+        let verifier_key_id = VerifyingKeyId::new(
+            ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND,
+            ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID,
+        );
+        let identity_commitment = iroha_data_model::zk::derive_zk_ace_identity_commitment(
+            &witness.identity_root,
+            &witness.identity_blinding,
+            ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG,
+        );
+        let tx_digest = iroha_data_model::zk::derive_zk_ace_transfer_digest(
+            &from,
+            &to,
+            &asset,
+            amount,
+            &chain_id,
+            ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER,
+            &policy_hash,
+        );
+        let replay_nullifier = iroha_data_model::zk::derive_zk_ace_replay_nullifier(
+            &witness.replay_secret,
+            &tx_digest,
+            &chain_id,
+            ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER,
+            ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG,
+        );
+        let public_inputs = ZkAcePublicInputsV1::transparent_transfer(
+            identity_commitment,
+            tx_digest,
+            chain_id,
+            replay_nullifier,
+            policy_hash,
+            from,
+            to,
+            asset,
+            amount,
+            verifier_key_id,
+        );
+        (public_inputs, witness)
+    }
+
+    #[test]
+    fn zk_ace_stark_prover_rejects_below_floor_verifying_key_payload() {
+        let weak_payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
+            version: 1,
+            circuit_id: ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID.to_owned(),
+            n_log2: crate::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2 - 1,
+            blowup_log2: crate::zk_stark::ZK_ACE_STARK_FRI_V1_BLOWUP_LOG2,
+            fold_arity: 2,
+            queries: crate::zk_stark::ZK_ACE_STARK_FRI_V1_QUERIES,
+            merkle_arity: 2,
+            hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
+        };
+        let vk_box = VerifyingKeyBox::new(
+            ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND.into(),
+            norito::to_bytes(&weak_payload).expect("encode weak ZK-ACE STARK VK"),
+        );
+        let (public_inputs, witness) = public_inputs_and_witness();
+        let err = prove_stark_fri_zk_ace_open_verify_envelope(
+            ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND,
+            ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID,
+            &vk_box,
+            &public_inputs,
+            &witness,
+        )
+        .expect_err("ZK-ACE prover must reject below-floor STARK VK payloads");
+        assert!(
+            err.contains("below production floor"),
+            "unexpected weak VK rejection: {err}"
+        );
+    }
 }
 
 /// Build a STARK/FRI `ivm-execution-v1` proof envelope for IVM proved execution.
@@ -20010,6 +20122,19 @@ impl DedupCache {
     feature = "zk-halo2",
     feature = "zk-halo2-ipa-poseidon"
 ))]
+use halo2_proofs::transcript::TranscriptWriterBuffer;
+#[cfg(all(
+    feature = "zk-halo2-ipa",
+    feature = "zk-halo2",
+    feature = "zk-halo2-ipa-poseidon"
+))]
+use rand_core_06::OsRng;
+
+#[cfg(all(
+    feature = "zk-halo2-ipa",
+    feature = "zk-halo2",
+    feature = "zk-halo2-ipa-poseidon"
+))]
 #[test]
 fn halo2_verify_with_instance_noncanonical_ipa() {
     // Generate a valid proof, then wrap a non-canonical instance scalar in ZK1.
@@ -20019,7 +20144,7 @@ fn halo2_verify_with_instance_noncanonical_ipa() {
         plonk::{
             Circuit, ConstraintSystem, Error as PlonkError, VerifyingKey, keygen_pk, keygen_vk,
         },
-        poly::{Rotation, commitment::Params as _},
+        poly::Rotation,
         transcript::{Blake2bWrite, Challenge255},
     };
     #[derive(Clone, Default)]
@@ -20147,12 +20272,8 @@ fn halo2_verify_with_instance_noncanonical_ipa() {
 #[test]
 fn ipa_vote_bool_commit_zk1() {
     use halo2_proofs::{
-        circuit::{Layouter, SimpleFloorPlanner, Value},
         halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
-        plonk::{
-            Circuit, ConstraintSystem, Error as PlonkError, VerifyingKey, keygen_pk, keygen_vk,
-        },
-        poly::Rotation,
+        plonk::{VerifyingKey, keygen_pk, keygen_vk},
         transcript::{Blake2bWrite, Challenge255},
     };
     // Build circuit and params
@@ -20217,7 +20338,7 @@ fn ipa_vote_bool_commit_zk1() {
     let backend = "halo2/pasta/ipa/vote-bool-commit";
     let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
     let prf_box = ProofBox::new(backend.into(), prf_env);
-    assert!(verify_backend(backend, &prf_box, Some(&vk_box)));
+    assert!(verify_halo2_ipa(backend, &prf_box, Some(&vk_box)));
 }
 
 #[cfg(all(
@@ -20230,7 +20351,6 @@ fn halo2_verify_rejects_vk_without_bytes() {
     use halo2_proofs::{
         halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
         plonk::{VerifyingKey, keygen_pk, keygen_vk},
-        poly::commitment::Params as _,
         transcript::{Blake2bWrite, Challenge255},
     };
     let k = 5u32;
@@ -20321,7 +20441,6 @@ fn ipa_anon_transfer_commit_zk1() {
     use halo2_proofs::{
         halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
         plonk::{VerifyingKey, keygen_pk, keygen_vk},
-        poly::commitment::Params as _,
         transcript::{Blake2bWrite, Challenge255},
     };
     let k = 5u32;
@@ -20335,7 +20454,7 @@ fn ipa_anon_transfer_commit_zk1() {
     )
     .expect("pk");
 
-    // Compute toy commitments externally using the same formula
+    // Compute commitments externally using the same Pow5 pair hash as the circuit.
     let in0 = Scalar::from(7u64);
     let rin0 = Scalar::from(11u64);
     let in1 = Scalar::from(5u64);
@@ -20347,13 +20466,15 @@ fn ipa_anon_transfer_commit_zk1() {
     let sk = Scalar::from(1_234_567u64);
     let serial = Scalar::from(42u64);
     let h = |a: Scalar, r: Scalar| {
+        let a = a + Scalar::from(7u64);
+        let r = r + Scalar::from(13u64);
         let a2 = a * a;
         let a4 = a2 * a2;
         let a5 = a4 * a;
         let r2 = r * r;
         let r4 = r2 * r2;
         let r5 = r4 * r;
-        Scalar::from(2) * a5 + Scalar::from(3) * r5 + Scalar::from(7)
+        Scalar::from(2) * a5 + Scalar::from(3) * r5
     };
     let cm_in0 = h(in0, rin0);
     let cm_in1 = h(in1, rin1);
@@ -20406,7 +20527,7 @@ fn ipa_anon_transfer_commit_zk1() {
     let backend = "halo2/pasta/ipa/anon-transfer-2x2";
     let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
     let prf_box = ProofBox::new(backend.into(), prf_env);
-    assert!(verify_backend(backend, &prf_box, Some(&vk_box)));
+    assert!(verify_halo2_ipa(backend, &prf_box, Some(&vk_box)));
 }
 
 #[cfg(all(
@@ -20419,7 +20540,6 @@ fn ipa_vote_bool_commit_merkle2_zk1() {
     use halo2_proofs::{
         halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
         plonk::{VerifyingKey, keygen_pk, keygen_vk},
-        poly::commitment::Params as _,
         transcript::{Blake2bWrite, Challenge255},
     };
     let k = 6u32;
@@ -20433,28 +20553,23 @@ fn ipa_vote_bool_commit_merkle2_zk1() {
     )
     .expect("pk");
 
-    // Compute commit and merkle2 root using the same inline pow5-like hash as circuit
+    // Compute commit and Merkle root using the same fallback Pow5 pair hash as the circuit.
     let v = Scalar::from(1u64);
     let rho = Scalar::from(12345u64);
-    let h2 = |a: Scalar, b: Scalar| {
-        let a2 = a * a;
-        let a4 = a2 * a2;
-        let a5 = a4 * a;
-        let b2 = b * b;
-        let b4 = b2 * b2;
-        let b5 = b4 * b;
-        Scalar::from(2) * a5 + Scalar::from(3) * b5
-    };
-    let commit = h2(v + Scalar::from(7u64), rho + Scalar::from(13u64));
-    let sib0 = Scalar::from(23u64);
-    let sib1 = Scalar::from(29u64);
-    // w0 = h(commit+7, sib0+13), w1 = h(sib1+7, w0+13)
-    let w0 = h2(commit + Scalar::from(7u64), sib0 + Scalar::from(13u64));
-    let root = h2(sib1 + Scalar::from(7u64), w0 + Scalar::from(13u64));
+    let commit = pasta_tiny::poseidon_pair(v, rho);
+    let sib0 = Scalar::from(5u64);
+    let sib1 = Scalar::from(7u64);
+    // w0 = h(commit, sib0), w1 = h(w0, sib1)
+    let w0 = pasta_tiny::poseidon_pair(commit, sib0);
+    let root = pasta_tiny::poseidon_pair(w0, sib1);
 
-    // Make proof with public instances [commit, root]
+    let col0 = vec![commit];
+    let col1 = vec![root];
+    let inst_cols: Vec<&[Scalar]> = vec![col0.as_slice(), col1.as_slice()];
+    let inst_proofs: Vec<&[&[Scalar]]> = vec![inst_cols.as_slice()];
+
+    // Make proof with public instance columns [commit], [root].
     let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-    let insts: [&[&[Scalar]]; 1] = [&[&[commit, root]]];
     halo2_proofs::plonk::create_proof::<
         IPACommitmentScheme<Curve>,
         ProverIPA<'_, Curve>,
@@ -20466,7 +20581,7 @@ fn ipa_vote_bool_commit_merkle2_zk1() {
         &params,
         &pk,
         &[pasta_tiny::VoteBoolCommitMerkle2::default()],
-        &insts,
+        &inst_proofs,
         OsRng,
         &mut transcript,
     )
@@ -20479,13 +20594,13 @@ fn ipa_vote_bool_commit_merkle2_zk1() {
     crate::zk::zk1::wrap_append_vk_pasta(&mut vk_env, &vk_h2);
     let mut prf_env = crate::zk::zk1::wrap_start();
     crate::zk::zk1::wrap_append_proof(&mut prf_env, &proof_bytes);
-    let cols: [&[Scalar]; 2] = [&[commit][..], &[root][..]];
+    let cols: [&[Scalar]; 2] = [col0.as_slice(), col1.as_slice()];
     crate::zk::zk1::wrap_append_instances_pasta_fp_cols(&cols, &mut prf_env);
 
     let backend = "halo2/pasta/ipa/vote-bool-commit-merkle2";
     let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
     let prf_box = ProofBox::new(backend.into(), prf_env);
-    assert!(verify_backend(backend, &prf_box, Some(&vk_box)));
+    assert!(verify_halo2_ipa(backend, &prf_box, Some(&vk_box)));
 }
 impl DedupCache {
     /// Return true if this proof is new to the cache and insert it; false if duplicate.
@@ -65982,7 +66097,7 @@ mod pasta_tiny {
 
     #[cfg(not(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests")))]
     #[derive(Clone, Default)]
-    pub struct CommitOpen; // commitment = Poseidon2(m, r) fallback when Poseidon gadgets disabled
+    pub struct CommitOpen; // commitment = local Pow5 pair hash when Poseidon gadgets are disabled
     #[cfg(not(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests")))]
     impl Circuit<Scalar> for CommitOpen {
         type Config = (
@@ -66007,7 +66122,7 @@ mod pasta_tiny {
                 let m = meta.query_advice(m, Rotation::cur());
                 let r = meta.query_advice(r, Rotation::cur());
                 let c = meta.query_instance(inst, Rotation::cur());
-                vec![s * (m + r - c)]
+                vec![s * (poseidon_pair_expr(m, r) - c)]
             });
             (m, r, inst, s)
         }
@@ -66042,7 +66157,7 @@ mod pasta_tiny {
 
     #[cfg(not(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests")))]
     #[derive(Clone, Default)]
-    pub struct Merkle2; // root = Poseidon2(Poseidon2(leaf, sib0), sib1) fallback when Poseidon gadgets disabled
+    pub struct Merkle2; // root = H(H(leaf, sib0), sib1) fallback when Poseidon gadgets are disabled
     #[cfg(not(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests")))]
     impl Circuit<Scalar> for Merkle2 {
         type Config = (
@@ -66077,8 +66192,8 @@ mod pasta_tiny {
                 let w1 = meta.query_advice(w1, Rotation::cur());
                 let root = meta.query_instance(root, Rotation::cur());
                 vec![
-                    s.clone() * (w0.clone() - (leaf + sib0)),
-                    s.clone() * (w1.clone() - (w0 + sib1)),
+                    s.clone() * (w0.clone() - poseidon_pair_expr(leaf, sib0)),
+                    s.clone() * (w1.clone() - poseidon_pair_expr(w0, sib1)),
                     s * (root - w1),
                 ]
             });
@@ -66096,8 +66211,8 @@ mod pasta_tiny {
                     let l = Scalar::from(9);
                     let s0 = Scalar::from(5);
                     let s1 = Scalar::from(7);
-                    let w0v = l + s0; // placeholder hash
-                    let w1v = w0v + s1; // placeholder hash
+                    let w0v = poseidon_pair(l, s0);
+                    let w1v = poseidon_pair(w0v, s1);
                     crate::zk::assign_advice_compat(
                         &mut region,
                         || "leaf",
@@ -66803,64 +66918,12 @@ mod pasta_tiny {
                 let output_commitment_slot1 = meta.query_instance(cm_out1, Rotation::cur());
                 let nullifier_instance = meta.query_instance(nf, Rotation::cur());
 
-                // hash-like commitment checks (placeholder pow5)
                 // cm_in0 = H(a, r0); cm_in1 = H(b, r1); cm_out0 = H(c, r2); cm_out1 = H(d, r3)
-                let h_in0 = {
-                    let a2 = a.clone() * a.clone();
-                    let a4 = a2.clone() * a2.clone();
-                    let a5 = a4 * a.clone();
-                    let r2 = r0.clone() * r0.clone();
-                    let r4 = r2.clone() * r2.clone();
-                    let r5 = r4 * r0.clone();
-                    halo2_proofs::plonk::Expression::Constant(Scalar::from(2)) * a5
-                        + halo2_proofs::plonk::Expression::Constant(Scalar::from(3)) * r5
-                        + halo2_proofs::plonk::Expression::Constant(Scalar::from(7))
-                };
-                let h_in1 = {
-                    let a2 = b.clone() * b.clone();
-                    let a4 = a2.clone() * a2.clone();
-                    let a5 = a4 * b.clone();
-                    let r2 = r1.clone() * r1.clone();
-                    let r4 = r2.clone() * r2.clone();
-                    let r5 = r4 * r1.clone();
-                    halo2_proofs::plonk::Expression::Constant(Scalar::from(2)) * a5
-                        + halo2_proofs::plonk::Expression::Constant(Scalar::from(3)) * r5
-                        + halo2_proofs::plonk::Expression::Constant(Scalar::from(7))
-                };
-                let h_out0 = {
-                    let a2 = c.clone() * c.clone();
-                    let a4 = a2.clone() * a2.clone();
-                    let a5 = a4 * c.clone();
-                    let r2 = r2.clone() * r2.clone();
-                    let r4 = r2.clone() * r2.clone();
-                    let r5 = r4 * r2.clone();
-                    halo2_proofs::plonk::Expression::Constant(Scalar::from(2)) * a5
-                        + halo2_proofs::plonk::Expression::Constant(Scalar::from(3)) * r5
-                        + halo2_proofs::plonk::Expression::Constant(Scalar::from(7))
-                };
-                let h_out1 = {
-                    let a2 = d.clone() * d.clone();
-                    let a4 = a2.clone() * a2.clone();
-                    let a5 = a4 * d.clone();
-                    let r2x = r3.clone() * r3.clone();
-                    let r4 = r2x.clone() * r2x.clone();
-                    let r5 = r4 * r3.clone();
-                    halo2_proofs::plonk::Expression::Constant(Scalar::from(2)) * a5
-                        + halo2_proofs::plonk::Expression::Constant(Scalar::from(3)) * r5
-                        + halo2_proofs::plonk::Expression::Constant(Scalar::from(7))
-                };
-                // nullifier = H(sk, serial)
-                let h_nf = {
-                    let a2 = skq.clone() * skq.clone();
-                    let a4 = a2.clone() * a2.clone();
-                    let a5 = a4 * skq.clone();
-                    let r2 = serq.clone() * serq.clone();
-                    let r4 = r2.clone() * r2.clone();
-                    let r5 = r4 * serq.clone();
-                    halo2_proofs::plonk::Expression::Constant(Scalar::from(2)) * a5
-                        + halo2_proofs::plonk::Expression::Constant(Scalar::from(3)) * r5
-                        + halo2_proofs::plonk::Expression::Constant(Scalar::from(7))
-                };
+                let h_in0 = poseidon_pair_expr(a.clone(), r0);
+                let h_in1 = poseidon_pair_expr(b.clone(), r1);
+                let h_out0 = poseidon_pair_expr(c.clone(), r2);
+                let h_out1 = poseidon_pair_expr(d.clone(), r3);
+                let h_nf = poseidon_pair_expr(skq.clone(), serq.clone());
                 vec![
                     s.clone() * (a.clone() + b.clone() - (c.clone() + d.clone())),
                     s.clone() * (h_in0 - input_commitment_slot0),
@@ -67022,28 +67085,16 @@ mod pasta_tiny {
                 // Boolean v
                 let boolc = vq.clone() * (vq.clone() - one);
                 // commit = H(v,rho)
-                let a = vq + halo2_proofs::plonk::Expression::Constant(Scalar::from(7));
-                let b = rhoq + halo2_proofs::plonk::Expression::Constant(Scalar::from(13));
-                let a2 = a.clone() * a.clone();
-                let a4 = a2.clone() * a2.clone();
-                let a5 = a4 * a.clone();
-                let b2 = b.clone() * b.clone();
-                let b4 = b2.clone() * b2.clone();
-                let b5 = b4 * b.clone();
-                let h = halo2_proofs::plonk::Expression::Constant(Scalar::from(2)) * a5
-                    + halo2_proofs::plonk::Expression::Constant(Scalar::from(3)) * b5;
+                let h = poseidon_pair_expr(vq, rhoq);
                 let commitment_delta = h.clone() - cmq.clone();
                 // merkle2: w0 = H(cm, sib0); w1 = H(w0, sib1) = root
-                let _t0a2 = h.clone() * h.clone(); // not exact; reuse a-like pattern for simplicity
-                let expected_first_hash =
-                    h + sib0q.clone() + halo2_proofs::plonk::Expression::Constant(Scalar::from(5));
-                let _w1e = w0q.clone()
-                    + sib1q.clone()
-                    + halo2_proofs::plonk::Expression::Constant(Scalar::from(11));
+                let expected_first_hash = poseidon_pair_expr(h, sib0q);
+                let expected_second_hash = poseidon_pair_expr(w0q.clone(), sib1q);
                 vec![
                     s.clone() * boolc,
                     s.clone() * commitment_delta,
                     s.clone() * (w0q - expected_first_hash),
+                    s.clone() * (w1q.clone() - expected_second_hash),
                     s * (w1q - rootq),
                 ]
             });
@@ -67062,8 +67113,9 @@ mod pasta_tiny {
                     let rho_v = Scalar::from(12345);
                     let sib0_v = Scalar::from(5);
                     let sib1_v = Scalar::from(7);
-                    let w0_v = v_v + rho_v + Scalar::from(5);
-                    let w1_v = w0_v + sib1_v + Scalar::from(11);
+                    let commit_v = poseidon_pair(v_v, rho_v);
+                    let w0_v = poseidon_pair(commit_v, sib0_v);
+                    let w1_v = poseidon_pair(w0_v, sib1_v);
                     crate::zk::assign_advice_compat(
                         &mut region,
                         || "v",
@@ -67189,30 +67241,13 @@ mod pasta_tiny {
                 let output_commitment_slot1 = meta.query_instance(cm_out1, Rotation::cur());
                 let nullifier_instance = meta.query_instance(nf, Rotation::cur());
                 let rootq = meta.query_instance(root, Rotation::cur());
-                let h = |x: halo2_proofs::plonk::Expression<Scalar>,
-                         r: halo2_proofs::plonk::Expression<Scalar>| {
-                    let x2 = x.clone() * x.clone();
-                    let x4 = x2.clone() * x2.clone();
-                    let x5 = x4 * x.clone();
-                    let r2 = r.clone() * r.clone();
-                    let r4 = r2.clone() * r2.clone();
-                    let r5 = r4 * r.clone();
-                    halo2_proofs::plonk::Expression::Constant(Scalar::from(2)) * x5
-                        + halo2_proofs::plonk::Expression::Constant(Scalar::from(3)) * r5
-                        + halo2_proofs::plonk::Expression::Constant(Scalar::from(7))
-                };
-                let computed_cm0 = h(a.clone(), r0.clone());
-                let computed_cm1 = h(b.clone(), r1.clone());
-                let computed_cm2 = h(c.clone(), r2.clone());
-                let computed_cm3 = h(d.clone(), r3.clone());
-                // Merkle2 on cm0 with s0_0 and s0_1
-                let w0 = computed_cm0.clone()
-                    + s0_0
-                    + halo2_proofs::plonk::Expression::Constant(Scalar::from(5));
-                let w1 =
-                    w0.clone() + s0_1 + halo2_proofs::plonk::Expression::Constant(Scalar::from(11));
-                // Nullifier
-                let nf_exp = h(skq.clone(), serq.clone());
+                let computed_cm0 = poseidon_pair_expr(a.clone(), r0.clone());
+                let computed_cm1 = poseidon_pair_expr(b.clone(), r1.clone());
+                let computed_cm2 = poseidon_pair_expr(c.clone(), r2.clone());
+                let computed_cm3 = poseidon_pair_expr(d.clone(), r3.clone());
+                let cm0_root =
+                    poseidon_pair_expr(poseidon_pair_expr(computed_cm0.clone(), s0_0), s0_1);
+                let nf_exp = poseidon_pair_expr(skq.clone(), serq.clone());
                 vec![
                     s.clone() * (a.clone() + b.clone() - (c.clone() + d.clone())),
                     s.clone() * (computed_cm0 - input_commitment_slot0),
@@ -67220,7 +67255,7 @@ mod pasta_tiny {
                     s.clone() * (computed_cm2 - output_commitment_slot0),
                     s.clone() * (computed_cm3 - output_commitment_slot1),
                     s.clone() * (nf_exp - nullifier_instance),
-                    s * (w1 - rootq),
+                    s * (cm0_root - rootq),
                 ]
             });
             (
@@ -67380,10 +67415,29 @@ mod pasta_tiny {
         x4 * x
     }
 
-    fn poseidon_pair(lhs: Scalar, rhs: Scalar) -> Scalar {
+    pub(super) fn poseidon_pair(lhs: Scalar, rhs: Scalar) -> Scalar {
         let lhs = lhs + Scalar::from(7u64);
         let rhs = rhs + Scalar::from(13u64);
         Scalar::from(2u64) * poseidon_pow5(lhs) + Scalar::from(3u64) * poseidon_pow5(rhs)
+    }
+
+    fn poseidon_pow5_expr(
+        expr: halo2_proofs::plonk::Expression<Scalar>,
+    ) -> halo2_proofs::plonk::Expression<Scalar> {
+        let squared = expr.clone() * expr.clone();
+        let fourth = squared.clone() * squared;
+        fourth * expr
+    }
+
+    fn poseidon_pair_expr(
+        lhs: halo2_proofs::plonk::Expression<Scalar>,
+        rhs: halo2_proofs::plonk::Expression<Scalar>,
+    ) -> halo2_proofs::plonk::Expression<Scalar> {
+        let lhs = lhs + halo2_proofs::plonk::Expression::Constant(Scalar::from(7u64));
+        let rhs = rhs + halo2_proofs::plonk::Expression::Constant(Scalar::from(13u64));
+        halo2_proofs::plonk::Expression::Constant(Scalar::from(2u64)) * poseidon_pow5_expr(lhs)
+            + halo2_proofs::plonk::Expression::Constant(Scalar::from(3u64))
+                * poseidon_pow5_expr(rhs)
     }
 
     pub(super) fn vote_bool_commit_merkle8_witnesses(
@@ -70607,6 +70661,130 @@ mod tests {
         let public_inputs = vec![vec![commit], vec![root]];
         let prover = MockProver::run(8, &circuit, public_inputs).expect("mock prover");
         prover.assert_satisfied();
+    }
+
+    #[cfg(all(
+        feature = "zk-halo2",
+        not(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests"))
+    ))]
+    #[test]
+    fn fallback_commit_open_rejects_additive_placeholder_commitment() {
+        use halo2_proofs::{dev::MockProver, halo2curves::pasta::Fp as Scalar};
+
+        let circuit = crate::zk::pasta_tiny::CommitOpen::default();
+        let commitment = crate::zk::pasta_tiny::poseidon_pair(Scalar::from(7), Scalar::from(11));
+        let prover = MockProver::run(5, &circuit, vec![vec![commitment]]).expect("mock prover");
+        prover.assert_satisfied();
+
+        let additive_placeholder_commitment = Scalar::from(7 + 11);
+        let stale = MockProver::run(5, &circuit, vec![vec![additive_placeholder_commitment]])
+            .expect("mock prover");
+        assert!(
+            stale.verify().is_err(),
+            "fallback commit-open must not accept the old additive placeholder commitment"
+        );
+    }
+
+    #[cfg(all(
+        feature = "zk-halo2",
+        not(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests"))
+    ))]
+    #[test]
+    fn fallback_tiny_merkle2_rejects_additive_placeholder_root() {
+        use halo2_proofs::{dev::MockProver, halo2curves::pasta::Fp as Scalar};
+
+        let circuit = crate::zk::pasta_tiny::Merkle2::default();
+        let first = crate::zk::pasta_tiny::poseidon_pair(Scalar::from(9), Scalar::from(5));
+        let root = crate::zk::pasta_tiny::poseidon_pair(first, Scalar::from(7));
+        let prover = MockProver::run(5, &circuit, vec![vec![root]]).expect("mock prover");
+        prover.assert_satisfied();
+
+        let additive_placeholder_root = Scalar::from(9 + 5 + 7);
+        let stale = MockProver::run(5, &circuit, vec![vec![additive_placeholder_root]])
+            .expect("mock prover");
+        assert!(
+            stale.verify().is_err(),
+            "fallback Merkle2 must not accept the old additive placeholder root"
+        );
+    }
+
+    #[cfg(all(
+        feature = "zk-halo2",
+        not(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests"))
+    ))]
+    #[test]
+    fn fallback_anon_transfer_commit_rejects_unshifted_placeholder_commitment() {
+        use halo2_proofs::{dev::MockProver, halo2curves::pasta::Fp as Scalar};
+
+        fn unshifted_pow5_pair(lhs: Scalar, rhs: Scalar) -> Scalar {
+            let lhs2 = lhs * lhs;
+            let lhs4 = lhs2 * lhs2;
+            let lhs5 = lhs4 * lhs;
+            let rhs2 = rhs * rhs;
+            let rhs4 = rhs2 * rhs2;
+            let rhs5 = rhs4 * rhs;
+            Scalar::from(2) * lhs5 + Scalar::from(3) * rhs5 + Scalar::from(7)
+        }
+
+        let circuit = crate::zk::pasta_tiny::AnonTransfer2x2Commit::default();
+        let cm_in0 = crate::zk::pasta_tiny::poseidon_pair(Scalar::from(7), Scalar::from(11));
+        let cm_in1 = crate::zk::pasta_tiny::poseidon_pair(Scalar::from(5), Scalar::from(13));
+        let cm_out0 = crate::zk::pasta_tiny::poseidon_pair(Scalar::from(6), Scalar::from(17));
+        let cm_out1 = crate::zk::pasta_tiny::poseidon_pair(Scalar::from(6), Scalar::from(19));
+        let nullifier =
+            crate::zk::pasta_tiny::poseidon_pair(Scalar::from(1_234_567), Scalar::from(42));
+        let public_inputs = vec![
+            vec![cm_in0],
+            vec![cm_in1],
+            vec![cm_out0],
+            vec![cm_out1],
+            vec![nullifier],
+        ];
+        let prover = MockProver::run(6, &circuit, public_inputs).expect("mock prover");
+        prover.assert_satisfied();
+
+        let stale_cm_in0 = unshifted_pow5_pair(Scalar::from(7), Scalar::from(11));
+        let stale = MockProver::run(
+            6,
+            &circuit,
+            vec![
+                vec![stale_cm_in0],
+                vec![cm_in1],
+                vec![cm_out0],
+                vec![cm_out1],
+                vec![nullifier],
+            ],
+        )
+        .expect("mock prover");
+        assert!(
+            stale.verify().is_err(),
+            "fallback anon-transfer must not accept the old unshifted placeholder commitment"
+        );
+    }
+
+    #[cfg(all(
+        feature = "zk-halo2",
+        not(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests"))
+    ))]
+    #[test]
+    fn fallback_vote_bool_merkle2_rejects_stale_merkle_shortcut() {
+        use halo2_proofs::{dev::MockProver, halo2curves::pasta::Fp as Scalar};
+
+        let circuit = crate::zk::pasta_tiny::VoteBoolCommitMerkle2::default();
+        let commit = crate::zk::pasta_tiny::poseidon_pair(Scalar::from(1), Scalar::from(12_345));
+        let first = crate::zk::pasta_tiny::poseidon_pair(commit, Scalar::from(5));
+        let root = crate::zk::pasta_tiny::poseidon_pair(first, Scalar::from(7));
+        let prover =
+            MockProver::run(6, &circuit, vec![vec![commit], vec![root]]).expect("mock prover");
+        prover.assert_satisfied();
+
+        let stale_shortcut_root = Scalar::from(1 + 12_345 + 5 + 7 + 11);
+        let stale = MockProver::run(6, &circuit, vec![vec![commit], vec![stale_shortcut_root]])
+            .expect("mock prover");
+        assert!(
+            stale.verify().is_err(),
+            "fallback vote Merkle2 must not accept the old additive shortcut root"
+        );
     }
 
     #[cfg(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests"))]
