@@ -13,6 +13,12 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class KagemushaRecursiveSpendProverTest {
+    private companion object {
+        private const val TEST_NORITO_COMPACT_LEN_FLAG = 0x02
+        private const val TEST_NORITO_PACKED_STRUCT_FLAG = 0x04
+        private const val TEST_NORITO_FIELD_BITSET_FLAG = 0x20
+    }
+
     @Test
     fun exposesStableModesAndCircuitIds() {
         assertEquals(6, KagemushaRecursiveSpendProver.REQUIRED_BRIDGE_ABI_VERSION)
@@ -1001,11 +1007,11 @@ class KagemushaRecursiveSpendProverTest {
                 )
             }.message,
         )
-        val missingCircuitArchive = kagemushaNoritoFrameFromPayload(
-            0x9a,
-            "package".toByteArray(Charsets.UTF_8) +
-                verifierKeyCommitment(initVerifierKey) +
-                ByteArray(64) { 0xa5.toByte() },
+        val missingCircuitArchive = lineageProvingKeyArchiveRaw(
+            version = 1,
+            circuitId = KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+            verifierKeyCommitment = verifierKeyCommitment(initVerifierKey),
+            provingKey = ByteArray(64) { 0xa5.toByte() },
         )
         assertEquals(
             "lineage_proving_key_archive",
@@ -1015,6 +1021,26 @@ class KagemushaRecursiveSpendProverTest {
                     KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND,
                     initVerifierKey,
                     missingCircuitArchive,
+                )
+            }.message,
+        )
+        val smuggledCircuitArchive = lineageProvingKeyArchiveRaw(
+            version = 1,
+            circuitId = KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+            verifierKeyCommitment = verifierKeyCommitment(initVerifierKey),
+            provingKey =
+                KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1
+                    .toByteArray(Charsets.UTF_8) +
+                    ByteArray(64) { 0xa6.toByte() },
+        )
+        assertEquals(
+            "lineage_proving_key_archive",
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
+                    2,
+                    KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND,
+                    initVerifierKey,
+                    smuggledCircuitArchive,
                 )
             }.message,
         )
@@ -1031,6 +1057,129 @@ class KagemushaRecursiveSpendProverTest {
                     KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND,
                     initVerifierKey,
                     wrongCommitmentArchive,
+                )
+            }.message,
+        )
+        val smuggledCommitmentArchive = lineageProvingKeyArchiveRaw(
+            version = 1,
+            circuitId = KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+            verifierKeyCommitment = verifierKeyCommitment(appendVerifierKey),
+            provingKey = verifierKeyCommitment(initVerifierKey) + ByteArray(64) { 0xa7.toByte() },
+        )
+        assertEquals(
+            "lineage_proving_key_archive",
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
+                    2,
+                    KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND,
+                    initVerifierKey,
+                    smuggledCommitmentArchive,
+                )
+            }.message,
+        )
+        val wrongVersionArchive = lineageProvingKeyArchiveRaw(
+            version = 2,
+            circuitId = KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+            verifierKeyCommitment = verifierKeyCommitment(initVerifierKey),
+            provingKey = ByteArray(64) { 0xa8.toByte() },
+        )
+        assertEquals(
+            "lineage_proving_key_archive",
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
+                    2,
+                    KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND,
+                    initVerifierKey,
+                    wrongVersionArchive,
+                )
+            }.message,
+        )
+        val emptyProvingKeyArchive = lineageProvingKeyArchiveRaw(
+            version = 1,
+            circuitId = KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+            verifierKeyCommitment = verifierKeyCommitment(initVerifierKey),
+            provingKey = ByteArray(0),
+        )
+        assertEquals(
+            "lineage_proving_key_archive",
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
+                    2,
+                    KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND,
+                    initVerifierKey,
+                    emptyProvingKeyArchive,
+                )
+            }.message,
+        )
+        val trailingPayloadArchive = lineageProvingKeyArchiveRaw(
+            version = 1,
+            circuitId = KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+            verifierKeyCommitment = verifierKeyCommitment(initVerifierKey),
+            provingKey = ByteArray(64) { 0xa9.toByte() },
+            trailingPayload = byteArrayOf(0x7f),
+        )
+        assertEquals(
+            "lineage_proving_key_archive",
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
+                    2,
+                    KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND,
+                    initVerifierKey,
+                    trailingPayloadArchive,
+                )
+            }.message,
+        )
+        val oldSchemaArchive = lineageProvingKeyArchiveRaw(
+            version = 1,
+            circuitId = KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+            verifierKeyCommitment = verifierKeyCommitment(initVerifierKey),
+            provingKey = ByteArray(64) { 0xaa.toByte() },
+            schemaHash = oldLineageProvingKeyArchiveSchemaHash,
+        )
+        assertEquals(
+            "lineage_proving_key_archive",
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
+                    2,
+                    KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND,
+                    initVerifierKey,
+                    oldSchemaArchive,
+                )
+            }.message,
+        )
+        val packedStructArchive = lineageProvingKeyArchiveRaw(
+            version = 1,
+            circuitId = KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+            verifierKeyCommitment = verifierKeyCommitment(initVerifierKey),
+            provingKey = ByteArray(64) { 0xab.toByte() },
+            flags = TEST_NORITO_COMPACT_LEN_FLAG or TEST_NORITO_PACKED_STRUCT_FLAG,
+        )
+        assertEquals(
+            "lineage_proving_key_archive",
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
+                    2,
+                    KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND,
+                    initVerifierKey,
+                    packedStructArchive,
+                )
+            }.message,
+        )
+        val fieldBitsetArchive = lineageProvingKeyArchiveRaw(
+            version = 1,
+            circuitId = KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+            verifierKeyCommitment = verifierKeyCommitment(initVerifierKey),
+            provingKey = ByteArray(64) { 0xac.toByte() },
+            flags = TEST_NORITO_COMPACT_LEN_FLAG or TEST_NORITO_FIELD_BITSET_FLAG,
+        )
+        assertEquals(
+            "lineage_proving_key_archive",
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
+                    2,
+                    KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND,
+                    initVerifierKey,
+                    fieldBitsetArchive,
                 )
             }.message,
         )
@@ -1879,6 +2028,75 @@ class KagemushaRecursiveSpendProverTest {
         return frame
     }
 
+    private val lineageProvingKeyArchiveSchemaHash =
+        byteArrayOf(
+            0xc8.toByte(), 0x84.toByte(), 0x89.toByte(), 0x61.toByte(),
+            0x8a.toByte(), 0x01, 0x2c, 0x28,
+            0x3f, 0xf3.toByte(), 0xbb.toByte(), 0x2e.toByte(),
+            0xba.toByte(), 0xbc.toByte(), 0x77, 0x75,
+        )
+
+    private val oldLineageProvingKeyArchiveSchemaHash =
+        byteArrayOf(
+            0x11, 0x9f.toByte(), 0x4d, 0xf3.toByte(),
+            0x8a.toByte(), 0x98.toByte(), 0xef.toByte(), 0x58,
+            0x48, 0xad.toByte(), 0x0a, 0xad.toByte(),
+            0xb9.toByte(), 0x71, 0x57, 0x79,
+        )
+
+    private fun kagemushaNoritoFrameFromSchemaHash(
+        schemaHash: ByteArray,
+        payload: ByteArray,
+        flags: Int = TEST_NORITO_COMPACT_LEN_FLAG,
+    ): ByteArray {
+        val frame = ByteArray(40 + payload.size)
+        "NRT0".toByteArray(Charsets.US_ASCII).copyInto(frame, 0)
+        schemaHash.copyInto(frame, 6)
+        frame[39] = flags.toByte()
+        payload.copyInto(frame, 40)
+        writeLongLittleEndian(frame, 23, payload.size.toLong())
+        writeLongLittleEndian(frame, 31, testCrc64(payload))
+        return frame
+    }
+
+    private fun kagemushaNoritoLength(
+        value: Int,
+        flags: Int = TEST_NORITO_COMPACT_LEN_FLAG,
+    ): ByteArray {
+        if ((flags and TEST_NORITO_COMPACT_LEN_FLAG) == 0) {
+            val encoded = ByteArray(8)
+            writeLongLittleEndian(encoded, 0, value.toLong())
+            return encoded
+        }
+        var remaining = value
+        val bytes = ArrayList<Byte>()
+        while (remaining >= 0x80) {
+            bytes.add(((remaining and 0x7f) or 0x80).toByte())
+            remaining = remaining ushr 7
+        }
+        bytes.add(remaining.toByte())
+        return bytes.toByteArray()
+    }
+
+    private fun kagemushaNoritoField(
+        payload: ByteArray,
+        flags: Int = TEST_NORITO_COMPACT_LEN_FLAG,
+    ): ByteArray = kagemushaNoritoLength(payload.size, flags) + payload
+
+    private fun kagemushaNoritoString(
+        value: String,
+        flags: Int = TEST_NORITO_COMPACT_LEN_FLAG,
+    ): ByteArray {
+        val bytes = value.toByteArray(Charsets.UTF_8)
+        return kagemushaNoritoLength(bytes.size, flags) + bytes
+    }
+
+    private fun kagemushaNoritoByteVec(bytes: ByteArray): ByteArray {
+        val encoded = ByteArray(8)
+        writeLongLittleEndian(encoded, 0, bytes.size.toLong())
+        return encoded + bytes
+    }
+
     private fun zk1Tlv(tag: String, payload: ByteArray): ByteArray {
         val tagBytes = tag.toByteArray(Charsets.US_ASCII)
         val encoded = ByteArray(8 + payload.size)
@@ -1899,13 +2117,36 @@ class KagemushaRecursiveSpendProverTest {
         verifierKey: ByteArray,
         seed: Byte,
     ): ByteArray =
-        kagemushaNoritoFrameFromPayload(
-            0x9a,
-            byteArrayOf(1, 0) +
-                circuitId.toByteArray(Charsets.UTF_8) +
-                verifierKeyCommitment(verifierKey) +
-                ByteArray(64) { seed },
+        lineageProvingKeyArchiveRaw(
+            version = 1,
+            circuitId = circuitId,
+            verifierKeyCommitment = verifierKeyCommitment(verifierKey),
+            provingKey = ByteArray(64) { seed },
         )
+
+    private fun lineageProvingKeyArchiveRaw(
+        version: Int,
+        circuitId: String,
+        verifierKeyCommitment: ByteArray,
+        provingKey: ByteArray,
+        flags: Int = TEST_NORITO_COMPACT_LEN_FLAG,
+        schemaHash: ByteArray = lineageProvingKeyArchiveSchemaHash,
+        trailingPayload: ByteArray = ByteArray(0),
+    ): ByteArray {
+        val versionBytes = ByteArray(2)
+        writeShortLittleEndian(versionBytes, 0, version)
+        val payload =
+            kagemushaNoritoField(versionBytes, flags) +
+                kagemushaNoritoField(kagemushaNoritoString(circuitId, flags), flags) +
+                kagemushaNoritoField(verifierKeyCommitment, flags) +
+                kagemushaNoritoField(kagemushaNoritoByteVec(provingKey), flags) +
+                trailingPayload
+        return kagemushaNoritoFrameFromSchemaHash(
+            schemaHash,
+            payload,
+            flags,
+        )
+    }
 
     private fun verifierKeyCommitment(verifierKey: ByteArray): ByteArray {
         val backend =
@@ -1946,6 +2187,12 @@ class KagemushaRecursiveSpendProverTest {
 
     private fun writeIntLittleEndian(bytes: ByteArray, offset: Int, value: Int) {
         for (index in 0 until 4) {
+            bytes[offset + index] = ((value ushr (index * 8)) and 0xff).toByte()
+        }
+    }
+
+    private fun writeShortLittleEndian(bytes: ByteArray, offset: Int, value: Int) {
+        for (index in 0 until 2) {
             bytes[offset + index] = ((value ushr (index * 8)) and 0xff).toByte()
         }
     }

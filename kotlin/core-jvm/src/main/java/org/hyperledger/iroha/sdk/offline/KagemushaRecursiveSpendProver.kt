@@ -1,5 +1,8 @@
 package org.hyperledger.iroha.sdk.offline
 
+import java.nio.ByteBuffer
+import java.nio.charset.CharacterCodingException
+import java.nio.charset.CodingErrorAction
 import java.security.MessageDigest
 
 /** Native recursive Kagemusha spend ABI-6 bridge. */
@@ -53,7 +56,36 @@ class KagemushaRecursiveSpendProver private constructor() {
         private val KAGEMUSHA_ZK1_TLV_CID1 = "CID1".toByteArray(Charsets.US_ASCII)
         private val KAGEMUSHA_ZK1_TLV_IPAK = "IPAK".toByteArray(Charsets.US_ASCII)
         private val KAGEMUSHA_ZK1_TLV_H2VK = "H2VK".toByteArray(Charsets.US_ASCII)
+        private const val KAGEMUSHA_NORITO_COMPACT_LEN_FLAG = 0x02
+        private const val KAGEMUSHA_NORITO_PACKED_STRUCT_FLAG = 0x04
+        private const val PRIVACY_NORITO_FIELD_BITSET_FLAG = 0x20
+        private const val KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_VERSION_V1 = 1
+        private val KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH =
+            byteArrayOf(
+                0xc8.toByte(), 0x84.toByte(), 0x89.toByte(), 0x61.toByte(),
+                0x8a.toByte(), 0x01, 0x2c, 0x28,
+                0x3f, 0xf3.toByte(), 0xbb.toByte(), 0x2e.toByte(),
+                0xba.toByte(), 0xbc.toByte(), 0x77, 0x75,
+            )
         private val nativeAvailable: Boolean = loadLibrary()
+
+        private class LineageProvingKeyArchive(
+            val version: Int,
+            val circuitFamily: String,
+            val verifierKeyCommitment: ByteArray,
+            val provingKey: ByteArray,
+        )
+
+        private class NoritoField(
+            val payload: ByteArray,
+            val offset: Int,
+        )
+
+        private class NoritoLength(
+            val value: Int,
+            val offset: Int,
+        )
+
         @JvmStatic
         fun isNativeAvailable(): Boolean = nativeAvailable
 
@@ -214,6 +246,19 @@ class KagemushaRecursiveSpendProver private constructor() {
             ) {
                 "lineage_proving_key_archive"
             }
+            val archive =
+                decodeLineageProvingKeyArchivePayload(
+                    archivePayload,
+                    lineageProvingKeyArchive[39].toInt() and 0xff,
+                )
+            require(
+                archive.version == KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_VERSION_V1 &&
+                    archive.circuitFamily == proofCircuitId &&
+                    archive.verifierKeyCommitment.contentEquals(verifierKeyCommitment) &&
+                    archive.provingKey.isNotEmpty(),
+            ) {
+                "lineage_proving_key_archive"
+            }
         }
 
         private fun lineageVerifierKeyEnvelopeCircuitId(lineageVerifierKey: ByteArray): String {
@@ -284,12 +329,154 @@ class KagemushaRecursiveSpendProver private constructor() {
             ) {
                 "lineage_proving_key_archive"
             }
+            require(
+                lineageProvingKeyArchive.copyOfRange(6, 22)
+                    .contentEquals(KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH) &&
+                    (lineageProvingKeyArchive[39].toInt() and KAGEMUSHA_NORITO_PACKED_STRUCT_FLAG) == 0 &&
+                    (lineageProvingKeyArchive[39].toInt() and PRIVACY_NORITO_FIELD_BITSET_FLAG) == 0,
+            ) {
+                "lineage_proving_key_archive"
+            }
             val payloadLength = readLongLittleEndian(lineageProvingKeyArchive, 23)
             require(payloadLength > 0 && payloadLength <= Int.MAX_VALUE.toLong()) {
                 "lineage_proving_key_archive"
             }
             val payloadOffset = lineageProvingKeyArchive.size - payloadLength.toInt()
             return lineageProvingKeyArchive.copyOfRange(payloadOffset, lineageProvingKeyArchive.size)
+        }
+
+        private fun decodeLineageProvingKeyArchivePayload(
+            payload: ByteArray,
+            flags: Int,
+        ): LineageProvingKeyArchive {
+            var offset = 0
+            var field = readNoritoField(payload, offset, flags)
+            require(field.payload.size == 2) {
+                "lineage_proving_key_archive"
+            }
+            val version = readUnsignedShortLittleEndian(field.payload, 0)
+            offset = field.offset
+
+            field = readNoritoField(payload, offset, flags)
+            val circuitFamily = decodeNoritoString(field.payload, flags)
+            offset = field.offset
+
+            field = readNoritoField(payload, offset, flags)
+            val verifierKeyCommitment = field.payload
+            require(verifierKeyCommitment.size == 32) {
+                "lineage_proving_key_archive"
+            }
+            offset = field.offset
+
+            field = readNoritoField(payload, offset, flags)
+            val provingKey = decodeNoritoByteVec(field.payload)
+            offset = field.offset
+            require(offset == payload.size) {
+                "lineage_proving_key_archive"
+            }
+            return LineageProvingKeyArchive(
+                version,
+                circuitFamily,
+                verifierKeyCommitment,
+                provingKey,
+            )
+        }
+
+        private fun readNoritoField(
+            buffer: ByteArray,
+            offset: Int,
+            flags: Int,
+        ): NoritoField {
+            val length = readNoritoLength(buffer, offset, flags)
+            val payloadEnd = length.offset.toLong() + length.value.toLong()
+            require(payloadEnd <= buffer.size.toLong()) {
+                "lineage_proving_key_archive"
+            }
+            return NoritoField(
+                buffer.copyOfRange(length.offset, payloadEnd.toInt()),
+                payloadEnd.toInt(),
+            )
+        }
+
+        private fun readNoritoLength(
+            buffer: ByteArray,
+            offset: Int,
+            flags: Int,
+        ): NoritoLength {
+            require(offset >= 0) {
+                "lineage_proving_key_archive"
+            }
+            if ((flags and KAGEMUSHA_NORITO_COMPACT_LEN_FLAG) == 0) {
+                require(offset + 8 <= buffer.size) {
+                    "lineage_proving_key_archive"
+                }
+                val value = readLongLittleEndian(buffer, offset)
+                require(value >= 0 && value <= Int.MAX_VALUE.toLong() && value <= buffer.size.toLong()) {
+                    "lineage_proving_key_archive"
+                }
+                return NoritoLength(value.toInt(), offset + 8)
+            }
+
+            var value = 0L
+            var shift = 0
+            var cursor = offset
+            repeat(10) {
+                require(cursor < buffer.size) {
+                    "lineage_proving_key_archive"
+                }
+                val byte = buffer[cursor].toInt() and 0xff
+                cursor += 1
+                val chunk = (byte and 0x7f).toLong()
+                require(shift < 63 || chunk == 0L) {
+                    "lineage_proving_key_archive"
+                }
+                value = value or (chunk shl shift)
+                if ((byte and 0x80) == 0) {
+                    val encodedLength = cursor - offset
+                    require(encodedLength <= 1 || value >= (1L shl (7 * (encodedLength - 1)))) {
+                        "lineage_proving_key_archive"
+                    }
+                    require(value <= Int.MAX_VALUE.toLong() && value <= buffer.size.toLong()) {
+                        "lineage_proving_key_archive"
+                    }
+                    return NoritoLength(value.toInt(), cursor)
+                }
+                shift += 7
+            }
+            throw IllegalArgumentException("lineage_proving_key_archive")
+        }
+
+        private fun decodeNoritoString(
+            payload: ByteArray,
+            flags: Int,
+        ): String {
+            val length = readNoritoLength(payload, 0, flags)
+            val end = length.offset + length.value
+            require(end == payload.size) {
+                "lineage_proving_key_archive"
+            }
+            return try {
+                Charsets.UTF_8
+                    .newDecoder()
+                    .onMalformedInput(CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(CodingErrorAction.REPORT)
+                    .decode(ByteBuffer.wrap(payload, length.offset, length.value))
+                    .toString()
+            } catch (ex: CharacterCodingException) {
+                throw IllegalArgumentException("lineage_proving_key_archive", ex)
+            }
+        }
+
+        private fun decodeNoritoByteVec(payload: ByteArray): ByteArray {
+            require(payload.size >= 8) {
+                "lineage_proving_key_archive"
+            }
+            val length = readLongLittleEndian(payload, 0)
+            val end = 8L + length
+            require(length >= 0 && end == payload.size.toLong()) {
+                "lineage_proving_key_archive"
+            }
+            return payload.copyOfRange(8, end.toInt())
         }
 
         private fun verifyingKeyCommitment(
@@ -314,6 +501,14 @@ class KagemushaRecursiveSpendProver private constructor() {
                 ((bytes[offset + 1].toInt() and 0xff) shl 8) or
                 ((bytes[offset + 2].toInt() and 0xff) shl 16) or
                 ((bytes[offset + 3].toInt() and 0xff) shl 24)
+        }
+
+        private fun readUnsignedShortLittleEndian(bytes: ByteArray, offset: Int): Int {
+            require(offset >= 0 && offset + 2 <= bytes.size) {
+                "lineage_proving_key_archive"
+            }
+            return (bytes[offset].toInt() and 0xff) or
+                ((bytes[offset + 1].toInt() and 0xff) shl 8)
         }
 
         private fun readLongLittleEndian(bytes: ByteArray, offset: Int): Long {
