@@ -873,6 +873,58 @@ public final class KagemushaRecursiveSpendProverTest {
                 KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND,
                 initVerifierKey,
                 overlongVersionLengthArchive));
+    final byte[] oversizedTerminalCompactLengthArchive =
+        kagemushaNoritoFrameFromSchemaHash(
+            LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH,
+            concat(
+                kagemushaOversizedTerminalCompactLength(),
+                new byte[] {1, 0},
+                kagemushaNoritoField(
+                    kagemushaNoritoString(
+                        KagemushaRecursiveSpendProver
+                            .RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+                        TEST_NORITO_COMPACT_LEN_FLAG),
+                    TEST_NORITO_COMPACT_LEN_FLAG),
+                kagemushaNoritoField(
+                    verifierKeyCommitment(initVerifierKey), TEST_NORITO_COMPACT_LEN_FLAG),
+                kagemushaNoritoField(
+                    kagemushaNoritoByteVec(repeat((byte) 0xB0, 64)),
+                    TEST_NORITO_COMPACT_LEN_FLAG)),
+            TEST_NORITO_COMPACT_LEN_FLAG);
+    assertThrows(
+        "lineage_proving_key_archive",
+        () ->
+            KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
+                2,
+                KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND,
+                initVerifierKey,
+                oversizedTerminalCompactLengthArchive));
+    final byte[] hugeCanonicalCompactLengthArchive =
+        kagemushaNoritoFrameFromSchemaHash(
+            LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH,
+            concat(
+                kagemushaHugeCanonicalCompactLength(),
+                new byte[] {1, 0},
+                kagemushaNoritoField(
+                    kagemushaNoritoString(
+                        KagemushaRecursiveSpendProver
+                            .RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+                        TEST_NORITO_COMPACT_LEN_FLAG),
+                    TEST_NORITO_COMPACT_LEN_FLAG),
+                kagemushaNoritoField(
+                    verifierKeyCommitment(initVerifierKey), TEST_NORITO_COMPACT_LEN_FLAG),
+                kagemushaNoritoField(
+                    kagemushaNoritoByteVec(repeat((byte) 0xB1, 64)),
+                    TEST_NORITO_COMPACT_LEN_FLAG)),
+            TEST_NORITO_COMPACT_LEN_FLAG);
+    assertThrows(
+        "lineage_proving_key_archive",
+        () ->
+            KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
+                2,
+                KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND,
+                initVerifierKey,
+                hugeCanonicalCompactLengthArchive));
     final byte[] overlongCircuitStringArchive =
         kagemushaNoritoFrameFromSchemaHash(
             LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH,
@@ -1561,6 +1613,14 @@ public final class KagemushaRecursiveSpendProverTest {
       throw new IllegalArgumentException("test helper only encodes small overlong lengths");
     }
     return new byte[] {(byte) (value | 0x80), 0};
+  }
+
+  private static byte[] kagemushaOversizedTerminalCompactLength() {
+    return concat(repeat((byte) 0x80, 9), new byte[] {0x02});
+  }
+
+  private static byte[] kagemushaHugeCanonicalCompactLength() {
+    return concat(repeat((byte) 0x80, 9), new byte[] {0x01});
   }
 
   private static byte[] kagemushaNoritoField(final byte[] payload, final int flags) {
