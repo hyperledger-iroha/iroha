@@ -413,7 +413,7 @@ phase_dotnet_sdk() {
 }
 
 phase_contract_smoke() {
-  run_cmd "$SCCP_CORRIDOR_NODE_BIN" --test scripts/sccp_tron_taira_xor_deploy.test.mjs scripts/sccp_taira_xor_contract.test.mjs
+  run_cmd "$SCCP_CORRIDOR_NODE_BIN" --test scripts/sccp_bsc_taira_xor_deploy.test.mjs scripts/sccp_tron_taira_xor_deploy.test.mjs scripts/sccp_taira_xor_contract.test.mjs
   run_cmd "$SCCP_CORRIDOR_NODE_BIN" --check contracts/evm/sccp/test/sccp_message_bridge_smoke.js
   run_cmd bash scripts/sccp_evm_contract_smoke.sh
 }
@@ -421,7 +421,7 @@ phase_contract_smoke() {
 phase_core_admission() {
   run_cmd \
     env "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" "NORITO_SKIP_BINDINGS_SYNC=$NORITO_SKIP_BINDINGS_SYNC" \
-    cargo test -p iroha_core --test bridge_proofs -- --nocapture
+    cargo test -p iroha_core --test iroha_core_group_01 bridge_proofs:: -- --nocapture
 }
 
 run_with_log_dir() {

@@ -7042,6 +7042,9 @@ public func buildEvmSccpProofRequest(_ input: EvmSccpProofRequestInput) throws -
     guard input.backend == sccpEvmGroth16Bn254ProofBackendV1 else {
         throw EvmSccpProverError.invalidPublicInputs("backend")
     }
+    guard input.sourceDomain == sccpDomainSora else {
+        throw EvmSccpProverError.invalidPublicInputs("sourceDomain")
+    }
     guard !input.bundleBytes.isEmpty else {
         throw EvmSccpProverError.invalidPublicInputs("bundleBytes")
     }
@@ -7050,6 +7053,29 @@ public func buildEvmSccpProofRequest(_ input: EvmSccpProofRequestInput) throws -
     }
     let sourceProofBytes = try requireEvmOptionalSourceProofBytes(input.sourceProofBytes, field: "sourceProofBytes")
     let publicInputsBytes = try canonicalEvmSccpPublicInputsBytes(input.publicInputs)
+    let bundleSummary: SccpMessageProofBundleSummary
+    do {
+        bundleSummary = try requireSccpProofRequestBundleMatchesPublicInputs(
+            targetDomain: input.publicInputs.targetDomain,
+            messageId: try evmNormalizeHex32(input.publicInputs.messageId, field: "publicInputs.messageId"),
+            payloadHash: try evmNormalizeHex32(input.publicInputs.payloadHash, field: "publicInputs.payloadHash"),
+            commitmentRoot: try evmNormalizeHex32(
+                input.publicInputs.commitmentRoot,
+                field: "publicInputs.commitmentRoot"
+            ),
+            bundleBytes: input.bundleBytes,
+            sourceProofBytes: sourceProofBytes
+        )
+    } catch SccpMessageProofBundleError.missingSourceProof {
+        throw EvmSccpProverError.invalidPublicInputs("sourceProofBytes")
+    } catch SccpMessageProofBundleError.mismatch {
+        throw EvmSccpProverError.invalidPublicInputs("bundleBytes")
+    } catch SccpMessageProofBundleError.invalid(let field) {
+        throw EvmSccpProverError.invalidPublicInputs(field)
+    }
+    guard bundleSummary.sourceDomain == input.sourceDomain else {
+        throw EvmSccpProverError.invalidPublicInputs("bundleBytes.sourceDomain")
+    }
     let proofContext = try normalizeEvmSccpProofContext(
         statementHash: input.statementHash,
         destinationBindingHash: input.destinationBindingHash

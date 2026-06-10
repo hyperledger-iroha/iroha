@@ -7831,6 +7831,14 @@ const normalizeEvmGroth16ProofRequest = (input) => {
       "sourceDomain and publicInputs.targetDomain must differ",
     );
   }
+  const bundleSummary = requireSccpProofRequestBundleMatchesPublicInputs(
+    publicInputs,
+    bundleBytes,
+    sourceProofBytes,
+  );
+  if (bundleSummary.sourceDomain !== sourceDomain) {
+    throw new TypeError("bundleBytes.sourceDomain must match sourceDomain");
+  }
   const proofContextInput = requestOptionalField(
     "proofContext",
     "proofContext",
@@ -18101,6 +18109,14 @@ const normalizeTronGroth16ProofRequest = (input) => {
     throw new RangeError(
       "sourceDomain and publicInputs.targetDomain must differ",
     );
+  }
+  const bundleSummary = requireSccpProofRequestBundleMatchesPublicInputs(
+    publicInputs,
+    bundleBytes,
+    sourceProofBytes,
+  );
+  if (bundleSummary.sourceDomain !== sourceDomain) {
+    throw new TypeError("bundleBytes.sourceDomain must match sourceDomain");
   }
   const proofContextInput = requestOptionalField(
     "proofContext",
@@ -35543,6 +35559,20 @@ const normalizeSolanaDestinationProgramDataEvidence = (input) => {
   };
 };
 
+const requireSccpHashRolesDistinct = (context, fields) => {
+  const seen = new Map();
+  for (const [label, bytes] of fields) {
+    const encoded = bytesToHex(bytes, false);
+    const previousLabel = seen.get(encoded);
+    if (previousLabel) {
+      throw new TypeError(
+        `${context} must be distinct: ${label} matches ${previousLabel}`,
+      );
+    }
+    seen.set(encoded, label);
+  }
+};
+
 export function canonicalSolanaSccpRouteCanaryEvidenceBytes(input) {
   const value = input && typeof input === "object" ? input : {};
   const routeAllowlistHash = nonZeroHex32Bytes(
@@ -35584,6 +35614,12 @@ export function canonicalSolanaSccpRouteCanaryEvidenceBytes(input) {
       value.source_adapter_engine_deployment_hash,
     "sourceAdapterEngineDeploymentHash",
   );
+  requireSccpHashRolesDistinct("Solana route canary governed hashes", [
+    ["routeAllowlistHash", routeAllowlistHash],
+    ["destinationBindingHash", destinationBindingHash],
+    ["sourceVerifierMaterialHash", sourceVerifierMaterialHash],
+    ["sourceAdapterEngineDeploymentHash", sourceAdapterEngineDeploymentHash],
+  ]);
   const evidence = normalizeSolanaDestinationProgramDataEvidence(value);
   let out = new Uint8Array();
   out = writeU8(out, 1);
@@ -35752,6 +35788,12 @@ export function canonicalTonSccpRouteCanaryEvidenceBytes(input) {
     ),
     "sourceAdapterEngineDeploymentHash",
   );
+  requireSccpHashRolesDistinct("TON route canary governed hashes", [
+    ["routeAllowlistHash", routeAllowlistHash],
+    ["destinationBindingHash", destinationBindingHash],
+    ["sourceVerifierMaterialHash", sourceVerifierMaterialHash],
+    ["sourceAdapterEngineDeploymentHash", sourceAdapterEngineDeploymentHash],
+  ]);
   const verifierContractAddress = normalizeTonRawAddress(
     strictResultField(
       value,
@@ -35886,6 +35928,11 @@ const tronSccpRouteAllowlistHashBytes = ({
   sourceAdapterEngineDeploymentHash,
   destinationBindingHash,
 }) => {
+  requireSccpHashRolesDistinct("TRON route allowlist governed hashes", [
+    ["sourceVerifierMaterialHash", sourceVerifierMaterialHash],
+    ["sourceAdapterEngineDeploymentHash", sourceAdapterEngineDeploymentHash],
+    ["destinationBindingHash", destinationBindingHash],
+  ]);
   let payload = new Uint8Array();
   payload = writeU8(payload, 1);
   payload = writeU32Le(payload, SCCP_DOMAIN_TRON);
@@ -35977,6 +36024,12 @@ const normalizeTronSccpRouteCanaryEvidence = (input) => {
     ),
     "sourceAdapterEngineDeploymentHash",
   );
+  requireSccpHashRolesDistinct("TRON route canary governed hashes", [
+    ["routeAllowlistHash", routeAllowlistHash],
+    ["destinationBindingHash", destinationBindingHash],
+    ["sourceVerifierMaterialHash", sourceVerifierMaterialHash],
+    ["sourceAdapterEngineDeploymentHash", sourceAdapterEngineDeploymentHash],
+  ]);
   const expectedRouteAllowlistHash = tronSccpRouteAllowlistHashBytes({
     sourceVerifierMaterialHash,
     sourceAdapterEngineDeploymentHash,

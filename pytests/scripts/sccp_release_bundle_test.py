@@ -41,7 +41,175 @@ EVM_EVIDENCE_SCRIPT_FRAGMENTS = (
 
 
 def phase_command_lines(fragments) -> list[str]:
-    """Render required fragments as production-corridor traced commands."""
+    """Render required fragments as realistic production-corridor commands."""
+
+    fragments = tuple(fragments)
+    if not fragments:
+        return []
+
+    lines: list[str] = []
+    if any(fragment.startswith("-m pytest") for fragment in fragments):
+        tests: list[str] = []
+        for fragment in fragments:
+            if fragment.startswith("-m pytest"):
+                parts = shlex.split(fragment)
+                if "-q" in parts:
+                    tests.extend(parts[parts.index("-q") + 1 :])
+            elif fragment.startswith(("pytests/", "python/")):
+                tests.append(fragment)
+        return ["+ python3 -m pytest -q " + " ".join(dict.fromkeys(tests))]
+
+    if any(
+        fragment.startswith("--test ") or fragment.startswith("javascript/")
+        for fragment in fragments
+    ):
+        tests: list[str] = []
+        for fragment in fragments:
+            if fragment.startswith("--test "):
+                tests.extend(shlex.split(fragment)[1:])
+            elif fragment.startswith("javascript/"):
+                tests.append(fragment)
+        return ["+ node --test " + " ".join(dict.fromkeys(tests))]
+
+    if any(
+        fragment.startswith("swift test ") or fragment.startswith("ToriiClientTests/")
+        for fragment in fragments
+    ):
+        for fragment in fragments:
+            if fragment.startswith("swift test "):
+                lines.append(f"+ {fragment}")
+            elif fragment.startswith("ToriiClientTests/"):
+                lines.append(
+                    "+ swift test --filter "
+                    f"{fragment} --disable-swift-testing"
+                )
+        return lines
+
+    has_android_fragments = any(
+        fragment.startswith("ANDROID_HARNESS_MAINS=")
+        or fragment.startswith("org.hyperledger.iroha.android.sccp.")
+        or fragment.startswith("./gradlew :core:test")
+        for fragment in fragments
+    )
+    if has_android_fragments:
+        if "java -version" in fragments:
+            lines.append("+ java -version")
+        android_fragments = [
+            fragment for fragment in fragments if fragment != "java -version"
+        ]
+        harness_assignment = next(
+            (
+                fragment
+                for fragment in android_fragments
+                if fragment.startswith("ANDROID_HARNESS_MAINS=")
+            ),
+            None,
+        )
+        harness_classes = [
+            fragment
+            for fragment in android_fragments
+            if fragment.startswith("org.hyperledger.iroha.android.sccp.")
+        ]
+        gradle_fragments = [
+            fragment
+            for fragment in android_fragments
+            if fragment.startswith("./gradlew :core:test")
+        ]
+        if harness_assignment is not None or harness_classes:
+            harness_value = harness_assignment or "ANDROID_HARNESS_MAINS="
+            for harness_class in harness_classes:
+                if harness_class not in harness_value:
+                    harness_value += "," + harness_class
+            lines.append(
+                f"+ env {harness_value} ./gradlew :core:test --console=plain "
+                "--tests org.hyperledger.iroha.android.GradleHarnessTests"
+            )
+        for fragment in gradle_fragments:
+            if "GradleHarnessTests" in fragment and (
+                harness_assignment is not None or harness_classes
+            ):
+                continue
+            lines.append(f"+ {fragment}")
+        return lines
+
+    if any(
+        fragment.startswith("./gradlew :core-jvm:test")
+        or fragment.startswith("org.hyperledger.iroha.sdk.sccp.")
+        for fragment in fragments
+    ) or fragments == ("java -version",):
+        if "java -version" in fragments:
+            lines.append("+ java -version")
+        gradle_fragments = [
+            fragment for fragment in fragments if fragment != "java -version"
+        ]
+        if gradle_fragments:
+            gradle_test_classes = [
+                fragment
+                for fragment in gradle_fragments
+                if fragment.startswith("org.hyperledger.iroha.sdk.sccp.")
+            ]
+            gradle_command = "+ ./gradlew :core-jvm:test --console=plain"
+            if any(fragment.startswith("./gradlew ") for fragment in gradle_fragments):
+                gradle_command = "+ " + " ".join(
+                    fragment
+                    for fragment in gradle_fragments
+                    if not fragment.startswith("org.hyperledger.iroha.sdk.sccp.")
+                )
+            else:
+                gradle_command += " " + " ".join(
+                    f"--tests {fragment}" for fragment in gradle_fragments
+                )
+            for test_class in gradle_test_classes:
+                if test_class not in gradle_command:
+                    gradle_command += f" --tests {test_class}"
+            lines.append(gradle_command)
+        return lines
+
+    if any(
+        fragment.startswith("dotnet test ") or fragment.startswith("FullyQualifiedName")
+        for fragment in fragments
+    ):
+        test_command = next(
+            (
+                fragment
+                for fragment in fragments
+                if fragment.startswith("dotnet test ")
+            ),
+            "dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj",
+        )
+        filter_fragment = next(
+            (
+                fragment
+                for fragment in fragments
+                if fragment.startswith("FullyQualifiedName")
+            ),
+            None,
+        )
+        if filter_fragment is not None:
+            test_command += " --filter " + filter_fragment
+        test_command += " --nologo"
+        return [f"+ {test_command}"]
+
+    if any(
+        fragment.endswith(".test.mjs")
+        or fragment.startswith("--check ")
+        or fragment.startswith("bash scripts/")
+        for fragment in fragments
+    ):
+        mjs_tests = [fragment for fragment in fragments if fragment.endswith(".test.mjs")]
+        if mjs_tests:
+            lines.append("+ node --test " + " ".join(mjs_tests))
+        lines.extend(
+            "+ node " + fragment
+            for fragment in fragments
+            if fragment.startswith("--check ")
+        )
+        lines.extend(
+            f"+ {fragment}"
+            for fragment in fragments
+            if fragment.startswith("bash scripts/")
+        )
+        return lines
 
     return [f"+ {fragment}" for fragment in fragments]
 
@@ -185,6 +353,7 @@ def minimal_release_bundle_report(*, production_ready: bool = True) -> dict[str,
     return {
         "production_ready": production_ready,
         "blockers": [] if production_ready else ["blocked"],
+        "inputs": [],
         "input_artifacts": [],
         "release_checklist": {"ready": production_ready, "items": []},
         "corridor": {
@@ -562,6 +731,37 @@ def test_release_bundle_verifier_reports_removed_generic_no_support_note_guard(
     verifier = load_verify_helpers()
     required_markers = verifier.SCCP_RETIRED_NETWORK_SURFACE_GUARD_MARKERS[0][1]
     removed_marker = "def test_generic_no_support_note_stays_in_launch_scope_files"
+    guard = tmp_path / "sccp_retired_network_surface_test.py"
+    guard.write_text(
+        "\n".join(marker for marker in required_markers if marker != removed_marker),
+        encoding="utf-8",
+    )
+
+    errors = verifier._sccp_retired_network_surface_guard_inventory_errors(
+        (
+            (
+                guard,
+                required_markers,
+            ),
+        )
+    )
+
+    assert any(
+        "SCCP retired network-surface guard source inventory" in error
+        and str(guard) in error
+        and removed_marker in error
+        for error in errors
+    )
+
+
+def test_release_bundle_verifier_reports_removed_specific_no_support_note_guard(
+    tmp_path: Path,
+) -> None:
+    """Exact launch-scope no-support wording coverage must stay pinned."""
+
+    verifier = load_verify_helpers()
+    required_markers = verifier.SCCP_RETIRED_NETWORK_SURFACE_GUARD_MARKERS[0][1]
+    removed_marker = "def test_specific_no_support_note_stays_in_launch_scope_files"
     guard = tmp_path / "sccp_retired_network_surface_test.py"
     guard.write_text(
         "\n".join(marker for marker in required_markers if marker != removed_marker),
@@ -994,6 +1194,62 @@ def test_release_bundle_verifier_guards_all_lanes_release_checklist_exact_boolea
         "SCCP all-lanes release-checklist exact-boolean source inventory" in error
         and str(sparse_tests) in error
         and f"missing marker: {removed_marker}" in error
+        for error in errors
+    )
+
+    required_rust_markers = verifier.ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS[
+        2
+    ][1]
+    removed_rust_marker = (
+        "TON route canary evidence must reject route allowlist/source deployment hash role reuse"
+    )
+    sparse_rust = tmp_path / "lib.rs"
+    sparse_rust.write_text(
+        "\n".join(
+            marker for marker in required_rust_markers if marker != removed_rust_marker
+        ),
+        encoding="utf-8",
+    )
+    errors = verifier._all_lanes_release_checklist_exact_boolean_inventory_errors(
+        (
+            (
+                sparse_rust,
+                required_rust_markers,
+            ),
+        )
+    )
+
+    assert any(
+        "SCCP all-lanes release-checklist exact-boolean source inventory" in error
+        and str(sparse_rust) in error
+        and f"missing marker: {removed_rust_marker}" in error
+        for error in errors
+    )
+
+    required_sdk_markers = next(
+        markers
+        for path, markers in verifier.ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS
+        if path == "javascript/iroha_js/src/sccp.js"
+    )
+    removed_sdk_marker = "TRON route allowlist governed hashes"
+    sparse_sdk = tmp_path / "sccp.js"
+    sparse_sdk.write_text(
+        "\n".join(marker for marker in required_sdk_markers if marker != removed_sdk_marker),
+        encoding="utf-8",
+    )
+    errors = verifier._all_lanes_release_checklist_exact_boolean_inventory_errors(
+        (
+            (
+                sparse_sdk,
+                required_sdk_markers,
+            ),
+        )
+    )
+
+    assert any(
+        "SCCP all-lanes release-checklist exact-boolean source inventory" in error
+        and str(sparse_sdk) in error
+        and f"missing marker: {removed_sdk_marker}" in error
         for error in errors
     )
 
@@ -1622,6 +1878,374 @@ def test_release_bundle_phase_command_matchers_reject_echoed_fragments() -> None
                 ), f"{module.__name__} {phase} accepted echoed {fragment}"
 
 
+def test_release_bundle_phase_command_matchers_reject_bare_fragments() -> None:
+    """Report and verifier command matchers must reject bare fragments."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    cases = (
+        ("evidence-scripts", "pytests/scripts/sccp_release_bundle_test.py"),
+        ("js-sdk", "javascript/iroha_js/test/sccpPackageExports.test.js"),
+        ("swift-sdk", "ToriiClientTests/testBridgeProofSubmitRequestBuildsSccpPayloadsFromSubmissions"),
+        ("kotlin-sdk", "org.hyperledger.iroha.sdk.sccp.TonSccpProverTest"),
+        ("java-android", "org.hyperledger.iroha.android.sccp.SourceSccpProofsTests"),
+        ("dotnet-sdk", "FullyQualifiedName~SccpEthereumMainnetTests\\|FullyQualifiedName~SccpBscMainnetTests"),
+        ("contract-smoke", "--check contracts/evm/sccp/test/sccp_message_bridge_smoke.js"),
+    )
+
+    for module in (report, verifier):
+        for phase, fragment in cases:
+            assert fragment in module.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[phase]
+            assert not module._phase_command_matches_required_fragment(
+                phase,
+                f"+ {fragment}",
+                fragment,
+            ), f"{module.__name__} {phase} accepted bare fragment: {fragment}"
+
+
+def test_release_bundle_phase_command_matchers_reject_comment_fragments() -> None:
+    """Report and verifier matchers must reject shell-commented fragments."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    cases = (
+        (
+            "rust-sccp",
+            "+ cargo test -p iroha_core # cargo test -p iroha_sccp -- --nocapture",
+            "cargo test -p iroha_sccp -- --nocapture",
+        ),
+        (
+            "evidence-scripts",
+            "+ python3 -m pytest -q "
+            "pytests/scripts/check_sccp_production_corridor_test.py "
+            "# pytests/scripts/sccp_release_bundle_test.py",
+            "pytests/scripts/sccp_release_bundle_test.py",
+        ),
+        (
+            "js-sdk",
+            "+ node --test javascript/iroha_js/test/sccpSolanaProver.test.js "
+            "# javascript/iroha_js/test/sccpPackageExports.test.js",
+            "javascript/iroha_js/test/sccpPackageExports.test.js",
+        ),
+        (
+            "contract-smoke",
+            "+ node --test scripts/sccp_taira_xor_contract.test.mjs "
+            "# --check contracts/evm/sccp/test/sccp_message_bridge_smoke.js",
+            "--check contracts/evm/sccp/test/sccp_message_bridge_smoke.js",
+        ),
+    )
+
+    for module in (report, verifier):
+        for phase, command, fragment in cases:
+            assert fragment in module.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[phase]
+            assert not module._phase_command_matches_required_fragment(
+                phase,
+                command,
+                fragment,
+            ), f"{module.__name__} {phase} accepted commented {fragment}"
+
+
+def test_release_bundle_phase_command_matchers_reject_inert_option_values() -> None:
+    """Report and verifier matchers must require option-selected fragments."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    cases = (
+        (
+            "evidence-scripts",
+            "+ python3 -m pytest -q "
+            "pytests/scripts/check_sccp_production_corridor_test.py "
+            "--ignore pytests/scripts/sccp_release_bundle_test.py",
+            "pytests/scripts/sccp_release_bundle_test.py",
+        ),
+        (
+            "js-sdk",
+            "+ node --test javascript/iroha_js/test/sccpSolanaProver.test.js "
+            "--test-reporter javascript/iroha_js/test/sccpPackageExports.test.js",
+            "javascript/iroha_js/test/sccpPackageExports.test.js",
+        ),
+        (
+            "swift-sdk",
+            "+ swift test --filter SccpSolanaProverTests "
+            "--skip ToriiClientTests/testBridgeProofSubmitRequestBuildsSccpPayloadsFromSubmissions "
+            "--disable-swift-testing",
+            "ToriiClientTests/testBridgeProofSubmitRequestBuildsSccpPayloadsFromSubmissions",
+        ),
+        (
+            "swift-sdk",
+            "+ swift test --filter OtherTests --skip swift test --filter "
+            "SccpSolanaProverTests --disable-swift-testing",
+            "swift test --filter SccpSolanaProverTests --disable-swift-testing",
+        ),
+        (
+            "kotlin-sdk",
+            "+ ./gradlew :core-jvm:test --console=plain "
+            "--tests org.hyperledger.iroha.sdk.sccp.OtherTest "
+            "--info org.hyperledger.iroha.sdk.sccp.TonSccpProverTest",
+            "org.hyperledger.iroha.sdk.sccp.TonSccpProverTest",
+        ),
+        (
+            "java-android",
+            "+ ./gradlew :core:test --console=plain "
+            "--tests org.hyperledger.iroha.android.GradleHarnessTests "
+            "ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.SourceSccpProofsTests",
+            "org.hyperledger.iroha.android.sccp.SourceSccpProofsTests",
+        ),
+        (
+            "java-android",
+            "+ env ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.EvmSccpProverTestsExtra "
+            "./gradlew :core:test --console=plain "
+            "--tests org.hyperledger.iroha.android.GradleHarnessTests",
+            "ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.EvmSccpProverTests",
+        ),
+        (
+            "java-android",
+            "+ env ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.SourceSccpProofsTestsExtra "
+            "./gradlew :core:test --console=plain "
+            "--tests org.hyperledger.iroha.android.GradleHarnessTests",
+            "org.hyperledger.iroha.android.sccp.SourceSccpProofsTests",
+        ),
+        (
+            "dotnet-sdk",
+            "+ dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj "
+            "--filter FullyQualifiedName~Other --logger "
+            "FullyQualifiedName~SccpEthereumMainnetTests\\|FullyQualifiedName~SccpBscMainnetTests",
+            "FullyQualifiedName~SccpEthereumMainnetTests\\|FullyQualifiedName~SccpBscMainnetTests",
+        ),
+        (
+            "dotnet-sdk",
+            "+ dotnet test tests/Other/Other.csproj "
+            "--filter FullyQualifiedName~SccpEthereumMainnetTests\\|FullyQualifiedName~SccpBscMainnetTests "
+            "--logger dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj",
+            "dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj",
+        ),
+        (
+            "contract-smoke",
+            "+ node --test scripts/sccp_taira_xor_contract.test.mjs "
+            "--test-reporter scripts/sccp_bsc_taira_xor_deploy.test.mjs",
+            "scripts/sccp_bsc_taira_xor_deploy.test.mjs",
+        ),
+        (
+            "contract-smoke",
+            '+ node --eval "--check contracts/evm/sccp/test/sccp_message_bridge_smoke.js"',
+            "--check contracts/evm/sccp/test/sccp_message_bridge_smoke.js",
+        ),
+    )
+
+    for module in (report, verifier):
+        for phase, command, fragment in cases:
+            assert fragment in module.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[phase]
+            assert not module._phase_command_matches_required_fragment(
+                phase,
+                command,
+                fragment,
+            ), f"{module.__name__} {phase} accepted inert option {fragment}"
+
+
+def test_release_bundle_phase_command_matchers_reject_narrow_kotlin_selector() -> None:
+    """Report and verifier require the broad Kotlin package selector."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    fragment = "./gradlew :core-jvm:test --console=plain --tests org.hyperledger.iroha.sdk.sccp."
+
+    for module in (report, verifier):
+        assert fragment in module.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["kotlin-sdk"]
+        assert not module._phase_command_matches_required_fragment(
+            "kotlin-sdk",
+            "+ ./gradlew :core-jvm:test --console=plain "
+            "--tests org.hyperledger.iroha.sdk.sccp.TonSccpProverTest",
+            fragment,
+        )
+        assert module._phase_command_matches_required_fragment(
+            "kotlin-sdk",
+            "+ ./gradlew :core-jvm:test --console=plain "
+            "--tests org.hyperledger.iroha.sdk.sccp.*",
+            fragment,
+        )
+
+
+def test_release_bundle_phase_command_matchers_reject_extra_suffix_arguments() -> None:
+    """Report and verifier matchers must reject trailing mutating arguments."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    cases = (
+        (
+            "evidence-scripts",
+            "+ python3 -m pytest -q pytests/scripts/check_sccp_production_corridor_test.py "
+            "pytests/scripts/sccp_release_bundle_test.py "
+            "--ignore pytests/scripts/check_sccp_production_corridor_test.py",
+            "-m pytest -q pytests/scripts/check_sccp_production_corridor_test.py",
+        ),
+        (
+            "evidence-scripts",
+            "+ python3 -m pytest -q "
+            + " ".join(corridor_evidence_script_tests())
+            + " pytests/scripts/unscoped_extra_sccp_test.py",
+            "pytests/scripts/sccp_release_bundle_test.py",
+        ),
+        (
+            "python-sdk",
+            "+ python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py "
+            "--deselect python/iroha_torii_client/tests/sccp_test.py::test_sccp",
+            "-m pytest -q python/iroha_torii_client/tests/sccp_test.py",
+        ),
+        (
+            "python-sdk",
+            "+ python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py "
+            "pytests/scripts/sccp_release_bundle_test.py",
+            "-m pytest -q python/iroha_torii_client/tests/sccp_test.py",
+        ),
+        (
+            "rust-sccp",
+            "+ cargo test -p iroha_sccp -- --nocapture --skip sccp",
+            "cargo test -p iroha_sccp -- --nocapture",
+        ),
+        (
+            "core-admission",
+            "+ cargo test -p iroha_core --test iroha_core_group_01 "
+            "bridge_proofs:: -- --nocapture --skip bridge_proofs::",
+            "cargo test -p iroha_core --test iroha_core_group_01 bridge_proofs:: -- --nocapture",
+        ),
+        (
+            "contract-smoke",
+            "+ bash scripts/sccp_evm_contract_smoke.sh --dry-run",
+            "bash scripts/sccp_evm_contract_smoke.sh",
+        ),
+        (
+            "kotlin-sdk",
+            "+ java -version --dry-run",
+            "java -version",
+        ),
+        (
+            "java-android",
+            "+ java -version --dry-run",
+            "java -version",
+        ),
+        (
+            "kotlin-sdk",
+            "+ ./gradlew :core-jvm:test --console=plain "
+            "--tests org.hyperledger.iroha.sdk.sccp.* "
+            "--tests org.hyperledger.iroha.sdk.sccp.TonSccpProverTest --dry-run",
+            "./gradlew :core-jvm:test --console=plain --tests org.hyperledger.iroha.sdk.sccp.",
+        ),
+        (
+            "kotlin-sdk",
+            "+ ./gradlew :core-jvm:test --console=plain "
+            "--tests org.hyperledger.iroha.sdk.sccp.* "
+            "--tests org.hyperledger.iroha.sdk.sccp.TonSccpProverTest --exclude-task test",
+            "org.hyperledger.iroha.sdk.sccp.TonSccpProverTest",
+        ),
+        (
+            "java-android",
+            "+ ./gradlew :core:test --console=plain "
+            "--tests org.hyperledger.iroha.android.sccp.SolanaSccpProverTests --dry-run",
+            "./gradlew :core:test --console=plain --tests org.hyperledger.iroha.android.sccp.SolanaSccpProverTests",
+        ),
+        (
+            "swift-sdk",
+            "+ swift test --filter SccpSolanaProverTests "
+            "--disable-swift-testing --skip SccpSolanaProverTests",
+            "swift test --filter SccpSolanaProverTests --disable-swift-testing",
+        ),
+        (
+            "js-sdk",
+            "+ node --test javascript/iroha_js/test/sccpSolanaProver.test.js "
+            "javascript/iroha_js/test/sccpEthereumMainnet.test.js "
+            "javascript/iroha_js/test/sccpBscMainnet.test.js "
+            "javascript/iroha_js/test/package_dist.test.js "
+            "javascript/iroha_js/test/sccpPackageExports.test.js "
+            "javascript/iroha_js/test/unscopedExtra.test.js",
+            "javascript/iroha_js/test/sccpPackageExports.test.js",
+        ),
+        (
+            "js-sdk",
+            "+ node --test javascript/iroha_js/test/sccpSolanaProver.test.js "
+            "javascript/iroha_js/test/sccpEthereumMainnet.test.js "
+            "javascript/iroha_js/test/sccpBscMainnet.test.js "
+            "javascript/iroha_js/test/package_dist.test.js "
+            "javascript/iroha_js/test/sccpPackageExports.test.js || true",
+            "javascript/iroha_js/test/sccpPackageExports.test.js",
+        ),
+        (
+            "contract-smoke",
+            "+ node --test scripts/sccp_bsc_taira_xor_deploy.test.mjs "
+            "scripts/sccp_tron_taira_xor_deploy.test.mjs "
+            "scripts/sccp_taira_xor_contract.test.mjs scripts/unscoped_extra.test.mjs",
+            "scripts/sccp_taira_xor_contract.test.mjs",
+        ),
+        (
+            "contract-smoke",
+            "+ node --check contracts/evm/sccp/test/sccp_message_bridge_smoke.js "
+            "--trace-warnings",
+            "--check contracts/evm/sccp/test/sccp_message_bridge_smoke.js",
+        ),
+        (
+            "dotnet-sdk",
+            "+ dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj "
+            "--filter FullyQualifiedName~SccpEthereumMainnetTests\\|FullyQualifiedName~SccpBscMainnetTests "
+            "--nologo --logger trx",
+            "dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj",
+        ),
+        (
+            "dotnet-sdk",
+            "+ dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj "
+            "--filter FullyQualifiedName~SccpEthereumMainnetTests\\|FullyQualifiedName~SccpBscMainnetTests "
+            "--nologo || true",
+            "FullyQualifiedName~SccpEthereumMainnetTests\\|FullyQualifiedName~SccpBscMainnetTests",
+        ),
+    )
+
+    for module in (report, verifier):
+        for phase, command, fragment in cases:
+            assert fragment in module.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[phase]
+            assert not module._phase_command_matches_required_fragment(
+                phase,
+                command,
+                fragment,
+            ), f"{module.__name__} {phase} accepted extra suffix {fragment}"
+
+
+def test_release_bundle_phase_command_matchers_reject_short_circuited_fragments() -> None:
+    """Report and verifier command matchers must reject failing shell prefixes."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    cases = (
+        (
+            "rust-sccp",
+            "+ false && env CARGO_TARGET_DIR=target/sccp-production-corridor "
+            "NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_sccp -- --nocapture",
+            "cargo test -p iroha_sccp -- --nocapture",
+        ),
+        (
+            "evidence-scripts",
+            "+ false && python3 -m pytest -q "
+            + " ".join(corridor_evidence_script_tests()),
+            "pytests/scripts/sccp_release_bundle_test.py",
+        ),
+        (
+            "js-sdk",
+            "+ false && node --test javascript/iroha_js/test/sccpSolanaProver.test.js",
+            "javascript/iroha_js/test/sccpSolanaProver.test.js",
+        ),
+        (
+            "contract-smoke",
+            "+ false && bash scripts/sccp_evm_contract_smoke.sh",
+            "bash scripts/sccp_evm_contract_smoke.sh",
+        ),
+    )
+
+    for module in (report, verifier):
+        for phase, command, fragment in cases:
+            assert not module._phase_command_matches_required_fragment(
+                phase,
+                command,
+                fragment,
+            ), f"{module.__name__} {phase} accepted short-circuit {fragment}"
+
+
 def test_release_bundle_java_android_phase_requires_source_proof_harness() -> None:
     """Android corridor evidence must prove source-proof hardening ran."""
 
@@ -1723,13 +2347,38 @@ def write_phase_artifacts(tmp_path: Path) -> dict[str, str]:
     return payloads
 
 
-def complete_corridor_log() -> str:
+def complete_corridor_log(phases: tuple[str, ...] = PHASES) -> str:
     """Return a synthetic successful full SCCP production-corridor transcript."""
 
     report = load_report_module()
     lines: list[str] = []
-    for phase in PHASES:
+    for phase in phases:
         lines.append(f"==> SCCP production corridor: {phase}")
+        lines.extend(
+            phase_command_lines(report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[phase])
+        )
+        lines.extend(report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS[phase])
+    return "\n".join(
+        [*lines, ""]
+    ) + "SCCP production corridor completed.\n"
+
+
+def complete_corridor_log_with_success_before_command(
+    forged_phase: str,
+    phases: tuple[str, ...] = PHASES,
+) -> str:
+    """Return a full corridor transcript with one forged phase success order."""
+
+    report = load_report_module()
+    lines: list[str] = []
+    for phase in phases:
+        lines.append(f"==> SCCP production corridor: {phase}")
+        if phase == forged_phase:
+            lines.extend(report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS[phase])
+            lines.extend(
+                phase_command_lines(report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[phase])
+            )
+            continue
         lines.extend(
             phase_command_lines(report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[phase])
         )
@@ -2087,22 +2736,22 @@ def test_release_bundle_preflight_rejects_truthy_production_ready(
             ]
         )
     except SystemExit as exc:
-        assert exc.code == 1
+        assert exc.code == 2
     else:
         raise AssertionError("malformed production_ready preflight passed")
 
     captured = capsys.readouterr()
-    assert "SCCP release bundle is not production ready" in captured.err
-    assert "malformed production_ready flag" in captured.err
+    assert "malformed SCCP release readiness report" in captured.err
+    assert "preflight report production_ready must be true or false" in captured.err
     assert not output_dir.exists()
 
 
-def test_release_bundle_preflight_marks_malformed_blocker_containers(
+def test_release_bundle_preflight_rejects_malformed_blocker_containers(
     tmp_path: Path,
     monkeypatch,
     capsys,
 ) -> None:
-    """Bundle preflight diagnostics must not flatten malformed blocker strings."""
+    """Bundle preflight must reject malformed blocker containers."""
 
     bundle = load_bundle_module()
     evidence = tmp_path / "evidence.toml"
@@ -2132,15 +2781,77 @@ def test_release_bundle_preflight_marks_malformed_blocker_containers(
             ]
         )
     except SystemExit as exc:
-        assert exc.code == 1
+        assert exc.code == 2
     else:
         raise AssertionError("malformed blocker preflight passed")
 
     captured = capsys.readouterr()
-    assert "SCCP release bundle is not production ready" in captured.err
-    assert "- `<invalid blockers>`" in captured.err
+    assert "malformed SCCP release readiness report" in captured.err
+    assert (
+        "preflight report blockers must be a list of non-empty strings"
+        in captured.err
+    )
     assert "- o\n- p\n- e\n- r" not in captured.err
     assert not output_dir.exists()
+
+
+def test_release_bundle_allow_not_ready_rejects_noncanonical_root_blockers(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Not-ready diagnostic bundles must keep root blockers canonical."""
+
+    bundle = load_bundle_module()
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    cases = (
+        (
+            [" padded blocker "],
+            "preflight report blockers must be a list of non-empty strings "
+            "with no surrounding whitespace",
+        ),
+        (
+            ["duplicate blocker", "duplicate blocker"],
+            "preflight report blockers must not contain duplicate strings",
+        ),
+    )
+
+    for index, (blockers, expected_error) in enumerate(cases):
+        output_dir = tmp_path / f"bundle-{index}"
+
+        class FakeReportModule:
+            def _corridor_phases(self) -> list[str]:
+                return []
+
+            def _build_report(self, *args, **kwargs) -> dict[str, object]:
+                return {
+                    "production_ready": False,
+                    "blockers": blockers,
+                }
+
+        monkeypatch.setattr(bundle, "_report_module", lambda: FakeReportModule())
+
+        try:
+            bundle.main(
+                [
+                    "--allow-not-ready",
+                    "--output-dir",
+                    str(output_dir),
+                    "--phase-result",
+                    "all=passed",
+                    str(evidence),
+                ]
+            )
+        except SystemExit as exc:
+            assert exc.code == 2
+        else:
+            raise AssertionError("noncanonical blockers reached bundle output")
+
+        captured = capsys.readouterr()
+        assert "malformed SCCP release readiness report" in captured.err
+        assert expected_error in captured.err
+        assert not output_dir.exists()
 
 
 def test_release_bundle_preflight_rejects_malformed_ready_report(
@@ -2247,6 +2958,195 @@ def test_release_bundle_rejects_malformed_copied_report_before_render(
     assert not (output_dir / "sccp-release-readiness.md").exists()
 
 
+def test_release_bundle_rejects_missing_copied_report_inputs_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """The bundle-local report must keep raw input provenance before render."""
+
+    bundle = load_bundle_module()
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report.pop("inputs")
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("report without inputs was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("report without inputs reached Markdown rendering")
+
+    captured = capsys.readouterr()
+    assert "malformed SCCP release readiness report" in captured.err
+    assert "bundled report missing field: inputs" in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_unknown_copied_report_root_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """The bundle-local report must not publish extra root JSON claims."""
+
+    bundle = load_bundle_module()
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["operator_attestation"] = "approved outside evidence"
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("report with unknown root field was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("report with unknown root field reached Markdown rendering")
+
+    captured = capsys.readouterr()
+    assert "malformed SCCP release readiness report" in captured.err
+    assert (
+        "bundled report contains unknown field: operator_attestation"
+    ) in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_unknown_copied_checklist_fields_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """The bundle-local checklist must not publish extra JSON claims."""
+
+    bundle = load_bundle_module()
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            report["release_checklist"] = {
+                "ready": True,
+                "items": [
+                    {
+                        "id": "all_required_lane_records",
+                        "title": "All required lane records",
+                        "ready": True,
+                        "blockers": [],
+                    }
+                ],
+            }
+            if self.calls == 2:
+                checklist = report["release_checklist"]
+                assert isinstance(checklist, dict)
+                checklist["operator_attestation"] = "approved outside evidence"
+                items = checklist["items"]
+                assert isinstance(items, list)
+                item = items[0]
+                assert isinstance(item, dict)
+                item["operator_attestation"] = "approved outside evidence"
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("checklist with unknown field was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("checklist with unknown field reached Markdown rendering")
+
+    captured = capsys.readouterr()
+    assert "malformed SCCP release readiness report" in captured.err
+    assert (
+        "bundled report.release_checklist contains unknown field: "
+        "operator_attestation"
+    ) in captured.err
+    assert (
+        "bundled report.release_checklist.items[0] contains unknown field: "
+        "operator_attestation"
+    ) in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
 def test_release_bundle_rejects_duplicate_phase_evidence_assignment_before_copy(
     tmp_path: Path,
 ) -> None:
@@ -2327,6 +3227,74 @@ def test_release_bundle_rejects_phase_evidence_dir_override_before_copy(
     ) in completed.stderr
     assert "already set by --phase-evidence-dir" in completed.stderr
     assert "cannot set from --phase-evidence rust-sccp=" in completed.stderr
+    assert not output_dir.exists()
+
+
+def test_release_bundle_rejects_duplicate_evidence_input_before_copy(
+    tmp_path: Path,
+) -> None:
+    """Bundle generation must reject repeated evidence sources before copy."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    output_dir = tmp_path / "bundle"
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--allow-not-ready",
+            "--output-dir",
+            str(output_dir),
+            "--phase-result",
+            "all=missing",
+            str(evidence),
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert "release bundle evidence input path is duplicated" in completed.stderr
+    assert str(evidence) in completed.stderr
+    assert not output_dir.exists()
+
+
+def test_release_bundle_rejects_canonical_duplicate_evidence_input_before_copy(
+    tmp_path: Path,
+) -> None:
+    """Bundle generation must reject duplicate sources hidden by path aliases."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    alias_parent = tmp_path / "alias-parent"
+    alias_parent.mkdir()
+    evidence_alias = alias_parent / ".." / evidence.name
+    output_dir = tmp_path / "bundle"
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--allow-not-ready",
+            "--output-dir",
+            str(output_dir),
+            "--phase-result",
+            "all=missing",
+            str(evidence),
+            str(evidence_alias),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert "release bundle evidence input path is duplicated" in completed.stderr
+    assert str(evidence_alias) in completed.stderr
+    assert str(evidence) in completed.stderr
     assert not output_dir.exists()
 
 
@@ -2758,6 +3726,49 @@ def test_release_bundle_rejects_native_evm_prover_uri_scheme_path_before_copy(
     assert not output_dir.exists()
 
 
+def test_release_bundle_rejects_native_evm_prover_percent_encoded_path_before_copy(
+    tmp_path: Path,
+) -> None:
+    """Bundle generation must reject encoded native artifact traversal."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(
+        tmp_path,
+        evidence,
+        overrides={"proof_artifact": "native-prover-artifacts/%252e%252e/proof.bin"},
+    )
+    write_phase_artifacts(tmp_path)
+    output_dir = tmp_path / "bundle"
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--output-dir",
+            str(output_dir),
+            "--phase-result",
+            "all=passed",
+            "--phase-evidence-dir",
+            str(tmp_path / "phase-artifacts"),
+            "--native-evm-prover-bundle",
+            str(native_bundle),
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert (
+        "native EVM Groth16 prover bundle proof_artifact path contains "
+        "percent-encoded traversal segment: "
+        "'native-prover-artifacts/%252e%252e/proof.bin'"
+    ) in completed.stderr
+    assert not output_dir.exists()
+
+
 def test_release_bundle_rejects_native_evm_prover_forbidden_path_marker_before_copy(
     tmp_path: Path,
 ) -> None:
@@ -3043,6 +4054,63 @@ def test_release_bundle_rejects_duplicate_native_evm_prover_sdk_artifact_keys(
     assert not output_dir.exists()
 
 
+def test_release_bundle_rejects_native_evm_prover_malformed_duplicate_json_keys(
+    tmp_path: Path,
+) -> None:
+    """Bundle generation must reject malformed duplicate keys without echoing them."""
+
+    cases = (
+        ("operator\\nnote", "control character", "operator\nnote"),
+        ("operat\\u043er_note", "non-ASCII character", "operat\u043er_note"),
+    )
+    for index, (encoded_key, expected_reason, decoded_key) in enumerate(cases):
+        case_dir = tmp_path / f"case-{index}"
+        case_dir.mkdir()
+        evidence, _ = write_complete_evidence(case_dir)
+        native_bundle = write_native_evm_prover_bundle(case_dir, evidence)
+        manifest = native_bundle.read_text(encoding="utf-8")
+        native_bundle.write_text(
+            manifest.replace(
+                "{\n",
+                "{\n"
+                f'  "{encoded_key}": "first",\n'
+                f'  "{encoded_key}": "second",\n',
+                1,
+            ),
+            encoding="utf-8",
+        )
+        write_phase_artifacts(case_dir)
+        output_dir = case_dir / "bundle"
+
+        completed = subprocess.run(
+            [
+                "python3",
+                str(SCRIPT),
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                "--phase-evidence-dir",
+                str(case_dir / "phase-artifacts"),
+                "--native-evm-prover-bundle",
+                str(native_bundle),
+                str(evidence),
+            ],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        assert completed.returncode == 2
+        assert (
+            "native EVM Groth16 prover bundle JSON contains duplicate key "
+            f"with {expected_reason}"
+        ) in completed.stderr
+        assert decoded_key not in completed.stderr
+        assert not output_dir.exists()
+
+
 def test_release_bundle_verifier_rejects_native_evm_prover_unknown_root_and_audit_fields(
     tmp_path: Path,
 ) -> None:
@@ -3089,6 +4157,105 @@ def test_release_bundle_verifier_rejects_native_evm_prover_unknown_root_and_audi
         "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
         f"bundle audit_hashes missing field: {removed_audit}"
     ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle does not match bundled native "
+        "prover manifest"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_native_evm_prover_malformed_unknown_field_names(
+    tmp_path: Path,
+) -> None:
+    """Published native manifests must reject unsafe field names without echoing them."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    native_path = output_dir / "native-prover" / "00-native-evm-prover-bundle.json"
+    payload = json.loads(native_path.read_text(encoding="utf-8"))
+    confusable_root = "operat\u043er_note"
+    confusable_audit = "aud\u0456t_note"
+    payload[" operator_note "] = "not allowed"
+    payload["operator\nnote"] = "not allowed"
+    payload["operator note"] = "not allowed"
+    payload["operator|note"] = "not allowed"
+    payload[confusable_root] = "not allowed"
+    payload["audit_hashes"][" audit_note "] = "0x" + "d6" * 32
+    payload["audit_hashes"]["audit\nnote"] = "0x" + "d7" * 32
+    payload["audit_hashes"]["audit note"] = "0x" + "d8" * 32
+    payload["audit_hashes"]["audit|note"] = "0x" + "d9" * 32
+    payload["audit_hashes"][confusable_audit] = "not-a-hex32"
+    native_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(
+        output_dir,
+        "native-prover/00-native-evm-prover-bundle.json",
+    )
+
+    verified = subprocess.run(
+        [
+            "python3",
+            str(VERIFY_SCRIPT),
+            str(output_dir),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle contains unknown field name with surrounding whitespace"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle contains unknown field name with control character"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle contains unknown field name with whitespace"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle contains unknown field name with Markdown-unsafe character"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle contains unknown field name with non-ASCII character"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle audit_hashes contains unexpected field name with surrounding "
+        "whitespace"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle audit_hashes contains unexpected field name with control "
+        "character"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle audit_hashes contains unexpected field name with whitespace"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle audit_hashes contains unexpected field name with Markdown-unsafe "
+        "character"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle audit_hashes contains unexpected field name with non-ASCII "
+        "character"
+    ) in verified.stdout
+    blocker_lines = "\n".join(
+        line
+        for line in verified.stdout.splitlines()
+        if "bundled native EVM prover manifest blocker:" in line
+    )
+    assert confusable_root not in blocker_lines
+    assert confusable_audit not in blocker_lines
     assert (
         "readiness report native_evm_prover_bundle does not match bundled native "
         "prover manifest"
@@ -4192,6 +5359,44 @@ def test_release_bundle_verifier_rejects_native_evm_prover_uri_scheme_path(
     ) in verified.stdout
 
 
+def test_release_bundle_verifier_rejects_native_evm_prover_percent_encoded_path(
+    tmp_path: Path,
+) -> None:
+    """Published native prover manifests must reject encoded traversal."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    native_path = output_dir / "native-prover" / "00-native-evm-prover-bundle.json"
+    payload = json.loads(native_path.read_text(encoding="utf-8"))
+    payload["proof_artifact"] = "native-prover-artifacts/%2e%2e/proof.bin"
+    native_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(
+        output_dir,
+        "native-prover/00-native-evm-prover-bundle.json",
+    )
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle proof_artifact path contains percent-encoded traversal segment: "
+        "'native-prover-artifacts/%2e%2e/proof.bin'"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle does not match bundled native "
+        "prover manifest"
+    ) in verified.stdout
+
+
 def test_release_bundle_verifier_rejects_native_evm_prover_forbidden_path_marker(
     tmp_path: Path,
 ) -> None:
@@ -4458,6 +5663,196 @@ def test_release_bundle_verifier_rejects_duplicate_native_evm_prover_report_path
     ) in verified.stdout
 
 
+def test_release_bundle_verifier_rejects_native_evm_prover_report_malformed_field_names(
+    tmp_path: Path,
+) -> None:
+    """Readiness report native prover summaries must reject unsafe field names."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    native_bundle = report["native_evm_prover_bundle"]
+    confusable_root = "operat\u043er_report_note"
+    confusable_audit = "aud\u0456t_report_note"
+    native_bundle[" operator_report_note "] = "not allowed"
+    native_bundle["operator\nreport_note"] = "not allowed"
+    native_bundle["operator report_note"] = "not allowed"
+    native_bundle["operator|report_note"] = "not allowed"
+    native_bundle[confusable_root] = "not allowed"
+    native_bundle["audit_hashes"][" audit_report_note "] = "0x" + "d6" * 32
+    native_bundle["audit_hashes"]["audit\nreport_note"] = "0x" + "d7" * 32
+    native_bundle["audit_hashes"]["audit report_note"] = "0x" + "d8" * 32
+    native_bundle["audit_hashes"]["audit|report_note"] = "0x" + "d9" * 32
+    native_bundle["audit_hashes"][confusable_audit] = "not-a-hex32"
+    confusable_sdk_field = "operat\u043er_sdk_report_note"
+    sdk_row = native_bundle["sdk_artifacts"][0]
+    sdk_row[" operator_sdk_report_note "] = "not allowed"
+    sdk_row["operator\nsdk_report_note"] = "not allowed"
+    sdk_row["operator sdk_report_note"] = "not allowed"
+    sdk_row["operator|sdk_report_note"] = "not allowed"
+    sdk_row[confusable_sdk_field] = "not allowed"
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        [
+            "python3",
+            str(VERIFY_SCRIPT),
+            str(output_dir),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report native_evm_prover_bundle contains unknown field name "
+        "with surrounding whitespace"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle contains unknown field name "
+        "with control character"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle contains unknown field name "
+        "with whitespace"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle contains unknown field name "
+        "with Markdown-unsafe character"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle contains unknown field name "
+        "with non-ASCII character"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle audit_hashes contains unexpected "
+        "field name with surrounding whitespace"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle audit_hashes contains unexpected "
+        "field name with control character"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle audit_hashes contains unexpected "
+        "field name with whitespace"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle audit_hashes contains unexpected "
+        "field name with Markdown-unsafe character"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle audit_hashes contains unexpected "
+        "field name with non-ASCII character"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle sdk_artifacts[0] contains unknown "
+        "field name with surrounding whitespace"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle sdk_artifacts[0] contains unknown "
+        "field name with control character"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle sdk_artifacts[0] contains unknown "
+        "field name with whitespace"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle sdk_artifacts[0] contains unknown "
+        "field name with Markdown-unsafe character"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle sdk_artifacts[0] contains unknown "
+        "field name with non-ASCII character"
+    ) in verified.stdout
+    native_report_lines = "\n".join(
+        line
+        for line in verified.stdout.splitlines()
+        if "readiness report native_evm_prover_bundle" in line
+    )
+    assert confusable_root not in native_report_lines
+    assert confusable_audit not in native_report_lines
+    assert confusable_sdk_field not in native_report_lines
+
+
+def test_release_bundle_verifier_rejects_native_evm_prover_report_artifact_malformed_field_names(
+    tmp_path: Path,
+) -> None:
+    """Readiness report native artifact summaries must reject unsafe field names."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    native_bundle = report["native_evm_prover_bundle"]
+    confusable_field = "operat\u043er_artifact_note"
+    native_bundle["artifact"][" artifact_note "] = "not allowed"
+    native_bundle["proof_artifact"]["artifact\nnote"] = "not allowed"
+    native_bundle["cross_sdk_fixture_parity_artifact"][
+        "artifact note"
+    ] = "not allowed"
+    native_bundle["native_prover_self_test_artifact"][
+        "artifact|note"
+    ] = "not allowed"
+    native_bundle["sdk_artifacts"][0]["implementation_artifact"][
+        confusable_field
+    ] = "not allowed"
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        [
+            "python3",
+            str(VERIFY_SCRIPT),
+            str(output_dir),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report native_evm_prover_bundle artifact contains unknown "
+        "field name with surrounding whitespace"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle proof_artifact contains "
+        "unknown field name with control character"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle "
+        "cross_sdk_fixture_parity_artifact contains unknown field name with "
+        "whitespace"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle "
+        "native_prover_self_test_artifact contains unknown field name with "
+        "Markdown-unsafe character"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle sdk_artifacts[0] "
+        "implementation_artifact contains unknown field name with non-ASCII "
+        "character"
+    ) in verified.stdout
+    native_report_lines = "\n".join(
+        line
+        for line in verified.stdout.splitlines()
+        if "readiness report native_evm_prover_bundle" in line
+    )
+    assert confusable_field not in native_report_lines
+
+
 def test_release_bundle_verifier_rejects_duplicate_native_evm_prover_sdk_artifact_keys(
     tmp_path: Path,
 ) -> None:
@@ -4645,6 +6040,75 @@ def test_release_bundle_verifier_rejects_malformed_native_evm_prover_sdk_artifac
     ) in verified.stdout
 
 
+def test_release_bundle_verifier_rejects_native_evm_prover_sdk_artifact_malformed_unknown_field_names(
+    tmp_path: Path,
+) -> None:
+    """Published native prover SDK rows must reject unsafe unknown field names."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    native_path = output_dir / "native-prover" / "00-native-evm-prover-bundle.json"
+    payload = json.loads(native_path.read_text(encoding="utf-8"))
+    confusable_field = "operat\u043er_sdk_note"
+    row = payload["native_sdk_artifacts"][0]
+    row[" operator_sdk_note "] = "not allowed"
+    row["operator\nsdk_note"] = "not allowed"
+    row["operator sdk_note"] = "not allowed"
+    row["operator|sdk_note"] = "not allowed"
+    row[confusable_field] = "not allowed"
+    native_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(
+        output_dir,
+        "native-prover/00-native-evm-prover-bundle.json",
+    )
+
+    verified = subprocess.run(
+        [
+            "python3",
+            str(VERIFY_SCRIPT),
+            str(output_dir),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "bundled native EVM prover manifest blocker: native_sdk_artifacts[0] "
+        "contains unknown field name with surrounding whitespace"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native_sdk_artifacts[0] "
+        "contains unknown field name with control character"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native_sdk_artifacts[0] "
+        "contains unknown field name with whitespace"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native_sdk_artifacts[0] "
+        "contains unknown field name with Markdown-unsafe character"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native_sdk_artifacts[0] "
+        "contains unknown field name with non-ASCII character"
+    ) in verified.stdout
+    blocker_lines = "\n".join(
+        line
+        for line in verified.stdout.splitlines()
+        if "bundled native EVM prover manifest blocker:" in line
+    )
+    assert confusable_field not in blocker_lines
+    assert (
+        "readiness report native_evm_prover_bundle does not match bundled native "
+        "prover manifest"
+    ) in verified.stdout
+
+
 def test_release_bundle_verifier_rejects_padded_native_evm_prover_payload_paths(
     tmp_path: Path,
 ) -> None:
@@ -4737,6 +6201,144 @@ def test_release_bundle_verifier_rejects_padded_native_evm_prover_sdk_artifacts(
         "readiness report native_evm_prover_bundle sdk_artifacts[0] sdk "
         "must not contain surrounding whitespace"
     ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle does not match bundled native "
+        "prover manifest"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_malformed_native_evm_prover_sdk_artifact_ids(
+    tmp_path: Path,
+) -> None:
+    """Published native prover SDK artifact ids must reject unsafe spellings."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    native_path = output_dir / "native-prover" / "00-native-evm-prover-bundle.json"
+    payload = json.loads(native_path.read_text(encoding="utf-8"))
+    sdk_artifacts = payload["native_sdk_artifacts"]
+    removed_sdks = [row["sdk"] for row in sdk_artifacts[:5]]
+    confusable_sdk = "javas\u0441ript"
+    sdk_artifacts[0]["sdk"] = "java script"
+    sdk_artifacts[1]["sdk"] = "swift\nsdk"
+    sdk_artifacts[2]["sdk"] = confusable_sdk
+    sdk_artifacts[3]["sdk"] = "kotlin_sdk"
+    sdk_artifacts[4]["sdk"] = "-dotnet"
+    native_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(
+        output_dir,
+        "native-prover/00-native-evm-prover-bundle.json",
+    )
+
+    verified = subprocess.run(
+        [
+            "python3",
+            str(VERIFY_SCRIPT),
+            str(output_dir),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "bundled native EVM prover manifest blocker: "
+        "native_sdk_artifacts[0].sdk must not contain whitespace"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: "
+        "native_sdk_artifacts[1].sdk contains control character"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: "
+        "native_sdk_artifacts[2].sdk must be printable ASCII"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: "
+        "native_sdk_artifacts[3].sdk must be a lowercase SDK id"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: "
+        "native_sdk_artifacts[4].sdk must be a lowercase SDK id"
+    ) in verified.stdout
+    for sdk in removed_sdks:
+        assert (
+            "bundled native EVM prover manifest blocker: "
+            f"native_sdk_artifacts missing sdk: {sdk}"
+        ) in verified.stdout
+    assert confusable_sdk not in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle does not match bundled native "
+        "prover manifest"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_native_evm_prover_report_malformed_sdk_artifact_ids(
+    tmp_path: Path,
+) -> None:
+    """Published native prover readiness summaries must reject unsafe SDK ids."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    sdk_artifacts = report["native_evm_prover_bundle"]["sdk_artifacts"]
+    removed_sdks = [row["sdk"] for row in sdk_artifacts[:5]]
+    confusable_sdk = "javas\u0441ript"
+    sdk_artifacts[0]["sdk"] = "java script"
+    sdk_artifacts[1]["sdk"] = "swift\nsdk"
+    sdk_artifacts[2]["sdk"] = confusable_sdk
+    sdk_artifacts[3]["sdk"] = "kotlin_sdk"
+    sdk_artifacts[4]["sdk"] = "-dotnet"
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        [
+            "python3",
+            str(VERIFY_SCRIPT),
+            str(output_dir),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report native_evm_prover_bundle sdk_artifacts[0] sdk "
+        "must not contain whitespace"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle sdk_artifacts[1] sdk "
+        "contains control character"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle sdk_artifacts[2] sdk "
+        "must be printable ASCII"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle sdk_artifacts[3] sdk "
+        "must be a lowercase SDK id"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle sdk_artifacts[4] sdk "
+        "must be a lowercase SDK id"
+    ) in verified.stdout
+    for sdk in removed_sdks:
+        assert (
+            "readiness report native_evm_prover_bundle sdk_artifacts "
+            f"missing sdk: {sdk}"
+        ) in verified.stdout
+    assert confusable_sdk not in verified.stdout
     assert (
         "readiness report native_evm_prover_bundle does not match bundled native "
         "prover manifest"
@@ -5074,6 +6676,62 @@ def test_release_bundle_verifier_rejects_duplicate_native_evm_parity_fixture_key
     ) in verified.stdout
 
 
+def test_release_bundle_verifier_rejects_native_evm_parity_fixture_malformed_duplicate_keys(
+    tmp_path: Path,
+) -> None:
+    """Published parity fixtures must not echo malformed duplicate keys."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    relative_path = (
+        "native-prover/native-prover-artifacts/cross-sdk-fixture-parity.json"
+    )
+    parity_text = (
+        '{"operator\\nnote":"first","operator\\nnote":"second"}\n'
+    )
+    parity_bytes = parity_text.encode("utf-8")
+    (output_dir / relative_path).write_bytes(parity_bytes)
+    rewrite_manifest_artifact(output_dir, relative_path)
+
+    native_path = output_dir / "native-prover" / "00-native-evm-prover-bundle.json"
+    payload = json.loads(native_path.read_text(encoding="utf-8"))
+    payload["audit_hashes"]["cross_sdk_fixture_parity"] = (
+        "0x" + hashlib.sha256(parity_bytes).hexdigest()
+    )
+    native_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(
+        output_dir,
+        "native-prover/00-native-evm-prover-bundle.json",
+    )
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle cross_sdk_fixture_parity_artifact JSON contains duplicate key "
+        "with control character"
+    ) in verified.stdout
+    blocker_lines = "\n".join(
+        line
+        for line in verified.stdout.splitlines()
+        if "cross_sdk_fixture_parity_artifact JSON contains duplicate key" in line
+    )
+    assert "operator\nnote" not in blocker_lines
+    assert (
+        "readiness report native_evm_prover_bundle does not match bundled native "
+        "prover manifest"
+    ) in verified.stdout
+
+
 def test_release_bundle_verifier_rejects_duplicate_native_evm_parity_fixture_sdk_result_keys(
     tmp_path: Path,
 ) -> None:
@@ -5177,6 +6835,122 @@ def test_release_bundle_verifier_rejects_duplicate_native_evm_self_test_keys(
         "bundle native_prover_self_test_artifact JSON contains duplicate key: "
         "schema"
     ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle does not match bundled native "
+        "prover manifest"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_native_evm_self_test_malformed_unknown_field_names(
+    tmp_path: Path,
+) -> None:
+    """Published self-test fixtures must not echo malformed unknown keys."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    relative_path = (
+        "native-prover/native-prover-artifacts/native-prover-self-test.json"
+    )
+    self_test_path = output_dir / relative_path
+    self_test_payload = json.loads(self_test_path.read_text(encoding="utf-8"))
+    confusable_root = "operat\u043er_self_test_note"
+    confusable_result = "operat\u043er_self_result_note"
+    self_test_payload[" self_test_note "] = "not allowed"
+    self_test_payload["self_test\nnote"] = "not allowed"
+    self_test_payload["self test note"] = "not allowed"
+    self_test_payload["self_test|note"] = "not allowed"
+    self_test_payload[confusable_root] = "not allowed"
+    result = self_test_payload["sdk_results"]["kotlin"]
+    result[" result_note "] = "not allowed"
+    result["result\nnote"] = "not allowed"
+    result["result note"] = "not allowed"
+    result["result|note"] = "not allowed"
+    result[confusable_result] = "not allowed"
+    self_test_bytes = (
+        json.dumps(self_test_payload, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    self_test_path.write_bytes(self_test_bytes)
+    rewrite_manifest_artifact(output_dir, relative_path)
+
+    native_path = output_dir / "native-prover" / "00-native-evm-prover-bundle.json"
+    payload = json.loads(native_path.read_text(encoding="utf-8"))
+    payload["audit_hashes"]["native_prover_self_test"] = (
+        "0x" + hashlib.sha256(self_test_bytes).hexdigest()
+    )
+    native_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(
+        output_dir,
+        "native-prover/00-native-evm-prover-bundle.json",
+    )
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle native_prover_self_test_artifact contains unknown field name "
+        "with surrounding whitespace"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle native_prover_self_test_artifact contains unknown field name "
+        "with control character"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle native_prover_self_test_artifact contains unknown field name "
+        "with whitespace"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle native_prover_self_test_artifact contains unknown field name "
+        "with Markdown-unsafe character"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle native_prover_self_test_artifact contains unknown field name "
+        "with non-ASCII character"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle native_prover_self_test_artifact sdk_results.kotlin contains "
+        "unknown field name with surrounding whitespace"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle native_prover_self_test_artifact sdk_results.kotlin contains "
+        "unknown field name with control character"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle native_prover_self_test_artifact sdk_results.kotlin contains "
+        "unknown field name with whitespace"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle native_prover_self_test_artifact sdk_results.kotlin contains "
+        "unknown field name with Markdown-unsafe character"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle native_prover_self_test_artifact sdk_results.kotlin contains "
+        "unknown field name with non-ASCII character"
+    ) in verified.stdout
+    blocker_lines = "\n".join(
+        line
+        for line in verified.stdout.splitlines()
+        if "native_prover_self_test_artifact" in line
+    )
+    assert confusable_root not in blocker_lines
+    assert confusable_result not in blocker_lines
     assert (
         "readiness report native_evm_prover_bundle does not match bundled native "
         "prover manifest"
@@ -5751,6 +7525,203 @@ def test_release_bundle_verifier_rejects_native_evm_fixture_unknown_sdk_results(
     ) in verified.stdout
 
 
+def test_release_bundle_verifier_rejects_native_evm_fixture_padded_sdk_results(
+    tmp_path: Path,
+) -> None:
+    """Published fixture SDK result keys must stay canonical text."""
+
+    padded_sdk_blocker = "sdk_results sdk key must not contain surrounding whitespace"
+    output_dir = build_ready_bundle(tmp_path)
+
+    parity_relative_path = (
+        "native-prover/native-prover-artifacts/cross-sdk-fixture-parity.json"
+    )
+    parity_path = output_dir / parity_relative_path
+    parity_payload = json.loads(parity_path.read_text(encoding="utf-8"))
+    parity_sdk = sorted(parity_payload["sdk_results"])[0]
+    parity_padded_sdk = f" {parity_sdk} "
+    parity_payload["sdk_results"][parity_padded_sdk] = parity_payload[
+        "sdk_results"
+    ].pop(parity_sdk)
+    parity_bytes = (
+        json.dumps(parity_payload, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    parity_path.write_bytes(parity_bytes)
+    rewrite_manifest_artifact(output_dir, parity_relative_path)
+
+    self_test_relative_path = (
+        "native-prover/native-prover-artifacts/native-prover-self-test.json"
+    )
+    self_test_path = output_dir / self_test_relative_path
+    self_test_payload = json.loads(self_test_path.read_text(encoding="utf-8"))
+    self_test_sdk = sorted(self_test_payload["sdk_results"])[-1]
+    self_test_padded_sdk = f" {self_test_sdk} "
+    self_test_payload["sdk_results"][self_test_padded_sdk] = self_test_payload[
+        "sdk_results"
+    ].pop(self_test_sdk)
+    self_test_bytes = (
+        json.dumps(self_test_payload, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    self_test_path.write_bytes(self_test_bytes)
+    rewrite_manifest_artifact(output_dir, self_test_relative_path)
+
+    native_path = output_dir / "native-prover" / "00-native-evm-prover-bundle.json"
+    payload = json.loads(native_path.read_text(encoding="utf-8"))
+    payload["audit_hashes"]["cross_sdk_fixture_parity"] = (
+        "0x" + hashlib.sha256(parity_bytes).hexdigest()
+    )
+    payload["audit_hashes"]["native_prover_self_test"] = (
+        "0x" + hashlib.sha256(self_test_bytes).hexdigest()
+    )
+    native_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(
+        output_dir,
+        "native-prover/00-native-evm-prover-bundle.json",
+    )
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle cross_sdk_fixture_parity_artifact "
+        f"{padded_sdk_blocker}: {parity_padded_sdk!r}"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle cross_sdk_fixture_parity_artifact sdk_results missing sdk: "
+        f"{parity_sdk}"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle native_prover_self_test_artifact "
+        f"{padded_sdk_blocker}: {self_test_padded_sdk!r}"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle native_prover_self_test_artifact sdk_results missing sdk: "
+        f"{self_test_sdk}"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle does not match bundled native "
+        "prover manifest"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_native_evm_fixture_malformed_sdk_result_keys(
+    tmp_path: Path,
+) -> None:
+    """Published fixture SDK result keys must reject unsafe spellings."""
+
+    printable_ascii_blocker = "sdk_results sdk key must be printable ASCII"
+    output_dir = build_ready_bundle(tmp_path)
+
+    parity_relative_path = (
+        "native-prover/native-prover-artifacts/cross-sdk-fixture-parity.json"
+    )
+    parity_path = output_dir / parity_relative_path
+    parity_payload = json.loads(parity_path.read_text(encoding="utf-8"))
+    parity_keys = sorted(parity_payload["sdk_results"])
+    parity_payload["sdk_results"]["java script"] = parity_payload[
+        "sdk_results"
+    ].pop(parity_keys[0])
+    parity_payload["sdk_results"]["swift\nsdk"] = parity_payload[
+        "sdk_results"
+    ].pop(parity_keys[1])
+    parity_payload["sdk_results"]["kotlin_sdk"] = parity_payload[
+        "sdk_results"
+    ].pop(parity_keys[2])
+    parity_bytes = (
+        json.dumps(parity_payload, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    parity_path.write_bytes(parity_bytes)
+    rewrite_manifest_artifact(output_dir, parity_relative_path)
+
+    self_test_relative_path = (
+        "native-prover/native-prover-artifacts/native-prover-self-test.json"
+    )
+    self_test_path = output_dir / self_test_relative_path
+    self_test_payload = json.loads(self_test_path.read_text(encoding="utf-8"))
+    self_test_keys = sorted(self_test_payload["sdk_results"])
+    confusable_sdk = "javas\u0441ript"
+    self_test_payload["sdk_results"][confusable_sdk] = self_test_payload[
+        "sdk_results"
+    ].pop(self_test_keys[0])
+    self_test_payload["sdk_results"]["-swift"] = self_test_payload[
+        "sdk_results"
+    ].pop(self_test_keys[1])
+    self_test_bytes = (
+        json.dumps(self_test_payload, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    self_test_path.write_bytes(self_test_bytes)
+    rewrite_manifest_artifact(output_dir, self_test_relative_path)
+
+    native_path = output_dir / "native-prover" / "00-native-evm-prover-bundle.json"
+    payload = json.loads(native_path.read_text(encoding="utf-8"))
+    payload["audit_hashes"]["cross_sdk_fixture_parity"] = (
+        "0x" + hashlib.sha256(parity_bytes).hexdigest()
+    )
+    payload["audit_hashes"]["native_prover_self_test"] = (
+        "0x" + hashlib.sha256(self_test_bytes).hexdigest()
+    )
+    native_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(
+        output_dir,
+        "native-prover/00-native-evm-prover-bundle.json",
+    )
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle cross_sdk_fixture_parity_artifact sdk_results sdk key must "
+        "not contain whitespace"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle cross_sdk_fixture_parity_artifact sdk_results sdk key contains "
+        "control character"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle cross_sdk_fixture_parity_artifact sdk_results sdk key must be "
+        "a lowercase SDK id"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        f"bundle native_prover_self_test_artifact {printable_ascii_blocker}"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle native_prover_self_test_artifact sdk_results sdk key must be "
+        "a lowercase SDK id"
+    ) in verified.stdout
+    assert confusable_sdk not in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle does not match bundled native "
+        "prover manifest"
+    ) in verified.stdout
+
+
 def test_release_bundle_verifier_rejects_native_evm_fixture_public_signal_shape(
     tmp_path: Path,
 ) -> None:
@@ -6203,6 +8174,35 @@ def test_release_bundle_rejects_padded_artifact_paths(
     ) in message
 
 
+def test_release_bundle_rejects_percent_encoded_artifact_traversal_paths(
+    tmp_path: Path,
+) -> None:
+    """Generated public artifact paths must reject encoded parent segments."""
+
+    module = load_bundle_module()
+    for index, marker in enumerate(
+        ("%2e%2e", "%252e%252e", "%252525252e%252525252e")
+    ):
+        output_dir = tmp_path / f"bundle-{index}"
+        artifact = output_dir / "evidence" / marker / "00-complete.toml"
+        artifact.parent.mkdir(parents=True)
+        artifact.write_text("release evidence\n", encoding="utf-8")
+
+        try:
+            module._artifact(artifact, output_dir)
+        except ValueError as exc:
+            message = str(exc)
+        else:
+            raise AssertionError(
+                f"percent-encoded traversal artifact path was accepted: {marker}"
+            )
+
+        assert (
+            "release artifact path contains percent-encoded traversal segment: "
+            f"'evidence/{marker}/00-complete.toml'"
+        ) in message
+
+
 def test_release_bundle_verifier_rejects_control_character_manifest_paths(
     tmp_path: Path,
 ) -> None:
@@ -6290,6 +8290,40 @@ def test_release_bundle_verifier_rejects_padded_manifest_paths(
     ) in verified.stdout
 
 
+def test_release_bundle_verifier_rejects_percent_encoded_manifest_path_escape(
+    tmp_path: Path,
+) -> None:
+    """Manifest artifact paths must reject encoded traversal."""
+
+    for index, marker in enumerate(
+        ("%2e%2e", "%252e%252e", "%252525252e%252525252e")
+    ):
+        case_dir = tmp_path / f"manifest-{index}"
+        case_dir.mkdir()
+        output_dir = build_ready_bundle(case_dir)
+        manifest_path = output_dir / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["artifacts"][0]["path"] = f"evidence/{marker}/outside.md"
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+        verified = subprocess.run(
+            ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        assert verified.returncode == 1
+        assert (
+            "manifest artifact path contains percent-encoded traversal segment: "
+            f"'evidence/{marker}/outside.md'"
+        ) in verified.stdout
+
+
 def test_release_bundle_verifier_rejects_control_character_report_paths(
     tmp_path: Path,
 ) -> None:
@@ -6358,6 +8392,62 @@ def test_release_bundle_verifier_rejects_markdown_unsafe_report_paths(
         "readiness report input artifact path contains Markdown-unsafe "
         "character '|': 'evidence/00-complete|operator.toml'"
     ) in verified.stdout
+
+
+def test_release_bundle_verifier_suppresses_malformed_report_artifact_path_markdown_leaks(
+    tmp_path: Path,
+) -> None:
+    """Malformed report artifact paths must not leak from Markdown checks."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    phase = "swift-sdk"
+    forged_input_hash = "f" * 64
+    forged_phase_hash = "e" * 64
+    report["input_artifacts"][0]["path"] = "evidence/00-complete|operator.toml"
+    report["input_artifacts"][0]["sha256"] = forged_input_hash
+    report["corridor"]["evidence_artifacts"][phase]["path"] = (
+        "corridor/swift|operator.log"
+    )
+    report["corridor"]["evidence_artifacts"][phase]["sha256"] = forged_phase_hash
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report input artifact path contains Markdown-unsafe "
+        "character '|': 'evidence/00-complete|operator.toml'"
+    ) in verified.stdout
+    assert (
+        "readiness report phase swift-sdk artifact path contains "
+        "Markdown-unsafe character '|': 'corridor/swift|operator.log'"
+    ) in verified.stdout
+    assert (
+        "readiness report Markdown Evidence Inputs section missing input "
+        "artifact path"
+    ) not in verified.stdout
+    assert "input artifact hash for evidence/00-complete|operator.toml" not in (
+        verified.stdout
+    )
+    assert forged_input_hash not in verified.stdout
+    assert (
+        "readiness report Markdown Production Corridor section missing evidence "
+        "artifact path for phase swift-sdk"
+    ) not in verified.stdout
+    assert "evidence artifact hash for phase swift-sdk" not in verified.stdout
+    assert forged_phase_hash not in verified.stdout
 
 
 def test_release_bundle_verifier_rejects_padded_report_paths(
@@ -6915,6 +9005,94 @@ def test_release_bundle_verifier_rejects_report_summary_duplicate_json_keys(
     )
 
 
+def test_release_bundle_verifier_rejects_malformed_public_json_duplicate_keys(
+    tmp_path: Path,
+) -> None:
+    """Malformed duplicate public JSON keys must be classified, not echoed."""
+
+    def duplicate_root_key_json(payload: str, encoded_key: str) -> str:
+        return payload.replace(
+            "{\n",
+            "{\n"
+            f'  "{encoded_key}": "first",\n'
+            f'  "{encoded_key}": "second",\n',
+            1,
+        )
+
+    cases = (
+        (" operator_note ", "surrounding whitespace", " operator_note "),
+        ("operator\\nnote", "control character", "operator\nnote"),
+        ("operator note", "whitespace", "operator note"),
+        ("operator|note", "Markdown-unsafe character", "operator|note"),
+        ("operat\\u043er_note", "non-ASCII character", "operat\u043er_note"),
+    )
+
+    for index, (encoded_key, expected_reason, decoded_key) in enumerate(cases):
+        manifest_dir = tmp_path / f"manifest-duplicate-{index}"
+        manifest_dir.mkdir()
+        (manifest_dir / "manifest.json").write_text(
+            "{\n"
+            f'  "{encoded_key}": "first",\n'
+            f'  "{encoded_key}": "second"\n'
+            "}\n",
+            encoding="utf-8",
+        )
+
+        verified = subprocess.run(
+            ["python3", str(VERIFY_SCRIPT), str(manifest_dir)],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        assert verified.returncode == 1
+        assert (
+            f"manifest JSON contains duplicate key with {expected_reason}"
+            in verified.stdout
+        )
+        assert decoded_key not in verified.stdout
+
+    bundle_root = tmp_path / "report-summary-duplicates"
+    bundle_root.mkdir()
+    output_dir = build_ready_bundle(bundle_root)
+    report_path = output_dir / "sccp-release-readiness.json"
+    summary_path = output_dir / "sccp-all-lanes-summary.json"
+    report_json = report_path.read_text(encoding="utf-8")
+    summary_json = summary_path.read_text(encoding="utf-8")
+
+    for encoded_key, expected_reason, decoded_key in cases:
+        report_path.write_text(
+            duplicate_root_key_json(report_json, encoded_key),
+            encoding="utf-8",
+        )
+        summary_path.write_text(
+            duplicate_root_key_json(summary_json, encoded_key),
+            encoding="utf-8",
+        )
+        rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+        rewrite_manifest_artifact(output_dir, "sccp-all-lanes-summary.json")
+
+        verified = subprocess.run(
+            ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        assert verified.returncode == 1
+        assert (
+            f"readiness report JSON contains duplicate key with {expected_reason}"
+            in verified.stdout
+        )
+        assert (
+            f"all-lanes summary JSON contains duplicate key with {expected_reason}"
+            in verified.stdout
+        )
+        assert decoded_key not in verified.stdout
+
+
 def test_release_bundle_verifier_rejects_non_utf8_manifest_json(
     tmp_path: Path,
 ) -> None:
@@ -7217,6 +9395,76 @@ def test_release_bundle_verifier_rejects_unknown_root_json_fields(
     )
 
 
+def test_release_bundle_verifier_rejects_malformed_root_json_fields(
+    tmp_path: Path,
+) -> None:
+    """Malformed public JSON root fields must be classified before diagnostics."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    confusable_field = "operat\u043er_attestation"
+    malformed_fields = {
+        " operator_attestation ": "reviewed elsewhere",
+        "operator\nattestation": "reviewed elsewhere",
+        "operator attestation": "reviewed elsewhere",
+        "operator|attestation": "reviewed elsewhere",
+        confusable_field: "reviewed elsewhere",
+        "operator_attestation": "reviewed elsewhere",
+    }
+
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report.update(malformed_fields)
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    manifest_path = output_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest.update(malformed_fields)
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    for label in ("manifest", "readiness report"):
+        assert (
+            f"{label} contains unknown top-level field name with surrounding "
+            "whitespace"
+        ) in verified.stdout
+        assert (
+            f"{label} contains unknown top-level field name with control character"
+        ) in verified.stdout
+        assert (
+            f"{label} contains unknown top-level field name with whitespace"
+            in verified.stdout
+        )
+        assert (
+            f"{label} contains unknown top-level field name with "
+            "Markdown-unsafe character"
+        ) in verified.stdout
+        assert (
+            f"{label} contains unknown top-level field name with non-ASCII "
+            "character"
+        ) in verified.stdout
+        assert (
+            f"{label} contains unknown top-level field: operator_attestation"
+            in verified.stdout
+        )
+    assert confusable_field not in verified.stdout
+
+
 def test_release_bundle_verifier_rejects_missing_report_root_json_fields(
     tmp_path: Path,
 ) -> None:
@@ -7277,6 +9525,117 @@ def test_release_bundle_verifier_rejects_unknown_source_inventory_gate(
         "readiness report source_inventory contains unknown gate: "
         "operator_attestation_gate"
     ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_malformed_source_inventory_gate_names(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory gate names must be classified before lookup."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    confusable_gate = "operat\u043er_attestation_gate"
+    for gate in (
+        " operator_attestation_gate ",
+        "operator\nattestation_gate",
+        "operator attestation_gate",
+        "operator|attestation_gate",
+        confusable_gate,
+    ):
+        report["source_inventory"][gate] = {
+            "validation_status": "passed",
+            "validation_blockers": [],
+        }
+    report["source_inventory"]["operator_attestation_gate"] = {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory contains unknown gate name with "
+        "surrounding whitespace"
+    ) in verified.stdout
+    assert (
+        "readiness report source_inventory contains unknown gate name with "
+        "control character"
+    ) in verified.stdout
+    assert (
+        "readiness report source_inventory contains unknown gate name with whitespace"
+    ) in verified.stdout
+    assert (
+        "readiness report source_inventory contains unknown gate name with "
+        "Markdown-unsafe character"
+    ) in verified.stdout
+    assert (
+        "readiness report source_inventory contains unknown gate name with "
+        "non-ASCII character"
+    ) in verified.stdout
+    assert (
+        "readiness report source_inventory contains unknown gate: "
+        "operator_attestation_gate"
+    ) in verified.stdout
+    assert confusable_gate not in verified.stdout
+
+
+def test_release_bundle_verifier_suppresses_malformed_source_inventory_gate_markdown_leaks(
+    tmp_path: Path,
+) -> None:
+    """Malformed source-inventory gate names must not leak from Markdown checks."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    confusable_gate = "operat\u043er_attestation_gate"
+    cases = (
+        (" operator_attestation_gate ", "surrounding whitespace"),
+        ("operator\nattestation_gate", "control character"),
+        ("operator attestation_gate", "whitespace"),
+        ("operator|attestation_gate", "Markdown-unsafe character"),
+        (confusable_gate, "non-ASCII character"),
+    )
+    for index, (gate, _) in enumerate(cases):
+        report["source_inventory"][gate] = {
+            "validation_status": "blocked",
+            "validation_blockers": [f"forged blocker {index}"],
+        }
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    for index, (gate, expected_reason) in enumerate(cases):
+        assert (
+            "readiness report source_inventory contains unknown gate name with "
+            f"{expected_reason}"
+        ) in verified.stdout
+        assert gate not in verified.stdout
+        assert f"forged blocker {index}" not in verified.stdout
 
 
 def test_release_bundle_verifier_rejects_missing_source_inventory_gate(
@@ -9379,6 +11738,65 @@ def test_release_bundle_verifier_rejects_malformed_source_inventory_gate(
     ) in verified.stdout
 
 
+def test_release_bundle_verifier_rejects_source_inventory_gate_malformed_unknown_fields(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory gate fields must be classified before lookup."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    gate = report["source_inventory"]["proof_request_bundle_gate"]
+    confusable_field = "operat\u043er_note"
+    gate[" operator_note "] = "not allowed"
+    gate["operator\nnote"] = "not allowed"
+    gate["operator note"] = "not allowed"
+    gate["operator|note"] = "not allowed"
+    gate[confusable_field] = "not allowed"
+    gate["operator_note"] = "manual override"
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory.proof_request_bundle_gate contains "
+        "unknown field name with surrounding whitespace"
+    ) in verified.stdout
+    assert (
+        "readiness report source_inventory.proof_request_bundle_gate contains "
+        "unknown field name with control character"
+    ) in verified.stdout
+    assert (
+        "readiness report source_inventory.proof_request_bundle_gate contains "
+        "unknown field name with whitespace"
+    ) in verified.stdout
+    assert (
+        "readiness report source_inventory.proof_request_bundle_gate contains "
+        "unknown field name with Markdown-unsafe character"
+    ) in verified.stdout
+    assert (
+        "readiness report source_inventory.proof_request_bundle_gate contains "
+        "unknown field name with non-ASCII character"
+    ) in verified.stdout
+    assert (
+        "readiness report source_inventory.proof_request_bundle_gate contains "
+        "unknown field: operator_note"
+    ) in verified.stdout
+    assert confusable_field not in verified.stdout
+
+
 def test_release_bundle_verifier_rejects_manifest_readiness_claim_drift(
     tmp_path: Path,
 ) -> None:
@@ -9732,6 +12150,84 @@ def test_release_bundle_verifier_rejects_unknown_artifact_fields(
     ) in verified.stdout
 
 
+def test_release_bundle_verifier_rejects_malformed_artifact_fields(
+    tmp_path: Path,
+) -> None:
+    """Malformed public artifact fields must be classified before diagnostics."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    confusable_field = "operat\u043er_attestation"
+    malformed_fields = {
+        " operator_attestation ": "reviewed elsewhere",
+        "operator\nattestation": "reviewed elsewhere",
+        "operator attestation": "reviewed elsewhere",
+        "operator|attestation": "reviewed elsewhere",
+        confusable_field: "reviewed elsewhere",
+        "operator_attestation": "reviewed elsewhere",
+    }
+
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["input_artifacts"][0].update(malformed_fields)
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    manifest_path = output_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    for artifact in manifest["artifacts"]:
+        if artifact["path"] == "sccp-all-lanes-summary.json":
+            artifact.update(malformed_fields)
+            break
+    else:
+        raise AssertionError("summary artifact not found")
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    for label in (
+        "manifest artifact sccp-all-lanes-summary.json",
+        "readiness report input artifact evidence/00-complete.toml",
+    ):
+        assert (
+            f"{label} contains unknown field name with surrounding whitespace"
+            in verified.stdout
+        )
+        assert (
+            f"{label} contains unknown field name with control character"
+            in verified.stdout
+        )
+        assert f"{label} contains unknown field name with whitespace" in (
+            verified.stdout
+        )
+        assert (
+            f"{label} contains unknown field name with Markdown-unsafe character"
+            in verified.stdout
+        )
+        assert (
+            f"{label} contains unknown field name with non-ASCII character"
+            in verified.stdout
+        )
+        assert (
+            f"{label} contains unknown field: operator_attestation"
+            in verified.stdout
+        )
+    assert confusable_field not in verified.stdout
+
+
 def test_release_bundle_verifier_rejects_artifact_field_type_drift(
     tmp_path: Path,
 ) -> None:
@@ -9848,7 +12344,7 @@ def test_release_bundle_verifier_rejects_release_checklist_drift(
     output_dir = build_ready_bundle(tmp_path)
     report_path = output_dir / "sccp-release-readiness.json"
     report = json.loads(report_path.read_text(encoding="utf-8"))
-    report["release_checklist"]["items"][0]["id"] = "forged_release_gate"
+    report["release_checklist"]["items"][0]["title"] = "Forged release gate"
     report_path.write_text(
         json.dumps(report, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -9902,6 +12398,98 @@ def test_release_bundle_verifier_rejects_release_checklist_unknown_fields(
         "readiness report release_checklist item all_required_lane_records "
         "contains unknown field: operator_attestation"
     ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_release_checklist_malformed_unknown_fields(
+    tmp_path: Path,
+) -> None:
+    """Release checklist field names must be classified before lookup."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    checklist = report["release_checklist"]
+    item = checklist["items"][0]
+    confusable_root = "operat\u043er_checklist_note"
+    confusable_item = "operat\u043er_attestation"
+    checklist[" operator_checklist_note "] = "not allowed"
+    checklist["operator\nchecklist_note"] = "not allowed"
+    checklist["operator checklist_note"] = "not allowed"
+    checklist["operator|checklist_note"] = "not allowed"
+    checklist[confusable_root] = "not allowed"
+    checklist["operator_checklist_note"] = "manual override"
+    item[" operator_attestation "] = "not allowed"
+    item["operator\nattestation"] = "not allowed"
+    item["operator attestation"] = "not allowed"
+    item["operator|attestation"] = "not allowed"
+    item[confusable_item] = "not allowed"
+    item["operator_attestation"] = "reviewed elsewhere"
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report release_checklist contains unknown field name with "
+        "surrounding whitespace"
+    ) in verified.stdout
+    assert (
+        "readiness report release_checklist contains unknown field name with "
+        "control character"
+    ) in verified.stdout
+    assert (
+        "readiness report release_checklist contains unknown field name with "
+        "whitespace"
+    ) in verified.stdout
+    assert (
+        "readiness report release_checklist contains unknown field name with "
+        "Markdown-unsafe character"
+    ) in verified.stdout
+    assert (
+        "readiness report release_checklist contains unknown field name with "
+        "non-ASCII character"
+    ) in verified.stdout
+    assert (
+        "readiness report release_checklist contains unknown field: "
+        "operator_checklist_note"
+    ) in verified.stdout
+    assert (
+        "readiness report release_checklist item all_required_lane_records "
+        "contains unknown field name with surrounding whitespace"
+    ) in verified.stdout
+    assert (
+        "readiness report release_checklist item all_required_lane_records "
+        "contains unknown field name with control character"
+    ) in verified.stdout
+    assert (
+        "readiness report release_checklist item all_required_lane_records "
+        "contains unknown field name with whitespace"
+    ) in verified.stdout
+    assert (
+        "readiness report release_checklist item all_required_lane_records "
+        "contains unknown field name with Markdown-unsafe character"
+    ) in verified.stdout
+    assert (
+        "readiness report release_checklist item all_required_lane_records "
+        "contains unknown field name with non-ASCII character"
+    ) in verified.stdout
+    assert (
+        "readiness report release_checklist item all_required_lane_records "
+        "contains unknown field: operator_attestation"
+    ) in verified.stdout
+    assert confusable_root not in verified.stdout
+    assert confusable_item not in verified.stdout
 
 
 def test_release_bundle_verifier_rejects_release_checklist_duplicate_item_ids(
@@ -10017,6 +12605,69 @@ def test_release_bundle_verifier_rejects_release_checklist_field_type_drift(
     ) in verified.stdout
 
 
+def test_release_bundle_verifier_rejects_release_checklist_malformed_item_ids(
+    tmp_path: Path,
+) -> None:
+    """Release checklist item IDs must be classified before Markdown checks."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    summary_path = output_dir / "sccp-all-lanes-summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    confusable_id = "all_required_l\u0430ne_records"
+    cases = (
+        (" all_required_lane_records ", "surrounding whitespace"),
+        ("all_required\nlane_records", "control character"),
+        ("all required_lane_records", "whitespace"),
+        ("all|required_lane_records", "Markdown-unsafe character"),
+        (confusable_id, "non-ASCII character"),
+    )
+    checklists = (
+        report["release_checklist"],
+        report["evidence"]["release_checklist"],
+        summary["release_checklist"],
+    )
+    for checklist in checklists:
+        for index, (item_id, _) in enumerate(cases):
+            checklist["items"][index]["id"] = item_id
+            checklist["items"][index]["blockers"] = [f"forged checklist blocker {index}"]
+
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    summary_path.write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_manifest_artifact(output_dir, "sccp-all-lanes-summary.json")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    for label in (
+        "readiness report",
+        "readiness report embedded evidence",
+        "all-lanes summary",
+    ):
+        for item_id, expected_reason in cases:
+            assert (
+                f"{label} release_checklist item id contains {expected_reason}"
+                in verified.stdout
+            )
+            assert item_id not in verified.stdout
+    for index, _ in enumerate(cases):
+        assert f"forged checklist blocker {index}" not in verified.stdout
+
+
 def test_release_bundle_verifier_rejects_padded_public_scalar_strings(
     tmp_path: Path,
 ) -> None:
@@ -10089,14 +12740,13 @@ def test_release_bundle_verifier_rejects_padded_public_scalar_strings(
         "must be a list of non-empty strings with no surrounding whitespace"
     )
     for fragment in (
-        f"readiness report release_checklist item  all_required_lane_records  id {scalar_error}",
-        f"readiness report release_checklist item  all_required_lane_records  title {scalar_error}",
-        "readiness report embedded evidence release_checklist item  "
-        f"all_required_lane_records  id {scalar_error}",
-        "readiness report embedded evidence release_checklist item  "
-        f"all_required_lane_records  title {scalar_error}",
-        f"all-lanes summary release_checklist item  all_required_lane_records  id {scalar_error}",
-        f"all-lanes summary release_checklist item  all_required_lane_records  title {scalar_error}",
+        "readiness report release_checklist item id contains surrounding whitespace",
+        f"readiness report release_checklist item title {scalar_error}",
+        "readiness report embedded evidence release_checklist item id contains "
+        "surrounding whitespace",
+        f"readiness report embedded evidence release_checklist item title {scalar_error}",
+        "all-lanes summary release_checklist item id contains surrounding whitespace",
+        f"all-lanes summary release_checklist item title {scalar_error}",
         f"readiness report cryptographic evidence row chain {scalar_error}",
         "readiness report cryptographic evidence row "
         f"route_canary_evidence_source {scalar_error}",
@@ -10246,6 +12896,133 @@ def test_release_bundle_verifier_rejects_corridor_unknown_fields(
     )
 
 
+def test_release_bundle_verifier_rejects_corridor_malformed_unknown_fields(
+    tmp_path: Path,
+) -> None:
+    """Malformed corridor field names must be classified before diagnostics."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    confusable_field = "operat\u043er_attestation"
+    report["corridor"].update(
+        {
+            " operator_attestation ": "reviewed elsewhere",
+            "operator\nattestation": "reviewed elsewhere",
+            "operator attestation": "reviewed elsewhere",
+            "operator|attestation": "reviewed elsewhere",
+            confusable_field: "reviewed elsewhere",
+            "operator_attestation": "reviewed elsewhere",
+        }
+    )
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report corridor contains unknown field name with "
+        "surrounding whitespace"
+    ) in verified.stdout
+    assert (
+        "readiness report corridor contains unknown field name with "
+        "control character"
+    ) in verified.stdout
+    assert (
+        "readiness report corridor contains unknown field name with whitespace"
+        in verified.stdout
+    )
+    assert (
+        "readiness report corridor contains unknown field name with "
+        "Markdown-unsafe character"
+    ) in verified.stdout
+    assert (
+        "readiness report corridor contains unknown field name with "
+        "non-ASCII character"
+    ) in verified.stdout
+    assert (
+        "readiness report corridor contains unknown field: operator_attestation"
+        in verified.stdout
+    )
+    assert confusable_field not in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_corridor_malformed_phase_keys(
+    tmp_path: Path,
+) -> None:
+    """Malformed corridor phase map keys must be classified before lookup."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    confusable_phase = "jav\u0430-sdk"
+    malformed_phases = {
+        " js-sdk ": "passed",
+        "swift\nsdk": "passed",
+        "kotlin sdk": "passed",
+        "java|android": "passed",
+        confusable_phase: "passed",
+        "kotlin_sdk": "passed",
+        "-dotnet": "passed",
+        "portal-review": "passed",
+    }
+    artifact = dict(report["corridor"]["evidence_artifacts"]["js-sdk"])
+    report["corridor"]["phases"].update(malformed_phases)
+    report["corridor"]["evidence_artifacts"].update(
+        {phase: dict(artifact) for phase in malformed_phases}
+    )
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    for label in (
+        "readiness report corridor phases",
+        "readiness report corridor evidence_artifacts",
+    ):
+        assert f"{label} contains phase with surrounding whitespace" in (
+            verified.stdout
+        )
+        assert f"{label} contains phase with control character" in verified.stdout
+        assert f"{label} contains phase with whitespace" in verified.stdout
+        assert f"{label} contains phase with Markdown-unsafe character" in (
+            verified.stdout
+        )
+        assert f"{label} contains phase with non-ASCII character" in verified.stdout
+        assert f"{label} contains malformed phase" in verified.stdout
+    assert (
+        "readiness report corridor has unknown phase status: portal-review"
+        in verified.stdout
+    )
+    assert (
+        "readiness report corridor has evidence artifact for unknown phase: "
+        "portal-review"
+    ) in verified.stdout
+    assert confusable_phase not in verified.stdout
+
+
 def test_release_bundle_verifier_rejects_corridor_blockers(
     tmp_path: Path,
 ) -> None:
@@ -10393,6 +13170,48 @@ def test_release_bundle_verifier_rejects_report_artifact_path_drift(
     assert (
         "readiness report phase swift-sdk artifact path is not canonical: "
         "corridor\\swift-sdk.log"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_percent_encoded_report_paths(
+    tmp_path: Path,
+) -> None:
+    """Readiness report provenance paths must reject encoded traversal."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["inputs"][0] = "evidence/%2e%2e/complete.toml"
+    report["input_artifacts"][0]["path"] = "evidence/%252e%252e/complete.toml"
+    report["corridor"]["evidence_artifacts"]["swift-sdk"]["path"] = (
+        "corridor/%2e%2e/swift-sdk.log"
+    )
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report inputs path contains percent-encoded traversal "
+        "segment: 'evidence/%2e%2e/complete.toml'"
+    ) in verified.stdout
+    assert (
+        "readiness report input artifact path contains percent-encoded "
+        "traversal segment: 'evidence/%252e%252e/complete.toml'"
+    ) in verified.stdout
+    assert (
+        "readiness report phase swift-sdk artifact path contains "
+        "percent-encoded traversal segment: 'corridor/%2e%2e/swift-sdk.log'"
     ) in verified.stdout
 
 
@@ -10703,6 +13522,145 @@ def test_release_bundle_verifier_rejects_all_lanes_lane_unknown_fields(
         and "contains unknown field: operator_attestation" in line
         for line in verified.stdout.splitlines()
     )
+
+
+def test_release_bundle_verifier_rejects_all_lanes_malformed_unknown_fields(
+    tmp_path: Path,
+) -> None:
+    """All-lanes public JSON must classify malformed unknown field names."""
+
+    confusable_field = "operat\u043er_attestation"
+    confusable_audit = "aud\u0456t_attestation"
+
+    def add_unknown_fields(payload: dict) -> None:
+        payload.update(
+            {
+                " operator_attestation ": "reviewed elsewhere",
+                "operator\nattestation": "reviewed elsewhere",
+                "operator attestation": "reviewed elsewhere",
+                "operator|attestation": "reviewed elsewhere",
+                confusable_field: "reviewed elsewhere",
+                "operator_attestation": "reviewed elsewhere",
+            }
+        )
+
+    def mutate_summary(summary: dict) -> None:
+        add_unknown_fields(summary)
+        active_lane = next(lane for lane in summary["lanes"] if lane["domain"] == 1)
+        add_unknown_fields(active_lane)
+        for field in (
+            "records",
+            "source_record_hashes",
+            "source_adapter_gate",
+            "evm_live_metadata",
+            "destination_binding",
+            "route_allowlist",
+        ):
+            add_unknown_fields(active_lane[field])
+        add_unknown_fields(active_lane["route_allowlist"]["route_canary"])
+
+        solana_lane = next(lane for lane in summary["lanes"] if lane["domain"] == 3)
+        solana_audits = solana_lane["source_adapter_gate"]["audit_hashes"]
+        solana_audits.update(
+            {
+                " audit_attestation ": "0x" + "a1" * 32,
+                "audit\nattestation": "0x" + "a2" * 32,
+                "audit attestation": "0x" + "a3" * 32,
+                "audit|attestation": "0x" + "a4" * 32,
+                confusable_audit: "0x" + "a5" * 32,
+                "operator_attestation": "0x" + "a6" * 32,
+            }
+        )
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    mutate_summary(report["evidence"])
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    summary_path = output_dir / "sccp-all-lanes-summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    mutate_summary(summary)
+    summary_path.write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_manifest_artifact(output_dir, "sccp-all-lanes-summary.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    for label in (
+        "readiness report embedded evidence",
+        "all-lanes summary",
+        "readiness report embedded evidence lane domain 1",
+        "all-lanes summary lane domain 1",
+        "readiness report embedded evidence lane domain 1 source_record_hashes",
+        "readiness report embedded evidence lane domain 1 destination_binding",
+        "readiness report embedded evidence lane domain 1 route_allowlist route_canary",
+        "all-lanes summary lane domain 1 route_allowlist route_canary",
+    ):
+        assert f"{label} contains unknown field name with surrounding whitespace" in (
+            verified.stdout
+        )
+        assert f"{label} contains unknown field name with control character" in (
+            verified.stdout
+        )
+        assert f"{label} contains unknown field name with whitespace" in verified.stdout
+        assert f"{label} contains unknown field name with Markdown-unsafe character" in (
+            verified.stdout
+        )
+        assert f"{label} contains unknown field name with non-ASCII character" in (
+            verified.stdout
+        )
+    for label in (
+        "readiness report embedded evidence lane domain 3 source_adapter_gate",
+        "all-lanes summary lane domain 3 source_adapter_gate",
+    ):
+        assert (
+            f"{label} audit_hashes contains audit field name with surrounding "
+            "whitespace"
+        ) in verified.stdout
+        assert (
+            f"{label} audit_hashes contains audit field name with control character"
+        ) in verified.stdout
+        assert (
+            f"{label} audit_hashes contains audit field name with whitespace"
+        ) in verified.stdout
+        assert (
+            f"{label} audit_hashes contains audit field name with Markdown-unsafe "
+            "character"
+        ) in verified.stdout
+        assert (
+            f"{label} audit_hashes contains audit field name with non-ASCII "
+            "character"
+        ) in verified.stdout
+        assert (
+            f"{label} audit_hashes contains unexpected field: operator_attestation"
+            in verified.stdout
+        )
+    assert (
+        "readiness report embedded evidence contains unknown field: "
+        "operator_attestation"
+    ) in verified.stdout
+    assert (
+        "all-lanes summary lane domain 1 route_allowlist route_canary contains "
+        "unknown field: operator_attestation"
+    ) in verified.stdout
+    assert confusable_field not in verified.stdout
+    assert confusable_audit not in verified.stdout
 
 
 def test_release_bundle_verifier_rejects_all_lanes_list_scalar_type_drift(
@@ -14678,6 +17636,125 @@ def test_release_bundle_verifier_rejects_crypto_evidence_field_type_drift(
     ) in verified.stdout
 
 
+def test_release_bundle_verifier_rejects_crypto_evidence_malformed_source_adapter_gate_audit_keys(
+    tmp_path: Path,
+) -> None:
+    """Source-adapter gate audit keys must be schema-classified before semantics."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    active_domain = load_report_module().ACTIVE_LAUNCH_DOMAIN
+    row = next(
+        row for row in report["cryptographic_evidence"] if row["domain"] == active_domain
+    )
+    confusable_key = "aud\u0456t_note"
+    row["source_adapter_gate_audit_hashes"] = {}
+    row["source_adapter_gate_audit_hashes"][" audit_note "] = "0x" + "11" * 32
+    row["source_adapter_gate_audit_hashes"]["audit\nnote"] = "0x" + "22" * 32
+    row["source_adapter_gate_audit_hashes"]["audit note"] = "0x" + "33" * 32
+    row["source_adapter_gate_audit_hashes"]["audit|note"] = "0x" + "44" * 32
+    row["source_adapter_gate_audit_hashes"][confusable_key] = "not-a-hex32"
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report cryptographic evidence row "
+        "source_adapter_gate_audit_hashes contains audit field name with "
+        "surrounding whitespace"
+    ) in verified.stdout
+    assert (
+        "readiness report cryptographic evidence row "
+        "source_adapter_gate_audit_hashes contains audit field name with "
+        "control character"
+    ) in verified.stdout
+    assert (
+        "readiness report cryptographic evidence row "
+        "source_adapter_gate_audit_hashes contains audit field name with whitespace"
+    ) in verified.stdout
+    assert (
+        "readiness report cryptographic evidence row "
+        "source_adapter_gate_audit_hashes contains audit field name with "
+        "Markdown-unsafe character"
+    ) in verified.stdout
+    assert (
+        "readiness report cryptographic evidence row "
+        "source_adapter_gate_audit_hashes contains audit field name with "
+        "non-ASCII character"
+    ) in verified.stdout
+    assert confusable_key not in verified.stdout
+    assert (
+        "readiness report cryptographic_evidence does not match embedded lane evidence"
+        in verified.stdout
+    )
+
+
+def test_release_bundle_verifier_suppresses_crypto_evidence_malformed_markdown_leaks(
+    tmp_path: Path,
+) -> None:
+    """Malformed crypto row domains and audit keys must not leak from Markdown checks."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    malformed_domain = "2|operator"
+    forged_chain = "forged-crypto-chain"
+    domain_row = next(row for row in report["cryptographic_evidence"] if row["domain"] == 2)
+    domain_row["domain"] = malformed_domain
+    domain_row["chain"] = forged_chain
+
+    active_domain = load_report_module().ACTIVE_LAUNCH_DOMAIN
+    active_row = next(
+        row for row in report["cryptographic_evidence"] if row["domain"] == active_domain
+    )
+    malformed_audit_key = "audit|note"
+    forged_audit_hash = "0x" + "44" * 32
+    active_row["source_adapter_gate_audit_hashes"] = {
+        malformed_audit_key: forged_audit_hash,
+    }
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report cryptographic evidence row domain must be an integer"
+        in verified.stdout
+    )
+    assert (
+        "readiness report cryptographic evidence row "
+        "source_adapter_gate_audit_hashes contains audit field name with "
+        "Markdown-unsafe character"
+    ) in verified.stdout
+    assert malformed_domain not in verified.stdout
+    assert forged_chain not in verified.stdout
+    assert malformed_audit_key not in verified.stdout
+    assert forged_audit_hash not in verified.stdout
+
+
 def test_release_bundle_verifier_accepts_bsc_testnet_crypto_profile() -> None:
     """BSC testnet crypto rows must bind chain id 97 and testnet route IDs."""
 
@@ -14770,6 +17847,59 @@ def test_release_bundle_verifier_rejects_crypto_evidence_unknown_fields(
     ) in verified.stdout
 
 
+def test_release_bundle_verifier_rejects_crypto_evidence_malformed_unknown_fields(
+    tmp_path: Path,
+) -> None:
+    """Malformed cryptographic-evidence row keys must not be echoed."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    confusable_field = "operat\u043er_attestation"
+    report["cryptographic_evidence"][0].update(
+        {
+            " operator_attestation ": "reviewed elsewhere",
+            "operator\nattestation": "reviewed elsewhere",
+            "operator attestation": "reviewed elsewhere",
+            "operator|attestation": "reviewed elsewhere",
+            confusable_field: "reviewed elsewhere",
+            "operator_attestation": "reviewed elsewhere",
+        }
+    )
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    label = "readiness report cryptographic evidence row"
+    assert f"{label} contains unknown field name with surrounding whitespace" in (
+        verified.stdout
+    )
+    assert f"{label} contains unknown field name with control character" in (
+        verified.stdout
+    )
+    assert f"{label} contains unknown field name with whitespace" in verified.stdout
+    assert f"{label} contains unknown field name with Markdown-unsafe character" in (
+        verified.stdout
+    )
+    assert f"{label} contains unknown field name with non-ASCII character" in (
+        verified.stdout
+    )
+    assert f"{label} contains unknown field: operator_attestation" in verified.stdout
+    assert confusable_field not in verified.stdout
+
+
 def test_release_bundle_verifier_rejects_submission_surface_drift(
     tmp_path: Path,
 ) -> None:
@@ -14832,6 +17962,65 @@ def test_release_bundle_verifier_rejects_submission_surface_unknown_fields(
         "readiness report user prover submission surface row contains unknown "
         "field: operator_attestation"
     ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_submission_surface_malformed_unknown_fields(
+    tmp_path: Path,
+) -> None:
+    """Portal/mobile submission rows must classify unsafe unknown field names."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    row = report["user_prover_submission_surfaces"][0]
+    confusable_field = "operat\u043er_attestation"
+    row[" operator_attestation "] = "not allowed"
+    row["operator\nattestation"] = "not allowed"
+    row["operator attestation"] = "not allowed"
+    row["operator|attestation"] = "not allowed"
+    row[confusable_field] = "not allowed"
+    row["operator_attestation"] = "reviewed elsewhere"
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report user prover submission surface row contains unknown "
+        "field name with surrounding whitespace"
+    ) in verified.stdout
+    assert (
+        "readiness report user prover submission surface row contains unknown "
+        "field name with control character"
+    ) in verified.stdout
+    assert (
+        "readiness report user prover submission surface row contains unknown "
+        "field name with whitespace"
+    ) in verified.stdout
+    assert (
+        "readiness report user prover submission surface row contains unknown "
+        "field name with Markdown-unsafe character"
+    ) in verified.stdout
+    assert (
+        "readiness report user prover submission surface row contains unknown "
+        "field name with non-ASCII character"
+    ) in verified.stdout
+    assert (
+        "readiness report user prover submission surface row contains unknown "
+        "field: operator_attestation"
+    ) in verified.stdout
+    assert confusable_field not in verified.stdout
 
 
 def test_release_bundle_verifier_rejects_submission_surface_field_type_drift(
@@ -14992,6 +18181,75 @@ def test_release_bundle_verifier_rejects_per_sdk_helper_symbol_drift(
     ) in verified.stdout
 
 
+def test_release_bundle_verifier_rejects_submission_surface_malformed_sdk_helper_map_keys(
+    tmp_path: Path,
+) -> None:
+    """Portal/mobile helper-map SDK keys must be classified before lookup."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    row = report["user_prover_submission_surfaces"][0]
+    confusable_sdk = "javas\u0441ript-sdk"
+    row["sdk_helper_symbols_by_sdk"][" js-sdk "] = ["forgedUiProver"]
+    row["sdk_helper_symbols_by_sdk"]["swift\nsdk"] = ["forgedUiProver"]
+    row["sdk_helper_symbols_by_sdk"]["kotlin sdk"] = ["forgedUiProver"]
+    row["sdk_helper_symbols_by_sdk"]["java|android"] = ["forgedUiProver"]
+    row["sdk_helper_symbols_by_sdk"][confusable_sdk] = ["forgedUiProver"]
+    row["sdk_helper_symbols_by_sdk"]["kotlin_sdk"] = ["forgedUiProver"]
+    row["sdk_helper_symbols_by_sdk"]["-dotnet"] = ["forgedUiProver"]
+    row["sdk_helper_symbols_by_sdk"]["unknown-sdk"] = ["forgedUiProver"]
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report user prover submission surface row "
+        "sdk_helper_symbols_by_sdk contains SDK key with surrounding whitespace"
+    ) in verified.stdout
+    assert (
+        "readiness report user prover submission surface row "
+        "sdk_helper_symbols_by_sdk contains SDK key with control character"
+    ) in verified.stdout
+    assert (
+        "readiness report user prover submission surface row "
+        "sdk_helper_symbols_by_sdk contains SDK key with whitespace"
+    ) in verified.stdout
+    assert (
+        "readiness report user prover submission surface row "
+        "sdk_helper_symbols_by_sdk contains SDK key with Markdown-unsafe character"
+    ) in verified.stdout
+    assert (
+        "readiness report user prover submission surface row "
+        "sdk_helper_symbols_by_sdk contains SDK key with non-ASCII character"
+    ) in verified.stdout
+    assert (
+        "readiness report user prover submission surface row "
+        "sdk_helper_symbols_by_sdk contains malformed SDK key"
+    ) in verified.stdout
+    assert (
+        "readiness report user prover submission surface row "
+        "sdk_helper_symbols_by_sdk contains unknown SDK: unknown-sdk"
+    ) in verified.stdout
+    assert confusable_sdk not in verified.stdout
+    assert (
+        "readiness report user_prover_submission_surfaces does not match "
+        "corridor phases"
+    ) in verified.stdout
+
+
 def test_release_bundle_verifier_sdk_phase_inventory_matches_report() -> None:
     """Verifier-owned SDK inventory must mirror release-readiness rows."""
 
@@ -15142,6 +18400,79 @@ def test_release_bundle_verifier_requires_submission_surface_sdk_core_phases(
         "readiness report user prover submission surface row "
         "required_phases missing required phase: core-admission"
     ) in verified.stdout
+    assert (
+        "readiness report user_prover_submission_surfaces does not match "
+        "corridor phases"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_submission_surface_malformed_required_phases(
+    tmp_path: Path,
+) -> None:
+    """Portal/mobile required phase values must be classified before lookup."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    row = report["user_prover_submission_surfaces"][0]
+    confusable_phase = "javas\u0441ript-sdk"
+    row["required_phases"].extend(
+        [
+            " js-sdk ",
+            "swift\nsdk",
+            "kotlin sdk",
+            "java|android",
+            confusable_phase,
+            "kotlin_sdk",
+            "-dotnet",
+            "portal-review",
+        ]
+    )
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report user prover submission surface row "
+        "required_phases contains phase with surrounding whitespace"
+    ) in verified.stdout
+    assert (
+        "readiness report user prover submission surface row "
+        "required_phases contains phase with control character"
+    ) in verified.stdout
+    assert (
+        "readiness report user prover submission surface row "
+        "required_phases contains phase with whitespace"
+    ) in verified.stdout
+    assert (
+        "readiness report user prover submission surface row "
+        "required_phases contains phase with Markdown-unsafe character"
+    ) in verified.stdout
+    assert (
+        "readiness report user prover submission surface row "
+        "required_phases contains phase with non-ASCII character"
+    ) in verified.stdout
+    assert (
+        "readiness report user prover submission surface row "
+        "required_phases contains malformed phase"
+    ) in verified.stdout
+    assert (
+        "readiness report user prover submission surface row "
+        "required_phases contains unknown phase: portal-review"
+    ) in verified.stdout
+    assert confusable_phase not in verified.stdout
     assert (
         "readiness report user_prover_submission_surfaces does not match "
         "corridor phases"
@@ -15718,6 +19049,46 @@ def test_release_bundle_verifier_rejects_forged_phase_log(
     ) in verified.stdout
 
 
+def test_release_bundle_verifier_rejects_output_before_phase_marker(
+    tmp_path: Path,
+) -> None:
+    """Published phase logs cannot hide output before the first marker."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    phase_log = output_dir / "corridor" / "contract-smoke.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "fail 1 before phase marker",
+                "==> SCCP production corridor: contract-smoke",
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["contract-smoke"]
+                ),
+                *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["contract-smoke"],
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "contract-smoke")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase contract-smoke evidence artifact contains "
+        "non-empty output before first phase marker"
+    ) in verified.stdout
+
+
 def test_release_bundle_verifier_rejects_phase_log_without_expected_command(
     tmp_path: Path,
 ) -> None:
@@ -15936,6 +19307,644 @@ def test_release_bundle_verifier_rejects_output_only_phase_command_fragment(
         "readiness report phase contract-smoke evidence artifact is missing "
         "expected phase-block command: --check "
         "contracts/evm/sccp/test/sccp_message_bridge_smoke.js"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_bare_phase_command_fragment(
+    tmp_path: Path,
+) -> None:
+    """Published phase evidence must not accept bare traced fragments."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    omitted_fragment = "pytests/scripts/sccp_release_bundle_test.py"
+    required_fragments = [
+        fragment
+        for fragment in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["evidence-scripts"]
+        if fragment != omitted_fragment
+    ]
+    phase_log = output_dir / "corridor" / "evidence-scripts.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: evidence-scripts",
+                *phase_command_lines(required_fragments),
+                f"+ {omitted_fragment}",
+                *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["evidence-scripts"],
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "evidence-scripts")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase evidence-scripts evidence artifact is missing "
+        f"expected phase-block command: {omitted_fragment}"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_short_circuited_phase_command_fragment(
+    tmp_path: Path,
+) -> None:
+    """Published phase evidence must not hide commands behind failing prefixes."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    required_fragment = report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["rust-sccp"][0]
+    phase_log = output_dir / "corridor" / "rust-sccp.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: rust-sccp",
+                f"+ false && {required_fragment}",
+                *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["rust-sccp"],
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "rust-sccp")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase rust-sccp evidence artifact is missing "
+        f"expected phase-block command: {required_fragment}"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_comment_only_phase_command_fragment(
+    tmp_path: Path,
+) -> None:
+    """Published phase evidence must not hide commands behind shell comments."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    omitted_fragment = "pytests/scripts/sccp_release_bundle_test.py"
+    required_fragments = [
+        fragment
+        for fragment in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["evidence-scripts"]
+        if fragment != omitted_fragment
+    ]
+    phase_log = output_dir / "corridor" / "evidence-scripts.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: evidence-scripts",
+                *phase_command_lines(required_fragments),
+                "+ python3 -m pytest -q "
+                "pytests/scripts/check_sccp_production_corridor_test.py "
+                f"# {omitted_fragment}",
+                *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["evidence-scripts"],
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "evidence-scripts")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase evidence-scripts evidence artifact is missing "
+        f"expected phase-block command: {omitted_fragment}"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_inert_option_phase_command_fragment(
+    tmp_path: Path,
+) -> None:
+    """Published evidence must bind required tests to selecting options."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    omitted_fragment = "org.hyperledger.iroha.sdk.sccp.TonSccpProverTest"
+    required_fragments = [
+        fragment
+        for fragment in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["kotlin-sdk"]
+        if fragment != omitted_fragment
+    ]
+    phase_log = output_dir / "corridor" / "kotlin-sdk.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: kotlin-sdk",
+                *phase_command_lines(required_fragments),
+                "+ ./gradlew :core-jvm:test --console=plain "
+                "--tests org.hyperledger.iroha.sdk.sccp.OtherTest "
+                f"--info {omitted_fragment}",
+                *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["kotlin-sdk"],
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "kotlin-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase kotlin-sdk evidence artifact is missing "
+        f"expected phase-block command: {omitted_fragment}"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_prefix_android_harness_phase_command_fragment(
+    tmp_path: Path,
+) -> None:
+    """Published Android harness evidence must match exact class names."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    omitted_fragment = "org.hyperledger.iroha.android.sccp.SourceSccpProofsTests"
+    required_fragments = [
+        fragment
+        for fragment in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["java-android"]
+        if fragment != omitted_fragment
+    ]
+    phase_log = output_dir / "corridor" / "java-android.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: java-android",
+                *phase_command_lines(required_fragments),
+                "+ env ANDROID_HARNESS_MAINS="
+                f"{omitted_fragment}Extra ./gradlew :core:test --console=plain "
+                "--tests org.hyperledger.iroha.android.GradleHarnessTests",
+                *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["java-android"],
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "java-android")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase java-android evidence artifact is missing "
+        f"expected phase-block command: {omitted_fragment}"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_narrow_kotlin_phase_command_fragment(
+    tmp_path: Path,
+) -> None:
+    """Published Kotlin evidence must prove the broad package selector ran."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    omitted_fragment = (
+        "./gradlew :core-jvm:test --console=plain --tests org.hyperledger.iroha.sdk.sccp."
+    )
+    required_fragments = [
+        fragment
+        for fragment in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["kotlin-sdk"]
+        if fragment != omitted_fragment
+    ]
+    phase_log = output_dir / "corridor" / "kotlin-sdk.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: kotlin-sdk",
+                *phase_command_lines(required_fragments),
+                *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["kotlin-sdk"],
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "kotlin-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase kotlin-sdk evidence artifact is missing "
+        f"expected phase-block command: {omitted_fragment}"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_gradle_dry_run_phase_command_fragment(
+    tmp_path: Path,
+) -> None:
+    """Published Kotlin evidence must reject Gradle dry-run commands."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    required_fragment = (
+        "./gradlew :core-jvm:test --console=plain --tests org.hyperledger.iroha.sdk.sccp."
+    )
+    ton_fragment = "org.hyperledger.iroha.sdk.sccp.TonSccpProverTest"
+    phase_log = output_dir / "corridor" / "kotlin-sdk.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: kotlin-sdk",
+                "+ java -version",
+                "+ ./gradlew :core-jvm:test --console=plain "
+                "--tests org.hyperledger.iroha.sdk.sccp.* "
+                f"--tests {ton_fragment} --dry-run",
+                *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["kotlin-sdk"],
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "kotlin-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase kotlin-sdk evidence artifact is missing "
+        f"expected phase-block command: {required_fragment}"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_pytest_suffix_phase_command_fragment(
+    tmp_path: Path,
+) -> None:
+    """Published pytest evidence must not carry mutating suffix options."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    required_fragment = report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["python-sdk"][0]
+    phase_log = output_dir / "corridor" / "python-sdk.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: python-sdk",
+                "+ python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py "
+                "--ignore python/iroha_torii_client/tests/sccp_test.py",
+                *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["python-sdk"],
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "python-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase python-sdk evidence artifact is missing "
+        f"expected phase-block command: {required_fragment}"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_pytest_extra_positional_phase_command_fragment(
+    tmp_path: Path,
+) -> None:
+    """Published pytest evidence must run the exact expected positional files."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    required_fragment = report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["python-sdk"][0]
+    phase_log = output_dir / "corridor" / "python-sdk.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: python-sdk",
+                "+ python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py "
+                "pytests/scripts/sccp_release_bundle_test.py",
+                *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["python-sdk"],
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "python-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase python-sdk evidence artifact is missing "
+        f"expected phase-block command: {required_fragment}"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_node_extra_positional_phase_command_fragment(
+    tmp_path: Path,
+) -> None:
+    """Published Node evidence must run exactly the expected SCCP test files."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    required_fragment = report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["js-sdk"][0]
+    phase_log = output_dir / "corridor" / "js-sdk.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: js-sdk",
+                "+ node --test javascript/iroha_js/test/sccpSolanaProver.test.js "
+                "javascript/iroha_js/test/sccpEthereumMainnet.test.js "
+                "javascript/iroha_js/test/sccpBscMainnet.test.js "
+                "javascript/iroha_js/test/package_dist.test.js "
+                "javascript/iroha_js/test/sccpPackageExports.test.js "
+                "javascript/iroha_js/test/unscopedExtra.test.js",
+                *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["js-sdk"],
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "js-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase js-sdk evidence artifact is missing "
+        f"expected phase-block command: {required_fragment}"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_dotnet_suffix_phase_command_fragment(
+    tmp_path: Path,
+) -> None:
+    """Published .NET evidence must not carry suffix options or control tokens."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    required_fragment = report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"][0]
+    filter_fragment = report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"][1]
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                "+ dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj "
+                f"--filter {filter_fragment} --nologo --logger trx",
+                *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["dotnet-sdk"],
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact is missing "
+        f"expected phase-block command: {required_fragment}"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_inert_swift_phase_command_fragment(
+    tmp_path: Path,
+) -> None:
+    """Published Swift evidence must run the exact expected filter command."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    omitted_fragment = "swift test --filter SccpSolanaProverTests --disable-swift-testing"
+    required_fragments = [
+        fragment
+        for fragment in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["swift-sdk"]
+        if fragment != omitted_fragment
+    ]
+    phase_log = output_dir / "corridor" / "swift-sdk.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: swift-sdk",
+                *phase_command_lines(required_fragments),
+                "+ swift test --filter OtherTests --skip swift test --filter "
+                "SccpSolanaProverTests --disable-swift-testing",
+                *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["swift-sdk"],
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "swift-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase swift-sdk evidence artifact is missing "
+        f"expected phase-block command: {omitted_fragment}"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_suffix_argument_phase_command_fragment(
+    tmp_path: Path,
+) -> None:
+    """Published exact-command evidence must reject mutating suffix args."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    required_fragment = report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["rust-sccp"][0]
+    phase_log = output_dir / "corridor" / "rust-sccp.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: rust-sccp",
+                f"+ {required_fragment} --skip sccp",
+                *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["rust-sccp"],
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "rust-sccp")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase rust-sccp evidence artifact is missing "
+        f"expected phase-block command: {required_fragment}"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_inert_dotnet_project_phase_command_fragment(
+    tmp_path: Path,
+) -> None:
+    """Published .NET evidence must run the expected SDK test project."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    required_fragment = report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"][0]
+    filter_fragment = report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"][1]
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                "+ dotnet test tests/Other/Other.csproj "
+                f"--filter {filter_fragment} --logger {required_fragment}",
+                *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["dotnet-sdk"],
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact is missing "
+        f"expected phase-block command: {required_fragment}"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_inert_contract_smoke_test_fragment(
+    tmp_path: Path,
+) -> None:
+    """Published contract-smoke evidence must bind Node tests positionally."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    omitted_fragment = "scripts/sccp_bsc_taira_xor_deploy.test.mjs"
+    required_fragments = [
+        fragment
+        for fragment in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["contract-smoke"]
+        if fragment != omitted_fragment
+    ]
+    phase_log = output_dir / "corridor" / "contract-smoke.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: contract-smoke",
+                *phase_command_lines(required_fragments),
+                "+ node --test scripts/sccp_taira_xor_contract.test.mjs "
+                f"--test-reporter {omitted_fragment}",
+                *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["contract-smoke"],
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "contract-smoke")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase contract-smoke evidence artifact is missing "
+        f"expected phase-block command: {omitted_fragment}"
     ) in verified.stdout
 
 
@@ -16829,6 +20838,18 @@ def test_release_bundle_verifier_guards_sccp_proof_request_bundle_gate_inventory
 
     verifier = load_verify_helpers()
     assert verifier._sccp_proof_request_bundle_gate_inventory_errors() == []
+    inventory_paths = {
+        str(path) for path, _ in verifier.SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS
+    }
+    assert "IrohaSwift/Sources/IrohaSwift/SccpMessageProofBundle.swift" in inventory_paths
+    assert (
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/"
+        "SccpMessageProofBundles.kt"
+    ) in inventory_paths
+    assert (
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/"
+        "SccpMessageProofBundles.java"
+    ) in inventory_paths
 
     sparse_gate = tmp_path / "sccp_test.py"
     sparse_gate.write_text(
@@ -16977,7 +20998,70 @@ def test_release_bundle_verifier_guards_release_corridor_phase_transcript_invent
                 (
                     "def _phase_transcript_errors(",
                     "def _phase_transcript_block(",
+                    "def _known_corridor_phase_marker_lines(",
+                    "def _unknown_corridor_phase_marker_lines(",
+                    "def _transcript_has_multiple_known_phase_markers(",
+                    "def _transcript_has_nonempty_line_before_first_phase_marker(",
+                    "if lines[index] in known_markers:",
+                    "def _phase_marker_count(",
+                    "marker_positions != sorted(marker_positions)",
+                    "first_phase_command_position = min(phase_command_positions)",
+                    "position > first_phase_command_position",
+                    "for fragment in PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[phase]:",
+                    "for fragment in PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS.get(phase, ()):",
+                    "line == CORRIDOR_COMPLETION_SENTINEL",
+                    "def _phase_effective_command_tokens(",
+                    "PYTEST_OPTIONS_WITH_VALUES",
+                    "NODE_TEST_OPTIONS_WITH_VALUES",
+                    "def _command_option_values(",
+                    "def _command_has_option_value(",
+                    "def _command_positional_tokens(",
+                    "def _pytest_command_positionals(",
+                    "def _pytest_expected_positionals_for_phase(",
+                    "tuple(pytest_positionals) != expected_positionals",
+                    "def _node_expected_test_files_for_phase(",
+                    "def _node_test_command_files(",
+                    "def _node_check_command_matches(",
+                    "def _dotnet_sdk_command_matches(",
+                    "def _phase_prefix_env_assignments(",
+                    "def _android_harness_mains_classes(",
+                    "def _gradle_test_selector_matches(",
+                    "def _gradle_test_command_selectors(",
+                    "actual_harness_classes = _android_harness_mains_classes(command)",
+                    "tuple(tokens) == tuple(shlex.split(fragment))",
+                    "_command_token_basename(tokens[0]) == fragment_tokens[0]",
+                    "shlex.split(command, comments=True)",
+                    'tokens.index("&&") == 2',
+                    "def _effective_command_equals(",
+                    "def _phase_block_command_fragment_line_indices(",
+                    "def _phase_block_output_fragment_line_indices(",
+                    "SUCCESS_OUTPUT_NEGATION_PATTERN",
+                    "SUCCESS_OUTPUT_DIAGNOSTIC_PREFIX_PATTERN",
+                    "SHELL_XTRACE_COMMAND_PATTERN",
+                    "def _phase_output_line_has_success_fragment(",
+                    "def _line_is_shell_xtrace_command(",
+                    "SHELL_XTRACE_COMMAND_PATTERN.match(normalized_line)",
+                    "def _phase_block_has_exact_output_line(",
+                    "def _phase_block_has_completion_after_required_evidence(",
+                    "first_command_position = min(command_positions_before_completion)",
+                    "first_command_position < position < completion_position",
+                    "def _phase_block_has_traced_command_after_completion(",
+                    "def _transcript_has_traced_command_after_completion(",
+                    "def _phase_block_has_nonempty_line_after_completion(",
+                    "def _transcript_has_nonempty_line_after_completion(",
+                    "ANSI_ESCAPE_PATTERN",
+                    "ASCII_CONTROL_CHARACTER_PATTERN",
+                    "def _phase_output_failure_scan_line(",
+                    'unicodedata.category(character) != "Cf"',
+                    "evidence artifact contains unknown corridor phase marker",
+                    "contains non-empty output before first phase marker",
+                    "evidence artifact has duplicate phase marker",
+                    "evidence artifact contains incomplete multi-phase corridor transcript",
+                    "completion sentinel precedes required phase evidence",
+                    "contains traced command after completion sentinel",
+                    "contains non-empty output after completion sentinel",
                     "evidence artifact is missing expected phase-block success marker:",
+                    "evidence artifact contains forbidden phase-block",
                 ),
             ),
         )
@@ -16991,9 +21075,338 @@ def test_release_bundle_verifier_guards_release_corridor_phase_transcript_invent
     )
     assert any(
         "SCCP release corridor phase-transcript source inventory" in error
+        and str(sparse_verifier) in error
+        and "missing marker: def _phase_marker_count(" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and "missing marker: first_phase_command_position = min(phase_command_positions)"
+        in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and "missing marker: position > first_phase_command_position" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and "missing marker: def _known_corridor_phase_marker_lines(" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and "missing marker: def _unknown_corridor_phase_marker_lines(" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and "missing marker: def _transcript_has_multiple_known_phase_markers("
+        in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and "missing marker: def _transcript_has_nonempty_line_before_first_phase_marker("
+        in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and "missing marker: def _phase_output_failure_scan_line(" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and 'missing marker: unicodedata.category(character) != "Cf"' in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and "missing marker: if lines[index] in known_markers:" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and "missing marker: def _phase_effective_command_tokens(" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and "missing marker: def _command_option_values(" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and "missing marker: def _pytest_command_positionals(" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and "missing marker: def _pytest_expected_positionals_for_phase(" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and "missing marker: tuple(pytest_positionals) != expected_positionals" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and "missing marker: def _node_expected_test_files_for_phase(" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and "missing marker: def _node_test_command_files(" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and "missing marker: def _node_check_command_matches(" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and "missing marker: def _dotnet_sdk_command_matches(" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and "missing marker: def _phase_prefix_env_assignments(" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and "missing marker: def _android_harness_mains_classes(" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and "missing marker: def _gradle_test_selector_matches(" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and "missing marker: def _gradle_test_command_selectors(" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and (
+            "missing marker: actual_harness_classes = "
+            "_android_harness_mains_classes(command)"
+        )
+        in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and "missing marker: tuple(tokens) == tuple(shlex.split(fragment))" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and "missing marker: _command_token_basename(tokens[0]) == fragment_tokens[0]"
+        in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and "missing marker: shlex.split(command, comments=True)" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and 'missing marker: tokens.index("&&") == 2' in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and "missing marker: def _effective_command_equals(" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and "missing marker: marker_positions != sorted(marker_positions)" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and (
+            "missing marker: evidence artifact contains unknown corridor "
+            "phase marker"
+            in error
+        )
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and "missing marker: contains non-empty output before first phase marker"
+        in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and (
+            "missing marker: evidence artifact contains incomplete multi-phase "
+            "corridor transcript"
+            in error
+        )
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and "missing marker: for fragment in PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[phase]:"
+        in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and (
+            "missing marker: for fragment in "
+            "PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS.get(phase, ()):"
+        )
+        in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and "missing marker: line == CORRIDOR_COMPLETION_SENTINEL" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and "missing marker: def _phase_block_has_exact_output_line(" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and "missing marker: def _phase_block_command_fragment_line_indices("
+        in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and "missing marker: def _phase_block_output_fragment_line_indices("
+        in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and "missing marker: SUCCESS_OUTPUT_NEGATION_PATTERN" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and "missing marker: SUCCESS_OUTPUT_DIAGNOSTIC_PREFIX_PATTERN" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and "missing marker: SHELL_XTRACE_COMMAND_PATTERN" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and "missing marker: def _phase_output_line_has_success_fragment(" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and "missing marker: def _line_is_shell_xtrace_command(" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and "missing marker: SHELL_XTRACE_COMMAND_PATTERN.match(normalized_line)"
+        in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and "missing marker: def _phase_block_has_completion_after_required_evidence("
+        in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and (
+            "missing marker: first_command_position = "
+            "min(command_positions_before_completion)"
+        )
+        in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and "missing marker: first_command_position < position < completion_position"
+        in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and "missing marker: def _phase_block_has_traced_command_after_completion("
+        in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and "missing marker: def _transcript_has_traced_command_after_completion("
+        in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and "missing marker: def _phase_block_has_nonempty_line_after_completion("
+        in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and "missing marker: def _transcript_has_nonempty_line_after_completion("
+        in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and "missing marker: evidence artifact has duplicate phase marker" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and (
+            "missing marker: completion sentinel precedes required phase evidence"
+            in error
+        )
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and "missing marker: contains traced command after completion sentinel"
+        in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and "missing marker: contains non-empty output after completion sentinel"
+        in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
         and (
             "missing marker: evidence artifact is missing expected "
             "phase-block success marker:"
+            in error
+        )
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and (
+            "missing marker: evidence artifact contains forbidden phase-block"
             in error
         )
         for error in errors
@@ -17552,7 +21965,7 @@ def test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory(
                 "public_signal_words must contain 9 words",
                 "sdk_results must be a non-empty object",
                 "sdk_results.{sdk}",
-                "contains unknown field",
+                "contains {field_kind} field name with surrounding whitespace",
                 "missing field",
                 "must match {key}",
                 "must match public_signal_words",
@@ -17926,7 +22339,8 @@ def test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory(
     )
     assert any(
         "native SCCP no-WASM readiness SDK test inventory" in error
-        and "missing marker: contains unknown field" in error
+        and "missing marker: contains {field_kind} field name with surrounding whitespace"
+        in error
         for error in verified["errors"]
     )
     assert any(
@@ -20166,6 +24580,53 @@ def test_release_bundle_verifier_rejects_phase_log_without_success_marker(
     ) in verified.stdout
 
 
+def test_release_bundle_verifier_rejects_contract_smoke_log_without_node_success(
+    tmp_path: Path,
+) -> None:
+    """Published contract-smoke evidence must prove Node deploy tests passed."""
+
+    report = load_report_module()
+    for index, omitted_marker in enumerate(report.CONTRACT_SMOKE_NODE_SUCCESS_FRAGMENTS):
+        case_dir = tmp_path / f"case-{index}"
+        case_dir.mkdir()
+        output_dir = build_ready_bundle(case_dir)
+        success_markers = [
+            marker
+            for marker in report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["contract-smoke"]
+            if marker != omitted_marker
+        ]
+        phase_log = output_dir / "corridor" / "contract-smoke.log"
+        phase_log.write_text(
+            "\n".join(
+                (
+                    "==> SCCP production corridor: contract-smoke",
+                    *phase_command_lines(
+                        report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["contract-smoke"]
+                    ),
+                    *success_markers,
+                    "SCCP production corridor completed.",
+                    "",
+                )
+            ),
+            encoding="utf-8",
+        )
+        rewrite_report_phase_artifact(output_dir, "contract-smoke")
+
+        verified = subprocess.run(
+            ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        assert verified.returncode == 1
+        assert (
+            "readiness report phase contract-smoke evidence artifact is missing "
+            f"expected phase-block success marker: {omitted_marker}"
+        ) in verified.stdout
+
+
 def test_release_bundle_verifier_requires_mobile_jdk21_transcripts(
     tmp_path: Path,
 ) -> None:
@@ -20256,6 +24717,190 @@ def test_release_bundle_verifier_rejects_prefix_alias_phase_marker(
     ) in verified.stdout
 
 
+def test_release_bundle_verifier_rejects_duplicate_phase_marker(
+    tmp_path: Path,
+) -> None:
+    """Published phase evidence cannot hide a duplicate claimed phase block."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    phase_log = output_dir / "corridor" / "contract-smoke.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: contract-smoke",
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["contract-smoke"]
+                ),
+                *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["contract-smoke"],
+                "SCCP production corridor completed.",
+                "==> SCCP production corridor: contract-smoke",
+                "ℹ fail 1",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "contract-smoke")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase contract-smoke evidence artifact has duplicate "
+        "phase marker"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_prefix_marker_hidden_failure(
+    tmp_path: Path,
+) -> None:
+    """A prefix-like marker line cannot hide later published failure output."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    failure_marker = report.PHASE_TRANSCRIPT_FORBIDDEN_OUTPUT_PATTERNS[
+        "contract-smoke"
+    ][0].pattern
+    phase_log = output_dir / "corridor" / "contract-smoke.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: contract-smoke",
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["contract-smoke"]
+                ),
+                *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["contract-smoke"],
+                "SCCP production corridor completed.",
+                "==> SCCP production corridor: contract-smoke-forged",
+                "ℹ fail 1",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "contract-smoke")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase contract-smoke evidence artifact contains "
+        f"forbidden phase-block failure marker: {failure_marker}"
+    ) in verified.stdout
+    assert (
+        "readiness report phase contract-smoke evidence artifact contains "
+        "unknown corridor phase marker"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_partial_multi_phase_hidden_failure(
+    tmp_path: Path,
+) -> None:
+    """A partial multi-phase transcript cannot satisfy one published phase."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    phase_log = output_dir / "corridor" / "contract-smoke.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: contract-smoke",
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["contract-smoke"]
+                ),
+                *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["contract-smoke"],
+                "SCCP production corridor completed.",
+                "==> SCCP production corridor: core-admission",
+                "test result: FAILED. 1 failed",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "contract-smoke")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase contract-smoke evidence artifact contains "
+        "incomplete multi-phase corridor transcript"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_out_of_order_full_corridor_log(
+    tmp_path: Path,
+) -> None:
+    """Published full-corridor evidence must preserve canonical phase order."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    shuffled_phases = (PHASES[1], PHASES[0], *PHASES[2:])
+    phase_log = output_dir / "corridor" / "contract-smoke.log"
+    phase_log.write_text(complete_corridor_log(shuffled_phases), encoding="utf-8")
+    rewrite_report_phase_artifact(output_dir, "contract-smoke")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase contract-smoke evidence artifact contains "
+        "incomplete multi-phase corridor transcript"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_full_corridor_success_before_command(
+    tmp_path: Path,
+) -> None:
+    """Published full-corridor logs must order phase success after commands."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    phase_log = output_dir / "corridor" / "contract-smoke.log"
+    phase_log.write_text(
+        complete_corridor_log_with_success_before_command("contract-smoke"),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "contract-smoke")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase contract-smoke evidence artifact contains "
+        "incomplete multi-phase corridor transcript"
+    ) in verified.stdout
+
+
 def test_release_bundle_verifier_rejects_completion_outside_claimed_phase_block(
     tmp_path: Path,
 ) -> None:
@@ -20335,6 +24980,292 @@ def test_release_bundle_verifier_rejects_command_line_only_success_marker(
     ) in verified.stdout
 
 
+def test_release_bundle_verifier_rejects_xtrace_success_marker(
+    tmp_path: Path,
+) -> None:
+    """Published nested shell xtrace must not satisfy success evidence."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    success_marker = report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["contract-smoke"][-1]
+    phase_log = output_dir / "corridor" / "contract-smoke.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: contract-smoke",
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["contract-smoke"]
+                ),
+                f"++ echo {success_marker}",
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "contract-smoke")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase contract-smoke evidence artifact is missing "
+        f"expected phase-block success marker: {success_marker}"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_obfuscated_xtrace_success_marker(
+    tmp_path: Path,
+) -> None:
+    """Published control-obfuscated xtrace must not satisfy success evidence."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    success_marker = report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["contract-smoke"][-1]
+    phase_log = output_dir / "corridor" / "contract-smoke.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: contract-smoke",
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["contract-smoke"]
+                ),
+                f"\x1b[32m+\u200c+ echo {success_marker}\x1b[0m",
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "contract-smoke")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase contract-smoke evidence artifact is missing "
+        f"expected phase-block success marker: {success_marker}"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_negated_success_marker(
+    tmp_path: Path,
+) -> None:
+    """Published evidence must not satisfy success with negated output."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    success_marker = report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["contract-smoke"][-1]
+    phase_log = output_dir / "corridor" / "contract-smoke.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: contract-smoke",
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["contract-smoke"]
+                ),
+                f"not {success_marker}",
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "contract-smoke")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase contract-smoke evidence artifact is missing "
+        f"expected phase-block success marker: {success_marker}"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_diagnostic_success_marker(
+    tmp_path: Path,
+) -> None:
+    """Published diagnostic prose must not satisfy success evidence."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    success_marker = report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["contract-smoke"][-1]
+    phase_log = output_dir / "corridor" / "contract-smoke.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: contract-smoke",
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["contract-smoke"]
+                ),
+                f"diagnostic output contains {success_marker}",
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "contract-smoke")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase contract-smoke evidence artifact is missing "
+        f"expected phase-block success marker: {success_marker}"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_phase_failure_output_marker(
+    tmp_path: Path,
+) -> None:
+    """Published phase evidence must reject failure counts in output."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    failure_marker = report.PHASE_TRANSCRIPT_FORBIDDEN_OUTPUT_PATTERNS[
+        "evidence-scripts"
+    ][0].pattern
+    phase_log = output_dir / "corridor" / "evidence-scripts.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: evidence-scripts",
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["evidence-scripts"]
+                ),
+                "1 failed, 9 passed in 0.42s",
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "evidence-scripts")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase evidence-scripts evidence artifact contains "
+        f"forbidden phase-block failure marker: {failure_marker}"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_ansi_obfuscated_failure_output(
+    tmp_path: Path,
+) -> None:
+    """Published phase evidence must reject terminal-control failure counts."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    failure_marker = report.PHASE_TRANSCRIPT_FORBIDDEN_OUTPUT_PATTERNS[
+        "evidence-scripts"
+    ][0].pattern
+    phase_log = output_dir / "corridor" / "evidence-scripts.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: evidence-scripts",
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["evidence-scripts"]
+                ),
+                "1 \x1b[31mfa\x08iled\x1b[0m, 9 passed in 0.42s",
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "evidence-scripts")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase evidence-scripts evidence artifact contains "
+        f"forbidden phase-block failure marker: {failure_marker}"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_unicode_format_obfuscated_failure_output(
+    tmp_path: Path,
+) -> None:
+    """Published evidence must reject zero-width/bidi failure markers."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    failure_marker = report.PHASE_TRANSCRIPT_FORBIDDEN_OUTPUT_PATTERNS[
+        "evidence-scripts"
+    ][0].pattern
+    phase_log = output_dir / "corridor" / "evidence-scripts.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: evidence-scripts",
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["evidence-scripts"]
+                ),
+                "1 fa\u200c\u2066iled, 9 passed in 0.42s",
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "evidence-scripts")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase evidence-scripts evidence artifact contains "
+        f"forbidden phase-block failure marker: {failure_marker}"
+    ) in verified.stdout
+
+
 def test_release_bundle_verifier_rejects_command_line_only_completion_marker(
     tmp_path: Path,
 ) -> None:
@@ -20374,6 +25305,203 @@ def test_release_bundle_verifier_rejects_command_line_only_completion_marker(
     ) in verified.stdout
 
 
+def test_release_bundle_verifier_rejects_nonexact_completion_marker(
+    tmp_path: Path,
+) -> None:
+    """Published phase completion must be the exact output line."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    phase_log = output_dir / "corridor" / "contract-smoke.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: contract-smoke",
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["contract-smoke"]
+                ),
+                *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["contract-smoke"],
+                "not actually SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "contract-smoke")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase contract-smoke evidence artifact is missing "
+        "the phase-block completion sentinel"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_completion_before_phase_evidence(
+    tmp_path: Path,
+) -> None:
+    """Published completion must appear after the required phase evidence."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    phase_log = output_dir / "corridor" / "contract-smoke.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: contract-smoke",
+                "SCCP production corridor completed.",
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["contract-smoke"]
+                ),
+                *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["contract-smoke"],
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "contract-smoke")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase contract-smoke evidence artifact completion "
+        "sentinel precedes required phase evidence"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_success_marker_before_phase_command(
+    tmp_path: Path,
+) -> None:
+    """Published success markers must appear after the command they certify."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    phase_log = output_dir / "corridor" / "contract-smoke.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: contract-smoke",
+                *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["contract-smoke"],
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["contract-smoke"]
+                ),
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "contract-smoke")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase contract-smoke evidence artifact completion "
+        "sentinel precedes required phase evidence"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_command_after_completion(
+    tmp_path: Path,
+) -> None:
+    """Published phase evidence cannot contain traced commands after completion."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    phase_log = output_dir / "corridor" / "contract-smoke.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: contract-smoke",
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["contract-smoke"]
+                ),
+                *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["contract-smoke"],
+                "SCCP production corridor completed.",
+                "+ bash scripts/sccp_evm_contract_smoke.sh",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "contract-smoke")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase contract-smoke evidence artifact contains traced "
+        "command after completion sentinel"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_output_after_completion(
+    tmp_path: Path,
+) -> None:
+    """Published completion must be the final non-empty phase output."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    phase_log = output_dir / "corridor" / "contract-smoke.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: contract-smoke",
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["contract-smoke"]
+                ),
+                *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["contract-smoke"],
+                "SCCP production corridor completed.",
+                "still writing output after completion",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "contract-smoke")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase contract-smoke evidence artifact contains "
+        "non-empty output after completion sentinel"
+    ) in verified.stdout
+
+
 def test_release_bundle_verifier_rejects_command_line_only_full_completion_marker(
     tmp_path: Path,
 ) -> None:
@@ -20392,6 +25520,44 @@ def test_release_bundle_verifier_rejects_command_line_only_full_completion_marke
             )
             lines.extend(report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["contract-smoke"])
     lines.extend(("+ echo SCCP production corridor completed.", ""))
+
+    phase_log = output_dir / "corridor" / "contract-smoke.log"
+    phase_log.write_text("\n".join(lines), encoding="utf-8")
+    rewrite_report_phase_artifact(output_dir, "contract-smoke")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase contract-smoke evidence artifact is missing "
+        "the phase-block completion sentinel"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_marker_only_full_corridor_completion(
+    tmp_path: Path,
+) -> None:
+    """Full-corridor fallback must prove every published phase block."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    lines: list[str] = []
+    for phase in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS:
+        lines.append(f"==> SCCP production corridor: {phase}")
+        if phase == "contract-smoke":
+            lines.extend(
+                phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["contract-smoke"]
+                )
+            )
+            lines.extend(report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["contract-smoke"])
+    lines.extend(("SCCP production corridor completed.", ""))
 
     phase_log = output_dir / "corridor" / "contract-smoke.log"
     phase_log.write_text("\n".join(lines), encoding="utf-8")

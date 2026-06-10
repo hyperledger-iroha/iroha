@@ -7,11 +7,14 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import re
 import shlex
 import subprocess
 import sys
+import unicodedata
 from pathlib import Path, PurePosixPath
 from typing import Any
+from urllib.parse import unquote
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -1609,11 +1612,22 @@ PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS: dict[str, tuple[str, ...]] = {
         "FullyQualifiedName~SccpEthereumMainnetTests\\|FullyQualifiedName~SccpBscMainnetTests",
     ),
     "contract-smoke": (
+        "scripts/sccp_bsc_taira_xor_deploy.test.mjs",
+        "scripts/sccp_tron_taira_xor_deploy.test.mjs",
+        "scripts/sccp_taira_xor_contract.test.mjs",
         "--check contracts/evm/sccp/test/sccp_message_bridge_smoke.js",
         "bash scripts/sccp_evm_contract_smoke.sh",
     ),
-    "core-admission": ("cargo test -p iroha_core --test bridge_proofs -- --nocapture",),
+    "core-admission": (
+        "cargo test -p iroha_core --test iroha_core_group_01 bridge_proofs:: -- --nocapture",
+    ),
 }
+CONTRACT_SMOKE_NODE_SUCCESS_FRAGMENTS = (
+    "fail 0",
+    "BSC route-config requires explicit post-deploy evidence for production-ready manifests",
+    "route manifest draft binds deployment evidence, verifier material, and TAIRA burn-record contract",
+    "TAIRA XOR SCCP burn-record contract compiles as IVM ZK proved artifact",
+)
 PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS: dict[str, tuple[str, ...]] = {
     "rust-sccp": ("test result: ok",),
     "evidence-scripts": (" passed in ",),
@@ -1630,9 +1644,85 @@ PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS: dict[str, tuple[str, ...]] = {
     "kotlin-sdk": ("version \"21", "BUILD SUCCESSFUL"),
     "java-android": ("version \"21", "BUILD SUCCESSFUL"),
     "dotnet-sdk": ("Passed!",),
-    "contract-smoke": ("sccp_message_bridge_smoke: ok",),
+    "contract-smoke": (
+        *CONTRACT_SMOKE_NODE_SUCCESS_FRAGMENTS,
+        "sccp_message_bridge_smoke: ok",
+    ),
     "core-admission": ("test result: ok",),
 }
+PHASE_TRANSCRIPT_FORBIDDEN_OUTPUT_PATTERNS: dict[str, tuple[re.Pattern[str], ...]] = {
+    "rust-sccp": (
+        re.compile(r"\btest result:\s+FAILED\b", re.IGNORECASE),
+        re.compile(r"\b[1-9]\d*\s+failed\b", re.IGNORECASE),
+    ),
+    "evidence-scripts": (
+        re.compile(r"\b[1-9]\d*\s+failed\b", re.IGNORECASE),
+        re.compile(r"\b[1-9]\d*\s+errors?\b", re.IGNORECASE),
+    ),
+    "js-sdk": (re.compile(r"\bfail\s+[1-9]\d*\b", re.IGNORECASE),),
+    "python-sdk": (
+        re.compile(r"\b[1-9]\d*\s+failed\b", re.IGNORECASE),
+        re.compile(r"\b[1-9]\d*\s+errors?\b", re.IGNORECASE),
+    ),
+    "swift-sdk": (re.compile(r"\b[1-9]\d*\s+failures?\b", re.IGNORECASE),),
+    "kotlin-sdk": (re.compile(r"\bBUILD FAILED\b", re.IGNORECASE),),
+    "java-android": (re.compile(r"\bBUILD FAILED\b", re.IGNORECASE),),
+    "dotnet-sdk": (
+        re.compile(r"\bFailed!\b", re.IGNORECASE),
+        re.compile(r"\bFailed:\s*[1-9]\d*\b", re.IGNORECASE),
+    ),
+    "contract-smoke": (re.compile(r"\bfail\s+[1-9]\d*\b", re.IGNORECASE),),
+    "core-admission": (
+        re.compile(r"\btest result:\s+FAILED\b", re.IGNORECASE),
+        re.compile(r"\b[1-9]\d*\s+failed\b", re.IGNORECASE),
+    ),
+}
+PYTEST_OPTIONS_WITH_VALUES = frozenset(
+    (
+        "-k",
+        "-m",
+        "-o",
+        "--basetemp",
+        "--confcutdir",
+        "--deselect",
+        "--ignore",
+        "--ignore-glob",
+        "--junitxml",
+        "--log-file",
+        "--rootdir",
+    )
+)
+NODE_TEST_OPTIONS_WITH_VALUES = frozenset(
+    (
+        "--conditions",
+        "--experimental-loader",
+        "--import",
+        "--loader",
+        "--require",
+        "--test-name-pattern",
+        "--test-reporter",
+        "--test-reporter-destination",
+        "--test-shard",
+    )
+)
+ANSI_ESCAPE_PATTERN = re.compile(
+    r"\x1b(?:"
+    r"\[[0-?]*[ -/]*[@-~]"
+    r"|\][^\x07]*(?:\x07|\x1b\\)"
+    r"|[PX^_][^\x1b]*(?:\x1b\\)"
+    r"|[@-Z\\-_]"
+    r")"
+)
+ASCII_CONTROL_CHARACTER_PATTERN = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+SUCCESS_OUTPUT_NEGATION_PATTERN = re.compile(
+    r"\b(?:not|missing|without|no|never|failed|expected|omitted)\b",
+    re.IGNORECASE,
+)
+SUCCESS_OUTPUT_DIAGNOSTIC_PREFIX_PATTERN = re.compile(
+    r"\b(?:contains?|diagnostic|found|line|marker|output|reported|saw|seen|success|text)\b",
+    re.IGNORECASE,
+)
+SHELL_XTRACE_COMMAND_PATTERN = re.compile(r"^\s*\++\s+")
 EVM_JS_USER_PROVER_HELPERS = (
     "buildEvmSccpProofRequest",
     "canonicalEvmSccpReceiptProofBytes",
@@ -2280,6 +2370,29 @@ def _path_markdown_unsafe_character(path: str) -> str | None:
     return None
 
 
+def _path_percent_encoded_traversal(path: str) -> str | None:
+    decoded = path
+    seen = {decoded}
+    for _ in range(32):
+        if "%" not in decoded:
+            return None
+        decoded = unquote(decoded)
+        if decoded in seen:
+            return None
+        seen.add(decoded)
+        decoded_path = PurePosixPath(decoded)
+        if (
+            decoded_path.is_absolute()
+            or ".." in decoded_path.parts
+            or "\\" in decoded
+            or decoded != decoded_path.as_posix()
+        ):
+            return repr(path)
+    if "%" in decoded:
+        return repr(path)
+    return None
+
+
 def _artifact(path: Path) -> dict[str, Any]:
     if path.is_symlink():
         raise ValueError(f"release artifact path must not be a symlink: {path}")
@@ -2300,6 +2413,12 @@ def _artifact(path: Path) -> dict[str, Any]:
         raise ValueError(
             "release artifact path contains Markdown-unsafe character "
             f"{markdown_unsafe_character}: {artifact_path!r}"
+        )
+    percent_traversal = _path_percent_encoded_traversal(artifact_path)
+    if percent_traversal is not None:
+        raise ValueError(
+            "release artifact path contains percent-encoded traversal segment: "
+            f"{percent_traversal}"
         )
     payload = path.read_bytes()
     return {
@@ -2350,6 +2469,12 @@ def _native_evm_manifest_relative_path(
         return None, [
             f"{prefix} path contains Markdown-unsafe character "
             f"{markdown_unsafe_character}: {value!r}"
+        ]
+    percent_traversal = _path_percent_encoded_traversal(value)
+    if percent_traversal is not None:
+        return None, [
+            f"{prefix} path contains percent-encoded traversal segment: "
+            f"{percent_traversal}"
         ]
     if ":" in value:
         return None, [
@@ -2465,16 +2590,16 @@ def _native_evm_prover_bundle_artifact_summary(
             blockers.append(f"{label} must be an object")
             continue
         for key in sorted(set(artifact) - NATIVE_EVM_PROVER_SDK_ARTIFACT_KEYS):
-            blockers.append(f"{label} contains unknown field: {key}")
+            blockers.append(
+                _native_evm_prover_field_name_blocker(label, key, "unknown")
+            )
         for key in sorted(NATIVE_EVM_PROVER_SDK_ARTIFACT_KEYS - set(artifact)):
             blockers.append(f"{label} missing field: {key}")
         sdk = artifact.get("sdk")
         implementation = artifact.get("implementation")
-        if not isinstance(sdk, str) or not sdk:
-            blockers.append(f"{label}.sdk must be a non-empty string")
-            continue
-        if sdk.strip() != sdk:
-            blockers.append(f"{label}.sdk must not contain surrounding whitespace")
+        sdk_key_blocker = _native_evm_prover_sdk_artifact_key_blocker(label, sdk)
+        if sdk_key_blocker is not None:
+            blockers.append(sdk_key_blocker)
             continue
         if sdk in by_sdk:
             blockers.append(f"native_sdk_artifacts contains duplicate sdk: {sdk}")
@@ -2516,6 +2641,123 @@ def _native_evm_prover_bundle_artifact_summary(
         blockers.append(f"native_sdk_artifacts missing sdk: {sdk}")
 
     return sorted(rows, key=lambda row: row["sdk"]), blockers
+
+
+def _native_evm_prover_sdk_artifact_key_blocker(
+    label: str,
+    sdk: Any,
+) -> str | None:
+    if not isinstance(sdk, str) or not sdk:
+        return f"{label}.sdk must be a non-empty string"
+    if _path_control_character(sdk) is not None:
+        return f"{label}.sdk contains control character"
+    if not sdk.isascii():
+        return f"{label}.sdk must be printable ASCII"
+    if sdk.strip() != sdk:
+        return f"{label}.sdk must not contain surrounding whitespace"
+    if any(character.isspace() for character in sdk):
+        return f"{label}.sdk must not contain whitespace"
+    allowed = set("abcdefghijklmnopqrstuvwxyz0123456789-")
+    if (
+        any(character not in allowed for character in sdk)
+        or sdk.startswith("-")
+        or sdk.endswith("-")
+    ):
+        return f"{label}.sdk must be a lowercase SDK id"
+    return None
+
+
+def _native_evm_prover_sdk_results_by_sdk(
+    prefix: str,
+    sdk_results: Any,
+) -> tuple[dict[str, Any], list[str]]:
+    if not isinstance(sdk_results, dict) or not sdk_results:
+        return {}, [f"{prefix} sdk_results must be a non-empty object"]
+
+    blockers: list[str] = []
+    canonical_results: dict[str, Any] = {}
+    for sdk, result in sorted(sdk_results.items()):
+        sdk_key_blocker = _native_evm_prover_sdk_result_key_blocker(prefix, sdk)
+        if sdk_key_blocker is not None:
+            blockers.append(sdk_key_blocker)
+            continue
+        canonical_results[sdk] = result
+
+    for sdk in sorted(
+        set(canonical_results) - set(NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS)
+    ):
+        blockers.append(f"{prefix} sdk_results contains unknown sdk: {sdk}")
+    for sdk in sorted(
+        set(NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS) - set(canonical_results)
+    ):
+        blockers.append(f"{prefix} sdk_results missing sdk: {sdk}")
+    return canonical_results, blockers
+
+
+def _native_evm_prover_sdk_result_key_blocker(
+    prefix: str,
+    sdk: Any,
+) -> str | None:
+    if not isinstance(sdk, str) or not sdk:
+        return f"{prefix} sdk_results contains malformed sdk key"
+    if _path_control_character(sdk) is not None:
+        return f"{prefix} sdk_results sdk key contains control character"
+    if not sdk.isascii():
+        return f"{prefix} sdk_results sdk key must be printable ASCII"
+    if sdk.strip() != sdk:
+        return (
+            f"{prefix} sdk_results sdk key must not contain surrounding whitespace: "
+            f"{sdk!r}"
+        )
+    if any(character.isspace() for character in sdk):
+        return f"{prefix} sdk_results sdk key must not contain whitespace"
+    allowed = set("abcdefghijklmnopqrstuvwxyz0123456789-")
+    if (
+        any(character not in allowed for character in sdk)
+        or sdk.startswith("-")
+        or sdk.endswith("-")
+    ):
+        return f"{prefix} sdk_results sdk key must be a lowercase SDK id"
+    return None
+
+
+def _native_evm_prover_field_name_blocker(
+    label: str,
+    key: Any,
+    field_kind: str,
+) -> str:
+    if not isinstance(key, str) or not key:
+        return f"{label} contains malformed {field_kind} field name"
+    if _path_control_character(key) is not None:
+        return f"{label} contains {field_kind} field name with control character"
+    if not key.isascii():
+        return f"{label} contains {field_kind} field name with non-ASCII character"
+    if key.strip() != key:
+        return f"{label} contains {field_kind} field name with surrounding whitespace"
+    if any(character.isspace() for character in key):
+        return f"{label} contains {field_kind} field name with whitespace"
+    if _path_markdown_unsafe_character(key) is not None:
+        return (
+            f"{label} contains {field_kind} field name with Markdown-unsafe "
+            "character"
+        )
+    return f"{label} contains {field_kind} field: {key}"
+
+
+def _native_evm_prover_duplicate_json_key_blocker(label: str, key: Any) -> str:
+    if not isinstance(key, str) or not key:
+        return f"{label} JSON contains malformed duplicate key"
+    if _path_control_character(key) is not None:
+        return f"{label} JSON contains duplicate key with control character"
+    if not key.isascii():
+        return f"{label} JSON contains duplicate key with non-ASCII character"
+    if key.strip() != key:
+        return f"{label} JSON contains duplicate key with surrounding whitespace"
+    if any(character.isspace() for character in key):
+        return f"{label} JSON contains duplicate key with whitespace"
+    if _path_markdown_unsafe_character(key) is not None:
+        return f"{label} JSON contains duplicate key with Markdown-unsafe character"
+    return f"{label} JSON contains duplicate key: {key}"
 
 
 def _native_evm_prover_parity_fixture_status(
@@ -2565,7 +2807,7 @@ def _native_evm_prover_parity_fixture_status(
     try:
         fixture = _load_json_without_duplicate_keys(artifact_path)
     except DuplicateJsonKeyError as exc:
-        blockers.append(f"{prefix} JSON contains duplicate key: {exc.key}")
+        blockers.append(_native_evm_prover_duplicate_json_key_blocker(prefix, exc.key))
         fixture = {}
     except json.JSONDecodeError as exc:
         blockers.append(f"{prefix} is not valid JSON: {exc}")
@@ -2582,7 +2824,9 @@ def _native_evm_prover_parity_fixture_status(
         fixture = {}
 
     for key in sorted(set(fixture) - NATIVE_EVM_PROVER_PARITY_FIXTURE_REQUIRED_KEYS):
-        blockers.append(f"{prefix} contains unknown field: {key}")
+        blockers.append(
+            _native_evm_prover_field_name_blocker(prefix, key, "unknown")
+        )
     for key in sorted(NATIVE_EVM_PROVER_PARITY_FIXTURE_REQUIRED_KEYS - set(fixture)):
         blockers.append(f"{prefix} missing field: {key}")
 
@@ -2630,45 +2874,46 @@ def _native_evm_prover_parity_fixture_status(
                 )
 
     sdk_results = fixture.get("sdk_results")
-    if not isinstance(sdk_results, dict) or not sdk_results:
-        blockers.append(f"{prefix} sdk_results must be a non-empty object")
-        sdk_results = {}
-    else:
-        for sdk in sorted(set(sdk_results) - set(NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS)):
-            blockers.append(f"{prefix} sdk_results contains unknown sdk: {sdk}")
-        for sdk in sorted(set(NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS) - set(sdk_results)):
-            blockers.append(f"{prefix} sdk_results missing sdk: {sdk}")
-        for sdk, result in sorted(sdk_results.items()):
-            result_label = f"{label} sdk_results.{sdk}"
-            if not isinstance(result, dict):
-                blockers.append(
-                    f"native EVM Groth16 prover bundle {result_label} must be an object"
+    sdk_results, sdk_result_blockers = _native_evm_prover_sdk_results_by_sdk(
+        prefix,
+        sdk_results,
+    )
+    blockers.extend(sdk_result_blockers)
+    for sdk, result in sorted(sdk_results.items()):
+        result_label = f"{label} sdk_results.{sdk}"
+        if not isinstance(result, dict):
+            blockers.append(
+                f"native EVM Groth16 prover bundle {result_label} must be an object"
+            )
+            continue
+        for key in sorted(set(result) - NATIVE_EVM_PROVER_PARITY_SDK_RESULT_KEYS):
+            blockers.append(
+                _native_evm_prover_field_name_blocker(
+                    f"native EVM Groth16 prover bundle {result_label}",
+                    key,
+                    "unknown",
                 )
-                continue
-            for key in sorted(set(result) - NATIVE_EVM_PROVER_PARITY_SDK_RESULT_KEYS):
+            )
+        for key in sorted(NATIVE_EVM_PROVER_PARITY_SDK_RESULT_KEYS - set(result)):
+            blockers.append(
+                f"native EVM Groth16 prover bundle {result_label} missing field: {key}"
+            )
+        for key in (
+            "receipt_proof_hash",
+            "source_proof_hash",
+            "destination_binding_hash",
+            "calldata_hash",
+            "torii_submit_payload_hash",
+        ):
+            if key in result and result.get(key) != fixture.get(key):
                 blockers.append(
-                    f"native EVM Groth16 prover bundle {result_label} contains unknown field: {key}"
+                    f"native EVM Groth16 prover bundle {result_label}.{key} must match {key}"
                 )
-            for key in sorted(NATIVE_EVM_PROVER_PARITY_SDK_RESULT_KEYS - set(result)):
-                blockers.append(
-                    f"native EVM Groth16 prover bundle {result_label} missing field: {key}"
-                )
-            for key in (
-                "receipt_proof_hash",
-                "source_proof_hash",
-                "destination_binding_hash",
-                "calldata_hash",
-                "torii_submit_payload_hash",
-            ):
-                if key in result and result.get(key) != fixture.get(key):
-                    blockers.append(
-                        f"native EVM Groth16 prover bundle {result_label}.{key} must match {key}"
-                    )
-            if result.get("public_signal_words") != public_signal_words:
-                blockers.append(
-                    f"native EVM Groth16 prover bundle {result_label}.public_signal_words "
-                    "must match public_signal_words"
-                )
+        if result.get("public_signal_words") != public_signal_words:
+            blockers.append(
+                f"native EVM Groth16 prover bundle {result_label}.public_signal_words "
+                "must match public_signal_words"
+            )
 
     blockers.extend(
         _native_evm_prover_forbidden_payload_blockers(artifact_path, label)
@@ -2723,7 +2968,7 @@ def _native_evm_prover_self_test_status(
     try:
         fixture = _load_json_without_duplicate_keys(artifact_path)
     except DuplicateJsonKeyError as exc:
-        blockers.append(f"{prefix} JSON contains duplicate key: {exc.key}")
+        blockers.append(_native_evm_prover_duplicate_json_key_blocker(prefix, exc.key))
         fixture = {}
     except json.JSONDecodeError as exc:
         blockers.append(f"{prefix} is not valid JSON: {exc}")
@@ -2740,7 +2985,9 @@ def _native_evm_prover_self_test_status(
         fixture = {}
 
     for key in sorted(set(fixture) - NATIVE_EVM_PROVER_SELF_TEST_REQUIRED_KEYS):
-        blockers.append(f"{prefix} contains unknown field: {key}")
+        blockers.append(
+            _native_evm_prover_field_name_blocker(prefix, key, "unknown")
+        )
     for key in sorted(NATIVE_EVM_PROVER_SELF_TEST_REQUIRED_KEYS - set(fixture)):
         blockers.append(f"{prefix} missing field: {key}")
 
@@ -2790,46 +3037,47 @@ def _native_evm_prover_self_test_status(
                 )
 
     sdk_results = fixture.get("sdk_results")
-    if not isinstance(sdk_results, dict) or not sdk_results:
-        blockers.append(f"{prefix} sdk_results must be a non-empty object")
-        sdk_results = {}
-    else:
-        for sdk in sorted(set(sdk_results) - set(NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS)):
-            blockers.append(f"{prefix} sdk_results contains unknown sdk: {sdk}")
-        for sdk in sorted(set(NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS) - set(sdk_results)):
-            blockers.append(f"{prefix} sdk_results missing sdk: {sdk}")
-        for sdk, result in sorted(sdk_results.items()):
-            result_label = f"{label} sdk_results.{sdk}"
-            if not isinstance(result, dict):
-                blockers.append(
-                    f"native EVM Groth16 prover bundle {result_label} must be an object"
+    sdk_results, sdk_result_blockers = _native_evm_prover_sdk_results_by_sdk(
+        prefix,
+        sdk_results,
+    )
+    blockers.extend(sdk_result_blockers)
+    for sdk, result in sorted(sdk_results.items()):
+        result_label = f"{label} sdk_results.{sdk}"
+        if not isinstance(result, dict):
+            blockers.append(
+                f"native EVM Groth16 prover bundle {result_label} must be an object"
+            )
+            continue
+        for key in sorted(set(result) - NATIVE_EVM_PROVER_SELF_TEST_SDK_RESULT_KEYS):
+            blockers.append(
+                _native_evm_prover_field_name_blocker(
+                    f"native EVM Groth16 prover bundle {result_label}",
+                    key,
+                    "unknown",
                 )
-                continue
-            for key in sorted(set(result) - NATIVE_EVM_PROVER_SELF_TEST_SDK_RESULT_KEYS):
+            )
+        for key in sorted(NATIVE_EVM_PROVER_SELF_TEST_SDK_RESULT_KEYS - set(result)):
+            blockers.append(
+                f"native EVM Groth16 prover bundle {result_label} missing field: {key}"
+            )
+        for key in (
+            "request_hash",
+            "witness_hash",
+            "source_proof_hash",
+            "proof_hash",
+            "calldata_hash",
+            "torii_submit_payload_hash",
+        ):
+            if key in result and result.get(key) != fixture.get(key):
                 blockers.append(
-                    f"native EVM Groth16 prover bundle {result_label} contains unknown field: {key}"
+                    f"native EVM Groth16 prover bundle {result_label}.{key} must match {key}"
                 )
-            for key in sorted(NATIVE_EVM_PROVER_SELF_TEST_SDK_RESULT_KEYS - set(result)):
-                blockers.append(
-                    f"native EVM Groth16 prover bundle {result_label} missing field: {key}"
-                )
-            for key in (
-                "request_hash",
-                "witness_hash",
-                "source_proof_hash",
-                "proof_hash",
-                "calldata_hash",
-                "torii_submit_payload_hash",
-            ):
-                if key in result and result.get(key) != fixture.get(key):
-                    blockers.append(
-                        f"native EVM Groth16 prover bundle {result_label}.{key} must match {key}"
-                    )
-            if result.get("public_signal_words") != public_signal_words:
-                blockers.append(
-                    f"native EVM Groth16 prover bundle {result_label}.public_signal_words "
-                    "must match public_signal_words"
-                )
+        if result.get("public_signal_words") != public_signal_words:
+            blockers.append(
+                f"native EVM Groth16 prover bundle {result_label}.public_signal_words "
+                "must match public_signal_words"
+            )
 
     blockers.extend(
         _native_evm_prover_forbidden_payload_blockers(artifact_path, label)
@@ -2948,8 +3196,10 @@ def _native_evm_prover_bundle_status(
             payload = _load_json_without_duplicate_keys(path)
         except DuplicateJsonKeyError as exc:
             blockers.append(
-                "native EVM Groth16 prover bundle JSON contains duplicate key: "
-                f"{exc.key}"
+                _native_evm_prover_duplicate_json_key_blocker(
+                    "native EVM Groth16 prover bundle",
+                    exc.key,
+                )
             )
         except json.JSONDecodeError as exc:
             blockers.append(f"native EVM Groth16 prover bundle is not valid JSON: {exc}")
@@ -2965,7 +3215,13 @@ def _native_evm_prover_bundle_status(
         payload = {}
 
     for key in sorted(set(payload) - NATIVE_EVM_PROVER_BUNDLE_REQUIRED_KEYS):
-        blockers.append(f"native EVM Groth16 prover bundle contains unknown field: {key}")
+        blockers.append(
+            _native_evm_prover_field_name_blocker(
+                "native EVM Groth16 prover bundle",
+                key,
+                "unknown",
+            )
+        )
     for key in sorted(NATIVE_EVM_PROVER_BUNDLE_REQUIRED_KEYS - set(payload)):
         blockers.append(f"native EVM Groth16 prover bundle missing field: {key}")
 
@@ -3022,14 +3278,22 @@ def _native_evm_prover_bundle_status(
     else:
         for key in sorted(set(audit_hashes) - set(NATIVE_EVM_PROVER_REQUIRED_AUDIT_HASHES)):
             blockers.append(
-                "native EVM Groth16 prover bundle "
-                f"audit_hashes contains unexpected field: {key}"
+                _native_evm_prover_field_name_blocker(
+                    "native EVM Groth16 prover bundle audit_hashes",
+                    key,
+                    "unexpected",
+                )
             )
         for key in sorted(set(NATIVE_EVM_PROVER_REQUIRED_AUDIT_HASHES) - set(audit_hashes)):
             blockers.append(
                 "native EVM Groth16 prover bundle "
                 f"audit_hashes missing field: {key}"
             )
+        semantic_audit_hashes = {
+            key: audit_hashes[key]
+            for key in NATIVE_EVM_PROVER_REQUIRED_AUDIT_HASHES
+            if key in audit_hashes
+        }
         reserved_audit_hash_roles = {
             "proof_artifact_hash": payload.get("proof_artifact_hash"),
             "proving_key_hash": payload.get("proving_key_hash"),
@@ -3044,7 +3308,7 @@ def _native_evm_prover_bundle_status(
                         f"native_sdk_artifacts[{sdk_index}].implementation_hash"
                     ] = sdk_artifact.get("implementation_hash")
         seen_audit_hashes: dict[str, str] = {}
-        for key, audit_hash in sorted(audit_hashes.items()):
+        for key, audit_hash in sorted(semantic_audit_hashes.items()):
             if not _is_nonzero_hex32(audit_hash):
                 blockers.append(
                     "native EVM Groth16 prover bundle "
@@ -3123,7 +3387,16 @@ def _native_evm_prover_bundle_status(
         "verifier_key": verifier_key,
         "verifier_key_hash": payload.get("verifier_key_hash", ""),
         "destination_binding_hash": payload.get("destination_binding_hash", ""),
-        "audit_hashes": dict(sorted(audit_hashes.items())),
+        "audit_hashes": dict(
+            sorted(
+                (
+                    key,
+                    audit_hashes[key],
+                )
+                for key in NATIVE_EVM_PROVER_REQUIRED_AUDIT_HASHES
+                if key in audit_hashes
+            )
+        ),
         "cross_sdk_fixture_parity_artifact": parity_artifact,
         "native_prover_self_test_artifact": self_test_artifact,
         "sdk_artifacts": sdk_artifacts,
@@ -3149,6 +3422,7 @@ def _phase_log_from_dir(directory: Path, phase: str) -> Path:
 
 def _phase_transcript_block(phase: str, transcript: str) -> str | None:
     marker = f"{CORRIDOR_PHASE_MARKER_PREFIX}{phase}"
+    known_markers = _known_corridor_phase_marker_lines()
     lines = transcript.splitlines()
     start: int | None = None
     for index, line in enumerate(lines):
@@ -3159,29 +3433,130 @@ def _phase_transcript_block(phase: str, transcript: str) -> str | None:
         return None
     end = len(lines)
     for index in range(start + 1, len(lines)):
-        if lines[index].startswith(CORRIDOR_PHASE_MARKER_PREFIX):
+        if lines[index] in known_markers:
             end = index
             break
     return "\n".join(lines[start:end])
 
 
+def _known_corridor_phase_marker_lines() -> set[str]:
+    return {
+        f"{CORRIDOR_PHASE_MARKER_PREFIX}{phase}"
+        for phase in PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS
+    }
+
+
+def _unknown_corridor_phase_marker_lines(transcript: str) -> list[str]:
+    known_markers = _known_corridor_phase_marker_lines()
+    return [
+        line
+        for line in transcript.splitlines()
+        if line.startswith(CORRIDOR_PHASE_MARKER_PREFIX) and line not in known_markers
+    ]
+
+
+def _transcript_has_multiple_known_phase_markers(transcript: str) -> bool:
+    known_markers = _known_corridor_phase_marker_lines()
+    markers = {
+        line
+        for line in transcript.splitlines()
+        if line in known_markers
+    }
+    return len(markers) > 1
+
+
+def _transcript_has_nonempty_line_before_first_phase_marker(transcript: str) -> bool:
+    known_markers = _known_corridor_phase_marker_lines()
+    lines = transcript.splitlines()
+    for first_marker_index, line in enumerate(lines):
+        if line in known_markers:
+            return any(
+                bool(prefix_line.strip())
+                for prefix_line in lines[:first_marker_index]
+            )
+    return False
+
+
+def _phase_marker_count(phase: str, transcript: str) -> int:
+    marker = f"{CORRIDOR_PHASE_MARKER_PREFIX}{phase}"
+    return sum(1 for line in transcript.splitlines() if line == marker)
+
+
 def _transcript_has_full_corridor_completion(transcript: str) -> bool:
     lines = transcript.splitlines()
+    if _transcript_has_nonempty_line_before_first_phase_marker(transcript):
+        return False
     marker_positions: list[int] = []
+    command_positions_by_fragment: list[list[int]] = []
+    success_positions_by_fragment: list[list[int]] = []
     for phase in PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS:
         marker = f"{CORRIDOR_PHASE_MARKER_PREFIX}{phase}"
         try:
             marker_positions.append(lines.index(marker))
         except ValueError:
             return False
+        if _phase_marker_count(phase, transcript) != 1:
+            return False
+        phase_block = _phase_transcript_block(phase, transcript)
+        if phase_block is None:
+            return False
+        phase_command_positions: list[int] = []
+        for fragment in PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[phase]:
+            command_positions = _phase_block_command_fragment_line_indices(
+                phase, phase_block, fragment
+            )
+            if not command_positions:
+                return False
+            phase_command_positions.extend(command_positions)
+            block_offset = marker_positions[-1]
+            command_positions_by_fragment.append(
+                [block_offset + position for position in command_positions]
+            )
+        if not phase_command_positions:
+            return False
+        first_phase_command_position = min(phase_command_positions)
+        for fragment in PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS.get(phase, ()):
+            success_positions = _phase_block_output_fragment_line_indices(
+                phase_block, fragment
+            )
+            if not success_positions:
+                return False
+            if not any(
+                position > first_phase_command_position
+                for position in success_positions
+            ):
+                return False
+            block_offset = marker_positions[-1]
+            success_positions_by_fragment.append(
+                [block_offset + position for position in success_positions]
+            )
+        if _phase_block_forbidden_output_marker(phase, phase_block) is not None:
+            return False
+    if marker_positions != sorted(marker_positions):
+        return False
     completion_positions = [
         index
         for index, line in enumerate(lines)
-        if CORRIDOR_COMPLETION_SENTINEL in line
+        if line == CORRIDOR_COMPLETION_SENTINEL
         and not line.lstrip().startswith("+ ")
     ]
-    return bool(completion_positions) and max(completion_positions) > max(
-        marker_positions
+    if not completion_positions:
+        return False
+    completion_position = max(completion_positions)
+    if _transcript_has_nonempty_line_after_completion(transcript):
+        return False
+    if _transcript_has_traced_command_after_completion(transcript):
+        return False
+    return (
+        completion_position > max(marker_positions)
+        and all(
+            any(position < completion_position for position in positions)
+            for positions in command_positions_by_fragment
+        )
+        and all(
+            any(position < completion_position for position in positions)
+            for positions in success_positions_by_fragment
+        )
     )
 
 
@@ -3193,6 +3568,16 @@ def _phase_command_lines(phase_block: str) -> list[str]:
     ]
 
 
+def _line_is_shell_xtrace_command(line: str) -> bool:
+    if SHELL_XTRACE_COMMAND_PATTERN.match(line) is not None:
+        return True
+    normalized_line = _phase_output_failure_scan_line(line)
+    return (
+        normalized_line != line
+        and SHELL_XTRACE_COMMAND_PATTERN.match(normalized_line) is not None
+    )
+
+
 def _phase_command_tokens(command: str) -> list[str]:
     command = command.strip()
     if command.startswith("+ "):
@@ -3200,7 +3585,7 @@ def _phase_command_tokens(command: str) -> list[str]:
     try:
         return [
             normalized
-            for token in shlex.split(command)
+            for token in shlex.split(command, comments=True)
             if (normalized := token.strip("()"))
         ]
     except ValueError:
@@ -3216,9 +3601,93 @@ def _command_token_is_env_assignment(token: str) -> bool:
     return bool(separator and name and name.replace("_", "").isalnum())
 
 
+def _command_option_values(tokens: list[str], option: str) -> list[str]:
+    values: list[str] = []
+    index = 0
+    option_prefix = f"{option}="
+    while index < len(tokens):
+        token = tokens[index]
+        if token == option:
+            if index + 1 < len(tokens):
+                values.append(tokens[index + 1])
+            index += 2
+            continue
+        if token.startswith(option_prefix):
+            values.append(token[len(option_prefix) :])
+        index += 1
+    return values
+
+
+def _command_has_option_value(tokens: list[str], option: str, expected: str) -> bool:
+    return expected in _command_option_values(tokens, option)
+
+
+def _command_positional_tokens(
+    tokens: list[str],
+    start_index: int = 0,
+    options_with_values: frozenset[str] = frozenset(),
+) -> list[str]:
+    positionals: list[str] = []
+    skip_next = False
+    end_of_options = False
+    for token in tokens[start_index:]:
+        if skip_next:
+            skip_next = False
+            continue
+        if not end_of_options and token == "--":
+            end_of_options = True
+            continue
+        if not end_of_options:
+            if token in options_with_values:
+                skip_next = True
+                continue
+            if any(token.startswith(f"{option}=") for option in options_with_values):
+                continue
+            if token.startswith("-"):
+                continue
+        positionals.append(token)
+    return positionals
+
+
+def _phase_prefix_env_assignments(command: str) -> list[str]:
+    tokens = _phase_command_tokens(command)
+    if (
+        "&&" in tokens
+        and tokens.index("&&") == 2
+        and tokens[:1] == ["cd"]
+        and bool(tokens[1])
+        and not tokens[1].startswith("-")
+    ):
+        tokens = tokens[tokens.index("&&") + 1 :]
+    if tokens[:1] == ["env"]:
+        tokens = tokens[1:]
+    assignments: list[str] = []
+    while tokens and _command_token_is_env_assignment(tokens[0]):
+        assignments.append(tokens[0])
+        tokens = tokens[1:]
+    return assignments
+
+
+def _android_harness_mains_classes(command: str) -> list[str]:
+    harness_value: str | None = None
+    for assignment in _phase_prefix_env_assignments(command):
+        name, separator, value = assignment.partition("=")
+        if separator and name == "ANDROID_HARNESS_MAINS":
+            harness_value = value
+    if harness_value is None:
+        return []
+    return [item for item in harness_value.split(",") if item]
+
+
 def _phase_effective_command_tokens(command: str) -> list[str]:
     tokens = _phase_command_tokens(command)
-    if "&&" in tokens:
+    if (
+        "&&" in tokens
+        and tokens.index("&&") == 2
+        and tokens[:1] == ["cd"]
+        and bool(tokens[1])
+        and not tokens[1].startswith("-")
+    ):
         tokens = tokens[tokens.index("&&") + 1 :]
     if tokens[:1] == ["env"]:
         tokens = tokens[1:]
@@ -3232,14 +3701,134 @@ def _effective_command_starts_with(command: str, sequence: tuple[str, ...]) -> b
     return tuple(tokens[: len(sequence)]) == sequence
 
 
+def _effective_command_equals(command: str, sequence: tuple[str, ...]) -> bool:
+    return tuple(_phase_effective_command_tokens(command)) == sequence
+
+
 def _rust_sccp_command_has_fragment(command: str, _fragment: str) -> bool:
-    return _effective_command_starts_with(
+    return _effective_command_equals(
         command,
         ("cargo", "test", "-p", "iroha_sccp", "--", "--nocapture"),
     )
 
 
-def _evidence_pytest_command_has_fragment(command: str, fragment: str) -> bool:
+def _pytest_fragment_positionals(fragment: str) -> list[str]:
+    tokens = shlex.split(fragment)
+    if "-q" not in tokens:
+        return []
+    return _command_positional_tokens(
+        tokens,
+        tokens.index("-q") + 1,
+        PYTEST_OPTIONS_WITH_VALUES,
+    )
+
+
+def _pytest_command_positionals(tokens: list[str], module_index: int) -> list[str]:
+    if (
+        module_index != 1
+        or len(tokens) <= module_index + 3
+        or tokens[module_index : module_index + 3] != ["-m", "pytest", "-q"]
+    ):
+        return []
+    positionals = tokens[module_index + 3 :]
+    if any(token.startswith("-") for token in positionals):
+        return []
+    return positionals
+
+
+def _pytest_expected_positionals_for_phase(phase: str) -> tuple[str, ...]:
+    positionals: list[str] = []
+    for fragment in PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS.get(phase, ()):
+        if fragment.startswith("-m pytest"):
+            positionals.extend(_pytest_fragment_positionals(fragment))
+        elif fragment.startswith(("pytests/", "python/")):
+            positionals.append(fragment)
+    return tuple(positionals)
+
+
+def _append_unique(items: list[str], value: str) -> None:
+    if value not in items:
+        items.append(value)
+
+
+def _node_expected_test_files_for_phase(phase: str) -> tuple[str, ...]:
+    test_files: list[str] = []
+    for fragment in PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS.get(phase, ()):
+        if fragment.startswith("--test "):
+            for item in shlex.split(fragment)[1:]:
+                _append_unique(test_files, item)
+        elif fragment.endswith((".test.js", ".test.mjs")):
+            _append_unique(test_files, fragment)
+    return tuple(test_files)
+
+
+def _node_test_command_files(tokens: list[str]) -> tuple[str, ...]:
+    if len(tokens) < 3 or _command_token_basename(tokens[0]) != "node":
+        return ()
+    if tokens[1] != "--test":
+        return ()
+    test_files = tokens[2:]
+    if any(token.startswith("-") for token in test_files):
+        return ()
+    return tuple(test_files)
+
+
+def _node_check_command_matches(tokens: list[str], expected_path: str) -> bool:
+    return (
+        len(tokens) == 3
+        and _command_token_basename(tokens[0]) == "node"
+        and tokens[1] == "--check"
+        and tokens[2] == expected_path
+    )
+
+
+def _dotnet_sdk_command_matches(tokens: list[str]) -> bool:
+    if len(tokens) != 6 or _command_token_basename(tokens[0]) != "dotnet":
+        return False
+    project_fragment, filter_fragment = PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[
+        "dotnet-sdk"
+    ]
+    project_tokens = shlex.split(project_fragment)
+    expected_project = project_tokens[2] if len(project_tokens) > 2 else ""
+    return (
+        tokens[1] == "test"
+        and tokens[2] == expected_project
+        and tokens[3] == "--filter"
+        and tokens[4].replace("\\|", "|") == filter_fragment.replace("\\|", "|")
+        and tokens[5] == "--nologo"
+    )
+
+
+def _gradle_test_selector_matches(expected: str, actual: str) -> bool:
+    if expected.endswith("."):
+        return actual in (expected, f"{expected}*")
+    return actual == expected
+
+
+def _gradle_test_command_selectors(tokens: list[str], task: str) -> list[str]:
+    if (
+        len(tokens) < 5
+        or not tokens
+        or _command_token_basename(tokens[0]) != "gradlew"
+        or tokens[1] != task
+        or tokens[2] != "--console=plain"
+    ):
+        return []
+    selectors: list[str] = []
+    index = 3
+    while index < len(tokens):
+        if tokens[index] != "--tests" or index + 1 >= len(tokens):
+            return []
+        selectors.append(tokens[index + 1])
+        index += 2
+    return selectors
+
+
+def _evidence_pytest_command_has_fragment(
+    phase: str,
+    command: str,
+    fragment: str,
+) -> bool:
     tokens = _phase_effective_command_tokens(command)
     if not tokens or not _command_token_basename(tokens[0]).startswith("python"):
         return False
@@ -3253,22 +3842,33 @@ def _evidence_pytest_command_has_fragment(command: str, fragment: str) -> bool:
     )
     if module_index is None or "-q" not in tokens[module_index + 2 :]:
         return False
+    pytest_positionals = _pytest_command_positionals(tokens, module_index)
+    if not pytest_positionals:
+        return False
+    expected_positionals = _pytest_expected_positionals_for_phase(phase)
+    if tuple(pytest_positionals) != expected_positionals:
+        return False
     if fragment.startswith("pytests/"):
-        return fragment in tokens
+        return fragment in pytest_positionals
     if fragment.startswith("python/"):
-        return fragment in tokens
+        return fragment in pytest_positionals
     if fragment.startswith("-m pytest"):
-        return all(part in tokens for part in shlex.split(fragment))
+        expected_positionals = _pytest_fragment_positionals(fragment)
+        return bool(expected_positionals) and all(
+            item in pytest_positionals for item in expected_positionals
+        )
     return fragment in command
 
 
 def _js_sdk_command_has_fragment(command: str, fragment: str) -> bool:
     tokens = _phase_effective_command_tokens(command)
-    if not tokens or _command_token_basename(tokens[0]) != "node" or "--test" not in tokens:
+    expected_files = _node_expected_test_files_for_phase("js-sdk")
+    test_files = _node_test_command_files(tokens)
+    if test_files != expected_files:
         return False
     if fragment.startswith("--test "):
-        return all(part in tokens for part in shlex.split(fragment))
-    return fragment in tokens
+        return all(part in test_files for part in shlex.split(fragment)[1:])
+    return fragment in test_files
 
 
 def _swift_sdk_command_has_fragment(command: str, fragment: str) -> bool:
@@ -3276,80 +3876,122 @@ def _swift_sdk_command_has_fragment(command: str, fragment: str) -> bool:
         return False
     tokens = _phase_effective_command_tokens(command)
     if fragment.startswith("swift test "):
-        return all(part in tokens for part in shlex.split(fragment))
-    return fragment in tokens
+        return tuple(tokens) == tuple(shlex.split(fragment))
+    return tuple(tokens) == (
+        "swift",
+        "test",
+        "--filter",
+        fragment,
+        "--disable-swift-testing",
+    )
 
 
 def _kotlin_sdk_command_has_fragment(command: str, fragment: str) -> bool:
     tokens = _phase_effective_command_tokens(command)
     if fragment == "java -version":
-        return tuple(tokens[:2]) == ("java", "-version")
-    if not tokens or _command_token_basename(tokens[0]) != "gradlew":
+        return tuple(tokens) == ("java", "-version")
+    test_selectors = _gradle_test_command_selectors(tokens, ":core-jvm:test")
+    if not test_selectors:
         return False
     if fragment.startswith("./gradlew "):
-        return (
-            ":core-jvm:test" in tokens
-            and "--tests" in tokens
-            and any(token.startswith("org.hyperledger.iroha.sdk.sccp.") for token in tokens)
+        fragment_tokens = shlex.split(fragment)
+        expected_tests = _command_option_values(fragment_tokens, "--tests")
+        return all(
+            any(
+                _gradle_test_selector_matches(expected, actual)
+                for actual in test_selectors
+            )
+            for expected in expected_tests
         )
     if fragment.startswith("org.hyperledger.iroha.sdk.sccp."):
-        return fragment in tokens
-    return (
-        ":core-jvm:test" in tokens
-        and "--tests" in tokens
-        and any(token.startswith("org.hyperledger.iroha.sdk.sccp.") for token in tokens)
+        return fragment in test_selectors
+    return any(
+        _gradle_test_selector_matches("org.hyperledger.iroha.sdk.sccp.", token)
+        for token in test_selectors
     )
 
 
 def _java_android_command_has_fragment(command: str, fragment: str) -> bool:
     tokens = _phase_effective_command_tokens(command)
     if fragment == "java -version":
-        return tuple(tokens[:2]) == ("java", "-version")
-    if not tokens or _command_token_basename(tokens[0]) != "gradlew" or ":core:test" not in tokens:
+        return tuple(tokens) == ("java", "-version")
+    test_selectors = _gradle_test_command_selectors(tokens, ":core:test")
+    if not test_selectors:
         return False
-    all_tokens = _phase_command_tokens(command)
+    actual_harness_classes = _android_harness_mains_classes(command)
     if fragment.startswith("ANDROID_HARNESS_MAINS="):
-        return any(token.startswith(fragment) for token in all_tokens)
+        expected_harness_classes = [
+            item for item in fragment.partition("=")[2].split(",") if item
+        ]
+        return bool(expected_harness_classes) and all(
+            item in actual_harness_classes for item in expected_harness_classes
+        ) and "org.hyperledger.iroha.android.GradleHarnessTests" in test_selectors
     if (
         fragment.startswith("org.hyperledger.iroha.android.sccp.")
         and fragment.endswith("Tests")
     ):
-        return any(
-            token.startswith("ANDROID_HARNESS_MAINS=") and fragment in token
-            for token in all_tokens
+        return (
+            fragment in actual_harness_classes
+            and "org.hyperledger.iroha.android.GradleHarnessTests" in test_selectors
+        )
+    fragment_tokens = shlex.split(fragment)
+    expected_tests = _command_option_values(fragment_tokens, "--tests")
+    if expected_tests:
+        return (
+            all(part in tokens for part in fragment_tokens if part not in expected_tests)
+            and all(
+                expected in test_selectors
+                for expected in expected_tests
+            )
         )
     return all(part in tokens for part in shlex.split(fragment))
 
 
 def _dotnet_sdk_command_has_fragment(command: str, fragment: str) -> bool:
     tokens = _phase_effective_command_tokens(command)
-    if not tokens or _command_token_basename(tokens[0]) != "dotnet":
+    if not _dotnet_sdk_command_matches(tokens):
         return False
     if fragment.startswith("FullyQualifiedName"):
-        normalized_fragment = fragment.replace("\\|", "|")
-        return "--filter" in tokens and any(
-            token.replace("\\|", "|") == normalized_fragment for token in tokens
-        )
+        return tokens[4].replace("\\|", "|") == fragment.replace("\\|", "|")
     if fragment.startswith("dotnet test "):
-        return all(part in tokens for part in shlex.split(fragment)[1:])
+        fragment_tokens = shlex.split(fragment)
+        return (
+            _command_token_basename(tokens[0]) == fragment_tokens[0]
+            and tuple(tokens[1 : len(fragment_tokens)]) == tuple(fragment_tokens[1:])
+        )
     return all(part in tokens for part in shlex.split(fragment))
 
 
 def _contract_smoke_command_has_fragment(command: str, fragment: str) -> bool:
     tokens = _phase_effective_command_tokens(command)
+    if fragment.endswith(".test.mjs"):
+        test_files = _node_test_command_files(tokens)
+        return test_files == _node_expected_test_files_for_phase(
+            "contract-smoke"
+        ) and fragment in test_files
     if fragment.startswith("--check "):
-        return (
-            bool(tokens)
-            and _command_token_basename(tokens[0]) == "node"
-            and all(part in tokens for part in shlex.split(fragment))
-        )
-    return _effective_command_starts_with(command, ("bash", "scripts/sccp_evm_contract_smoke.sh"))
+        expected_path = shlex.split(fragment)[1]
+        return _node_check_command_matches(tokens, expected_path)
+    return _effective_command_equals(
+        command,
+        ("bash", "scripts/sccp_evm_contract_smoke.sh"),
+    )
 
 
 def _core_admission_command_has_fragment(command: str, _fragment: str) -> bool:
-    return _effective_command_starts_with(
+    return _effective_command_equals(
         command,
-        ("cargo", "test", "-p", "iroha_core", "--test", "bridge_proofs", "--", "--nocapture"),
+        (
+            "cargo",
+            "test",
+            "-p",
+            "iroha_core",
+            "--test",
+            "iroha_core_group_01",
+            "bridge_proofs::",
+            "--",
+            "--nocapture",
+        ),
     )
 
 
@@ -3358,18 +4000,16 @@ def _phase_command_matches_required_fragment(
     command: str,
     fragment: str,
 ) -> bool:
-    if command == f"+ {fragment}":
-        return True
     if fragment not in command:
         return False
     if phase == "evidence-scripts":
-        return _evidence_pytest_command_has_fragment(command, fragment)
+        return _evidence_pytest_command_has_fragment(phase, command, fragment)
     if phase == "rust-sccp":
         return _rust_sccp_command_has_fragment(command, fragment)
     if phase == "js-sdk":
         return _js_sdk_command_has_fragment(command, fragment)
     if phase == "python-sdk":
-        return _evidence_pytest_command_has_fragment(command, fragment)
+        return _evidence_pytest_command_has_fragment(phase, command, fragment)
     if phase == "swift-sdk":
         return _swift_sdk_command_has_fragment(command, fragment)
     if phase == "kotlin-sdk":
@@ -3390,18 +4030,200 @@ def _phase_block_has_command_fragment(
     phase_block: str,
     fragment: str,
 ) -> bool:
-    return any(
-        _phase_command_matches_required_fragment(phase, command, fragment)
-        for command in _phase_command_lines(phase_block)
-    )
+    return bool(_phase_block_command_fragment_line_indices(phase, phase_block, fragment))
 
 
 def _phase_block_has_output_fragment(phase_block: str, fragment: str) -> bool:
+    return bool(_phase_block_output_fragment_line_indices(phase_block, fragment))
+
+
+def _phase_block_command_fragment_line_indices(
+    phase: str,
+    phase_block: str,
+    fragment: str,
+) -> list[int]:
+    return [
+        index
+        for index, line in enumerate(phase_block.splitlines())
+        if line.lstrip().startswith("+ ")
+        and _phase_command_matches_required_fragment(phase, line.strip(), fragment)
+    ]
+
+
+def _phase_block_output_fragment_line_indices(
+    phase_block: str,
+    fragment: str,
+) -> list[int]:
+    return [
+        index
+        for index, line in enumerate(phase_block.splitlines())
+        if _phase_output_line_has_success_fragment(line, fragment)
+    ]
+
+
+def _phase_output_line_has_success_fragment(line: str, fragment: str) -> bool:
+    if _line_is_shell_xtrace_command(line):
+        return False
+    normalized_line = _phase_output_failure_scan_line(line)
+    scan_lines = (line,) if normalized_line == line else (line, normalized_line)
+    for scan_line in scan_lines:
+        position = scan_line.find(fragment)
+        if position < 0:
+            continue
+        prefix = scan_line[:position]
+        if SUCCESS_OUTPUT_NEGATION_PATTERN.search(
+            prefix
+        ) or SUCCESS_OUTPUT_DIAGNOSTIC_PREFIX_PATTERN.search(prefix):
+            continue
+        return True
+    return False
+
+
+def _phase_block_has_exact_output_line(phase_block: str, expected: str) -> bool:
     return any(
-        fragment in line
+        line == expected
         for line in phase_block.splitlines()
-        if not line.lstrip().startswith("+ ")
+        if not _line_is_shell_xtrace_command(line)
     )
+
+
+def _phase_block_has_completion_after_required_evidence(
+    phase: str,
+    phase_block: str,
+) -> bool:
+    completion_positions = [
+        index
+        for index, line in enumerate(phase_block.splitlines())
+        if line == CORRIDOR_COMPLETION_SENTINEL
+        and not line.lstrip().startswith("+ ")
+    ]
+    if not completion_positions:
+        return False
+
+    command_positions_by_fragment = [
+        _phase_block_command_fragment_line_indices(phase, phase_block, fragment)
+        for fragment in PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS.get(phase, ())
+    ]
+    success_positions_by_fragment = [
+        _phase_block_output_fragment_line_indices(phase_block, fragment)
+        for fragment in PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS.get(phase, ())
+    ]
+    for completion_position in completion_positions:
+        command_positions_before_completion: list[int] = []
+        for positions in command_positions_by_fragment:
+            positions_before_completion = [
+                position for position in positions if position < completion_position
+            ]
+            if not positions_before_completion:
+                break
+            command_positions_before_completion.extend(positions_before_completion)
+        else:
+            if not command_positions_before_completion:
+                continue
+            first_command_position = min(command_positions_before_completion)
+            if all(
+                any(
+                    first_command_position < position < completion_position
+                    for position in positions
+                )
+                for positions in success_positions_by_fragment
+            ):
+                return True
+    return False
+
+
+def _phase_block_has_traced_command_after_completion(phase_block: str) -> bool:
+    lines = phase_block.splitlines()
+    completion_positions = [
+        index
+        for index, line in enumerate(lines)
+        if line == CORRIDOR_COMPLETION_SENTINEL
+        and not line.lstrip().startswith("+ ")
+    ]
+    if not completion_positions:
+        return False
+    first_completion = min(completion_positions)
+    return any(
+        index > first_completion and _line_is_shell_xtrace_command(line)
+        for index, line in enumerate(lines)
+    )
+
+
+def _phase_block_has_nonempty_line_after_completion(phase_block: str) -> bool:
+    lines = phase_block.splitlines()
+    completion_positions = [
+        index
+        for index, line in enumerate(lines)
+        if line == CORRIDOR_COMPLETION_SENTINEL
+        and not line.lstrip().startswith("+ ")
+    ]
+    if not completion_positions:
+        return False
+    first_completion = min(completion_positions)
+    return any(
+        index > first_completion and bool(line.strip())
+        for index, line in enumerate(lines)
+    )
+
+
+def _transcript_has_traced_command_after_completion(transcript: str) -> bool:
+    lines = transcript.splitlines()
+    completion_positions = [
+        index
+        for index, line in enumerate(lines)
+        if line == CORRIDOR_COMPLETION_SENTINEL
+        and not line.lstrip().startswith("+ ")
+    ]
+    if not completion_positions:
+        return False
+    first_completion = min(completion_positions)
+    return any(
+        index > first_completion and _line_is_shell_xtrace_command(line)
+        for index, line in enumerate(lines)
+    )
+
+
+def _transcript_has_nonempty_line_after_completion(transcript: str) -> bool:
+    lines = transcript.splitlines()
+    completion_positions = [
+        index
+        for index, line in enumerate(lines)
+        if line == CORRIDOR_COMPLETION_SENTINEL
+        and not line.lstrip().startswith("+ ")
+    ]
+    if not completion_positions:
+        return False
+    first_completion = min(completion_positions)
+    return any(
+        index > first_completion and bool(line.strip())
+        for index, line in enumerate(lines)
+    )
+
+
+def _phase_output_failure_scan_line(line: str) -> str:
+    """Return output text normalized for failure-marker scanning."""
+
+    stripped_line = ASCII_CONTROL_CHARACTER_PATTERN.sub(
+        "",
+        ANSI_ESCAPE_PATTERN.sub("", line),
+    )
+    return "".join(
+        character
+        for character in stripped_line
+        if unicodedata.category(character) != "Cf"
+    )
+
+
+def _phase_block_forbidden_output_marker(phase: str, phase_block: str) -> str | None:
+    for line in phase_block.splitlines():
+        if _line_is_shell_xtrace_command(line):
+            continue
+        normalized_line = _phase_output_failure_scan_line(line)
+        scan_lines = (line,) if normalized_line == line else (line, normalized_line)
+        for pattern in PHASE_TRANSCRIPT_FORBIDDEN_OUTPUT_PATTERNS.get(phase, ()):
+            if any(pattern.search(scan_line) for scan_line in scan_lines):
+                return pattern.pattern
+    return None
 
 
 def _phase_transcript_errors(phase: str, artifact: dict[str, Any]) -> list[str]:
@@ -3414,16 +4236,56 @@ def _phase_transcript_errors(phase: str, artifact: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     if CORRIDOR_DRY_RUN_SENTINEL in transcript:
         errors.append("evidence artifact is a dry-run transcript")
+    if _unknown_corridor_phase_marker_lines(transcript):
+        errors.append("evidence artifact contains unknown corridor phase marker")
+    if _transcript_has_nonempty_line_before_first_phase_marker(transcript):
+        errors.append(
+            "evidence artifact contains non-empty output before first phase marker"
+        )
     if phase_block is None:
         errors.append("evidence artifact is missing the phase marker")
+    elif _phase_marker_count(phase, transcript) > 1:
+        errors.append("evidence artifact has duplicate phase marker")
     elif (
-        not _phase_block_has_output_fragment(
+        not _phase_block_has_exact_output_line(
             phase_block, CORRIDOR_COMPLETION_SENTINEL
         )
         and not _transcript_has_full_corridor_completion(transcript)
     ):
         errors.append(
             "evidence artifact is missing the phase-block completion sentinel"
+        )
+    elif (
+        _phase_block_has_exact_output_line(phase_block, CORRIDOR_COMPLETION_SENTINEL)
+        and not _phase_block_has_completion_after_required_evidence(
+            phase, phase_block
+        )
+        and not _transcript_has_full_corridor_completion(transcript)
+    ):
+        errors.append(
+            "evidence artifact completion sentinel precedes required phase evidence"
+        )
+    if (
+        phase_block is not None
+        and _phase_block_has_traced_command_after_completion(phase_block)
+    ):
+        errors.append(
+            "evidence artifact contains traced command after completion sentinel"
+        )
+    if (
+        phase_block is not None
+        and _phase_block_has_nonempty_line_after_completion(phase_block)
+    ):
+        errors.append(
+            "evidence artifact contains non-empty output after completion sentinel"
+        )
+    if (
+        phase_block is not None
+        and _transcript_has_multiple_known_phase_markers(transcript)
+        and not _transcript_has_full_corridor_completion(transcript)
+    ):
+        errors.append(
+            "evidence artifact contains incomplete multi-phase corridor transcript"
         )
     required_fragments = PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS.get(phase)
     if required_fragments is None:
@@ -3445,6 +4307,13 @@ def _phase_transcript_errors(phase: str, artifact: dict[str, Any]) -> list[str]:
                     "evidence artifact is missing expected phase-block success marker: "
                     f"{fragment}"
                 )
+    if phase_block is not None:
+        forbidden_marker = _phase_block_forbidden_output_marker(phase, phase_block)
+        if forbidden_marker is not None:
+            errors.append(
+                "evidence artifact contains forbidden phase-block failure marker: "
+                f"{forbidden_marker}"
+            )
     return errors
 
 
@@ -5463,11 +6332,11 @@ def _render_markdown(report: dict[str, Any], *, max_blockers_per_lane: int) -> s
             "- SCCP all-lanes release-checklist exact-boolean source inventory must pin exact checklist-item aggregation, record-presence gates, CLI production-ready exits, source-adapter gate hash/audit replay rejection, and route-canary hash replay rejection before all-lanes evidence can satisfy production readiness.",
             "- SCCP active-launch checklist schema source inventory must pin the active launch checklist ready value, malformed lane metadata, and verifier recomputation before production readiness can pass.",
             "- SCCP release manifest readiness-flags source inventory must pin exact boolean manifest generation, verifier boolean rejection, manifest/report equality checks, and all-lanes readiness recomputation before published bundle readiness can pass.",
-            "- SCCP release manifest artifact-set/order source inventory must pin required artifact paths, manifest-root exclusion, unmanifested artifact/directory rejection, report-referenced artifact closure, and canonical attachment order before published bundle readiness can pass.",
+            "- SCCP release manifest artifact-set/order source inventory must pin required artifact paths, manifest-root exclusion, unmanifested artifact/directory rejection, report-referenced artifact closure, malformed public artifact field-name classification, and canonical attachment order before published bundle readiness can pass.",
             "- SCCP release public blocker-list schema source inventory must pin canonical non-empty blocker strings, no surrounding whitespace, duplicate rejection, ready-surface empty-blocker checks, and invalid-marker rendering before published bundle readiness can pass.",
-            "- SCCP release public scalar-text schema source inventory must pin canonical non-empty scalar text for release-checklist ids/titles, cryptographic-evidence chain/source labels, user-prover submission rows, all-lanes chain labels, destination-binding keys, and route-canary status/source fields before published bundle readiness can pass.",
+            "- SCCP release public scalar-text schema source inventory must pin canonical non-empty scalar text, fixed release-checklist item-id classification, and public object-key classification for release-checklist titles, corridor phase keys, cryptographic-evidence chain/source labels, user-prover submission rows, all-lanes chain labels, all-lanes unknown object/audit keys, destination-binding keys, and route-canary status/source fields before published bundle readiness can pass.",
             "- SCCP release-notes attachment invariants source inventory must pin canonical title/status rendering, manifest handoff, artifact table hashes, blocker visibility, and canonical attachment drift rejection before public bundle readiness can pass.",
-            "- SCCP readiness Markdown invariants source inventory must pin verifier-owned public Markdown sections, checklist and source-inventory blocker visibility, invalid-marker rendering, and canonical Markdown drift rejection before public bundle readiness can pass.",
+            "- SCCP readiness Markdown invariants source inventory must pin verifier-owned public Markdown sections, checklist and source-inventory blocker visibility, invalid-marker rendering, malformed source-inventory gate-name, report-artifact path, and cryptographic-evidence row-domain/audit-key suppression, and canonical Markdown drift rejection before public bundle readiness can pass.",
             "- SCCP Ethereum outbound pre-callback source inventory must pin public SDK regressions that reject foreign-lane outbound requests, forged destination bindings, missing or partial proof-artifact hashes, zero proof-artifact hashes, and callback-visible proof material before outbound prover callbacks can run.",
             "- SCCP Ethereum outbound provider-validation source inventory must pin public SDK and facade guards that validate app-supplied Ethereum mainnet execution providers before outbound submitter callbacks can run.",
             "- SCCP Ethereum local-admission source inventory must pin public SDK regressions that reject mutated proof bytes, all-zero proof/public-input/bundle/envelope bytes, empty envelopes, zero statement/source-material/source-adapter hashes, and stale proof-family metadata before local admission payloads can be submitted.",
@@ -5500,14 +6369,14 @@ def _render_markdown(report: dict[str, Any], *, max_blockers_per_lane: int) -> s
             "- SCCP release native-prover bundle schema source inventory must pin native EVM Groth16 manifest schema, readiness summary schema, artifact hash/path binding, and bundled-manifest drift rejection before published bundle readiness can pass.",
             "- SCCP proof-request bundle/source-proof source inventory must pin canonical bundle-byte and non-SORA source-proof rejection gates across Rust, JavaScript, Python, Swift, Kotlin/JVM, and Java Android.",
             "- SCCP phase-evidence source inventory must pin duplicate assignment and directory override rejection across readiness-report and release-bundle CLIs before corridor phase evidence can satisfy production readiness.",
-            "- SCCP release corridor phase-transcript source inventory must pin exact phase markers, observed completion/success output, traced command fragments, dry-run rejection, and forged-block rejection before corridor logs can satisfy public bundle readiness.",
+            "- SCCP release corridor phase-transcript source inventory must pin exact phase markers, phase-local ordered non-negated/non-diagnostic shell-xtrace-free completion/success output after required commands in per-phase and full-corridor logs, phase-specific traced command shapes with exact pytest positional inputs, option-bound selectors, exact Gradle test command parsing, broad Kotlin package-suite selectors, exact Swift filter commands, exact Android harness class membership, exact Node test/check command files, exact .NET project/filter/nologo commands, exact no-suffix cargo/bash/java commands, and without bare-fragment shortcuts or shell-comment-hidden fragments, restricted cd wrappers, dry-run rejection, failure-marker scans, and forged-block rejection before corridor logs can satisfy public bundle readiness.",
             "- SCCP release bundle source-copy source inventory must pin symlink and control-character rejection for evidence inputs, phase evidence, native EVM prover manifests, and native prover payload sources before bundle copy can run.",
             "- SCCP release bundle output-path source inventory must pin symlink and control-character rejection for output directories before bundle generation can create or overwrite release artifacts.",
             "- SCCP release artifact path text source inventory must pin Markdown-unsafe character rejection for manifest artifact paths, readiness inputs, native prover payload paths, copied bundle filenames, and bundle filesystem entries before release notes can render artifact tables.",
             "- SCCP release input-provenance schema source inventory must pin canonical copied evidence input paths, unique input/input-artifact provenance, copied `evidence/NN-*.toml` layout, and recomputation from copied TOML before published bundle readiness can pass.",
-            "- SCCP release public JSON-root schema source inventory must pin canonical manifest/readiness/all-lanes JSON serialization, duplicate-key rejection, and non-UTF-8 fail-closed diagnostics before published bundle readiness can pass.",
+            "- SCCP release public JSON-root schema source inventory must pin canonical manifest/readiness/all-lanes JSON serialization, duplicate-key rejection with malformed-key classification, non-UTF-8 fail-closed diagnostics, and malformed manifest/readiness root-field classification before published bundle readiness can pass.",
             "- SCCP release public Markdown text schema source inventory must pin UTF-8 readiness/release-note Markdown loading and canonical text drift rejection before published bundle readiness can pass.",
-            "- SCCP release public cryptographic-evidence binding source inventory must pin production-domain inventory, lane-field binding, canonical row recomputation, and active route-canary binding rejection before published bundle readiness can pass.",
+            "- SCCP release public cryptographic-evidence binding source inventory must pin production-domain inventory, row-key and audit-key classification, lane-field binding, canonical row recomputation, Markdown row-domain/audit-key suppression, and active route-canary binding rejection before published bundle readiness can pass.",
             "- SCCP release public submission-surface binding source inventory must pin lane/backend inventory, per-SDK helper inventory, verifier-owned surface recomputation, and corridor-phase binding before published bundle readiness can pass.",
             "- SCCP retired network-surface source inventory must pin the launch-scope no-support note and active-tree scan so retired runtime-network integrations cannot re-enter release evidence silently.",
             "- SCCP unready transparent-proof source inventory must pin the diagnostic `allow_unready` toggle as config-owned, reject environment override paths, and reject production-ready BSC/TRON route configs that force the unready toggle back on.",

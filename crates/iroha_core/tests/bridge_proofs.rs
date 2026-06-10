@@ -2104,8 +2104,8 @@ fn make_sccp_sol_to_sora_message_bridge_proof_with_material_and_deployment(
         });
         if source_deployment.is_some() {
             assert!(
-                material_bound_bundle_is_structural,
-                "deployment-bound source proofs should remain structurally inspectable with source material",
+                !material_bound_bundle_is_structural,
+                "deployment-bound source proofs must not pass the material-only structural verifier",
             );
             assert!(
                 deployment_bound_bundle_is_structural,

@@ -14476,6 +14476,7 @@ mod tests {
             sample_extraction_key: b"soracloud-full-bootstrap-sample-extraction".to_vec(),
             accumulator: b"soracloud-full-bootstrap-accumulator".to_vec(),
             proof_public_input_schema: b"soracloud-full-bootstrap-proof-schema".to_vec(),
+            arithmetic_air_constraint_system: b"soracloud-full-bootstrap-arithmetic-air".to_vec(),
             prover_key: b"soracloud-full-bootstrap-prover-key".to_vec(),
             verifier_key: b"soracloud-full-bootstrap-verifier-key".to_vec(),
         }
@@ -14600,6 +14601,41 @@ mod tests {
         let proof_public_input_schema =
             valid_full_bootstrap_proof_public_input_schema_artifact_payload(&params);
         let proof_public_input_schema_digest = Hash::new(&proof_public_input_schema);
+        let arithmetic_air_constraint_system =
+            iroha_crypto::fhe_bfv::encode_bfv_full_bootstrap_arithmetic_air_constraint_system_artifact_v1(
+                &params,
+                1,
+                &iroha_crypto::fhe_bfv::bfv_full_bootstrap_arithmetic_air_constraint_system_material_v1(),
+            )
+            .expect("encode valid full-bootstrap arithmetic AIR constraint-system artifact");
+        let coefficient_to_slot_key = valid_full_bootstrap_linear_transform_artifact_payload(
+            &params,
+            iroha_crypto::fhe_bfv::BfvFullBootstrapCircuitArtifactRoleV1::CoefficientToSlotKey,
+        );
+        let slot_to_coefficient_key = valid_full_bootstrap_linear_transform_artifact_payload(
+            &params,
+            iroha_crypto::fhe_bfv::BfvFullBootstrapCircuitArtifactRoleV1::SlotToCoefficientKey,
+        );
+        let blind_rotation_key =
+            valid_full_bootstrap_blind_rotation_artifact_payload(&params, accumulator_digest);
+        let sample_extraction_key =
+            valid_full_bootstrap_sample_extraction_switch_key_artifact_payload(
+                &params,
+                &secret_key,
+            );
+        let evaluator_artifact_set_digest =
+            iroha_crypto::fhe_bfv::bfv_full_bootstrap_evaluator_artifact_set_digest_v1(
+                &params,
+                1,
+                &coefficient_to_slot_key,
+                &slot_to_coefficient_key,
+                &blind_rotation_key,
+                &sample_extraction_key,
+                &accumulator,
+                &proof_public_input_schema,
+                &arithmetic_air_constraint_system,
+            )
+            .expect("derive valid full-bootstrap evaluator artifact-set digest");
         let prover_key_material =
             iroha_crypto::fhe_bfv::encode_bfv_full_bootstrap_native_stark_fri_prover_key_material_v1(
                 iroha_data_model::soracloud::SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
@@ -14615,30 +14651,19 @@ mod tests {
                 &params,
                 1,
                 proof_public_input_schema_digest,
+                evaluator_artifact_set_digest,
                 &prover_key_material,
                 &verifier_key_material,
             )
             .expect("valid full-bootstrap proof-key pair");
         BfvFullBootstrapCircuitArtifactBundleV1 {
-            coefficient_to_slot_key: valid_full_bootstrap_linear_transform_artifact_payload(
-                &params,
-                iroha_crypto::fhe_bfv::BfvFullBootstrapCircuitArtifactRoleV1::CoefficientToSlotKey,
-            ),
-            slot_to_coefficient_key: valid_full_bootstrap_linear_transform_artifact_payload(
-                &params,
-                iroha_crypto::fhe_bfv::BfvFullBootstrapCircuitArtifactRoleV1::SlotToCoefficientKey,
-            ),
-            blind_rotation_key: valid_full_bootstrap_blind_rotation_artifact_payload(
-                &params,
-                accumulator_digest,
-            ),
-            sample_extraction_key:
-                valid_full_bootstrap_sample_extraction_switch_key_artifact_payload(
-                    &params,
-                    &secret_key,
-                ),
+            coefficient_to_slot_key,
+            slot_to_coefficient_key,
+            blind_rotation_key,
+            sample_extraction_key,
             accumulator,
             proof_public_input_schema,
+            arithmetic_air_constraint_system,
             prover_key: valid_full_bootstrap_proof_key_artifact_payload(
                 &params,
                 iroha_crypto::fhe_bfv::BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
@@ -14731,6 +14756,9 @@ mod tests {
             sample_extraction_key_digest: Hash::new(&artifacts.sample_extraction_key),
             accumulator_digest: Hash::new(&artifacts.accumulator),
             proof_public_input_schema_digest: Hash::new(&artifacts.proof_public_input_schema),
+            arithmetic_air_constraint_system_artifact_digest: Hash::new(
+                &artifacts.arithmetic_air_constraint_system,
+            ),
             prover_key_digest: Hash::new(&artifacts.prover_key),
             prover_key_material_commitment,
             verifier_key_digest: Hash::new(&artifacts.verifier_key),

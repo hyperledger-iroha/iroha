@@ -79,6 +79,29 @@ public final class SolanaSccpProverTests {
         wrongExpectedDestinationBinding
             .getMessage()
             .contains("expectedDestinationBindingHash must match canonical Solana destination binding"));
+    final String canonicalDestinationBindingHash =
+        SourceSccpProofs.destinationBindingHash(SolanaSccpProver.DOMAIN_SOLANA);
+    for (final SolanaSccpProver.RouteCanaryEvidenceInput replay :
+        new SolanaSccpProver.RouteCanaryEvidenceInput[] {
+          sampleSolanaRouteCanaryEvidence(
+              "4321", "f0VMRgECAwQF", canonicalDestinationBindingHash, null, canonicalDestinationBindingHash, null, null),
+          sampleSolanaRouteCanaryEvidence(
+              "4321", "f0VMRgECAwQF", null, null, "0x" + repeat("33", 32), null, null),
+          sampleSolanaRouteCanaryEvidence(
+              "4321", "f0VMRgECAwQF", null, null, "0x" + repeat("34", 32), null, null),
+          sampleSolanaRouteCanaryEvidence(
+              "4321", "f0VMRgECAwQF", null, null, null, canonicalDestinationBindingHash, null),
+          sampleSolanaRouteCanaryEvidence(
+              "4321", "f0VMRgECAwQF", null, null, null, null, canonicalDestinationBindingHash),
+          sampleSolanaRouteCanaryEvidence(
+              "4321", "f0VMRgECAwQF", null, null, null, null, "0x" + repeat("33", 32)),
+        }) {
+      final IllegalArgumentException replayFailure =
+          assertThrows(
+              IllegalArgumentException.class,
+              () -> SolanaSccpProver.routeCanaryEvidenceHash(replay));
+      assertTrue(replayFailure.getMessage().contains("Solana route canary governed hashes"));
+    }
   }
 
   @Test
@@ -5349,14 +5372,34 @@ public final class SolanaSccpProverTests {
       final String solanaProgramdataExecutableBase64,
       final String destinationBindingHash,
       final String expectedDestinationBindingHash) {
+    return sampleSolanaRouteCanaryEvidence(
+        solanaProgramdataSlot,
+        solanaProgramdataExecutableBase64,
+        destinationBindingHash,
+        expectedDestinationBindingHash,
+        null,
+        null,
+        null);
+  }
+
+  private static SolanaSccpProver.RouteCanaryEvidenceInput sampleSolanaRouteCanaryEvidence(
+      final String solanaProgramdataSlot,
+      final String solanaProgramdataExecutableBase64,
+      final String destinationBindingHash,
+      final String expectedDestinationBindingHash,
+      final String routeAllowlistHash,
+      final String sourceVerifierMaterialHash,
+      final String sourceAdapterEngineDeploymentHash) {
     return new SolanaSccpProver.RouteCanaryEvidenceInput(
-        "0x" + repeat("31", 32),
+        routeAllowlistHash == null ? "0x" + repeat("31", 32) : routeAllowlistHash,
         destinationBindingHash == null
             ? SourceSccpProofs.destinationBindingHash(SolanaSccpProver.DOMAIN_SOLANA)
             : destinationBindingHash,
         expectedDestinationBindingHash,
-        "0x" + repeat("33", 32),
-        "0x" + repeat("34", 32),
+        sourceVerifierMaterialHash == null ? "0x" + repeat("33", 32) : sourceVerifierMaterialHash,
+        sourceAdapterEngineDeploymentHash == null
+            ? "0x" + repeat("34", 32)
+            : sourceAdapterEngineDeploymentHash,
         "3JF3sEqM796hk5WFqA6EtmEwJQ9quALszsfJyvXNQKy3",
         "0xc81178d11a4de525782fe7ac6f5accc2056fa15d1b8c2bfd819eb2ef179c3411",
         "finalized",

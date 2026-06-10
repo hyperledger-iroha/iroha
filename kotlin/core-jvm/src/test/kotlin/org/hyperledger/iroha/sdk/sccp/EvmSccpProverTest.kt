@@ -1,8 +1,11 @@
 package org.hyperledger.iroha.sdk.sccp
 
 import com.sun.net.httpserver.HttpServer
+import java.io.ByteArrayOutputStream
 import java.net.InetSocketAddress
 import java.security.MessageDigest
+import org.bouncycastle.crypto.digests.KeccakDigest
+import org.hyperledger.iroha.sdk.crypto.Blake2b
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -20,7 +23,7 @@ class EvmSccpProverTest {
 
     @Test
     fun proofRequestBindsPublicSignalsAndRelayContext() {
-        val bundleBytes = byteArrayOf(5, 6, 7)
+        val bundleBytes = sampleBundleBytes()
         val sourceProofBytes = byteArrayOf(9, 10)
         val request = SccpEvm.buildProofRequest(
             sampleProofRequestInput(bundleBytes = bundleBytes, sourceProofBytes = sourceProofBytes),
@@ -44,16 +47,13 @@ class EvmSccpProverTest {
         )
         assertEquals("0x" + "56".repeat(32), request.statementHash)
         assertEquals("0x" + "78".repeat(32), request.destinationBindingHash)
-        assertEquals(
-            "0xfb990c2ffdf826c9beb0e74105b060af467570720a1382b48abc42d32850f5ea",
-            request.requestHash,
-        )
+        assertEquals("0xba200357f3f21f7b6eec2c60b95576ab5fce91ee518981a3a139bdec1e03e789", request.requestHash)
 
         val destinationBinding = sampleDestinationBinding()
         val boundRequest = SccpEvm.buildProofRequest(
             EvmSccpProofRequestInput(
                 publicInputs = samplePublicInputs(),
-                bundleBytes = byteArrayOf(5, 6, 7),
+                bundleBytes = sampleBundleBytes(),
                 sourceProofBytes = byteArrayOf(9, 10),
                 statementHash = "56".repeat(32),
                 destinationBinding = destinationBinding,
@@ -66,6 +66,7 @@ class EvmSccpProverTest {
         val bscRequest = SccpEvm.buildProofRequest(
             sampleProofRequestInput(
                 publicInputs = samplePublicInputs(targetDomain = SccpEvm.DOMAIN_BSC),
+                bundleBytes = sampleBundleBytes(targetDomain = SccpEvm.DOMAIN_BSC),
                 sourceProofBytes = byteArrayOf(9, 10),
             ),
         )
@@ -74,7 +75,8 @@ class EvmSccpProverTest {
         assertTrue(request.requestHash != bscRequest.requestHash)
         val shiftedSplitRequest = SccpEvm.buildProofRequest(
             sampleProofRequestInput(
-                bundleBytes = byteArrayOf(5, 6, 7, 9),
+                publicInputs = sampleBundleFixture(nonce = 328L).publicInputs,
+                bundleBytes = sampleBundleFixture(nonce = 328L).bundleBytes,
                 sourceProofBytes = byteArrayOf(10),
             ),
         )
@@ -198,7 +200,7 @@ class EvmSccpProverTest {
         val wrongBindingSource = assertFailsWith<IllegalArgumentException> {
             EvmSccpProofRequestInput(
                 publicInputs = samplePublicInputs(),
-                bundleBytes = byteArrayOf(5, 6, 7),
+                bundleBytes = sampleBundleBytes(),
                 statementHash = "56".repeat(32),
                 destinationBinding = destinationBinding.copy(sourceDomain = SccpEvm.DOMAIN_ETH),
             )
@@ -208,7 +210,7 @@ class EvmSccpProverTest {
         val forgedBindingHash = assertFailsWith<IllegalArgumentException> {
             EvmSccpProofRequestInput(
                 publicInputs = samplePublicInputs(),
-                bundleBytes = byteArrayOf(5, 6, 7),
+                bundleBytes = sampleBundleBytes(),
                 statementHash = "56".repeat(32),
                 destinationBinding = destinationBinding.copy(hash = "0x" + "99".repeat(32)),
             )
@@ -217,7 +219,7 @@ class EvmSccpProverTest {
 
         bundleBytes[0] = 99
         sourceProofBytes[0] = 99
-        assertContentEquals(byteArrayOf(5, 6, 7), request.bundleBytes)
+        assertContentEquals(sampleBundleBytes(), request.bundleBytes)
         assertContentEquals(byteArrayOf(9, 10), request.sourceProofBytes)
 
         val exposedPublicInputs = request.publicInputsBytes
@@ -227,7 +229,7 @@ class EvmSccpProverTest {
         exposedBundle[0] = 99
         exposedSourceProof[0] = 99
         assertTrue(request.publicInputsBytes[0].toInt() != 99)
-        assertContentEquals(byteArrayOf(5, 6, 7), request.bundleBytes)
+        assertContentEquals(sampleBundleBytes(), request.bundleBytes)
         assertContentEquals(byteArrayOf(9, 10), request.sourceProofBytes)
 
         val callbackSnapshot = SccpEvm.callbackRequestSnapshot(request)
@@ -237,7 +239,7 @@ class EvmSccpProverTest {
         val snapshotSourceProof = callbackSnapshot.sourceProofBytes
         snapshotBundle[0] = 77
         snapshotSourceProof[0] = 77
-        assertContentEquals(byteArrayOf(5, 6, 7), callbackSnapshot.bundleBytes)
+        assertContentEquals(sampleBundleBytes(), callbackSnapshot.bundleBytes)
         assertContentEquals(byteArrayOf(9, 10), callbackSnapshot.sourceProofBytes)
     }
 
@@ -331,14 +333,14 @@ class EvmSccpProverTest {
             SccpEvm.buildProofRequest(sampleProductionProofRequestInput(sourceProofBytes = byteArrayOf(9, 10)))
         mutatedRequestView.bundleBytes[0] = 9
         SccpEvm.wrapProofResult(proofBytes, mutatedRequestView)
-        assertContentEquals(byteArrayOf(5, 6, 7), mutatedRequestView.bundleBytes)
+        assertContentEquals(sampleBundleBytes(), mutatedRequestView.bundleBytes)
     }
 
     @Test
     fun proverResolvesWitnessProviderBeforeBuildingRequest() {
         var resolved = false
         val proofBytes = sampleGroth16ProofBytes()
-        val bundleBytes = byteArrayOf(5, 6, 7)
+        val bundleBytes = sampleBundleBytes()
         val input = sampleProductionProofRequestInput(bundleBytes = bundleBytes)
         val prover = EvmSccpProver(
             witnessProvider = EvmSccpWitnessProvider { input ->
@@ -346,7 +348,11 @@ class EvmSccpProverTest {
                 assertFalse(input.bundleBytes === bundleBytes)
                 input.bundleBytes[0] = 0x7f
                 resolved = true
-                input.copy(sourceProofBytes = byteArrayOf(9, 10))
+                sampleProductionProofRequestInput(
+                    publicInputs = input.publicInputs,
+                    sourceProofBytes = byteArrayOf(9, 10),
+                    statementHash = input.statementHash,
+                )
             },
             proofEngine = EvmSccpProofEngine { request ->
                 assertTrue(resolved)
@@ -358,8 +364,8 @@ class EvmSccpProverTest {
         val result = prover.prove(input)
 
         assertContentEquals(byteArrayOf(9, 10), result.sourceProofBytes)
-        assertContentEquals(byteArrayOf(5, 6, 7), input.bundleBytes)
-        assertContentEquals(byteArrayOf(5, 6, 7), bundleBytes)
+        assertContentEquals(sampleBundleBytes(), input.bundleBytes)
+        assertContentEquals(sampleBundleBytes(), bundleBytes)
     }
 
     @Test
@@ -468,7 +474,7 @@ class EvmSccpProverTest {
         assertEquals("0x" + "00".repeat(30) + "0180", "0x" + hexLower(submission.callData.copyOfRange(260, 292)))
         assertEquals(SccpEvm.messageTransparentPublicInputAbiWords(samplePublicInputs()), submission.publicInputWords)
         assertEquals(proofResult.publicSignalWords, submission.publicSignalWords)
-        assertContentEquals(byteArrayOf(5, 6, 7), proofResult.bundleBytes)
+        assertContentEquals(sampleBundleBytes(), proofResult.bundleBytes)
         assertContentEquals(byteArrayOf(9, 10), proofResult.sourceProofBytes)
         assertContentEquals(proofBytes, submission.proofBytes)
         assertContentEquals(submission.callData, submission.envelopeBytes)
@@ -550,7 +556,7 @@ class EvmSccpProverTest {
         val staleRequestError = assertFailsWith<IllegalArgumentException> {
             SccpEvm.buildSubmission(
                 EvmSccpSubmissionInput(
-                    proofResult = proofResult.copy(bundleBytes = byteArrayOf(5, 6, 8)),
+                    proofResult = proofResult.copy(sourceProofBytes = byteArrayOf(9, 11)),
                 ),
             )
         }
@@ -584,7 +590,6 @@ class EvmSccpProverTest {
 
     @Test
     fun bscMainnetFacadeRequiresChainId56AndBscTarget() {
-        val proofBytes = sampleGroth16ProofBytes()
         val binding = SccpBsc.destinationBinding(
             verifierAddress = "0x" + "11".repeat(20),
             bridgeAddress = "0x" + "22".repeat(20),
@@ -603,7 +608,7 @@ class EvmSccpProverTest {
         val request = SccpBsc.buildProofRequest(
             EvmSccpProofRequestInput(
                 publicInputs = samplePublicInputs(targetDomain = SccpEvm.DOMAIN_BSC),
-                bundleBytes = byteArrayOf(5, 6, 7),
+                bundleBytes = sampleBundleBytes(targetDomain = SccpEvm.DOMAIN_BSC),
                 sourceProofBytes = byteArrayOf(9, 10),
                 statementHash = "56".repeat(32),
                 destinationBinding = binding,
@@ -612,6 +617,7 @@ class EvmSccpProverTest {
         assertEquals(SccpEvm.DOMAIN_BSC, request.targetDomain)
         assertEquals(binding.hash, request.destinationBindingHash)
 
+        val proofBytes = sampleGroth16ProofBytes(publicInputs = request.publicInputs)
         val result = SccpBsc.wrapProofResult(proofBytes, request)
         assertFailsWith<IllegalArgumentException> {
             SccpBsc.wrapProofResult(
@@ -659,7 +665,7 @@ class EvmSccpProverTest {
             SccpBsc.buildProofRequest(
                 EvmSccpProofRequestInput(
                     publicInputs = samplePublicInputs(targetDomain = SccpEvm.DOMAIN_BSC),
-                    bundleBytes = byteArrayOf(5, 6, 7),
+                    bundleBytes = sampleBundleBytes(targetDomain = SccpEvm.DOMAIN_BSC),
                     statementHash = "56".repeat(32),
                     destinationBinding = wrongChainBinding,
                 ),
@@ -758,7 +764,7 @@ class EvmSccpProverTest {
 
         val input = EvmSccpProofRequestInput(
             publicInputs = samplePublicInputs(targetDomain = SccpEvm.DOMAIN_ETH),
-            bundleBytes = byteArrayOf(5, 6, 7),
+            bundleBytes = sampleBundleBytes(),
             sourceProofBytes = byteArrayOf(9, 10),
             statementHash = "56".repeat(32),
             destinationBinding = binding,
@@ -1664,7 +1670,7 @@ class EvmSccpProverTest {
             SccpEthereumMainnet.buildProofRequest(
                 EvmSccpProofRequestInput(
                     publicInputs = samplePublicInputs(targetDomain = SccpEvm.DOMAIN_BSC),
-                    bundleBytes = byteArrayOf(5, 6, 7),
+                    bundleBytes = sampleBundleBytes(targetDomain = SccpEvm.DOMAIN_BSC),
                     statementHash = "56".repeat(32),
                     destinationBinding = binding,
                 ),
@@ -4477,12 +4483,16 @@ class EvmSccpProverTest {
         return receipt
     }
 
-    private fun sampleGroth16ProofBytes(overrides: Map<Int, ByteArray> = emptyMap()): ByteArray {
+    private fun sampleGroth16ProofBytes(
+        overrides: Map<Int, ByteArray> = emptyMap(),
+        publicInputs: EvmSccpPublicInputsInput = samplePublicInputs(),
+        sourceDomain: Int = SccpEvm.DOMAIN_SORA,
+    ): ByteArray {
         val words = mutableListOf(
             abiWord(1),
-            repeatedWord(0x11),
-            abiWord(SccpSolana.DOMAIN_SORA.toLong()),
-            repeatedWord(0x33),
+            hexWord(publicInputs.messageId.removePrefix("0x")),
+            abiWord(sourceDomain.toLong()),
+            hexWord(publicInputs.commitmentRoot.removePrefix("0x")),
             abiWord(1),
             abiWord(2),
             hexWord("1800deef121f1e76426a00665e5c4479674322d4f75edadd46debd5cd992f6ed"),
@@ -4682,6 +4692,140 @@ class EvmSccpProverTest {
     private fun sha256Hex(bytes: ByteArray): String =
         "0x" + hexLower(MessageDigest.getInstance("SHA-256").digest(bytes))
 
+    private data class SampleBundleFixture(
+        val publicInputs: EvmSccpPublicInputsInput,
+        val bundleBytes: ByteArray,
+    )
+
+    private fun sampleBundleBytes(
+        sourceDomain: Int = SccpSolana.DOMAIN_SORA,
+        targetDomain: Int = SccpEvm.DOMAIN_ETH,
+        nonce: Long = 327L,
+    ): ByteArray =
+        sampleBundleFixture(
+            sourceDomain = sourceDomain,
+            targetDomain = targetDomain,
+            nonce = nonce,
+        ).bundleBytes
+
+    private fun sampleBundleFixture(
+        sourceDomain: Int = SccpSolana.DOMAIN_SORA,
+        targetDomain: Int = SccpEvm.DOMAIN_ETH,
+        nonce: Long = 327L,
+    ): SampleBundleFixture {
+        val recipientCodec = if (targetDomain == SccpTron.DOMAIN_TRON) 5 else 2
+        val recipient = if (targetDomain == SccpTron.DOMAIN_TRON) {
+            "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8"
+        } else {
+            "0x" + "11".repeat(20)
+        }
+        val routeId = when (targetDomain) {
+            SccpEvm.DOMAIN_BSC -> "sora-bsc-xor"
+            SccpTron.DOMAIN_TRON -> "sora-tron-xor"
+            else -> "sora-eth-xor"
+        }
+        val payloadBody = ByteArrayOutputStream()
+        payloadBody.write(1)
+        writeTestU32Le(payloadBody, sourceDomain)
+        writeTestU32Le(payloadBody, targetDomain)
+        writeTestU64Le(payloadBody, nonce)
+        writeTestU32Le(payloadBody, SccpSolana.DOMAIN_SORA)
+        payloadBody.write(1)
+        writeTestBytes(payloadBody, "xor#sccp".toByteArray(Charsets.UTF_8))
+        writeTestU128Le(payloadBody, 42L)
+        payloadBody.write(1)
+        writeTestBytes(payloadBody, "alice@sora".toByteArray(Charsets.UTF_8))
+        payloadBody.write(recipientCodec)
+        writeTestBytes(payloadBody, recipient.toByteArray(Charsets.UTF_8))
+        payloadBody.write(1)
+        writeTestBytes(payloadBody, routeId.toByteArray(Charsets.UTF_8))
+
+        val payloadBodyBytes = payloadBody.toByteArray()
+        val payloadBytes = byteArrayOf(0x02) + payloadBodyBytes
+        val messageId = "0x" + hexLower(prefixedKeccakBytes("sccp:transfer:v1", payloadBodyBytes))
+        val payloadHash = "0x" + hexLower(
+            Blake2b.digest256("sccp:payload:v1".toByteArray(Charsets.UTF_8) + payloadBytes),
+        )
+
+        val commitment = ByteArrayOutputStream()
+        commitment.write(1)
+        commitment.write(6)
+        writeTestU32Le(commitment, targetDomain)
+        commitment.write(hexBytes(messageId.removePrefix("0x")))
+        commitment.write(hexBytes(payloadHash.removePrefix("0x")))
+        val commitmentBytes = commitment.toByteArray()
+        val currentRoot = Blake2b.digest256("sccp:hub:leaf:v1".toByteArray(Charsets.UTF_8) + commitmentBytes)
+        val commitmentRoot = "0x" + hexLower(currentRoot)
+
+        val merkleProof = ByteArrayOutputStream()
+        writeTestU32Le(merkleProof, 0)
+
+        val bundle = ByteArrayOutputStream()
+        bundle.write(1)
+        bundle.write(currentRoot)
+        writeTestBytes(bundle, commitmentBytes)
+        writeTestBytes(bundle, merkleProof.toByteArray())
+        writeTestBytes(bundle, payloadBytes)
+        writeTestBytes(bundle, byteArrayOf(0x01, 0x02, 0x03))
+
+        return SampleBundleFixture(
+            publicInputs = EvmSccpPublicInputsInput(
+                messageId = messageId,
+                payloadHash = payloadHash,
+                targetDomain = targetDomain,
+                commitmentRoot = commitmentRoot,
+                finalityHeight = "19",
+                finalityBlockHash = "44".repeat(32),
+            ),
+            bundleBytes = bundle.toByteArray(),
+        )
+    }
+
+    private fun writeTestBytes(out: ByteArrayOutputStream, value: ByteArray) {
+        writeTestU32Le(out, value.size)
+        out.write(value)
+    }
+
+    private fun writeTestU32Le(out: ByteArrayOutputStream, value: Int) {
+        require(value >= 0)
+        out.write(value and 0xff)
+        out.write((value ushr 8) and 0xff)
+        out.write((value ushr 16) and 0xff)
+        out.write((value ushr 24) and 0xff)
+    }
+
+    private fun writeTestU64Le(out: ByteArrayOutputStream, value: Long) {
+        var working = value
+        repeat(8) {
+            out.write((working and 0xffL).toInt())
+            working = working ushr 8
+        }
+    }
+
+    private fun writeTestU128Le(out: ByteArrayOutputStream, value: Long) {
+        writeTestU64Le(out, value)
+        writeTestU64Le(out, 0L)
+    }
+
+    private fun hexBytes(hex: String): ByteArray {
+        require(hex.length % 2 == 0)
+        val out = ByteArray(hex.length / 2)
+        for (index in out.indices) {
+            out[index] = hex.substring(index * 2, index * 2 + 2).toInt(16).toByte()
+        }
+        return out
+    }
+
+    private fun prefixedKeccakBytes(prefix: String, payload: ByteArray): ByteArray {
+        val digest = KeccakDigest(256)
+        val prefixBytes = prefix.toByteArray(Charsets.UTF_8)
+        digest.update(prefixBytes, 0, prefixBytes.size)
+        digest.update(payload, 0, payload.size)
+        val out = ByteArray(32)
+        digest.doFinal(out, 0)
+        return out
+    }
+
     private fun nativeEvmProverArtifactBytes(label: String): ByteArray {
         val labelBytes = label.toByteArray(Charsets.UTF_8)
         val bytes = ByteArray(256) { index ->
@@ -4693,7 +4837,7 @@ class EvmSccpProverTest {
 
     private fun sampleProofRequestInput(
         publicInputs: EvmSccpPublicInputsInput = samplePublicInputs(),
-        bundleBytes: ByteArray = byteArrayOf(5, 6, 7),
+        bundleBytes: ByteArray = sampleBundleBytes(targetDomain = publicInputs.targetDomain),
         sourceProofBytes: ByteArray = ByteArray(0),
         statementHash: String = "56".repeat(32),
         destinationBindingHash: String = "78".repeat(32),
@@ -4716,7 +4860,7 @@ class EvmSccpProverTest {
 
     private fun sampleProductionProofRequestInput(
         publicInputs: EvmSccpPublicInputsInput = samplePublicInputs(),
-        bundleBytes: ByteArray = byteArrayOf(5, 6, 7),
+        bundleBytes: ByteArray = sampleBundleBytes(targetDomain = publicInputs.targetDomain),
         sourceProofBytes: ByteArray = ByteArray(0),
         statementHash: String = "56".repeat(32),
         backend: String = SccpEvm.GROTH16_BN254_PROOF_BACKEND_V1,
@@ -4963,13 +5107,15 @@ class EvmSccpProverTest {
     private fun samplePublicInputs(
         targetDomain: Int = SccpEvm.DOMAIN_ETH,
         finalityHeight: String = "19",
-    ): EvmSccpPublicInputsInput =
-        EvmSccpPublicInputsInput(
-            messageId = "11".repeat(32),
-            payloadHash = "22".repeat(32),
+    ): EvmSccpPublicInputsInput {
+        val fixture = sampleBundleFixture(targetDomain = targetDomain)
+        return EvmSccpPublicInputsInput(
+            messageId = fixture.publicInputs.messageId,
+            payloadHash = fixture.publicInputs.payloadHash,
             targetDomain = targetDomain,
-            commitmentRoot = "33".repeat(32),
+            commitmentRoot = fixture.publicInputs.commitmentRoot,
             finalityHeight = finalityHeight,
-            finalityBlockHash = "44".repeat(32),
+            finalityBlockHash = fixture.publicInputs.finalityBlockHash,
         )
+    }
 }

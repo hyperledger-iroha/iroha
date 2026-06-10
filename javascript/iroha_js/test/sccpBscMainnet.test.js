@@ -18,6 +18,8 @@ import {
   SCCP_DOMAIN_BSC,
   SCCP_DOMAIN_ETH,
   SCCP_DOMAIN_SORA,
+  SCCP_CODEC_EVM_HEX,
+  SCCP_CODEC_TEXT_UTF8,
   SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1,
   SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
   SCCP_GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1,
@@ -25,6 +27,8 @@ import {
   SCCP_LOCAL_ADMISSION_ENTRYPOINT_V1,
   SCCP_LOCAL_ADMISSION_SUBMISSION_KIND_V1,
   SCCP_NATIVE_EVM_PROVER_BUNDLE_SCHEMA_V1,
+  SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1,
+  SCCP_TAIRA_XOR_ASSET_KEY_V1,
   bscMainnetSccpDestinationBinding,
   bscTestnetSccpDestinationBinding,
   bscSccpReceiptProofHash,
@@ -33,6 +37,8 @@ import {
   buildBscTestnetSccpLocalAdmissionSubmission,
   buildBscTestnetSccpDestinationProofRequest,
   buildBscTestnetSccpDestinationSubmission,
+  canonicalSccpMessageProofBundleBytes,
+  canonicalSccpPayloadEnvelopeBytes,
   evmSccpSourceEventTopic,
   parseBscMainnetNativeEvmProverBundleManifest,
   parseBscMainnetNativeEvmProverParityFixture,
@@ -50,6 +56,9 @@ import {
   verifyBscMainnetNativeEvmProverArtifacts,
   verifyBscTestnetNativeEvmProverArtifacts,
   verifyBscTestnetNativeEvmProverArtifactsFromBundle,
+  sccpMerkleRootFromCommitment,
+  sccpPayloadHash,
+  sccpTransferMessageId,
   wrapBscMainnetSccpDestinationProofResult,
   wrapBscTestnetSccpDestinationProofResult,
 } from "../src/sccp.js";
@@ -115,14 +124,65 @@ const sourceEventLog = (overrides = {}) => ({
   ...overrides,
 });
 
-const samplePublicInputs = {
-  messageId: hex32("11"),
-  payloadHash: hex32("22"),
-  targetDomain: SCCP_DOMAIN_BSC,
-  commitmentRoot: hex32("33"),
-  finalityHeight: "42",
-  finalityBlockHash: hex32("55"),
+const buildSampleOutboundBundleFixture = ({
+  targetDomain = SCCP_DOMAIN_BSC,
+  nonce = 1n,
+} = {}) => {
+  const transferPayload = {
+    version: 1,
+    source_domain: SCCP_DOMAIN_SORA,
+    dest_domain: targetDomain,
+    nonce,
+    asset_home_domain: SCCP_DOMAIN_SORA,
+    asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+    asset_id: SCCP_TAIRA_XOR_ASSET_KEY_V1,
+    amount: 1000n,
+    sender_codec: SCCP_CODEC_TEXT_UTF8,
+    sender: "alice@sora",
+    recipient_codec: SCCP_CODEC_EVM_HEX,
+    recipient: `0x${"11".repeat(20)}`,
+    route_id_codec: SCCP_CODEC_TEXT_UTF8,
+    route_id:
+      targetDomain === SCCP_DOMAIN_BSC
+        ? SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1
+        : "sccp-eth-mainnet-xor-route-v1",
+  };
+  const payloadEnvelope = { kind: "Transfer", value: transferPayload };
+  const payloadBytes = canonicalSccpPayloadEnvelopeBytes(payloadEnvelope);
+  const messageId = sccpTransferMessageId(transferPayload);
+  const payloadHash = sccpPayloadHash(payloadBytes);
+  const commitment = {
+    version: 1,
+    kind: "Transfer",
+    target_domain: targetDomain,
+    message_id: messageId,
+    payload_hash: payloadHash,
+  };
+  const commitmentRoot = sccpMerkleRootFromCommitment(commitment, {
+    steps: [],
+  });
+  const bundle = {
+    version: 1,
+    commitment_root: commitmentRoot,
+    commitment,
+    merkle_proof: { steps: [] },
+    payload: payloadEnvelope,
+    finality_proof: "0x010203",
+  };
+  return {
+    publicInputs: {
+      messageId,
+      payloadHash,
+      targetDomain,
+      commitmentRoot,
+      finalityHeight: "42",
+      finalityBlockHash: hex32("55"),
+    },
+    bundleBytes: canonicalSccpMessageProofBundleBytes(bundle),
+  };
 };
+const sampleOutboundFixture = buildSampleOutboundBundleFixture();
+const samplePublicInputs = sampleOutboundFixture.publicInputs;
 
 const sampleDestinationBindingInput = (overrides = {}) => ({
   verifierAddress: `0x${"11".repeat(20)}`,
@@ -139,28 +199,43 @@ const destinationBindingInputFromBinding = (binding) => ({
   verifierKeyHash: binding.verifierKeyHash,
 });
 
-const sampleOutboundInput = (targetDomain = SCCP_DOMAIN_BSC, destinationBindingOverrides = {}) => ({
-  publicInputs: { ...samplePublicInputs, targetDomain },
-  bundleBytes: [1, 2, 3],
-  destinationBinding: bscMainnetSccpDestinationBinding(
-    sampleDestinationBindingInput(destinationBindingOverrides),
-  ),
-  sourceDomain: SCCP_DOMAIN_SORA,
-  statementHash: hex32("66"),
-});
+const sampleOutboundInput = (
+  targetDomain = SCCP_DOMAIN_BSC,
+  destinationBindingOverrides = {},
+) => {
+  const fixture =
+    targetDomain === SCCP_DOMAIN_BSC
+      ? sampleOutboundFixture
+      : buildSampleOutboundBundleFixture({ targetDomain });
+  return {
+    publicInputs: { ...fixture.publicInputs },
+    bundleBytes: fixture.bundleBytes,
+    destinationBinding: bscMainnetSccpDestinationBinding(
+      sampleDestinationBindingInput(destinationBindingOverrides),
+    ),
+    sourceDomain: SCCP_DOMAIN_SORA,
+    statementHash: hex32("66"),
+  };
+};
 
 const sampleBscTestnetOutboundInput = (
   targetDomain = SCCP_DOMAIN_BSC,
   destinationBindingOverrides = {},
-) => ({
-  publicInputs: { ...samplePublicInputs, targetDomain },
-  bundleBytes: [1, 2, 3],
-  destinationBinding: bscTestnetSccpDestinationBinding(
-    sampleDestinationBindingInput(destinationBindingOverrides),
-  ),
-  sourceDomain: SCCP_DOMAIN_SORA,
-  statementHash: hex32("66"),
-});
+) => {
+  const fixture =
+    targetDomain === SCCP_DOMAIN_BSC
+      ? sampleOutboundFixture
+      : buildSampleOutboundBundleFixture({ targetDomain });
+  return {
+    publicInputs: { ...fixture.publicInputs },
+    bundleBytes: fixture.bundleBytes,
+    destinationBinding: bscTestnetSccpDestinationBinding(
+      sampleDestinationBindingInput(destinationBindingOverrides),
+    ),
+    sourceDomain: SCCP_DOMAIN_SORA,
+    statementHash: hex32("66"),
+  };
+};
 
 const sampleBscTestnetNativeEvmProverBundle = (
   destinationBindingHash,
@@ -554,13 +629,13 @@ const BN254_G2_GENERATOR_WORDS = [
   abiWord(0x090689d0585ff075ec9e99ad690c3395bc4b313370b38ef355acdadcd122975bn),
 ];
 
-const groth16ProofBytes = () => {
+const groth16ProofBytes = (publicInputs = samplePublicInputs) => {
   const out = new Uint8Array(SCCP_GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1);
   const words = [
     abiWord(1),
-    Uint8Array.from({ length: 32 }, () => 0x11),
+    Uint8Array.from(Buffer.from(publicInputs.messageId.slice(2), "hex")),
     abiWord(SCCP_DOMAIN_SORA),
-    Uint8Array.from({ length: 32 }, () => 0x33),
+    Uint8Array.from(Buffer.from(publicInputs.commitmentRoot.slice(2), "hex")),
     abiWord(1),
     abiWord(2),
     ...BN254_G2_GENERATOR_WORDS,
@@ -953,7 +1028,7 @@ test("BSC testnet destination helpers bind outbound proofs to chain id 97", () =
 
   const input = {
     publicInputs: samplePublicInputs,
-    bundleBytes: [1, 2, 3],
+    bundleBytes: sampleOutboundFixture.bundleBytes,
     destinationBinding: testnetBinding,
     sourceDomain: SCCP_DOMAIN_SORA,
     statementHash: hex32("66"),
@@ -962,7 +1037,10 @@ test("BSC testnet destination helpers bind outbound proofs to chain id 97", () =
   assert.equal(request.targetDomain, SCCP_DOMAIN_BSC);
   assert.equal(request.destinationBinding.networkId, SCCP_BSC_TESTNET_NETWORK_ID);
 
-  const proofResult = wrapBscTestnetSccpDestinationProofResult(GROTH16_PROOF_BYTES, request);
+  const proofResult = wrapBscTestnetSccpDestinationProofResult(
+    groth16ProofBytes(request.publicInputs),
+    request,
+  );
   const submission = buildBscTestnetSccpDestinationSubmission({ proofResult });
   assert.equal(submission.targetDomain, SCCP_DOMAIN_BSC);
   assert.equal(submission.destinationBindingHash, request.destinationBindingHash);
@@ -978,13 +1056,14 @@ test("BSC testnet destination helpers bind outbound proofs to chain id 97", () =
     () =>
       buildBscTestnetSccpDestinationProofRequest({
         ...input,
-        publicInputs: { ...samplePublicInputs, targetDomain: SCCP_DOMAIN_ETH },
+        ...sampleBscTestnetOutboundInput(SCCP_DOMAIN_ETH),
+        destinationBinding: testnetBinding,
       }),
     /destinationBinding must match request route|target BSC/u,
   );
   const mainnetRequest = buildBscMainnetSccpDestinationProofRequest(sampleOutboundInput());
   const mainnetProofResult = wrapBscMainnetSccpDestinationProofResult(
-    GROTH16_PROOF_BYTES,
+    groth16ProofBytes(mainnetRequest.publicInputs),
     mainnetRequest,
   );
   assert.throws(
@@ -1012,7 +1091,7 @@ test("BscTestnetSccp keeps outbound proof and calldata on BSC testnet", async ()
   );
 
   const proofResult = wrapBscTestnetSccpDestinationProofResult(
-    GROTH16_PROOF_BYTES,
+    groth16ProofBytes(request.publicInputs),
     request,
   );
   const submission = sdk.buildBscCalldata({ proofResult });
@@ -1021,7 +1100,7 @@ test("BscTestnetSccp keeps outbound proof and calldata on BSC testnet", async ()
 
   const mainnetRequest = buildBscMainnetSccpDestinationProofRequest(sampleOutboundInput());
   const mainnetProofResult = wrapBscMainnetSccpDestinationProofResult(
-    GROTH16_PROOF_BYTES,
+    groth16ProofBytes(mainnetRequest.publicInputs),
     mainnetRequest,
   );
   assert.throws(
@@ -1135,7 +1214,7 @@ test("BscTestnetSccp validates native prover bundles and binds artifact hashes",
       async prove(request) {
         factoryRequest = request;
         return wrapBscTestnetSccpDestinationProofResult(
-          GROTH16_PROOF_BYTES,
+          groth16ProofBytes(request.publicInputs),
           request,
         );
       },
@@ -1367,7 +1446,10 @@ test("BscMainnetSccp calldata requires a wrapped BSC mainnet proof result", () =
       destinationBindingInputFromBinding(destinationBinding),
     ),
   );
-  const proofResult = wrapBscMainnetSccpDestinationProofResult(GROTH16_PROOF_BYTES, request);
+  const proofResult = wrapBscMainnetSccpDestinationProofResult(
+    groth16ProofBytes(request.publicInputs),
+    request,
+  );
   const submission = sdk.buildBscCalldata({ proofResult });
 
   assert.equal(submission.targetDomain, SCCP_DOMAIN_BSC);
@@ -1375,10 +1457,13 @@ test("BscMainnetSccp calldata requires a wrapped BSC mainnet proof result", () =
 
   assert.throws(
     () =>
-      wrapBscMainnetSccpDestinationProofResult(GROTH16_PROOF_BYTES, {
+      wrapBscMainnetSccpDestinationProofResult(
+        groth16ProofBytes(request.publicInputs),
+        {
         ...request,
         destinationBindingHash: hex32("99"),
-      }),
+        },
+      ),
     /canonical|destinationBinding/u,
   );
 
@@ -1386,7 +1471,7 @@ test("BscMainnetSccp calldata requires a wrapped BSC mainnet proof result", () =
     () =>
       sdk.buildBscCalldata({
         publicInputs: samplePublicInputs,
-        proofBytes: GROTH16_PROOF_BYTES,
+        proofBytes: groth16ProofBytes(request.publicInputs),
         sourceDomain: SCCP_DOMAIN_SORA,
         statementHash: request.statementHash,
         destinationBindingHash: request.destinationBindingHash,
@@ -1418,17 +1503,22 @@ test("BscMainnetSccp binds custom outbound proof results to the requested proof"
   const nativeProverSelfTest = (context) => context.expectedResult;
   const referenceSdk = new BscMainnetSccp({ nativeProverArtifacts });
   const expectedRequest = referenceSdk.buildOutboundProofRequest(input);
+  const wrongFixture = buildSampleOutboundBundleFixture({ nonce: 2n });
   const wrongRequest = referenceSdk.buildOutboundProofRequest({
     ...sampleOutboundInput(
       SCCP_DOMAIN_BSC,
       destinationBindingInputFromBinding(destinationBinding),
     ),
-    bundleBytes: [9, 8, 7],
+    publicInputs: wrongFixture.publicInputs,
+    bundleBytes: wrongFixture.bundleBytes,
   });
-  const wrongProofResult = wrapBscMainnetSccpDestinationProofResult(
-    GROTH16_PROOF_BYTES,
-    wrongRequest,
-  );
+  const wrongProofResult = {
+    ...wrapBscMainnetSccpDestinationProofResult(
+      groth16ProofBytes(expectedRequest.publicInputs),
+      expectedRequest,
+    ),
+    requestHash: wrongRequest.requestHash,
+  };
   let seenRequest;
   const rejectingSdk = new BscMainnetSccp({
     nativeProverArtifacts,
@@ -1476,7 +1566,10 @@ test("BscMainnetSccp binds custom outbound proof results to the requested proof"
     outboundProver: {
       async prove(request) {
         acceptedRequest = request;
-        return wrapBscMainnetSccpDestinationProofResult(GROTH16_PROOF_BYTES, request);
+        return wrapBscMainnetSccpDestinationProofResult(
+          groth16ProofBytes(request.publicInputs),
+          request,
+        );
       },
     },
   });
@@ -1509,7 +1602,10 @@ test("BscMainnetSccp outbound provider path derives target from wrapped proof re
       destinationBindingInputFromBinding(destinationBinding),
     ),
   );
-  const proofResult = wrapBscMainnetSccpDestinationProofResult(GROTH16_PROOF_BYTES, request);
+  const proofResult = wrapBscMainnetSccpDestinationProofResult(
+    groth16ProofBytes(request.publicInputs),
+    request,
+  );
 
   assert.equal(await sdk.submitOutboundToBsc({ proofResult }), "0xbsc1");
   assert.equal(submittedTxs[0].to, request.destinationBinding.bridgeAddress);
@@ -1554,7 +1650,10 @@ test("BscMainnetSccp validates configured providers before app-owned submit call
       destinationBindingInputFromBinding(destinationBinding),
     ),
   );
-  const proofResult = wrapBscMainnetSccpDestinationProofResult(GROTH16_PROOF_BYTES, request);
+  const proofResult = wrapBscMainnetSccpDestinationProofResult(
+    groth16ProofBytes(request.publicInputs),
+    request,
+  );
   let called = false;
   await assert.rejects(
     () =>
@@ -1634,7 +1733,7 @@ test("BscTestnetSccp outbound provider path submits on chain id 0x61", async () 
     ),
   );
   const proofResult = wrapBscTestnetSccpDestinationProofResult(
-    GROTH16_PROOF_BYTES,
+    groth16ProofBytes(request.publicInputs),
     request,
   );
 
@@ -1668,7 +1767,7 @@ test("BscTestnetSccp validates configured providers before app-owned submit call
     ),
   );
   const proofResult = wrapBscTestnetSccpDestinationProofResult(
-    GROTH16_PROOF_BYTES,
+    groth16ProofBytes(request.publicInputs),
     request,
   );
   let called = false;

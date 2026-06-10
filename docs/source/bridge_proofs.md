@@ -14,7 +14,7 @@ Torii now exposes two SCCP bundle families:
 The active SCCP surface is limited to Ethereum, BSC, Solana, TON, and TRON.
 Retired runtime-network families outside that launch scope are not supported
 for now.
-Sub&#115;trate/Pol&#107;adot networks are explicitly outside SCCP launch support for now.
+SCCP will not support Sub&#115;trate/Pol&#107;adot networks for now.
 Torii public SCCP discovery, proof manifests, route readiness, SDK helpers, and
 operator scripts must advertise only those lanes. Unsupported domain ids fail at
 the absent-manifest/backend boundary rather than routing through diagnostic
@@ -35,13 +35,27 @@ the normalized lane summary must stay on domain `1`, chain `eth`, report
 `production_ready = true`, and carry boolean `true` flags for source verifier
 material, source-adapter deployment, destination rollout, and route allowlist
 records before the required-records item can become ready.
-Active launch readiness also treats source verifier material and
-source-adapter deployment as separate evidence roles: their canonical bytes32
-hashes must both be non-zero and must not reuse the same value before governed
-deployment or route-allowlist binding checks can pass.
+Active launch readiness also treats route allowlist, source verifier material,
+source-adapter deployment, and destination binding as separate evidence roles:
+their canonical bytes32 hashes must all be non-zero and must not reuse the same
+value before governed deployment, route-allowlist binding, or route-canary
+checks can pass.
+Rust route-allowlist and route-canary helper entry points apply the same role
+separation when attaching lane canaries or hashing EVM/TRON transaction, Solana
+ProgramData, and TON live-account canary transcripts. The Python operator
+evidence scripts mirror those checks before rendering route allowlists or route
+canaries, so direct helper calls cannot publish canary evidence with reused
+route-allowlist/source-material/source-deployment/destination-binding hashes.
+Python Torii-client, JavaScript source/dist, Swift, Kotlin/JVM, and Java Android
+route-canary helpers must mirror that governed-hash separation before app-side
+proof packaging, including TRON route-allowlist hashes derived from source,
+deployment, and destination roles.
 The release-readiness and release-bundle source inventory pins that
-role-separation helper and its governed-deployment plus route-allowlist
-hash-reuse regressions, so removing the guard becomes a public release blocker.
+role-separation helper, SDK route-canary guard strings, and governed-deployment
+plus route-allowlist hash-reuse regressions. The all-lanes release-checklist
+inventory also pins the Rust direct-helper route-canary regressions for
+route-allowlist and destination-binding replay, so removing report-level,
+helper-level, or SDK packaging guards becomes a public release blocker.
 The no-unresolved-blockers checklist also inspects the active lane's own
 blocker list instead of trusting only the top-level aggregate, so lane-local
 operator holds or malformed blocker entries keep release readiness blocked even
@@ -56,11 +70,18 @@ as source inventory before published bundle readiness can pass, including
 duplicate rejection, ready-surface empty-blocker checks, and invalid-marker
 rendering for malformed blocker containers.
 Public scalar metadata uses the same rule for release-checklist item
-ids/titles, cryptographic-evidence chain and route-canary source labels,
-user-prover submission surface text, all-lanes lane chain labels,
-destination-binding keys, and route-canary status/source fields.
+ids/titles, corridor phase keys, cryptographic-evidence chain and route-canary
+source labels, user-prover submission surface text, all-lanes lane chain
+labels, destination-binding keys, and route-canary status/source fields.
+Release-checklist item ids are a fixed public gate set; malformed ids are
+classified before duplicate, drift, or Markdown-presence checks, while safe
+unknown ids remain readable operator diagnostics.
 Release-readiness and bundle verification pin that public scalar-text schema as
 source inventory before published bundle readiness can pass.
+The same public schema classifies unknown all-lanes object keys and
+source-adapter audit-hash keys before semantic matching, so padded,
+control-character, whitespace, Markdown-unsafe, malformed, or
+Unicode-confusable keys cannot leak into release diagnostics.
 The all-lanes release checklist also treats route-canary `status` and
 `evidence_source` as canonical strings before semantic matching, so padded or
 non-string canary scalars stay schema blockers instead of ambiguous not-ready
@@ -2566,8 +2587,10 @@ visible, so a hand-edited attachment cannot hide readiness blockers while
 preserving the surrounding table structure. Release-readiness and bundle
 verification pin those public Markdown invariants as required source inventory,
 so required sections, checklist/source-inventory blocker visibility,
-invalid-marker rendering, and canonical Markdown drift rejection cannot be
-dropped before public bundle readiness passes. Release-notes attachment invariants
+invalid-marker rendering, malformed source-inventory gate-name, report-artifact
+path, and cryptographic-evidence row-domain/audit-key suppression, and canonical
+Markdown drift rejection cannot
+be dropped before public bundle readiness passes. Release-notes attachment invariants
 likewise require the canonical title, exact readiness status line, manifest
 handoff, artifact table entries, and blocker lines or invalid-marker bullets
 before the canonical attachment comparison runs. Release-readiness and bundle
@@ -2655,7 +2678,10 @@ validation before any bundle directory is created. Public release artifact
 paths, copied source filenames, and native prover manifest-relative payload
 paths containing Markdown-unsafe characters (`|`, backticks, `<`, or `>`) are
 also rejected before they can enter readiness Markdown, release-note tables, or
-strict-verifier diagnostics.
+strict-verifier diagnostics. The same path-text gate rejects percent-encoded
+and recursively over-encoded parent-directory segments in generated artifacts,
+manifest rows, readiness-report provenance paths, extracted bundle entries, and
+native EVM prover manifest-relative payload paths.
 The verifier also
 rejects
 non-directory or symlinked bundle roots, non-canonical or escaping manifest
@@ -2663,12 +2689,14 @@ paths, a symlinked `manifest.json`, self-listed `manifest.json` artifact rows,
 symlinked artifacts, unmanifested directories, duplicate, unmanifested, or
 omitted required artifacts,
 non-canonical manifest/readiness-report/summary JSON serialization,
-duplicate keys in public JSON roots,
+duplicate keys and malformed duplicate-key names in public JSON roots,
 non-UTF-8 public JSON and Markdown roots,
 control characters or Markdown-unsafe characters in manifest,
 readiness-report, or extracted bundle artifact paths, surrounding whitespace in
 manifest, readiness-input, readiness-report artifact, generated artifact, or
-native prover payload paths,
+native prover payload paths, percent-encoded traversal in manifest,
+readiness-input, readiness-report artifact, generated artifact, extracted
+bundle, or native prover payload paths,
 unknown corridor phase statuses or evidence keys,
 blocked corridor roots,
 non-canonical corridor phase-log paths,
@@ -2682,6 +2710,7 @@ malformed or duplicate input-provenance paths, input-provenance drift from the
 copied evidence artifacts, copied evidence layout drift from `evidence/NN-*.toml`,
 non-canonical readiness-report artifact paths,
 missing or unknown manifest/readiness-report top-level fields,
+malformed manifest/readiness-report top-level field names,
 unknown embedded or standalone all-lanes summary root or lane fields,
 malformed all-lanes required-domain or blocker scalar lists,
 all-lanes required-domain drift from published lane domains,
@@ -2712,9 +2741,10 @@ finality-height replay, or recovered-signer drift from the transaction owner,
 expected destination/route hash drift,
 route-canary route/destination hash drift from sibling lane evidence,
 duplicate, unknown, or missing required cryptographic evidence domains,
+malformed cryptographic-evidence row field names,
 cryptographic evidence row domain/chain drift, or per-field
 source/destination/source-gate/route/canary drift from embedded lane rows,
-unknown manifest or report artifact fields,
+unknown or malformed manifest or report artifact fields,
 unknown corridor root fields,
 unknown or malformed release-checklist fields,
 unknown or malformed portal/mobile submission-surface fields,
@@ -2735,16 +2765,25 @@ input/input-artifact provenance, `evidence/NN-*.toml` layout, and recomputation
 from copied TOML cannot be dropped before public bundle readiness passes.
 Release-readiness and bundle verification also pin the public JSON-root schema
 as required source inventory, so canonical manifest/readiness/all-lanes JSON
-serialization, duplicate-key rejection, and non-UTF-8 diagnostics cannot be
-dropped before public bundle readiness passes.
+serialization, duplicate-key rejection with malformed-key classification,
+non-UTF-8 diagnostics, and malformed manifest/readiness root-field
+classification cannot be dropped before public bundle readiness passes.
+The manifest artifact-set/order inventory also pins malformed public artifact
+field-name classification before release-note artifact tables can pass.
 Release-readiness and bundle verification pin the public Markdown text schema
 as required source inventory, so UTF-8 readiness/release-note Markdown loading
 and canonical text drift rejection cannot be dropped before public bundle
 readiness passes.
+The cryptographic-evidence source inventory also pins row-key and audit-key
+classification, including safe diagnostics for readable operator fields,
+category-only diagnostics for malformed or Unicode-confusable row names, and
+Markdown suppression for malformed row domains or source-adapter audit keys.
 Release-readiness and bundle verification also pin public cryptographic-evidence
 binding as required source inventory, so production-domain row inventory,
-lane-field binding, canonical row recomputation, and active route-canary
-binding rejection cannot be dropped before public bundle readiness passes.
+lane-field binding, active-row audit-key classification, canonical row
+recomputation, Markdown row-domain/audit-key suppression, and active
+route-canary binding rejection cannot be dropped before public bundle readiness
+passes.
 Release-readiness and bundle verification also pin public submission-surface
 binding as required source inventory, so lane/backend inventory, per-SDK helper
 inventory, verifier-owned surface recomputation, and corridor-phase binding

@@ -47,6 +47,19 @@ class TonSccpProverTest {
             SccpTon.routeCanaryEvidenceHash(evidence.copy(verifierCodeBocRootHash = "0x" + "45".repeat(32)))
         }
         assertTrue(mismatchedCodeRoot.message?.contains("verifierCodeBocRootHash") == true)
+        listOf(
+            evidence.copy(routeAllowlistHash = evidence.destinationBindingHash),
+            evidence.copy(routeAllowlistHash = evidence.sourceVerifierMaterialHash),
+            evidence.copy(routeAllowlistHash = evidence.sourceAdapterEngineDeploymentHash),
+            evidence.copy(sourceVerifierMaterialHash = evidence.destinationBindingHash),
+            evidence.copy(sourceAdapterEngineDeploymentHash = evidence.destinationBindingHash),
+            evidence.copy(sourceAdapterEngineDeploymentHash = evidence.sourceVerifierMaterialHash),
+        ).forEach { replay ->
+            val failure = assertFailsWith<IllegalArgumentException> {
+                SccpTon.routeCanaryEvidenceHash(replay)
+            }
+            assertTrue(failure.message?.contains("TON route canary governed hashes") == true)
+        }
     }
 
     @Test

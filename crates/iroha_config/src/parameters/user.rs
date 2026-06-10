@@ -4556,7 +4556,7 @@ impl SccpRouteManifest {
             let mut remainder = 0_u32;
             for byte in &mut value[start..] {
                 let next = (remainder << 8) + u32::from(*byte);
-                *byte = (next / 58) as u8;
+                *byte = u8::try_from(next / 58).expect("TRON Base58 quotient fits in one byte");
                 remainder = next % 58;
             }
             encoded.push(Self::TRON_BASE58_ALPHABET[remainder as usize]);

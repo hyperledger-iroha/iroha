@@ -13,26 +13,28 @@ use std::{
     time::Duration,
 };
 
-use base64::{engine::general_purpose as b64gp, Engine as _};
+use base64::{Engine as _, engine::general_purpose as b64gp};
 use blake3::hash as blake3_hash;
 use iroha_crypto::{
-    kex::KeyExchangeScheme,
-    sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature},
     Algorithm, EcdsaSecp256k1Sha256, Error as CryptoError, Hash, KeyGenOption, KeyPair, PrivateKey,
     PublicKey, RamLfeBackend, RamLfeVerificationMode, Signature,
+    kex::KeyExchangeScheme,
+    sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature},
 };
 use iroha_data_model::{
+    ChainId,
     account::{
-        address::{AccountAddress, AccountAddressError},
         AccountId,
+        address::{AccountAddress, AccountAddressError},
     },
     asset::id::{AssetBalanceScope, AssetDefinitionId, AssetId},
-    confidential::{ConfidentialEncryptedPayload, CONFIDENTIAL_ENCRYPTED_PAYLOAD_V1},
+    confidential::{CONFIDENTIAL_ENCRYPTED_PAYLOAD_V1, ConfidentialEncryptedPayload},
     da::manifest::DaManifestV1,
     domain::DomainId,
     governance::types::AtWindow,
     identifier::{IdentifierResolutionReceipt, IdentifierResolutionReceiptPayload},
     isi::{
+        InstructionBox, RemoveAssetKeyValue, RemoveKeyValue, SetAssetKeyValue, SetKeyValue,
         governance::{
             CastPlainBallot, CastZkBallot, CouncilDerivationKind, EnactReferendum,
             FinalizeReferendum, PersistCouncilForEpoch, ProposeDeployContract, VotingMode,
@@ -40,7 +42,7 @@ use iroha_data_model::{
         identifier::ClaimIdentifier,
         mint_burn::{Burn, Mint},
         transfer::Transfer,
-        zk, InstructionBox, RemoveAssetKeyValue, RemoveKeyValue, SetAssetKeyValue, SetKeyValue,
+        zk,
     },
     metadata::Metadata,
     name::Name,
@@ -51,9 +53,8 @@ use iroha_data_model::{
     rwa::RwaId,
     smart_contract::manifest::ContractManifest,
     transaction::{
-        signed::TransactionBuilder, Executable, SignedTransaction, TransactionSubmissionReceipt,
+        Executable, SignedTransaction, TransactionSubmissionReceipt, signed::TransactionBuilder,
     },
-    ChainId,
 };
 use iroha_executor_data_model::isi::multisig::{MultisigRegister, MultisigSpec};
 use iroha_primitives::{json::Json, numeric::Numeric};
@@ -64,13 +65,12 @@ use libc::{c_char, c_int, c_uchar, c_ulong, free, malloc};
 use norito::decode_from_bytes;
 use norito::json::{Map as JsonMap, Value as JsonValue};
 use sorafs_car::{
-    build_plan_from_da_manifest,
+    ChunkStore, ChunkStoreError, InMemoryPayload, PorProof, build_plan_from_da_manifest,
     local_fetch::{
         self, LocalFetchError, LocalFetchOptions, LocalFetchResult, LocalProviderInput,
         ProviderMetadataInput, RangeCapabilityInput, StreamBudgetInput, TelemetryEntryInput,
         TransportHintInput,
     },
-    ChunkStore, ChunkStoreError, InMemoryPayload, PorProof,
 };
 use zeroize::Zeroizing;
 
@@ -1448,25 +1448,63 @@ fn privacy_expected_public_inputs_schema(entry: &PrivacyAlgorithmEntry) -> Optio
     match entry.id {
         "transparent-transfer" => None,
         "shield" => Some("asset,from,amount,note_commitment"),
-        "confidential-transfer-v2" => Some("input_commitment_0,input_commitment_1,nullifier_0,nullifier_1,output_commitment_0,output_commitment_1,root,asset_tag,chain_tag"),
-        "unshield" => Some("input_commitment_0,input_commitment_1,nullifier_0,nullifier_1,change_commitment_0,root,public_amount,asset_tag,chain_tag"),
-        "asset-hidden-confidential-transfer-v1" => Some("pool_id,asset_set_root,input_commitment_0,input_commitment_1,nullifier_0,nullifier_1,output_commitment_0,output_commitment_1,root,chain_tag"),
-        "zk-ace-pq-authorization-v0" => Some("identity_commitment,tx_digest,chain_id,domain_separator,action_class,replay_nullifier,policy_hash,from,to,asset,amount,verifier_key_id"),
-        "anonymous-pgc-k-out-of-n-v1" => Some("anonymity_set_root,tx_digest,balance_commitments,receiver_set_commitment,receiver_ciphertext_commitments,receiver_threshold,receiver_count,link_tag,range_commitments,chain_id,domain_separator"),
-        "verange-transparent-range-v1" => Some("commitments,range_parameters,aggregation_count,domain_separator,payload_digest"),
-        "zkat-policy-private-auth-v1" => Some("policy_commitment,tx_digest,account_id,action_class,domain_separator,policy_epoch"),
-        "zk-ams-recursive-admission-v0" => Some("issuer_root,admission_batch_root,admission_nullifiers,anonymous_account_commitments,recursive_admission_digest,domain_separator"),
-        "vega-existing-credential-zk-v0" => Some("issuer_commitment,credential_schema,predicate_commitment,subject_binding,expiration_epoch,domain_separator"),
-        "silent-threshold-anoncred-v0" => Some("issuer_set_commitment,threshold_policy_hash,credential_showing_commitment,showing_nullifier,verifier_policy_hash,domain_separator"),
-        "zk-x509-onchain-identity-v0" => Some("ca_root_commitment,certificate_policy_hash,revocation_root,subject_commitment,address_binding,domain_separator"),
-        "jindo-lattice-pcs-zk-v0" => Some("commitment,opening_claim,query_set,parameter_hash,domain_separator"),
-        "sis-hints-anoncred-pq-v0" => Some("issuer_commitment,credential_commitment,showing_policy_hash,parameter_hash,domain_separator"),
-        "orchard-halo2-actions-v1" => Some("anchor,nullifiers,cmx,value_commitments,binding_signature"),
-        "penumbra-masp-v1" => Some("state_commitment_anchor,nullifiers,note_commitments,balance_commitment,asset_id_commitment"),
-        "monero-fcmp-plus-plus-v1" => Some("membership_root,key_image_or_link_tag,amount_commitments,range_commitments,spend_authorization,chain_tag"),
-        "miden-stark-note-v1" => Some("account_id,initial_account_commitment,final_account_commitment,input_note_nullifiers,output_note_hashes,reference_block"),
-        "aztec-private-rollup-v1" => Some("note_hashes,nullifiers,encrypted_logs,public_call_requests,private_kernel_commitment,rollup_state_roots"),
-        "pq-masp-stark-v0" => Some("pool_id,asset_set_root,nullifier_set,output_commitments,root,chain_tag,pq_policy_hash"),
+        "confidential-transfer-v2" => Some(
+            "input_commitment_0,input_commitment_1,nullifier_0,nullifier_1,output_commitment_0,output_commitment_1,root,asset_tag,chain_tag",
+        ),
+        "unshield" => Some(
+            "input_commitment_0,input_commitment_1,nullifier_0,nullifier_1,change_commitment_0,root,public_amount,asset_tag,chain_tag",
+        ),
+        "asset-hidden-confidential-transfer-v1" => Some(
+            "pool_id,asset_set_root,input_commitment_0,input_commitment_1,nullifier_0,nullifier_1,output_commitment_0,output_commitment_1,root,chain_tag",
+        ),
+        "zk-ace-pq-authorization-v0" => Some(
+            "identity_commitment,tx_digest,chain_id,domain_separator,action_class,replay_nullifier,policy_hash,from,to,asset,amount,verifier_key_id",
+        ),
+        "anonymous-pgc-k-out-of-n-v1" => Some(
+            "anonymity_set_root,tx_digest,balance_commitments,receiver_set_commitment,receiver_ciphertext_commitments,receiver_threshold,receiver_count,link_tag,range_commitments,chain_id,domain_separator",
+        ),
+        "verange-transparent-range-v1" => {
+            Some("commitments,range_parameters,aggregation_count,domain_separator,payload_digest")
+        }
+        "zkat-policy-private-auth-v1" => Some(
+            "policy_commitment,tx_digest,account_id,action_class,domain_separator,policy_epoch",
+        ),
+        "zk-ams-recursive-admission-v0" => Some(
+            "issuer_root,admission_batch_root,admission_nullifiers,anonymous_account_commitments,recursive_admission_digest,domain_separator",
+        ),
+        "vega-existing-credential-zk-v0" => Some(
+            "issuer_commitment,credential_schema,predicate_commitment,subject_binding,expiration_epoch,domain_separator",
+        ),
+        "silent-threshold-anoncred-v0" => Some(
+            "issuer_set_commitment,threshold_policy_hash,credential_showing_commitment,showing_nullifier,verifier_policy_hash,domain_separator",
+        ),
+        "zk-x509-onchain-identity-v0" => Some(
+            "ca_root_commitment,certificate_policy_hash,revocation_root,subject_commitment,address_binding,domain_separator",
+        ),
+        "jindo-lattice-pcs-zk-v0" => {
+            Some("commitment,opening_claim,query_set,parameter_hash,domain_separator")
+        }
+        "sis-hints-anoncred-pq-v0" => Some(
+            "issuer_commitment,credential_commitment,showing_policy_hash,parameter_hash,domain_separator",
+        ),
+        "orchard-halo2-actions-v1" => {
+            Some("anchor,nullifiers,cmx,value_commitments,binding_signature")
+        }
+        "penumbra-masp-v1" => Some(
+            "state_commitment_anchor,nullifiers,note_commitments,balance_commitment,asset_id_commitment",
+        ),
+        "monero-fcmp-plus-plus-v1" => Some(
+            "membership_root,key_image_or_link_tag,amount_commitments,range_commitments,spend_authorization,chain_tag",
+        ),
+        "miden-stark-note-v1" => Some(
+            "account_id,initial_account_commitment,final_account_commitment,input_note_nullifiers,output_note_hashes,reference_block",
+        ),
+        "aztec-private-rollup-v1" => Some(
+            "note_hashes,nullifiers,encrypted_logs,public_call_requests,private_kernel_commitment,rollup_state_roots",
+        ),
+        "pq-masp-stark-v0" => Some(
+            "pool_id,asset_set_root,nullifier_set,output_commitments,root,chain_tag,pq_policy_hash",
+        ),
         _ => None,
     }
 }
@@ -4745,11 +4783,7 @@ fn json_option_string_array(values: &Option<Vec<String>>) -> JsonValue {
 }
 
 fn bool_to_u8(value: bool) -> u8 {
-    if value {
-        1
-    } else {
-        0
-    }
+    if value { 1 } else { 0 }
 }
 
 fn option_to_ffi(value: Option<usize>) -> (u64, u8) {
@@ -7163,11 +7197,7 @@ pub unsafe extern "C" fn connect_norito_offline_verify_note_redeem_with_vk(
     match verify_offline_note_redeem_recursive_with_vk(redeem_bytes, vk_bytes) {
         Ok(valid) => {
             unsafe { *out_valid = if valid { 1 } else { 0 } };
-            if valid {
-                1
-            } else {
-                0
-            }
+            if valid { 1 } else { 0 }
         }
         Err(_) => ERR_OFFLINE_NOTE_VERIFY,
     }
@@ -7194,11 +7224,7 @@ pub unsafe extern "C" fn connect_norito_offline_verify_note_audit_with_vk(
     match verify_offline_note_audit_recursive_with_vk(audit_bytes, vk_bytes) {
         Ok(valid) => {
             unsafe { *out_valid = if valid { 1 } else { 0 } };
-            if valid {
-                1
-            } else {
-                0
-            }
+            if valid { 1 } else { 0 }
         }
         Err(_) => ERR_OFFLINE_NOTE_VERIFY,
     }
@@ -7208,7 +7234,7 @@ fn prove_offline_note_redeem_recursive(
     redeem_archive: &[u8],
 ) -> BridgeResult<iroha_data_model::offline::OfflineNoteRecursiveProof> {
     use iroha_core::zk::{
-        offline_note_recursive_vk_box, prove_offline_note_redeem, OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID,
+        OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID, offline_note_recursive_vk_box, prove_offline_note_redeem,
     };
     use iroha_data_model::{
         offline::{OfflineNoteRecursiveProof, OfflineNoteRedeem},
@@ -7243,7 +7269,7 @@ fn prove_offline_note_audit_recursive(
     audit_archive: &[u8],
 ) -> BridgeResult<iroha_data_model::offline::OfflineNoteRecursiveProof> {
     use iroha_core::zk::{
-        offline_note_recursive_vk_box, prove_offline_note_audit, OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID,
+        OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID, offline_note_recursive_vk_box, prove_offline_note_audit,
     };
     use iroha_data_model::{
         offline::{OfflineNoteAuditBundle, OfflineNoteRecursiveProof},
@@ -7274,7 +7300,7 @@ fn prove_offline_note_redeem_recursive_with_vk(
     redemption_norito: &[u8],
     vk_box_norito: &[u8],
 ) -> Result<Vec<u8>, String> {
-    use iroha_core::zk::{prove_offline_note_redeem, OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID};
+    use iroha_core::zk::{OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID, prove_offline_note_redeem};
     use iroha_data_model::{
         offline::{OfflineNoteRecursiveProof, OfflineNoteRedeem},
         proof::{VerifyingKeyBox, VerifyingKeyId},
@@ -7311,7 +7337,7 @@ fn prove_offline_note_audit_recursive_with_vk(
     audit_norito: &[u8],
     vk_box_norito: &[u8],
 ) -> Result<Vec<u8>, String> {
-    use iroha_core::zk::{prove_offline_note_audit, OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID};
+    use iroha_core::zk::{OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID, prove_offline_note_audit};
     use iroha_data_model::{
         offline::{OfflineNoteAuditBundle, OfflineNoteRecursiveProof},
         proof::{VerifyingKeyBox, VerifyingKeyId},
@@ -7429,7 +7455,7 @@ fn zk1_read_instance_columns(payload: &[u8]) -> Option<Vec<Vec<[u8; 32]>>> {
 fn offline_note_vk_box_is_canonical(
     vk_box: &iroha_data_model::proof::VerifyingKeyBox,
 ) -> Result<bool, String> {
-    use iroha_core::zk::{hash_vk, offline_note_recursive_vk_box, ZK_BACKEND_HALO2_IPA};
+    use iroha_core::zk::{ZK_BACKEND_HALO2_IPA, hash_vk, offline_note_recursive_vk_box};
 
     if vk_box.backend.as_str() != ZK_BACKEND_HALO2_IPA || vk_box.bytes.is_empty() {
         return Ok(false);
@@ -7446,7 +7472,7 @@ fn verify_offline_note_recursive_proof_with_vk(
     vk_box: &iroha_data_model::proof::VerifyingKeyBox,
 ) -> Result<bool, String> {
     use iroha_core::zk::{
-        hash_vk, verify_backend, OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID, ZK_BACKEND_HALO2_IPA,
+        OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID, ZK_BACKEND_HALO2_IPA, hash_vk, verify_backend,
     };
     use iroha_data_model::{
         offline::OFFLINE_NOTE_RECURSIVE_PUBLIC_INPUTS_SCHEMA,
@@ -7621,8 +7647,8 @@ fn prove_verified_kagemusha_compact_token_from_record_bundle(
     verified_record_bundle_archive: &[u8],
 ) -> BridgeResult<iroha_data_model::offline::KagemushaCompactPaymentToken> {
     use iroha_core::zk::{
-        kagemusha_folded_vk_box, prove_verified_kagemusha_compact_payment_token_from_record_bundle,
-        KAGEMUSHA_FOLDED_CIRCUIT_ID,
+        KAGEMUSHA_FOLDED_CIRCUIT_ID, kagemusha_folded_vk_box,
+        prove_verified_kagemusha_compact_payment_token_from_record_bundle,
     };
     use iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle;
 
@@ -7691,9 +7717,8 @@ fn prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_record_bundl
     pallas_open_envelopes_archive: &[u8],
 ) -> BridgeResult<iroha_data_model::offline::KagemushaRecursiveAggregationProofBundle> {
     use iroha_core::zk::{
-        kagemusha_recursive_aggregation_proof_vk_box,
+        KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID, kagemusha_recursive_aggregation_proof_vk_box,
         prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_record_bundle_and_pallas_open_envelope_archive,
-        KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
     };
     use iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle;
 
@@ -8101,10 +8126,9 @@ fn kagemusha_recursive_spend_append_from_request_archive(
     request_archive: &[u8],
 ) -> BridgeResult<iroha_data_model::offline::KagemushaRecursiveSpendBundleV1> {
     use iroha_core::zk::{
-        kagemusha_recursive_aggregation_proof_vk_box,
+        KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID, kagemusha_recursive_aggregation_proof_vk_box,
         prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive,
         prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive_at_height,
-        KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
     };
     use iroha_data_model::offline::KagemushaRecursiveSpendAppendRequestV1;
 
@@ -8213,8 +8237,8 @@ fn kagemusha_recursive_spend_transition_profile_init_from_request_archive(
         kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelope_archive_at_height,
     };
     use iroha_data_model::offline::{
-        kagemusha_recursive_spend_transition_profile_from_initial_evidence,
         KagemushaRecursiveSpendInitRequestV1,
+        kagemusha_recursive_spend_transition_profile_from_initial_evidence,
     };
 
     let request: KagemushaRecursiveSpendInitRequestV1 =
@@ -8282,9 +8306,9 @@ fn kagemusha_recursive_spend_transition_profile_append_from_request_archive(
         kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelope_archive_at_height,
     };
     use iroha_data_model::offline::{
+        KagemushaRecursiveSpendAppendRequestV1,
         kagemusha_recursive_spend_transition_profile_append_evidence_with_opening_preflight_contract,
         kagemusha_recursive_spend_transition_profile_append_evidence_with_previous_proof_openings,
-        KagemushaRecursiveSpendAppendRequestV1,
     };
 
     let request: KagemushaRecursiveSpendAppendRequestV1 =
@@ -8381,8 +8405,8 @@ fn kagemusha_recursive_spend_lineage_append_boundary_from_transition_profile_arc
     profile_archive: &[u8],
 ) -> BridgeResult<iroha_data_model::offline::KagemushaRecursiveSpendLineageAppendBoundaryV1> {
     use iroha_data_model::offline::{
-        kagemusha_recursive_spend_lineage_append_boundary_from_transition_profile,
         KagemushaRecursiveSpendTransitionProfileV1,
+        kagemusha_recursive_spend_lineage_append_boundary_from_transition_profile,
     };
 
     let profile: KagemushaRecursiveSpendTransitionProfileV1 =
@@ -8432,8 +8456,8 @@ fn kagemusha_recursive_spend_lineage_witness_from_init_result_archives(
     bundle_archive: &[u8],
 ) -> BridgeResult<iroha_data_model::offline::KagemushaRecursiveSpendLineageWitnessV1> {
     use iroha_data_model::offline::{
-        kagemusha_recursive_spend_lineage_witness_from_init_result,
         KagemushaRecursiveSpendBundleV1, KagemushaRecursiveSpendInitRequestV1,
+        kagemusha_recursive_spend_lineage_witness_from_init_result,
     };
 
     let request: KagemushaRecursiveSpendInitRequestV1 =
@@ -8490,9 +8514,9 @@ fn kagemusha_recursive_spend_lineage_witness_append_result_archives(
     bundle_archive: &[u8],
 ) -> BridgeResult<iroha_data_model::offline::KagemushaRecursiveSpendLineageWitnessV1> {
     use iroha_data_model::offline::{
-        kagemusha_recursive_spend_lineage_witness_append_result,
         KagemushaRecursiveSpendAppendRequestV1, KagemushaRecursiveSpendBundleV1,
         KagemushaRecursiveSpendLineageWitnessV1,
+        kagemusha_recursive_spend_lineage_witness_append_result,
     };
 
     let previous_witness: KagemushaRecursiveSpendLineageWitnessV1 =
@@ -8592,6 +8616,7 @@ fn kagemusha_recursive_spend_redeem_from_request_archive(
     request_archive: &[u8],
 ) -> BridgeResult<iroha_data_model::isi::offline::RedeemKagemushaRecursive> {
     use iroha_core::zk::{
+        KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID, ZK_BACKEND_HALO2_IPA,
         ensure_kagemusha_recursive_spend_chain_admission_proves_lineage,
         kagemusha_recursive_aggregation_proof_vk_box,
         preverify_kagemusha_recursive_spend_bundle_with_record,
@@ -8604,7 +8629,6 @@ fn kagemusha_recursive_spend_redeem_from_request_archive(
         verify_kagemusha_recursive_spend_lineage_witness_and_bundle_with_vk_box,
         verify_kagemusha_recursive_spend_lineage_witness_with_record_resolver,
         verify_kagemusha_recursive_spend_lineage_witness_with_record_resolver_at_height,
-        KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID, ZK_BACKEND_HALO2_IPA,
     };
     use iroha_data_model::{
         isi::offline::RedeemKagemushaRecursive, offline::KagemushaRecursiveSpendRedeemRequestV1,
@@ -8770,6 +8794,7 @@ mod offline_note_prover_tests {
     use std::{ffi::CString, sync::OnceLock};
 
     use iroha_core::zk::{
+        KAGEMUSHA_HOP_MAX_PROOF_BYTES, OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID, ZK_BACKEND_HALO2_IPA,
         confidential_v2, hash_vk, kagemusha_fold_step_proof_hash,
         kagemusha_fold_step_public_inputs_digest, kagemusha_folded_vk_box,
         kagemusha_pallas_open_envelope_metadata_for_verified_hop,
@@ -8781,18 +8806,18 @@ mod offline_note_prover_tests {
         kagemusha_verified_folded_public_inputs_from_record_bundle, offline_note_recursive_vk_box,
         verify_backend, verify_kagemusha_compact_payment_token,
         verify_kagemusha_recursive_aggregation_proof_bundle,
-        verify_kagemusha_recursive_compact_payment_token, KAGEMUSHA_HOP_MAX_PROOF_BYTES,
-        OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID, ZK_BACKEND_HALO2_IPA,
+        verify_kagemusha_recursive_compact_payment_token,
     };
     use iroha_data_model::{
         confidential::ConfidentialStatus,
         offline::{
-            kagemusha_lineage_proving_key_archive,
-            kagemusha_recursive_aggregation_evidence_from_steps,
-            kagemusha_recursive_aggregation_proof_public_inputs_from_evidence,
-            kagemusha_recursive_spend_accumulator_from_initial_evidence,
-            kagemusha_recursive_spend_compact_payment_token_from_bundle,
-            kagemusha_recursive_spend_public_inputs_from_accumulator, KagemushaCompactPaymentToken,
+            KAGEMUSHA_AGGREGATION_MODE_RECURSIVE_IN_CIRCUIT_V1,
+            KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+            KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_PUBLIC_INPUTS_SCHEMA,
+            KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1,
+            KAGEMUSHA_RECURSIVE_COMPACT_SUPPORTED_OPENING_LENS_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_ACCUMULATOR_DOMAIN,
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, KagemushaCompactPaymentToken,
             KagemushaFoldedProof, KagemushaRecursiveAggregationProof,
             KagemushaRecursiveAggregationProofBundle, KagemushaRecursiveCompactKeyArtifactEntryV1,
             KagemushaRecursiveCompactKeyArtifactsV1, KagemushaRecursiveCompactVerifierKeyEntryV1,
@@ -8805,13 +8830,12 @@ mod offline_note_prover_tests {
             KagemushaVerifiedFoldStep, KagemushaVerifiedFoldVerifierRecord, OfflineNoteAuditBundle,
             OfflineNoteAuditOutputClaim, OfflineNoteIssue, OfflineNoteIssuedClaim,
             OfflineNoteKeyCertificate, OfflineNoteRecursiveProof, OfflineNoteRedeem,
-            KAGEMUSHA_AGGREGATION_MODE_RECURSIVE_IN_CIRCUIT_V1,
-            KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
-            KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_PUBLIC_INPUTS_SCHEMA,
-            KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1,
-            KAGEMUSHA_RECURSIVE_COMPACT_SUPPORTED_OPENING_LENS_V1,
-            KAGEMUSHA_RECURSIVE_SPEND_ACCUMULATOR_DOMAIN,
-            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+            kagemusha_lineage_proving_key_archive,
+            kagemusha_recursive_aggregation_evidence_from_steps,
+            kagemusha_recursive_aggregation_proof_public_inputs_from_evidence,
+            kagemusha_recursive_spend_accumulator_from_initial_evidence,
+            kagemusha_recursive_spend_compact_payment_token_from_bundle,
+            kagemusha_recursive_spend_public_inputs_from_accumulator,
         },
         proof::{ProofBox, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
         zk::{BackendTag, OpenVerifyEnvelope},
@@ -9236,8 +9260,8 @@ mod offline_note_prover_tests {
         }
     }
 
-    fn sample_semantic_redeem_request_with_reserved_previous_lineage(
-    ) -> KagemushaRecursiveSpendRedeemRequestV1 {
+    fn sample_semantic_redeem_request_with_reserved_previous_lineage()
+    -> KagemushaRecursiveSpendRedeemRequestV1 {
         let mut request = sample_recursive_spend_redeem_request(42);
         let mut witness = sample_fast_recursive_spend_lineage_witness_for_bundle(&request.bundle);
         let previous_proof = witness
@@ -9990,8 +10014,8 @@ mod offline_note_prover_tests {
         .expect("encode recursive compact test proving-key archive")
     }
 
-    fn recursive_compact_key_artifacts_for_tests(
-    ) -> &'static KagemushaRecursiveCompactKeyArtifactsV1 {
+    fn recursive_compact_key_artifacts_for_tests()
+    -> &'static KagemushaRecursiveCompactKeyArtifactsV1 {
         static KEY_ARTIFACTS: OnceLock<KagemushaRecursiveCompactKeyArtifactsV1> = OnceLock::new();
         KEY_ARTIFACTS.get_or_init(|| {
             let entries = KAGEMUSHA_RECURSIVE_COMPACT_SUPPORTED_OPENING_LENS_V1
@@ -12117,8 +12141,8 @@ mod offline_note_prover_tests {
         }
     }
 
-    fn sample_recursive_spend_init_request_for_transition_profile(
-    ) -> KagemushaRecursiveSpendInitRequestV1 {
+    fn sample_recursive_spend_init_request_for_transition_profile()
+    -> KagemushaRecursiveSpendInitRequestV1 {
         let record_bundle = sample_kagemusha_verified_record_bundle();
         let step = record_bundle
             .bundle
@@ -12154,8 +12178,8 @@ mod offline_note_prover_tests {
         record.withdraw_height = Some(4);
     }
 
-    fn sample_reserved_lineage_append_request_missing_key_artifacts(
-    ) -> KagemushaRecursiveSpendAppendRequestV1 {
+    fn sample_reserved_lineage_append_request_missing_key_artifacts()
+    -> KagemushaRecursiveSpendAppendRequestV1 {
         let (mut previous_bundle, witness) =
             sample_verifying_semantic_recursive_spend_lineage_fixture();
         let record_bundle = witness.record_bundle.clone();
@@ -12327,8 +12351,8 @@ mod offline_note_prover_tests {
     }
 
     #[test]
-    fn kagemusha_recursive_spend_transition_profile_append_ffi_rejects_stale_previous_public_input_hash(
-    ) {
+    fn kagemusha_recursive_spend_transition_profile_append_ffi_rejects_stale_previous_public_input_hash()
+     {
         let mut request =
             sample_recursive_spend_append_request(sample_kagemusha_recursive_spend_bundle(), None);
         request.previous_bundle.recursive_proof.public_inputs_hash =
@@ -14110,14 +14134,18 @@ mod offline_note_prover_tests {
         match signed.instructions() {
             Executable::Instructions(instructions) => {
                 assert_eq!(instructions.len(), 2);
-                assert!(instructions[0]
-                    .as_any()
-                    .downcast_ref::<iroha_data_model::isi::offline::AuditOfflineNote>()
-                    .is_some());
-                assert!(instructions[1]
-                    .as_any()
-                    .downcast_ref::<iroha_data_model::isi::offline::RedeemOfflineNote>()
-                    .is_some());
+                assert!(
+                    instructions[0]
+                        .as_any()
+                        .downcast_ref::<iroha_data_model::isi::offline::AuditOfflineNote>()
+                        .is_some()
+                );
+                assert!(
+                    instructions[1]
+                        .as_any()
+                        .downcast_ref::<iroha_data_model::isi::offline::RedeemOfflineNote>()
+                        .is_some()
+                );
             }
             other => panic!("unexpected executable: {other:?}"),
         }
@@ -20107,11 +20135,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAcceler
     use jni::sys::{JNI_FALSE, JNI_TRUE};
 
     let available = catch_unwind(ivm::cuda_available).unwrap_or(false);
-    if available {
-        JNI_TRUE
-    } else {
-        JNI_FALSE
-    }
+    if available { JNI_TRUE } else { JNI_FALSE }
 }
 
 #[cfg(any(
@@ -20131,11 +20155,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAcceler
     use jni::sys::{JNI_FALSE, JNI_TRUE};
 
     let disabled = catch_unwind(ivm::cuda_disabled).unwrap_or(false);
-    if disabled {
-        JNI_TRUE
-    } else {
-        JNI_FALSE
-    }
+    if disabled { JNI_TRUE } else { JNI_FALSE }
 }
 
 #[cfg(any(
@@ -20168,7 +20188,7 @@ fn catch_unwind_to_java<T, F>(env: &mut jni::JNIEnv<'_>, label: &str, f: F) -> O
 where
     F: FnOnce() -> T,
 {
-    use std::panic::{catch_unwind, AssertUnwindSafe};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
 
     match catch_unwind(AssertUnwindSafe(f)) {
         Ok(value) => Some(value),
@@ -25459,8 +25479,7 @@ mod tests {
     const PRIVACY_TEST_PRODUCTION_LOCALNET_RUN_ID: &str = "boi-privacy-4peer-localnet-2026-01-02";
     const PRIVACY_TEST_PRODUCTION_HASH: &str =
         "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    const PRIVACY_TEST_PRODUCTION_SIGNATURE: &str =
-        "ed25519:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const PRIVACY_TEST_PRODUCTION_SIGNATURE: &str = "ed25519:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
     fn privacy_test_production_entrypoints(entry: &PrivacyAlgorithmEntry) -> Vec<&'static str> {
         entry
@@ -25628,29 +25647,37 @@ mod tests {
             privacy_required_production_gate_keys(zk_ace_entry),
             "ZK-ACE must require the full production proof gate set",
         );
-        assert!(zk_ace
-            .production_gate
-            .missing
-            .iter()
-            .any(|missing| missing == PRIVACY_PRODUCTION_GATE_MISSING_ENGINE));
-        assert!(zk_ace
-            .production_gate
-            .missing
-            .iter()
-            .any(|missing| missing == PRIVACY_PRODUCTION_GATE_MISSING_ALLOWLIST));
+        assert!(
+            zk_ace
+                .production_gate
+                .missing
+                .iter()
+                .any(|missing| missing == PRIVACY_PRODUCTION_GATE_MISSING_ENGINE)
+        );
+        assert!(
+            zk_ace
+                .production_gate
+                .missing
+                .iter()
+                .any(|missing| missing == PRIVACY_PRODUCTION_GATE_MISSING_ALLOWLIST)
+        );
         for algorithm in capabilities.algorithms {
             assert!(!algorithm.production_ready);
             assert!(!algorithm.production_gate.ready);
             assert!(algorithm.production_gate.audit_references.is_empty());
-            assert!(algorithm
-                .production_gate
-                .gates
-                .iter()
-                .all(|gate| !gate.passed));
-            assert!(algorithm
-                .production_gate
-                .missing
-                .contains(&"internal cryptographic review signoff is missing".to_owned()));
+            assert!(
+                algorithm
+                    .production_gate
+                    .gates
+                    .iter()
+                    .all(|gate| !gate.passed)
+            );
+            assert!(
+                algorithm
+                    .production_gate
+                    .missing
+                    .contains(&"internal cryptographic review signoff is missing".to_owned())
+            );
             assert!(algorithm.production_gate.missing.contains(
                 &"Iroha production allowlist is not enabled for this audited row".to_owned()
             ));
@@ -25746,12 +25773,16 @@ mod tests {
             .iter()
             .find(|algorithm| algorithm.algorithm_id == "zk-ace-pq-authorization-v0")
             .expect("ZK-ACE capability");
-        assert!(zk_ace
-            .sdk_entrypoints
-            .contains(&"buildZkAceAuthorizationProofV1".to_owned()));
-        assert!(zk_ace
-            .sdk_entrypoints
-            .contains(&"buildZkAceAuthorizedTransferInstruction".to_owned()));
+        assert!(
+            zk_ace
+                .sdk_entrypoints
+                .contains(&"buildZkAceAuthorizationProofV1".to_owned())
+        );
+        assert!(
+            zk_ace
+                .sdk_entrypoints
+                .contains(&"buildZkAceAuthorizedTransferInstruction".to_owned())
+        );
     }
 
     #[test]
@@ -27818,7 +27849,7 @@ mod tests {
     fn print_sample_claim_identifier_wire_payload_hex() {
         use iroha_crypto::Signature;
         use iroha_data_model::identifier::IdentifierResolutionReceipt;
-        use iroha_data_model::isi::{identifier::ClaimIdentifier, Instruction, InstructionBox};
+        use iroha_data_model::isi::{Instruction, InstructionBox, identifier::ClaimIdentifier};
 
         let payload = sample_identifier_receipt_payload();
         let receipt = IdentifierResolutionReceipt {
@@ -28534,9 +28565,9 @@ mod signed_transaction_fixture_tests {
 
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
-        account::{address, AccountId},
-        transaction::TransactionBuilder,
         ChainId,
+        account::{AccountId, address},
+        transaction::TransactionBuilder,
     };
     use iroha_version::codec::EncodeVersioned as _;
 
@@ -28757,7 +28788,7 @@ mod da_proof_summary_tests {
 mod sorafs_tests {
     use std::{ffi::CString, fs, ptr, slice};
 
-    use sorafs_car::{fetch_plan::chunk_fetch_specs_to_string, CarBuildPlan};
+    use sorafs_car::{CarBuildPlan, fetch_plan::chunk_fetch_specs_to_string};
     use sorafs_chunker::ChunkProfile;
     use tempfile::tempdir;
 

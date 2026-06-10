@@ -6277,6 +6277,12 @@ pub fn canonical_sccp_evm_route_canary_evidence_bytes_v1(
         return None;
     }
     if !sccp_nonzero_h256_values_are_pairwise_distinct(&[
+        route_allowlist_hash,
+        destination_binding_hash,
+    ]) {
+        return None;
+    }
+    if !sccp_nonzero_h256_values_are_pairwise_distinct(&[
         transaction_hash,
         receipt_block_hash,
         block_receipts_root,
@@ -6453,6 +6459,12 @@ pub fn canonical_sccp_tron_route_canary_evidence_bytes_v1(
         return None;
     }
     if !sccp_nonzero_h256_values_are_pairwise_distinct(&[
+        route_allowlist_hash,
+        destination_binding_hash,
+    ]) {
+        return None;
+    }
+    if !sccp_nonzero_h256_values_are_pairwise_distinct(&[
         transaction_id,
         call_data_sha256,
         message_id,
@@ -6593,6 +6605,12 @@ pub fn canonical_sccp_ton_route_canary_evidence_bytes_v1(
         || !h256_is_nonzero(&account_state_hash)
         || !h256_is_nonzero(&last_transaction_hash)
         || !sccp_ton_live_decimal_is_positive_canonical(last_transaction_lt)
+        || !sccp_nonzero_h256_values_are_pairwise_distinct(&[
+            route_allowlist_hash,
+            destination_binding_hash,
+            source_verifier_material_hash,
+            source_adapter_engine_deployment_hash,
+        ])
         || !sccp_destination_rollout_is_production_ready(SCCP_DOMAIN_TON, destination_rollout)
     {
         return None;
@@ -6696,6 +6714,12 @@ pub fn canonical_sccp_solana_route_canary_evidence_bytes_v1(
         || !h256_is_nonzero(&destination_binding_hash)
         || !h256_is_nonzero(&source_verifier_material_hash)
         || !h256_is_nonzero(&source_adapter_engine_deployment_hash)
+        || !sccp_nonzero_h256_values_are_pairwise_distinct(&[
+            route_allowlist_hash,
+            destination_binding_hash,
+            source_verifier_material_hash,
+            source_adapter_engine_deployment_hash,
+        ])
         || !sccp_destination_rollout_is_production_ready(SCCP_DOMAIN_SOL, destination_rollout)
     {
         return None;
@@ -6820,9 +6844,12 @@ pub fn sccp_route_allowlist_with_canary_evidence_v1(
     let route_allowlist_hash =
         required_hex_string_is_nonzero::<32>(allowlist.route_allowlist_hash.as_deref())?;
     if !h256_is_nonzero(&route_canary_evidence_hash)
-        || route_canary_evidence_hash == route_allowlist_hash
-        || route_canary_evidence_hash == destination_binding_hash
         || !h256_is_nonzero(&destination_binding_hash)
+        || !sccp_nonzero_h256_values_are_pairwise_distinct(&[
+            route_allowlist_hash,
+            destination_binding_hash,
+            route_canary_evidence_hash,
+        ])
     {
         return None;
     }
@@ -6842,8 +6869,16 @@ pub fn sccp_route_allowlist_with_lane_canary_evidence_v1(
     source_verifier_material_hash: H256,
     source_adapter_engine_deployment_hash: H256,
 ) -> Option<SccpRouteAllowlistReadinessV1> {
+    let route_allowlist_hash =
+        required_hex_string_is_nonzero::<32>(allowlist.route_allowlist_hash.as_deref())?;
     if !h256_is_nonzero(&source_verifier_material_hash)
         || !h256_is_nonzero(&source_adapter_engine_deployment_hash)
+        || !sccp_nonzero_h256_values_are_pairwise_distinct(&[
+            route_allowlist_hash,
+            destination_binding_hash,
+            source_verifier_material_hash,
+            source_adapter_engine_deployment_hash,
+        ])
         || route_canary_evidence_hash == source_verifier_material_hash
         || route_canary_evidence_hash == source_adapter_engine_deployment_hash
     {
@@ -56988,6 +57023,54 @@ mod tests {
         .expect("decode destination binding hash");
         let source_material_hash = sccp_source_verifier_material_hash(&source_material);
         let source_deployment_hash = sccp_source_adapter_engine_deployment_hash(&source_deployment);
+        let replayed_destination_route_allowlist = sccp_profiled_route_allowlist_v1(
+            SCCP_DOMAIN_ETH,
+            encode_0x_lower_hex(&destination_binding_hash),
+        )
+        .expect("destination-replayed route allowlist");
+        assert!(
+            sccp_route_allowlist_with_lane_canary_evidence_v1(
+                replayed_destination_route_allowlist,
+                [0xe6; 32],
+                destination_binding_hash,
+                source_material_hash,
+                source_deployment_hash,
+            )
+            .is_none(),
+            "lane-aware canary builder must reject route allowlist/destination binding hash role reuse"
+        );
+        let replayed_source_material_route_allowlist = sccp_profiled_route_allowlist_v1(
+            SCCP_DOMAIN_ETH,
+            encode_0x_lower_hex(&source_material_hash),
+        )
+        .expect("source-material-replayed route allowlist");
+        assert!(
+            sccp_route_allowlist_with_lane_canary_evidence_v1(
+                replayed_source_material_route_allowlist,
+                [0xe7; 32],
+                destination_binding_hash,
+                source_material_hash,
+                source_deployment_hash,
+            )
+            .is_none(),
+            "lane-aware canary builder must reject route allowlist/source material hash role reuse"
+        );
+        let replayed_source_deployment_route_allowlist = sccp_profiled_route_allowlist_v1(
+            SCCP_DOMAIN_ETH,
+            encode_0x_lower_hex(&source_deployment_hash),
+        )
+        .expect("source-deployment-replayed route allowlist");
+        assert!(
+            sccp_route_allowlist_with_lane_canary_evidence_v1(
+                replayed_source_deployment_route_allowlist,
+                [0xe8; 32],
+                destination_binding_hash,
+                source_material_hash,
+                source_deployment_hash,
+            )
+            .is_none(),
+            "lane-aware canary builder must reject route allowlist/source deployment hash role reuse"
+        );
 
         for replayed_hash in [source_material_hash, source_deployment_hash] {
             assert!(
@@ -57002,6 +57085,39 @@ mod tests {
                 "lane-aware canary builder must reject source record hash replay"
             );
         }
+        assert!(
+            sccp_route_allowlist_with_lane_canary_evidence_v1(
+                route_allowlist.clone(),
+                [0xe3; 32],
+                destination_binding_hash,
+                source_material_hash,
+                source_material_hash,
+            )
+            .is_none(),
+            "lane-aware canary builder must reject source material/deployment hash role reuse"
+        );
+        assert!(
+            sccp_route_allowlist_with_lane_canary_evidence_v1(
+                route_allowlist.clone(),
+                [0xe4; 32],
+                source_material_hash,
+                source_material_hash,
+                source_deployment_hash,
+            )
+            .is_none(),
+            "lane-aware canary builder must reject destination binding/source material hash role reuse"
+        );
+        assert!(
+            sccp_route_allowlist_with_lane_canary_evidence_v1(
+                route_allowlist.clone(),
+                [0xe5; 32],
+                source_deployment_hash,
+                source_material_hash,
+                source_deployment_hash,
+            )
+            .is_none(),
+            "lane-aware canary builder must reject destination binding/source deployment hash role reuse"
+        );
 
         let generic_allowlist = sccp_route_allowlist_with_lane_canary_evidence_v1(
             route_allowlist.clone(),
@@ -57471,6 +57587,33 @@ mod tests {
             )
             .expect("Python route allowlist vector")
         );
+        assert!(
+            sccp_evm_route_canary_evidence_hash_v1(
+                SCCP_DOMAIN_ETH,
+                destination_binding_hash,
+                destination_binding_hash,
+                &destination_rollout,
+                [0x44; 32],
+                0,
+                0x1234,
+                [0x45; 32],
+                true,
+                [0x46; 32],
+                [0x88; 32],
+                [0x55; 32],
+                [0x99; 32],
+                SCCP_DOMAIN_ETH,
+                [0x66; 32],
+                [0x77; 32],
+                [0xaa; 32],
+                [0xab; 32],
+                1,
+                SCCP_DOMAIN_SORA,
+                true,
+            )
+            .is_none(),
+            "EVM route canary evidence must reject route allowlist/destination binding hash role reuse"
+        );
 
         let route_canary_hash = sccp_evm_route_canary_evidence_hash_v1(
             SCCP_DOMAIN_ETH,
@@ -57533,6 +57676,72 @@ mod tests {
             &destination_rollout,
         )
         .expect("Solana route canary hash");
+        assert!(
+            sccp_solana_route_canary_evidence_hash_v1(
+                destination_binding_hash,
+                destination_binding_hash,
+                source_material_hash,
+                source_deployment_hash,
+                &destination_rollout,
+            )
+            .is_none(),
+            "Solana route canary evidence must reject route allowlist/destination binding hash role reuse"
+        );
+        assert!(
+            sccp_solana_route_canary_evidence_hash_v1(
+                source_material_hash,
+                destination_binding_hash,
+                source_material_hash,
+                source_deployment_hash,
+                &destination_rollout,
+            )
+            .is_none(),
+            "Solana route canary evidence must reject route allowlist/source material hash role reuse"
+        );
+        assert!(
+            sccp_solana_route_canary_evidence_hash_v1(
+                source_deployment_hash,
+                destination_binding_hash,
+                source_material_hash,
+                source_deployment_hash,
+                &destination_rollout,
+            )
+            .is_none(),
+            "Solana route canary evidence must reject route allowlist/source deployment hash role reuse"
+        );
+        assert!(
+            sccp_solana_route_canary_evidence_hash_v1(
+                route_allowlist_hash,
+                destination_binding_hash,
+                source_material_hash,
+                source_material_hash,
+                &destination_rollout,
+            )
+            .is_none(),
+            "Solana route canary evidence must reject source material/deployment hash role reuse"
+        );
+        assert!(
+            sccp_solana_route_canary_evidence_hash_v1(
+                route_allowlist_hash,
+                destination_binding_hash,
+                destination_binding_hash,
+                source_deployment_hash,
+                &destination_rollout,
+            )
+            .is_none(),
+            "Solana route canary evidence must reject destination binding/source material hash role reuse"
+        );
+        assert!(
+            sccp_solana_route_canary_evidence_hash_v1(
+                route_allowlist_hash,
+                destination_binding_hash,
+                source_material_hash,
+                destination_binding_hash,
+                &destination_rollout,
+            )
+            .is_none(),
+            "Solana route canary evidence must reject destination binding/source deployment hash role reuse"
+        );
         assert_eq!(
             route_canary_hash,
             decode_fixed_hex_bytes::<32>(
@@ -58069,6 +58278,90 @@ mod tests {
             last_transaction_hash,
         )
         .expect("TON route canary hash");
+        assert!(
+            sccp_ton_route_canary_evidence_hash_v1(
+                destination_binding_hash,
+                destination_binding_hash,
+                source_material_hash,
+                source_deployment_hash,
+                &destination_rollout,
+                account_state_hash,
+                &last_transaction_lt,
+                last_transaction_hash,
+            )
+            .is_none(),
+            "TON route canary evidence must reject route allowlist/destination binding hash role reuse"
+        );
+        assert!(
+            sccp_ton_route_canary_evidence_hash_v1(
+                source_material_hash,
+                destination_binding_hash,
+                source_material_hash,
+                source_deployment_hash,
+                &destination_rollout,
+                account_state_hash,
+                &last_transaction_lt,
+                last_transaction_hash,
+            )
+            .is_none(),
+            "TON route canary evidence must reject route allowlist/source material hash role reuse"
+        );
+        assert!(
+            sccp_ton_route_canary_evidence_hash_v1(
+                source_deployment_hash,
+                destination_binding_hash,
+                source_material_hash,
+                source_deployment_hash,
+                &destination_rollout,
+                account_state_hash,
+                &last_transaction_lt,
+                last_transaction_hash,
+            )
+            .is_none(),
+            "TON route canary evidence must reject route allowlist/source deployment hash role reuse"
+        );
+        assert!(
+            sccp_ton_route_canary_evidence_hash_v1(
+                route_allowlist_hash,
+                destination_binding_hash,
+                source_material_hash,
+                source_material_hash,
+                &destination_rollout,
+                account_state_hash,
+                &last_transaction_lt,
+                last_transaction_hash,
+            )
+            .is_none(),
+            "TON route canary evidence must reject source material/deployment hash role reuse"
+        );
+        assert!(
+            sccp_ton_route_canary_evidence_hash_v1(
+                route_allowlist_hash,
+                destination_binding_hash,
+                destination_binding_hash,
+                source_deployment_hash,
+                &destination_rollout,
+                account_state_hash,
+                &last_transaction_lt,
+                last_transaction_hash,
+            )
+            .is_none(),
+            "TON route canary evidence must reject destination binding/source material hash role reuse"
+        );
+        assert!(
+            sccp_ton_route_canary_evidence_hash_v1(
+                route_allowlist_hash,
+                destination_binding_hash,
+                source_material_hash,
+                destination_binding_hash,
+                &destination_rollout,
+                account_state_hash,
+                &last_transaction_lt,
+                last_transaction_hash,
+            )
+            .is_none(),
+            "TON route canary evidence must reject destination binding/source deployment hash role reuse"
+        );
         assert!(h256_is_nonzero(&route_canary_hash));
         assert_ne!(route_canary_hash, route_allowlist_hash);
         assert_ne!(route_canary_hash, destination_binding_hash);
@@ -58230,6 +58523,44 @@ mod tests {
             "fea8effb3cddfa458ea79a5a9af6f2d2c33a460b3a66d9305963908c2a3ea67a",
         )
         .expect("TRON route allowlist vector");
+
+        assert!(
+            sccp_tron_route_canary_evidence_hash_v1(
+                destination_binding_hash,
+                destination_binding_hash,
+                &destination_rollout,
+                [0xfa; 32],
+                decode_fixed_hex_bytes::<21>("417e5f4552091a69125d5dfcb7b8c2659029395bdf")
+                    .expect("TRON route canary transaction owner vector"),
+                234,
+                567_000,
+                0,
+                [0xdd; 32],
+                decode_fixed_hex_bytes::<32>(
+                    "f96dfb36d47a61e7e80df4f19e00b78c12f9a3f3c542e8dac06a7422e1d5f951",
+                )
+                .expect("TRON route canary call-data hash vector"),
+                [0xab; 32],
+                SCCP_DOMAIN_TRON,
+                [0xf1; 32],
+                [0xee; 32],
+                decode_fixed_hex_bytes::<32>(
+                    "000000000000000000000000000000000000000000000000000000000000007b",
+                )
+                .expect("TRON route canary finality height vector"),
+                [0xcd; 32],
+                1,
+                SCCP_DOMAIN_SORA,
+                true,
+                true,
+                [0xc4; 32],
+                decode_fixed_hex_bytes::<21>("417e5f4552091a69125d5dfcb7b8c2659029395bdf")
+                    .expect("TRON route canary recovered signer vector"),
+                true,
+            )
+            .is_none(),
+            "TRON route canary evidence must reject route allowlist/destination binding hash role reuse"
+        );
 
         assert_eq!(
             sccp_tron_route_canary_evidence_hash_v1(

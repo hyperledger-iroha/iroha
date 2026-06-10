@@ -519,6 +519,33 @@ def groth16_proof_bytes(*, words: Mapping[int, bytes] | None = None) -> bytes:
     return b"".join(proof_words)
 
 
+def groth16_proof_bytes_for_public_inputs(
+    public_inputs: Mapping[str, Any],
+    *,
+    source_domain: int = SCCP_DOMAIN_SORA,
+    words: Mapping[int, bytes] | None = None,
+) -> bytes:
+    proof_words = {
+        1: bytes.fromhex(str(public_inputs["message_id"]).removeprefix("0x")),
+        2: abi_word(source_domain),
+        3: bytes.fromhex(str(public_inputs["commitment_root"]).removeprefix("0x")),
+    }
+    proof_words.update(words or {})
+    return groth16_proof_bytes(words=proof_words)
+
+
+def groth16_proof_bytes_for_request(
+    request: Mapping[str, Any],
+    *,
+    words: Mapping[int, bytes] | None = None,
+) -> bytes:
+    return groth16_proof_bytes_for_public_inputs(
+        request["public_inputs"],
+        source_domain=int(request["source_domain"]),
+        words=words,
+    )
+
+
 GROTH16_PROOF_BYTES = groth16_proof_bytes()
 SOLANA_SIGNATURE_55 = (
     "2hxGyn4y9Mjkii76BqmxVoNYbTs3tw97bmtZRXnDoZPAw7VZTWhhk1aV11DtFgYGVibPaty4PQLHVLaKrT24NxGU"
@@ -1200,6 +1227,22 @@ def test_solana_route_canary_evidence_binds_programdata_snapshot() -> None:
         solana_sccp_route_canary_evidence_hash(
             sample_solana_route_canary_evidence(expected_destination_binding_hash=HEX32_H)
         )
+    for override in (
+        {"route_allowlist_hash": evidence["destination_binding_hash"]},
+        {"route_allowlist_hash": evidence["source_verifier_material_hash"]},
+        {"route_allowlist_hash": evidence["source_adapter_engine_deployment_hash"]},
+        {"source_verifier_material_hash": evidence["destination_binding_hash"]},
+        {"source_adapter_engine_deployment_hash": evidence["destination_binding_hash"]},
+        {
+            "source_adapter_engine_deployment_hash": (
+                evidence["source_verifier_material_hash"]
+            )
+        },
+    ):
+        with pytest.raises(TypeError, match="Solana route canary governed hashes"):
+            solana_sccp_route_canary_evidence_hash(
+                sample_solana_route_canary_evidence(**override)
+            )
 
 
 def test_ton_route_canary_evidence_binds_live_account_snapshot() -> None:
@@ -1241,6 +1284,22 @@ def test_ton_route_canary_evidence_binds_live_account_snapshot() -> None:
         ton_sccp_route_canary_evidence_hash(
             sample_ton_route_canary_evidence(accountStatus="active")
         )
+    for override in (
+        {"route_allowlist_hash": evidence["destination_binding_hash"]},
+        {"route_allowlist_hash": evidence["source_verifier_material_hash"]},
+        {"route_allowlist_hash": evidence["source_adapter_engine_deployment_hash"]},
+        {"source_verifier_material_hash": evidence["destination_binding_hash"]},
+        {"source_adapter_engine_deployment_hash": evidence["destination_binding_hash"]},
+        {
+            "source_adapter_engine_deployment_hash": (
+                evidence["source_verifier_material_hash"]
+            )
+        },
+    ):
+        with pytest.raises(TypeError, match="TON route canary governed hashes"):
+            ton_sccp_route_canary_evidence_hash(
+                sample_ton_route_canary_evidence(**override)
+            )
 
 
 def test_tron_route_canary_evidence_binds_transaction_transcript() -> None:
@@ -1300,6 +1359,22 @@ def test_tron_route_canary_evidence_binds_transaction_transcript() -> None:
         tron_sccp_route_canary_evidence_hash(
             sample_tron_route_canary_evidence(route_canary_evidence_hash=HEX32_H)
         )
+    for override in (
+        {"route_allowlist_hash": evidence["destination_binding_hash"]},
+        {"route_allowlist_hash": evidence["source_verifier_material_hash"]},
+        {"route_allowlist_hash": evidence["source_adapter_engine_deployment_hash"]},
+        {"source_verifier_material_hash": evidence["destination_binding_hash"]},
+        {"source_adapter_engine_deployment_hash": evidence["destination_binding_hash"]},
+        {
+            "source_adapter_engine_deployment_hash": (
+                evidence["source_verifier_material_hash"]
+            )
+        },
+    ):
+        with pytest.raises(TypeError, match="TRON route canary governed hashes"):
+            tron_sccp_route_canary_evidence_hash(
+                sample_tron_route_canary_evidence(**override)
+            )
 
 
 def sample_solana_accounts_lt_hash_proof_input(**overrides: Any) -> Dict[str, Any]:
@@ -1393,8 +1468,11 @@ def sample_ton_public_inputs(**overrides: Any) -> Dict[str, Any]:
 def sample_ton_bundle_fixture(
     *,
     source_domain: int = SCCP_DOMAIN_SORA,
+    target_domain: int = SCCP_DOMAIN_TON,
     sender_codec: int = sccp_module.SCCP_CODEC_TEXT_UTF8,
     sender: Any = "alice@sora",
+    recipient_codec: int | None = None,
+    recipient: Any | None = None,
     nonce: int = 327,
     amount: int = 42,
     route_id: str = "sccp-ton-proof-request",
@@ -1413,13 +1491,24 @@ def sample_ton_bundle_fixture(
 
     asset_id = codec_value(sccp_module.SCCP_CODEC_TEXT_UTF8, "xor#ton")
     sender_value = codec_value(sender_codec, sender)
-    recipient = codec_value(sccp_module.SCCP_CODEC_TON_RAW, "0:" + "12" * 32)
+    if recipient_codec is None:
+        recipient_codec = sccp_module._sccp_counterparty_account_codec(target_domain)
+    if recipient is None:
+        if target_domain in (SCCP_DOMAIN_ETH, SCCP_DOMAIN_BSC):
+            recipient = "0x" + "11" * 20
+        elif target_domain == SCCP_DOMAIN_TRON:
+            recipient = "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8"
+        elif target_domain == SCCP_DOMAIN_TON:
+            recipient = "0:" + "12" * 32
+        else:
+            recipient = "alice@sora"
+    recipient_value = codec_value(recipient_codec, recipient)
     route = codec_value(sccp_module.SCCP_CODEC_TEXT_UTF8, route_id)
     payload_body = b"".join(
         (
             sccp_module._write_u8(1),
             sccp_module._write_u32_le(source_domain),
-            sccp_module._write_u32_le(SCCP_DOMAIN_TON),
+            sccp_module._write_u32_le(target_domain),
             sccp_module._write_u64_le(nonce),
             sccp_module._write_u32_le(SCCP_DOMAIN_SORA),
             sccp_module._write_u8(sccp_module.SCCP_CODEC_TEXT_UTF8),
@@ -1427,8 +1516,8 @@ def sample_ton_bundle_fixture(
             int(amount).to_bytes(16, "little"),
             sccp_module._write_u8(sender_codec),
             sccp_module._write_bytes(sender_value),
-            sccp_module._write_u8(sccp_module.SCCP_CODEC_TON_RAW),
-            sccp_module._write_bytes(recipient),
+            sccp_module._write_u8(recipient_codec),
+            sccp_module._write_bytes(recipient_value),
             sccp_module._write_u8(sccp_module.SCCP_CODEC_TEXT_UTF8),
             sccp_module._write_bytes(route),
         )
@@ -1446,7 +1535,7 @@ def sample_ton_bundle_fixture(
         (
             sccp_module._write_u8(1),
             sccp_module._write_u8(6),
-            sccp_module._write_u32_le(SCCP_DOMAIN_TON),
+            sccp_module._write_u32_le(target_domain),
             bytes.fromhex(message_id.removeprefix("0x")),
             bytes.fromhex(payload_hash.removeprefix("0x")),
         )
@@ -1481,7 +1570,7 @@ def sample_ton_bundle_fixture(
             "version": 1,
             "message_id": message_id,
             "payload_hash": payload_hash,
-            "target_domain": SCCP_DOMAIN_TON,
+            "target_domain": target_domain,
             "commitment_root": commitment_root,
             "finality_height": 19,
             "finality_block_hash": HEX32_A,
@@ -1492,6 +1581,30 @@ def sample_ton_bundle_fixture(
 
 def sample_ton_bundle_bytes(**overrides: Any) -> bytes:
     return sample_ton_bundle_fixture(**overrides)["bundle_bytes"]
+
+
+def sample_evm_bundle_fixture(
+    *,
+    target_domain: int = SCCP_DOMAIN_ETH,
+    **overrides: Any,
+) -> Dict[str, Any]:
+    return sample_ton_bundle_fixture(
+        target_domain=target_domain,
+        recipient_codec=sccp_module.SCCP_CODEC_EVM_HEX,
+        recipient="0x" + "11" * 20,
+        route_id="sccp-evm-proof-request",
+        **overrides,
+    )
+
+
+def sample_tron_bundle_fixture(**overrides: Any) -> Dict[str, Any]:
+    return sample_ton_bundle_fixture(
+        target_domain=SCCP_DOMAIN_TRON,
+        recipient_codec=sccp_module.SCCP_CODEC_TRON_BASE58CHECK,
+        recipient="TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
+        route_id="sccp-tron-proof-request",
+        **overrides,
+    )
 
 
 def read_test_u32_le(raw: bytes, offset: int, label: str) -> int:
@@ -1610,23 +1723,22 @@ def sample_ton_message_body_input_with_result(**overrides: Any) -> Dict[str, Any
 
 
 def sample_tron_public_inputs(**overrides: Any) -> Dict[str, Any]:
-    public_inputs = {
-        "version": 1,
-        "message_id": "0x" + "11" * 32,
-        "payload_hash": "0x" + "22" * 32,
-        "target_domain": SCCP_DOMAIN_TRON,
-        "commitment_root": "0x" + "33" * 32,
-        "finality_height": "19",
-        "finality_block_hash": "0x" + "44" * 32,
-    }
+    public_inputs = sample_tron_bundle_fixture()["public_inputs"]
     public_inputs.update(overrides)
+    public_inputs["finality_height"] = str(public_inputs["finality_height"])
     return public_inputs
 
 
 def sample_tron_request_input(**overrides: Any) -> Dict[str, Any]:
+    public_inputs = overrides.get("public_inputs")
+    if public_inputs is None:
+        fixture = sample_tron_bundle_fixture()
+        public_inputs = fixture["public_inputs"]
+    else:
+        fixture = sample_tron_bundle_fixture()
     request = {
-        "public_inputs": sample_tron_public_inputs(),
-        "bundle_bytes": bytes([5, 6, 7]),
+        "public_inputs": public_inputs,
+        "bundle_bytes": fixture["bundle_bytes"],
         "source_proof_bytes": bytes([9, 10]),
         "source_domain": SCCP_DOMAIN_SORA,
         "statement_hash": "0x" + "55" * 32,
@@ -1657,23 +1769,40 @@ def sample_tron_production_request_input(**overrides: Any) -> Dict[str, Any]:
 
 
 def sample_evm_public_inputs(**overrides: Any) -> Dict[str, Any]:
-    public_inputs = {
-        "version": 1,
-        "message_id": "0x" + "11" * 32,
-        "payload_hash": "0x" + "22" * 32,
-        "target_domain": SCCP_DOMAIN_ETH,
-        "commitment_root": "0x" + "33" * 32,
-        "finality_height": "19",
-        "finality_block_hash": "0x" + "44" * 32,
-    }
+    target_domain = overrides.get("target_domain", SCCP_DOMAIN_ETH)
+    fixture_target_domain = (
+        target_domain
+        if target_domain in (SCCP_DOMAIN_ETH, SCCP_DOMAIN_BSC)
+        else SCCP_DOMAIN_ETH
+    )
+    public_inputs = sample_evm_bundle_fixture(
+        target_domain=fixture_target_domain
+    )["public_inputs"]
     public_inputs.update(overrides)
+    public_inputs["finality_height"] = str(public_inputs["finality_height"])
     return public_inputs
 
 
 def sample_evm_request_input(**overrides: Any) -> Dict[str, Any]:
+    public_inputs = overrides.get("public_inputs")
+    if public_inputs is None:
+        fixture = sample_evm_bundle_fixture()
+        public_inputs = fixture["public_inputs"]
+    else:
+        target_domain = (
+            public_inputs.get("target_domain", SCCP_DOMAIN_ETH)
+            if isinstance(public_inputs, Mapping)
+            else SCCP_DOMAIN_ETH
+        )
+        fixture_target_domain = (
+            target_domain
+            if target_domain in (SCCP_DOMAIN_ETH, SCCP_DOMAIN_BSC)
+            else SCCP_DOMAIN_ETH
+        )
+        fixture = sample_evm_bundle_fixture(target_domain=fixture_target_domain)
     request = {
-        "public_inputs": sample_evm_public_inputs(),
-        "bundle_bytes": bytes([5, 6, 7]),
+        "public_inputs": public_inputs,
+        "bundle_bytes": fixture["bundle_bytes"],
         "source_proof_bytes": bytes([9, 10]),
         "source_domain": SCCP_DOMAIN_SORA,
         "statement_hash": "0x" + "55" * 32,
@@ -1702,6 +1831,17 @@ def sample_evm_production_request_input(**overrides: Any) -> Dict[str, Any]:
         destination_binding_hash=None,
     )
     request.update(overrides)
+    if "public_inputs" in overrides and "bundle_bytes" not in overrides:
+        public_inputs = overrides["public_inputs"]
+        target_domain = (
+            public_inputs.get("target_domain", SCCP_DOMAIN_ETH)
+            if isinstance(public_inputs, Mapping)
+            else SCCP_DOMAIN_ETH
+        )
+        if target_domain in (SCCP_DOMAIN_ETH, SCCP_DOMAIN_BSC):
+            request["bundle_bytes"] = sample_evm_bundle_fixture(
+                target_domain=target_domain
+            )["bundle_bytes"]
     return request
 
 
@@ -7479,8 +7619,9 @@ def test_derives_evm_and_tron_destination_bindings_for_ui_provers() -> None:
         )
     )
     assert evm_request["destination_binding_hash"] == evm_binding["binding_hash"]
+    evm_proof_bytes = groth16_proof_bytes_for_request(evm_request)
     evm_submission_for_submit = build_evm_sccp_submission(
-        {"proof_result": wrap_evm_sccp_proof_result(GROTH16_PROOF_BYTES, evm_request)}
+        {"proof_result": wrap_evm_sccp_proof_result(evm_proof_bytes, evm_request)}
     )
     evm_message_bundle = {
         "commitment": {"message_id": sample_evm_public_inputs()["message_id"]},
@@ -7509,7 +7650,7 @@ def test_derives_evm_and_tron_destination_bindings_for_ui_provers() -> None:
         evm_submit_payload["expected_destination_binding_hash_hex"]
         == evm_binding["binding_hash"]
     )
-    assert evm_submit_payload["proof_bytes_hex"] == "0x" + GROTH16_PROOF_BYTES.hex()
+    assert evm_submit_payload["proof_bytes_hex"] == "0x" + evm_proof_bytes.hex()
     assert evm_submit_payload["creation_time_ms"] == 123
     with pytest.raises(
         TypeError,
@@ -7668,8 +7809,9 @@ def test_derives_evm_and_tron_destination_bindings_for_ui_provers() -> None:
         )
     )
     assert tron_request["destination_binding_hash"] == tron_binding["binding_hash"]
+    tron_proof_bytes = groth16_proof_bytes_for_request(tron_request)
     tron_submission_for_submit = build_tron_sccp_submission(
-        {"proof_result": wrap_tron_sccp_proof_result(GROTH16_PROOF_BYTES, tron_request)}
+        {"proof_result": wrap_tron_sccp_proof_result(tron_proof_bytes, tron_request)}
     )
     tron_message_bundle = {
         "commitment": {"message_id": sample_tron_public_inputs()["message_id"]},
@@ -7693,7 +7835,7 @@ def test_derives_evm_and_tron_destination_bindings_for_ui_provers() -> None:
         tron_submit_payload["expected_destination_binding_hash_hex"]
         == tron_binding["binding_hash"]
     )
-    assert tron_submit_payload["proof_bytes_hex"] == "0x" + GROTH16_PROOF_BYTES.hex()
+    assert tron_submit_payload["proof_bytes_hex"] == "0x" + tron_proof_bytes.hex()
     with pytest.raises(
         TypeError,
         match=r"proofBytes\.commitmentRoot must match messageBundle\.commitmentRoot",
@@ -9668,7 +9810,7 @@ def test_builds_tron_sccp_groth16_proof_request_with_public_signals() -> None:
     assert request["source_domain"] == SCCP_DOMAIN_SORA
     assert request["target_domain"] == SCCP_DOMAIN_TRON
     assert request["public_inputs"] == sample_tron_public_inputs()
-    assert request["bundle_bytes"] == bytes([5, 6, 7])
+    assert request["bundle_bytes"] == sample_tron_bundle_fixture()["bundle_bytes"]
     assert request["source_proof_bytes"] == bytes([9, 10])
     assert request["proof_context"] == {
         "version": 1,
@@ -9692,11 +9834,13 @@ def test_builds_tron_sccp_groth16_proof_request_with_public_signals() -> None:
     with pytest.raises(TypeError, match="immutable"):
         request["public_signal_words"].append(HEX32_A)
     assert request["request_hash"] == (
-        "0x853cdaff01db27620f607dfb54cc7a580b4733849354b18867e5d5ca129d40cd"
+        "0xecb68e42b93f12af0c88f897243193f6c2565719d520213b88ac164e86c53c1f"
     )
     assert request["request_hash"] != build_tron_sccp_proof_request(
         sample_tron_request_input(
-            bundle_bytes=bytes([5, 6, 7, 9]),
+            bundle_bytes=sample_tron_bundle_fixture(finality_proof=b"\x71\x73")[
+                "bundle_bytes"
+            ],
             source_proof_bytes=bytes([10]),
         )
     )["request_hash"]
@@ -9804,7 +9948,7 @@ def test_builds_evm_family_sccp_groth16_proof_request_with_public_signals() -> N
     assert request["source_domain"] == SCCP_DOMAIN_SORA
     assert request["target_domain"] == SCCP_DOMAIN_ETH
     assert request["public_inputs"] == sample_evm_public_inputs()
-    assert request["bundle_bytes"] == bytes([5, 6, 7])
+    assert request["bundle_bytes"] == sample_evm_bundle_fixture()["bundle_bytes"]
     assert request["source_proof_bytes"] == bytes([9, 10])
     assert request["proof_context"] == {
         "version": 1,
@@ -9828,11 +9972,13 @@ def test_builds_evm_family_sccp_groth16_proof_request_with_public_signals() -> N
     with pytest.raises(TypeError, match="immutable"):
         request["public_signal_words"].append(HEX32_A)
     assert request["request_hash"] == (
-        "0xc784b3c223200182c9a52017eaba9a1d9225ed11ae3d99c35b17a1b0083cdfad"
+        "0x5f36119da9ac289030489afe622d82f12a02277064c161758dda4ad0038c6f84"
     )
     assert request["request_hash"] != build_evm_sccp_proof_request(
         sample_evm_request_input(
-            bundle_bytes=bytes([5, 6, 7, 9]),
+            bundle_bytes=sample_evm_bundle_fixture(finality_proof=b"\x71\x73")[
+                "bundle_bytes"
+            ],
             source_proof_bytes=bytes([10]),
         )
     )["request_hash"]
@@ -9949,6 +10095,10 @@ def test_builds_evm_family_sccp_groth16_proof_request_with_public_signals() -> N
         )
     with pytest.raises(TypeError, match="bundleBytes must not be empty"):
         build_evm_sccp_proof_request(sample_evm_request_input(bundle_bytes=b""))
+    with pytest.raises(TypeError, match="bundleBytes must not be all zero"):
+        build_evm_sccp_proof_request(
+            sample_evm_request_input(bundle_bytes=b"\x00\x00")
+        )
     with pytest.raises(TypeError, match="backend must be evm-groth16-bn254-v1"):
         build_evm_sccp_proof_request(sample_evm_request_input(backend="debug-evm-backend"))
     for bad_backend in ("", False, 0):
@@ -10003,21 +10153,23 @@ def test_sccp_proof_requests_reject_all_zero_source_proof_bytes() -> None:
         )["source_proof_bytes"]
         == b""
     )
+    omitted_evm_request = build_evm_sccp_proof_request(
+        sample_evm_production_request_input(source_proof_bytes=b"")
+    )
     assert (
         wrap_evm_sccp_proof_result(
-            GROTH16_PROOF_BYTES,
-            build_evm_sccp_proof_request(
-                sample_evm_production_request_input(source_proof_bytes=b"")
-            ),
+            groth16_proof_bytes_for_request(omitted_evm_request),
+            omitted_evm_request,
         )["source_proof_bytes"]
         == b""
     )
+    omitted_tron_request = build_tron_sccp_proof_request(
+        sample_tron_production_request_input(source_proof_bytes=b"")
+    )
     assert (
         wrap_tron_sccp_proof_result(
-            GROTH16_PROOF_BYTES,
-            build_tron_sccp_proof_request(
-                sample_tron_production_request_input(source_proof_bytes=b"")
-            ),
+            groth16_proof_bytes_for_request(omitted_tron_request),
+            omitted_tron_request,
         )["source_proof_bytes"]
         == b""
     )
@@ -10034,6 +10186,78 @@ def test_sccp_proof_requests_reject_all_zero_source_proof_bytes() -> None:
         )["source_proof_bytes"]
         == b""
     )
+
+
+def test_evm_and_tron_groth16_proof_requests_reject_noncanonical_or_mismatched_bundle_bytes() -> None:
+    with pytest.raises(TypeError, match=r"bundleBytes\.version must be 1"):
+        build_evm_sccp_proof_request(
+            sample_evm_request_input(bundle_bytes=bytes([5, 6, 7]))
+        )
+    with pytest.raises(TypeError, match=r"bundleBytes\.version must be 1"):
+        build_tron_sccp_proof_request(
+            sample_tron_request_input(bundle_bytes=bytes([5, 6, 7]))
+        )
+
+    with pytest.raises(TypeError, match="bundleBytes must match publicInputs"):
+        build_evm_sccp_proof_request(
+            sample_evm_request_input(
+                bundle_bytes=sample_evm_bundle_fixture(amount=43)["bundle_bytes"]
+            )
+        )
+    with pytest.raises(TypeError, match="bundleBytes must match publicInputs"):
+        build_tron_sccp_proof_request(
+            sample_tron_request_input(
+                bundle_bytes=sample_tron_bundle_fixture(amount=43)["bundle_bytes"]
+            )
+        )
+
+    non_sora_evm_bundle = sample_evm_bundle_fixture(
+        source_domain=SCCP_DOMAIN_SOL,
+        sender_codec=sccp_module.SCCP_CODEC_SOLANA_BASE58,
+        sender=SOLANA_PROGRAM_42,
+    )
+    with pytest.raises(
+        TypeError,
+        match=r"bundleBytes\.sourceDomain must match sourceDomain",
+    ):
+        build_evm_sccp_proof_request(
+            sample_evm_request_input(
+                public_inputs=non_sora_evm_bundle["public_inputs"],
+                bundle_bytes=non_sora_evm_bundle["bundle_bytes"],
+            )
+        )
+
+    non_sora_tron_bundle = sample_tron_bundle_fixture(
+        source_domain=SCCP_DOMAIN_SOL,
+        sender_codec=sccp_module.SCCP_CODEC_SOLANA_BASE58,
+        sender=SOLANA_PROGRAM_42,
+    )
+    with pytest.raises(
+        TypeError,
+        match=r"bundleBytes\.sourceDomain must match sourceDomain",
+    ):
+        build_tron_sccp_proof_request(
+            sample_tron_request_input(
+                public_inputs=non_sora_tron_bundle["public_inputs"],
+                bundle_bytes=non_sora_tron_bundle["bundle_bytes"],
+            )
+        )
+
+
+def test_groth16_proof_result_wrappers_reject_all_zero_bundle_bytes() -> None:
+    evm_request = dict(
+        build_evm_sccp_proof_request(sample_evm_production_request_input())
+    )
+    evm_request["bundle_bytes"] = b"\x00\x00"
+    with pytest.raises(TypeError, match="bundleBytes must not be all zero"):
+        wrap_evm_sccp_proof_result(GROTH16_PROOF_BYTES, evm_request)
+
+    tron_request = dict(
+        build_tron_sccp_proof_request(sample_tron_production_request_input())
+    )
+    tron_request["bundle_bytes"] = b"\x00\x00"
+    with pytest.raises(TypeError, match="bundleBytes must not be all zero"):
+        wrap_tron_sccp_proof_result(GROTH16_PROOF_BYTES, tron_request)
 
 
 def test_builds_solana_sccp_program_instruction_submission_data() -> None:
@@ -10794,7 +11018,7 @@ def test_ton_sccp_prover_rejects_non_production_input_before_callback() -> None:
 
 def test_sccp_provers_accept_callable_and_camel_case_witness_providers() -> None:
     evm_public_inputs = sample_evm_public_inputs()
-    evm_bundle_bytes = [5, 6, 7]
+    evm_bundle_bytes = list(sample_evm_bundle_fixture()["bundle_bytes"])
     evm_input = sample_evm_production_request_input(
         public_inputs=evm_public_inputs,
         bundle_bytes=evm_bundle_bytes,
@@ -10821,7 +11045,7 @@ def test_sccp_provers_accept_callable_and_camel_case_witness_providers() -> None
     ) -> Dict[str, Any]:
         assert options["portal"] is True
         assert request["source_proof_bytes"] == bytes([9, 10])
-        return {"proof_bytes": GROTH16_PROOF_BYTES}
+        return {"proof_bytes": groth16_proof_bytes_for_request(request)}
 
     evm_result = asyncio.run(
         EvmSccpProver(
@@ -10831,8 +11055,10 @@ def test_sccp_provers_accept_callable_and_camel_case_witness_providers() -> None
     )
 
     assert evm_result["source_proof_bytes"] == bytes([9, 10])
-    assert evm_input["public_inputs"]["message_id"] == "0x" + "11" * 32
-    assert evm_input["bundle_bytes"] == [5, 6, 7]
+    assert evm_input["public_inputs"]["message_id"] == sample_evm_public_inputs()[
+        "message_id"
+    ]
+    assert evm_input["bundle_bytes"] == list(sample_evm_bundle_fixture()["bundle_bytes"])
 
     class TonWitnessProvider:
         async def resolveWitness(
@@ -10902,7 +11128,7 @@ def test_sccp_provers_accept_callable_and_camel_case_witness_providers() -> None
 
 
 def test_sccp_witness_provider_snapshots_mutable_sequence_inputs() -> None:
-    bundle_bytes = deque([5, 6, 7])
+    bundle_bytes = deque(sample_evm_bundle_fixture()["bundle_bytes"])
     source_proof_bytes = deque([9, 10])
     input_value = sample_evm_production_request_input(
         bundle_bytes=bundle_bytes,
@@ -10920,7 +11146,7 @@ def test_sccp_witness_provider_snapshots_mutable_sequence_inputs() -> None:
         input_snapshot["source_proof_bytes"].append(0xFF)  # type: ignore[attr-defined]
         return {
             **input_snapshot,
-            "bundle_bytes": [5, 6, 7],
+            "bundle_bytes": list(sample_evm_bundle_fixture()["bundle_bytes"]),
             "source_proof_bytes": [9, 10],
         }
 
@@ -10928,9 +11154,9 @@ def test_sccp_witness_provider_snapshots_mutable_sequence_inputs() -> None:
         EvmSccpProver(witness_provider=evm_witness_provider).build_request(input_value)
     )
 
-    assert list(bundle_bytes) == [5, 6, 7]
+    assert list(bundle_bytes) == list(sample_evm_bundle_fixture()["bundle_bytes"])
     assert list(source_proof_bytes) == [9, 10]
-    assert request["bundle_bytes"] == bytes([5, 6, 7])
+    assert request["bundle_bytes"] == sample_evm_bundle_fixture()["bundle_bytes"]
     assert request["source_proof_bytes"] == bytes([9, 10])
 
 
@@ -11032,7 +11258,7 @@ def test_sccp_provers_resolve_ui_witnesses_before_linked_provers() -> None:
         assert options["portal"] is True
         assert tron_resolved
         assert request["source_proof_bytes"] == bytes([9, 10])
-        return {"proof_bytes": GROTH16_PROOF_BYTES}
+        return {"proof_bytes": groth16_proof_bytes_for_request(request)}
 
     tron_result = asyncio.run(
         TronSccpProver(
@@ -11149,7 +11375,7 @@ def test_evm_family_sccp_prover_wraps_externally_generated_proof_bytes() -> None
         assert request["backend"] == SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1
         assert isinstance(request["bundle_bytes"], bytes)
         assert isinstance(request["source_proof_bytes"], bytes)
-        assert request["bundle_bytes"] == bytes([5, 6, 7])
+        assert request["bundle_bytes"] == sample_evm_bundle_fixture()["bundle_bytes"]
         assert request["source_proof_bytes"] == bytes([9, 10])
         assert request["proof_context"]["statement_hash"] == "0x" + "55" * 32
         assert request["target_domain"] == SCCP_DOMAIN_ETH
@@ -11158,9 +11384,9 @@ def test_evm_family_sccp_prover_wraps_externally_generated_proof_bytes() -> None
             request["bundle_bytes"] = b"\x00"
         with pytest.raises(TypeError, match="immutable"):
             request["source_proof_bytes"] = b"\x00"
-        return {"proof_bytes": GROTH16_PROOF_BYTES}
+        return {"proof_bytes": groth16_proof_bytes_for_request(request)}
 
-    bundle_bytes = bytearray([5, 6, 7])
+    bundle_bytes = bytearray(sample_evm_bundle_fixture()["bundle_bytes"])
     source_proof_bytes = bytearray([9, 10])
     input_value = sample_evm_production_request_input(
         bundle_bytes=bundle_bytes,
@@ -11168,7 +11394,8 @@ def test_evm_family_sccp_prover_wraps_externally_generated_proof_bytes() -> None
     )
     result = asyncio.run(EvmSccpProver(prove=prove).prove(input_value))
     request = build_evm_sccp_proof_request(input_value)
-    direct_result = wrap_evm_sccp_proof_result(GROTH16_PROOF_BYTES, request)
+    expected_proof_bytes = groth16_proof_bytes_for_request(request)
+    direct_result = wrap_evm_sccp_proof_result(expected_proof_bytes, request)
 
     assert callback_request is not request
     assert callback_request == request
@@ -11177,7 +11404,7 @@ def test_evm_family_sccp_prover_wraps_externally_generated_proof_bytes() -> None
         _options: Mapping[str, Any],
     ) -> Dict[str, Any]:
         return {
-            "proof_bytes": GROTH16_PROOF_BYTES,
+            "proof_bytes": expected_proof_bytes,
             "request_hash": linked_request["request_hash"],
             "requestHash": linked_request["request_hash"],
         }
@@ -11189,9 +11416,12 @@ def test_evm_family_sccp_prover_wraps_externally_generated_proof_bytes() -> None
         linked_request: Mapping[str, Any],
         _options: Mapping[str, Any],
     ) -> Dict[str, Any]:
-        wrapped = wrap_evm_sccp_proof_result(GROTH16_PROOF_BYTES, linked_request)
+        wrapped = wrap_evm_sccp_proof_result(
+            groth16_proof_bytes_for_request(linked_request),
+            linked_request,
+        )
         return {
-            "proof_bytes": GROTH16_PROOF_BYTES,
+            "proof_bytes": groth16_proof_bytes_for_request(linked_request),
             "envelope_hash": wrapped["envelope_hash"],
             "envelopeHash": wrapped["envelope_hash"],
         }
@@ -11199,12 +11429,12 @@ def test_evm_family_sccp_prover_wraps_externally_generated_proof_bytes() -> None
     with pytest.raises(TypeError, match=r"proofResult\.envelopeHash.*multiple aliases"):
         asyncio.run(EvmSccpProver(prove=prove_with_envelope_hash_aliases).prove(input_value))
 
-    assert result["proof_bytes"] == GROTH16_PROOF_BYTES
+    assert result["proof_bytes"] == expected_proof_bytes
     assert len(result["proof_base64"]) > 0
     assert result["request_hash"] == request["request_hash"]
     assert direct_result["envelope_hash"] == result["envelope_hash"]
     assert result["public_signal_words"] == request["public_signal_words"]
-    assert result["bundle_bytes"] == bytes([5, 6, 7])
+    assert result["bundle_bytes"] == sample_evm_bundle_fixture()["bundle_bytes"]
     assert result["source_proof_bytes"] == bytes([9, 10])
     assert result["statement_hash"] == "0x" + "55" * 32
     assert result["destination_binding_hash"] == input_value["destination_binding"]["binding_hash"]
@@ -11266,8 +11496,9 @@ def test_ethereum_mainnet_sccp_facade_requires_chain_id_1_and_eth_target() -> No
                 }
             )
         )
+    proof_bytes = groth16_proof_bytes_for_request(request)
     proof_result = wrap_ethereum_mainnet_sccp_destination_proof_result(
-        GROTH16_PROOF_BYTES,
+        proof_bytes,
         request,
     )
     submission = build_ethereum_mainnet_sccp_destination_submission(
@@ -11339,7 +11570,7 @@ def test_ethereum_mainnet_sccp_facade_requires_chain_id_1_and_eth_target() -> No
             callback_request["destination_binding"]["network_id"]
             == SCCP_ETH_MAINNET_NETWORK_ID
         )
-        return {"proof_bytes": GROTH16_PROOF_BYTES}
+        return {"proof_bytes": groth16_proof_bytes_for_request(callback_request)}
 
     async_result = asyncio.run(
         EthereumMainnetSccp(prove=prove).prove_outbound_to_ethereum(input_value)
@@ -11389,7 +11620,9 @@ def test_ethereum_mainnet_sccp_facade_requires_chain_id_1_and_eth_target() -> No
         build_ethereum_mainnet_sccp_destination_submission(
             {
                 "public_inputs": sample_evm_public_inputs(target_domain=SCCP_DOMAIN_ETH),
-                "proof_bytes": GROTH16_PROOF_BYTES,
+                "proof_bytes": groth16_proof_bytes_for_public_inputs(
+                    sample_evm_public_inputs(target_domain=SCCP_DOMAIN_ETH)
+                ),
                 "statement_hash": HEX32_G,
                 "destination_binding_hash": binding["binding_hash"],
             }
@@ -12352,8 +12585,9 @@ def test_bsc_mainnet_sccp_facade_requires_chain_id_56_and_bsc_target() -> None:
         destination_binding_hash=None,
     )
     request = build_bsc_mainnet_sccp_destination_proof_request(input_value)
+    proof_bytes = groth16_proof_bytes_for_request(request)
     proof_result = wrap_bsc_mainnet_sccp_destination_proof_result(
-        GROTH16_PROOF_BYTES,
+        proof_bytes,
         request,
     )
     with pytest.raises(TypeError, match="canonical|destinationBinding"):
@@ -12379,7 +12613,7 @@ def test_bsc_mainnet_sccp_facade_requires_chain_id_56_and_bsc_target() -> None:
             callback_request["destination_binding"]["network_id"]
             == SCCP_BSC_MAINNET_NETWORK_ID
         )
-        return {"proof_bytes": GROTH16_PROOF_BYTES}
+        return {"proof_bytes": groth16_proof_bytes_for_request(callback_request)}
 
     async_result = asyncio.run(BscMainnetSccpProver(prove=prove).prove(input_value))
     assert async_result["destination_binding_hash"] == binding["binding_hash"]
@@ -13216,7 +13450,7 @@ def test_tron_sccp_prover_wraps_externally_generated_proof_bytes() -> None:
         assert request["backend"] == SCCP_TRON_GROTH16_BN254_PROOF_BACKEND_V1
         assert isinstance(request["bundle_bytes"], bytes)
         assert isinstance(request["source_proof_bytes"], bytes)
-        assert request["bundle_bytes"] == bytes([5, 6, 7])
+        assert request["bundle_bytes"] == sample_tron_bundle_fixture()["bundle_bytes"]
         assert request["source_proof_bytes"] == bytes([9, 10])
         assert request["proof_context"]["statement_hash"] == "0x" + "55" * 32
         assert len(request["public_signal_words"]) == 9
@@ -13228,9 +13462,9 @@ def test_tron_sccp_prover_wraps_externally_generated_proof_bytes() -> None:
             request["public_signal_words"].append(HEX32_B)
         with pytest.raises(TypeError, match="immutable"):
             request["proof_context"]["statement_hash"] = HEX32_A
-        return {"proof_bytes": GROTH16_PROOF_BYTES}
+        return {"proof_bytes": groth16_proof_bytes_for_request(request)}
 
-    bundle_bytes = bytearray([5, 6, 7])
+    bundle_bytes = bytearray(sample_tron_bundle_fixture()["bundle_bytes"])
     source_proof_bytes = bytearray([9, 10])
     input_value = sample_tron_production_request_input(
         bundle_bytes=bundle_bytes,
@@ -13238,7 +13472,8 @@ def test_tron_sccp_prover_wraps_externally_generated_proof_bytes() -> None:
     )
     result = asyncio.run(TronSccpProver(prove=prove).prove(input_value))
     request = build_tron_sccp_proof_request(input_value)
-    direct_result = wrap_tron_sccp_proof_result(GROTH16_PROOF_BYTES, request)
+    expected_proof_bytes = groth16_proof_bytes_for_request(request)
+    direct_result = wrap_tron_sccp_proof_result(expected_proof_bytes, request)
 
     assert callback_request is not request
     assert callback_request == request
@@ -13246,9 +13481,12 @@ def test_tron_sccp_prover_wraps_externally_generated_proof_bytes() -> None:
         linked_request: Mapping[str, Any],
         _options: Mapping[str, Any],
     ) -> Dict[str, Any]:
-        wrapped = wrap_tron_sccp_proof_result(GROTH16_PROOF_BYTES, linked_request)
+        wrapped = wrap_tron_sccp_proof_result(
+            groth16_proof_bytes_for_request(linked_request),
+            linked_request,
+        )
         return {
-            "proof_bytes": GROTH16_PROOF_BYTES,
+            "proof_bytes": groth16_proof_bytes_for_request(linked_request),
             "envelope_hash": wrapped["envelope_hash"],
             "envelopeHash": wrapped["envelope_hash"],
         }
@@ -13256,13 +13494,13 @@ def test_tron_sccp_prover_wraps_externally_generated_proof_bytes() -> None:
     with pytest.raises(TypeError, match=r"proofResult\.envelopeHash.*multiple aliases"):
         asyncio.run(TronSccpProver(prove=prove_with_envelope_hash_aliases).prove(input_value))
 
-    assert result["proof_bytes"] == GROTH16_PROOF_BYTES
+    assert result["proof_bytes"] == expected_proof_bytes
     assert len(result["proof_base64"]) > 0
     assert result["request_hash"] == request["request_hash"]
     assert direct_result["envelope_hash"] == result["envelope_hash"]
     assert result["public_signal_words"] == request["public_signal_words"]
-    assert request["bundle_bytes"] == bytes([5, 6, 7])
-    assert result["bundle_bytes"] == bytes([5, 6, 7])
+    assert request["bundle_bytes"] == sample_tron_bundle_fixture()["bundle_bytes"]
+    assert result["bundle_bytes"] == sample_tron_bundle_fixture()["bundle_bytes"]
     assert result["source_proof_bytes"] == bytes([9, 10])
     assert result["statement_hash"] == "0x" + "55" * 32
     assert result["destination_binding_hash"] == input_value["destination_binding"]["binding_hash"]
@@ -13280,7 +13518,8 @@ def test_builds_evm_and_tron_groth16_contract_call_submissions() -> None:
     )
 
     evm_request = build_evm_sccp_proof_request(sample_evm_production_request_input())
-    evm_result = wrap_evm_sccp_proof_result(GROTH16_PROOF_BYTES, evm_request)
+    evm_proof_bytes = groth16_proof_bytes_for_request(evm_request)
+    evm_result = wrap_evm_sccp_proof_result(evm_proof_bytes, evm_request)
     evm_submission = build_evm_sccp_submission({"proof_result": evm_result})
     evm_words = sccp_message_transparent_public_input_abi_words(sample_evm_public_inputs())
 
@@ -13298,16 +13537,16 @@ def test_builds_evm_and_tron_groth16_contract_call_submissions() -> None:
     assert evm_submission["public_signal_words"] == evm_result["public_signal_words"]
     assert evm_submission["statement_hash"] == evm_result["statement_hash"]
     assert evm_submission["destination_binding_hash"] == evm_result["destination_binding_hash"]
-    assert evm_submission["proof_bytes"] == GROTH16_PROOF_BYTES
+    assert evm_submission["proof_bytes"] == evm_proof_bytes
     assert evm_submission["envelope_bytes"] == evm_submission["call_data"]
     assert evm_submission["envelope_hex"] == evm_submission["call_data_hex"]
     assert evm_submission["call_data_hex"].startswith(SCCP_SUBMIT_MESSAGE_PROOF_SELECTOR_V1)
     assert len(evm_submission["call_data"]) == 676
     assert evm_submission["call_data"][4:36].hex() == ("00" * 30 + "0100")
     assert evm_submission["call_data"][260:292].hex() == ("00" * 30 + "0180")
-    assert evm_submission["call_data"][292:] == GROTH16_PROOF_BYTES
+    assert evm_submission["call_data"][292:] == evm_proof_bytes
     assert evm_submission["call_data"] == sccp_submit_message_proof_call_data(
-        GROTH16_PROOF_BYTES,
+        evm_proof_bytes,
         sample_evm_public_inputs(),
         evm_result["statement_hash"],
     )
@@ -13372,17 +13611,18 @@ def test_builds_evm_and_tron_groth16_contract_call_submissions() -> None:
                 },
             }
         )
+    omitted_evm_request = build_evm_sccp_proof_request(
+        sample_evm_production_request_input(source_proof_bytes=b"")
+    )
     omitted_evm_result = wrap_evm_sccp_proof_result(
-        GROTH16_PROOF_BYTES,
-        build_evm_sccp_proof_request(
-                sample_evm_production_request_input(source_proof_bytes=b"")
-        ),
+        groth16_proof_bytes_for_request(omitted_evm_request),
+        omitted_evm_request,
     )
     omitted_evm_submission = build_evm_sccp_submission(
         {"proof_result": omitted_evm_result}
     )
     assert omitted_evm_result["source_proof_bytes"] == b""
-    assert omitted_evm_submission["proof_bytes"] == GROTH16_PROOF_BYTES
+    assert omitted_evm_submission["proof_bytes"] == omitted_evm_result["proof_bytes"]
     assert evm_submission["public_input_words_bytes"] == bytes.fromhex(
         "".join(word.removeprefix("0x") for word in evm_words)
     )
@@ -13392,21 +13632,20 @@ def test_builds_evm_and_tron_groth16_contract_call_submissions() -> None:
     with pytest.raises(TypeError, match="immutable"):
         evm_submission["arguments"].append({})
 
+    bsc_request = build_evm_sccp_proof_request(
+        sample_evm_production_request_input(
+            public_inputs=sample_evm_public_inputs(target_domain=SCCP_DOMAIN_BSC),
+            destination_binding=sample_evm_destination_binding(
+                target_domain=SCCP_DOMAIN_BSC
+            ),
+            destination_binding_hash=None,
+        )
+    )
     bsc_submission = build_evm_sccp_submission(
         {
             "proof_result": wrap_evm_sccp_proof_result(
-                GROTH16_PROOF_BYTES,
-                build_evm_sccp_proof_request(
-                    sample_evm_production_request_input(
-                        public_inputs=sample_evm_public_inputs(
-                            target_domain=SCCP_DOMAIN_BSC
-                        ),
-                        destination_binding=sample_evm_destination_binding(
-                            target_domain=SCCP_DOMAIN_BSC
-                        ),
-                        destination_binding_hash=None,
-                    )
-                ),
+                groth16_proof_bytes_for_request(bsc_request),
+                bsc_request,
             )
         }
     )
@@ -13421,7 +13660,8 @@ def test_builds_evm_and_tron_groth16_contract_call_submissions() -> None:
         build_evm_sccp_submission(
             {
                 "proof_result": evm_result,
-                "proof_bytes": groth16_proof_bytes(
+                "proof_bytes": groth16_proof_bytes_for_request(
+                    evm_request,
                     words={
                         11: abi_word(
                             int(
@@ -13474,7 +13714,14 @@ def test_builds_evm_and_tron_groth16_contract_call_submissions() -> None:
         match=r"proofResult\.requestHash must match bundleBytes and sourceProofBytes",
     ):
         build_evm_sccp_submission(
-            {"proof_result": {**dict(evm_result), "bundle_bytes": bytes([5, 6, 8])}}
+            {
+                "proof_result": {
+                    **dict(evm_result),
+                    "bundle_bytes": sample_evm_bundle_fixture(
+                        finality_proof=b"\x71\x73"
+                    )["bundle_bytes"],
+                }
+            }
         )
     wrong_evm_context = dict(evm_result["proof_context"])
     wrong_evm_context["statement_hash"] = HEX32_A
@@ -13490,10 +13737,11 @@ def test_builds_evm_and_tron_groth16_contract_call_submissions() -> None:
                 "statement_hash": "0x" + "55" * 32,
                 "destination_binding_hash": "0x" + "66" * 32,
             }
-        )
+    )
 
     tron_request = build_tron_sccp_proof_request(sample_tron_production_request_input())
-    tron_result = wrap_tron_sccp_proof_result(GROTH16_PROOF_BYTES, tron_request)
+    tron_proof_bytes = groth16_proof_bytes_for_request(tron_request)
+    tron_result = wrap_tron_sccp_proof_result(tron_proof_bytes, tron_request)
     tron_submission = build_tron_sccp_submission({"proof_result": tron_result})
     tron_words = sccp_message_transparent_public_input_abi_words(
         sample_tron_public_inputs()
@@ -13508,21 +13756,22 @@ def test_builds_evm_and_tron_groth16_contract_call_submissions() -> None:
     assert tron_submission["public_input_words"] == tron_words
     assert tron_submission["public_signal_words"] == tron_result["public_signal_words"]
     assert tron_submission["call_data"] == sccp_submit_message_proof_call_data(
-        GROTH16_PROOF_BYTES,
+        tron_proof_bytes,
         sample_tron_public_inputs(),
         tron_result["statement_hash"],
     )
+    omitted_tron_request = build_tron_sccp_proof_request(
+        sample_tron_production_request_input(source_proof_bytes=b"")
+    )
     omitted_tron_result = wrap_tron_sccp_proof_result(
-        GROTH16_PROOF_BYTES,
-        build_tron_sccp_proof_request(
-                sample_tron_production_request_input(source_proof_bytes=b"")
-        ),
+        groth16_proof_bytes_for_request(omitted_tron_request),
+        omitted_tron_request,
     )
     omitted_tron_submission = build_tron_sccp_submission(
         {"proof_result": omitted_tron_result}
     )
     assert omitted_tron_result["source_proof_bytes"] == b""
-    assert omitted_tron_submission["proof_bytes"] == GROTH16_PROOF_BYTES
+    assert omitted_tron_submission["proof_bytes"] == omitted_tron_result["proof_bytes"]
     with pytest.raises(
         TypeError,
         match="bundleBytes requires proofResult for request-bound submission",
@@ -13550,7 +13799,7 @@ def test_builds_evm_and_tron_groth16_contract_call_submissions() -> None:
             }
         )
     assert len(tron_submission["call_data"]) == 676
-    assert tron_submission["call_data"][292:] == GROTH16_PROOF_BYTES
+    assert tron_submission["call_data"][292:] == tron_proof_bytes
     with pytest.raises(TypeError, match=r"proofResult\.requestHash.*multiple aliases"):
         build_tron_sccp_submission(
             {
@@ -13604,7 +13853,14 @@ def test_builds_evm_and_tron_groth16_contract_call_submissions() -> None:
         match=r"proofResult\.requestHash must match bundleBytes and sourceProofBytes",
     ):
         build_tron_sccp_submission(
-            {"proof_result": {**dict(tron_result), "bundle_bytes": bytes([5, 6, 8])}}
+            {
+                "proof_result": {
+                    **dict(tron_result),
+                    "bundle_bytes": sample_tron_bundle_fixture(
+                        finality_proof=b"\x71\x73"
+                    )["bundle_bytes"],
+                }
+            }
         )
     wrong_tron_context = dict(tron_result["proof_context"])
     wrong_tron_context["destination_binding_hash"] = HEX32_A
@@ -13627,24 +13883,31 @@ def test_rejects_malformed_evm_and_tron_groth16_proof_tuples() -> None:
     evm_request = build_evm_sccp_proof_request(sample_evm_production_request_input())
     with pytest.raises(TypeError, match=r"proofBytes\.version must be 1"):
         wrap_evm_sccp_proof_result(
-            groth16_proof_bytes(words={0: abi_word(2)}),
+            groth16_proof_bytes_for_request(evm_request, words={0: abi_word(2)}),
             evm_request,
         )
 
     tron_request = build_tron_sccp_proof_request(sample_tron_production_request_input())
     with pytest.raises(TypeError, match=r"proofBytes\.a\.x must be a BN254 base-field element"):
         wrap_tron_sccp_proof_result(
-            groth16_proof_bytes(words={4: bytes([0xFF]) * 32}),
+            groth16_proof_bytes_for_request(
+                tron_request,
+                words={4: bytes([0xFF]) * 32},
+            ),
             tron_request,
         )
     with pytest.raises(TypeError, match=r"proofBytes\.a must not be zero"):
         wrap_tron_sccp_proof_result(
-            groth16_proof_bytes(words={4: bytes(32), 5: bytes(32)}),
+            groth16_proof_bytes_for_request(
+                tron_request,
+                words={4: bytes(32), 5: bytes(32)},
+            ),
             tron_request,
         )
     with pytest.raises(TypeError, match=r"proofBytes\.b must not be zero"):
         wrap_tron_sccp_proof_result(
-            groth16_proof_bytes(
+            groth16_proof_bytes_for_request(
+                tron_request,
                 words={
                     6: bytes(32),
                     7: bytes(32),
@@ -13653,24 +13916,28 @@ def test_rejects_malformed_evm_and_tron_groth16_proof_tuples() -> None:
                 }
             ),
             tron_request,
-        )
+    )
     with pytest.raises(TypeError, match=r"proofBytes\.c must not be zero"):
         wrap_tron_sccp_proof_result(
-            groth16_proof_bytes(words={10: bytes(32), 11: bytes(32)}),
+            groth16_proof_bytes_for_request(
+                tron_request,
+                words={10: bytes(32), 11: bytes(32)},
+            ),
             tron_request,
         )
     with pytest.raises(TypeError, match=r"proofBytes\.c must be a BN254 G1 point"):
         wrap_evm_sccp_proof_result(
-            groth16_proof_bytes(words={11: abi_word(3)}),
+            groth16_proof_bytes_for_request(evm_request, words={11: abi_word(3)}),
             evm_request,
         )
-    off_curve_b = bytearray(groth16_proof_bytes())
+    off_curve_b = bytearray(groth16_proof_bytes_for_request(tron_request))
     off_curve_b[6 * 32 + 31] ^= 0x01
     with pytest.raises(TypeError, match=r"proofBytes\.b must be a BN254 G2 point"):
         wrap_tron_sccp_proof_result(bytes(off_curve_b), tron_request)
     with pytest.raises(TypeError, match=r"proofBytes\.b must be a BN254 G2 point"):
         wrap_evm_sccp_proof_result(
-            groth16_proof_bytes(
+            groth16_proof_bytes_for_request(
+                evm_request,
                 words={
                     6: abi_word(0),
                     7: abi_word(1),
@@ -13683,10 +13950,11 @@ def test_rejects_malformed_evm_and_tron_groth16_proof_tuples() -> None:
                 }
             ),
             evm_request,
-        )
+    )
     with pytest.raises(TypeError, match=r"proofBytes\.b must be a BN254 G2 point"):
         wrap_tron_sccp_proof_result(
-            groth16_proof_bytes(
+            groth16_proof_bytes_for_request(
+                tron_request,
                 words={
                     6: abi_word(0),
                     7: abi_word(1),
@@ -13713,7 +13981,7 @@ def test_rejects_malformed_evm_and_tron_groth16_proof_tuples() -> None:
         match=r"proofBytes\.sourceDomain must match sourceDomain",
     ):
         wrap_tron_sccp_proof_result(
-            groth16_proof_bytes(words={2: abi_word(999)}),
+            groth16_proof_bytes_for_request(tron_request, words={2: abi_word(999)}),
             tron_request,
         )
     with pytest.raises(
@@ -13721,13 +13989,19 @@ def test_rejects_malformed_evm_and_tron_groth16_proof_tuples() -> None:
         match=r"proofBytes\.sourceDomain must match sourceDomain",
     ):
         sccp_submit_message_proof_call_data(
-            groth16_proof_bytes(words={2: abi_word(SCCP_DOMAIN_ETH)}),
+            groth16_proof_bytes_for_public_inputs(
+                sample_tron_public_inputs(),
+                words={2: abi_word(SCCP_DOMAIN_ETH)},
+            ),
             sample_tron_public_inputs(),
             HEX32_G,
         )
     with pytest.raises(ValueError, match="sourceDomain must be SORA"):
         sccp_submit_message_proof_call_data(
-            groth16_proof_bytes(words={2: abi_word(SCCP_DOMAIN_ETH)}),
+            groth16_proof_bytes_for_public_inputs(
+                sample_tron_public_inputs(),
+                words={2: abi_word(SCCP_DOMAIN_ETH)},
+            ),
             sample_tron_public_inputs(),
             HEX32_G,
             SCCP_DOMAIN_ETH,
@@ -13738,7 +14012,10 @@ def test_rejects_malformed_evm_and_tron_groth16_proof_tuples() -> None:
     ):
         build_evm_sccp_submission(
             {
-                "proof_bytes": groth16_proof_bytes(words={3: bytes([0x44]) * 32}),
+                "proof_bytes": groth16_proof_bytes_for_public_inputs(
+                    sample_evm_public_inputs(),
+                    words={3: bytes([0x44]) * 32},
+                ),
                 "public_inputs": sample_evm_public_inputs(),
                 "source_domain": SCCP_DOMAIN_SORA,
                 "statement_hash": HEX32_G,
@@ -13859,17 +14136,23 @@ def test_sccp_provers_reject_results_bound_to_different_request_contexts() -> No
         )
 
     async def wrong_evm_request(
-        _request: Mapping[str, Any], _options: Mapping[str, Any]
+        request: Mapping[str, Any], _options: Mapping[str, Any]
     ) -> Dict[str, Any]:
-        return {"proof_bytes": GROTH16_PROOF_BYTES, "request_hash": HEX32_A}
+        return {
+            "proof_bytes": groth16_proof_bytes_for_request(request),
+            "request_hash": HEX32_A,
+        }
 
     with pytest.raises(TypeError, match="requestHash must match request"):
         asyncio.run(EvmSccpProver(prove=wrong_evm_request).prove(sample_evm_production_request_input()))
 
     async def wrong_evm_proof_base64(
-        _request: Mapping[str, Any], _options: Mapping[str, Any]
+        request: Mapping[str, Any], _options: Mapping[str, Any]
     ) -> Dict[str, Any]:
-        return {"proof_bytes": GROTH16_PROOF_BYTES, "proof_base64": "AAAA"}
+        return {
+            "proof_bytes": groth16_proof_bytes_for_request(request),
+            "proof_base64": "AAAA",
+        }
 
     with pytest.raises(TypeError, match=r"proofResult\.proofBase64"):
         asyncio.run(
@@ -13879,12 +14162,13 @@ def test_sccp_provers_reject_results_bound_to_different_request_contexts() -> No
         )
 
     async def padded_evm_proof_base64(
-        _request: Mapping[str, Any], _options: Mapping[str, Any]
+        request: Mapping[str, Any], _options: Mapping[str, Any]
     ) -> Dict[str, Any]:
+        proof_bytes = groth16_proof_bytes_for_request(request)
         return {
-            "proof_bytes": GROTH16_PROOF_BYTES,
+            "proof_bytes": proof_bytes,
             "proof_base64": (
-                " " + base64.b64encode(GROTH16_PROOF_BYTES).decode("ascii") + " "
+                " " + base64.b64encode(proof_bytes).decode("ascii") + " "
             ),
         }
 
@@ -13896,10 +14180,10 @@ def test_sccp_provers_reject_results_bound_to_different_request_contexts() -> No
         )
 
     async def wrong_evm_public_inputs(
-        _request: Mapping[str, Any], _options: Mapping[str, Any]
+        request: Mapping[str, Any], _options: Mapping[str, Any]
     ) -> Dict[str, Any]:
         return {
-            "proof_bytes": GROTH16_PROOF_BYTES,
+            "proof_bytes": groth16_proof_bytes_for_request(request),
             "public_inputs": sample_evm_public_inputs(commitment_root=HEX32_A),
         }
 
@@ -13914,7 +14198,7 @@ def test_sccp_provers_reject_results_bound_to_different_request_contexts() -> No
         request: Mapping[str, Any], _options: Mapping[str, Any]
     ) -> Dict[str, Any]:
         return {
-            "proof_bytes": GROTH16_PROOF_BYTES,
+            "proof_bytes": groth16_proof_bytes_for_request(request),
             "publicInputs": request["public_inputs"],
             "public_inputs": request["public_inputs"],
         }
@@ -13927,9 +14211,12 @@ def test_sccp_provers_reject_results_bound_to_different_request_contexts() -> No
         )
 
     async def null_evm_public_inputs(
-        _request: Mapping[str, Any], _options: Mapping[str, Any]
+        request: Mapping[str, Any], _options: Mapping[str, Any]
     ) -> Dict[str, Any]:
-        return {"proof_bytes": GROTH16_PROOF_BYTES, "public_inputs": None}
+        return {
+            "proof_bytes": groth16_proof_bytes_for_request(request),
+            "public_inputs": None,
+        }
 
     with pytest.raises(TypeError, match="publicInputs"):
         asyncio.run(
@@ -13939,20 +14226,23 @@ def test_sccp_provers_reject_results_bound_to_different_request_contexts() -> No
         )
 
     async def wrong_tron_backend(
-        _request: Mapping[str, Any], _options: Mapping[str, Any]
+        request: Mapping[str, Any], _options: Mapping[str, Any]
     ) -> Dict[str, Any]:
         return {
             "backend": SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
-            "proof_bytes": GROTH16_PROOF_BYTES,
+            "proof_bytes": groth16_proof_bytes_for_request(request),
         }
 
     with pytest.raises(TypeError, match="backend must match request"):
         asyncio.run(TronSccpProver(prove=wrong_tron_backend).prove(sample_tron_production_request_input()))
 
     async def wrong_tron_proof_base64(
-        _request: Mapping[str, Any], _options: Mapping[str, Any]
+        request: Mapping[str, Any], _options: Mapping[str, Any]
     ) -> Dict[str, Any]:
-        return {"proof_bytes": GROTH16_PROOF_BYTES, "proofBase64": "AAAA"}
+        return {
+            "proof_bytes": groth16_proof_bytes_for_request(request),
+            "proofBase64": "AAAA",
+        }
 
     with pytest.raises(TypeError, match=r"proofResult\.proofBase64"):
         asyncio.run(
@@ -13962,11 +14252,12 @@ def test_sccp_provers_reject_results_bound_to_different_request_contexts() -> No
         )
 
     async def duplicate_tron_proof_base64(
-        _request: Mapping[str, Any], _options: Mapping[str, Any]
+        request: Mapping[str, Any], _options: Mapping[str, Any]
     ) -> Dict[str, Any]:
-        proof_base64 = base64.b64encode(GROTH16_PROOF_BYTES).decode("ascii")
+        proof_bytes = groth16_proof_bytes_for_request(request)
+        proof_base64 = base64.b64encode(proof_bytes).decode("ascii")
         return {
-            "proof_bytes": GROTH16_PROOF_BYTES,
+            "proof_bytes": proof_bytes,
             "proofBase64": proof_base64,
             "proof_base64": proof_base64,
         }
@@ -13979,10 +14270,10 @@ def test_sccp_provers_reject_results_bound_to_different_request_contexts() -> No
         )
 
     async def wrong_tron_proof_context(
-        _request: Mapping[str, Any], _options: Mapping[str, Any]
+        request: Mapping[str, Any], _options: Mapping[str, Any]
     ) -> Dict[str, Any]:
         return {
-            "proof_bytes": GROTH16_PROOF_BYTES,
+            "proof_bytes": groth16_proof_bytes_for_request(request),
             "proof_context": {
                 "version": 1,
                 "statement_hash": "0x" + "55" * 32,
@@ -13998,9 +14289,12 @@ def test_sccp_provers_reject_results_bound_to_different_request_contexts() -> No
         )
 
     async def null_tron_request_hash(
-        _request: Mapping[str, Any], _options: Mapping[str, Any]
+        request: Mapping[str, Any], _options: Mapping[str, Any]
     ) -> Dict[str, Any]:
-        return {"proof_bytes": GROTH16_PROOF_BYTES, "request_hash": None}
+        return {
+            "proof_bytes": groth16_proof_bytes_for_request(request),
+            "request_hash": None,
+        }
 
     with pytest.raises(TypeError, match="requestHash"):
         asyncio.run(

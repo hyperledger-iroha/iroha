@@ -270,6 +270,20 @@ public final class TonSccpProver {
     final byte[] sourceAdapterEngineDeploymentHash =
         nonZeroHex32Bytes(
             input.sourceAdapterEngineDeploymentHash(), "sourceAdapterEngineDeploymentHash");
+    requireHashRolesDistinct(
+        "TON route canary governed hashes",
+        new String[] {
+          "routeAllowlistHash",
+          "destinationBindingHash",
+          "sourceVerifierMaterialHash",
+          "sourceAdapterEngineDeploymentHash"
+        },
+        new byte[][] {
+          routeAllowlistHash,
+          destinationBindingHash,
+          sourceVerifierMaterialHash,
+          sourceAdapterEngineDeploymentHash
+        });
     final String verifierContractAddress =
         normalizeTonRawAddress(input.verifierContractAddress(), "verifierContractAddress");
     final byte[] verifierCodeHash = nonZeroHex32Bytes(input.verifierCodeHash(), "verifierCodeHash");
@@ -5494,6 +5508,18 @@ public final class TonSccpProver {
       throw new IllegalArgumentException(field + " must not be zero");
     }
     return bytes;
+  }
+
+  private static void requireHashRolesDistinct(
+      final String context, final String[] labels, final byte[][] values) {
+    for (int index = 0; index < values.length; index++) {
+      for (int previous = 0; previous < index; previous++) {
+        if (Arrays.equals(values[index], values[previous])) {
+          throw new IllegalArgumentException(
+              context + " must be distinct: " + labels[index] + " matches " + labels[previous]);
+        }
+      }
+    }
   }
 
   private static String normalizeHex32(final String value, final String field) {

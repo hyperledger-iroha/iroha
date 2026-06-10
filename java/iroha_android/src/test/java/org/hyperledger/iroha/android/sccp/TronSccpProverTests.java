@@ -1,8 +1,13 @@
 package org.hyperledger.iroha.android.sccp;
 
+import java.io.ByteArrayOutputStream;
+import java.math.BigInteger;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import org.bouncycastle.crypto.digests.KeccakDigest;
+import org.hyperledger.iroha.android.crypto.Blake2b;
 
 public final class TronSccpProverTests {
   private TronSccpProverTests() {}
@@ -72,6 +77,42 @@ public final class TronSccpProverTests {
                 sampleTronRouteCanaryEvidence(
                     null, null, null, true, true, null, true, "0x" + repeat("78", 32))),
         "routeCanaryEvidenceHash");
+    assertThrows(
+        () ->
+            TronSccpProver.routeCanaryEvidenceHash(
+                sampleTronRouteCanaryEvidenceWithGovernedHashes(
+                    evidence.destinationBindingHash(), evidence.destinationBindingHash(), null, null)),
+        "TRON route canary governed hashes");
+    assertThrows(
+        () ->
+            TronSccpProver.routeCanaryEvidenceHash(
+                sampleTronRouteCanaryEvidenceWithGovernedHashes(
+                    evidence.sourceVerifierMaterialHash(), null, null, null)),
+        "TRON route canary governed hashes");
+    assertThrows(
+        () ->
+            TronSccpProver.routeCanaryEvidenceHash(
+                sampleTronRouteCanaryEvidenceWithGovernedHashes(
+                    evidence.sourceAdapterEngineDeploymentHash(), null, null, null)),
+        "TRON route canary governed hashes");
+    assertThrows(
+        () ->
+            TronSccpProver.routeCanaryEvidenceHash(
+                sampleTronRouteCanaryEvidenceWithGovernedHashes(
+                    null, evidence.destinationBindingHash(), evidence.destinationBindingHash(), null)),
+        "TRON route canary governed hashes");
+    assertThrows(
+        () ->
+            TronSccpProver.routeCanaryEvidenceHash(
+                sampleTronRouteCanaryEvidenceWithGovernedHashes(
+                    null, evidence.destinationBindingHash(), null, evidence.destinationBindingHash())),
+        "TRON route canary governed hashes");
+    assertThrows(
+        () ->
+            TronSccpProver.routeCanaryEvidenceHash(
+                sampleTronRouteCanaryEvidenceWithGovernedHashes(
+                    null, null, null, evidence.sourceVerifierMaterialHash())),
+        "TRON route canary governed hashes");
   }
 
   private static void derivesGroth16PublicSignalWords() {
@@ -84,10 +125,10 @@ public final class TronSccpProverTests {
 
     assert signals.equals(
             Arrays.asList(
-                "0x0ffdbc782e79d1dc508e08af01e87f16d93b6e58e4861a0b8155455e3ee7a683",
-                "0x0c5398ea95021a790e276e3ece1592b32b85751dc77e50293c867a5f2e0131bb",
+                "0x065b440c575edfc60df3235cfcf9e94d9b109e34d2ec6474934ab183d1306607",
+                "0x23bc72d067e4874a3c42a8e8efa48c64e2612f164e6332c5b2a65e1e23950939",
                 "0x21aac4195d8db839756f61c0780675823e15456c92acf135c36e02367c8fd11f",
-                "0x01c73f2f9156a52493a9beabeec73e62deed32fcef2e3e6fac86a79f0764f0bc",
+                "0x00d836b75e1646c15194e6e7db40b834b101fe4dad47ab46607d91c9a026ec70",
                 "0x0ca6bbc36d23183d027c8df09f06c39e64abbb0bb4d6a4c37369d2c36f41a888",
                 "0x2b153d0fe1bc6e2a6d44e851523edb1511dac55443ca80c22cbe9cb7423886dc",
                 "0x2697e4e42f34b673b4aa254c6a92de09304e84c1a667c7d266777775a231efb4",
@@ -139,7 +180,7 @@ public final class TronSccpProverTests {
     final byte[] snapshotSourceProof = callbackSnapshot.sourceProofBytes();
     snapshotBundle[0] = 77;
     snapshotSourceProof[0] = 77;
-    assert Arrays.equals(new byte[] {5, 6, 7}, callbackSnapshot.bundleBytes())
+    assert Arrays.equals(sampleBundleBytes(), callbackSnapshot.bundleBytes())
         : "snapshot bundle bytes must be defensive copies";
     assert Arrays.equals(new byte[] {9, 10}, callbackSnapshot.sourceProofBytes())
         : "snapshot source proof bytes must be defensive copies";
@@ -150,7 +191,7 @@ public final class TronSccpProverTests {
         TronSccpProver.buildProofRequest(
             new TronSccpProver.ProofRequestInput(
                 samplePublicInputs(),
-                new byte[] {5, 6, 7},
+                sampleBundleBytes(),
                 new byte[] {9, 10},
                 repeat("56", 32),
                 destinationBinding));
@@ -173,8 +214,8 @@ public final class TronSccpProverTests {
         .equals(
             TronSccpProver.buildProofRequest(
                     new TronSccpProver.ProofRequestInput(
-                        samplePublicInputs(),
-                        new byte[] {5, 6, 7, 9},
+                        sampleBundleFixture(328L).publicInputs,
+                        sampleBundleFixture(328L).bundleBytes,
                         new byte[] {10},
                         repeat("56", 32),
                         repeat("78", 32),
@@ -337,7 +378,7 @@ public final class TronSccpProverTests {
     try {
       new TronSccpProver.ProofRequestInput(
           samplePublicInputs(repeat("22", 32), TonSccpProver.DOMAIN_TON),
-          new byte[] {5, 6, 7},
+          sampleBundleBytes(),
           repeat("56", 32),
           destinationBinding);
     } catch (final IllegalArgumentException ex) {
@@ -502,7 +543,7 @@ public final class TronSccpProverTests {
   private static void proverResolvesWitnessProviderBeforeBuildingRequest() {
     final boolean[] resolved = new boolean[] {false};
     final byte[] proofBytes = sampleGroth16ProofBytes();
-    final byte[] bundleBytes = new byte[] {5, 6, 7};
+    final byte[] bundleBytes = sampleBundleBytes();
     final TronSccpProver.ProofRequestInput userInput =
         sampleProductionProofRequestInput(samplePublicInputs(), bundleBytes, new byte[0], repeat("56", 32));
     final TronSccpProver prover =
@@ -530,9 +571,9 @@ public final class TronSccpProverTests {
 
     assert Arrays.equals(new byte[] {9, 10}, result.sourceProofBytes())
         : "wrapped result must preserve provider-resolved source proof bytes";
-    assert Arrays.equals(new byte[] {5, 6, 7}, userInput.bundleBytes())
+    assert Arrays.equals(sampleBundleBytes(), userInput.bundleBytes())
         : "UI-owned TRON bundle bytes must not be mutated by witness provider";
-    assert Arrays.equals(new byte[] {5, 6, 7}, bundleBytes)
+    assert Arrays.equals(sampleBundleBytes(), bundleBytes)
         : "UI-owned TRON bundle array must not be mutated by witness provider";
   }
 
@@ -679,7 +720,7 @@ public final class TronSccpProverTests {
         .equals(submission.publicInputWords()) : "public input ABI words must be exposed";
     assert proofResult.publicSignalWords().equals(submission.publicSignalWords())
         : "public signal words must be carried";
-    assert Arrays.equals(new byte[] {5, 6, 7}, proofResult.bundleBytes())
+    assert Arrays.equals(sampleBundleBytes(), proofResult.bundleBytes())
         : "proof results must retain request bundle bytes";
     assert Arrays.equals(new byte[] {9, 10}, proofResult.sourceProofBytes())
         : "proof results must retain source proof bytes";
@@ -773,7 +814,7 @@ public final class TronSccpProverTests {
     try {
       TronSccpProver.buildSubmission(
           new TronSccpProver.SubmissionInput(
-              tronResultWithBundleBytes(proofResult, new byte[] {5, 6, 8})));
+              tronResultWithSourceProofBytes(proofResult, new byte[] {9, 11})));
     } catch (final IllegalArgumentException ex) {
       threw = ex.getMessage().contains("requestHash");
     }
@@ -812,24 +853,28 @@ public final class TronSccpProverTests {
   }
 
   private static byte[] sampleGroth16ProofBytes() {
-    return flattenGroth16ProofWords(sampleGroth16ProofWords());
+    return flattenGroth16ProofWords(
+        sampleGroth16ProofWords(samplePublicInputs(), TronSccpProver.DOMAIN_SORA));
   }
 
   private static byte[] sampleGroth16ProofBytes(final int wordIndex, final byte[] word) {
-    final byte[][] words = sampleGroth16ProofWords();
+    final byte[][] words =
+        sampleGroth16ProofWords(samplePublicInputs(), TronSccpProver.DOMAIN_SORA);
     words[wordIndex] = Arrays.copyOf(word, word.length);
     return flattenGroth16ProofWords(words);
   }
 
   private static byte[] sampleGroth16ProofBytesWithZeroA() {
-    final byte[][] words = sampleGroth16ProofWords();
+    final byte[][] words =
+        sampleGroth16ProofWords(samplePublicInputs(), TronSccpProver.DOMAIN_SORA);
     words[4] = new byte[32];
     words[5] = new byte[32];
     return flattenGroth16ProofWords(words);
   }
 
   private static byte[] sampleGroth16ProofBytesWithZeroB() {
-    final byte[][] words = sampleGroth16ProofWords();
+    final byte[][] words =
+        sampleGroth16ProofWords(samplePublicInputs(), TronSccpProver.DOMAIN_SORA);
     words[6] = new byte[32];
     words[7] = new byte[32];
     words[8] = new byte[32];
@@ -838,14 +883,16 @@ public final class TronSccpProverTests {
   }
 
   private static byte[] sampleGroth16ProofBytesWithZeroC() {
-    final byte[][] words = sampleGroth16ProofWords();
+    final byte[][] words =
+        sampleGroth16ProofWords(samplePublicInputs(), TronSccpProver.DOMAIN_SORA);
     words[10] = new byte[32];
     words[11] = new byte[32];
     return flattenGroth16ProofWords(words);
   }
 
   private static byte[] sampleGroth16ProofBytesWithNonSubgroupB() {
-    final byte[][] words = sampleGroth16ProofWords();
+    final byte[][] words =
+        sampleGroth16ProofWords(samplePublicInputs(), TronSccpProver.DOMAIN_SORA);
     words[6] = abiWord(0);
     words[7] = abiWord(1);
     words[8] = hexWord("0cf32d3c49a2cb8a092f24ec3201e68dc299b6216e6321ee60573e3a7f596ea8");
@@ -853,12 +900,13 @@ public final class TronSccpProverTests {
     return flattenGroth16ProofWords(words);
   }
 
-  private static byte[][] sampleGroth16ProofWords() {
+  private static byte[][] sampleGroth16ProofWords(
+      final TronSccpProver.PublicInputsInput publicInputs, final int sourceDomain) {
     return new byte[][] {
       abiWord(1),
-      repeatedWord(0x11),
-      abiWord(TronSccpProver.DOMAIN_SORA),
-      repeatedWord(0x33),
+      hexWord(stripHex(publicInputs.messageId())),
+      abiWord(sourceDomain),
+      hexWord(stripHex(publicInputs.commitmentRoot())),
       abiWord(1),
       abiWord(2),
       hexWord("1800deef121f1e76426a00665e5c4479674322d4f75edadd46debd5cd992f6ed"),
@@ -906,6 +954,10 @@ public final class TronSccpProverTests {
       out[index] = (byte) Integer.parseInt(hex.substring(index * 2, index * 2 + 2), 16);
     }
     return out;
+  }
+
+  private static String stripHex(final String value) {
+    return value.startsWith("0x") ? value.substring(2) : value;
   }
 
   private static String hexLower(final byte[] bytes) {
@@ -965,6 +1017,25 @@ public final class TronSccpProverTests {
         result.publicSignalWords(),
         bundleBytes,
         result.sourceProofBytes(),
+        result.proofContext(),
+        result.statementHash(),
+        result.destinationBindingHash(),
+        result.requestHash(),
+        result.envelopeHash(),
+        result.destinationBinding());
+  }
+
+  private static TronSccpProver.ProofResult tronResultWithSourceProofBytes(
+      final TronSccpProver.ProofResult result, final byte[] sourceProofBytes) {
+    return new TronSccpProver.ProofResult(
+        result.version(),
+        result.backend(),
+        result.proofBytes(),
+        result.proofBase64(),
+        result.publicInputs(),
+        result.publicSignalWords(),
+        result.bundleBytes(),
+        sourceProofBytes,
         result.proofContext(),
         result.statementHash(),
         result.destinationBindingHash(),
@@ -1045,7 +1116,7 @@ public final class TronSccpProverTests {
       final int sourceDomain) {
     return new TronSccpProver.ProofRequestInput(
         publicInputs,
-        new byte[] {5, 6, 7},
+        sampleBundleBytes(),
         sourceProofBytes,
         statementHash,
         destinationBindingHash,
@@ -1063,7 +1134,7 @@ public final class TronSccpProverTests {
       final byte[] sourceProofBytes,
       final String statementHash) {
     return sampleProductionProofRequestInput(
-        publicInputs, new byte[] {5, 6, 7}, sourceProofBytes, statementHash);
+        publicInputs, sampleBundleBytes(), sourceProofBytes, statementHash);
   }
 
   private static TronSccpProver.ProofRequestInput sampleProductionProofRequestInput(
@@ -1079,6 +1150,149 @@ public final class TronSccpProverTests {
         sampleDestinationBinding(publicInputs),
         TronSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
         TronSccpProver.DOMAIN_SORA);
+  }
+
+  private static final class SampleBundleFixture {
+    final TronSccpProver.PublicInputsInput publicInputs;
+    final byte[] bundleBytes;
+
+    SampleBundleFixture(
+        final TronSccpProver.PublicInputsInput publicInputs, final byte[] bundleBytes) {
+      this.publicInputs = publicInputs;
+      this.bundleBytes = bundleBytes;
+    }
+  }
+
+  private static byte[] sampleBundleBytes() {
+    return sampleBundleFixture().bundleBytes;
+  }
+
+  private static SampleBundleFixture sampleBundleFixture() {
+    return sampleBundleFixture(327L);
+  }
+
+  private static SampleBundleFixture sampleBundleFixture(final long nonce) {
+    final ByteArrayOutputStream payloadBody = new ByteArrayOutputStream();
+    payloadBody.write(1);
+    writeTestU32Le(payloadBody, TronSccpProver.DOMAIN_SORA);
+    writeTestU32Le(payloadBody, TronSccpProver.DOMAIN_TRON);
+    writeTestU64Le(payloadBody, BigInteger.valueOf(nonce));
+    writeTestU32Le(payloadBody, TronSccpProver.DOMAIN_SORA);
+    payloadBody.write(1);
+    writeTestBytes(payloadBody, "xor#sccp".getBytes(StandardCharsets.UTF_8));
+    writeTestU128Le(payloadBody, BigInteger.valueOf(42L));
+    payloadBody.write(1);
+    writeTestBytes(payloadBody, "alice@sora".getBytes(StandardCharsets.UTF_8));
+    payloadBody.write(5);
+    writeTestBytes(payloadBody, "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8".getBytes(StandardCharsets.UTF_8));
+    payloadBody.write(1);
+    writeTestBytes(payloadBody, "sora-tron-xor".getBytes(StandardCharsets.UTF_8));
+
+    final byte[] payloadBodyBytes = payloadBody.toByteArray();
+    final byte[] payloadBytes = concatTestBytes(new byte[] {0x02}, payloadBodyBytes);
+    final String messageId =
+        "0x" + hexLower(prefixedKeccakBytes("sccp:transfer:v1", payloadBodyBytes));
+    final String payloadHash =
+        "0x"
+            + hexLower(
+                Blake2b.digest256(
+                    concatTestBytes("sccp:payload:v1".getBytes(StandardCharsets.UTF_8), payloadBytes)));
+
+    final ByteArrayOutputStream commitment = new ByteArrayOutputStream();
+    commitment.write(1);
+    commitment.write(6);
+    writeTestU32Le(commitment, TronSccpProver.DOMAIN_TRON);
+    writeTestRawBytes(commitment, hexBytes(messageId.substring(2)));
+    writeTestRawBytes(commitment, hexBytes(payloadHash.substring(2)));
+    final byte[] commitmentBytes = commitment.toByteArray();
+    final byte[] currentRoot =
+        Blake2b.digest256(
+            concatTestBytes("sccp:hub:leaf:v1".getBytes(StandardCharsets.UTF_8), commitmentBytes));
+    final String commitmentRoot = "0x" + hexLower(currentRoot);
+
+    final ByteArrayOutputStream merkleProof = new ByteArrayOutputStream();
+    writeTestU32Le(merkleProof, 0);
+
+    final ByteArrayOutputStream bundle = new ByteArrayOutputStream();
+    bundle.write(1);
+    writeTestRawBytes(bundle, currentRoot);
+    writeTestBytes(bundle, commitmentBytes);
+    writeTestBytes(bundle, merkleProof.toByteArray());
+    writeTestBytes(bundle, payloadBytes);
+    writeTestBytes(bundle, new byte[] {0x01, 0x02, 0x03});
+
+    return new SampleBundleFixture(
+        new TronSccpProver.PublicInputsInput(
+            1,
+            messageId,
+            payloadHash,
+            TronSccpProver.DOMAIN_TRON,
+            commitmentRoot,
+            "19",
+            repeat("44", 32)),
+        bundle.toByteArray());
+  }
+
+  private static void writeTestBytes(final ByteArrayOutputStream out, final byte[] value) {
+    writeTestU32Le(out, value.length);
+    writeTestRawBytes(out, value);
+  }
+
+  private static void writeTestRawBytes(final ByteArrayOutputStream out, final byte[] value) {
+    out.write(value, 0, value.length);
+  }
+
+  private static void writeTestU32Le(final ByteArrayOutputStream out, final int value) {
+    if (value < 0) {
+      throw new IllegalArgumentException("u32 test value must be non-negative");
+    }
+    out.write(value & 0xff);
+    out.write((value >>> 8) & 0xff);
+    out.write((value >>> 16) & 0xff);
+    out.write((value >>> 24) & 0xff);
+  }
+
+  private static void writeTestU64Le(final ByteArrayOutputStream out, final BigInteger value) {
+    BigInteger working = value;
+    for (int index = 0; index < 8; index++) {
+      out.write(working.and(BigInteger.valueOf(0xffL)).intValue());
+      working = working.shiftRight(8);
+    }
+  }
+
+  private static void writeTestU128Le(final ByteArrayOutputStream out, final BigInteger value) {
+    BigInteger working = value;
+    for (int index = 0; index < 16; index++) {
+      out.write(working.and(BigInteger.valueOf(0xffL)).intValue());
+      working = working.shiftRight(8);
+    }
+  }
+
+  private static byte[] concatTestBytes(final byte[] left, final byte[] right) {
+    final byte[] out = Arrays.copyOf(left, left.length + right.length);
+    System.arraycopy(right, 0, out, left.length, right.length);
+    return out;
+  }
+
+  private static byte[] hexBytes(final String hex) {
+    if ((hex.length() & 1) != 0) {
+      throw new IllegalArgumentException("hex test value must have even length");
+    }
+    final byte[] out = new byte[hex.length() / 2];
+    for (int index = 0; index < out.length; index++) {
+      out[index] = (byte) Integer.parseInt(hex.substring(index * 2, index * 2 + 2), 16);
+    }
+    return out;
+  }
+
+  private static byte[] prefixedKeccakBytes(final String prefix, final byte[] payload) {
+    final KeccakDigest digest = new KeccakDigest(256);
+    final byte[] prefixBytes = prefix.getBytes(StandardCharsets.UTF_8);
+    digest.update(prefixBytes, 0, prefixBytes.length);
+    digest.update(payload, 0, payload.length);
+    final byte[] out = new byte[32];
+    digest.doFinal(out, 0);
+    return out;
   }
 
   private static SourceSccpProofs.TronDestinationBinding sampleDestinationBinding(
@@ -1147,8 +1361,55 @@ public final class TronSccpProverTests {
             : routeCanaryEvidenceHash);
   }
 
+  private static TronSccpProver.RouteCanaryEvidenceInput sampleTronRouteCanaryEvidenceWithGovernedHashes(
+      final String routeAllowlistHash,
+      final String destinationBindingHash,
+      final String sourceVerifierMaterialHash,
+      final String sourceAdapterEngineDeploymentHash) {
+    final SourceSccpProofs.TronDestinationBinding binding =
+        sampleDestinationBinding(samplePublicInputs());
+    return new TronSccpProver.RouteCanaryEvidenceInput(
+        routeAllowlistHash == null
+            ? "0xfea8effb3cddfa458ea79a5a9af6f2d2c33a460b3a66d9305963908c2a3ea67a"
+            : routeAllowlistHash,
+        destinationBindingHash == null ? binding.hash : destinationBindingHash,
+        null,
+        sourceVerifierMaterialHash == null
+            ? "0x68c20262e44676bd5f3c4ec428f063373147a1ca14c5885648a9c651b3bcd8d8"
+            : sourceVerifierMaterialHash,
+        sourceAdapterEngineDeploymentHash == null
+            ? "0x94dbe28a2fb16e043b83639b6dea8ec62f53679599ef1dd220fd13c71c7bdcb8"
+            : sourceAdapterEngineDeploymentHash,
+        binding.networkId,
+        binding.verifierAddress,
+        binding.verifierCodeHash,
+        binding.verifierKeyHash,
+        TronSccpProver.DOMAIN_SORA,
+        TronSccpProver.DOMAIN_TRON,
+        "0x" + repeat("fa", 32),
+        "0x417e5f4552091a69125d5dfcb7b8c2659029395bdf",
+        "234",
+        "567000",
+        0,
+        "0x" + repeat("dd", 32),
+        "0xf96dfb36d47a61e7e80df4f19e00b78c12f9a3f3c542e8dac06a7422e1d5f951",
+        "0x" + repeat("ab", 32),
+        "0x" + repeat("ee", 32),
+        "0x" + repeat("00", 31) + "7b",
+        "0x" + repeat("cd", 32),
+        "0x" + repeat("f1", 32),
+        1,
+        TronSccpProver.DOMAIN_SORA,
+        true,
+        true,
+        "0x" + repeat("c4", 32),
+        "0x417e5f4552091a69125d5dfcb7b8c2659029395bdf",
+        true,
+        "0xe0a96ff7e8f523599fd60fffe8bb3b9fda9519126b7ba00c89c922b323b64e56");
+  }
+
   private static TronSccpProver.PublicInputsInput samplePublicInputs() {
-    return samplePublicInputs(repeat("22", 32), TronSccpProver.DOMAIN_TRON);
+    return samplePublicInputs(null, TronSccpProver.DOMAIN_TRON);
   }
 
   private static TronSccpProver.PublicInputsInput samplePublicInputs(final String payloadHash) {
@@ -1162,14 +1423,15 @@ public final class TronSccpProverTests {
 
   private static TronSccpProver.PublicInputsInput samplePublicInputs(
       final String payloadHash, final int targetDomain, final String finalityHeight) {
+    final TronSccpProver.PublicInputsInput fixture = sampleBundleFixture().publicInputs;
     return new TronSccpProver.PublicInputsInput(
         1,
-        repeat("11", 32),
-        payloadHash,
+        fixture.messageId(),
+        payloadHash == null ? fixture.payloadHash() : payloadHash,
         targetDomain,
-        repeat("33", 32),
+        fixture.commitmentRoot(),
         finalityHeight,
-        repeat("44", 32));
+        fixture.finalityBlockHash());
   }
 
   private static String repeat(final String value, final int count) {

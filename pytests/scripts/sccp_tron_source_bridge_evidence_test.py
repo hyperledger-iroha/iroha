@@ -606,6 +606,46 @@ def test_tron_route_allowlist_hash_matches_rust_profile_vector():
 
     assert route_hash.hex() == TRON_ROUTE_ALLOWLIST_HASH_VECTOR
 
+    for replayed in (
+        {
+            "source_verifier_material_hash": bytes.fromhex(
+                TRON_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH_VECTOR
+            ),
+            "source_adapter_engine_deployment_hash": bytes.fromhex(
+                TRON_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH_VECTOR
+            ),
+            "destination_binding_hash": bytes.fromhex(TRON_DESTINATION_BINDING_VECTOR),
+        },
+        {
+            "source_verifier_material_hash": bytes.fromhex(
+                TRON_SOURCE_VERIFIER_MATERIAL_HASH_VECTOR
+            ),
+            "source_adapter_engine_deployment_hash": bytes.fromhex(
+                TRON_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH_VECTOR
+            ),
+            "destination_binding_hash": bytes.fromhex(
+                TRON_SOURCE_VERIFIER_MATERIAL_HASH_VECTOR
+            ),
+        },
+        {
+            "source_verifier_material_hash": bytes.fromhex(
+                TRON_SOURCE_VERIFIER_MATERIAL_HASH_VECTOR
+            ),
+            "source_adapter_engine_deployment_hash": bytes.fromhex(
+                TRON_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH_VECTOR
+            ),
+            "destination_binding_hash": bytes.fromhex(
+                TRON_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH_VECTOR
+            ),
+        },
+    ):
+        try:
+            module.tron_route_allowlist_hash(**replayed)
+        except ValueError as exc:
+            assert "TRON route allowlist evidence hashes must be distinct" in str(exc)
+        else:
+            raise AssertionError("TRON route allowlist accepted replayed hash role")
+
 
 def test_tron_destination_binding_hash_rejects_malformed_direct_material():
     module = load_evidence_module()
@@ -1627,6 +1667,21 @@ def test_route_canary_transaction_hash_requires_canonical_binding_material():
 
     cases = (
         ("route_allowlist_hash", bytes(32), "route_allowlist_hash must not be zero"),
+        (
+            "route_allowlist_hash",
+            bytes.fromhex(TRON_DESTINATION_BINDING_VECTOR),
+            "TRON route canary governed hashes must be distinct",
+        ),
+        (
+            "route_allowlist_hash",
+            bytes.fromhex(TRON_SOURCE_VERIFIER_MATERIAL_HASH_VECTOR),
+            "TRON route canary governed hashes must be distinct",
+        ),
+        (
+            "route_allowlist_hash",
+            bytes.fromhex(TRON_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH_VECTOR),
+            "TRON route canary governed hashes must be distinct",
+        ),
         (
             "route_allowlist_hash",
             bytes.fromhex("dd" * 32),

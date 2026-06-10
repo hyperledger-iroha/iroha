@@ -1133,6 +1133,15 @@ public func canonicalTonSccpRouteCanaryEvidenceBytes(
         input.sourceAdapterEngineDeploymentHash,
         field: "sourceAdapterEngineDeploymentHash"
     )
+    try tonRequireHashRolesDistinct(
+        field: "routeCanaryGovernedHashes",
+        [
+            ("routeAllowlistHash", routeAllowlistHash),
+            ("destinationBindingHash", destinationBindingHash),
+            ("sourceVerifierMaterialHash", sourceVerifierMaterialHash),
+            ("sourceAdapterEngineDeploymentHash", sourceAdapterEngineDeploymentHash),
+        ]
+    )
     let verifierContractAddress = try tonNormalizeRawAddress(
         input.verifierContractAddress,
         field: "verifierContractAddress"
@@ -5731,6 +5740,19 @@ private func tonNonZeroBytesFromHex32(_ value: String, field: String) throws -> 
         throw TonSccpProverError.invalidHex32(field)
     }
     return bytes
+}
+
+private func tonRequireHashRolesDistinct(
+    field: String,
+    _ fields: [(String, Data)]
+) throws {
+    var seen: [Data: String] = [:]
+    for (label, bytes) in fields {
+        if seen[bytes] != nil {
+            throw TonSccpProverError.invalidField(field)
+        }
+        seen[bytes] = label
+    }
 }
 
 private func tonNormalizeInclusionBranch(_ branch: [Data]) throws -> [Data] {
