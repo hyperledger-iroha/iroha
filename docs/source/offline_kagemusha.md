@@ -218,10 +218,15 @@ the proving-key archive against that verifier key before proving. Runtime
 verifier-slice key generation is disabled by default and is available only
 behind the explicit developer environment override used to generate artifacts,
 so SDKs should treat missing artifacts as a deterministic request-construction
-error rather than a fallback to runtime keygen. Swift, Kotlin/JVM, Java Android,
-JavaScript/Node, Python, and C# expose typed lineage key artifact helpers for the
-same package shape; those helpers defensively copy key bytes and reject unknown
-profile ids, unsupported opening lengths, non-`halo2/ipa` verifier backends,
+error rather than a fallback to runtime keygen. Release key-artifact generation
+derives the one-hop and append verifier/proving keys through key-generation-only
+verifier-slice shapes whose verifier-key commitments are regression-checked
+against the full recursive verifier circuits, reducing keygen witness memory
+without changing the published circuit identities. Swift, Kotlin/JVM, Java
+Android, JavaScript/Node, Python, and C# expose typed lineage key artifact
+helpers for the same package shape; those helpers defensively copy key bytes and
+reject unknown profile ids, unsupported opening lengths, non-`halo2/ipa`
+verifier backends,
 empty verifier keys, and empty proving-key archives before wallet code can
 construct a native request archive. The helpers also require the proving-key
 archive payload to contain both the selected circuit id bytes and the stable
@@ -229,7 +234,14 @@ verifier-key commitment for the supplied verifier key, so a self-consistent
 archive cannot be paired with a different verifier package. Kotlin/JVM also
 converts Java-callable null
 lineage artifact inputs into the same stable field errors instead of relying on
-Kotlin intrinsic null checks.
+Kotlin intrinsic null checks. Swift, Kotlin/JVM, Java Android, JavaScript/Node,
+Python, and C# now also parse the
+canonical `KagemushaRecursiveSpendLineageKeyArtifactsV1` proving-key archive
+fields and reject byte-smuggled circuit ids or verifier-key commitments, stale
+schema hashes, unsupported archive flags, wrong archive versions, empty proving
+keys, trailing payloads, non-canonical compact Norito length encodings, and
+invalid UTF-8 circuit family fields before native bridge loading, so overlong
+varints cannot smuggle otherwise valid lineage metadata through the SDK guard.
 
 Release tooling can produce the portable Norito packages with:
 

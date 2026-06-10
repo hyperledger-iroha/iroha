@@ -63,6 +63,7 @@ PRIVACY_PRODUCTION_EVIDENCE_REGISTRY_VERSION = (
 PRIVACY_PRODUCTION_REVIEW_ARTIFACT_KEYS = frozenset(
     ("label", "uri", "signature")
 )
+PRIVACY_PRODUCTION_REVIEW_ARTIFACT_SIGNATURE_PREFIX = "ed25519:"
 PRIVACY_PRODUCTION_GATE_ARTIFACT_KEYS = frozenset(("label", "uri"))
 PRIVACY_PRODUCTION_RESULT_KEYS = frozenset(("passed", "artifact"))
 PRIVACY_PRODUCTION_LOCALNET_ACCEPTANCE_KEYS = frozenset(
@@ -2794,13 +2795,12 @@ def _privacy_evidence_text_value(value: Any, *, limit: int = 256) -> str:
 
 def _privacy_evidence_hash_uri(value: Any) -> str:
     text = _privacy_evidence_text_value(value, limit=256)
-    lowered = text.lower()
-    if lowered.startswith("sha256:"):
-        digest = lowered.removeprefix("sha256:")
-    elif lowered.startswith("urn:sha256:"):
-        digest = lowered.removeprefix("urn:sha256:")
-    elif lowered.startswith("hash://sha256/"):
-        digest = lowered.removeprefix("hash://sha256/")
+    if text.startswith("sha256:"):
+        digest = text.removeprefix("sha256:")
+    elif text.startswith("urn:sha256:"):
+        digest = text.removeprefix("urn:sha256:")
+    elif text.startswith("hash://sha256/"):
+        digest = text.removeprefix("hash://sha256/")
     else:
         return ""
     if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
@@ -2823,8 +2823,17 @@ def _privacy_evidence_review_artifact(value: Any) -> dict[str, str] | None:
         return None
     label = _privacy_evidence_text_value(value.get("label"), limit=160)
     uri = _privacy_evidence_hash_uri(value.get("uri"))
-    signature = _privacy_evidence_text_value(value.get("signature"), limit=512)
+    signature = _privacy_evidence_text_value(value.get("signature"), limit=160)
+    signature_body = signature.removeprefix(
+        PRIVACY_PRODUCTION_REVIEW_ARTIFACT_SIGNATURE_PREFIX
+    )
     if not label or not uri or not signature:
+        return None
+    if (
+        not signature.startswith(PRIVACY_PRODUCTION_REVIEW_ARTIFACT_SIGNATURE_PREFIX)
+        or len(signature_body) != 128
+        or any(char not in "0123456789abcdef" for char in signature_body)
+    ):
         return None
     return {"label": label, "uri": uri, "signature": signature}
 
@@ -2972,6 +2981,24 @@ def _privacy_evidence_localnet_run_id(value: Any) -> str:
     return text
 
 
+def _privacy_evidence_chain_id(value: Any, *, limit: int = 256) -> str:
+    text = _privacy_evidence_text_value(value, limit=limit)
+    if (
+        not text
+        or _entrypoint_is_dev_fixture(text)
+        or ".." in text
+        or any(
+            not (
+                char.isascii()
+                and (char.isalnum() or char in {"_", ".", ":", "-"})
+            )
+            for char in text
+        )
+    ):
+        return ""
+    return text
+
+
 def _privacy_evidence_localnet_acceptance(
     value: Any,
     *,
@@ -2987,7 +3014,7 @@ def _privacy_evidence_localnet_acceptance(
     if not isinstance(peer_ids_raw, list) or len(peer_ids_raw) != 4:
         return None
     peer_ids = [_privacy_evidence_localnet_peer_id(peer_id) for peer_id in peer_ids_raw]
-    evidence_chain_id = _privacy_evidence_text_value(value.get("chain_id"), limit=256)
+    evidence_chain_id = _privacy_evidence_chain_id(value.get("chain_id"))
     smoke_tx_hash = _privacy_evidence_hash_uri(value.get("smoke_tx_hash"))
     replay_rejection_hash = _privacy_evidence_hash_uri(value.get("replay_rejection_hash"))
     restart_replay_rejection_hash = _privacy_evidence_hash_uri(
@@ -3111,8 +3138,20 @@ def _privacy_trusted_production_evidence(
         return None
     if source.get("covered_algorithm_id") != algorithm_id:
         return None
-    evidence_chain_id = _privacy_evidence_text_value(source.get("chain_id"), limit=256)
-    if not evidence_chain_id or (chain_id is not None and evidence_chain_id != chain_id):
+    expected_chain_id = (
+        _privacy_evidence_chain_id(chain_id)
+        if chain_id is not None
+        else None
+    )
+    evidence_chain_id = _privacy_evidence_chain_id(source.get("chain_id"))
+    if (
+        not evidence_chain_id
+        or (chain_id is not None and not expected_chain_id)
+        or (
+            expected_chain_id is not None
+            and evidence_chain_id != expected_chain_id
+        )
+    ):
         return None
     reviewer_identity = _privacy_evidence_text_value(
         source.get("reviewer_identity"),

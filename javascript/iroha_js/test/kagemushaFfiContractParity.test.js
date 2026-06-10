@@ -282,6 +282,93 @@ function assertRunnerRejectsDotnetSdk(script, envName, label) {
   }
 }
 
+function assertRunnerPrintsDotnetAndBridgeEvidence(script, envName, label) {
+  const tmp = mkdtempSync(`${tmpdir()}/iroha-dotnet-runner-evidence-`);
+  const fakeDotnet = `${tmp}/dotnet`;
+  const fakeCargo = `${tmp}/cargo`;
+  const bridgeTarget = `${tmp}/bridge-target`;
+  try {
+    writeFileSync(
+      fakeDotnet,
+      [
+        "#!/usr/bin/env bash",
+        "case \"${1:-}\" in",
+        "  --version)",
+        "    printf '%s\\n' '8.0.100'",
+        "    exit 0",
+        "    ;;",
+        "  --info)",
+        "    printf '%s\\n' '.NET SDK:'",
+        "    printf '%s\\n' ' Version: 8.0.100'",
+        "    printf '%s\\n' ' RID: fake-x64'",
+        "    exit 0",
+        "    ;;",
+        "  test)",
+        "    printf '%s\\n' \"fake dotnet test: $*\"",
+        "    exit 0",
+        "    ;;",
+        "esac",
+        "printf '%s\\n' \"unexpected fake dotnet invocation: $*\" >&2",
+        "exit 64",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(
+      fakeCargo,
+      [
+        "#!/usr/bin/env bash",
+        "if [[ \"${1:-}\" != 'build' || \"${2:-}\" != '-p' || \"${3:-}\" != 'connect_norito_bridge' ]]; then",
+        "  printf '%s\\n' \"unexpected fake cargo invocation: $*\" >&2",
+        "  exit 64",
+        "fi",
+        "mkdir -p \"${CARGO_TARGET_DIR}/debug\"",
+        "printf '%s\\n' 'fake connect_norito_bridge' > \"${CARGO_TARGET_DIR}/debug/libconnect_norito_bridge.so\"",
+        "printf '%s\\n' 'fake connect_norito_bridge' > \"${CARGO_TARGET_DIR}/debug/libconnect_norito_bridge.dylib\"",
+        "printf '%s\\n' 'fake connect_norito_bridge' > \"${CARGO_TARGET_DIR}/debug/connect_norito_bridge.dll\"",
+        "printf '%s\\n' 'fake cargo bridge build'",
+        "exit 0",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(fakeDotnet, 0o755);
+    chmodSync(fakeCargo, 0o755);
+
+    const result = spawnSync("bash", [script], {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: `${tmp}:${process.env.PATH}`,
+        [envName]: fakeDotnet,
+        KAGEMUSHA_RECURSIVE_SPEND_CSHARP_BRIDGE_TARGET_DIR: bridgeTarget,
+      },
+    });
+
+    assert.equal(result.status, 0, `${label} must succeed with fake .NET 8 and fake bridge build`);
+    assert.match(result.stdout, /^8\.0\.100$/m, `${label} must print dotnet version evidence`);
+    assert.match(result.stdout, /dotnet --info:\n\.NET SDK:\n Version: 8\.0\.100\n RID: fake-x64/u);
+    assert.match(result.stdout, /fake cargo bridge build/u, `${label} must build the native bridge first`);
+    assert.match(
+      result.stdout,
+      /connect_norito_bridge native bridge: .*connect_norito_bridge\.(?:dll|dylib|so)/u,
+      `${label} must print the built native bridge path`,
+    );
+    assert.match(
+      result.stdout,
+      /connect_norito_bridge native bridge sha256: [0-9a-fA-F]{64}/u,
+      `${label} must print the built native bridge digest`,
+    );
+    assert.match(result.stdout, /fake dotnet test: test /u, `${label} must invoke dotnet test`);
+    assert.ok(
+      result.stdout.indexOf("connect_norito_bridge native bridge sha256:") <
+        result.stdout.indexOf("fake dotnet test: test "),
+      `${label} must print native bridge evidence before running tests`,
+    );
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 function negativeControlModesFromInventory(text, startMarker, endMarker) {
   const start = text.indexOf(startMarker);
   assert.notEqual(start, -1, `missing ${startMarker}`);
@@ -2504,6 +2591,14 @@ test("Kagemusha C# SDK runner rejects non-.NET-8 overrides before tests", () => 
   );
 });
 
+test("Kagemusha C# SDK runner prints host and bridge evidence before tests", () => {
+  assertRunnerPrintsDotnetAndBridgeEvidence(
+    "ci/check_kagemusha_recursive_spend_csharp_sdk.sh",
+    "KAGEMUSHA_RECURSIVE_SPEND_DOTNET_BIN",
+    "Kagemusha C# SDK runner",
+  );
+});
+
 test("recursive Kagemusha witnessless Reserved-lineage policy stays enabled in public docs", () => {
   const docs = [
     "docs/source/offline_kagemusha.md",
@@ -4208,6 +4303,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-csharp-sdk-dotnet-version-workflow",
     "--negative-control-csharp-sdk-setup-order-workflow",
     "--negative-control-csharp-sdk-dotnet-version-script",
+    "--negative-control-csharp-sdk-dotnet-info-script",
     "--negative-control-csharp-sdk-dotnet-override-script",
     "--negative-control-csharp-sdk-dotnet-major-script",
     "--negative-control-csharp-sdk-native-bridge-script",
@@ -5673,6 +5769,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     csharpRunner,
     /BRIDGE_LIBRARY_NAME="libconnect_norito_bridge\.dylib"[\s\S]*BRIDGE_LIBRARY_NAME="connect_norito_bridge\.dll"[\s\S]*BRIDGE_LIBRARY_NAME="libconnect_norito_bridge\.so"[\s\S]*BRIDGE_LIBRARY_PATH="\$\{BRIDGE_LIBRARY_DIR\}\/\$\{BRIDGE_LIBRARY_NAME\}"[\s\S]*connect_norito_bridge native bridge:/,
     "Kagemusha C# SDK runner must verify and print the freshly built native bridge path",
+  );
+  assert.match(
+    csharpRunner,
+    /printf 'dotnet --info:\\n'[\s\S]*"\$\{DOTNET_BIN\}" --info[\s\S]*connect_norito_bridge native bridge sha256:/,
+    "Kagemusha C# SDK runner must print host and bridge digest evidence",
   );
   assert.match(
     pythonRunner,

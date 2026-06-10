@@ -45,13 +45,20 @@ and completed history lives in [`status.md`](./status.md).
   readiness guards needed to clear the C# row.
   Windows-machine TODOs:
   - Select a .NET 8 SDK and capture `dotnet --version` in the run log.
+  - Capture the Windows `dotnet --info` output, including RID/architecture, so
+    the native C# pass is tied to the host that loaded the bridge.
   - Run `ci/check_kagemusha_recursive_spend_csharp_sdk.sh`, or the equivalent
     direct `dotnet test` command with the same native bridge path setup.
   - Confirm the Windows runner log prints `connect_norito_bridge native bridge:`
-    with the freshly built `connect_norito_bridge.dll` path before the P/Invoke
-    tests start.
+    and `connect_norito_bridge native bridge sha256:` for the freshly built
+    `connect_norito_bridge.dll` before the P/Invoke tests start.
   - Confirm the pass includes `KagemushaRecursiveSpendNativeTests`,
     `PrivacyNativeTests`, and `TransactionBuilderTests`.
+  - Confirm `KagemushaRecursiveSpendNativeTests` exercises
+    `KagemushaOverlongCompactLength`, `overlongVersionLengthArchive`,
+    `overlongCircuitStringArchive`, and `invalidUtf8CircuitArchive` so the C#
+    parser rejects non-canonical compact lengths and invalid UTF-8 lineage
+    archive circuit fields on Windows.
   - Re-run `ci/check_kagemusha_recursive_spend_sdk_parity.sh` after recording
     the Windows evidence so C# SDK parity status can be cleared explicitly.
 - Kagemusha JVM SDK validation must keep the focused runner aligned with the
@@ -138,8 +145,9 @@ and completed history lives in [`status.md`](./status.md).
   producing only the init key-log, so the remaining lineage release blocker is
   successful production-width init/append key-artifact generation plus the
   heavy ignored proof run, followed by finalization into `artifacts/kagemusha`.
-  That blocker now needs either a lower-memory production key-generation path
-  for the LEN=128 verifier-slice circuits or a larger release host that can
+  A lower-memory key-generation-only verifier-slice shape path is now
+  implemented and source-pinned for the one-hop and append circuits, but release
+  evidence still requires a successful production-width run on a host that can
   complete init/append key generation without OS termination.
 - Kagemusha ABI-7 recursive compact key evidence now has a staged-run finalizer
   that requires a zero exit marker, validates staged artifacts and the generator
@@ -961,7 +969,13 @@ and completed history lives in [`status.md`](./status.md).
   mismatches as caller input errors. Swift, Kotlin/JVM, Java
   Android, JavaScript/Node, Python, and C# lineage key artifact helpers also
   require proving-key archive payloads to contain the selected circuit id bytes
-  and verifier-key commitment before native request construction. Swift,
+  and verifier-key commitment before native request construction.
+  Swift, Kotlin/JVM, Java Android, JavaScript/Node, Python, and C# additionally
+  parse the canonical `KagemushaRecursiveSpendLineageKeyArtifactsV1` archive
+  fields and reject stale schemas, unsupported flags, byte-smuggled bindings,
+  wrong versions, empty proving keys, trailing payloads, non-canonical compact
+  Norito length encodings, and invalid UTF-8 circuit family fields before native
+  loading. Swift,
   Kotlin/JVM, Java Android, JavaScript/Node, Python, and C# compact-token,
   recursive aggregation,
   recursive compact, and recursive spend validators also reject over-cap caller

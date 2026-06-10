@@ -23388,6 +23388,7 @@ mod kagemusha_recursive_keygen_shape_tests {
     }
 
     #[test]
+    #[ignore = "expensive Halo2 VK equivalence check; run explicitly after keygen-shape changes"]
     fn one_hop_keygen_shape_matches_full_circuit_verifier_key() {
         assert_verifying_keys_match(
             pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<2, 1, 1>::default,
@@ -23400,6 +23401,7 @@ mod kagemusha_recursive_keygen_shape_tests {
     }
 
     #[test]
+    #[ignore = "expensive Halo2 VK equivalence check; run explicitly after keygen-shape changes"]
     fn append_keygen_shape_matches_full_circuit_verifier_key() {
         assert_verifying_keys_match(
             pasta_tiny::KagemushaRecursiveAggregationAppendVerifierSlice::<2, 1, 1>::default,

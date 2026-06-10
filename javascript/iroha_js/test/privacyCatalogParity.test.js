@@ -1336,6 +1336,8 @@ function productionTestArtifact(label) {
   return { label, uri: `sha256:${digest}` };
 }
 
+const productionReviewArtifactSignature = `ed25519:${"a".repeat(128)}`;
+
 function productionEvidenceEntrypoints(descriptor) {
   const entrypoints = [];
   for (const entrypoint of [
@@ -1375,7 +1377,7 @@ function productionEvidenceRow(descriptor, { chainId, localnetRunId }) {
     reviewerIdentity: "crypto-reviewer@internal.example",
     reviewArtifact: {
       ...productionTestArtifact(`${descriptor.id}-review`),
-      signature: `minisign:${descriptor.id}`,
+      signature: productionReviewArtifactSignature,
     },
     verifierKeyId: descriptor.verifierKeyId,
     proofFamily: descriptor.proofFamily,
@@ -3333,9 +3335,21 @@ test("privacy algorithm JS catalogs reject malformed internal review evidence", 
       },
     ],
     [
+      "malformed review artifact signature",
+      (row) => {
+        row.reviewArtifact.signature = "minisign:reviewer-placeholder";
+      },
+    ],
+    [
       "non-hash-addressed review artifact",
       (row) => {
         row.reviewArtifact.uri = "https://audit.example/review.pdf";
+      },
+    ],
+    [
+      "uppercase review artifact hash",
+      (row) => {
+        row.reviewArtifact.uri = `sha256:${"A".repeat(64)}`;
       },
     ],
     [
@@ -3502,6 +3516,35 @@ test("privacy algorithm JS catalogs reject chain-mismatched evidence", () => {
       chainId: "wrong-chain",
     });
     assert.equal(descriptor.productionReady, false, `${label} must reject wrong chain evidence`);
+    assert.equal(descriptor.productionGate.ready, false);
+    assert.deepEqual(descriptor.plannedSdkEntrypoints, []);
+  }
+});
+
+test("privacy algorithm JS catalogs reject mock chain evidence even when requested", () => {
+  const chainId = "mock-privacy-4peer-chain";
+  for (const [label, getDescriptor] of [
+    ["src", getSrcPrivacyAlgorithmDescriptor],
+    ["dist", getDistPrivacyAlgorithmDescriptor],
+  ]) {
+    const target = getDescriptor("zk-ace-pq-authorization-v0");
+    const manifest = {
+      version: PRIVACY_PRODUCTION_EVIDENCE_REGISTRY_VERSION,
+      rows: [
+        productionEvidenceRow(target, {
+          chainId,
+          localnetRunId: "boi-localnet-4peer-run-2026-06-09",
+        }),
+      ],
+    };
+    const descriptor = getDescriptor("zk-ace-pq-authorization-v0", manifest, {
+      chainId,
+    });
+    assert.equal(
+      descriptor.productionReady,
+      false,
+      `${label} must reject mock chain evidence`,
+    );
     assert.equal(descriptor.productionGate.ready, false);
     assert.deepEqual(descriptor.plannedSdkEntrypoints, []);
   }

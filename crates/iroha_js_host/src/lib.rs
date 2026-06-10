@@ -11125,7 +11125,10 @@ fn privacy_production_evidence_hash_is_valid(value: &str) -> bool {
         return false;
     };
 
-    digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+    digest.len() == 64
+        && digest
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 fn privacy_production_review_signature_is_valid(value: &str) -> bool {
@@ -11136,7 +11139,9 @@ fn privacy_production_review_signature_is_valid(value: &str) -> bool {
     privacy_evidence_public_text_is_clean(value, 512)
         && !privacy_evidence_text_has_non_production_marker(value)
         && signature.len() == 128
-        && signature.bytes().all(|byte| byte.is_ascii_hexdigit())
+        && signature
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 fn privacy_production_localnet_run_id_is_valid(value: &str) -> bool {
@@ -15271,6 +15276,8 @@ mod tests {
     ];
     const PRIVACY_TEST_PRODUCTION_HASH: &str =
         "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const PRIVACY_TEST_UPPERCASE_PRODUCTION_HASH: &str =
+        "sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
     const PRIVACY_TEST_PRODUCTION_SMOKE_HASH: &str =
         "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     const PRIVACY_TEST_PRODUCTION_REPLAY_HASH: &str =
@@ -15280,6 +15287,7 @@ mod tests {
     const PRIVACY_TEST_PRODUCTION_STATE_RECOVERY_HASH: &str =
         "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
     const PRIVACY_TEST_PRODUCTION_SIGNATURE: &str = "ed25519:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const PRIVACY_TEST_UPPERCASE_PRODUCTION_SIGNATURE: &str = "ed25519:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
 
     fn privacy_test_production_entrypoints(entry: &PrivacyAlgorithmEntry) -> Vec<&'static str> {
         entry
@@ -15750,8 +15758,14 @@ mod tests {
         assert_zk_ace_evidence_rejected("bad review artifact hash", |row| {
             row.review_artifact_hash = "sha256:not-a-hex-digest";
         });
+        assert_zk_ace_evidence_rejected("uppercase review artifact hash", |row| {
+            row.review_artifact_hash = PRIVACY_TEST_UPPERCASE_PRODUCTION_HASH;
+        });
         assert_zk_ace_evidence_rejected("unsigned review artifact", |row| {
             row.review_artifact_signature = "ed25519:bbbb";
+        });
+        assert_zk_ace_evidence_rejected("uppercase review artifact signature", |row| {
+            row.review_artifact_signature = PRIVACY_TEST_UPPERCASE_PRODUCTION_SIGNATURE;
         });
         assert_zk_ace_evidence_rejected("mock reviewer identity", |row| {
             row.reviewer_identity = "mock-crypto-reviewer";
@@ -15883,9 +15897,18 @@ mod tests {
         assert_privacy_evidence_rejected_for_all_rows("bad review artifact hash", |row| {
             row.review_artifact_hash = "sha256:not-a-hex-digest";
         });
+        assert_privacy_evidence_rejected_for_all_rows("uppercase review artifact hash", |row| {
+            row.review_artifact_hash = PRIVACY_TEST_UPPERCASE_PRODUCTION_HASH;
+        });
         assert_privacy_evidence_rejected_for_all_rows("unsigned review artifact", |row| {
             row.review_artifact_signature = "ed25519:bbbb";
         });
+        assert_privacy_evidence_rejected_for_all_rows(
+            "uppercase review artifact signature",
+            |row| {
+                row.review_artifact_signature = PRIVACY_TEST_UPPERCASE_PRODUCTION_SIGNATURE;
+            },
+        );
         assert_privacy_evidence_rejected_for_all_rows("mock reviewer identity", |row| {
             row.reviewer_identity = "mock-crypto-reviewer";
         });

@@ -526,6 +526,7 @@ const PRIVACY_PRODUCTION_REVIEW_ARTIFACT_KEYS = Object.freeze([
   "uri",
   "signature",
 ]);
+const REVIEW_ARTIFACT_SIGNATURE_RE = /^ed25519:[0-9a-f]{128}$/;
 const PRIVACY_PRODUCTION_GATE_ARTIFACT_KEYS = Object.freeze(["label", "uri"]);
 const PRIVACY_PRODUCTION_RESULT_KEYS = Object.freeze(["passed", "artifact"]);
 const PRIVACY_PRODUCTION_LOCALNET_ACCEPTANCE_KEYS = Object.freeze([
@@ -2283,14 +2284,13 @@ function evidenceTextValue(value, limit = 256) {
 
 function evidenceHashUri(value) {
   const text = evidenceTextValue(value, 256);
-  const lowered = text.toLowerCase();
   let digest = "";
-  if (lowered.startsWith("sha256:")) {
-    digest = lowered.slice("sha256:".length);
-  } else if (lowered.startsWith("urn:sha256:")) {
-    digest = lowered.slice("urn:sha256:".length);
-  } else if (lowered.startsWith("hash://sha256/")) {
-    digest = lowered.slice("hash://sha256/".length);
+  if (text.startsWith("sha256:")) {
+    digest = text.slice("sha256:".length);
+  } else if (text.startsWith("urn:sha256:")) {
+    digest = text.slice("urn:sha256:".length);
+  } else if (text.startsWith("hash://sha256/")) {
+    digest = text.slice("hash://sha256/".length);
   } else {
     return "";
   }
@@ -2328,6 +2328,14 @@ function localnetRunIdValue(value) {
   return text;
 }
 
+function evidenceChainIdValue(value) {
+  const text = evidenceTextValue(value, 256);
+  if (!text || entrypointIsDevFixture(text) || text.includes("..") || /[^A-Za-z0-9_.:-]/.test(text)) {
+    return "";
+  }
+  return text;
+}
+
 function setEquals(left, right) {
   return left.size === right.size && [...left].every((item) => right.has(item));
 }
@@ -2356,8 +2364,8 @@ function evidenceReviewArtifact(value) {
   }
   const label = evidenceTextValue(value.label, 160);
   const uri = evidenceHashUri(value.uri);
-  const signature = evidenceTextValue(value.signature, 512);
-  if (!label || !uri || !signature) {
+  const signature = evidenceTextValue(value.signature, 160);
+  if (!label || !uri || !REVIEW_ARTIFACT_SIGNATURE_RE.test(signature)) {
     return null;
   }
   return { label, uri, signature };
@@ -2511,7 +2519,7 @@ function evidenceLocalnetAcceptance(value, localnetRunId, chainId) {
   const peerIds = Array.isArray(value.peer_ids)
     ? value.peer_ids.map((peerId) => localnetPeerIdValue(peerId))
     : [];
-  const localnetChainId = evidenceTextValue(value.chain_id, 256);
+  const localnetChainId = evidenceChainIdValue(value.chain_id);
   const smokeTxHash = evidenceHashUri(value.smoke_tx_hash);
   const replayRejectionHash = evidenceHashUri(value.replay_rejection_hash);
   const restartReplayRejectionHash = evidenceHashUri(
@@ -2648,7 +2656,7 @@ function productionEvidenceChainId(options) {
   if (!isPlainObject(options)) {
     return null;
   }
-  return evidenceTextValue(options.chainId ?? options.chain_id, 256) || null;
+  return evidenceChainIdValue(options.chainId ?? options.chain_id) || null;
 }
 
 function trustedProductionEvidence(descriptor, evidenceRows, options = undefined) {
@@ -2660,7 +2668,7 @@ function trustedProductionEvidence(descriptor, evidenceRows, options = undefined
     return null;
   }
   const expectedChainId = productionEvidenceChainId(options);
-  const evidenceChainId = evidenceTextValue(source.chain_id, 256);
+  const evidenceChainId = evidenceChainIdValue(source.chain_id);
   if (!evidenceChainId || (expectedChainId !== null && evidenceChainId !== expectedChainId)) {
     return null;
   }

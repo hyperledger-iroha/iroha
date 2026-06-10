@@ -136,6 +136,9 @@ def _privacy_production_test_artifact(label: str) -> dict[str, str]:
     return {"label": label, "uri": f"sha256:{digest}"}
 
 
+PRIVACY_PRODUCTION_TEST_REVIEW_SIGNATURE = f"ed25519:{'a' * 128}"
+
+
 def _privacy_production_test_entrypoints(
     descriptor: dict[str, object],
 ) -> list[str]:
@@ -175,7 +178,7 @@ def _privacy_production_test_row(
         "reviewer_identity": "crypto-reviewer@internal.example",
         "review_artifact": {
             **_privacy_production_test_artifact(f"{algorithm_id}-review"),
-            "signature": f"minisign:{algorithm_id}",
+            "signature": PRIVACY_PRODUCTION_TEST_REVIEW_SIGNATURE,
         },
         "verifier_key_id": descriptor["verifier_key_id"],
         "proof_family": descriptor["proof_family"],
@@ -3073,9 +3076,21 @@ def test_privacy_catalog_accepts_internal_review_evidence_for_all_rows() -> None
         ),
         pytest.param(
             lambda row, _descriptor: row["review_artifact"].update(
+                {"signature": "minisign:reviewer-placeholder"}
+            ),
+            id="malformed-review-artifact-signature",
+        ),
+        pytest.param(
+            lambda row, _descriptor: row["review_artifact"].update(
                 {"uri": "https://audit.example/review.pdf"}
             ),
             id="non-hash-addressed-review-artifact",
+        ),
+        pytest.param(
+            lambda row, _descriptor: row["review_artifact"].update(
+                {"uri": f"sha256:{'A' * 64}"}
+            ),
+            id="uppercase-review-artifact-hash",
         ),
         pytest.param(
             lambda row, _descriptor: row["sdk_entrypoints"]["python"].append(
@@ -3231,6 +3246,30 @@ def test_privacy_catalog_rejects_chain_mismatched_internal_review_evidence() -> 
             str(target["id"]),
             manifest,
             chain_id="wrong-chain",
+        )
+
+        assert descriptor is not None
+        assert descriptor["production_ready"] is False
+        assert descriptor["production_gate"]["ready"] is False
+
+
+def test_privacy_catalog_rejects_mock_chain_internal_review_evidence() -> None:
+    chain_id = "mock-privacy-4peer-chain"
+    for target in get_privacy_algorithm_descriptors():
+        row = _privacy_production_test_row(
+            target,
+            chain_id=chain_id,
+            localnet_run_id="boi-localnet-4peer-run-2026-06-09",
+        )
+        manifest = {
+            "version": privacy_catalog.PRIVACY_PRODUCTION_EVIDENCE_REGISTRY_VERSION,
+            "rows": [row],
+        }
+
+        descriptor = get_privacy_algorithm_descriptor(
+            str(target["id"]),
+            manifest,
+            chain_id=chain_id,
         )
 
         assert descriptor is not None

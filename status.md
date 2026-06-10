@@ -2,6 +2,347 @@
 
 Last updated: 2026-06-10
 
+## 2026-06-10 Kagemusha all-SDK lineage archive canonical length hardening
+
+- Mirrored canonical compact Norito length rejection from Python and
+  JavaScript/Node into Swift, Kotlin/JVM, Java Android, and C# lineage
+  proving-key archive parsers. Kotlin/JVM and Java Android additionally bound
+  accepted compact length encodings to the 5-byte range needed for the
+  `Int`-bounded archive lengths before applying the canonical-threshold check.
+- Added Swift, Kotlin/JVM, Java Android, and C# adversarial lineage
+  key-artifact coverage for an overlong version field length, an overlong
+  nested circuit-family string length, and invalid UTF-8 in the parsed circuit
+  family while the archive byte-smuggles the expected circuit id through
+  proving-key bytes.
+- Extended the recursive Kagemusha SDK parity guard and documentation so the
+  non-canonical compact-length and invalid-UTF-8 lineage archive contract is
+  pinned across Swift, Kotlin/JVM, Java Android, JavaScript/Node, Python, and C#.
+- Local C# runtime validation remains a Windows-machine follow-up because this
+  macOS host has no `dotnet` binary; the source and parity guards now pin the
+  new C# parser/test markers.
+- Validation:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh ci/check_kagemusha_recursive_spend_csharp_sdk.sh ci/check_kagemusha_recursive_spend_policy.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `swift test --filter KagemushaRecursiveSpendProverTests/testLineageKeyArtifactPackagesValidateReleaseProfiles`
+    (`1` focused test passed)
+  - `swift test --filter KagemushaRecursiveSpendProverTests`
+    (`18` tests passed)
+  - `ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `KAGEMUSHA_RECURSIVE_SPEND_JVM_JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+    (`39` tests passed)
+  - `node --test javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+    (`26` tests passed)
+  - `ci/check_kagemusha_production_readiness.sh`
+  - `python3 scripts/kagemusha_production_readiness.py --repo-root . --min-signed-at-utc '' --min-lineage-proof-evidence-at-utc '' --min-compact-key-evidence-at-utc ''`
+    (still blocked by `lineage_proof_evidence_missing`,
+    `compact_key_evidence_missing`, and `android_device_lab_root_missing`)
+  - `git diff --check` on the touched SDK, parity, roadmap, docs, and status
+    files
+
+## 2026-06-10 Kagemusha Python and JavaScript lineage archive canonical length hardening
+
+- Hardened the Python and JavaScript/Node SDK lineage proving-key archive
+  parsers so compact Norito length encodings must be canonical. Overlong
+  compact varints now fail before field extraction, including nested
+  circuit-family string lengths.
+- Added Python and JavaScript lineage key-artifact adversarial coverage for an
+  overlong version field length, an overlong circuit-family string length, and
+  invalid UTF-8 in the parsed circuit-family field while the archive still
+  byte-smuggles the expected circuit id through proving-key bytes.
+- Mirrored the JavaScript source guard into browser source plus committed dist
+  files so Node and browser/package consumers reject the same malformed lineage
+  archives.
+- Extended the recursive Kagemusha SDK parity guard so the new
+  overlong-length and invalid-UTF-8 archive cases remain source-pinned.
+- Validation:
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/kagemusha.py python/iroha_python/tests/kagemusha_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=python/iroha_python/src:python/norito_py/src:python /tmp/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q python/iroha_python/tests/kagemusha_test.py -k lineage_key_artifacts`
+    (`1` focused test passed)
+  - `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=python/iroha_python/src:python/norito_py/src:python /tmp/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q python/iroha_python/tests/kagemusha_test.py`
+    (`44` tests passed)
+  - `node --test javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+    (`26` tests passed)
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-10 Privacy review artifact signature hardening
+
+- Hardened the Python and JavaScript privacy production-evidence gates so
+  internal review artifacts must carry an `ed25519:` signature with exactly 128
+  lowercase hexadecimal characters, matching the stricter BOI renderer and
+  desktop production-gate contract.
+- Replaced permissive `minisign:` test placeholders with canonical Ed25519
+  review signatures and added Python/JavaScript regressions where the signature
+  field is present but malformed.
+- Mirrored the JavaScript source guard into the committed dist catalog so SDK
+  consumers reject forged review artifacts consistently.
+- Tightened the native connect bridge, JavaScript host, and Python Rust binding
+  evidence validators to reject uppercase Ed25519 signature hex as well, keeping
+  the native capability path case-exact with BOI and public SDK catalogs.
+- Validation:
+  - `PYTHONPATH=python/iroha_python/src /private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-sdk-guard-venv/bin/python -m pytest -q python/iroha_python/tests/privacy_catalog_test.py -k "internal_review_evidence or mock_chain"`
+    (`24` tests passed)
+  - `node --test --test-reporter=spec javascript/iroha_js/test/privacyCatalogParity.test.js --test-name-pattern "malformed internal review evidence|mock chain"`
+    (`19` tests passed)
+  - `PYTHONPATH=python/iroha_python/src /private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-sdk-guard-venv/bin/python -m pytest -q python/iroha_python/tests/privacy_catalog_test.py`
+    (`750` tests passed)
+  - `node --test --test-reporter=spec javascript/iroha_js/test/privacyCatalogParity.test.js`
+    (`19` tests passed)
+  - `bash ci/check_privacy_sdk_guard.sh`
+    (`1159` Python catalog tests passed after the release native SDK build)
+  - `cargo test -p connect_norito_bridge privacy_production_evidence -- --nocapture`
+    (`4` focused tests passed)
+  - `cargo test -p iroha_js_host privacy_production_evidence -- --nocapture`
+    (`4` focused tests passed)
+  - `cargo test -p iroha_python_rs privacy_production_evidence -- --nocapture`
+    (`4` focused tests passed)
+
+## 2026-06-10 Kagemusha C# Windows follow-up and readiness recheck
+
+- Extended the C# SDK Windows-machine TODOs in `roadmap.md` and the focused C#
+  guard so the Windows pass captures `dotnet --info` plus printed
+  `connect_norito_bridge.dll` path and SHA-256 evidence alongside the focused
+  Kagemusha/Privacy/transaction-builder test pass. The SDK parity guard,
+  payload workflow, and JavaScript parity meta-test now pin the new
+  `dotnet --info` evidence negative control, and the JavaScript meta-test now
+  exercises a fake .NET 8/fake cargo success path that proves host and native
+  bridge evidence is printed before `dotnet test`.
+- Rechecked the local C# guard: it still stops at preflight because `dotnet` is
+  not installed on this macOS host, so the actual C# compile/test evidence
+  remains a Windows-machine follow-up.
+- Re-ran the lightweight Kagemusha SDK guards and readiness rollup. SDK parity,
+  witnessless policy, shell syntax, conflict-marker, and whitespace checks are
+  clean; production readiness is still blocked only by
+  `lineage_proof_evidence_missing`, `compact_key_evidence_missing`, and
+  `android_device_lab_root_missing`.
+- The ABI-7 compact key generator is still running and no processes were
+  stopped.
+- Validation:
+  - `bash -n ci/check_kagemusha_recursive_spend_csharp_sdk.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-native-library-evidence-script`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-dotnet-info-script`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+    (`39` tests passed)
+  - `git diff --check -- ...` over the touched Kagemusha SDK/docs/status files
+  - `rg -n '^(<<<<<<<( |$)|=======$|>>>>>>>( |$))' ...` over the touched
+    Kagemusha SDK/docs/status files (no matches)
+  - `ci/check_kagemusha_recursive_spend_csharp_sdk.sh` (expected preflight
+    failure: `dotnet` was not found)
+  - `python3 scripts/kagemusha_production_readiness.py --repo-root . --min-signed-at-utc '' --min-lineage-proof-evidence-at-utc '' --min-compact-key-evidence-at-utc ''`
+    (expected readiness blockers:
+    `lineage_proof_evidence_missing`, `compact_key_evidence_missing`,
+    `android_device_lab_root_missing`)
+
+## 2026-06-10 Kagemusha JVM and Android lineage key archive parser hardening
+
+- Hardened the Kotlin/JVM and Java Android lineage key-artifact guards to parse
+  canonical `KagemushaRecursiveSpendLineageKeyArtifactsV1` proving-key archives
+  instead of accepting opaque payloads that merely contain the selected circuit
+  id and verifier-key commitment bytes.
+- Both wrappers now validate the pinned lineage archive schema hash, reject
+  packed-struct and field-bitset forms, parse version, circuit family,
+  verifier-key commitment, and proving-key fields, and require version `1`,
+  exact circuit-family binding, exact verifier-key commitment binding, and a
+  non-empty proving key.
+- Converted the Kotlin/JVM and Java Android test fixtures to the canonical
+  compact-field archive layout and added adversarial coverage for smuggled
+  circuit ids, smuggled verifier-key commitments, wrong archive version, empty
+  proving key, trailing payload, stale schema hash, packed-struct flags, and
+  field-bitset flags.
+- Extended the recursive Kagemusha SDK parity guard so the Kotlin/JVM and Java
+  Android structured parsers and adversarial cases remain source-pinned.
+- Validation:
+  - `KAGEMUSHA_RECURSIVE_SPEND_JVM_JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+    (`38` tests passed)
+
+## 2026-06-10 Privacy SDK chain-marker evidence hardening
+
+- Hardened the Python and JavaScript privacy production-evidence gates so chain
+  identifiers from requested production bindings, internal review evidence rows,
+  and structured 4-peer localnet acceptance records must be portable
+  production identifiers, not DevFixture/mock/local-only markers.
+- Added Python and JavaScript catalog regressions where the caller requests the
+  same mock chain id that appears in the internal review artifact and localnet
+  acceptance evidence; all 21 privacy descriptors now remain fail-closed in
+  that forged-consistency case.
+- Mirrored the JavaScript source guard into the committed dist catalog so BOI
+  and SDK consumers receive the same chain-marker rejection behavior.
+- Validation:
+  - `node --test --test-reporter=spec javascript/iroha_js/test/privacyCatalogParity.test.js --test-name-pattern "mock chain|chain-mismatched|adversarial internal evidence"`
+    (`19` tests passed)
+  - `PYTHONPATH=python/iroha_python/src /private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-sdk-guard-venv/bin/python -m pytest -q python/iroha_python/tests/privacy_catalog_test.py -k "mock_chain or chain_mismatched or invalid_internal_review_evidence"`
+    (`22` tests passed)
+  - `PYTHONPATH=python/iroha_python/src /private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-sdk-guard-venv/bin/python -m pytest -q python/iroha_python/tests/privacy_catalog_test.py`
+    (`749` tests passed)
+  - `node --test --test-reporter=spec javascript/iroha_js/test/privacyCatalogParity.test.js`
+    (`19` tests passed)
+  - `bash ci/check_privacy_sdk_guard.sh`
+    (`1158` Python catalog tests passed after the release native SDK build)
+
+## 2026-06-10 Kagemusha JavaScript lineage key archive parser pin
+
+- Confirmed the JavaScript/Node SDK already parses canonical
+  `KagemushaRecursiveSpendLineageKeyArtifactsV1` proving-key archives and
+  compares version, circuit family, verifier-key commitment, and non-empty
+  proving-key fields after the compatibility byte-membership guard.
+- Extended JavaScript source-test adversarial coverage to include byte-smuggled
+  circuit ids, byte-smuggled verifier-key commitments, trailing payload, packed
+  struct flags, and field-bitset flags alongside the existing stale schema,
+  wrong version, wrong circuit, wrong commitment, and empty proving-key cases.
+- Extended the recursive Kagemusha SDK parity guard so the JavaScript source,
+  dist, browser, and dist-browser parser markers plus the new source-test
+  adversarial inputs remain pinned.
+- Validation:
+  - `node --test javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+    (`26` tests passed)
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+    (`38` tests passed)
+
+## 2026-06-10 Kagemusha Swift lineage key archive parser hardening
+
+- Hardened the Swift SDK lineage key-artifact guard to parse canonical
+  `KagemushaRecursiveSpendLineageKeyArtifactsV1` proving-key archives instead
+  of accepting an opaque payload that merely contains the selected circuit id and
+  verifier-key commitment bytes.
+- Swift now validates the pinned lineage archive schema hash, rejects
+  packed-struct and field-bitset forms, parses version, circuit family,
+  verifier-key commitment, and proving-key fields, and requires version `1`,
+  exact circuit-family binding, exact verifier-key commitment binding, and a
+  non-empty proving key.
+- Added Swift adversarial fixture coverage for smuggled circuit ids, smuggled
+  verifier-key commitments, wrong archive version, empty proving key, trailing
+  payload, stale schema hash, packed-struct flags, and field-bitset flags.
+- Extended the recursive Kagemusha SDK parity guard so the Swift structured
+  parser and adversarial cases remain source-pinned.
+- Validation:
+  - `swift test --filter KagemushaRecursiveSpendProverTests/testLineageKeyArtifactPackagesValidateReleaseProfiles`
+    (`1` focused test passed)
+  - `swift test --filter KagemushaRecursiveSpendProverTests`
+    (`18` tests passed)
+  - `ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+    (`38` tests passed)
+  - `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=python/iroha_python/src:python/norito_py/src:python /tmp/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q python/iroha_python/tests/kagemusha_test.py -k lineage_key_artifacts`
+    (`1` focused test passed)
+
+## 2026-06-10 Kagemusha Python lineage key archive parser hardening
+
+- Hardened the Python SDK lineage key-artifact guard to parse canonical
+  `KagemushaRecursiveSpendLineageKeyArtifactsV1` proving-key archives instead
+  of accepting an opaque payload that merely contains the selected circuit id and
+  verifier-key commitment bytes.
+- Python now validates the lineage archive schema hash, rejects packed-struct
+  and field-bitset forms, parses version, circuit family, verifier-key
+  commitment, and proving-key fields, and requires version `1`, exact
+  circuit-family binding, exact verifier-key commitment binding, and a non-empty
+  proving key.
+- Added Python adversarial coverage for smuggled circuit ids, smuggled
+  verifier-key commitments, wrong archive version, empty proving key, trailing
+  payload, stale schema hash, packed-struct flags, and field-bitset flags.
+- Extended the recursive Kagemusha SDK parity guard so the Python structured
+  parser and adversarial cases remain source-pinned.
+- Validation:
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/kagemusha.py python/iroha_python/tests/kagemusha_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=python/iroha_python/src:python/norito_py/src:python /tmp/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q python/iroha_python/tests/kagemusha_test.py -k lineage_key_artifacts`
+    (`1` focused test passed)
+  - `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=python/iroha_python/src:python/norito_py/src:python /tmp/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q python/iroha_python/tests/kagemusha_test.py`
+    (`44` tests passed)
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+    (`38` tests passed)
+  - `python3 scripts/kagemusha_production_readiness.py --repo-root . --min-signed-at-utc '' --min-lineage-proof-evidence-at-utc '' --min-compact-key-evidence-at-utc ''`
+    (expected readiness blockers: `lineage_proof_evidence_missing`,
+    `compact_key_evidence_missing`, `android_device_lab_root_missing`)
+
+## 2026-06-10 Kagemusha C# lineage key archive parser hardening
+
+- Hardened the C# SDK lineage key-artifact guard so proving-key archives are no
+  longer accepted merely because their opaque payload contains the selected
+  circuit id and verifier-key commitment bytes. C# now validates the canonical
+  lineage proving-key archive schema hash, rejects packed-struct and field-bitset
+  forms, parses the version, circuit family, verifier-key commitment, and
+  proving-key fields, and requires version `1`, exact circuit-family binding,
+  exact verifier-key commitment binding, and a non-empty proving key.
+- Added C# adversarial fixture coverage for smuggled circuit ids, smuggled
+  verifier-key commitments, wrong archive version, empty proving key, trailing
+  payload, stale schema hash, packed-struct flags, and field-bitset flags.
+- Extended the recursive Kagemusha SDK parity guard so the new C# parser and
+  adversarial cases remain source-pinned.
+- Validation:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+    (`38` tests passed)
+  - `ci/check_kagemusha_recursive_spend_csharp_sdk.sh`
+    did not run C# tests because `.NET SDK 8.0.x` is not installed locally
+    (`dotnet` was not found).
+  - `python3 scripts/kagemusha_production_readiness.py --repo-root . --min-signed-at-utc '' --min-lineage-proof-evidence-at-utc '' --min-compact-key-evidence-at-utc ''`
+    (expected readiness blockers: `lineage_proof_evidence_missing`,
+    `compact_key_evidence_missing`, `android_device_lab_root_missing`)
+
+## 2026-06-10 Kagemusha Reserved-lineage keygen-shape policy pin
+
+- Pinned the lower-memory Reserved-lineage key-generation path in the recursive
+  spend policy guard: the one-hop and append keygen-only verifier-slice shapes,
+  their shared native-scalar verifier-table synthesis helper, and the
+  verifier-key equivalence tests must remain present.
+- Updated the Kagemusha docs and roadmap to distinguish the implemented
+  source-level keygen-shape path from the still-open production evidence
+  blocker. Release readiness still requires a successful production-width
+  init/append key-artifact run and the heavy ignored proof evidence.
+- Re-ran readiness after the policy/doc update; it remains blocked only by the
+  known external gates: Reserved-lineage proof evidence, ABI-7 recursive compact
+  key evidence, and the Android device-lab root.
+- Validation:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+    (`38` tests passed)
+  - `python3 scripts/kagemusha_production_readiness.py --repo-root . --min-signed-at-utc '' --min-lineage-proof-evidence-at-utc '' --min-compact-key-evidence-at-utc ''`
+    (expected readiness blockers: `lineage_proof_evidence_missing`,
+    `compact_key_evidence_missing`, `android_device_lab_root_missing`)
+
+## 2026-06-10 Kagemusha native redeem record-circuit boundary
+
+- Added native-boundary regressions in the C bridge, Node NAPI host, and Python
+  PyO3 host so raw-archive recursive redeem builders reject a
+  `lineage_verifier_record` whose commitment is otherwise valid but whose
+  `circuit_id` belongs to another Reserved-lineage circuit family.
+- Covered both selection sites: semantic-final redeems with a Reserved-lineage
+  previous proof, and witnessless final Reserved-lineage redeems. The rejection
+  happens through public binding before instruction serialization or backend
+  proof verification.
+- Pinned the coverage in the recursive-spend policy guard and documented the
+  C/Node/Python host boundary in the Kagemusha docs.
+- Validation:
+  - `env CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-boundary-target cargo test -p connect_norito_bridge kagemusha_recursive_spend_redeem_bridge_requires_lineage_record_for_reserved_previous_proof --lib -- --test-threads=1`
+    (`1` focused test passed)
+  - `env CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-boundary-target cargo test -p connect_norito_bridge kagemusha_recursive_spend_redeem_bridge_accepts_witnessless_reserved_lineage_public_binding --lib -- --test-threads=1`
+    (`1` focused test passed)
+  - `env CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-boundary-target cargo test -p iroha_js_host kagemusha_recursive_spend_redeem_instruction_requires_lineage_record_for_reserved_previous_proof --lib -- --test-threads=1`
+    (`1` focused test passed)
+  - `env CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-boundary-target cargo test -p iroha_js_host kagemusha_recursive_spend_redeem_instruction_rejects_backend_invalid_lineage --lib -- --test-threads=1`
+    (`1` focused test passed)
+  - `env CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-boundary-target cargo test -p iroha_python_rs kagemusha_recursive_spend_redeem_python_requires_lineage_record_for_reserved_previous_proof --lib -- --test-threads=1`
+    (`1` focused test passed after rebuilding against current FHE symbols)
+  - `env CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-boundary-target cargo test -p iroha_python_rs kagemusha_recursive_spend_redeem_python_native_accepts_witnessless_reserved_lineage_public_binding --lib -- --test-threads=1`
+    (`1` focused test passed)
+  - `cargo fmt --check -p connect_norito_bridge -p iroha_js_host -p iroha_python_rs`
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+    (`38` tests passed)
+
 ## 2026-06-10 Kagemusha redeem lineage verifier-record circuit binding
 
 - Tightened `KagemushaRecursiveSpendRedeemRequestV1` public binding so a final

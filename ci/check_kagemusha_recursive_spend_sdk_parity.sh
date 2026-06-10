@@ -984,6 +984,10 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-dotnet-version-script",
     ),
     (
+        "C# SDK dotnet info script negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-dotnet-info-script",
+    ),
+    (
         "C# SDK dotnet override script negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-dotnet-override-script",
     ),
@@ -3781,12 +3785,26 @@ def check_javascript(texts, errors):
                 "validateKagemushaRecursiveSpendLineageKeyArtifactPackageBinding",
                 "kagemushaLineageVerifierKeyEnvelopeCircuitId",
                 "kagemushaLineageProvingKeyArchivePayload",
+                "kagemushaLineageProvingKeyArchive(",
+                "kagemushaDecodeLineageProvingKeyArchivePayload",
+                "kagemushaReadNoritoField",
+                "kagemushaDecodeNoritoString",
+                "kagemushaDecodeNoritoByteVec",
+                "varint is non-canonical",
+                "encodedLength > 1",
+                "KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH",
+                "KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_VERSION_V1",
+                "KAGEMUSHA_NORITO_PACKED_STRUCT_FLAG",
+                "PRIVACY_NORITO_FIELD_BITSET_FLAG",
                 "kagemushaVerifyingKeyCommitment",
                 "KAGEMUSHA_ZK1_TLV_CID1",
                 "KAGEMUSHA_ZK1_TLV_IPAK",
                 "KAGEMUSHA_ZK1_TLV_H2VK",
                 "archivePayload.includes(circuitIdBytes)",
                 "archivePayload.includes(verifierKeyCommitment)",
+                "archive.circuitFamily !== proofCircuitId",
+                "!archive.vkCommitment.equals(verifierKeyCommitment)",
+                "archive.provingKey.length === 0",
                 "storedLineageVerifierKey",
                 "storedLineageProvingKeyArchive",
                 "get lineageVerifierKey()",
@@ -3833,6 +3851,18 @@ def check_javascript(texts, errors):
             "kagemushaRecursiveSpendLineageKeyArtifactsForInit",
             "kagemushaLineageVerifierKey",
             "kagemushaLineageProvingKeyArchive",
+            "TEST_NORITO_PACKED_STRUCT_FLAG",
+            "TEST_NORITO_FIELD_BITSET_FLAG",
+            "options.trailingPayload",
+            "Buffer.alloc(64, 0xa6)",
+            "Buffer.alloc(64, 0xa7)",
+            "trailingPayload: Buffer.from([0x7f])",
+            "TEST_NORITO_COMPACT_LEN_FLAG | TEST_NORITO_PACKED_STRUCT_FLAG",
+            "TEST_NORITO_COMPACT_LEN_FLAG | TEST_NORITO_FIELD_BITSET_FLAG",
+            "kagemushaOverlongCompactLength",
+            "overlongVersionLengthArchive",
+            "overlongCircuitStringArchive",
+            "invalidUtf8CircuitArchive",
             "appendVerifierKey",
             "lineage_verifier_key",
             "lineage_proving_key_archive",
@@ -4185,6 +4215,20 @@ def check_python(texts, errors):
             "duplicate_cid_verifier_key",
             "missing_circuit_archive",
             "wrong_commitment_archive",
+            "smuggled_circuit_archive",
+            "smuggled_commitment_archive",
+            "wrong_version_archive",
+            "empty_proving_key_archive",
+            "trailing_payload_archive",
+            "old_schema_archive",
+            "packed_struct_archive",
+            "field_bitset_archive",
+            "overlong_version_length_archive",
+            "overlong_circuit_string_archive",
+            "invalid_utf8_circuit_archive",
+            "_kagemusha_overlong_compact_length",
+            "_kagemusha_lineage_proving_key_archive_raw",
+            "_KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH",
             "halo2/kzg",
             "not-bytes",
             "FrozenInstanceError",
@@ -4249,12 +4293,20 @@ def check_python(texts, errors):
             "_validate_kagemusha_recursive_spend_lineage_key_artifact_package_binding",
             "_kagemusha_lineage_verifier_key_envelope_circuit_id",
             "_kagemusha_lineage_proving_key_archive_payload",
+            "_kagemusha_decode_lineage_proving_key_archive_payload",
+            "_KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH",
+            "_KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_VERSION_V1",
+            "_KAGEMUSHA_NORITO_PACKED_STRUCT_FLAG",
+            "_KAGEMUSHA_NORITO_FIELD_BITSET_FLAG",
             "_kagemusha_verifying_key_commitment",
             "_KAGEMUSHA_ZK1_TLV_CID1",
             "_KAGEMUSHA_ZK1_TLV_IPAK",
             "_KAGEMUSHA_ZK1_TLV_H2VK",
             "archive_payload.find(circuit_id_bytes)",
             "archive_payload.find(verifier_key_commitment)",
+            "circuit_family != proof_circuit_id",
+            "archive_commitment != verifier_key_commitment",
+            "or not proving_key",
             '"proof_circuit_id"',
             '"verifier_opening_len"',
             '"lineage_verifier_key"',
@@ -4472,12 +4524,29 @@ def check_swift(texts, errors):
             "validateLineageKeyArtifactPackageBinding",
             "lineageVerifierKeyEnvelopeCircuitId",
             "lineageProvingKeyArchivePayload",
+            "decodeLineageProvingKeyArchivePayload",
+            "LineageProvingKeyArchive",
+            "kagemushaLineageProvingKeyArchiveSchemaHash",
+            "kagemushaLineageProvingKeyArchiveVersionV1",
+            "kagemushaNoritoCompactLenFlag",
+            "kagemushaNoritoPackedStructFlag",
+            "privacyNoritoFieldBitsetFlag",
+            "readNoritoField",
+            "decodeNoritoString",
+            "decodeNoritoByteVec",
+            "encodedLength > 1",
+            "value < (UInt64(1) << UInt64(7 * (encodedLength - 1)))",
             "verifyingKeyCommitment",
             "kagemushaZk1TlvCid1",
             "kagemushaZk1TlvIpaK",
             "kagemushaZk1TlvH2Vk",
             "archivePayload.range(of: circuitIdBytes)",
             "archivePayload.range(of: verifierKeyCommitment)",
+            "frame.header.schema == kagemushaLineageProvingKeyArchiveSchemaHash",
+            "archive.version == kagemushaLineageProvingKeyArchiveVersionV1",
+            "archive.circuitFamily == proofCircuitId",
+            "archive.verifierKeyCommitment == verifierKeyCommitment",
+            "!archive.provingKey.isEmpty",
             '"proof_circuit_id"',
             '"verifier_opening_len"',
             '"lineage_verifier_key"',
@@ -4493,11 +4562,26 @@ def check_swift(texts, errors):
             "testLineageKeyArtifactPackagesValidateReleaseProfiles",
             "lineageVerifierKey(",
             "lineageProvingKeyArchive(",
+            "lineageProvingKeyArchiveRaw(",
+            "kagemushaLineageProvingKeyArchiveSchemaHash",
+            "oldKagemushaLineageProvingKeyArchiveSchemaHash",
             "verifierKeyCommitment(verifierKey:",
             "appendVerifierKey",
             "duplicateCidVerifierKey",
             "missingCircuitArchive",
+            "smuggledCircuitArchive",
             "wrongCommitmentArchive",
+            "smuggledCommitmentArchive",
+            "wrongVersionArchive",
+            "emptyProvingKeyArchive",
+            "trailingPayloadArchive",
+            "oldSchemaArchive",
+            "packedStructArchive",
+            "fieldBitsetArchive",
+            "overlongVersionLengthArchive",
+            "overlongCircuitStringArchive",
+            "invalidUtf8CircuitArchive",
+            "noritoOverlongCompactLength",
             "Data(\"not-zk1\".utf8)",
             "Data(\"not-norito\".utf8)",
             "lineageVerifierKey: appendVerifierKey",
@@ -5198,6 +5282,16 @@ def check_java_kotlin(texts, errors):
                 "validateLineageKeyArtifactPackageBinding",
                 "lineageVerifierKeyEnvelopeCircuitId",
                 "lineageProvingKeyArchivePayload",
+                "LineageProvingKeyArchive",
+                "decodeLineageProvingKeyArchivePayload",
+                "readNoritoField",
+                "decodeNoritoString",
+                "decodeNoritoByteVec",
+                "KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH",
+                "KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_VERSION_V1",
+                "KAGEMUSHA_NORITO_COMPACT_LEN_FLAG",
+                "KAGEMUSHA_NORITO_PACKED_STRUCT_FLAG",
+                "PRIVACY_NORITO_FIELD_BITSET_FLAG",
                 "verifyingKeyCommitment",
                 "KAGEMUSHA_ZK1_TLV_CID1",
                 "KAGEMUSHA_ZK1_TLV_IPAK",
@@ -5205,6 +5299,9 @@ def check_java_kotlin(texts, errors):
                 "circuitIdBytes",
                 "verifierKeyCommitment",
                 "indexOfSlice",
+                "archive.circuitFamily",
+                "archive.provingKey",
+                "lineageProvingKeyArchive[39]",
                 '"proof_circuit_id"',
                 '"verifier_opening_len"',
                 '"lineage_verifier_key"',
@@ -5583,6 +5680,28 @@ def check_java_kotlin(texts, errors):
         "Kotlin witnessless Reserved-lineage helper bounds",
         errors,
     )
+    require_contains(
+        texts,
+        java,
+        (
+            "final int encodedLength = cursor - offset",
+            "encodedLength > 5",
+            "encodedLength > 1 && value < (1L << (7 * (encodedLength - 1)))",
+        ),
+        "Android Java lineage archive canonical compact length guard",
+        errors,
+    )
+    require_contains(
+        texts,
+        kotlin,
+        (
+            "val encodedLength = cursor - offset",
+            "encodedLength <= 5",
+            "encodedLength <= 1 || value >= (1L shl (7 * (encodedLength - 1)))",
+        ),
+        "Kotlin lineage archive canonical compact length guard",
+        errors,
+    )
     for relative, label in (
         (java_test, "Android Java portable lineage key artifact tests"),
         (kotlin_test, "Kotlin portable lineage key artifact tests"),
@@ -5608,7 +5727,20 @@ def check_java_kotlin(texts, errors):
                 "appendVerifierKey",
                 "duplicateCidVerifierKey",
                 "missingCircuitArchive",
+                "smuggledCircuitArchive",
                 "wrongCommitmentArchive",
+                "smuggledCommitmentArchive",
+                "wrongVersionArchive",
+                "emptyProvingKeyArchive",
+                "trailingPayloadArchive",
+                "oldSchemaArchive",
+                "packedStructArchive",
+                "fieldBitsetArchive",
+                "overlongVersionLengthArchive",
+                "overlongCircuitStringArchive",
+                "invalidUtf8CircuitArchive",
+                "kagemushaOverlongCompactLength",
+                "lineageProvingKeyArchiveRaw",
                 "not-zk1",
                 "not-norito",
                 "exposedVerifierKey",
@@ -5617,6 +5749,26 @@ def check_java_kotlin(texts, errors):
             label,
             errors,
         )
+    require_contains(
+        texts,
+        java_test,
+        (
+            "LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH",
+            "OLD_LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH",
+        ),
+        "Android Java lineage archive schema fixture hashes",
+        errors,
+    )
+    require_contains(
+        texts,
+        kotlin_test,
+        (
+            "lineageProvingKeyArchiveSchemaHash",
+            "oldLineageProvingKeyArchiveSchemaHash",
+        ),
+        "Kotlin lineage archive schema fixture hashes",
+        errors,
+    )
     require_contains(
         texts,
         kotlin,
@@ -5868,6 +6020,12 @@ def check_csharp(texts, errors):
         errors,
     )
     require(
+        "printf 'dotnet --info:\\n'" in script
+        and '"${DOTNET_BIN}" --info' in script,
+        "Kagemusha C# SDK script must emit dotnet --info host evidence",
+        errors,
+    )
+    require(
         'BRIDGE_TARGET_DIR="${KAGEMUSHA_RECURSIVE_SPEND_CSHARP_BRIDGE_TARGET_DIR:-${TMPDIR:-/tmp}/iroha-kagemusha-csharp-native-target}"' in script,
         "Kagemusha C# SDK script must keep an overrideable native bridge target dir",
         errors,
@@ -5891,6 +6049,25 @@ def check_csharp(texts, errors):
         "Kagemusha C# SDK script must verify and print the freshly built native bridge path",
         errors,
     )
+    require(
+        "sha256sum" in script
+        and "shasum -a 256" in script
+        and "connect_norito_bridge native bridge sha256:" in script,
+        "Kagemusha C# SDK script must print the freshly built native bridge SHA-256",
+        errors,
+    )
+    js_parity_test = read(JS_PARITY_TEST_PATH)
+    for marker in (
+        "assertRunnerPrintsDotnetAndBridgeEvidence",
+        "fake cargo bridge build",
+        "connect_norito_bridge native bridge sha256:",
+        "Kagemusha C# SDK runner prints host and bridge evidence before tests",
+    ):
+        require(
+            marker in js_parity_test,
+            f"JavaScript C# SDK runner host/bridge evidence meta-test must contain {marker}",
+            errors,
+        )
     require(
         'export DYLD_LIBRARY_PATH="${BRIDGE_LIBRARY_DIR}${DYLD_LIBRARY_PATH:+:${DYLD_LIBRARY_PATH}}"' in script,
         "Kagemusha C# SDK script must expose the native bridge on macOS loader path",
@@ -6203,12 +6380,22 @@ def check_csharp(texts, errors):
             "ValidateLineageKeyArtifactPackageBinding",
             "LineageVerifierKeyEnvelopeCircuitId",
             "LineageProvingKeyArchivePayload",
+            "DecodeLineageProvingKeyArchivePayload",
+            "KagemushaLineageProvingKeyArchiveSchemaHash",
+            "KagemushaLineageProvingKeyArchiveVersionV1",
+            "KagemushaNoritoPackedStructFlag",
+            "PrivacyNoritoFieldBitsetFlag",
+            "encodedLength > 1",
+            "value < (1UL << (7 * (encodedLength - 1)))",
             "VerifyingKeyCommitment",
             "KagemushaZk1TlvCid1",
             "KagemushaZk1TlvIpaK",
             "KagemushaZk1TlvH2Vk",
             "archivePayload.AsSpan().IndexOf(circuitIdBytes)",
             "archivePayload.AsSpan().IndexOf(verifierKeyCommitment)",
+            "archive.CircuitFamily != proofCircuitId",
+            "archive.VerifierKeyCommitment.AsSpan().SequenceEqual(verifierKeyCommitment)",
+            "archive.ProvingKey.Length == 0",
             '"proof_circuit_id"',
             '"verifier_opening_len"',
             '"lineage_verifier_key"',
@@ -6239,6 +6426,20 @@ def check_csharp(texts, errors):
             "duplicateCidVerifierKey",
             "missingCircuitArchive",
             "wrongCommitmentArchive",
+            "smuggledCircuitArchive",
+            "smuggledCommitmentArchive",
+            "wrongVersionArchive",
+            "emptyProvingKeyArchive",
+            "trailingPayloadArchive",
+            "oldSchemaArchive",
+            "packedStructArchive",
+            "fieldBitsetArchive",
+            "overlongVersionLengthArchive",
+            "overlongCircuitStringArchive",
+            "invalidUtf8CircuitArchive",
+            "KagemushaOverlongCompactLength",
+            "KagemushaLineageProvingKeyArchiveRaw",
+            "KagemushaLineageProvingKeyArchiveSchemaHash",
             "returnedVerifierKey",
             "returnedProvingKeyArchive",
         ),
@@ -8433,6 +8634,22 @@ if mode == "--negative-control-csharp-sdk-dotnet-version-script":
         raise SystemExit(0)
     raise SystemExit("negative control failed: C# SDK dotnet version script drift was not detected")
 
+if mode == "--negative-control-csharp-sdk-dotnet-info-script":
+    target = CSHARP_SDK_TEST_COMMAND
+    original = read(target)
+    mutated = original.replace("printf 'dotnet --info:\\n'\n", "", 1)
+    mutated = mutated.replace('"${DOTNET_BIN}" --info\n', "", 1)
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate C# SDK dotnet info evidence")
+    text_overrides[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        print("negative control rejected C# SDK dotnet info script drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: C# SDK dotnet info script drift was not detected")
+
 if mode == "--negative-control-csharp-sdk-dotnet-override-script":
     target = CSHARP_SDK_TEST_COMMAND
     original = read(target)
@@ -8496,6 +8713,11 @@ if mode == "--negative-control-csharp-sdk-native-library-evidence-script":
     )
     mutated = mutated.replace(
         'printf \'connect_norito_bridge native bridge: %s\\n\' "${BRIDGE_LIBRARY_PATH}"\n',
+        "",
+        1,
+    )
+    mutated = mutated.replace(
+        'printf \'connect_norito_bridge native bridge sha256: %s\\n\' "${BRIDGE_LIBRARY_SHA256}"\n',
         "",
         1,
     )
