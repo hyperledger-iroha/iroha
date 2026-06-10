@@ -794,37 +794,14 @@ test("BSC route-config writes backend-compatible TOML with BSC deployment eviden
   );
   assert.match(
     toml,
-    new RegExp(`source_bridge_address = "${BSC_SOURCE_BRIDGE_ADDRESS}"`, "u"),
-  );
-  assert.match(
-    toml,
     new RegExp(
       `sccp_bsc_source_bridge_address = "${BSC_SOURCE_BRIDGE_ADDRESS}"`,
       "u",
     ),
   );
-  assert.match(
-    toml,
-    new RegExp(
-      `bsc_source_bridge_address = "${BSC_SOURCE_BRIDGE_ADDRESS}"`,
-      "u",
-    ),
-  );
-  assert.match(
-    toml,
-    new RegExp(
-      `sccp_tron_source_bridge_address = "${BSC_SOURCE_BRIDGE_ADDRESS}"`,
-      "u",
-    ),
-  );
-  assert.match(
-    toml,
-    new RegExp(`destination_verifier_address = "${BSC_VERIFIER_ADDRESS}"`, "u"),
-  );
-  assert.match(
-    toml,
-    new RegExp(`verifier_address = "${BSC_VERIFIER_ADDRESS}"`, "u"),
-  );
+  assert.doesNotMatch(toml, /(^|\n)source_bridge_address =/u);
+  assert.doesNotMatch(toml, /(^|\n)bsc_source_bridge_address =/u);
+  assert.doesNotMatch(toml, /(^|\n)sccp_tron_source_bridge_address =/u);
   assert.match(
     toml,
     new RegExp(
@@ -832,21 +809,14 @@ test("BSC route-config writes backend-compatible TOML with BSC deployment eviden
       "u",
     ),
   );
-  assert.match(
-    toml,
-    new RegExp(`bsc_verifier_address = "${BSC_VERIFIER_ADDRESS}"`, "u"),
-  );
-  assert.match(
-    toml,
-    new RegExp(`evm_verifier_address = "${BSC_VERIFIER_ADDRESS}"`, "u"),
-  );
-  assert.match(
-    toml,
-    new RegExp(`tron_verifier_address = "${BSC_VERIFIER_ADDRESS}"`, "u"),
-  );
+  assert.doesNotMatch(toml, /(^|\n)destination_verifier_address =/u);
+  assert.doesNotMatch(toml, /(^|\n)verifier_address =/u);
+  assert.doesNotMatch(toml, /(^|\n)bsc_verifier_address =/u);
+  assert.doesNotMatch(toml, /(^|\n)evm_verifier_address =/u);
+  assert.doesNotMatch(toml, /(^|\n)tron_verifier_address =/u);
   assert.match(toml, new RegExp(`proof_artifact_hash = "${HASH_44}"`, "u"));
-  assert.match(toml, new RegExp(`prover_artifact_hash = "${HASH_44}"`, "u"));
-  assert.match(toml, new RegExp(`circuit_artifact_hash = "${HASH_44}"`, "u"));
+  assert.doesNotMatch(toml, /(^|\n)prover_artifact_hash =/u);
+  assert.doesNotMatch(toml, /(^|\n)circuit_artifact_hash =/u);
   assert.match(toml, new RegExp(`proving_key_hash = "${HASH_55}"`, "u"));
   assert.doesNotMatch(toml, /native_evm_prover_bundle_hash/u);
   assert.match(
@@ -1981,16 +1951,15 @@ test("BSC route-config command writes an operator overlay", async () => {
   assert.match(toml, /route_id = "taira_bsc_xor"/u);
   assert.match(
     toml,
-    /source_bridge_address = "0x3333333333333333333333333333333333333333"/u,
+    /sccp_bsc_source_bridge_address = "0x3333333333333333333333333333333333333333"/u,
   );
   assert.match(
     toml,
-    /destination_verifier_address = "0x4444444444444444444444444444444444444444"/u,
+    /sccp_bsc_destination_verifier_address = "0x4444444444444444444444444444444444444444"/u,
   );
-  assert.match(
-    toml,
-    /tron_verifier_address = "0x4444444444444444444444444444444444444444"/u,
-  );
+  assert.doesNotMatch(toml, /(^|\n)source_bridge_address =/u);
+  assert.doesNotMatch(toml, /(^|\n)destination_verifier_address =/u);
+  assert.doesNotMatch(toml, /(^|\n)tron_verifier_address =/u);
 });
 
 test("BSC route-config command refuses draft manifests in the canonical default output", async () => {
