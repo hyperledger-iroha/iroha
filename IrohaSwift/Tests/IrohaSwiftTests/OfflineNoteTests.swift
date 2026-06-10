@@ -15,7 +15,7 @@ final class OfflineNoteTests: XCTestCase {
             try sender.payloadHash().hexLowercased(),
             fixture.chainVectors.certificates.senderPayloadHash
         )
-        XCTAssertTrue(try verifier.verifyCertificate(sender))
+        XCTAssertTrue(try verifier.verifyIssuerCertificate(sender))
 
         var tamperedSignature = sender.issuerSignature
         tamperedSignature[tamperedSignature.startIndex] ^= 0x01
@@ -33,11 +33,11 @@ final class OfflineNoteTests: XCTestCase {
             oneUse: sender.oneUse,
             issuerSignature: tamperedSignature
         )
-        XCTAssertFalse(try verifier.verifyCertificate(tampered))
-        XCTAssertFalse(try RejectingOfflineNoteCertificateVerifier().verifyCertificate(sender))
+        XCTAssertFalse(try verifier.verifyIssuerCertificate(tampered))
+        XCTAssertFalse(try RejectingOfflineNoteCertificateVerifier().verifyIssuerCertificate(sender))
         XCTAssertFalse(try Ed25519OfflineNoteCertificateVerifier(
             trustedIssuerPublicKeys: [Data(repeating: 0x42, count: 32)]
-        ).verifyCertificate(sender))
+        ).verifyIssuerCertificate(sender))
     }
 
     func testOfflineNoteModelsMatchRustNoritoVectors() throws {
