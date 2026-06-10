@@ -1546,6 +1546,42 @@ public final class OfflineNoteWallet {
         self.clock = clock
     }
 
+    public static func p2pEnabled(
+        chainId: String,
+        accountId: String,
+        attestationProvider: OfflineNoteAttestationProvider,
+        store: OfflineNoteStore = InMemoryOfflineNoteStore(),
+        issuerClient: OfflineNoteIssuerClient? = nil,
+        transactionSubmitter: OfflineNoteTransactionSubmitter? = nil,
+        syncResolver: OfflineNoteSyncResolver? = nil,
+        proofProvider: OfflineNoteProofProvider,
+        proofVerifier: OfflineNoteProofVerifier = Halo2OfflineNoteProofVerifier(),
+        certificateVerifier: OfflineNoteCertificateVerifier,
+        ownerCertificateSigner: OfflineNoteOwnerCertificateSigner,
+        randomSource: OfflineNoteRandomSource = SecureOfflineNoteRandomSource(),
+        idGenerator: OfflineNoteIdGenerator = UuidOfflineNoteIdGenerator(),
+        bearerCashPolicy: OfflineBearerCashPolicyV1 = .default,
+        clock: @escaping () -> UInt64 = { UInt64(Date().timeIntervalSince1970 * 1000) }
+    ) -> OfflineNoteWallet {
+        OfflineNoteWallet(
+            chainId: chainId,
+            accountId: accountId,
+            attestationProvider: attestationProvider,
+            store: store,
+            issuerClient: issuerClient,
+            transactionSubmitter: transactionSubmitter,
+            syncResolver: syncResolver,
+            proofProvider: proofProvider,
+            proofVerifier: proofVerifier,
+            certificateVerifier: certificateVerifier,
+            ownerCertificateSigner: ownerCertificateSigner,
+            randomSource: randomSource,
+            idGenerator: idGenerator,
+            bearerCashPolicy: bearerCashPolicy,
+            clock: clock
+        )
+    }
+
     public func listNotes() throws -> [OfflineNoteWalletNote] {
         try store.listNotes()
     }
