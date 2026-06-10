@@ -1,3 +1,4 @@
+import argparse
 import contextlib
 import base64
 import importlib.util
@@ -396,6 +397,58 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                 self.assertIn(expected, message)
                 self.assertNotIn(raw, message)
 
+    def test_overlong_bundle_strings_are_rejected_without_echo(self):
+        overlong = "M" * (VERIFIER.MAX_CLEAN_STRING_CHARS + 1)
+        cases = (
+            (
+                "required",
+                lambda: VERIFIER._required_string(
+                    {"authority": overlong}, "authority", "bundle.source"
+                ),
+                f"bundle.source.authority must be no longer than {VERIFIER.MAX_CLEAN_STRING_CHARS} characters",
+            ),
+            (
+                "optional",
+                lambda: VERIFIER._optional_string(
+                    {"label": overlong}, "label", "bundle.x509_trust_anchors[0]"
+                ),
+                f"bundle.x509_trust_anchors[0].label must be no longer than {VERIFIER.MAX_CLEAN_STRING_CHARS} characters",
+            ),
+            (
+                "oid",
+                lambda: VERIFIER._oid_list(
+                    {"x509_required_certificate_policy_oids": [overlong]},
+                    "x509_required_certificate_policy_oids",
+                    "bundle",
+                ),
+                f"bundle.x509_required_certificate_policy_oids[0] must be no longer than {VERIFIER.MAX_CLEAN_STRING_CHARS} characters",
+            ),
+        )
+        for name, call, expected in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(VERIFIER.TrustBundleError) as caught:
+                    call()
+
+                message = str(caught.exception)
+                self.assertIn(expected, message)
+                self.assertNotIn(overlong, message)
+
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            bundle = valid_bundle()
+            bundle["environment"] = overlong
+            path = write_bundle(root, bundle)
+
+            rc, stdout, stderr = run_verify(["--bundle", str(path)])
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn(
+                f".environment must be no longer than {VERIFIER.MAX_CLEAN_STRING_CHARS} characters",
+                stderr,
+            )
+            self.assertNotIn(overlong, stderr)
+
     def test_url_paths_reject_raw_delimiter_smuggling(self):
         cases = (
             "https://pki.local-bank.bank/source:debug",
@@ -634,6 +687,66 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                     self.assertEqual(stdout, "")
                     self.assertIn(message, stderr)
 
+    def test_direct_run_paths_reject_smuggling_before_bundle_loading(self):
+        def args_for(root, **overrides):
+            values = {
+                "bundle": [root / "missing-bundle.json"],
+                "summary_out": root / "trust.summary.json",
+                "emit_profile_json": None,
+                "allow_record_only": False,
+                "allow_insecure_source_url": False,
+                "allow_synthetic_der": False,
+                "max_source_age_days": None,
+            }
+            values.update(overrides)
+            return argparse.Namespace(**values)
+
+        cases = (
+            (
+                "bundle whitespace",
+                lambda root: args_for(root, bundle=[root / "trust bundle.json"]),
+                "--bundle[0] must not contain whitespace",
+            ),
+            (
+                "profile parent",
+                lambda root: args_for(
+                    root,
+                    emit_profile_json=root / "nested" / ".." / "profiles.json",
+                ),
+                "output path must not contain dot or parent segments",
+            ),
+            (
+                "summary leading dash",
+                lambda root: args_for(
+                    root,
+                    summary_out=root / "nested" / "-trust.summary.json",
+                ),
+                "output path must not contain leading-dash path segments",
+            ),
+        )
+        for name, make_args, message in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+
+                    with self.assertRaises(VERIFIER.TrustBundleError) as caught:
+                        VERIFIER.run(make_args(root))
+
+                    error = str(caught.exception)
+                    self.assertIn(message, error)
+                    self.assertNotIn("does not exist", error)
+
+        for bundle in (None, []):
+            with self.subTest(bundle=bundle):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+
+                    with self.assertRaisesRegex(
+                        VERIFIER.TrustBundleError,
+                        "provide at least one --bundle",
+                    ):
+                        VERIFIER.run(args_for(root, bundle=bundle))
+
     def test_secret_looking_cli_paths_are_rejected_before_summary_output(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -728,6 +841,62 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertEqual(stdout, "")
                     self.assertIn(message, stderr)
+
+    def test_output_files_reject_repository_fixture_artifacts(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            output_path = root / "fixtures" / "iso20022" / "trust.summary.json"
+
+            with self.assertRaisesRegex(
+                VERIFIER.TrustBundleError,
+                "output path must not point to checked-in ISO fixture artifacts",
+            ):
+                VERIFIER._write_text_output(output_path, "{}\n")
+
+            self.assertFalse((root / "fixtures").exists())
+            with self.assertRaisesRegex(
+                VERIFIER.TrustBundleError,
+                "output path must not point to checked-in ISO fixture artifacts",
+            ):
+                VERIFIER._reject_repository_output_path(
+                    Path("fixtures/iso20022/trust.summary.json"),
+                    "output path",
+                )
+
+    def test_output_files_reject_repository_fixture_before_bundle_loading(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            cases = (
+                (
+                    "summary",
+                    "--summary-out",
+                    root / "fixtures" / "iso20022" / "trust.summary.json",
+                ),
+                (
+                    "profile",
+                    "--emit-profile-json",
+                    root / "fixtures" / "iso20022" / "trust-profile.json",
+                ),
+            )
+            for name, flag, output_path in cases:
+                with self.subTest(name=name):
+                    rc, stdout, stderr = run_verify(
+                        [
+                            "--bundle",
+                            str(root / f"missing-{name}-trust-bundle.json"),
+                            flag,
+                            str(output_path),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(
+                        "output path must not point to checked-in ISO fixture artifacts",
+                        stderr,
+                    )
+                    self.assertNotIn("does not exist", stderr)
+                    self.assertFalse((root / "fixtures").exists())
 
     def test_hardlinked_output_files_are_rejected(self):
         cases = (

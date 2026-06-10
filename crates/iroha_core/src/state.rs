@@ -53806,8 +53806,7 @@ mod tests {
                 MintRequestCanceledAt[sequence] = canceled_at_ms;
               }
 
-              fn main() {
-                let ev = trigger_event();
+              fn main_impl(ev: Json) {
                 let action_key = name("action");
                 let request_id_key = name("request_id");
                 let fi_id_key = name("fi_id");
@@ -53849,6 +53848,10 @@ mod tests {
                 }
 
                 assert(false, "unsupported staged mint action");
+              }
+
+              kotoage fn main(ev: Json) permission(staged_mint_request_run) {
+                main_impl(ev);
               }
             }
         "#;
@@ -54093,8 +54096,7 @@ mod tests {
 
         let src = r#"
             seiyaku AliasTransfer {
-              fn main() {
-                let ev = trigger_event();
+              fn main_impl(ev: Json) {
                 if (ev.get_name(name("kind")) != name("asset_change")) {
                   return;
                 }
@@ -54114,6 +54116,10 @@ mod tests {
                 }
                 transfer_asset(dst, src, asset_definition("__ROSE_ASSET_DEFINITION_ID__"), amount);
                 transfer_asset(src, dst, asset_definition("__GOLD_ASSET_DEFINITION_ID__"), payout);
+              }
+
+              kotoage fn main(ev: Json) permission(alias_transfer_run) {
+                main_impl(ev);
               }
             }
         "#

@@ -1722,9 +1722,16 @@ def test_normalizes_solana_sccp_witness_input_for_local_proof_requests() -> None
         sample_witness(blockhash=witness["blockhash"])
     )
     assert build_solana_sccp_proof_request(
-        sample_witness()
+        sample_witness(
+            source_adapter_deployment_hash=HEX32_A,
+            source_adapter_deployment_receipt_hash=HEX32_B,
+        )
     )["witness_hash"] == build_solana_sccp_proof_request(
-        sample_witness(blockhash=witness["blockhash"])
+        sample_witness(
+            blockhash=witness["blockhash"],
+            source_adapter_deployment_hash=HEX32_A,
+            source_adapter_deployment_receipt_hash=HEX32_B,
+        )
     )["witness_hash"]
     assert witness[
         "accounts_lt_hash_proof_public_inputs_hash"
@@ -7240,7 +7247,12 @@ def test_derives_groth16_bn254_public_signal_words_for_destination_verifiers() -
 
 
 def test_builds_deterministic_solana_sccp_proof_requests() -> None:
-    request = build_solana_sccp_proof_request(sample_witness())
+    request = build_solana_sccp_proof_request(
+        sample_witness(
+            source_adapter_deployment_hash=HEX32_A,
+            source_adapter_deployment_receipt_hash=HEX32_B,
+        )
+    )
 
     assert request["version"] == 1
     assert request["backend"] == SCCP_SOLANA_RECURSIVE_PROOF_BACKEND_V1
@@ -7263,16 +7275,16 @@ def test_builds_deterministic_solana_sccp_proof_requests() -> None:
         == SCCP_SOLANA_MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1
     )
     assert request["public_inputs"]["source_state_verifier_hash"] == SCCP_ZERO_HASH_V1
-    assert request["public_inputs"]["source_adapter_deployment_hash"] == SCCP_ZERO_HASH_V1
+    assert request["public_inputs"]["source_adapter_deployment_hash"] == HEX32_A
     assert (
-        request["public_inputs"]["source_adapter_deployment_receipt_hash"] == SCCP_ZERO_HASH_V1
+        request["public_inputs"]["source_adapter_deployment_receipt_hash"] == HEX32_B
     )
     assert request["source_adapter_deployment_binding"] == {
         "version": 1,
         "source_domain": SCCP_DOMAIN_SOL,
         "target_domain": SCCP_DOMAIN_SORA,
-        "source_adapter_deployment_hash": SCCP_ZERO_HASH_V1,
-        "source_adapter_deployment_receipt_hash": SCCP_ZERO_HASH_V1,
+        "source_adapter_deployment_hash": HEX32_A,
+        "source_adapter_deployment_receipt_hash": HEX32_B,
     }
     assert request["proof_context"] == {
         "version": 1,
@@ -7280,13 +7292,13 @@ def test_builds_deterministic_solana_sccp_proof_requests() -> None:
         "destination_binding_hash": HEX32_H,
     }
     assert request["witness_hash"] == (
-        "0x42db5036040f5ae4873123e3296f94df360a50d29634bb4ee3620667fadf9b61"
+        "0xdafdb1bef21767aba8679ee048e6bf1064ace0ce969631f83ced01540de51431"
     )
     assert request["proof_context_hash"] == (
         "0x3301998ef4dccab62a62dc2be0b5f6b3e3a876344c67200dcbe6f751165d9679"
     )
     assert request["source_adapter_deployment_binding_hash"] == (
-        "0x199859d1da5915d5d17df51a97c9df8ac9c375c0093230e4faac5476ab416e6a"
+        "0xb34583055ea208331c3110bda5eac354d46a1d01b8e76d6a2b8cc3163c3e6bdf"
     )
     assert request["proof_context_hash"] == solana_sccp_proof_context_hash(
         request["proof_context"]
@@ -7355,6 +7367,14 @@ def test_rejects_unexpected_solana_source_state_verifier_profile() -> None:
 
 
 def test_binds_source_adapter_deployment_context_for_ui_provers() -> None:
+    zero_binding = normalize_sccp_source_adapter_deployment_binding({})
+    assert zero_binding["source_adapter_deployment_hash"] == SCCP_ZERO_HASH_V1
+    assert (
+        zero_binding["source_adapter_deployment_receipt_hash"] == SCCP_ZERO_HASH_V1
+    )
+    with pytest.raises(TypeError, match="requires non-zero source adapter deployment binding"):
+        build_solana_sccp_proof_request(sample_witness())
+
     binding = normalize_sccp_source_adapter_deployment_binding(
         {
             "source_domain": SCCP_DOMAIN_SOL,
@@ -10547,7 +10567,7 @@ def test_solana_sccp_prover_requires_linked_engine() -> None:
     prover = SolanaSccpProver()
 
     with pytest.raises(SolanaSccpProverUnavailableError) as exc:
-        asyncio.run(prover.prove(sample_witness()))
+        asyncio.run(prover.prove(sample_production_witness()))
 
     assert exc.value.code == "ERR_SCCP_SOLANA_PROVER_UNAVAILABLE"
 
@@ -10702,7 +10722,14 @@ def test_solana_sccp_prover_wraps_externally_generated_proof_bytes() -> None:
         )
 
     with pytest.raises(TypeError, match="sourceStateVerifierHash must not be zero"):
-        asyncio.run(SolanaSccpProver(prove=unexpected_prover).prove(sample_witness()))
+        asyncio.run(
+            SolanaSccpProver(prove=unexpected_prover).prove(
+                sample_witness(
+                    source_adapter_deployment_hash=HEX32_A,
+                    source_adapter_deployment_receipt_hash=HEX32_B,
+                )
+            )
+        )
 
     with pytest.raises(TypeError, match="Solana template verifier hash"):
         asyncio.run(

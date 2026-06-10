@@ -23,7 +23,7 @@ BLS_NORMAL_ALGORITHM: Final[str] = "bls_normal"
 BLS_SMALL_ALGORITHM: Final[str] = "bls_small"
 SM2_ALGORITHM: Final[str] = "sm2"
 PRIVACY_FFI_VERSION_V1: Final[int] = 1
-PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: Final[int] = 6
+PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: Final[int] = 7
 PRIVACY_NATIVE_ARCHIVE_MAX_BYTES: Final[int] = 64 * 1024 * 1024
 PRIVACY_FFI_STATUS_ERROR: Final[int] = 1
 PRIVACY_FFI_ERROR_NULL_POINTER: Final[int] = 1
@@ -160,6 +160,7 @@ __all__ = [
     "zk_ace_build_transfer_authorization_v1",
     "privacy_bridge_abi_version",
     "is_privacy_native_available",
+    "privacy_proof_request_v1",
     "privacy_capabilities_v1",
     "privacy_build_proof_v1",
     "privacy_verify_proof_v1",
@@ -1245,6 +1246,28 @@ def _clear_privacy_native_output(result: object) -> None:
         return
 
 
+def _privacy_request_component_bytes(
+    value: bytes | bytearray | memoryview,
+    name: str,
+    *,
+    allow_empty: bool,
+) -> bytes:
+    if isinstance(value, str):
+        raise TypeError(f"{name} must be bytes-like, not a string")
+    view = _privacy_unsigned_byte_view(
+        value,
+        bytes_like_message=f"{name} must be bytes-like",
+        typed_message=f"{name} must use unsigned byte elements",
+    )
+    if not allow_empty and view.nbytes == 0:
+        raise ValueError(f"{name} must not be empty")
+    if view.nbytes > PRIVACY_NATIVE_ARCHIVE_MAX_BYTES:
+        raise ValueError(
+            f"{name} must not exceed {PRIVACY_NATIVE_ARCHIVE_MAX_BYTES} bytes"
+        )
+    return view.tobytes()
+
+
 def _privacy_crc64_table() -> tuple[int, ...]:
     table: list[int] = []
     for index in range(256):
@@ -1357,10 +1380,12 @@ def _privacy_expected_result_schema_byte(operation: str) -> int:
 
 _PRIVACY_NATIVE_METHODS: Final[tuple[str, ...]] = (
     "privacy_capabilities_v1",
+    "privacy_proof_request_v1",
     "privacy_build_proof_v1",
     "privacy_verify_proof_v1",
 )
 _PRIVACY_BRIDGE_ABI_VERSION_METHOD: Final[str] = "privacy_bridge_abi_version"
+_PRIVACY_PYO3_BYTES_CAST_ERROR_FRAGMENT: Final[str] = "cannot be cast as 'bytes'"
 _PRIVACY_NATIVE_AVAILABILITY_PROBE_ARCHIVE: Final[bytes] = (
     b"NRT0\x00\x00"
     + bytes([_PRIVACY_REQUEST_SCHEMA_BYTE]) * 16
@@ -1424,6 +1449,21 @@ def _privacy_native_method(operation: str):
     return method
 
 
+def _call_privacy_native_method(method: object, *args: object) -> object:
+    if not callable(method):
+        raise TypeError("privacy native method is not callable")
+    try:
+        return method(*args)
+    except TypeError as exc:
+        if (
+            args
+            and isinstance(args[0], bytearray)
+            and _PRIVACY_PYO3_BYTES_CAST_ERROR_FRAGMENT in str(exc)
+        ):
+            return method(bytes(args[0]))
+        raise
+
+
 def _privacy_native_probe_returns_bytes(
     module: object,
     operation: str,
@@ -1436,9 +1476,9 @@ def _privacy_native_probe_returns_bytes(
     result: object | None = None
     try:
         if request is None:
-            result = method()
+            result = _call_privacy_native_method(method)
         else:
-            result = method(request)
+            result = _call_privacy_native_method(method, request)
         _privacy_output_archive(operation, result)
         return True
     except Exception:
@@ -1449,11 +1489,46 @@ def _privacy_native_probe_returns_bytes(
             _clear_privacy_request_archive(request)
 
 
+def _privacy_proof_request_native_probe_returns_bytes(module: object) -> bool:
+    method = getattr(module, "privacy_proof_request_v1", None)
+    if not callable(method):
+        return False
+    public_inputs = bytearray(b"public-inputs")
+    result: object | None = None
+    try:
+        result = _call_privacy_native_method(
+            method,
+            "verange-transparent-range-v1",
+            "buildVeRangeProofV1",
+            "bulletproofs:verange_transparent_range_v1",
+            public_inputs,
+            b"",
+            b"",
+        )
+        view = _privacy_unsigned_byte_view(
+            result,
+            bytes_like_message="native privacy_proof_request_v1 returned non-byte output",
+            typed_message="native privacy_proof_request_v1 output must use unsigned byte elements",
+        )
+        request_archive = view.tobytes()
+        _assert_privacy_norito_archive(
+            "privacy_proof_request_v1",
+            request_archive,
+            expected_schema_byte=_PRIVACY_REQUEST_SCHEMA_BYTE,
+        )
+        return True
+    except Exception:
+        return False
+    finally:
+        _clear_privacy_native_output(result)
+        _clear_privacy_request_archive(public_inputs)
+
+
 def _invoke_privacy_native(operation: str, *args: object) -> object:
     method = _privacy_native_method(operation)
     failed = False
     try:
-        return method(*args)
+        return _call_privacy_native_method(method, *args)
     except Exception:
         failed = True
     if failed:
@@ -1479,6 +1554,8 @@ def is_privacy_native_available() -> bool:
     return _has_privacy_bridge_abi(_crypto) and all(
         _privacy_native_probe_returns_bytes(_crypto, operation)
         if operation == "privacy_capabilities_v1"
+        else _privacy_proof_request_native_probe_returns_bytes(_crypto)
+        if operation == "privacy_proof_request_v1"
         else _privacy_native_probe_returns_bytes(
             _crypto,
             operation,
@@ -1507,6 +1584,59 @@ def privacy_capabilities_v1() -> bytes:
         "privacy_capabilities_v1",
         _invoke_privacy_native("privacy_capabilities_v1"),
     )
+
+
+def privacy_proof_request_v1(
+    *,
+    algorithm_id: str,
+    entrypoint: str,
+    vk_ref: str,
+    public_inputs: bytes | bytearray | memoryview,
+    witness: bytes | bytearray | memoryview = b"",
+    proof: bytes | bytearray | memoryview = b"",
+) -> bytes:
+    """Encode a Norito V1 `PrivacyProofRequest` for the native build/verify FFI."""
+
+    public_inputs_bytes = _privacy_request_component_bytes(
+        public_inputs,
+        "public_inputs",
+        allow_empty=False,
+    )
+    witness_bytes = _privacy_request_component_bytes(
+        witness,
+        "witness",
+        allow_empty=True,
+    )
+    proof_bytes = _privacy_request_component_bytes(
+        proof,
+        "proof",
+        allow_empty=True,
+    )
+    method = _privacy_native_method("privacy_proof_request_v1")
+    archive = method(
+        str(algorithm_id),
+        str(entrypoint),
+        str(vk_ref),
+        public_inputs_bytes,
+        witness_bytes,
+        proof_bytes,
+    )
+    view = _privacy_unsigned_byte_view(
+        archive,
+        bytes_like_message="native privacy_proof_request_v1 returned non-byte output",
+        typed_message="native privacy_proof_request_v1 output must use unsigned byte elements",
+    )
+    if view.nbytes == 0:
+        raise RuntimeError("native privacy_proof_request_v1 returned empty output")
+    if view.nbytes > PRIVACY_NATIVE_ARCHIVE_MAX_BYTES:
+        raise RuntimeError("native privacy_proof_request_v1 returned oversized output")
+    request_archive = view.tobytes()
+    _assert_privacy_norito_archive(
+        "privacy_proof_request_v1",
+        request_archive,
+        expected_schema_byte=_PRIVACY_REQUEST_SCHEMA_BYTE,
+    )
+    return request_archive
 
 
 def privacy_build_proof_v1(request_archive: bytes | bytearray | memoryview) -> bytes:

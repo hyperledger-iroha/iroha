@@ -2337,6 +2337,12 @@ def test_release_readiness_report_guards_active_launch_checklist_schema_gate_inv
         in error
         for error in errors
     )
+    assert any(
+        "SCCP active-launch checklist schema source inventory" in error
+        and "missing marker: source verifier material hash must not reuse source adapter engine deployment hash"
+        in error
+        for error in errors
+    )
 
 
 def test_release_readiness_report_guards_release_manifest_readiness_flags_gate_inventory(
@@ -9653,6 +9659,11 @@ def test_release_readiness_report_blocks_malformed_active_route_allowlist_bindin
             "route allowlist source adapter engine deployment hash must be a canonical non-zero bytes32 hex string",
         ),
         (
+            "source_record_hashes.hash_reuse",
+            None,
+            "route allowlist source verifier material hash must not reuse source adapter engine deployment hash",
+        ),
+        (
             "destination_binding.destination_binding_hash",
             "0x" + "00" * 32,
             "route allowlist destination binding hash must be a canonical non-zero bytes32 hex string",
@@ -9671,6 +9682,11 @@ def test_release_readiness_report_blocks_malformed_active_route_allowlist_bindin
         if path == "route_allowlist.hash_mismatch":
             route_allowlist["expected_route_allowlist_hash"] = value
             route_allowlist["expected_route_allowlist_hash_matches"] = True
+        elif path == "source_record_hashes.hash_reuse":
+            source_hashes = active_lane["source_record_hashes"]
+            source_hashes["source_adapter_engine_deployment_hash"] = source_hashes[
+                "source_verifier_material_hash"
+            ]
         else:
             section, field = path.split(".", 1)
             target = active_lane[section]
@@ -9709,6 +9725,11 @@ def test_release_readiness_report_blocks_malformed_active_governed_deployment_me
             "source_record_hashes.source_adapter_engine_deployment_hash",
             fixed_hex32(0x51).upper(),
             "governed deployment source adapter engine deployment hash must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "source_record_hashes.hash_reuse",
+            None,
+            "governed deployment source verifier material hash must not reuse source adapter engine deployment hash",
         ),
         (
             "destination_binding.destination_binding_hash",
@@ -9765,7 +9786,12 @@ def test_release_readiness_report_blocks_malformed_active_governed_deployment_me
         )
         active_lane = report._active_launch_lane(evidence_summary)
         assert active_lane is not None
-        if path == "destination_binding.hash_mismatch":
+        if path == "source_record_hashes.hash_reuse":
+            source_hashes = active_lane["source_record_hashes"]
+            source_hashes["source_adapter_engine_deployment_hash"] = source_hashes[
+                "source_verifier_material_hash"
+            ]
+        elif path == "destination_binding.hash_mismatch":
             active_lane["destination_binding"]["expected_destination_binding_hash"] = (
                 value
             )

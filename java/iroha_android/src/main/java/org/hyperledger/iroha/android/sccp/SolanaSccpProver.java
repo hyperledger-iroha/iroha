@@ -4158,6 +4158,10 @@ public final class SolanaSccpProver {
             witness.targetDomain(),
             witness.sourceAdapterDeploymentHash(),
             witness.sourceAdapterDeploymentReceiptHash());
+    if (ZERO_HASH_V1.equals(deploymentBinding.sourceAdapterDeploymentHash())) {
+      throw new IllegalArgumentException(
+          "Solana SCCP proof request requires non-zero source adapter deployment binding");
+    }
     final String deploymentBindingHash = sourceAdapterDeploymentBindingHash(deploymentBinding);
     return new ProofRequest(
         1,

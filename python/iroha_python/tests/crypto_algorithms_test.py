@@ -38,6 +38,7 @@ from iroha_python.crypto import (
     privacy_bridge_abi_version,
     privacy_build_proof_v1,
     privacy_capabilities_v1,
+    privacy_proof_request_v1,
     privacy_verify_proof_v1,
     private_key_multihash,
     public_key_multihash,
@@ -312,10 +313,27 @@ def _malformed_privacy_request_archives() -> tuple[bytes, ...]:
 
 class _FakePrivacyNative:
     def privacy_bridge_abi_version(self) -> int:
-        return PRIVACY_REQUIRED_BRIDGE_ABI_VERSION + 1
+        return PRIVACY_REQUIRED_BRIDGE_ABI_VERSION
 
     def privacy_capabilities_v1(self) -> bytes:
         return _PRIVACY_CAPABILITIES_ARCHIVE
+
+    def privacy_proof_request_v1(
+        self,
+        algorithm_id: str,
+        entrypoint: str,
+        vk_ref: str,
+        public_inputs: bytes,
+        witness: bytes,
+        proof: bytes,
+    ) -> bytes:
+        assert algorithm_id
+        assert entrypoint
+        assert vk_ref
+        assert public_inputs
+        assert witness == b""
+        assert proof == b""
+        return _PRIVACY_REQUEST_ARCHIVE
 
     def privacy_build_proof_v1(self, request_archive: bytes) -> bytes:
         assert request_archive
@@ -333,6 +351,17 @@ class _FakePrivacyNativeMustNotDispatch:
     def privacy_capabilities_v1(self) -> bytes:
         pytest.fail("invalid privacy request must not call native capabilities")
 
+    def privacy_proof_request_v1(
+        self,
+        algorithm_id: str,
+        entrypoint: str,
+        vk_ref: str,
+        public_inputs: bytes,
+        witness: bytes,
+        proof: bytes,
+    ) -> bytes:
+        pytest.fail("invalid privacy request must not call native request builder")
+
     def privacy_build_proof_v1(self, request_archive: bytes) -> bytes:
         pytest.fail("invalid privacy request must not call native build")
 
@@ -346,6 +375,23 @@ class _FakeTextPrivacyNative:
 
     def privacy_capabilities_v1(self) -> str:
         return "json is not a Norito archive"
+
+    def privacy_proof_request_v1(
+        self,
+        algorithm_id: str,
+        entrypoint: str,
+        vk_ref: str,
+        public_inputs: bytes,
+        witness: bytes,
+        proof: bytes,
+    ) -> str:
+        assert algorithm_id
+        assert entrypoint
+        assert vk_ref
+        assert public_inputs
+        assert witness == b""
+        assert proof == b""
+        return "not bytes"
 
     def privacy_build_proof_v1(self, request_archive: bytes) -> str:
         assert request_archive == _PRIVACY_REQUEST_ARCHIVE
@@ -361,6 +407,23 @@ class _FakeNoOutputPrivacyNative:
         return PRIVACY_REQUIRED_BRIDGE_ABI_VERSION
 
     def privacy_capabilities_v1(self) -> None:
+        return None
+
+    def privacy_proof_request_v1(
+        self,
+        algorithm_id: str,
+        entrypoint: str,
+        vk_ref: str,
+        public_inputs: bytes,
+        witness: bytes,
+        proof: bytes,
+    ) -> None:
+        assert algorithm_id
+        assert entrypoint
+        assert vk_ref
+        assert public_inputs
+        assert witness == b""
+        assert proof == b""
         return None
 
     def privacy_build_proof_v1(self, request_archive: bytes) -> bytes:
@@ -379,6 +442,23 @@ class _FakeOversizedOutputPrivacyNative:
     def privacy_capabilities_v1(self) -> bytes:
         return bytes([0x7F]) * (len(_PRIVACY_REQUEST_ARCHIVE) + 1)
 
+    def privacy_proof_request_v1(
+        self,
+        algorithm_id: str,
+        entrypoint: str,
+        vk_ref: str,
+        public_inputs: bytes,
+        witness: bytes,
+        proof: bytes,
+    ) -> bytes:
+        assert algorithm_id
+        assert entrypoint
+        assert vk_ref
+        assert public_inputs
+        assert witness == b""
+        assert proof == b""
+        return bytes([0x7F]) * (len(_PRIVACY_REQUEST_ARCHIVE) + 1)
+
     def privacy_build_proof_v1(self, request_archive: bytes) -> bytes:
         assert request_archive
         return bytes([0x7F]) * (len(_PRIVACY_REQUEST_ARCHIVE) + 1)
@@ -394,6 +474,23 @@ class _FakeListOutputPrivacyNative:
 
     def privacy_capabilities_v1(self) -> list[int]:
         return [0x50, 0x01]
+
+    def privacy_proof_request_v1(
+        self,
+        algorithm_id: str,
+        entrypoint: str,
+        vk_ref: str,
+        public_inputs: bytes,
+        witness: bytes,
+        proof: bytes,
+    ) -> list[int]:
+        assert algorithm_id
+        assert entrypoint
+        assert vk_ref
+        assert public_inputs
+        assert witness == b""
+        assert proof == b""
+        return [0x52]
 
     def privacy_build_proof_v1(self, request_archive: bytes) -> list[int]:
         assert request_archive == _PRIVACY_REQUEST_ARCHIVE
@@ -411,6 +508,23 @@ class _FakeTypedOutputPrivacyNative:
     def privacy_capabilities_v1(self) -> array[int]:
         return _signed_byte_array(_PRIVACY_CAPABILITIES_ARCHIVE)
 
+    def privacy_proof_request_v1(
+        self,
+        algorithm_id: str,
+        entrypoint: str,
+        vk_ref: str,
+        public_inputs: bytes,
+        witness: bytes,
+        proof: bytes,
+    ) -> memoryview:
+        assert algorithm_id
+        assert entrypoint
+        assert vk_ref
+        assert public_inputs
+        assert witness == b""
+        assert proof == b""
+        return memoryview(array("H", [0x5252] * 24))
+
     def privacy_build_proof_v1(self, request_archive: bytes) -> memoryview:
         assert request_archive == _PRIVACY_REQUEST_ARCHIVE
         return memoryview(array("H", [0x4242] * 24))
@@ -423,6 +537,7 @@ class _FakeTypedOutputPrivacyNative:
 class _FakeMutableOutputPrivacyNative:
     def __init__(self) -> None:
         self.capabilities_output = bytearray(_PRIVACY_CAPABILITIES_ARCHIVE)
+        self.request_output = bytearray(_PRIVACY_REQUEST_ARCHIVE)
         self.build_output = bytearray(_PRIVACY_BUILD_ARCHIVE)
         self.verify_backing = bytearray(b"\x00" + _PRIVACY_VERIFY_ARCHIVE + b"\x00")
         self.verify_output = memoryview(self.verify_backing)[1:-1]
@@ -432,6 +547,23 @@ class _FakeMutableOutputPrivacyNative:
 
     def privacy_capabilities_v1(self) -> bytearray:
         return self.capabilities_output
+
+    def privacy_proof_request_v1(
+        self,
+        algorithm_id: str,
+        entrypoint: str,
+        vk_ref: str,
+        public_inputs: bytes,
+        witness: bytes,
+        proof: bytes,
+    ) -> bytearray:
+        assert algorithm_id
+        assert entrypoint
+        assert vk_ref
+        assert public_inputs
+        assert witness == b""
+        assert proof == b""
+        return self.request_output
 
     def privacy_build_proof_v1(self, request_archive: bytes) -> bytearray:
         assert request_archive == _PRIVACY_REQUEST_ARCHIVE
@@ -445,6 +577,7 @@ class _FakeMutableOutputPrivacyNative:
 class _FakeSlicedOutputPrivacyNative:
     def __init__(self) -> None:
         self.capabilities_backing = bytearray(b"\xff\x7f\x50" + _PRIVACY_CAPABILITIES_ARCHIVE + b"\x24")
+        self.request_backing = bytearray(b"\xff\x7f\x52" + _PRIVACY_REQUEST_ARCHIVE + b"\x42")
         self.build_backing = bytearray(b"\xff\x7f\x42" + _PRIVACY_BUILD_ARCHIVE + b"\x13")
         self.verify_backing = bytearray(b"\xff\x7f\x56" + _PRIVACY_VERIFY_ARCHIVE + b"\x37")
         self.prefix_len = 3
@@ -455,6 +588,25 @@ class _FakeSlicedOutputPrivacyNative:
     def privacy_capabilities_v1(self) -> memoryview:
         return memoryview(self.capabilities_backing)[
             self.prefix_len : self.prefix_len + len(_PRIVACY_CAPABILITIES_ARCHIVE)
+        ]
+
+    def privacy_proof_request_v1(
+        self,
+        algorithm_id: str,
+        entrypoint: str,
+        vk_ref: str,
+        public_inputs: bytes,
+        witness: bytes,
+        proof: bytes,
+    ) -> memoryview:
+        assert algorithm_id
+        assert entrypoint
+        assert vk_ref
+        assert public_inputs
+        assert witness == b""
+        assert proof == b""
+        return memoryview(self.request_backing)[
+            self.prefix_len : self.prefix_len + len(_PRIVACY_REQUEST_ARCHIVE)
         ]
 
     def privacy_build_proof_v1(self, request_archive: bytes) -> memoryview:
@@ -484,6 +636,23 @@ class _FakeLeakingExceptionPrivacyNative:
     def privacy_capabilities_v1(self) -> bytes:
         self._raise()
 
+    def privacy_proof_request_v1(
+        self,
+        algorithm_id: str,
+        entrypoint: str,
+        vk_ref: str,
+        public_inputs: bytes,
+        witness: bytes,
+        proof: bytes,
+    ) -> bytes:
+        assert algorithm_id
+        assert entrypoint
+        assert vk_ref
+        assert public_inputs
+        assert witness == b""
+        assert proof == b""
+        self._raise()
+
     def privacy_build_proof_v1(self, request_archive: bytes) -> bytes:
         self.requests.append(request_archive)  # type: ignore[arg-type]
         assert bytes(request_archive) == _PRIVACY_REQUEST_ARCHIVE
@@ -507,6 +676,23 @@ class _FakeCapturingPrivacyNative:
     def privacy_capabilities_v1(self) -> bytes:
         return _PRIVACY_CAPABILITIES_ARCHIVE
 
+    def privacy_proof_request_v1(
+        self,
+        algorithm_id: str,
+        entrypoint: str,
+        vk_ref: str,
+        public_inputs: bytes,
+        witness: bytes,
+        proof: bytes,
+    ) -> bytes:
+        assert algorithm_id
+        assert entrypoint
+        assert vk_ref
+        assert public_inputs
+        assert witness == b""
+        assert proof == b""
+        return _PRIVACY_REQUEST_ARCHIVE
+
     def privacy_build_proof_v1(self, request_archive: bytes) -> bytes:
         self._capture(request_archive)
         return _PRIVACY_BUILD_ARCHIVE
@@ -527,7 +713,7 @@ def test_privacy_native_capabilities_are_opaque_norito_bytes(monkeypatch: pytest
     archive = privacy_capabilities_v1()
 
     assert PRIVACY_FFI_VERSION_V1 == 1
-    assert PRIVACY_REQUIRED_BRIDGE_ABI_VERSION == 6
+    assert PRIVACY_REQUIRED_BRIDGE_ABI_VERSION == 7
     assert PRIVACY_FFI_STATUS_ERROR == 1
     assert PRIVACY_FFI_ERROR_NULL_POINTER == 1
     assert PRIVACY_FFI_ERROR_MALFORMED_NORITO == 2
@@ -562,7 +748,7 @@ def test_privacy_native_availability_requires_abi_6(
         monkeypatch.setattr(crypto_module, "_crypto", native)
 
         assert is_privacy_native_available() is False
-        with pytest.raises(RuntimeError, match="privacy FFI requires native bridge ABI 6"):
+        with pytest.raises(RuntimeError, match="privacy FFI requires native bridge ABI 7"):
             privacy_capabilities_v1()
 
 
@@ -578,9 +764,9 @@ def test_privacy_native_availability_rejects_broken_abi_probe(
     monkeypatch.setattr(crypto_module, "_crypto", native)
 
     assert is_privacy_native_available() is False
-    with pytest.raises(RuntimeError, match="privacy FFI requires native bridge ABI 6"):
+    with pytest.raises(RuntimeError, match="privacy FFI requires native bridge ABI 7"):
         privacy_bridge_abi_version()
-    with pytest.raises(RuntimeError, match="privacy FFI requires native bridge ABI 6"):
+    with pytest.raises(RuntimeError, match="privacy FFI requires native bridge ABI 7"):
         privacy_build_proof_v1(_PRIVACY_REQUEST_ARCHIVE)
 
 
@@ -601,6 +787,16 @@ def test_privacy_native_availability_requires_complete_method_surface(
         RuntimeError,
         match="privacy FFI requires complete native method surface; missing privacy_verify_proof_v1",
     ):
+        privacy_proof_request_v1(
+            algorithm_id="verange-transparent-range-v1",
+            entrypoint="buildVeRangeProofV1",
+            vk_ref="bulletproofs:verange_transparent_range_v1",
+            public_inputs=b"public-inputs",
+        )
+    with pytest.raises(
+        RuntimeError,
+        match="privacy FFI requires complete native method surface; missing privacy_verify_proof_v1",
+    ):
         privacy_capabilities_v1()
     with pytest.raises(
         RuntimeError,
@@ -616,15 +812,39 @@ def test_privacy_native_availability_probes_use_norito_request_archives(
         def __init__(self) -> None:
             self.build_request: bytearray | None = None
             self.verify_request: bytearray | None = None
+            self.proof_request_public_inputs: bytearray | None = None
+            self.proof_request_call: tuple[object, ...] | None = None
             self.build_request_bytes: bytes | None = None
             self.verify_request_bytes: bytes | None = None
             self.capabilities_output: bytearray | None = None
+            self.proof_request_output: bytearray | None = None
             self.build_output: bytearray | None = None
             self.verify_output: bytearray | None = None
 
         def privacy_capabilities_v1(self) -> bytearray:
             self.capabilities_output = bytearray(_PRIVACY_CAPABILITIES_ARCHIVE)
             return self.capabilities_output
+
+        def privacy_proof_request_v1(
+            self,
+            algorithm_id: str,
+            entrypoint: str,
+            vk_ref: str,
+            public_inputs: bytearray,
+            witness: bytes,
+            proof: bytes,
+        ) -> bytearray:
+            self.proof_request_public_inputs = public_inputs
+            self.proof_request_call = (
+                algorithm_id,
+                entrypoint,
+                vk_ref,
+                bytes(public_inputs),
+                witness,
+                proof,
+            )
+            self.proof_request_output = bytearray(_PRIVACY_REQUEST_ARCHIVE)
+            return self.proof_request_output
 
         def privacy_build_proof_v1(self, request_archive: bytearray) -> bytearray:
             self.build_request = request_archive
@@ -649,16 +869,28 @@ def test_privacy_native_availability_probes_use_norito_request_archives(
     )
     assert is_privacy_native_available() is True
 
+    assert native.proof_request_call == (
+        "verange-transparent-range-v1",
+        "buildVeRangeProofV1",
+        "bulletproofs:verange_transparent_range_v1",
+        b"public-inputs",
+        b"",
+        b"",
+    )
     assert native.build_request_bytes == _privacy_norito_frame(0x52)
     assert native.verify_request_bytes == _privacy_norito_frame(0x52)
+    assert native.proof_request_public_inputs is not None
     assert native.build_request is not None
     assert native.verify_request is not None
+    assert all(value == 0 for value in native.proof_request_public_inputs)
     assert all(value == 0 for value in native.build_request)
     assert all(value == 0 for value in native.verify_request)
     assert native.capabilities_output is not None
+    assert native.proof_request_output is not None
     assert native.build_output is not None
     assert native.verify_output is not None
     assert all(value == 0 for value in native.capabilities_output)
+    assert all(value == 0 for value in native.proof_request_output)
     assert all(value == 0 for value in native.build_output)
     assert all(value == 0 for value in native.verify_output)
 
@@ -705,10 +937,16 @@ def test_privacy_native_availability_probes_reject_unsafe_raw_output(
     def build_cases() -> tuple[tuple[str, object], ...]:
         return (
             ("privacy_capabilities_v1", lambda: "json is not Norito"),
+            ("privacy_proof_request_v1", lambda *_args: b""),
             ("privacy_build_proof_v1", lambda _request: b""),
             ("privacy_verify_proof_v1", lambda _request: None),
+            ("privacy_proof_request_v1", lambda *_args: [0x52]),
             ("privacy_build_proof_v1", lambda _request: [0x42]),
             ("privacy_build_proof_v1", lambda _request: b"\x42"),
+            (
+                "privacy_proof_request_v1",
+                lambda *_args: (_ for _ in ()).throw(RuntimeError("probe failed")),
+            ),
             (
                 "privacy_verify_proof_v1",
                 lambda _request: (_ for _ in ()).throw(RuntimeError("probe failed")),
@@ -718,6 +956,8 @@ def test_privacy_native_availability_probes_reject_unsafe_raw_output(
     cases: list[tuple[str, object]] = list(build_cases())
     for archive in _malformed_privacy_native_output_archives(0x50):
         cases.append(("privacy_capabilities_v1", lambda archive=archive: archive))
+    for archive in _malformed_privacy_native_output_archives(0x52):
+        cases.append(("privacy_proof_request_v1", lambda *_args, archive=archive: archive))
     for archive in _malformed_privacy_native_output_archives(0x42):
         cases.append(("privacy_build_proof_v1", lambda _request, archive=archive: archive))
     for archive in _malformed_privacy_native_output_archives(0x56):
@@ -733,6 +973,7 @@ def test_privacy_native_availability_probes_reject_unsafe_raw_output(
     monkeypatch.setattr(crypto_module, "PRIVACY_NATIVE_ARCHIVE_MAX_BYTES", 2)
     for operation, replacement in (
         ("privacy_capabilities_v1", lambda: b"\x50\x01\x7f"),
+        ("privacy_proof_request_v1", lambda *_args: b"\x52\x7f\x7f"),
         ("privacy_build_proof_v1", lambda _request: b"\x42\x7f\x7f"),
         ("privacy_verify_proof_v1", lambda _request: b"\x56\x7f\x7f"),
     ):
@@ -919,6 +1160,107 @@ def test_privacy_native_build_and_verify_accept_complete_field_bitset_flags(
     for request in native.requests:
         assert isinstance(request, bytearray)
         assert all(value == 0 for value in request)
+
+
+def test_privacy_proof_request_v1_forwards_validated_binary_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _RequestNative(_FakePrivacyNative):
+        def __init__(self) -> None:
+            self.call: tuple[object, ...] | None = None
+
+        def privacy_proof_request_v1(
+            self,
+            algorithm_id: str,
+            entrypoint: str,
+            vk_ref: str,
+            public_inputs: bytes,
+            witness: bytes,
+            proof: bytes,
+        ) -> bytes:
+            self.call = (
+                algorithm_id,
+                entrypoint,
+                vk_ref,
+                public_inputs,
+                witness,
+                proof,
+            )
+            return _PRIVACY_REQUEST_ARCHIVE
+
+    native = _RequestNative()
+    monkeypatch.setattr(crypto_module, "_crypto", native)
+
+    archive = privacy_proof_request_v1(
+        algorithm_id="verange-transparent-range-v1",
+        entrypoint="buildVeRangeProofV1",
+        vk_ref="bulletproofs:verange_transparent_range_v1",
+        public_inputs=memoryview(b"public-inputs"),
+        witness=bytearray(b"secret-witness"),
+    )
+
+    assert archive == _PRIVACY_REQUEST_ARCHIVE
+    assert native.call == (
+        "verange-transparent-range-v1",
+        "buildVeRangeProofV1",
+        "bulletproofs:verange_transparent_range_v1",
+        b"public-inputs",
+        b"secret-witness",
+        b"",
+    )
+
+
+def test_privacy_proof_request_v1_rejects_text_and_signed_byte_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(crypto_module, "_crypto", _FakePrivacyNativeMustNotDispatch())
+
+    with pytest.raises(TypeError, match="public_inputs must be bytes-like, not a string"):
+        privacy_proof_request_v1(
+            algorithm_id="verange-transparent-range-v1",
+            entrypoint="buildVeRangeProofV1",
+            vk_ref="bulletproofs:verange_transparent_range_v1",
+            public_inputs="public-inputs",  # type: ignore[arg-type]
+        )
+    with pytest.raises(TypeError, match="witness must use unsigned byte elements"):
+        privacy_proof_request_v1(
+            algorithm_id="verange-transparent-range-v1",
+            entrypoint="buildVeRangeProofV1",
+            vk_ref="bulletproofs:verange_transparent_range_v1",
+            public_inputs=b"public-inputs",
+            witness=_signed_byte_array(b"witness"),  # type: ignore[arg-type]
+        )
+    with pytest.raises(ValueError, match="public_inputs must not be empty"):
+        privacy_proof_request_v1(
+            algorithm_id="verange-transparent-range-v1",
+            entrypoint="buildVeRangeProofV1",
+            vk_ref="bulletproofs:verange_transparent_range_v1",
+            public_inputs=b"",
+        )
+
+
+def test_privacy_proof_request_v1_roundtrips_through_native_build_and_verify() -> None:
+    build_request = privacy_proof_request_v1(
+        algorithm_id="verange-transparent-range-v1",
+        entrypoint="buildVeRangeProofV1",
+        vk_ref="bulletproofs:verange_transparent_range_v1",
+        public_inputs=b"public-inputs",
+        witness=b"secret-witness",
+    )
+    verify_request = privacy_proof_request_v1(
+        algorithm_id="verange-transparent-range-v1",
+        entrypoint="buildVeRangeProofV1",
+        vk_ref="bulletproofs:verange_transparent_range_v1",
+        public_inputs=b"public-inputs",
+        proof=b"proof-bytes",
+    )
+
+    assert build_request.startswith(b"NRT0")
+    assert build_request[6:22] == bytes([0x52]) * 16
+    assert verify_request.startswith(b"NRT0")
+    assert verify_request[6:22] == bytes([0x52]) * 16
+    assert privacy_build_proof_v1(build_request)[6:22] == bytes([0x42]) * 16
+    assert privacy_verify_proof_v1(verify_request)[6:22] == bytes([0x56]) * 16
 
 
 def test_privacy_native_build_and_verify_reject_invalid_request_archive(

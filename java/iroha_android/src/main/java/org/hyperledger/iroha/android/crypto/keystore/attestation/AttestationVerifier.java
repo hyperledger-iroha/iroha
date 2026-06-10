@@ -122,7 +122,7 @@ public final class AttestationVerifier {
 
     final CertPath certPath;
     try {
-      certPath = factory.generateCertPath(chain);
+      certPath = factory.generateCertPath(certificatesForPath(chain));
     } catch (final CertificateException ex) {
       throw new AttestationVerificationException("Failed to construct attestation CertPath", ex);
     }
@@ -150,6 +150,28 @@ public final class AttestationVerifier {
       throw new AttestationVerificationException(
           "Unexpected failure validating attestation certificate path", ex);
     }
+  }
+
+  private List<X509Certificate> certificatesForPath(final List<X509Certificate> chain) {
+    if (chain.size() < 2) {
+      return chain;
+    }
+    final X509Certificate trailingCertificate = chain.get(chain.size() - 1);
+    for (final TrustAnchor anchor : trustAnchors) {
+      final X509Certificate trusted = anchor.getTrustedCert();
+      if (trusted != null && sameTrustAnchorCertificate(trailingCertificate, trusted)) {
+        // The configured trust anchor is not part of the PKIX CertPath. Android
+        // attestation exports often include it as the final chain entry.
+        return chain.subList(0, chain.size() - 1);
+      }
+    }
+    return chain;
+  }
+
+  private static boolean sameTrustAnchorCertificate(
+      final X509Certificate certificate, final X509Certificate trusted) {
+    return certificate.getSubjectX500Principal().equals(trusted.getSubjectX500Principal())
+        && certificate.getPublicKey().equals(trusted.getPublicKey());
   }
 
   private KeyDescription parseKeyDescription(final X509Certificate leaf)

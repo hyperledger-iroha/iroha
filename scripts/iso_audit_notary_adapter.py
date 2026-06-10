@@ -63,6 +63,10 @@ RESERVED_PLACEHOLDER_HOST_SUFFIXES = {
 TEMPLATE_CANARY_ENDPOINT_HOSTS = {
     "operator-canary.bank",
 }
+REPOSITORY_XML_FIXTURE_PARTS = (
+    "fixtures",
+    "iso20022",
+)
 NAT64_WELL_KNOWN_PREFIX = ipaddress.ip_network("64:ff9b::/96")
 IPV4_COMPATIBLE_IPV6_PREFIX = ipaddress.ip_network("::/96")
 DEFAULT_RESPONSE_LIMIT_BYTES = 64 * 1024
@@ -648,6 +652,10 @@ def _preflight_numeric_cli_values(
 
 def _ensure_output_directory(path: Path, label: str) -> None:
     _reject_output_path_smuggling(path, label)
+    if _path_is_repository_iso_fixture(str(path)):
+        raise AdapterError(
+            f"{label} must not point to checked-in ISO fixture artifacts"
+        )
     _reject_symlinked_existing_ancestors(path)
     if path.exists() or path.is_symlink():
         mode = path.lstat().st_mode
@@ -677,6 +685,10 @@ def _ensure_output_file_target(path: Path) -> None:
 
 def _write_text_output(path: Path, text: str) -> None:
     _reject_output_path_smuggling(path, "output path")
+    if _path_is_repository_iso_fixture(str(path)):
+        raise AdapterError(
+            "output path must not point to checked-in ISO fixture artifacts"
+        )
     _reject_symlinked_existing_ancestors(path.parent)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -950,6 +962,22 @@ def _require_clean_path_string(value: Any, label: str) -> str:
     if any(part in {".", ".."} for part in parts):
         raise AdapterError(f"{label} must not contain dot or parent segments")
     return path
+
+
+def _path_contains_component_sequence(raw: str, components: tuple[str, ...]) -> bool:
+    parts = [part.casefold() for part in raw.split("/") if part]
+    target = [part.casefold() for part in components]
+    if len(parts) < len(target):
+        return False
+    last_start = len(parts) - len(target)
+    return any(
+        parts[offset : offset + len(target)] == target
+        for offset in range(last_start + 1)
+    )
+
+
+def _path_is_repository_iso_fixture(raw: str) -> bool:
+    return _path_contains_component_sequence(raw, REPOSITORY_XML_FIXTURE_PARTS)
 
 
 def _require_optional_clean_string(value: Any, label: str) -> str | None:
@@ -1331,6 +1359,10 @@ def verify_anchor_file(
     """Verify one notary anchor against the export directory index file."""
 
     _reject_raw_output_path_smuggling(str(anchor_path), "anchor path")
+    if _path_is_repository_iso_fixture(str(anchor_path)):
+        raise AdapterError(
+            f"{anchor_path} anchor path must not point to checked-in ISO fixture artifacts"
+        )
     anchor_value, raw = _load_json_bytes(anchor_path)
     if not isinstance(anchor_value, dict):
         raise AdapterError(f"{anchor_path} must contain a JSON object")
@@ -1356,9 +1388,14 @@ def verify_anchor_file(
         raise AdapterError(f"{anchor_path} record_count must be a non-negative integer")
     if anchor_record_count != audit_index.get("record_count"):
         raise AdapterError(f"{anchor_path} record_count does not match embedded audit index")
+    store_dir = _record_store_dir(anchor_value, str(anchor_path))
+    if store_dir is not None and _path_is_repository_iso_fixture(str(store_dir)):
+        raise AdapterError(
+            f"{anchor_path}.store_dir must not point to checked-in ISO fixture artifacts"
+        )
     missing_record_sources = _verify_persisted_record_sources(
         audit_index,
-        _record_store_dir(anchor_value, str(anchor_path)),
+        store_dir,
         str(anchor_path),
         allow_missing_record_sources=allow_missing_record_sources,
     )
@@ -1908,15 +1945,30 @@ def receipt_output_path(receipt_dir: Path, anchor: VerifiedAnchor, endpoint: str
 
 
 def run(args: argparse.Namespace) -> int:
+    if args.export_dir is None:
+        raise AdapterError("provide --export-dir")
+    _reject_output_path_smuggling(args.export_dir, "export_dir")
+    if args.bearer_token_file is not None:
+        _reject_output_path_smuggling(args.bearer_token_file, "bearer_token_file")
+    receipt_dir_source = args.receipt_dir or args.export_dir / "receipts"
+    _reject_output_path_smuggling(receipt_dir_source, "receipt_dir")
+    receipt_dir = _absolute_path_without_resolving_leaf(
+        receipt_dir_source
+    )
+    if _path_is_repository_iso_fixture(str(receipt_dir)):
+        raise AdapterError(
+            "receipt_dir must not point to checked-in ISO fixture artifacts"
+        )
+    if _path_is_repository_iso_fixture(str(args.export_dir)):
+        raise AdapterError(
+            "export_dir must not point to checked-in ISO fixture artifacts"
+        )
     timeout_secs = _require_positive_finite_cli_number(args.timeout_secs, "--timeout-secs")
     response_limit_bytes = _require_positive_cli_int(
         args.response_limit_bytes, "--response-limit-bytes"
     )
     _ensure_input_directory(args.export_dir, "export_dir")
     export_dir = args.export_dir
-    receipt_dir = _absolute_path_without_resolving_leaf(
-        args.receipt_dir or export_dir / "receipts"
-    )
     endpoints = list(args.endpoint)
     for endpoint in endpoints:
         _validate_endpoint(endpoint, args.allow_insecure_http)

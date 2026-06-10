@@ -316,6 +316,7 @@ def _write_text_atomic(
     if len(text.encode("utf-8")) > byte_limit:
         return [f"{label} must be no more than {byte_limit} bytes"]
     tmp_path: Path | None = None
+    write_errors: list[str] = []
     try:
         with tempfile.NamedTemporaryFile(
             "w",
@@ -331,31 +332,30 @@ def _write_text_atomic(
             os.fsync(handle.fileno())
         errors = _validate_json_output_path(path, label)
         if errors:
-            return errors
-        os.replace(tmp_path, path)
-        tmp_path = None
+            write_errors.extend(errors)
+        else:
+            os.replace(tmp_path, path)
+            tmp_path = None
     except OSError:
-        return [f"{label} could not be written"]
+        write_errors.append(f"{label} could not be written")
     finally:
         if tmp_path is not None:
-            try:
-                tmp_path.unlink()
-            except OSError:
-                pass
+            write_errors.extend(_cleanup_temp_output(tmp_path, label))
+    if write_errors:
+        return write_errors
     errors = _validate_existing_json_output_path(path, label)
     if errors:
         return errors
     try:
         parent_fd = os.open(path.parent, os.O_RDONLY)
     except OSError:
-        parent_fd = None
-    if parent_fd is not None:
-        try:
-            os.fsync(parent_fd)
-        except OSError:
-            pass
-        finally:
-            os.close(parent_fd)
+        return [f"{label} parent directory could not be synced"]
+    try:
+        os.fsync(parent_fd)
+    except OSError:
+        return [f"{label} parent directory could not be synced"]
+    finally:
+        os.close(parent_fd)
     errors = _validate_existing_json_output_path(path, label)
     if errors:
         return errors
@@ -383,6 +383,16 @@ def _write_text_atomic(
         return readback_errors
     if readback_text != text:
         return [f"{label} write verification failed"]
+    return []
+
+
+def _cleanup_temp_output(path: Path, label: str) -> list[str]:
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return []
+    except OSError:
+        return [f"{label} temporary file could not be removed"]
     return []
 
 
@@ -754,6 +764,8 @@ def _artifact_digests(
         errors.extend(preflight_errors)
         return None
     device_lab.validate_required_kagemusha_slot_artifact_shapes(slot_path, errors)
+    if metadata is not None:
+        device_lab.validate_attestation_report(slot_path, metadata, errors)
     if len(errors) != initial_error_count:
         return None
     for relative in device_lab._required_signed_evidence_digest_paths(
@@ -917,10 +929,16 @@ def _read_validated_slot_artifact_bytes(
     artifact_path: Path,
     expected_stat: os.stat_result,
     relative: str,
+    max_bytes: int | None = None,
 ) -> tuple[bytes | None, list[str]]:
     """Read a signer slot artifact without trusting a stale path."""
 
     display = device_lab._display_path(relative)
+    artifact_max_bytes = (
+        device_lab._slot_artifact_max_bytes(relative)
+        if max_bytes is None
+        else max_bytes
+    )
     chunks: list[bytes] = []
     try:
         with artifact_path.open("rb") as handle:
@@ -939,18 +957,18 @@ def _read_validated_slot_artifact_bytes(
                 return None, [f"slot artifact {display} changed while being read"]
             if open_stat.st_nlink > 1:
                 return None, [f"slot artifact {display} must not be hardlinked"]
-            if open_stat.st_size > device_lab.MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES:
+            if open_stat.st_size > artifact_max_bytes:
                 return None, [
                     f"slot artifact {display} must be no more than "
-                    f"{device_lab.MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES} bytes"
+                    f"{artifact_max_bytes} bytes"
                 ]
             size = 0
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                 size += len(chunk)
-                if size > device_lab.MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES:
+                if size > artifact_max_bytes:
                     return None, [
                         f"slot artifact {display} must be no more than "
-                        f"{device_lab.MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES} bytes"
+                        f"{artifact_max_bytes} bytes"
                     ]
                 chunks.append(chunk)
             final_path_stat = artifact_path.lstat()
@@ -1058,6 +1076,7 @@ def sign_slot_evidence(
     device_lab.validate_slot_regular_file_artifacts(slot_path, errors)
     device_lab.validate_no_slot_hardlink_artifacts(slot_path, errors)
     device_lab.validate_attestation_result(slot_path, metadata, errors)
+    device_lab.validate_attestation_report(slot_path, metadata, errors)
     device_lab.validate_d2d_payment_transcript_binding(slot_path, metadata, errors)
     device_lab.validate_wallet_integrity_transcript_binding(slot_path, metadata, errors)
     if errors:

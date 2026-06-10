@@ -13054,6 +13054,9 @@ fn source_verifier_evidence_matches_material_without_deployment(
         && evidence.source_bridge_network_id == expected.source_bridge_network_id
         && evidence.source_bridge_owner_address == expected.source_bridge_owner_address
         && evidence.source_bridge_config_hash == expected.source_bridge_config_hash
+        && evidence.source_adapter_deployment_hash == expected.source_adapter_deployment_hash
+        && evidence.source_adapter_deployment_receipt_hash
+            == expected.source_adapter_deployment_receipt_hash
 }
 
 fn verify_sccp_source_verifier_evidence_with_material(
@@ -59901,21 +59904,36 @@ mod tests {
                 .source_adapter_deployment_receipt_hash,
             [0u8; 32]
         );
+        let material_only_adapter_transcript_hash = sccp_source_adapter_transcript_hash(
+            material_only_proof.source_domain,
+            material_only_proof.target_domain,
+            material_only_proof.source_proof_plan,
+            material_only_proof.finality_model,
+            material_only_proof.finality_height,
+            material_only_proof.finality_block_hash,
+            material_only_proof.receipt_or_message_root,
+            material_only_proof.source_event_digest,
+            &material_only_consensus.adapter_proof,
+        );
+        let mut forged_material_only_evidence = material_only_consensus.verifier_evidence.clone();
+        forged_material_only_evidence.source_adapter_deployment_hash =
+            sccp_source_adapter_engine_deployment_hash(&deployment);
+        forged_material_only_evidence.source_adapter_deployment_receipt_hash =
+            deployment.deployment_receipt_hash;
+        assert!(
+            !verify_sccp_source_verifier_evidence_with_material(
+                &material_only_proof,
+                &material_only_consensus.adapter_proof,
+                material_only_adapter_transcript_hash,
+                &forged_material_only_evidence,
+                &material,
+            ),
+            "material-only verifier evidence must not accept deployment-looking fields without deployment context"
+        );
         if !verify_sccp_source_chain_proof_envelope_structure_with_material(
             &material_only_proof,
             &material,
         ) {
-            let material_only_adapter_transcript_hash = sccp_source_adapter_transcript_hash(
-                material_only_proof.source_domain,
-                material_only_proof.target_domain,
-                material_only_proof.source_proof_plan,
-                material_only_proof.finality_model,
-                material_only_proof.finality_height,
-                material_only_proof.finality_block_hash,
-                material_only_proof.receipt_or_message_root,
-                material_only_proof.source_event_digest,
-                &material_only_consensus.adapter_proof,
-            );
             let material_only_binding = verify_sccp_source_adapter_proof_binding(
                 &material_only_consensus.adapter_proof,
                 &material_only_proof,

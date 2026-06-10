@@ -54,6 +54,8 @@ MAX_SUMMARY_JSON_BYTES = 4 * 1024 * 1024
 MAX_TIMESTAMP_CHARS = 128
 MAX_SOURCE_URL_CHARS = 2048
 MAX_LOCAL_PATH_CHARS = 4096
+MAX_CLEAN_STRING_CHARS = 4096
+MAX_XML_IDENTIFIER_CHARS = 256
 MAX_SOURCE_REPOSITORY_CHARS = 2048
 MAX_SOURCE_PATH_CHARS = 2048
 MAX_REVIEWED_GAP_REASON_CHARS = 1024
@@ -115,6 +117,9 @@ ALLOWED_SCHEMA_SOURCE_LICENSES = {"Apache-2.0"}
 SCHEMA_SOURCE_KEYS = {"repository", "commit", "path", "license", "sha256"}
 TRUST_SOURCE_KEYS = {"authority", "version", "url", "retrieved_at"}
 TRUST_DER_PROOF_KEYS = {"sha256", "byte_len"}
+ANCHOR_DIR = "anchors"
+INDEX_FILE = "messages.index.json"
+LATEST_ANCHOR_FILE = "latest.notary.json"
 PLACEHOLDER_TRUST_SOURCE_MARKERS = (
     "dummy",
     "fake",
@@ -206,6 +211,9 @@ RECEIPT_ENTRY_KEYS = {
     "status_code",
     "response_body_sha256",
     "endpoint_requires_insecure_http",
+    "anchor_path",
+    "store_dir",
+    "index_path",
     "anchor_sha256",
     "index_sha256",
     "record_count",
@@ -213,13 +221,22 @@ RECEIPT_ENTRY_KEYS = {
     "payload_sha256",
     "profile",
     "rail_message_id",
+    "source_path",
 }
-NOTARY_RECEIPT_METADATA_KEYS = {"anchor_sha256", "index_sha256", "record_count"}
+NOTARY_RECEIPT_METADATA_KEYS = {
+    "anchor_path",
+    "store_dir",
+    "index_path",
+    "anchor_sha256",
+    "index_sha256",
+    "record_count",
+}
 RAIL_RECEIPT_METADATA_KEYS = {
     "message_type",
     "payload_sha256",
     "profile",
     "rail_message_id",
+    "source_path",
 }
 TRUST_SUMMARY_KEYS = {
     "version",
@@ -237,6 +254,7 @@ TRUST_SUMMARY_KEYS = {
     SUMMARY_DIGEST_FIELD,
 }
 TRUST_PROFILE_KEYS = {
+    "path",
     "profile_id",
     "rail",
     "environment",
@@ -332,6 +350,26 @@ XSD_PROFILE_CATALOG_KEYS = {
     "skipped_family_versions",
     "versions",
 }
+REPOSITORY_XSD_FIXTURE_MANIFEST_PARTS = (
+    "fixtures",
+    "iso20022",
+    "xsd",
+    "fixture_manifest.json",
+)
+REPOSITORY_CANARY_RUNBOOK_PARTS = (
+    "fixtures",
+    "iso20022",
+    "operator_canary",
+)
+REPOSITORY_TRUST_BUNDLE_PARTS = (
+    "fixtures",
+    "iso20022",
+    "trust_bundles",
+)
+REPOSITORY_XML_FIXTURE_PARTS = (
+    "fixtures",
+    "iso20022",
+)
 XSD_PROFILE_VERSION_KEYS = {
     "profile_id",
     "message_type",
@@ -795,8 +833,16 @@ def _preflight_numeric_cli_values(
             index += 1
 
 
+def _reject_repository_output_path(path: Path, label: str) -> None:
+    if _receipt_path_is_repository_fixture(str(path)):
+        raise ReadinessError(
+            f"{label} must not point to checked-in ISO fixture artifacts"
+        )
+
+
 def _write_text_output(path: Path, text: str) -> None:
     _reject_output_path_smuggling(path, "output path")
+    _reject_repository_output_path(path, "output path")
     _reject_symlinked_existing_ancestors(path.parent)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -976,6 +1022,8 @@ def _require_string(value: dict[str, Any], key: str, label: str) -> str:
     raw = value.get(key)
     if not isinstance(raw, str) or not raw.strip():
         raise ReadinessError(f"{label}.{key} must be a non-empty string")
+    if len(raw) > MAX_CLEAN_STRING_CHARS:
+        raise ReadinessError(f"{label}.{key} must be no longer than {MAX_CLEAN_STRING_CHARS} characters")
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
         raise ReadinessError(f"{label}.{key} must not contain control characters")
     if raw != raw.strip():
@@ -993,6 +1041,8 @@ def _require_context_string(value: dict[str, Any], key: str, label: str) -> str:
 def _require_cli_string(value: str | None, label: str) -> str:
     if value is None or not value.strip():
         raise ReadinessError(f"provide {label}")
+    if len(value) > MAX_CLEAN_STRING_CHARS:
+        raise ReadinessError(f"{label} must be no longer than {MAX_CLEAN_STRING_CHARS} characters")
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value):
         raise ReadinessError(f"{label} must not contain control characters")
     if value != value.strip():
@@ -1110,10 +1160,109 @@ def _require_compact_der_entries(
     return result
 
 
+def _block_compact_der_role_reuse(
+    roles: tuple[tuple[str, list[dict[str, int | str]]], ...],
+    label: str,
+    path: Path,
+    blockers: list[dict[str, Any]],
+) -> None:
+    seen: dict[str, tuple[str, int]] = {}
+    for role, entries in roles:
+        for offset, entry in enumerate(entries):
+            digest = str(entry["sha256"])
+            if digest in seen:
+                previous_role, previous_offset = seen[digest]
+                _blocker(
+                    blockers,
+                    "trust.der_proof_reused_across_roles",
+                    (
+                        f"{label}.{role}[{offset}].sha256 reuses "
+                        f"{label}.{previous_role}[{previous_offset}].sha256 "
+                        "across trust material roles"
+                    ),
+                    path,
+                )
+            else:
+                seen[digest] = (role, offset)
+
+
 def _validate_receipt_path(raw: str, label: str) -> str:
     _reject_path_smuggling(raw, label)
     if not raw.endswith(RECEIPT_PATH_SUFFIX):
         raise ReadinessError(f"{label} must point to a {RECEIPT_PATH_SUFFIX} file")
+    return raw
+
+
+def _validate_xml_path(raw: str, label: str) -> str:
+    _reject_path_smuggling(raw, label)
+    if not raw.endswith(".xml"):
+        raise ReadinessError(f"{label} must point to an .xml file")
+    return raw
+
+
+def _validate_notary_anchor_path(raw: str, label: str, index_sha256: str) -> str:
+    _reject_path_smuggling(raw, label)
+    parts = raw.split("/")
+    leaf = parts[-1] if parts else ""
+    if leaf == LATEST_ANCHOR_FILE:
+        return raw
+    expected_leaf = f"{index_sha256}.notary.json"
+    if len(parts) >= 2 and parts[-2] == ANCHOR_DIR and leaf == expected_leaf:
+        return raw
+    raise ReadinessError(
+        f"{label} must be {LATEST_ANCHOR_FILE} or {ANCHOR_DIR}/<index_sha256>.notary.json"
+    )
+
+
+def _validate_notary_store_dir(
+    receipt: dict[str, Any],
+    entry_label: str,
+    *,
+    require_source_files: bool,
+) -> str | None:
+    if "store_dir" not in receipt or receipt["store_dir"] is None:
+        if require_source_files:
+            raise ReadinessError(f"{entry_label}.store_dir must be recorded")
+        return None
+    raw = receipt["store_dir"]
+    if not isinstance(raw, str) or not raw.strip():
+        raise ReadinessError(f"{entry_label}.store_dir must be a non-empty path")
+    _reject_path_smuggling(raw, f"{entry_label}.store_dir")
+    return raw
+
+
+def _expected_notary_index_path(anchor_path: str) -> str:
+    parts = anchor_path.split("/")
+    if parts[-1] == LATEST_ANCHOR_FILE:
+        export_parts = parts[:-1]
+    else:
+        export_parts = parts[:-2]
+    return "/".join([*export_parts, INDEX_FILE]) if export_parts else INDEX_FILE
+
+
+def _validate_notary_index_path(
+    receipt: dict[str, Any],
+    entry_label: str,
+    anchor_path: str,
+    *,
+    require_source_files: bool,
+) -> str | None:
+    if "index_path" not in receipt or receipt["index_path"] is None:
+        if require_source_files:
+            raise ReadinessError(f"{entry_label}.index_path must be recorded")
+        return None
+    raw = receipt["index_path"]
+    if not isinstance(raw, str) or not raw.strip():
+        raise ReadinessError(f"{entry_label}.index_path must be a non-empty path")
+    _reject_path_smuggling(raw, f"{entry_label}.index_path")
+    if _receipt_path_is_repository_fixture(raw):
+        raise ReadinessError(
+            f"{entry_label}.index_path must not point to checked-in ISO fixture artifacts"
+        )
+    if raw != _expected_notary_index_path(anchor_path):
+        raise ReadinessError(
+            f"{entry_label}.index_path must be the {INDEX_FILE} peer of anchor_path"
+        )
     return raw
 
 
@@ -1125,6 +1274,13 @@ def _validate_compact_summary_path(raw: str, label: str) -> str:
 
 
 def _validate_config_path(raw: str, label: str) -> str:
+    _reject_path_smuggling(raw, label)
+    if not raw.endswith(".json"):
+        raise ReadinessError(f"{label} must point to a .json file")
+    return raw
+
+
+def _validate_trust_bundle_path(raw: str, label: str) -> str:
     _reject_path_smuggling(raw, label)
     if not raw.endswith(".json"):
         raise ReadinessError(f"{label} must point to a .json file")
@@ -1171,6 +1327,17 @@ def _require_message_def_id(value: dict[str, Any], key: str, label: str) -> str:
     _reject_secret_looking_identifier(raw, f"{label}.{key}")
     if MESSAGE_DEF_ID_RE.fullmatch(raw) is None:
         raise ReadinessError(f"{label}.{key} must be a lowercase ISO message id")
+    return raw
+
+
+def _require_xsd_identifier(value: dict[str, Any], key: str, label: str) -> str:
+    raw = _require_string(value, key, label)
+    if len(raw) > MAX_XML_IDENTIFIER_CHARS:
+        raise ReadinessError(
+            f"{label}.{key} must be no longer than {MAX_XML_IDENTIFIER_CHARS} characters"
+        )
+    _reject_non_ascii_context(raw, f"{label}.{key}")
+    _reject_secret_looking_identifier(raw, f"{label}.{key}")
     return raw
 
 
@@ -1323,6 +1490,7 @@ def _block_receipt_entry_metadata_errors(
     receipt_kind: str,
     allow_legacy_colr007: bool,
     allow_default_profile: bool,
+    require_source_files: bool,
     metadata_code: str,
 ) -> None:
     if receipt_kind == "iso-audit-notary":
@@ -1343,7 +1511,7 @@ def _block_receipt_entry_metadata_errors(
             path,
             blockers,
         )
-        _check_receipt_entry_sha256(
+        index_sha256 = _check_receipt_entry_sha256(
             receipt,
             "index_sha256",
             entry_label,
@@ -1351,6 +1519,82 @@ def _block_receipt_entry_metadata_errors(
             path,
             blockers,
         )
+        anchor_path = None
+        if index_sha256 is not None:
+            try:
+                anchor_path = _validate_notary_anchor_path(
+                    _require_string(receipt, "anchor_path", entry_label),
+                    f"{entry_label}.anchor_path",
+                    index_sha256,
+                )
+            except ReadinessError as error:
+                _block_receipt_metadata_error(
+                    blockers,
+                    metadata_code,
+                    str(error),
+                    path,
+                )
+            else:
+                if _receipt_path_is_repository_fixture(anchor_path):
+                    _block_receipt_metadata_error(
+                        blockers,
+                        metadata_code,
+                        (
+                            f"{entry_label}.anchor_path must not point to "
+                            "checked-in ISO fixture artifacts"
+                        ),
+                        path,
+                    )
+        try:
+            store_dir = _validate_notary_store_dir(
+                receipt,
+                entry_label,
+                require_source_files=require_source_files,
+            )
+        except ReadinessError as error:
+            _block_receipt_metadata_error(
+                blockers,
+                metadata_code,
+                str(error),
+                path,
+            )
+        else:
+            if store_dir is not None and _receipt_path_is_repository_fixture(store_dir):
+                _block_receipt_metadata_error(
+                    blockers,
+                    metadata_code,
+                    (
+                        f"{entry_label}.store_dir must not point to "
+                        "checked-in ISO fixture artifacts"
+                    ),
+                    path,
+                )
+        if index_sha256 is not None and anchor_path is not None:
+            try:
+                index_path = _validate_notary_index_path(
+                    receipt,
+                    entry_label,
+                    anchor_path,
+                    require_source_files=require_source_files,
+                )
+            except ReadinessError as error:
+                _block_receipt_metadata_error(
+                    blockers,
+                    metadata_code,
+                    str(error),
+                    path,
+                )
+            else:
+                if index_path is not None and _receipt_path_is_repository_fixture(index_path):
+                    _block_receipt_metadata_error(
+                        blockers,
+                        metadata_code,
+                        (
+                            f"{entry_label}.index_path must not point to "
+                            "checked-in ISO fixture artifacts"
+                        ),
+                        path,
+                    )
         record_count = receipt.get("record_count")
         if (
             isinstance(record_count, bool)
@@ -1424,6 +1668,24 @@ def _block_receipt_entry_metadata_errors(
             _require_nullable_rail_message_id(receipt, "rail_message_id", entry_label)
         except ReadinessError as error:
             _block_receipt_metadata_error(blockers, metadata_code, str(error), path)
+        try:
+            source_path = _validate_xml_path(
+                _require_string(receipt, "source_path", entry_label),
+                f"{entry_label}.source_path",
+            )
+        except ReadinessError as error:
+            _block_receipt_metadata_error(blockers, metadata_code, str(error), path)
+        else:
+            if _receipt_path_is_repository_fixture(source_path):
+                _block_receipt_metadata_error(
+                    blockers,
+                    metadata_code,
+                    (
+                        f"{entry_label}.source_path must not point to "
+                        "checked-in ISO XML fixtures"
+                    ),
+                    path,
+                )
 
 
 def _receipt_entry_content_metadata(receipt: dict[str, Any]) -> tuple[tuple[str, Any], ...]:
@@ -1435,9 +1697,22 @@ def _receipt_entry_content_metadata(receipt: dict[str, Any]) -> tuple[tuple[str,
         "endpoint_requires_insecure_http",
     )
     if receipt_kind == "iso-audit-notary":
-        keys = ("anchor_sha256", "index_sha256", "record_count")
+        keys = (
+            "anchor_path",
+            "store_dir",
+            "index_path",
+            "anchor_sha256",
+            "index_sha256",
+            "record_count",
+        )
     elif receipt_kind == "iso-rail-gateway":
-        keys = ("message_type", "payload_sha256", "profile", "rail_message_id")
+        keys = (
+            "message_type",
+            "payload_sha256",
+            "profile",
+            "rail_message_id",
+            "source_path",
+        )
     else:
         keys = ()
     return tuple((key, receipt.get(key)) for key in (*generic_keys, *keys))
@@ -1540,6 +1815,34 @@ def _validate_reviewed_gap_reason(raw: Any, label: str) -> str | None:
     _reject_non_ascii_context(raw, label)
     _reject_secret_looking_identifier(raw, label)
     return raw
+
+
+def _path_contains_component_sequence(raw: str, components: tuple[str, ...]) -> bool:
+    parts = [part.casefold() for part in raw.split("/") if part]
+    target = [part.casefold() for part in components]
+    if len(parts) < len(target):
+        return False
+    last_start = len(parts) - len(target)
+    return any(
+        parts[offset : offset + len(target)] == target
+        for offset in range(last_start + 1)
+    )
+
+
+def _xsd_manifest_is_repository_fixture(raw: str) -> bool:
+    return _path_contains_component_sequence(raw, REPOSITORY_XSD_FIXTURE_MANIFEST_PARTS)
+
+
+def _canary_config_path_is_repository_template(raw: str) -> bool:
+    return _path_contains_component_sequence(raw, REPOSITORY_CANARY_RUNBOOK_PARTS)
+
+
+def _trust_bundle_path_is_repository_template(raw: str) -> bool:
+    return _path_contains_component_sequence(raw, REPOSITORY_TRUST_BUNDLE_PARTS)
+
+
+def _receipt_path_is_repository_fixture(raw: str) -> bool:
+    return _path_contains_component_sequence(raw, REPOSITORY_XML_FIXTURE_PARTS)
 
 
 def _source_repository_component_is_placeholder(component: str) -> bool:
@@ -2125,6 +2428,8 @@ def _verify_xsd_summary_entries(
     schema_digests: list[str] = []
     schema_source_refs: list[str] = []
     schema_sources: list[dict[str, str]] = []
+    schema_ids_by_path: dict[str, str] = {}
+    schema_payload_roots_by_path: dict[str, str] = {}
     for offset, schema_raw in enumerate(schemas_raw):
         label = f"{path}.schemas[{offset}]"
         schema = _require_object(schema_raw, label)
@@ -2143,8 +2448,18 @@ def _verify_xsd_summary_entries(
                 path,
             )
         schema_ids.append(message_def_id)
-        _require_string(schema, "payload_root", label)
-        _require_string(schema, "target_namespace", label)
+        schema_payload_root = _require_xsd_identifier(schema, "payload_root", label)
+        target_namespace = _require_xsd_identifier(schema, "target_namespace", label)
+        expected_namespace = f"urn:iso:std:iso:20022:tech:xsd:{message_def_id}"
+        if target_namespace != expected_namespace:
+            _blocker(
+                blockers,
+                "xsd.schema_target_namespace_mismatch",
+                f"{label}.target_namespace does not match message_def_id",
+                path,
+            )
+        schema_ids_by_path[schema_path] = message_def_id
+        schema_payload_roots_by_path[schema_path] = schema_payload_root
         schema_sha256 = _require_sha256(schema, "sha256", label)
         schema_digests.append(schema_sha256)
         schema_only = _require_bool(schema, "schema_only", label)
@@ -2288,7 +2603,7 @@ def _verify_xsd_summary_entries(
         )
         fixture_paths.append(fixture_path)
         fixture_message_def_id = _require_message_def_id(fixture, "message_def_id", label)
-        _require_string(fixture, "payload_root", label)
+        fixture_payload_root = _require_xsd_identifier(fixture, "payload_root", label)
         fixture_digests.append(_require_sha256(fixture, "sha256", label))
         schema_backed = _require_bool(fixture, "schema_backed", label)
         schema_validated = _require_bool(fixture, "schema_validated", label)
@@ -2325,6 +2640,22 @@ def _verify_xsd_summary_entries(
                         path,
                     )
                 else:
+                    schema_message_def_id = schema_ids_by_path[schema_rel]
+                    if schema_message_def_id != fixture_message_def_id:
+                        _blocker(
+                            blockers,
+                            "xsd.fixture_schema_message_mismatch",
+                            f"{label}.schema message_def_id does not match fixture",
+                            path,
+                        )
+                    schema_payload_root = schema_payload_roots_by_path[schema_rel]
+                    if schema_payload_root != fixture_payload_root:
+                        _blocker(
+                            blockers,
+                            "xsd.fixture_payload_root_mismatch",
+                            f"{label}.schema payload_root does not match fixture",
+                            path,
+                        )
                     backed_schema_paths.add(schema_rel)
         else:
             computed_missing_schema += 1
@@ -2534,6 +2865,13 @@ def _verify_xsd_profile_catalog_entries(
         f"{path}.profile_catalog",
     )
     _reject_path_smuggling(profile_catalog_path, f"{path}.profile_catalog.path")
+    if _receipt_path_is_repository_fixture(profile_catalog_path):
+        _blocker(
+            blockers,
+            "xsd.repository_profile_catalog",
+            "XSD summary profile catalog path points at checked-in ISO fixture artifacts",
+            path,
+        )
     profile_catalog_sha256 = _require_sha256(
         profile_catalog,
         "sha256",
@@ -2577,6 +2915,7 @@ def _verify_xsd_profile_catalog_entries(
         profile_catalog.get("skipped_family_versions"),
         f"{path}.profile_catalog.skipped_family_versions",
     )
+    represented_profile_ids: set[str] = set()
     seen_skipped: dict[tuple[str, str, str, str], int] = {}
     for offset, raw_skipped in enumerate(skipped_raw):
         label = f"{path}.profile_catalog.skipped_family_versions[{offset}]"
@@ -2588,6 +2927,7 @@ def _verify_xsd_profile_catalog_entries(
             _require_profile_direction(skipped, "direction", label),
             _require_profile_catalog_version(skipped, "version", label),
         )
+        represented_profile_ids.add(key[0])
         if MESSAGE_DEF_ID_RE.fullmatch(key[3]) is not None:
             _blocker(
                 blockers,
@@ -2633,6 +2973,7 @@ def _verify_xsd_profile_catalog_entries(
         version = _require_object(raw_version, label)
         _reject_unknown_keys(version, XSD_PROFILE_VERSION_KEYS, label)
         key = _profile_version_key(version, label)
+        represented_profile_ids.add(key[0])
         if key in seen_versions:
             _blocker(
                 blockers,
@@ -2655,6 +2996,13 @@ def _verify_xsd_profile_catalog_entries(
             blockers,
             "xsd.profile_schema_backed_count_mismatch",
             "XSD summary profile_schema_backed_versions does not match profile catalog",
+            path,
+        )
+    if len(represented_profile_ids) != catalog_profiles:
+        _blocker(
+            blockers,
+            "xsd.profile_catalog_profile_count_mismatch",
+            "XSD profile_catalog.profiles does not match represented profile IDs",
             path,
         )
 
@@ -2749,6 +3097,10 @@ def _verify_receipt_summary(
     for offset, item in enumerate(receipt_kind_raw):
         if not isinstance(item, str) or not item.strip():
             raise ReadinessError(f"{label}.receipt_kind must contain strings")
+        if len(item) > MAX_CLEAN_STRING_CHARS:
+            raise ReadinessError(
+                f"{label}.receipt_kind[{offset}] must be no longer than {MAX_CLEAN_STRING_CHARS} characters"
+            )
         if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in item):
             raise ReadinessError(
                 f"{label}.receipt_kind[{offset}] must not contain control characters"
@@ -2942,6 +3294,7 @@ def _verify_receipt_summary(
             receipt_kind=receipt_kind,
             allow_legacy_colr007=allow_legacy_colr007,
             allow_default_profile=allow_default_profile,
+            require_source_files=require_source_files,
             metadata_code=metadata_code,
         )
         if receipt_kind == "iso-rail-gateway":
@@ -3020,6 +3373,13 @@ def verify_xsd_summary(
             f"XSD summary version must be {XSD_SUMMARY_VERSION}",
             path,
         )
+    if _receipt_path_is_repository_fixture(str(path)):
+        _blocker(
+            blockers,
+            "xsd.repository_xsd_summary",
+            "XSD summary path points at checked-in ISO fixture artifacts",
+            path,
+        )
     verified_at, verified_at_dt = _require_timestamp(summary, "verified_at", str(path))
     _block_if_stale(
         verified_at_dt,
@@ -3031,6 +3391,7 @@ def verify_xsd_summary(
     )
     manifest = _require_string(summary, "manifest", str(path))
     _reject_path_smuggling(manifest, f"{path}.manifest")
+    repository_fixture_manifest = _xsd_manifest_is_repository_fixture(manifest)
     manifest_sha256 = _require_sha256(summary, "manifest_sha256", str(path))
     verified_schemas = _require_positive_int(summary, "verified_schemas", str(path))
     verified_fixtures = _require_positive_int(summary, "verified_fixtures", str(path))
@@ -3164,9 +3525,30 @@ def verify_xsd_summary(
                 path,
             )
 
+    has_reviewed_xsd_gap = (
+        repository_fixture_manifest
+        or bool(missing_schema_fixtures)
+        or bool(schema_only_entries)
+        or bool(blocked_schema_sources)
+    )
+
+    def reviewed_gap_target() -> list[dict[str, Any]]:
+        return warnings if allow_reviewed_xsd_gaps and has_reviewed_xsd_gap else blockers
+
+    if repository_fixture_manifest:
+        reviewed_gap_target().append(
+            {
+                "code": "xsd.repository_fixture_manifest",
+                "message": (
+                    "XSD summary was generated from the repository ISO fixture "
+                    "manifest; production evidence must use an operator-supplied "
+                    "official MDR/XSD package manifest"
+                ),
+                "path": str(path),
+            }
+        )
     if not require_schema_backed:
-        target = warnings if allow_reviewed_xsd_gaps else blockers
-        target.append(
+        reviewed_gap_target().append(
             {
                 "code": "xsd.strict_schema_backed_not_proven",
                 "message": "XSD summary was not produced with --require-schema-backed-fixtures",
@@ -3174,8 +3556,7 @@ def verify_xsd_summary(
             }
         )
     if not require_fixture_for_schema:
-        target = warnings if allow_reviewed_xsd_gaps else blockers
-        target.append(
+        reviewed_gap_target().append(
             {
                 "code": "xsd.strict_fixture_for_schema_not_proven",
                 "message": "XSD summary was not produced with --require-fixture-for-schema",
@@ -3183,8 +3564,7 @@ def verify_xsd_summary(
             }
         )
     if not require_profile_schema_backed:
-        target = warnings if allow_reviewed_xsd_gaps else blockers
-        target.append(
+        reviewed_gap_target().append(
             {
                 "code": "xsd.profile_schema_backed_not_proven",
                 "message": (
@@ -3195,8 +3575,7 @@ def verify_xsd_summary(
             }
         )
     if not validate_xml_schema:
-        target = warnings if allow_reviewed_xsd_gaps else blockers
-        target.append(
+        reviewed_gap_target().append(
             {
                 "code": "xsd.xml_schema_validation_not_proven",
                 "message": "XSD summary was not produced with --validate-xml-schema",
@@ -3204,8 +3583,7 @@ def verify_xsd_summary(
             }
         )
     if missing_schema_fixtures:
-        target = warnings if allow_reviewed_xsd_gaps else blockers
-        target.append(
+        reviewed_gap_target().append(
             {
                 "code": "xsd.missing_schema_fixtures",
                 "message": f"{len(missing_schema_fixtures)} XML fixtures are not schema-backed",
@@ -3214,8 +3592,7 @@ def verify_xsd_summary(
             }
         )
     if schema_only_entries:
-        target = warnings if allow_reviewed_xsd_gaps else blockers
-        target.append(
+        reviewed_gap_target().append(
             {
                 "code": "xsd.schema_only_entries",
                 "message": f"{len(schema_only_entries)} XSDs have no standalone XML fixture",
@@ -3231,8 +3608,7 @@ def verify_xsd_summary(
             path,
         )
     if missing_profile_schema_versions:
-        target = warnings if allow_reviewed_xsd_gaps else blockers
-        target.append(
+        reviewed_gap_target().append(
             {
                 "code": "xsd.missing_profile_schema_versions",
                 "message": (
@@ -3346,10 +3722,24 @@ def _verify_canary(
         _require_string(canary, "path", label),
         f"{label}.path",
     )
+    if _receipt_path_is_repository_fixture(canary_path):
+        _blocker(
+            blockers,
+            "evidence.repository_canary_summary",
+            "canary summary path points at checked-in ISO fixture artifacts",
+            path,
+        )
     config_path = _validate_config_path(
         _require_string(canary, "config_path", label),
         f"{label}.config_path",
     )
+    if _canary_config_path_is_repository_template(config_path):
+        _blocker(
+            blockers,
+            "evidence.repository_canary_config",
+            "canary summary references checked-in operator canary template config",
+            path,
+        )
     summary_sha256 = _require_sha256(canary, SUMMARY_DIGEST_FIELD, label)
     version = canary.get("version")
     if (
@@ -3407,6 +3797,10 @@ def _verify_canary(
     for offset, item in enumerate(stage_names_raw):
         if not isinstance(item, str) or not item.strip():
             raise ReadinessError(f"{label}.stage_names must contain non-empty strings")
+        if len(item) > MAX_CLEAN_STRING_CHARS:
+            raise ReadinessError(
+                f"{label}.stage_names[{offset}] must be no longer than {MAX_CLEAN_STRING_CHARS} characters"
+            )
         if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in item):
             raise ReadinessError(
                 f"{label}.stage_names[{offset}] must not contain control characters"
@@ -3571,6 +3965,17 @@ def _verify_trust_profile(
     blockers: list[dict[str, Any]],
 ) -> dict[str, Any]:
     _reject_unknown_keys(profile, TRUST_PROFILE_KEYS, label)
+    bundle_path = _validate_trust_bundle_path(
+        _require_string(profile, "path", label),
+        f"{label}.path",
+    )
+    if _trust_bundle_path_is_repository_template(bundle_path):
+        _blocker(
+            blockers,
+            "trust.repository_trust_bundle",
+            "trust profile references checked-in trust-bundle template",
+            path,
+        )
     profile_id = _require_profile_id(profile, "profile_id", label)
     rail = _require_rail(profile, "rail", label)
     environment = _require_context_string(profile, "environment", label)
@@ -3637,6 +4042,17 @@ def _verify_trust_profile(
         raise ReadinessError(
             f"{label}.x509_ocsp_response_der length does not match x509_ocsp_response_count"
         )
+    _block_compact_der_role_reuse(
+        (
+            ("x509_trust_anchor_der", trust_anchor_der),
+            ("revoked_certificate_der", revoked_der),
+            ("x509_crl_der", x509_crl_der),
+            ("x509_ocsp_response_der", x509_ocsp_response_der),
+        ),
+        label,
+        path,
+        blockers,
+    )
     if "source" not in profile:
         raise ReadinessError(f"{label}.source must be a JSON object")
     source_raw = profile["source"]
@@ -3758,6 +4174,7 @@ def _verify_trust_profile(
             path,
         )
     result = {
+        "path": bundle_path,
         "profile_id": profile_id,
         "rail": rail,
         "environment": environment,
@@ -3934,6 +4351,18 @@ def _block_cross_canary_receipt_reuse(
 
     seen_paths: dict[str, tuple[int, int]] = {}
     seen_digests: dict[str, tuple[int, int]] = {}
+    source_material_checks: tuple[tuple[str, str], ...] = (
+        ("source_path", "evidence.canary_receipt_source_path_reused"),
+        ("payload_sha256", "evidence.canary_receipt_payload_digest_reused"),
+        ("anchor_path", "evidence.canary_receipt_anchor_path_reused"),
+        ("anchor_sha256", "evidence.canary_receipt_anchor_digest_reused"),
+        ("store_dir", "evidence.canary_receipt_store_dir_reused"),
+        ("index_path", "evidence.canary_receipt_index_path_reused"),
+        ("index_sha256", "evidence.canary_receipt_index_digest_reused"),
+    )
+    seen_source_material: dict[str, dict[str, tuple[int, int]]] = {
+        field: {} for field, _code in source_material_checks
+    }
     for canary_offset, canary in enumerate(canaries):
         receipt_summary = canary.get("receipt_summary")
         if receipt_summary is None:
@@ -3973,6 +4402,29 @@ def _block_cross_canary_receipt_reuse(
                     )
                 else:
                     seen_digests[receipt_sha256] = (canary_offset, receipt_offset)
+            for field, code in source_material_checks:
+                value = receipt.get(field)
+                if not isinstance(value, str):
+                    continue
+                seen_for_field = seen_source_material[field]
+                previous = seen_for_field.get(value)
+                if previous is None:
+                    seen_for_field[value] = (canary_offset, receipt_offset)
+                    continue
+                first_canary, first_receipt = previous
+                if first_canary == canary_offset:
+                    continue
+                _blocker(
+                    blockers,
+                    code,
+                    (
+                        f"canary_summaries[{canary_offset}].receipt_summary.receipts"
+                        f"[{receipt_offset}].{field} duplicates canary_summaries"
+                        f"[{first_canary}].receipt_summary.receipts"
+                        f"[{first_receipt}].{field}"
+                    ),
+                    path,
+                )
 
 
 def _block_cross_trust_profile_reuse(
@@ -4116,6 +4568,50 @@ def _block_cross_xsd_summary_reuse(
                     seen[value] = (summary_offset, item_offset)
 
 
+def _evidence_receipt_entries(
+    summary: dict[str, Any],
+    source: str,
+) -> list[tuple[int, int | None, dict[str, Any]]]:
+    entries: list[tuple[int, int | None, dict[str, Any]]] = []
+    if source == "canary":
+        for canary_offset, canary in enumerate(summary["canary_summaries"]):
+            receipt_summary = canary.get("receipt_summary")
+            if receipt_summary is None:
+                continue
+            for receipt_offset, receipt in enumerate(receipt_summary["receipts"]):
+                entries.append((receipt_offset, canary_offset, receipt))
+        return entries
+    if source == "archive":
+        archive_summary = summary["receipt_verification"]
+        if isinstance(archive_summary, dict):
+            for receipt_offset, receipt in enumerate(archive_summary["receipts"]):
+                entries.append((receipt_offset, None, receipt))
+        return entries
+    raise AssertionError(f"unsupported evidence receipt source {source!r}")
+
+
+def _evidence_receipt_field_path(
+    summary_offset: int,
+    source: str,
+    label: str,
+    receipt_offset: int,
+    parent_offset: int | None,
+    field: str,
+) -> str:
+    if source == "canary":
+        return (
+            f"evidence_summaries[{summary_offset}].canary_summaries"
+            f"[{parent_offset}].receipt_summary.receipts"
+            f"[{receipt_offset}].{field}"
+        )
+    if source == "archive":
+        return (
+            f"evidence_summaries[{summary_offset}].{label}.receipts"
+            f"[{receipt_offset}].{field}"
+        )
+    raise AssertionError(f"unsupported evidence receipt source {source!r}")
+
+
 def _block_cross_evidence_summary_reuse(
     evidence_summaries: list[dict[str, Any]],
     blockers: list[dict[str, Any]],
@@ -4186,45 +4682,29 @@ def _block_cross_evidence_summary_reuse(
     for source, field, label, code in receipt_checks:
         seen_receipts: dict[str, tuple[int, int, int | None]] = {}
         for summary_offset, summary in enumerate(evidence_summaries):
-            receipt_entries: list[tuple[int, int | None, dict[str, Any]]] = []
-            if source == "canary":
-                for canary_offset, canary in enumerate(summary["canary_summaries"]):
-                    receipt_summary = canary.get("receipt_summary")
-                    if receipt_summary is None:
-                        continue
-                    for receipt_offset, receipt in enumerate(receipt_summary["receipts"]):
-                        receipt_entries.append((receipt_offset, canary_offset, receipt))
-            else:
-                archive_summary = summary["receipt_verification"]
-                if isinstance(archive_summary, dict):
-                    for receipt_offset, receipt in enumerate(archive_summary["receipts"]):
-                        receipt_entries.append((receipt_offset, None, receipt))
+            receipt_entries = _evidence_receipt_entries(summary, source)
             for receipt_offset, parent_offset, receipt in receipt_entries:
                 value = receipt.get(field)
                 if not isinstance(value, str):
                     continue
                 if value in seen_receipts:
                     first_summary, first_receipt, first_parent = seen_receipts[value]
-                    if source == "canary":
-                        current_path = (
-                            f"evidence_summaries[{summary_offset}].canary_summaries"
-                            f"[{parent_offset}].receipt_summary.receipts"
-                            f"[{receipt_offset}].{field}"
-                        )
-                        first_path = (
-                            f"evidence_summaries[{first_summary}].canary_summaries"
-                            f"[{first_parent}].receipt_summary.receipts"
-                            f"[{first_receipt}].{field}"
-                        )
-                    else:
-                        current_path = (
-                            f"evidence_summaries[{summary_offset}].{label}.receipts"
-                            f"[{receipt_offset}].{field}"
-                        )
-                        first_path = (
-                            f"evidence_summaries[{first_summary}].{label}.receipts"
-                            f"[{first_receipt}].{field}"
-                        )
+                    current_path = _evidence_receipt_field_path(
+                        summary_offset,
+                        source,
+                        label,
+                        receipt_offset,
+                        parent_offset,
+                        field,
+                    )
+                    first_path = _evidence_receipt_field_path(
+                        first_summary,
+                        source,
+                        label,
+                        first_receipt,
+                        first_parent,
+                        field,
+                    )
                     _blocker(
                         blockers,
                         code,
@@ -4233,6 +4713,131 @@ def _block_cross_evidence_summary_reuse(
                     )
                 else:
                     seen_receipts[value] = (summary_offset, receipt_offset, parent_offset)
+
+    source_material_checks: tuple[tuple[str, str, str, str], ...] = (
+        (
+            "canary",
+            "source_path",
+            "canary_summaries",
+            "evidence.canary_receipt_source_path_reused",
+        ),
+        (
+            "canary",
+            "payload_sha256",
+            "canary_summaries",
+            "evidence.canary_receipt_payload_digest_reused",
+        ),
+        (
+            "canary",
+            "anchor_path",
+            "canary_summaries",
+            "evidence.canary_receipt_anchor_path_reused",
+        ),
+        (
+            "canary",
+            "anchor_sha256",
+            "canary_summaries",
+            "evidence.canary_receipt_anchor_digest_reused",
+        ),
+        (
+            "canary",
+            "store_dir",
+            "canary_summaries",
+            "evidence.canary_receipt_store_dir_reused",
+        ),
+        (
+            "canary",
+            "index_path",
+            "canary_summaries",
+            "evidence.canary_receipt_index_path_reused",
+        ),
+        (
+            "canary",
+            "index_sha256",
+            "canary_summaries",
+            "evidence.canary_receipt_index_digest_reused",
+        ),
+        (
+            "archive",
+            "source_path",
+            "receipt_verification",
+            "evidence.archive_receipt_source_path_reused",
+        ),
+        (
+            "archive",
+            "payload_sha256",
+            "receipt_verification",
+            "evidence.archive_receipt_payload_digest_reused",
+        ),
+        (
+            "archive",
+            "anchor_path",
+            "receipt_verification",
+            "evidence.archive_receipt_anchor_path_reused",
+        ),
+        (
+            "archive",
+            "anchor_sha256",
+            "receipt_verification",
+            "evidence.archive_receipt_anchor_digest_reused",
+        ),
+        (
+            "archive",
+            "store_dir",
+            "receipt_verification",
+            "evidence.archive_receipt_store_dir_reused",
+        ),
+        (
+            "archive",
+            "index_path",
+            "receipt_verification",
+            "evidence.archive_receipt_index_path_reused",
+        ),
+        (
+            "archive",
+            "index_sha256",
+            "receipt_verification",
+            "evidence.archive_receipt_index_digest_reused",
+        ),
+    )
+    for source, field, label, code in source_material_checks:
+        seen_receipts: dict[str, tuple[int, int, int | None]] = {}
+        for summary_offset, summary in enumerate(evidence_summaries):
+            for receipt_offset, parent_offset, receipt in _evidence_receipt_entries(
+                summary,
+                source,
+            ):
+                value = receipt.get(field)
+                if not isinstance(value, str):
+                    continue
+                if value not in seen_receipts:
+                    seen_receipts[value] = (summary_offset, receipt_offset, parent_offset)
+                    continue
+                first_summary, first_receipt, first_parent = seen_receipts[value]
+                if first_summary == summary_offset:
+                    continue
+                current_path = _evidence_receipt_field_path(
+                    summary_offset,
+                    source,
+                    label,
+                    receipt_offset,
+                    parent_offset,
+                    field,
+                )
+                first_path = _evidence_receipt_field_path(
+                    first_summary,
+                    source,
+                    label,
+                    first_receipt,
+                    first_parent,
+                    field,
+                )
+                _blocker(
+                    blockers,
+                    code,
+                    f"{current_path} duplicates {first_path}",
+                    Path(summary["path"]),
+                )
 
     seen_profile_ids: dict[str, tuple[int, int, int]] = {}
     seen_bundle_digests: dict[str, tuple[int, int, int]] = {}
@@ -4323,6 +4928,13 @@ def verify_evidence_summary(
         raise ReadinessError(f"{path}.version must be {EVIDENCE_VERSION}")
     if not _require_bool(summary, "ok", str(path)):
         _blocker(blockers, "evidence.summary_not_ok", "evidence summary is not ok", path)
+    if _receipt_path_is_repository_fixture(str(path)):
+        _blocker(
+            blockers,
+            "evidence.repository_evidence_summary",
+            "evidence summary path points at checked-in ISO fixture artifacts",
+            path,
+        )
     evidence_policy = _verify_policy(summary, path, args, blockers)
 
     canary_summaries = _require_list(summary.get("canary_summaries"), f"{path}.canary_summaries")
@@ -4382,6 +4994,13 @@ def verify_evidence_summary(
             _require_string(trust_obj, "path", label),
             f"{label}.path",
         )
+        if _receipt_path_is_repository_fixture(trust_path):
+            _blocker(
+                blockers,
+                "trust.repository_trust_summary",
+                "trust summary path points at checked-in ISO fixture artifacts",
+                path,
+            )
         verified_at_raw, verified_at_dt = _require_timestamp(trust_obj, "verified_at", label)
         _block_if_stale(
             verified_at_dt,
@@ -4602,9 +5221,18 @@ def _public_evidence_summary(summary: dict[str, Any]) -> dict[str, Any]:
 
 
 def run(args: argparse.Namespace) -> int:
-    if not args.xsd_summary:
+    xsd_summary_paths = list(args.xsd_summary or [])
+    evidence_summary_paths = list(args.evidence_summary or [])
+    if args.summary_out is not None:
+        _reject_output_path_smuggling(args.summary_out, "output path")
+        _reject_repository_output_path(args.summary_out, "output path")
+    for offset, path in enumerate(xsd_summary_paths):
+        _reject_output_path_smuggling(path, f"--xsd-summary[{offset}]")
+    for offset, path in enumerate(evidence_summary_paths):
+        _reject_output_path_smuggling(path, f"--evidence-summary[{offset}]")
+    if not xsd_summary_paths:
         raise ReadinessError("provide at least one --xsd-summary")
-    if not args.evidence_summary:
+    if not evidence_summary_paths:
         raise ReadinessError("provide at least one --evidence-summary")
     args.provider = _require_cli_string(args.provider, "--provider")
     args.environment = _require_cli_string(args.environment, "--environment")
@@ -4631,8 +5259,8 @@ def run(args: argparse.Namespace) -> int:
 
     blockers: list[dict[str, Any]] = []
     warnings: list[dict[str, Any]] = []
-    xsd_paths = list(args.xsd_summary)
-    evidence_paths = list(args.evidence_summary)
+    xsd_paths = xsd_summary_paths
+    evidence_paths = evidence_summary_paths
     _reject_duplicate_paths([path.resolve() for path in xsd_paths], "--xsd-summary")
     _reject_duplicate_paths([path.resolve() for path in evidence_paths], "--evidence-summary")
     xsd_summaries = [

@@ -47,6 +47,7 @@ import org.hyperledger.iroha.android.offline.UuidOfflineNoteIdGenerator;
 import org.hyperledger.iroha.android.testing.TestAccountIds;
 import org.hyperledger.iroha.norito.NoritoAdapters;
 import org.hyperledger.iroha.norito.NoritoCodec;
+import org.hyperledger.iroha.norito.NoritoHeader;
 import org.hyperledger.iroha.android.tx.offline.OfflineEnvelopeOptions;
 import org.hyperledger.iroha.android.tx.offline.OfflineTransactionBundle;
 
@@ -264,6 +265,34 @@ public final class TransactionBuilderTests {
     assertThrows(
         () -> KagemushaInstructionArchives.recursiveRedeemInstructionBox(tampered),
         "checksum drift must be rejected");
+
+    final byte[] compressed =
+        kagemushaArchive(KagemushaInstructionArchives.InstructionType.REDEEM_RECURSIVE);
+    compressed[22] = 1;
+    assertThrows(
+        () -> KagemushaInstructionArchives.recursiveRedeemInstructionBox(compressed),
+        "compressed archive must be rejected");
+
+    final byte[] unsupportedFlags =
+        kagemushaArchive(KagemushaInstructionArchives.InstructionType.REDEEM_RECURSIVE);
+    unsupportedFlags[39] = (byte) NoritoHeader.VARINT_OFFSETS;
+    assertThrows(
+        () -> KagemushaInstructionArchives.recursiveRedeemInstructionBox(unsupportedFlags),
+        "unsupported archive flags must be rejected");
+
+    final byte[] invalidFieldBitsetFlags =
+        kagemushaArchive(KagemushaInstructionArchives.InstructionType.REDEEM_RECURSIVE);
+    invalidFieldBitsetFlags[39] = (byte) NoritoHeader.FIELD_BITSET;
+    assertThrows(
+        () -> KagemushaInstructionArchives.recursiveRedeemInstructionBox(invalidFieldBitsetFlags),
+        "invalid field-bitset archive flags must be rejected");
+
+    final byte[] nonZeroPadding =
+        withNonZeroHeaderPadding(
+            kagemushaArchive(KagemushaInstructionArchives.InstructionType.REDEEM_RECURSIVE));
+    assertThrows(
+        () -> KagemushaInstructionArchives.recursiveRedeemInstructionBox(nonZeroPadding),
+        "non-zero header padding must be rejected");
   }
 
   private static void offlineCashLifecycleAndTransportGuards() throws Exception {
@@ -632,6 +661,19 @@ public final class TransactionBuilderTests {
 
   private static byte[] kagemushaArchive(final KagemushaInstructionArchives.InstructionType type) {
     return NoritoCodec.encode("payload", type.wireName(), NoritoAdapters.stringAdapter());
+  }
+
+  private static byte[] withNonZeroHeaderPadding(final byte[] archive) {
+    final byte[] padded = new byte[archive.length + 1];
+    System.arraycopy(archive, 0, padded, 0, NoritoHeader.HEADER_LENGTH);
+    padded[NoritoHeader.HEADER_LENGTH] = 0x7f;
+    System.arraycopy(
+        archive,
+        NoritoHeader.HEADER_LENGTH,
+        padded,
+        NoritoHeader.HEADER_LENGTH + 1,
+        archive.length - NoritoHeader.HEADER_LENGTH);
+    return padded;
   }
 
   @SuppressWarnings("unchecked")

@@ -158,6 +158,7 @@ export {
   PRIVACY_REQUIRED_BRIDGE_ABI_VERSION,
   isPrivacyNativeAvailable,
   privacyCapabilitiesV1,
+  privacyProofRequestV1,
   privacyBuildProofV1,
   privacyVerifyProofV1,
   SM2_PRIVATE_KEY_LENGTH,

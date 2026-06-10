@@ -111,8 +111,10 @@ verifier is exposed separately as
 `verifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(...)`; gate it with
 `isProjectionVerifierNativeAvailable()`. It accepts raw Norito compact-token
 and verifier-record archives, rejects empty, malformed, oversized, or
-negative-height inputs before JNI dispatch, and returns the native boolean
-receiver result. ABI 7 now carries the one-hop LEN=4 and package-backed
+negative signed-height inputs before JNI dispatch, accepts full `u64`
+activation heights through canonical unsigned decimal `String` or `BigInteger`
+overloads, and returns the native boolean receiver result. ABI 7 now carries the
+one-hop LEN=4 and package-backed
 multi-hop compact-token proof paths when the native bundle includes packaged
 compact proving-key archives and matching verifier-slice material. Production
 defaults still stay on ABI 6 Reserved-lineage recursive spend until that

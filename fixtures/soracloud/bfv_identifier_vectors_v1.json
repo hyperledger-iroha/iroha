@@ -329,9 +329,9 @@
       }
     },
     "evaluation_key_bundle": {
-      "expected_norito_bytes": 204962,
-      "expected_sha256": "13CF947583EB461AB21812E64E7B80610230D204A7278394CE7A37B1D571E4B8",
-      "expected_digest_hex": "9148a1a3efcc085473bddd0dd60a053d7c579516f5727d412134a2a655fb176f",
+      "expected_norito_bytes": 204997,
+      "expected_sha256": "9731A920FA1C43BD376D4B47A0E5A564E702673AF23B2A5E63B99F2D4F0F24C2",
+      "expected_digest_hex": "b86b43840561dbe36abd03475c2af78a40b4b8a25d4f92ed5172d0c5d530f15b",
       "decomposition_base_log": 12,
       "decomposition_digit_count": 5,
       "relinearization_entry_count": 5,
@@ -1898,14 +1898,14 @@
       "blind_rotation_key_digest_hex": "487d0522196b9c2f6ff4b5d5a4dbe8b8c199f2c1deb88ec17f528c34d5e39c8d",
       "sample_extraction_key_digest_hex": "cd71c60067430e5a5361c069297d4dd284fb320996191a12bdc296693e052779",
       "accumulator_digest_hex": "b0f8780b34bb72f204d23a86d18f345975ce6c6ac0f22b20952e8dd77c684d5d",
-      "proof_public_input_schema_digest_hex": "1ac4d2baa55297d601efb1a4330e58b80f17c76c63907bcb8de1e8b463290ae1",
-      "prover_key_digest_hex": "868b124bc574b009eee17d3c46a44963dac58084c9345c2336eda637c89e634b",
-      "prover_key_material_commitment_hex": "9b655256d6e3d24554fe32fdcdd0d96387c7e131c5df0289bb2ac9ca97cc5d81",
+      "proof_public_input_schema_digest_hex": "e0c273e68e8166f653e2875421834d5db62a5d6ce3a6e860e9c20b239de243ed",
+      "prover_key_digest_hex": "eaf5e71fced3a135b2277ca2b86d095f07180705ccf13f7f0a059fe5e460b1a3",
+      "prover_key_material_commitment_hex": "d4291c0935b25063f4e25b90c50df891803646f13d1d584e1cff90c68e9b6cad",
       "verifier_key_digest_hex": "63c5755db74a73b47b9c4a38420a86f807c181bee9357eace19c235644a854ad",
       "verifier_key_material_commitment_hex": "756f1bb101584fecb180ae4f484533377c07e27d7395609388d072dde88fd88d",
       "vk_commitment_hex": "756f1bb101584fecb180ae4f484533377c07e27d7395609388d072dde88fd88d",
-      "expected_material_digest_hex": "90c13cd9a434a38474dac2a04cca04a9939be6c38dbf092063f471b4ca291991",
-      "expected_statement_digest_hex": "76d90473846f6bde7a478fdcbe719f78669a98576a2872ef07b8d0557a9edb85"
+      "expected_material_digest_hex": "6077c2ef617426b369fc7cf18730ca92af6c4e7502ac38566a21d77e9a485483",
+      "expected_statement_digest_hex": "6302e1a3589072164ce36663ef081308778c3ae24b80333c28839282007a7e9d"
     },
     "bootstrap_refresh_vectors": [
       {

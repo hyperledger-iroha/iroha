@@ -302,7 +302,7 @@ also be ordinary non-symlink, non-hardlinked files with symlink-free ancestors
 before their contents can satisfy readiness, with ABI-6 manifest JSON and
 marker text decoded from the same opened regular files after path-identity
 revalidation and the ABI-6 manifest JSON capped at 1 MiB before parsing,
-while ABI-7 and Reserved-lineage marker text reads are capped at 2 MiB so
+while ABI-7 and Reserved-lineage marker text reads are capped at 8 MiB so
 large checked-in Rust bridge files remain bounded without becoming false
 readiness blockers,
 then hashes and parses the local proof log from the same opened regular file
@@ -388,7 +388,7 @@ source marker text reads also rerun the source-marker file validator immediately
 before loading marker text and bind the opened read to that preflight `lstat()`
 identity, so symlink, hardlink, non-regular, secret-bearing, or post-preflight
 regular-file source aliases cannot satisfy readiness markers after an earlier
-check. Source-marker text reads are capped at 2 MiB using opened-file metadata
+check. Source-marker text reads are capped at 8 MiB using opened-file metadata
 and streamed byte counts. Unreadable source-marker leaf metadata, unreadable
 marker bytes, or non-UTF-8 ABI-7 and Reserved-lineage marker files return
 structured blockers instead of raw decode errors. The
@@ -503,8 +503,11 @@ verification also revalidates required artifact paths for secret-looking names,
 symlinks, hardlinks, and non-regular files immediately before hashing the bytes
 claimed by `artifact_digests`, including the `slot.json` release APK,
 attestation certificate-chain, D2D handoff, and wallet-integrity transcript
-paths, and binds each digest to the opened file identity with a 16 MiB cap so
-post-preflight regular-file swaps fail closed. The Android device-lab root validator
+paths, and binds each digest to the opened file identity. Telemetry,
+transcript, report, log, and certificate-chain artifacts keep the 16 MiB cap;
+the offline wallet APK path is capped separately at 64 MiB so arm64 JNI proof
+bridge builds fit without relaxing the smaller evidence artifacts.
+Post-preflight regular-file swaps still fail closed. The Android device-lab root validator
 also rejects secret-looking paths and unreadable root metadata before slot
 discovery, and scan_slot(...) rejects unreadable slot directory or parent metadata
 before slot traversal. Scanner and rollup missing-root decisions also consume
@@ -541,7 +544,8 @@ also classifies slot-relative ancestor directories with
 `Path.is_symlink()`. Slot-metadata digest checks also revalidate `slot.json`-referenced
 attestation-chain, offline-wallet APK, and signed-evidence artifact paths before
 reading bytes for SHA-256 comparison, then bind the bytes to the opened file
-identity with a 16 MiB cap so post-preflight regular-file swaps fail closed. D2D handoff and
+identity using the same 16 MiB evidence cap and 64 MiB APK cap so
+post-preflight regular-file swaps fail closed. D2D handoff and
 wallet-integrity transcript bindings, including `queue/pending_queue.json`, use
 the same digest-time revalidation before comparing SHA-256 values. Required
 status NDJSON and runtime log marker checks also revalidate their slot-relative
@@ -564,9 +568,12 @@ digests also distinguish missing files from unreadable leaf metadata before
 classifying symlink, non-regular, hardlink, or read failures.
 
 Capture the production ignored proof log into the same artifact directory and
-build the evidence JSON from those local bytes:
+build the evidence JSON from those local bytes. Enable `pipefail` before the
+capturing pipelines so `tee` cannot mask a terminated prover or key-generation
+process:
 
 ```bash
+set -o pipefail
 SECONDS=0
 cargo test -p iroha_core \
   kagemusha_recursive_spend_lineage_init_append_from_record_archives_proves_reserved_lineage_output \
@@ -578,6 +585,23 @@ python3 scripts/kagemusha_lineage_proof_evidence.py \
   --artifact-dir artifacts/kagemusha \
   --proof-log artifacts/kagemusha/record-archive-proof.log \
   --elapsed-seconds "$elapsed_seconds" \
+  --out artifacts/kagemusha/lineage-proof-evidence.json
+
+# If the production proof ran in a detached staging directory, finalize only
+# after its wrapper has written a zero exit marker. The wrapper also captures
+# the lineage key artifacts. With no path flags, the runner and finalizer both
+# use the symlink-free resolution of /tmp, for example /private/tmp on macOS.
+python3 scripts/kagemusha_run_lineage_proof_staged.py \
+  --repo-root . \
+  --staged-artifact-dir <staged>/artifacts/kagemusha \
+  --exit-file <staged-exit-file> \
+  --elapsed-seconds-file <staged-elapsed-seconds-file>
+
+python3 scripts/kagemusha_finalize_lineage_proof_staged_run.py \
+  --staged-artifact-dir <staged>/artifacts/kagemusha \
+  --exit-file <staged-exit-file> \
+  --elapsed-seconds-file <staged-elapsed-seconds-file> \
+  --artifact-dir artifacts/kagemusha \
   --out artifacts/kagemusha/lineage-proof-evidence.json
 
 iroha app zk kagemusha recursive-compact-key-artifacts \
@@ -595,7 +619,101 @@ python3 scripts/kagemusha_recursive_compact_key_evidence.py \
   --generator-log artifacts/kagemusha/recursive-compact-key-artifacts.log \
   --generated-at-utc "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --out artifacts/kagemusha/recursive-compact-key-evidence.json
+
+# If the compact keygen must run detached, run it through the staged wrapper
+# first. It captures the generator log and writes the real process exit marker.
+# With no path flags, the runner and finalizer both use the symlink-free
+# resolution of /tmp, for example /private/tmp on macOS.
+python3 scripts/kagemusha_run_recursive_compact_keygen_staged.py \
+  --staged-artifact-dir <staged>/artifacts/kagemusha \
+  --exit-file <staged-exit-file>
+
+# Finalize only after the staged wrapper has written a zero exit marker.
+python3 scripts/kagemusha_finalize_recursive_compact_key_staged_run.py \
+  --staged-artifact-dir <staged>/artifacts/kagemusha \
+  --exit-file <staged-exit-file> \
+  --artifact-dir artifacts/kagemusha \
+  --out artifacts/kagemusha/recursive-compact-key-evidence.json
 ```
+
+The staged Reserved-lineage finalizer performs the same artifact, proof-log,
+command, timestamp, and digest checks as the direct helper, but additionally
+requires the detached wrapper's zero exit marker and refuses to overwrite any
+published lineage artifact or `lineage-proof-evidence.json` unless `--replace`
+is explicit. After installing each staged file into the published artifact
+directory, it reopens the published file through the identity-bound artifact
+reader and byte-compares it against the staged source so post-install drift
+fails before the final evidence check. The staged runner first runs the canonical init and append
+`iroha app zk kagemusha lineage-key-artifacts` commands from the staged root so
+the relative `artifacts/kagemusha/...` outputs match the release contract, then
+preserves the real keygen or cargo exit code in `<staged-exit-file>` instead of
+normalizing failures to success. Each init, append, and proof phase also writes
+a closed-schema execution report beside its log, recording the canonical
+command, phase, exit code, elapsed seconds, and log byte count. The runner
+writes `record-archive-proof.log` only after the canonical production command
+returns, writes
+`lineage-proof-staged-run.json` with the canonical command, exit code, elapsed
+seconds, proof-log filename, proof-log byte count, and init/append
+lineage-key-artifact log byte counts, and refuses to overwrite previous staged
+key artifacts, staged keygen logs, proof logs, execution reports, run reports,
+elapsed-time files, or exit markers unless `--replace` is explicit. The
+explicit `--resume-key-artifacts` mode is narrower than `--replace`: it reuses
+an init or append key-artifact phase only when all four profile artifacts, the
+phase log, and a zero-exit execution report validate with the canonical command
+and matching log byte count. Missing, failed, or otherwise invalid regular
+phase outputs are replaced and rerun, while symlinked, hardlinked, or special
+staged outputs still fail closed before anything is removed. Resume also
+replaces stale proof logs, proof execution reports, run reports, elapsed files,
+and exit markers so a previous nonzero proof or keygen marker cannot block a
+validated phase-boundary retry. `--resume-key-artifacts` and `--replace` are
+mutually exclusive, so operators must choose either selective validated resume
+or full staged-output replacement before any cleanup can occur. The
+runner reopens each installed metadata file after the atomic rename, checks the
+opened file identity, and compares the exact bytes so marker, elapsed, and JSON
+report drift fails before finalization. The
+finalizer applies that
+runner-report binding whenever the exit marker claims success, rejects
+exit-code, elapsed-second, proof-log-size, or lineage-key-artifact log-size
+drift between the marker, elapsed file, report, and staged logs, and still
+refuses to publish any artifacts from nonzero staged exits. Marker failures are
+reported before success-only elapsed, command, timestamp, or run-report checks
+so a partial stage cannot obscure the root failure. When the staged subprocess
+terminates with a signal-style negative status, the runner returns a
+conventional nonzero wrapper status while preserving the exact subprocess code
+in the staged marker and report.
+The ABI-7 compact-key staged runner applies the same detached-run contract for
+the key-generation command: it runs the canonical
+`iroha app zk kagemusha recursive-compact-key-artifacts` command from the
+staged root, captures `recursive-compact-key-artifacts.log`, preserves the real
+keygen exit code in `<staged-exit-file>`, writes a closed-schema
+`recursive-compact-key-execution.json` with the canonical command, phase, exit
+code, elapsed seconds, and generator-log byte count, writes
+`recursive-compact-key-staged-run.json` with the canonical command, exit code,
+elapsed seconds, generator-log filename, and generator-log byte count, and
+refuses to overwrite staged key artifacts, generator logs, execution reports,
+run reports, or exit markers unless `--replace` is explicit. The compact-key
+runner's explicit `--resume-keygen` mode reuses only a complete staged keygen
+whose artifacts, generator log, zero-exit execution report, zero-exit run
+report, and zero exit marker all validate against the canonical command and
+current generator-log byte count. If regular staged outputs are missing,
+nonzero, or malformed, resume replaces the whole compact keygen stage and
+reruns it; symlinked, hardlinked, special, or secret-looking staged outputs
+still fail closed before cleanup. `--resume-keygen` and `--replace` are
+mutually exclusive, so a caller cannot accidentally request both a validated
+resume and destructive staged-output replacement. The compact-key
+runner also reopens marker and JSON report outputs after the atomic rename,
+checks the opened file identity, and compares the exact bytes before returning.
+The compact-key finalizer requires that
+run report whenever the exit marker claims success, rejects exit-code or
+generator-log-size drift between the marker, report, and staged log, and still
+refuses to publish any artifacts from nonzero staged exits. It also reopens each
+published key artifact, generator log, and evidence JSON after the final
+install and compares the identity-bound readback against the staged bytes before
+success is reported. Marker failures are
+reported before success-only command, timestamp, or run-report checks. The
+compact runner uses the same wrapper-exit convention: its process status is
+conventional, but the exact keygen status remains bound in the marker and run
+report.
 
 After `scripts/kagemusha_production_readiness.py` writes a ready
 `dist/kagemusha-production-readiness.json`, package release evidence with the
@@ -695,22 +813,39 @@ rejects obvious plain-text or all-zero placeholder compact key artifacts before 
 evidence JSON. It also requires `recursive-compact-key-artifacts.log` beside the
 key artifacts and verifies that the canonical generator summary sizes match the
 local `.vk`, `.pk`, key-artifacts package, verifier-keys package, and
-`.record.norito` files.
+`.record.norito` files. The staged compact-key finalizer adds a zero-exit-marker
+gate plus a runner-report binding for successful staged exits, refuses
+destination overwrites unless `--replace` is explicit, reopens each published
+file after install to compare it with the staged source bytes, and runs the same
+generator-log and evidence checks before reporting staged artifacts as
+published.
 The readiness summary writer, Android device-lab summary writer, Android
 signed-evidence helper, both evidence helpers, and the release-bundle writer
 serialize with strict JSON; non-finite values such as `NaN` and
 `Infinity` fail before any temporary release output is created.
 The lineage and compact-key evidence helpers apply the same strict JSON
-serialization before creating validation scratch files under `--artifact-dir`.
+serialization before creating validation scratch files under `--artifact-dir`
+and report validation scratch-file cleanup failures even when the scratch write
+itself fails.
 The readiness summary writer enforces a 16 MiB `--summary-out` cap before
-temporary-file creation and during final opened-file readback. The lineage and
-compact-key evidence helpers also enforce the readiness evidence JSON byte caps
+temporary-file creation, during final opened-file readback, and reports
+temporary-file cleanup failures after write or post-stage output-validation
+errors. The lineage and compact-key
+evidence helpers also enforce the readiness evidence JSON byte caps
 before creating `--out` temporary files and again while reading back the opened
 output file after atomic replacement, so oversized same-inode output growth
-cannot be accepted as a verified write.
+cannot be accepted as a verified write, and they report temporary-file cleanup
+failures after output write or post-stage output-validation errors.
 The release-bundle writer applies the same pattern to its manifest output with
 a 16 MiB cap before temporary-file creation and during final opened-file
-readback.
+readback, and reports temporary-file cleanup failures after write or post-stage
+output-validation errors as structured blockers.
+The Android device-lab summary writer and Android signed-evidence helper
+atomic output writer also report temporary-file cleanup failures after write
+or post-stage output-validation errors instead of swallowing failed cleanup.
+All of these release-output writers also fail closed if the parent-directory
+sync after atomic replacement fails, so a release/readiness artifact is not
+accepted as durable when the directory entry cannot be fsynced.
 Android signed-evidence canonical signature payloads also serialize with strict
 JSON before hashing, signing, or verification, so non-standard constants cannot
 become signed bytes.

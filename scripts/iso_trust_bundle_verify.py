@@ -46,6 +46,11 @@ MAX_DER_BASE64_CHARS = ((MAX_DER_BYTES + 2) // 3) * 4
 MAX_BUNDLE_JSON_BYTES = 64 * 1024 * 1024
 MAX_SOURCE_URL_CHARS = 2048
 MAX_LOCAL_PATH_CHARS = 4096
+MAX_CLEAN_STRING_CHARS = 4096
+REPOSITORY_XML_FIXTURE_PARTS = (
+    "fixtures",
+    "iso20022",
+)
 MAX_PROFILE_ID_CHARS = 128
 MAX_TRUST_POLICY_CHARS = 128
 MAX_TRUST_SOURCE_TEXT_CHARS = 256
@@ -428,8 +433,32 @@ def _preflight_output_cli_paths(argv: list[str] | None, flags: set[str]) -> None
             index += 1
 
 
+def _path_contains_component_sequence(raw: str, components: tuple[str, ...]) -> bool:
+    parts = [part.casefold() for part in raw.split("/") if part]
+    target = [part.casefold() for part in components]
+    if len(parts) < len(target):
+        return False
+    last_start = len(parts) - len(target)
+    return any(
+        parts[offset : offset + len(target)] == target
+        for offset in range(last_start + 1)
+    )
+
+
+def _output_path_is_repository_iso_fixture(raw: str) -> bool:
+    return _path_contains_component_sequence(raw, REPOSITORY_XML_FIXTURE_PARTS)
+
+
+def _reject_repository_output_path(path: Path, label: str) -> None:
+    if _output_path_is_repository_iso_fixture(str(path)):
+        raise TrustBundleError(
+            f"{label} must not point to checked-in ISO fixture artifacts"
+        )
+
+
 def _write_text_output(path: Path, text: str) -> None:
     _reject_output_path_smuggling(path, "output path")
+    _reject_repository_output_path(path, "output path")
     _reject_symlinked_existing_ancestors(path.parent)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -727,10 +756,18 @@ def _reject_url_percent_encoding_smuggling(url: str, label: str) -> None:
         index += 3
 
 
-def _required_string(bundle: dict[str, Any], key: str, label: str) -> str:
+def _required_string(
+    bundle: dict[str, Any],
+    key: str,
+    label: str,
+    *,
+    max_chars: int | None = MAX_CLEAN_STRING_CHARS,
+) -> str:
     raw = bundle.get(key)
     if not isinstance(raw, str) or not raw.strip():
         raise TrustBundleError(f"{label}.{key} must be a non-empty string")
+    if max_chars is not None and len(raw) > max_chars:
+        raise TrustBundleError(f"{label}.{key} must be no longer than {max_chars} characters")
     _reject_ascii_control(raw, f"{label}.{key}")
     if raw != raw.strip():
         raise TrustBundleError(f"{label}.{key} must not have surrounding whitespace")
@@ -759,12 +796,20 @@ def _required_rail(bundle: dict[str, Any], key: str, label: str) -> str:
     return raw
 
 
-def _optional_string(bundle: dict[str, Any], key: str, label: str) -> str | None:
+def _optional_string(
+    bundle: dict[str, Any],
+    key: str,
+    label: str,
+    *,
+    max_chars: int | None = MAX_CLEAN_STRING_CHARS,
+) -> str | None:
     if key not in bundle:
         return None
     raw = bundle.get(key)
     if not isinstance(raw, str) or not raw.strip():
         raise TrustBundleError(f"{label}.{key} must be a non-empty string when provided")
+    if max_chars is not None and len(raw) > max_chars:
+        raise TrustBundleError(f"{label}.{key} must be no longer than {max_chars} characters")
     _reject_ascii_control(raw, f"{label}.{key}")
     if raw != raw.strip():
         raise TrustBundleError(f"{label}.{key} must not have surrounding whitespace")
@@ -854,6 +899,10 @@ def _oid_list(bundle: dict[str, Any], key: str, label: str) -> list[str]:
     for offset, item in enumerate(raw):
         if not isinstance(item, str):
             raise TrustBundleError(f"{label}.{key}[{offset}] must be a dotted numeric OID")
+        if len(item) > MAX_CLEAN_STRING_CHARS:
+            raise TrustBundleError(
+                f"{label}.{key}[{offset}] must be no longer than {MAX_CLEAN_STRING_CHARS} characters"
+            )
         if item != item.strip():
             raise TrustBundleError(f"{label}.{key}[{offset}] must not have surrounding whitespace")
         value = item
@@ -1103,7 +1152,12 @@ def _der_objects(
             if name in seen_labels:
                 raise TrustBundleError(f"{label}.{key}[{offset}].label duplicates label")
             seen_labels.add(name)
-        der_b64 = _required_string(obj, "der_base64", f"{label}.{key}[{offset}]")
+        der_b64 = _required_string(
+            obj,
+            "der_base64",
+            f"{label}.{key}[{offset}]",
+            max_chars=None,
+        )
         der, canonical_b64, is_synthetic_der = _strict_base64_der(
             der_b64,
             f"{label}.{key}[{offset}].der_base64",
@@ -1734,6 +1788,17 @@ def verify_bundle(
 
 
 def run(args: argparse.Namespace) -> int:
+    if args.summary_out is not None:
+        _reject_output_path_smuggling(args.summary_out, "output path")
+        _reject_repository_output_path(args.summary_out, "output path")
+    if args.emit_profile_json is not None:
+        _reject_output_path_smuggling(args.emit_profile_json, "output path")
+        _reject_repository_output_path(args.emit_profile_json, "output path")
+    bundle_paths = list(args.bundle or [])
+    for offset, path in enumerate(bundle_paths):
+        _reject_output_path_smuggling(path, f"--bundle[{offset}]")
+    if not bundle_paths:
+        raise TrustBundleError("provide at least one --bundle")
     args.max_source_age_days = _optional_positive_cli_int(
         args.max_source_age_days,
         "--max-source-age-days",
@@ -1749,7 +1814,6 @@ def run(args: argparse.Namespace) -> int:
         and args.summary_out.resolve() == args.emit_profile_json.resolve()
     ):
         raise TrustBundleError("--summary-out and --emit-profile-json must be different paths")
-    bundle_paths = list(args.bundle)
     _reject_duplicate_paths([path.resolve() for path in bundle_paths], "--bundle")
     summaries = [
         verify_bundle(

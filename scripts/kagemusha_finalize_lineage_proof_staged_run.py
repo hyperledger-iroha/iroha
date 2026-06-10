@@ -1,0 +1,681 @@
+#!/usr/bin/env python3
+"""Finalize a completed staged Reserved-lineage proof run."""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import json
+import math
+import os
+from pathlib import Path
+import shutil
+import stat
+import sys
+import tempfile
+from typing import Any
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+import check_android_device_lab_slot as device_lab  # noqa: E402
+import kagemusha_lineage_proof_evidence as lineage_evidence  # noqa: E402
+import kagemusha_production_readiness as readiness  # noqa: E402
+
+
+DEFAULT_TEMP_ROOT = Path("/tmp").resolve()
+DEFAULT_STAGED_ARTIFACT_DIR = (
+    DEFAULT_TEMP_ROOT / "iroha-codex-lineage-proof-staged" / "artifacts" / "kagemusha"
+)
+DEFAULT_EXIT_FILE = DEFAULT_TEMP_ROOT / "iroha-codex-lineage-proof-staged.exit"
+DEFAULT_ELAPSED_SECONDS_FILE = (
+    DEFAULT_TEMP_ROOT / "iroha-codex-lineage-proof-staged.elapsed-seconds"
+)
+DEFAULT_ARTIFACT_DIR = Path("artifacts/kagemusha")
+EXIT_MARKER_MAX_BYTES = 32
+RUN_REPORT_FILENAME = "lineage-proof-staged-run.json"
+STAGED_RUN_REPORT_SCHEMA = "iroha.kagemusha.lineage_proof_staged_run.v1"
+MAX_STAGED_RUN_REPORT_BYTES = 16 * 1024
+
+
+def _default_generated_at_utc() -> str:
+    return (
+        dt.datetime.now(dt.timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+
+
+def _secret_path_error(path: Path, label: str) -> str | None:
+    if device_lab.SECRET_RE.search(str(path)):
+        return f"{label} must not contain secret-looking material"
+    return None
+
+
+def validate_directory_path(path: Path, label: str, *, must_exist: bool) -> list[str]:
+    """Reject directory aliases before reading or publishing lineage evidence."""
+
+    secret_error = _secret_path_error(path, label)
+    if secret_error is not None:
+        return [secret_error]
+    try:
+        mode = path.lstat().st_mode
+    except FileNotFoundError:
+        if must_exist:
+            return [f"{label} is missing"]
+        return []
+    except OSError:
+        return [f"{label} metadata could not be read"]
+    if stat.S_ISLNK(mode):
+        return [f"{label} must not be a symlink"]
+    ancestor_errors = device_lab.validate_no_symlink_ancestors(
+        path,
+        f"{label} ancestor directory",
+    )
+    if ancestor_errors:
+        return ancestor_errors
+    if not stat.S_ISDIR(mode):
+        return [f"{label} must be a directory"]
+    return []
+
+
+def _validate_output_file_path(path: Path, label: str, *, replace: bool) -> list[str]:
+    secret_error = _secret_path_error(path, label)
+    if secret_error is not None:
+        return [secret_error]
+    parent_errors = validate_directory_path(path.parent, f"{label} parent", must_exist=True)
+    if parent_errors:
+        return parent_errors
+    try:
+        mode = path.lstat().st_mode
+    except FileNotFoundError:
+        return []
+    except OSError:
+        return [f"{label} metadata could not be read"]
+    if stat.S_ISLNK(mode):
+        return [f"{label} must not be a symlink"]
+    if not stat.S_ISREG(mode):
+        return [f"{label} must be a regular file"]
+    try:
+        link_count = path.stat().st_nlink
+    except OSError:
+        return [f"{label} hardlink metadata could not be read"]
+    if link_count > 1:
+        return [f"{label} must not be hardlinked"]
+    if not replace:
+        return [f"{label} already exists; refuse to overwrite without --replace"]
+    return []
+
+
+def _read_small_text_file(
+    path: Path,
+    label: str,
+    *,
+    max_bytes: int = EXIT_MARKER_MAX_BYTES,
+) -> tuple[str | None, list[str]]:
+    secret_error = _secret_path_error(path, label)
+    if secret_error is not None:
+        return None, [secret_error]
+    ancestor_errors = device_lab.validate_no_symlink_ancestors(
+        path,
+        f"{label} ancestor directory",
+    )
+    if ancestor_errors:
+        return None, ancestor_errors
+    try:
+        expected_stat = path.lstat()
+    except FileNotFoundError:
+        return None, [f"{label} is missing"]
+    except OSError:
+        return None, [f"{label} metadata could not be read"]
+    if stat.S_ISLNK(expected_stat.st_mode):
+        return None, [f"{label} must not be a symlink"]
+    if not stat.S_ISREG(expected_stat.st_mode):
+        return None, [f"{label} must be a regular file"]
+    if expected_stat.st_size > max_bytes:
+        return None, [f"{label} must not exceed {max_bytes} bytes"]
+    try:
+        link_count = path.stat().st_nlink
+    except OSError:
+        return None, [f"{label} hardlink metadata could not be read"]
+    if link_count > 1:
+        return None, [f"{label} must not be hardlinked"]
+    expected_identity = (expected_stat.st_dev, expected_stat.st_ino)
+    try:
+        with path.open("rb") as handle:
+            open_stat = os.fstat(handle.fileno())
+            path_stat = path.lstat()
+            if (open_stat.st_dev, open_stat.st_ino) != expected_identity or (
+                path_stat.st_dev,
+                path_stat.st_ino,
+            ) != expected_identity:
+                return None, [f"{label} changed while being read"]
+            data = handle.read(max_bytes + 1)
+            if len(data) > max_bytes:
+                return None, [f"{label} must not exceed {max_bytes} bytes"]
+            final_stat = path.lstat()
+            if (final_stat.st_dev, final_stat.st_ino) != expected_identity:
+                return None, [f"{label} changed while being read"]
+    except OSError:
+        return None, [f"{label} could not be read"]
+    try:
+        return data.decode("utf-8"), []
+    except UnicodeDecodeError:
+        return None, [f"{label} could not be read"]
+
+
+def read_exit_marker(path: Path) -> tuple[str | None, list[str]]:
+    """Read and normalize the staged lineage proof exit marker."""
+
+    text, errors = _read_small_text_file(path, "staged lineage proof exit marker")
+    if errors:
+        return None, errors
+    assert text is not None
+    return text.strip(), []
+
+
+def validate_exit_marker(path: Path) -> tuple[str | None, list[str]]:
+    """Return errors if the staged lineage proof did not complete successfully."""
+
+    stripped, errors = read_exit_marker(path)
+    if errors:
+        return None, errors
+    assert stripped is not None
+    if stripped != "0":
+        return stripped, [f"staged lineage proof exit code must be 0, got {stripped or '<empty>'}"]
+    return stripped, []
+
+
+def resolve_elapsed_seconds(args: argparse.Namespace) -> tuple[float | None, list[str]]:
+    """Resolve elapsed seconds from the CLI value or staged-runner file."""
+
+    errors: list[str] = []
+    file_value: float | None = None
+    if args.elapsed_seconds_file is not None:
+        text, read_errors = _read_small_text_file(
+            args.elapsed_seconds_file,
+            "staged lineage proof elapsed-seconds file",
+        )
+        errors.extend(read_errors)
+        if text is not None:
+            stripped = text.strip()
+            try:
+                file_value = float(stripped)
+            except ValueError:
+                errors.append("staged lineage proof elapsed-seconds file must contain a number")
+    if args.elapsed_seconds is None and file_value is None:
+        errors.append("--elapsed-seconds or --elapsed-seconds-file is required")
+    if args.elapsed_seconds is not None and file_value is not None:
+        if args.elapsed_seconds != file_value:
+            errors.append("--elapsed-seconds must match --elapsed-seconds-file")
+    elapsed_seconds = file_value if file_value is not None else args.elapsed_seconds
+    if elapsed_seconds is not None and (
+        not math.isfinite(elapsed_seconds) or elapsed_seconds <= 0
+    ):
+        errors.append("--elapsed-seconds must be a positive finite number")
+    return elapsed_seconds, errors
+
+
+def _strict_json_loads(text: str, label: str) -> tuple[object | None, list[str]]:
+    try:
+        return (
+            json.loads(
+                text,
+                object_pairs_hook=device_lab._reject_duplicate_json_object_pairs,
+                parse_constant=device_lab._reject_nonfinite_json_constant,
+            ),
+            [],
+        )
+    except device_lab.DuplicateJsonKeyError as exc:
+        key = (
+            device_lab.SECRET_PATH_REDACTION
+            if device_lab.SECRET_RE.search(exc.key)
+            else exc.key
+        )
+        return None, [f"{label} contains duplicate JSON object key {key}"]
+    except device_lab.NonFiniteJsonConstantError as exc:
+        return None, [f"{label} is not strict JSON: non-finite constant {exc.constant} is not allowed"]
+    except json.JSONDecodeError:
+        return None, [f"{label} is not valid JSON"]
+
+
+def validate_staged_run_report(
+    *,
+    staged_artifact_dir: Path,
+    expected_exit_code: int,
+    expected_command: str,
+    expected_elapsed_seconds: float,
+) -> list[str]:
+    """Validate the staged proof runner report before trusting a success marker."""
+
+    label = "staged lineage proof run report"
+    path = staged_artifact_dir / RUN_REPORT_FILENAME
+    text, errors = _read_small_text_file(
+        path,
+        label,
+        max_bytes=MAX_STAGED_RUN_REPORT_BYTES,
+    )
+    if errors:
+        return errors
+    assert text is not None
+    document, errors = _strict_json_loads(text, label)
+    if errors:
+        return errors
+    if not isinstance(document, dict):
+        return [f"{label} must be a JSON object"]
+    allowed_keys = {
+        "schema",
+        "command",
+        "exit_code",
+        "elapsed_seconds",
+        "lineage_key_artifact_logs",
+        "proof_log_path",
+        "proof_log_size_bytes",
+    }
+    extra_keys = sorted(set(document) - allowed_keys)
+    if extra_keys:
+        return [f"{label} contains unexpected field {extra_keys[0]}"]
+    missing_keys = sorted(allowed_keys - set(document))
+    if missing_keys:
+        return [f"{label} is missing {missing_keys[0]}"]
+    if document["schema"] != STAGED_RUN_REPORT_SCHEMA:
+        return [f"{label} schema must be {STAGED_RUN_REPORT_SCHEMA}"]
+    if document["command"] != expected_command:
+        return [f"{label} command must match the canonical Reserved-lineage proof command"]
+    exit_code = document["exit_code"]
+    if isinstance(exit_code, bool) or not isinstance(exit_code, int):
+        return [f"{label} exit_code must be an integer"]
+    if exit_code != expected_exit_code:
+        return [
+            f"{label} exit_code must match staged lineage proof exit marker "
+            f"{expected_exit_code}, got {exit_code}"
+        ]
+    elapsed_seconds = document["elapsed_seconds"]
+    if isinstance(elapsed_seconds, bool) or not isinstance(elapsed_seconds, (int, float)):
+        return [f"{label} elapsed_seconds must be a finite positive number"]
+    if not math.isfinite(float(elapsed_seconds)) or float(elapsed_seconds) <= 0:
+        return [f"{label} elapsed_seconds must be a finite positive number"]
+    if float(elapsed_seconds) != expected_elapsed_seconds:
+        return [
+            f"{label} elapsed_seconds must match staged elapsed seconds "
+            f"{expected_elapsed_seconds}, got {float(elapsed_seconds)}"
+        ]
+    proof_log_name = readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS["record_archive_proof"]
+    if document["proof_log_path"] != proof_log_name:
+        return [f"{label} proof_log_path must be {proof_log_name}"]
+    size = document["proof_log_size_bytes"]
+    if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+        return [f"{label} proof_log_size_bytes must be a non-negative integer"]
+    try:
+        actual_size = (staged_artifact_dir / proof_log_name).stat().st_size
+    except OSError:
+        return [f"{label} proof log size could not be checked"]
+    if size != actual_size:
+        return [
+            f"{label} proof_log_size_bytes must match staged proof log "
+            f"size {actual_size}, got {size}"
+        ]
+    key_logs = document["lineage_key_artifact_logs"]
+    expected_key_logs = {
+        "init": "lineage-init-key-artifacts.log",
+        "append": "lineage-append-key-artifacts.log",
+    }
+    if not isinstance(key_logs, dict):
+        return [f"{label} lineage_key_artifact_logs must be a JSON object"]
+    unexpected_profiles = sorted(set(key_logs) - set(expected_key_logs))
+    if unexpected_profiles:
+        return [
+            f"{label} lineage_key_artifact_logs contains unexpected profile "
+            f"{unexpected_profiles[0]}"
+        ]
+    missing_profiles = sorted(set(expected_key_logs) - set(key_logs))
+    if missing_profiles:
+        return [
+            f"{label} lineage_key_artifact_logs is missing profile "
+            f"{missing_profiles[0]}"
+        ]
+    for profile, log_name in expected_key_logs.items():
+        entry = key_logs.get(profile)
+        if not isinstance(entry, dict):
+            return [f"{label} {profile} lineage key artifact log must be a JSON object"]
+        allowed_entry_keys = {"path", "size_bytes"}
+        entry_extra = sorted(set(entry) - allowed_entry_keys)
+        if entry_extra:
+            return [
+                f"{label} {profile} lineage key artifact log contains unexpected "
+                f"field {entry_extra[0]}"
+            ]
+        entry_missing = sorted(allowed_entry_keys - set(entry))
+        if entry_missing:
+            return [
+                f"{label} {profile} lineage key artifact log is missing "
+                f"{entry_missing[0]}"
+            ]
+        if entry["path"] != log_name:
+            return [f"{label} {profile} lineage key artifact log path must be {log_name}"]
+        entry_size = entry["size_bytes"]
+        if (
+            isinstance(entry_size, bool)
+            or not isinstance(entry_size, int)
+            or entry_size < 0
+        ):
+            return [
+                f"{label} {profile} lineage key artifact log size_bytes must be "
+                "a non-negative integer"
+            ]
+        try:
+            actual_entry_size = (staged_artifact_dir / log_name).stat().st_size
+        except OSError:
+            return [f"{label} {profile} lineage key artifact log size could not be checked"]
+        if entry_size != actual_entry_size:
+            return [
+                f"{label} {profile} lineage key artifact log size_bytes must match "
+                f"staged log size {actual_entry_size}, got {entry_size}"
+            ]
+    return []
+
+
+def _copy_validated_file(source: Path, destination: Path, label: str) -> list[str]:
+    digest, size, _prefix, errors = lineage_evidence._sha256_file_with_size(source, label)
+    if errors:
+        return errors
+    assert digest is not None and size is not None
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    expected_stat = source.lstat()
+    expected_identity = (expected_stat.st_dev, expected_stat.st_ino)
+    try:
+        with source.open("rb") as src, destination.open("xb") as dst:
+            open_stat = os.fstat(src.fileno())
+            path_stat = source.lstat()
+            if (open_stat.st_dev, open_stat.st_ino) != expected_identity or (
+                path_stat.st_dev,
+                path_stat.st_ino,
+            ) != expected_identity:
+                return [f"{label} changed while being copied"]
+            shutil.copyfileobj(src, dst, length=1024 * 1024)
+            dst.flush()
+            os.fsync(dst.fileno())
+            final_stat = source.lstat()
+            if (final_stat.st_dev, final_stat.st_ino) != expected_identity:
+                return [f"{label} changed while being copied"]
+    except FileExistsError:
+        return [f"published {destination.name} already exists"]
+    except OSError:
+        return [f"{label} could not be copied"]
+    copied_digest, copied_size, _copied_prefix, copied_errors = (
+        lineage_evidence._sha256_file_with_size(destination, f"published {destination.name}")
+    )
+    if copied_errors:
+        return copied_errors
+    if copied_digest != digest or copied_size != size:
+        return [f"published {destination.name} does not match staged bytes"]
+    return []
+
+
+def _verify_published_file(source: Path, destination: Path, label: str) -> list[str]:
+    source_digest, source_size, _source_prefix, source_errors = (
+        lineage_evidence._sha256_file_with_size(source, f"validated staged {destination.name}")
+    )
+    if source_errors:
+        return source_errors
+    published_digest, published_size, _published_prefix, published_errors = (
+        lineage_evidence._sha256_file_with_size(destination, label)
+    )
+    if published_errors:
+        return published_errors
+    if published_digest != source_digest or published_size != source_size:
+        return [f"published {destination.name} does not match staged bytes"]
+    return []
+
+
+def _required_publish_filenames() -> tuple[str, ...]:
+    return (
+        *readiness.LINEAGE_PROOF_REQUIRED_ARTIFACTS,
+        readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS["record_archive_proof"],
+        readiness.LINEAGE_PROOF_EVIDENCE_FILENAME,
+    )
+
+
+def stage_lineage_proof_evidence(
+    *,
+    staged_artifact_dir: Path,
+    stage_dir: Path,
+    generated_at_utc: str,
+    command: str,
+    elapsed_seconds: float,
+) -> tuple[dict[str, Any] | None, list[str]]:
+    """Copy staged lineage proof artifacts into ``stage_dir`` and build evidence."""
+
+    errors: list[str] = []
+    for name in readiness.LINEAGE_PROOF_REQUIRED_ARTIFACTS:
+        errors.extend(
+            _copy_validated_file(
+                staged_artifact_dir / name,
+                stage_dir / name,
+                f"staged lineage proof artifact {name}",
+            )
+        )
+    proof_log_name = readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS["record_archive_proof"]
+    errors.extend(
+        _copy_validated_file(
+            staged_artifact_dir / proof_log_name,
+            stage_dir / proof_log_name,
+            f"staged lineage proof log {proof_log_name}",
+        )
+    )
+    if errors:
+        return None, errors
+    evidence, evidence_errors = lineage_evidence.build_evidence(
+        artifact_dir=stage_dir,
+        proof_log=stage_dir / proof_log_name,
+        command=command,
+        elapsed_seconds=elapsed_seconds,
+        generated_at_utc=generated_at_utc,
+    )
+    if evidence_errors:
+        return None, evidence_errors
+    assert evidence is not None
+    validation_errors = lineage_evidence.validate_evidence_document(evidence, stage_dir)
+    if validation_errors:
+        return None, validation_errors
+    write_errors = lineage_evidence.write_evidence(
+        stage_dir / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME,
+        evidence,
+    )
+    if write_errors:
+        return None, write_errors
+    return evidence, []
+
+
+def publish_stage(*, stage_dir: Path, artifact_dir: Path, replace: bool) -> list[str]:
+    """Publish staged files to the final artifact directory."""
+
+    errors: list[str] = []
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    for name in _required_publish_filenames():
+        errors.extend(
+            _validate_output_file_path(
+                artifact_dir / name,
+                f"published {name}",
+                replace=replace,
+            )
+        )
+    if errors:
+        return errors
+    installed: list[Path] = []
+    for name in _required_publish_filenames():
+        source = stage_dir / name
+        destination = artifact_dir / name
+        tmp_destination = artifact_dir / f".{name}.staged-finalizer.tmp"
+        try:
+            if tmp_destination.exists() or tmp_destination.is_symlink():
+                return [f"temporary output for {name} already exists"]
+            copy_errors = _copy_validated_file(
+                source,
+                tmp_destination,
+                f"validated staged {name}",
+            )
+            if copy_errors:
+                tmp_destination.unlink(missing_ok=True)
+                for path in installed:
+                    try:
+                        path.unlink()
+                    except OSError:
+                        pass
+                return copy_errors
+            if replace:
+                os.replace(tmp_destination, destination)
+            else:
+                tmp_destination.rename(destination)
+            verify_errors = _verify_published_file(
+                source,
+                destination,
+                f"published {name}",
+            )
+            if verify_errors:
+                for path in [destination, *installed]:
+                    try:
+                        path.unlink()
+                    except OSError:
+                        pass
+                return verify_errors
+            installed.append(destination)
+        except OSError:
+            tmp_destination.unlink(missing_ok=True)
+            for path in installed:
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
+            return [f"published {name} could not be installed"]
+    try:
+        dir_fd = os.open(artifact_dir, os.O_RDONLY)
+    except OSError:
+        return ["artifact directory could not be synced"]
+    try:
+        os.fsync(dir_fd)
+    except OSError:
+        return ["artifact directory could not be synced"]
+    finally:
+        os.close(dir_fd)
+    return []
+
+
+def finalize_staged_run(args: argparse.Namespace) -> tuple[int, Path | None, list[str]]:
+    """Finalize a completed staged Reserved-lineage proof run."""
+
+    errors: list[str] = []
+    errors.extend(validate_directory_path(args.staged_artifact_dir, "--staged-artifact-dir", must_exist=True))
+    errors.extend(validate_directory_path(args.artifact_dir, "--artifact-dir", must_exist=False))
+    exit_code_text, exit_errors = validate_exit_marker(args.exit_file)
+    errors.extend(exit_errors)
+    if exit_errors:
+        return 1, None, errors
+    assert exit_code_text is not None
+    errors.extend(lineage_evidence._validate_generated_at_utc(args.generated_at_utc))
+    errors.extend(readiness.validate_lineage_proof_command(
+        args.command,
+        readiness.LINEAGE_PROOF_REQUIRED_TESTS["record_archive_proof"],
+    ))
+    elapsed_seconds, elapsed_errors = resolve_elapsed_seconds(args)
+    errors.extend(elapsed_errors)
+    if exit_code_text == "0" and not elapsed_errors:
+        assert elapsed_seconds is not None
+        errors.extend(
+            validate_staged_run_report(
+                staged_artifact_dir=args.staged_artifact_dir,
+                expected_exit_code=0,
+                expected_command=args.command,
+                expected_elapsed_seconds=elapsed_seconds,
+            )
+        )
+    if errors:
+        return 1, None, errors
+    assert elapsed_seconds is not None
+
+    try:
+        args.artifact_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return 1, None, ["--artifact-dir could not be created"]
+    errors = validate_directory_path(args.artifact_dir, "--artifact-dir", must_exist=True)
+    if errors:
+        return 1, None, errors
+
+    temp_parent = Path(tempfile.mkdtemp(prefix=".lineage-proof-finalize.", dir=args.artifact_dir))
+    stage_dir = temp_parent / "stage"
+    try:
+        stage_dir.mkdir()
+        _evidence, stage_errors = stage_lineage_proof_evidence(
+            staged_artifact_dir=args.staged_artifact_dir,
+            stage_dir=stage_dir,
+            generated_at_utc=args.generated_at_utc,
+            command=args.command,
+            elapsed_seconds=elapsed_seconds,
+        )
+        if stage_errors:
+            return 1, None, stage_errors
+        publish_errors = publish_stage(
+            stage_dir=stage_dir,
+            artifact_dir=args.artifact_dir,
+            replace=args.replace,
+        )
+        if publish_errors:
+            return 1, None, publish_errors
+    finally:
+        shutil.rmtree(temp_parent, ignore_errors=True)
+
+    final_evidence_path = args.artifact_dir / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME
+    blockers = readiness.check_lineage_proof_evidence(final_evidence_path)["blockers"]
+    if blockers:
+        return 1, None, [blocker["message"] for blocker in blockers]
+    return 0, final_evidence_path, []
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Finalize a completed staged Kagemusha Reserved-lineage proof run by "
+            "validating its exit marker, copying artifacts, and writing canonical "
+            "lineage-proof-evidence.json."
+        )
+    )
+    parser.add_argument("--staged-artifact-dir", type=Path, default=DEFAULT_STAGED_ARTIFACT_DIR)
+    parser.add_argument("--exit-file", type=Path, default=DEFAULT_EXIT_FILE)
+    parser.add_argument("--artifact-dir", type=Path, default=DEFAULT_ARTIFACT_DIR)
+    parser.add_argument("--out", type=Path)
+    parser.add_argument("--generated-at-utc", default=_default_generated_at_utc())
+    parser.add_argument("--command", default=lineage_evidence.DEFAULT_RECORD_ARCHIVE_PROOF_COMMAND)
+    parser.add_argument("--elapsed-seconds", type=float)
+    parser.add_argument("--elapsed-seconds-file", type=Path)
+    parser.add_argument(
+        "--replace",
+        action="store_true",
+        help="Replace existing lineage proof artifacts after staged validation succeeds.",
+    )
+    args = parser.parse_args(argv)
+    if args.elapsed_seconds is None and args.elapsed_seconds_file is None:
+        args.elapsed_seconds_file = DEFAULT_ELAPSED_SECONDS_FILE
+    if args.out is None:
+        args.out = args.artifact_dir / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME
+    expected_out = args.artifact_dir / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME
+    if args.out != expected_out:
+        parser.error("--out must equal <artifact-dir>/lineage-proof-evidence.json")
+    return args
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+    status, evidence_path, errors = finalize_staged_run(args)
+    if status != 0:
+        for error in errors:
+            print(f"[kagemusha-lineage-finalizer] {error}", file=sys.stderr)
+        return status
+    assert evidence_path is not None
+    print(f"[kagemusha-lineage-finalizer] wrote {evidence_path}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

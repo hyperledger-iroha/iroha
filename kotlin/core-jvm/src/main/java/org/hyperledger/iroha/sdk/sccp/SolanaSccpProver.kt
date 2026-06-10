@@ -3399,6 +3399,9 @@ object SccpSolana {
             sourceAdapterDeploymentHash = witness.sourceAdapterDeploymentHash,
             sourceAdapterDeploymentReceiptHash = witness.sourceAdapterDeploymentReceiptHash,
         )
+        require(deploymentBinding.sourceAdapterDeploymentHash != ZERO_HASH_V1) {
+            "Solana SCCP proof request requires non-zero source adapter deployment binding"
+        }
         val deploymentBindingHash = sourceAdapterDeploymentBindingHash(deploymentBinding)
         return SolanaSccpProofRequest(
             version = 1,

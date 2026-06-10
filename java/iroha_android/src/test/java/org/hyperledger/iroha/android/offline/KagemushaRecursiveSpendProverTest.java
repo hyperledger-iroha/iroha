@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.android.offline;
 
 import java.io.IOException;
+import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -506,6 +507,62 @@ public final class KagemushaRecursiveSpendProverTest {
             KagemushaRecursiveCompactPaymentTokenProver
                 .verifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(
                     validRecursiveCompactInput, validRecursiveCompactInput, -1L));
+    assertThrows(
+        "compactTokenArchive must not be empty",
+        () ->
+            KagemushaRecursiveCompactPaymentTokenProver
+                .verifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(
+                    new byte[0], validRecursiveCompactInput, Long.MAX_VALUE));
+    assertThrows(
+        "compactTokenArchive must not be empty",
+        () ->
+            KagemushaRecursiveCompactPaymentTokenProver
+                .verifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(
+                    new byte[0], validRecursiveCompactInput, "9223372036854775808"));
+    assertThrows(
+        "compactTokenArchive must not be empty",
+        () ->
+            KagemushaRecursiveCompactPaymentTokenProver
+                .verifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(
+                    new byte[0],
+                    validRecursiveCompactInput,
+                    new BigInteger("18446744073709551615")));
+    assertThrows(
+        "blockHeight must be a canonical unsigned decimal integer",
+        () ->
+            KagemushaRecursiveCompactPaymentTokenProver
+                .verifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(
+                    validRecursiveCompactInput, validRecursiveCompactInput, "01"));
+    assertThrows(
+        "blockHeight must be a canonical unsigned decimal integer",
+        () ->
+            KagemushaRecursiveCompactPaymentTokenProver
+                .verifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(
+                    validRecursiveCompactInput, validRecursiveCompactInput, " 1"));
+    assertThrows(
+        "blockHeight must fit in u64",
+        () ->
+            KagemushaRecursiveCompactPaymentTokenProver
+                .verifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(
+                    validRecursiveCompactInput, validRecursiveCompactInput, "18446744073709551616"));
+    assertThrows(
+        "blockHeight must be non-negative",
+        () ->
+            KagemushaRecursiveCompactPaymentTokenProver
+                .verifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(
+                    validRecursiveCompactInput, validRecursiveCompactInput, new BigInteger("-1")));
+    assertThrows(
+        "blockHeight must not be null",
+        () ->
+            KagemushaRecursiveCompactPaymentTokenProver
+                .verifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(
+                    validRecursiveCompactInput, validRecursiveCompactInput, (String) null));
+    assertThrows(
+        "blockHeight must not be null",
+        () ->
+            KagemushaRecursiveCompactPaymentTokenProver
+                .verifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(
+                    validRecursiveCompactInput, validRecursiveCompactInput, (BigInteger) null));
   }
 
   private static void lineageKeyArtifactPackagesValidateReleaseProfiles() {
@@ -1119,6 +1176,24 @@ public final class KagemushaRecursiveSpendProverTest {
             KagemushaRecursiveSpendProver.requireRecursiveSpendOutput(
                 new byte[] {1, 2}, "redeem"),
         "native redeem returned invalid Norito archive");
+
+    final byte[] compressed = kagemushaNoritoFrameWithPayload(0x4b);
+    compressed[22] = 1;
+    assertRejectsMalformedNativeRedeemOutput(compressed);
+
+    final byte[] unsupportedFlags = kagemushaNoritoFrameWithPayload(0x4b);
+    unsupportedFlags[39] = 0x08;
+    assertRejectsMalformedNativeRedeemOutput(unsupportedFlags);
+
+    final byte[] invalidFieldBitset = kagemushaNoritoFrameWithPayload(0x4b);
+    invalidFieldBitset[39] = 0x20;
+    assertRejectsMalformedNativeRedeemOutput(invalidFieldBitset);
+
+    assertRejectsMalformedNativeRedeemOutput(
+        withHeaderPadding(kagemushaNoritoFrameWithPayload(0x4b), new byte[] {0x7f}));
+    assertRejectsMalformedNativeRedeemOutput(
+        withHeaderPadding(kagemushaNoritoFrameWithPayload(0x4b), new byte[65]));
+
     assertIllegalState(
         () ->
             KagemushaRecursiveSpendProver.requireRecursiveSpendOutput(
@@ -1127,6 +1202,12 @@ public final class KagemushaRecursiveSpendProverTest {
 
     final byte[] output = kagemushaNoritoFrameWithPayload(0x4b);
     assert KagemushaRecursiveSpendProver.requireRecursiveSpendOutput(output, "redeem") == output;
+  }
+
+  private static void assertRejectsMalformedNativeRedeemOutput(final byte[] output) {
+    assertIllegalState(
+        () -> KagemushaRecursiveSpendProver.requireRecursiveSpendOutput(output, "redeem"),
+        "native redeem returned invalid Norito archive");
   }
 
   private static String sharedRecursiveSpendManifest() {
@@ -1209,6 +1290,14 @@ public final class KagemushaRecursiveSpendProverTest {
     frame[43] = 0x5a;
     frame[44] = 0x11;
     return frame;
+  }
+
+  private static byte[] withHeaderPadding(final byte[] archive, final byte[] padding) {
+    final byte[] padded = new byte[archive.length + padding.length];
+    System.arraycopy(archive, 0, padded, 0, 40);
+    System.arraycopy(padding, 0, padded, 40, padding.length);
+    System.arraycopy(archive, 40, padded, 40 + padding.length, archive.length - 40);
+    return padded;
   }
 
   private static final long[] TEST_CRC64_TABLE = buildTestCrc64Table();

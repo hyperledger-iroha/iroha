@@ -9,7 +9,7 @@ import kotlin.test.assertTrue
 class PrivacyNativeBridgeTest {
     @Test
     fun exposesStableFailClosedErrorCodes() {
-        assertEquals(6, PrivacyNativeBridge.REQUIRED_BRIDGE_ABI_VERSION)
+        assertEquals(7, PrivacyNativeBridge.REQUIRED_BRIDGE_ABI_VERSION)
         assertEquals(1, PrivacyNativeBridge.PRIVACY_FFI_VERSION_V1)
         assertEquals("privacy-production-gate-v1", PrivacyNativeBridge.PRODUCTION_GATE_VERSION)
         assertEquals(1, PrivacyNativeBridge.STATUS_ERROR)
@@ -77,6 +77,7 @@ class PrivacyNativeBridgeTest {
             PrivacyNativeBridge::buildProof,
             PrivacyNativeBridge::buildConfidentialTransferProofV2,
             PrivacyNativeBridge::buildConfidentialUnshieldProofV3,
+            PrivacyNativeBridge::buildZkAceAuthorizationProofV1,
             PrivacyNativeBridge::verifyProof,
         )
 
@@ -96,6 +97,36 @@ class PrivacyNativeBridgeTest {
             assertFailsWith<IllegalArgumentException> {
                 helper(privacyNoritoFrame(0x52))
             }
+        }
+    }
+
+    @Test
+    fun rejectsInvalidProofRequestComponentsBeforeNativeDispatch() {
+        assertFailsWith<IllegalArgumentException> {
+            PrivacyNativeBridge.privacyProofRequestV1(
+                null,
+                "buildVeRangeProofV1",
+                "bulletproofs:verange_transparent_range_v1",
+                "public-inputs".toByteArray(),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            PrivacyNativeBridge.privacyProofRequestV1(
+                "verange-transparent-range-v1",
+                "buildVeRangeProofV1",
+                "bulletproofs:verange_transparent_range_v1",
+                ByteArray(0),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            PrivacyNativeBridge.privacyProofRequestV1(
+                "verange-transparent-range-v1",
+                "buildVeRangeProofV1",
+                "bulletproofs:verange_transparent_range_v1",
+                "public-inputs".toByteArray(),
+                ByteArray(PrivacyNativeBridge.PRIVACY_NATIVE_ARCHIVE_MAX_BYTES / 2 + 1),
+                ByteArray(0),
+            )
         }
     }
 
@@ -183,14 +214,7 @@ class PrivacyNativeBridgeTest {
         assertTrue(
             PrivacyNativeBridge.detectNativeAvailability(
                 loadLibrary = {},
-                bridgeAbiVersion = { 6 },
-                probeSymbol = { true },
-            ),
-        )
-        assertFalse(
-            PrivacyNativeBridge.detectNativeAvailability(
-                loadLibrary = {},
-                bridgeAbiVersion = { 5 },
+                bridgeAbiVersion = { 7 },
                 probeSymbol = { true },
             ),
         )
@@ -198,6 +222,13 @@ class PrivacyNativeBridgeTest {
             PrivacyNativeBridge.detectNativeAvailability(
                 loadLibrary = {},
                 bridgeAbiVersion = { 6 },
+                probeSymbol = { true },
+            ),
+        )
+        assertFalse(
+            PrivacyNativeBridge.detectNativeAvailability(
+                loadLibrary = {},
+                bridgeAbiVersion = { 7 },
                 probeSymbol = { false },
             ),
         )
@@ -274,35 +305,35 @@ class PrivacyNativeBridgeTest {
         assertFalse(
             PrivacyNativeBridge.detectNativeAvailability(
                 loadLibrary = {},
-                bridgeAbiVersion = { 6 },
+                bridgeAbiVersion = { 7 },
                 probeSymbol = { throw UnsatisfiedLinkError("missing privacy symbol") },
             ),
         )
         assertFalse(
             PrivacyNativeBridge.detectNativeAvailability(
                 loadLibrary = {},
-                bridgeAbiVersion = { 6 },
+                bridgeAbiVersion = { 7 },
                 probeSymbol = { throw IllegalArgumentException("bad privacy probe") },
             ),
         )
         assertFalse(
             PrivacyNativeBridge.detectNativeAvailability(
                 loadLibrary = {},
-                bridgeAbiVersion = { 6 },
+                bridgeAbiVersion = { 7 },
                 probeSymbol = { throw SecurityException("blocked privacy probe") },
             ),
         )
         assertFalse(
             PrivacyNativeBridge.detectNativeAvailability(
                 loadLibrary = {},
-                bridgeAbiVersion = { 6 },
+                bridgeAbiVersion = { 7 },
                 probeSymbol = { throw RuntimeException("unexpected privacy probe") },
             ),
         )
         assertFalse(
             PrivacyNativeBridge.detectNativeAvailability(
                 loadLibrary = {},
-                bridgeAbiVersion = { 6 },
+                bridgeAbiVersion = { 7 },
                 probeSymbol = { throw LinkageError("bad privacy bridge") },
             ),
         )

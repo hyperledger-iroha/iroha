@@ -784,6 +784,34 @@ public sealed class KagemushaRecursiveSpendNativeTests
                 Assert.Throws<ArgumentException>(() => factory(KagemushaNoritoFrame(0x4b)));
             Assert.Contains("non-empty Norito payload", emptyPayloadError.Message);
             Assert.Equal("noritoBytes", emptyPayloadError.ParamName);
+
+            var compressed = KagemushaNoritoFrameWithPayload(0x4b);
+            compressed[22] = 1;
+            var compressedError = Assert.Throws<ArgumentException>(() => factory(compressed));
+            Assert.Contains("valid Norito V1 archive", compressedError.Message);
+            Assert.Equal("noritoBytes", compressedError.ParamName);
+
+            var unsupportedFlags = KagemushaNoritoFrameWithPayload(0x4b);
+            unsupportedFlags[39] = 0x08;
+            var unsupportedFlagsError = Assert.Throws<ArgumentException>(() => factory(unsupportedFlags));
+            Assert.Contains("valid Norito V1 archive", unsupportedFlagsError.Message);
+            Assert.Equal("noritoBytes", unsupportedFlagsError.ParamName);
+
+            var invalidFieldBitset = KagemushaNoritoFrameWithPayload(0x4b);
+            invalidFieldBitset[39] = 0x20;
+            var invalidFieldBitsetError = Assert.Throws<ArgumentException>(() => factory(invalidFieldBitset));
+            Assert.Contains("valid Norito V1 archive", invalidFieldBitsetError.Message);
+            Assert.Equal("noritoBytes", invalidFieldBitsetError.ParamName);
+
+            var nonZeroPadding = WithHeaderPadding(KagemushaNoritoFrameWithPayload(0x4b), new byte[] { 0x7f });
+            var nonZeroPaddingError = Assert.Throws<ArgumentException>(() => factory(nonZeroPadding));
+            Assert.Contains("valid Norito V1 archive", nonZeroPaddingError.Message);
+            Assert.Equal("noritoBytes", nonZeroPaddingError.ParamName);
+
+            var excessivePadding = WithHeaderPadding(KagemushaNoritoFrameWithPayload(0x4b), new byte[65]);
+            var excessivePaddingError = Assert.Throws<ArgumentException>(() => factory(excessivePadding));
+            Assert.Contains("valid Norito V1 archive", excessivePaddingError.Message);
+            Assert.Equal("noritoBytes", excessivePaddingError.ParamName);
         }
 
         var oversizedArchive = new byte[KagemushaRecursiveSpendNative.NativeArchiveMaxBytes + 1];
@@ -1416,10 +1444,32 @@ public sealed class KagemushaRecursiveSpendNativeTests
     [Fact]
     public void RecursiveSpendNativeReadBridgeOutputRejectsMalformedNoritoSuccessOutput()
     {
-        var error = Assert.Throws<InvalidOperationException>(() =>
-            ReadBridgeOutputWithBytes(new byte[] { 0x01 }));
+        static void AssertRejectsMalformedBridgeOutput(byte[] output)
+        {
+            var error = Assert.Throws<InvalidOperationException>(() =>
+                ReadBridgeOutputWithBytes(output));
 
-        Assert.Contains("invalid Norito archive", error.Message);
+            Assert.Contains("invalid Norito archive", error.Message);
+        }
+
+        AssertRejectsMalformedBridgeOutput(new byte[] { 0x01 });
+
+        var compressed = KagemushaNoritoFrameWithPayload(0x4b);
+        compressed[22] = 1;
+        AssertRejectsMalformedBridgeOutput(compressed);
+
+        var unsupportedFlags = KagemushaNoritoFrameWithPayload(0x4b);
+        unsupportedFlags[39] = 0x08;
+        AssertRejectsMalformedBridgeOutput(unsupportedFlags);
+
+        var invalidFieldBitset = KagemushaNoritoFrameWithPayload(0x4b);
+        invalidFieldBitset[39] = 0x20;
+        AssertRejectsMalformedBridgeOutput(invalidFieldBitset);
+
+        AssertRejectsMalformedBridgeOutput(
+            WithHeaderPadding(KagemushaNoritoFrameWithPayload(0x4b), new byte[] { 0x7f }));
+        AssertRejectsMalformedBridgeOutput(
+            WithHeaderPadding(KagemushaNoritoFrameWithPayload(0x4b), new byte[65]));
     }
 
     [Fact]
@@ -1444,44 +1494,67 @@ public sealed class KagemushaRecursiveSpendNativeTests
     public void RecursiveSpendNativeRejectsMalformedArchivesBeforeLoadingNativeBridge()
     {
         var validArchive = KagemushaNoritoFrameWithPayload(0x4b);
-        var malformed = new byte[] { 0x01, 0x02 };
-        Assert.Throws<ArgumentException>(() => KagemushaRecursiveSpendNative.Init(malformed));
-        Assert.Throws<ArgumentException>(() => KagemushaRecursiveSpendNative.Append(malformed));
-        Assert.Throws<ArgumentException>(() => KagemushaRecursiveSpendNative.TransitionProfileInit(malformed));
-        Assert.Throws<ArgumentException>(() => KagemushaRecursiveSpendNative.TransitionProfileAppend(malformed));
-        Assert.Throws<ArgumentException>(() => KagemushaRecursiveSpendNative.LineageAppendBoundary(malformed));
-        Assert.Throws<ArgumentException>(() => KagemushaRecursiveSpendNative.LineageWitnessFromInitResult(
-            malformed,
-            validArchive));
-        Assert.Throws<ArgumentException>(() => KagemushaRecursiveSpendNative.LineageWitnessFromInitResult(
-            validArchive,
-            malformed));
-        Assert.Throws<ArgumentException>(() => KagemushaRecursiveSpendNative.LineageWitnessAppendResult(
-            malformed,
-            validArchive,
-            validArchive));
-        Assert.Throws<ArgumentException>(() => KagemushaRecursiveSpendNative.LineageWitnessAppendResult(
-            validArchive,
-            malformed,
-            validArchive));
-        Assert.Throws<ArgumentException>(() => KagemushaRecursiveSpendNative.LineageWitnessAppendResult(
-            validArchive,
-            validArchive,
-            malformed));
-        Assert.Throws<ArgumentException>(() => KagemushaRecursiveSpendNative.Verify(malformed));
-        Assert.Throws<ArgumentException>(() => KagemushaRecursiveSpendNative.Redeem(malformed));
-        Assert.Throws<ArgumentException>(() =>
-            KagemushaRecursiveSpendNative.ProveVerifiedCompactPaymentTokenWithRecords(malformed));
-        Assert.Throws<ArgumentException>(() =>
-            KagemushaRecursiveSpendNative
-                .ProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
-                    malformed,
-                    validArchive));
-        Assert.Throws<ArgumentException>(() =>
-            KagemushaRecursiveSpendNative
-                .ProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
-                    validArchive,
-                    malformed));
+        static void AssertRejectsMalformedEverywhere(byte[] malformed, byte[] validArchive)
+        {
+            Assert.Throws<ArgumentException>(() => KagemushaRecursiveSpendNative.Init(malformed));
+            Assert.Throws<ArgumentException>(() => KagemushaRecursiveSpendNative.Append(malformed));
+            Assert.Throws<ArgumentException>(() => KagemushaRecursiveSpendNative.TransitionProfileInit(malformed));
+            Assert.Throws<ArgumentException>(() => KagemushaRecursiveSpendNative.TransitionProfileAppend(malformed));
+            Assert.Throws<ArgumentException>(() => KagemushaRecursiveSpendNative.LineageAppendBoundary(malformed));
+            Assert.Throws<ArgumentException>(() => KagemushaRecursiveSpendNative.LineageWitnessFromInitResult(
+                malformed,
+                validArchive));
+            Assert.Throws<ArgumentException>(() => KagemushaRecursiveSpendNative.LineageWitnessFromInitResult(
+                validArchive,
+                malformed));
+            Assert.Throws<ArgumentException>(() => KagemushaRecursiveSpendNative.LineageWitnessAppendResult(
+                malformed,
+                validArchive,
+                validArchive));
+            Assert.Throws<ArgumentException>(() => KagemushaRecursiveSpendNative.LineageWitnessAppendResult(
+                validArchive,
+                malformed,
+                validArchive));
+            Assert.Throws<ArgumentException>(() => KagemushaRecursiveSpendNative.LineageWitnessAppendResult(
+                validArchive,
+                validArchive,
+                malformed));
+            Assert.Throws<ArgumentException>(() => KagemushaRecursiveSpendNative.Verify(malformed));
+            Assert.Throws<ArgumentException>(() => KagemushaRecursiveSpendNative.Redeem(malformed));
+            Assert.Throws<ArgumentException>(() =>
+                KagemushaRecursiveSpendNative.ProveVerifiedCompactPaymentTokenWithRecords(malformed));
+            Assert.Throws<ArgumentException>(() =>
+                KagemushaRecursiveSpendNative
+                    .ProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+                        malformed,
+                        validArchive));
+            Assert.Throws<ArgumentException>(() =>
+                KagemushaRecursiveSpendNative
+                    .ProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+                        validArchive,
+                        malformed));
+        }
+
+        AssertRejectsMalformedEverywhere(new byte[] { 0x01, 0x02 }, validArchive);
+
+        var compressed = KagemushaNoritoFrameWithPayload(0x4b);
+        compressed[22] = 1;
+        AssertRejectsMalformedEverywhere(compressed, validArchive);
+
+        var unsupportedFlags = KagemushaNoritoFrameWithPayload(0x4b);
+        unsupportedFlags[39] = 0x08;
+        AssertRejectsMalformedEverywhere(unsupportedFlags, validArchive);
+
+        var invalidFieldBitset = KagemushaNoritoFrameWithPayload(0x4b);
+        invalidFieldBitset[39] = 0x20;
+        AssertRejectsMalformedEverywhere(invalidFieldBitset, validArchive);
+
+        AssertRejectsMalformedEverywhere(
+            WithHeaderPadding(KagemushaNoritoFrameWithPayload(0x4b), new byte[] { 0x7f }),
+            validArchive);
+        AssertRejectsMalformedEverywhere(
+            WithHeaderPadding(KagemushaNoritoFrameWithPayload(0x4b), new byte[65]),
+            validArchive);
     }
 
     [Fact]
@@ -1694,6 +1767,15 @@ public sealed class KagemushaRecursiveSpendNativeTests
         frame[43] = 0x5a;
         frame[44] = 0x11;
         return frame;
+    }
+
+    private static byte[] WithHeaderPadding(byte[] archive, byte[] padding)
+    {
+        var padded = new byte[archive.Length + padding.Length];
+        Array.Copy(archive, 0, padded, 0, 40);
+        Array.Copy(padding, 0, padded, 40, padding.Length);
+        Array.Copy(archive, 40, padded, 40 + padding.Length, archive.Length - 40);
+        return padded;
     }
 
     private static readonly ulong[] KagemushaTestCrc64Table = BuildKagemushaTestCrc64Table();

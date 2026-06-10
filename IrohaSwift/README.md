@@ -706,8 +706,9 @@ verifier is exposed separately as
 `verifyRecursiveSpendCompactPaymentTokenProjection(compactTokenArchive:verifierRecordArchive:blockHeight:)`;
 gate it with `isProjectionVerifierNativeAvailable`. It accepts raw Norito
 compact-token and verifier-record archives, rejects empty, malformed, or
-oversized archives before bridge dispatch, and returns the native boolean
-receiver result. ABI 7 now carries the one-hop LEN=4
+oversized archives before bridge dispatch, accepts only the type-safe optional
+`UInt64` `blockHeight`, and returns the native boolean receiver result. ABI 7
+now carries the one-hop LEN=4
 compact-token proof path when the native bundle includes the packaged compact
 one-hop proving-key archive and matching verifier-slice material. Production
 defaults still stay on ABI 6 Reserved-lineage recursive spend until that
@@ -820,11 +821,14 @@ material.
 
 `PrivacyNativeBridge` exposes the privacy FFI surface as generic raw Norito
 archives: `capabilitiesV1()`, `buildProofV1(requestArchive:)`, and
-`verifyProofV1(requestArchive:)`. The SDK does not expose algorithm-specific
-production proof builders while the privacy rows remain gated. Native
-availability requires ABI 6 or later, the privacy capability/build/verify
-symbols, and successful Norito probe outputs whose operation-specific result
-schema bytes match the called entry point.
+`verifyProofV1(requestArchive:)`. Approved typed proof-builder aliases for
+admitted production privacy entrypoints, including
+`buildZkAceAuthorizationProofV1(requestArchive:)`, dispatch through the same
+production archive paths and remain fail-closed while the privacy rows are
+gated. Planned catalog entrypoints stay unexported until their production gates
+pass. Native availability requires ABI 6 or later, the privacy
+capability/build/verify symbols, and successful Norito probe outputs whose
+operation-specific result schema bytes match the called entry point.
 
 All privacy request and response payloads must stay as raw Norito archives.
 Swift validates archive magic, length, CRC, the 64 MiB native size cap, and the

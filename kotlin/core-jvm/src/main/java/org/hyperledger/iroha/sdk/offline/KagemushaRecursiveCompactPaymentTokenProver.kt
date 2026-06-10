@@ -1,9 +1,13 @@
 package org.hyperledger.iroha.sdk.offline
 
+import java.math.BigInteger
+
 /** Native ABI-7 Kagemusha recursive compact-token prover and verifier. */
 class KagemushaRecursiveCompactPaymentTokenProver private constructor() {
     companion object {
         private const val LIBRARY_NAME = "connect_norito_bridge"
+        private val MAX_U64 = BigInteger("18446744073709551615")
+        private val UNSIGNED_DECIMAL = Regex("0|[1-9][0-9]*")
         const val REQUIRED_BRIDGE_ABI_VERSION: Int = 7
         const val RECURSIVE_COMPACT_CIRCUIT_ID_V1: String =
             "kagemusha-recursive-compact-v1"
@@ -138,6 +142,40 @@ class KagemushaRecursiveCompactPaymentTokenProver private constructor() {
             blockHeight: Long,
         ): Boolean {
             require(blockHeight >= 0) { "blockHeight must be non-negative" }
+            return verifyRecursiveSpendCompactPaymentTokenProjectionAtRawHeight(
+                compactTokenArchive,
+                verifierRecordArchive,
+                blockHeight,
+            )
+        }
+
+        @JvmStatic
+        fun verifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(
+            compactTokenArchive: ByteArray?,
+            verifierRecordArchive: ByteArray?,
+            blockHeight: String?,
+        ): Boolean = verifyRecursiveSpendCompactPaymentTokenProjectionAtRawHeight(
+            compactTokenArchive,
+            verifierRecordArchive,
+            parseUnsignedBlockHeight(blockHeight),
+        )
+
+        @JvmStatic
+        fun verifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(
+            compactTokenArchive: ByteArray?,
+            verifierRecordArchive: ByteArray?,
+            blockHeight: BigInteger?,
+        ): Boolean = verifyRecursiveSpendCompactPaymentTokenProjectionAtRawHeight(
+            compactTokenArchive,
+            verifierRecordArchive,
+            parseUnsignedBlockHeight(blockHeight),
+        )
+
+        private fun verifyRecursiveSpendCompactPaymentTokenProjectionAtRawHeight(
+            compactTokenArchive: ByteArray?,
+            verifierRecordArchive: ByteArray?,
+            blockHeight: Long,
+        ): Boolean {
             val compactToken = ownedNativeInput(compactTokenArchive, "compactTokenArchive")
             val verifierRecord = ownedNativeInput(verifierRecordArchive, "verifierRecordArchive")
             check(nativeProjectionVerifierAvailable) {
@@ -148,6 +186,21 @@ class KagemushaRecursiveCompactPaymentTokenProver private constructor() {
                 verifierRecord,
                 blockHeight,
             )
+        }
+
+        private fun parseUnsignedBlockHeight(blockHeight: String?): Long {
+            require(blockHeight != null) { "blockHeight must not be null" }
+            require(UNSIGNED_DECIMAL.matches(blockHeight)) {
+                "blockHeight must be a canonical unsigned decimal integer"
+            }
+            return parseUnsignedBlockHeight(BigInteger(blockHeight))
+        }
+
+        private fun parseUnsignedBlockHeight(blockHeight: BigInteger?): Long {
+            require(blockHeight != null) { "blockHeight must not be null" }
+            require(blockHeight >= BigInteger.ZERO) { "blockHeight must be non-negative" }
+            require(blockHeight <= MAX_U64) { "blockHeight must fit in u64" }
+            return blockHeight.toLong()
         }
 
         private fun loadLibrary(): Boolean =

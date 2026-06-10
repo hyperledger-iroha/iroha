@@ -180,6 +180,50 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                 self.assertNotIn(decoded_secret, message)
                 self.assertNotIn("canary-path-leak", message)
 
+    def test_summary_output_rejects_repository_fixture_artifacts(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            output_path = root / "fixtures" / "iso20022" / "operator_canary" / "summary.json"
+
+            with self.assertRaisesRegex(
+                CANARY.CanaryError,
+                "output path must not point to checked-in ISO fixture artifacts",
+            ):
+                CANARY._write_text_output(output_path, "{}\n")
+
+            self.assertFalse((root / "fixtures").exists())
+            with self.assertRaisesRegex(
+                CANARY.CanaryError,
+                "output path must not point to checked-in ISO fixture artifacts",
+            ):
+                CANARY._reject_repository_iso_fixture_path(
+                    Path("fixtures/iso20022/operator_canary/summary.json"),
+                    "output path",
+                )
+
+    def test_summary_output_rejects_repository_fixture_before_config_load(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            output_path = root / "fixtures" / "iso20022" / "operator_canary" / "summary.json"
+
+            rc, stdout, stderr = run_canary(
+                [
+                    "--config",
+                    str(root / "missing-canary.json"),
+                    "--summary-out",
+                    str(output_path),
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn(
+                "output path must not point to checked-in ISO fixture artifacts",
+                stderr,
+            )
+            self.assertNotIn("does not exist", stderr)
+            self.assertFalse((root / "fixtures").exists())
+
     def test_local_path_validators_reject_percent_encoded_smuggling(self):
         overlong_path = "out/" + ("a" * (CANARY.MAX_LOCAL_PATH_CHARS + 1))
         cases = (
@@ -726,6 +770,130 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     ["rail", "notary", "verify"],
                 )
 
+    def test_non_plan_rejects_repository_fixture_stage_paths_before_execution(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            fixture_root = root / "fixtures" / "iso20022"
+            fixture_root.mkdir(parents=True)
+            live_root = root / "live"
+            live_root.mkdir()
+
+            def rail_body(**rail_overrides):
+                rail = {
+                    "inbox_dir": str(live_root / "inbox"),
+                    "torii_base_url": "http://127.0.0.1:1",
+                    "allow_insecure_http": True,
+                }
+                rail.update(rail_overrides)
+                return {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "rail": rail,
+                    "verify": {"enabled": False},
+                }
+
+            def notary_body(**notary_overrides):
+                notary = {
+                    "export_dir": str(live_root / "audit-export"),
+                    "dry_run": True,
+                }
+                notary.update(notary_overrides)
+                return {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "notary": notary,
+                    "verify": {"enabled": False},
+                }
+
+            cases = (
+                (
+                    "config-path",
+                    fixture_root / "operator-canary",
+                    rail_body(),
+                    "config path must not point to checked-in ISO fixture artifacts",
+                ),
+                (
+                    "rail-inbox",
+                    root / "rail-inbox-case",
+                    rail_body(inbox_dir=str(fixture_root / "rail-inbox")),
+                    "rail.inbox_dir must not point to checked-in ISO fixture artifacts",
+                ),
+                (
+                    "rail-message",
+                    root / "rail-message-case",
+                    rail_body(message=str(fixture_root / "rail-inbox" / "payment.xml")),
+                    "rail.message must not point to checked-in ISO fixture artifacts",
+                ),
+                (
+                    "rail-receipt-dir",
+                    root / "rail-receipt-case",
+                    rail_body(receipt_dir=str(fixture_root / "rail-receipts")),
+                    "rail.receipt_dir must not point to checked-in ISO fixture artifacts",
+                ),
+                (
+                    "notary-export-dir",
+                    root / "notary-export-case",
+                    notary_body(export_dir=str(fixture_root / "audit-export")),
+                    "notary.export_dir must not point to checked-in ISO fixture artifacts",
+                ),
+                (
+                    "notary-receipt-dir",
+                    root / "notary-receipt-case",
+                    notary_body(receipt_dir=str(fixture_root / "notary-receipts")),
+                    "notary.receipt_dir must not point to checked-in ISO fixture artifacts",
+                ),
+            )
+            for name, config_dir, body, expected in cases:
+                with self.subTest(name=name):
+                    config_dir.mkdir(parents=True, exist_ok=True)
+                    config = write_config(config_dir, body)
+
+                    rc, stdout, stderr = run_canary(["--config", str(config)])
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(expected, stderr)
+
+    def test_non_plan_verify_rejects_repository_fixture_receipts(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            fixture_root = root / "fixtures" / "iso20022"
+            fixture_root.mkdir(parents=True)
+
+            cases = (
+                (
+                    "receipt-dir",
+                    {"include_stage_receipts": False, "receipt_dirs": [str(fixture_root / "receipts")]},
+                    [],
+                    "verify.receipt_dirs[0] must not point to checked-in ISO fixture artifacts",
+                ),
+                (
+                    "receipt-file",
+                    {"include_stage_receipts": False, "receipts": [str(fixture_root / "receipt.json")]},
+                    [],
+                    "verify.receipts[0] must not point to checked-in ISO fixture artifacts",
+                ),
+                (
+                    "stage-receipt-dir",
+                    {"include_stage_receipts": True},
+                    [fixture_root / "generated-receipts"],
+                    "verify.receipt_dirs[0] must not point to checked-in ISO fixture artifacts",
+                ),
+            )
+            for name, verify, stage_dirs, expected in cases:
+                with self.subTest(name=name):
+                    with self.assertRaises(CANARY.CanaryError) as caught:
+                        CANARY._build_verify_stage(
+                            root,
+                            verify,
+                            stage_dirs,
+                            prior_failure=False,
+                            require_explicit_policy=False,
+                            allow_repository_fixture_paths=False,
+                        )
+
+                    self.assertIn(expected, str(caught.exception))
+
     def test_symlinked_config_is_rejected_before_plan(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -856,6 +1024,80 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertEqual(stdout, "")
                     self.assertIn(message, stderr)
+
+    def test_direct_run_paths_reject_smuggling_before_config_loading(self):
+        def args_for(root, **overrides):
+            values = {
+                "config": root / "missing-canary.json",
+                "summary_out": root / "canary.summary.json",
+                "plan_only": True,
+                "require_explicit_policy": False,
+                "output_limit_bytes": 1024,
+                "stage_timeout_secs": 1.0,
+            }
+            values.update(overrides)
+            return argparse.Namespace(**values)
+
+        cases = (
+            (
+                "config whitespace",
+                lambda root: args_for(root, config=root / "canary config.json"),
+                "--config must not contain whitespace",
+            ),
+            (
+                "summary parent",
+                lambda root: args_for(
+                    root,
+                    summary_out=root / "nested" / ".." / "canary.summary.json",
+                ),
+                "output path must not contain dot or parent segments",
+            ),
+            (
+                "summary repository fixture",
+                lambda root: args_for(
+                    root,
+                    summary_out=(
+                        root
+                        / "fixtures"
+                        / "iso20022"
+                        / "operator_canary"
+                        / "summary.json"
+                    ),
+                ),
+                "output path must not point to checked-in ISO fixture artifacts",
+            ),
+            (
+                "non-plan config repository fixture",
+                lambda root: args_for(
+                    root,
+                    config=(
+                        root
+                        / "fixtures"
+                        / "iso20022"
+                        / "operator_canary"
+                        / "missing.json"
+                    ),
+                    plan_only=False,
+                ),
+                "config path must not point to checked-in ISO fixture artifacts",
+            ),
+        )
+        for name, make_args, message in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+
+                    with self.assertRaises(CANARY.CanaryError) as caught:
+                        CANARY.run(make_args(root))
+
+                    error = str(caught.exception)
+                    self.assertIn(message, error)
+                    self.assertNotIn("does not exist", error)
+
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            with self.assertRaisesRegex(CANARY.CanaryError, "provide --config"):
+                CANARY.run(args_for(root, config=None))
 
     def test_summary_output_path_rejects_smuggled_segments(self):
         cases = (

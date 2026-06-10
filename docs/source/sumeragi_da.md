@@ -112,6 +112,11 @@ the invalid/mismatch counters instead of treated as live missing-chunk work.
   `recovered`, `invalid`, `lane_backlog`, `dataspace_backlog`) fetched from
   `/v1/sumeragi/rbc/sessions`. `complete_delivery` is false for invalid,
   zero-chunk, and chunk-incomplete summaries even when raw `delivered` is true.
+- Per-height/view delivered probe from
+  `/v1/sumeragi/rbc/delivered/{height}/{view}`. Its `delivered=true` result
+  requires a non-invalid, positive, count-complete chunk summary; invalid,
+  zero-chunk, or chunk-incomplete summaries remain visible with
+  `present=true` and `delivered=false`.
 - Prometheus counters per peer: `sumeragi_rbc_payload_bytes_delivered_total`,
   `sumeragi_rbc_deliver_broadcasts_total`, and
   `sumeragi_rbc_ready_broadcasts_total` obtained from `/metrics`.

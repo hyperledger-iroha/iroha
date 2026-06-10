@@ -1536,6 +1536,9 @@ public func buildSolanaSccpProofRequest(_ input: SolanaSccpWitnessInput) throws 
         sourceAdapterDeploymentHash: witness.sourceAdapterDeploymentHash,
         sourceAdapterDeploymentReceiptHash: witness.sourceAdapterDeploymentReceiptHash
     )
+    guard deploymentBinding.sourceAdapterDeploymentHash != sccpZeroHashV1 else {
+        throw SolanaSccpProverError.sourceAdapterDeploymentBindingMismatch
+    }
     let deploymentBindingHash = try sccpSourceAdapterDeploymentBindingHash(deploymentBinding)
     return SolanaSccpProofRequest(
         version: 1,

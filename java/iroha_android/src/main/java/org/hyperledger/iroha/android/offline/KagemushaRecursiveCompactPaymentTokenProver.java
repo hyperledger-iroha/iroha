@@ -1,10 +1,12 @@
 package org.hyperledger.iroha.android.offline;
 
+import java.math.BigInteger;
 import java.util.Arrays;
 
 /** Native ABI-7 Kagemusha recursive compact-token prover and verifier. */
 public final class KagemushaRecursiveCompactPaymentTokenProver {
   private static final String LIBRARY_NAME = "connect_norito_bridge";
+  private static final BigInteger MAX_U64 = new BigInteger("18446744073709551615");
   public static final int REQUIRED_BRIDGE_ABI_VERSION = 7;
   public static final String RECURSIVE_COMPACT_CIRCUIT_ID_V1 =
       "kagemusha-recursive-compact-v1";
@@ -134,12 +136,60 @@ public final class KagemushaRecursiveCompactPaymentTokenProver {
     if (blockHeight < 0) {
       throw new IllegalArgumentException("blockHeight must be non-negative");
     }
+    return verifyRecursiveSpendCompactPaymentTokenProjectionAtRawHeight(
+        compactTokenArchive, verifierRecordArchive, blockHeight);
+  }
+
+  public static boolean verifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(
+      final byte[] compactTokenArchive,
+      final byte[] verifierRecordArchive,
+      final String blockHeight) {
+    return verifyRecursiveSpendCompactPaymentTokenProjectionAtRawHeight(
+        compactTokenArchive, verifierRecordArchive, parseUnsignedBlockHeight(blockHeight));
+  }
+
+  public static boolean verifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(
+      final byte[] compactTokenArchive,
+      final byte[] verifierRecordArchive,
+      final BigInteger blockHeight) {
+    return verifyRecursiveSpendCompactPaymentTokenProjectionAtRawHeight(
+        compactTokenArchive, verifierRecordArchive, parseUnsignedBlockHeight(blockHeight));
+  }
+
+  private static boolean verifyRecursiveSpendCompactPaymentTokenProjectionAtRawHeight(
+      final byte[] compactTokenArchive,
+      final byte[] verifierRecordArchive,
+      final long blockHeight) {
     final byte[] compactToken = ownedNativeInput(compactTokenArchive, "compactTokenArchive");
     final byte[] verifierRecord =
         ownedNativeInput(verifierRecordArchive, "verifierRecordArchive");
     requireProjectionVerifierNative();
     return nativeVerifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(
         compactToken, verifierRecord, blockHeight);
+  }
+
+  private static long parseUnsignedBlockHeight(final String blockHeight) {
+    if (blockHeight == null) {
+      throw new IllegalArgumentException("blockHeight must not be null");
+    }
+    if (!blockHeight.matches("0|[1-9][0-9]*")) {
+      throw new IllegalArgumentException(
+          "blockHeight must be a canonical unsigned decimal integer");
+    }
+    return parseUnsignedBlockHeight(new BigInteger(blockHeight));
+  }
+
+  private static long parseUnsignedBlockHeight(final BigInteger blockHeight) {
+    if (blockHeight == null) {
+      throw new IllegalArgumentException("blockHeight must not be null");
+    }
+    if (blockHeight.signum() < 0) {
+      throw new IllegalArgumentException("blockHeight must be non-negative");
+    }
+    if (blockHeight.compareTo(MAX_U64) > 0) {
+      throw new IllegalArgumentException("blockHeight must fit in u64");
+    }
+    return blockHeight.longValue();
   }
 
   private static void requireNative() {

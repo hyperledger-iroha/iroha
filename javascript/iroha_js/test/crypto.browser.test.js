@@ -432,7 +432,7 @@ test("browser crypto exposes native-only helpers as safe stubs", () => {
     );
     assert.equal(crypto.PRIVACY_NATIVE_ARCHIVE_MAX_BYTES, 64 * 1024 * 1024);
     assert.equal(crypto.PRIVACY_FFI_VERSION_V1, 1);
-    assert.equal(crypto.PRIVACY_REQUIRED_BRIDGE_ABI_VERSION, 6);
+    assert.equal(crypto.PRIVACY_REQUIRED_BRIDGE_ABI_VERSION, 7);
     assert.equal(crypto.PRIVACY_FFI_STATUS_ERROR, 1);
     assert.equal(crypto.PRIVACY_FFI_ERROR_NULL_POINTER, 1);
     assert.equal(crypto.PRIVACY_FFI_ERROR_MALFORMED_NORITO, 2);
@@ -442,6 +442,15 @@ test("browser crypto exposes native-only helpers as safe stubs", () => {
     assert.throws(
       () => crypto.privacyCapabilitiesV1(),
       /privacyCapabilitiesV1 is unavailable in browser-only crypto builds/,
+    );
+    assert.throws(
+      () => crypto.privacyProofRequestV1({
+        algorithmId: "verange-transparent-range-v1",
+        entrypoint: "buildVeRangeProofV1",
+        vkRef: "bulletproofs:verange_transparent_range_v1",
+        publicInputs: Buffer.from([1]),
+      }),
+      /privacyProofRequestV1 is unavailable in browser-only crypto builds/,
     );
     assert.throws(
       () => crypto.privacyBuildProofV1(Buffer.from([1])),

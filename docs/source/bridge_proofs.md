@@ -35,6 +35,13 @@ the normalized lane summary must stay on domain `1`, chain `eth`, report
 `production_ready = true`, and carry boolean `true` flags for source verifier
 material, source-adapter deployment, destination rollout, and route allowlist
 records before the required-records item can become ready.
+Active launch readiness also treats source verifier material and
+source-adapter deployment as separate evidence roles: their canonical bytes32
+hashes must both be non-zero and must not reuse the same value before governed
+deployment or route-allowlist binding checks can pass.
+The release-readiness and release-bundle source inventory pins that
+role-separation helper and its governed-deployment plus route-allowlist
+hash-reuse regressions, so removing the guard becomes a public release blocker.
 The no-unresolved-blockers checklist also inspects the active lane's own
 blocker list instead of trusting only the top-level aggregate, so lane-local
 operator holds or malformed blocker entries keep release readiness blocked even
@@ -562,6 +569,9 @@ adapter proof hash, adapter transcript, and adapter circuit id. Any zero hash,
 empty id, domain replay, circuit replay, stale adapter hash, stale transcript,
 or mismatched finality policy is rejected.
 Material-only diagnostic evidence sets both deployment fields to zero.
+Material-only evidence verification also requires those deployment fields to
+remain zero; deployment-looking hashes without the matching deployment context
+are rejected instead of being ignored.
 Deployment-aware production evidence must set both fields to non-zero values and
 must match the configured `SccpSourceAdapterEngineDeploymentV1` hash plus its
 `deployment_receipt_hash`. The source adapter OpenVerify statement includes the
@@ -3068,9 +3078,12 @@ source-adapter deployment binding for UI/mobile provers:
 `blake2b256("sccp:source-adapter-deployment-binding:v1" || version ||
 source_domain || target_domain || source_adapter_deployment_hash ||
 source_adapter_deployment_receipt_hash)`, with integer fields encoded in
-little-endian order. Both deployment fields default to zero for diagnostic
-fixtures, exactly-one-zero bindings are rejected, and production portal/mobile
-flows must pass the configured deployment hash and deployment receipt hash.
+little-endian order. The lower-level binding normalizers and diagnostic witness
+fixtures may still represent both deployment fields as zero, exactly-one-zero
+bindings are rejected, and JavaScript, Python, Swift, Kotlin, and Java Android
+Solana proof request builders now reject zero/zero bindings so UI/mobile provers
+cannot produce deployment-agnostic proof bytes. Production portal/mobile flows
+must pass the configured deployment hash and deployment receipt hash.
 This deployment-binding hash is part of the SDK proof request public inputs and
 wrapped proof result envelope; the Solana verifier-program `proof_context_hash`
 remains derived only from the canonical SCCP statement hash and destination
@@ -4550,7 +4563,12 @@ as Nexus-origin messages from block-level SCCP records.
 	    source-chain evidence. The internal proof-byte job path also requires the
 	    bundle-derived counterparty domain, manifest counterparty domain, and
 	    supplied job counterparty domain to match, so diagnostic callers cannot
-	    mix a bundle with another lane's manifest or job metadata.
+	    mix a bundle with another lane's manifest or job metadata. Reusable
+	    transparent-statement and submission-package builders apply the same
+	    bundle-to-manifest counterparty binding before deriving statement hashes,
+	    native proof bytes, or relay envelopes, so inbound messages whose public
+	    inputs target SORA cannot be packaged under another remote lane's
+	    manifest.
 - `GET /v1/sccp/jobs/message/{message_id}` returns the normalized SCCP counterparty proof job for the same canonical message id. Each job bundles:
   - the chain family, chain key, backend labels, verifier backend, manifest seed, finality model, verifier target, and canonical SCCP public inputs;
   - the same SCCP security model / cryptographic anchor mode and destination binding that the artifact and manifest commit into the canonical statement hash;

@@ -1,3 +1,4 @@
+import argparse
 import contextlib
 import importlib.util
 import io
@@ -62,6 +63,9 @@ def receipt_verification_summary(
                 "endpoint_requires_insecure_http": endpoint_requires_insecure_http,
                 **(
                     {
+                        "anchor_path": "/ops/iso/notary/latest.notary.json",
+                        "store_dir": "/ops/iso/notary-store",
+                        "index_path": "/ops/iso/notary/messages.index.json",
                         "anchor_sha256": f"{offset + 101:064x}",
                         "index_sha256": f"{offset + 201:064x}",
                         "record_count": 1,
@@ -72,6 +76,7 @@ def receipt_verification_summary(
                         "payload_sha256": f"{offset + 301:064x}",
                         "profile": "swift-cbpr-plus",
                         "rail_message_id": f"rail-drop-{offset}",
+                        "source_path": f"/ops/iso/rail-inbox/rail-drop-{offset}.xml",
                     }
                 ),
             }
@@ -783,6 +788,52 @@ class IsoProductionReadinessTest(unittest.TestCase):
                 self.assertNotIn(decoded_secret, message)
                 self.assertNotIn("readiness-path-leak", message)
 
+    def test_summary_output_rejects_repository_fixture_artifacts(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            output_path = root / "fixtures" / "iso20022" / "readiness.summary.json"
+
+            with self.assertRaisesRegex(
+                READINESS.ReadinessError,
+                "output path must not point to checked-in ISO fixture artifacts",
+            ):
+                READINESS._write_text_output(output_path, "{}\n")
+
+            self.assertFalse((root / "fixtures").exists())
+            with self.assertRaisesRegex(
+                READINESS.ReadinessError,
+                "output path must not point to checked-in ISO fixture artifacts",
+            ):
+                READINESS._reject_repository_output_path(
+                    Path("fixtures/iso20022/readiness.summary.json"),
+                    "output path",
+                )
+
+    def test_summary_output_rejects_repository_fixture_before_input_loading(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            output_path = root / "fixtures" / "iso20022" / "readiness.summary.json"
+
+            rc, stdout, stderr = run_readiness(
+                [
+                    "--xsd-summary",
+                    str(root / "missing-xsd.summary.json"),
+                    "--evidence-summary",
+                    str(root / "missing-evidence.summary.json"),
+                    "--summary-out",
+                    str(output_path),
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn(
+                "output path must not point to checked-in ISO fixture artifacts",
+                stderr,
+            )
+            self.assertNotIn("does not exist", stderr)
+            self.assertFalse((root / "fixtures").exists())
+
     def test_local_path_validators_reject_percent_encoded_smuggling(self):
         overlong_path = "out/" + ("a" * (READINESS.MAX_LOCAL_PATH_CHARS + 1))
         cases = (
@@ -1244,6 +1295,20 @@ class IsoProductionReadinessTest(unittest.TestCase):
                 ["rail", "notary", "verify"],
             )
             self.assertEqual(canary_summary["stage_names"], ["rail", "notary", "verify"])
+            rail_receipt = next(
+                receipt
+                for receipt in canary_summary["receipt_summary"]["receipts"]
+                if receipt["receipt_kind"] == "iso-rail-gateway"
+            )
+            notary_receipt = next(
+                receipt
+                for receipt in canary_summary["receipt_summary"]["receipts"]
+                if receipt["receipt_kind"] == "iso-audit-notary"
+            )
+            self.assertTrue(notary_receipt["anchor_path"].endswith("latest.notary.json"))
+            self.assertTrue(notary_receipt["store_dir"].endswith("store"))
+            self.assertTrue(notary_receipt["index_path"].endswith("messages.index.json"))
+            self.assertTrue(rail_receipt["source_path"].endswith("rail-status.xml"))
             trust_profile = summary["evidence_summaries"][0]["trust_summaries"][0]["profiles"][0]
             trust_summary = summary["evidence_summaries"][0]["trust_summaries"][0]
             self.assertEqual(trust_summary["version"], READINESS.TRUST_SUMMARY_VERSION)
@@ -1257,6 +1322,7 @@ class IsoProductionReadinessTest(unittest.TestCase):
             self.assertTrue(trust_summary["profile_json_emitted"])
             self.assertTrue(trust_summary["profile_json_emittable"])
             self.assertRegex(trust_summary["profile_json_sha256"], r"^[0-9a-f]{64}$")
+            self.assertTrue(trust_profile["path"].endswith("trust-bundle.json"))
             self.assertRegex(trust_profile["bundle_sha256"], r"^[0-9a-f]{64}$")
             self.assertEqual(
                 trust_profile["source"],
@@ -1617,6 +1683,83 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertEqual(stdout, "")
                     self.assertIn(message, stderr)
+
+    def test_direct_run_summary_paths_reject_smuggling_before_input_loading(self):
+        def args_for(root, **overrides):
+            values = {
+                "xsd_summary": [root / "missing-xsd.summary.json"],
+                "evidence_summary": [root / "missing-evidence.summary.json"],
+                "provider": "local-bank",
+                "environment": "preprod",
+                "summary_out": root / "readiness.summary.json",
+                "max_xsd_age_days": 36500,
+                "max_evidence_age_days": 36500,
+                "max_canary_age_days": 36500,
+                "max_trust_age_days": 36500,
+                "max_trust_source_age_days": 36500,
+                "allow_reviewed_xsd_gaps": False,
+                "allow_canary_stage_receipts_only": False,
+            }
+            values.update(overrides)
+            return argparse.Namespace(**values)
+
+        cases = (
+            (
+                "xsd whitespace",
+                lambda root: args_for(
+                    root,
+                    xsd_summary=[root / "missing xsd.summary.json"],
+                ),
+                "--xsd-summary[0] must not contain whitespace",
+            ),
+            (
+                "evidence parent",
+                lambda root: args_for(
+                    root,
+                    evidence_summary=[root / "nested" / ".." / "evidence.summary.json"],
+                ),
+                "--evidence-summary[0] must not contain dot or parent segments",
+            ),
+            (
+                "output leading dash",
+                lambda root: args_for(
+                    root,
+                    summary_out=root / "nested" / "-readiness.summary.json",
+                ),
+                "output path must not contain leading-dash path segments",
+            ),
+        )
+        for name, make_args, message in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+
+                    with self.assertRaises(READINESS.ReadinessError) as caught:
+                        READINESS.run(make_args(root))
+
+                    error = str(caught.exception)
+                    self.assertIn(message, error)
+                    self.assertNotIn("does not exist", error)
+
+        missing_cases = (
+            (
+                "xsd",
+                {"xsd_summary": None},
+                "provide at least one --xsd-summary",
+            ),
+            (
+                "evidence",
+                {"evidence_summary": None},
+                "provide at least one --evidence-summary",
+            ),
+        )
+        for name, overrides, message in missing_cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+
+                    with self.assertRaisesRegex(READINESS.ReadinessError, message):
+                        READINESS.run(args_for(root, **overrides))
 
     def test_secret_looking_cli_paths_are_rejected_before_summary_output(self):
         cases = (
@@ -2038,6 +2181,70 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
 
+    def test_repository_fixture_summary_paths_are_production_blockers(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            fixture_root = root / "fixtures" / "iso20022"
+            fixture_root.mkdir(parents=True)
+            fixture_evidence = fixture_root / "evidence.summary.json"
+            fixture_evidence.write_text(
+                evidence_summary.read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+
+            compact_canary_path = json.loads(evidence_summary.read_text(encoding="utf-8"))
+            compact_canary_path["canary_summaries"][0]["path"] = (
+                "/ops/fixtures/iso20022/canary.summary.json"
+            )
+            refresh_digest(compact_canary_path)
+            compact_canary_file = write_json(
+                root / "repository-canary-summary.evidence.summary.json",
+                compact_canary_path,
+            )
+
+            compact_trust_path = json.loads(evidence_summary.read_text(encoding="utf-8"))
+            compact_trust_path["trust_summaries"][0]["path"] = (
+                "/ops/fixtures/iso20022/trust.summary.json"
+            )
+            refresh_digest(compact_trust_path)
+            compact_trust_file = write_json(
+                root / "repository-trust-summary.evidence.summary.json",
+                compact_trust_path,
+            )
+
+            cases = (
+                (
+                    fixture_evidence,
+                    "evidence.repository_evidence_summary",
+                ),
+                (
+                    compact_canary_file,
+                    "evidence.repository_canary_summary",
+                ),
+                (
+                    compact_trust_file,
+                    "trust.repository_trust_summary",
+                ),
+            )
+            for evidence_path, code in cases:
+                with self.subTest(code=code):
+                    rc, stdout, stderr = run_readiness(
+                        [
+                            "--xsd-summary",
+                            str(xsd_summary),
+                            "--evidence-summary",
+                            str(evidence_path),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 1, stderr)
+                    codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
+                    self.assertIn(code, codes)
+
     def test_duplicate_summary_paths_do_not_echo_secret_segments(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -2159,8 +2366,116 @@ class IsoProductionReadinessTest(unittest.TestCase):
             self.assertIn("evidence.canary_receipt_digest_reused", codes)
             self.assertIn("evidence.archive_receipt_path_reused", codes)
             self.assertIn("evidence.archive_receipt_digest_reused", codes)
+            self.assertIn("evidence.canary_receipt_source_path_reused", codes)
+            self.assertIn("evidence.canary_receipt_anchor_path_reused", codes)
+            self.assertIn("evidence.archive_receipt_source_path_reused", codes)
+            self.assertIn("evidence.archive_receipt_anchor_path_reused", codes)
             self.assertIn("trust.profile_id_reused", codes)
             self.assertIn("trust.bundle_digest_reused", codes)
+
+    def test_receipt_source_material_cannot_be_reused_across_relabelled_summaries(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_one = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence-one")
+            )
+            evidence_two = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence-two")
+            )
+            first = json.loads(evidence_one.read_text(encoding="utf-8"))
+            second = json.loads(evidence_two.read_text(encoding="utf-8"))
+            second_profile_id = "swift-cbpr-plus-two"
+            profile = second["trust_summaries"][0]["profiles"][0]
+            profile["profile_id"] = second_profile_id
+            profile["bundle_sha256"] = "b" * 64
+
+            source_fields = {
+                "iso-audit-notary": (
+                    "anchor_path",
+                    "anchor_sha256",
+                    "store_dir",
+                    "index_path",
+                    "index_sha256",
+                ),
+                "iso-rail-gateway": ("source_path", "payload_sha256"),
+            }
+            relabelled_receipts = {
+                "iso-audit-notary": (
+                    "/ops/iso/relabelled/notary.replayed-source.receipt.json",
+                    "8" * 64,
+                ),
+                "iso-rail-gateway": (
+                    "/ops/iso/relabelled/rail.replayed-source.receipt.json",
+                    "9" * 64,
+                ),
+            }
+
+            def copy_source_material(target_summary, source_summary):
+                source_receipts = {
+                    receipt["receipt_kind"]: receipt
+                    for receipt in source_summary["receipts"]
+                }
+                for receipt in target_summary["receipts"]:
+                    relabelled_path, relabelled_digest = relabelled_receipts[
+                        receipt["receipt_kind"]
+                    ]
+                    receipt["path"] = relabelled_path
+                    receipt["receipt_sha256"] = relabelled_digest
+                    if receipt["receipt_kind"] == "iso-rail-gateway":
+                        receipt["profile"] = second_profile_id
+                    source_receipt = source_receipts[receipt["receipt_kind"]]
+                    for field in source_fields[receipt["receipt_kind"]]:
+                        receipt[field] = source_receipt[field]
+                refresh_digest(target_summary)
+
+            copy_source_material(
+                second["canary_summaries"][0]["receipt_summary"],
+                first["canary_summaries"][0]["receipt_summary"],
+            )
+            copy_source_material(
+                second["receipt_verification"],
+                first["receipt_verification"],
+            )
+            refresh_digest(second)
+            write_json(evidence_two, second)
+
+            rc, stdout, stderr = run_readiness(
+                [
+                    "--xsd-summary",
+                    str(xsd_summary),
+                    "--evidence-summary",
+                    str(evidence_one),
+                    "--evidence-summary",
+                    str(evidence_two),
+                ]
+            )
+
+            self.assertEqual(rc, 1, stderr)
+            codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
+            expected = {
+                "evidence.canary_receipt_source_path_reused",
+                "evidence.canary_receipt_payload_digest_reused",
+                "evidence.canary_receipt_anchor_path_reused",
+                "evidence.canary_receipt_anchor_digest_reused",
+                "evidence.canary_receipt_store_dir_reused",
+                "evidence.canary_receipt_index_path_reused",
+                "evidence.canary_receipt_index_digest_reused",
+                "evidence.archive_receipt_source_path_reused",
+                "evidence.archive_receipt_payload_digest_reused",
+                "evidence.archive_receipt_anchor_path_reused",
+                "evidence.archive_receipt_anchor_digest_reused",
+                "evidence.archive_receipt_store_dir_reused",
+                "evidence.archive_receipt_index_path_reused",
+                "evidence.archive_receipt_index_digest_reused",
+            }
+            self.assertTrue(expected <= codes)
+            self.assertNotIn("evidence.canary_receipt_path_reused", codes)
+            self.assertNotIn("evidence.canary_receipt_digest_reused", codes)
+            self.assertNotIn("evidence.archive_receipt_path_reused", codes)
+            self.assertNotIn("evidence.archive_receipt_digest_reused", codes)
+            self.assertNotIn("trust.profile_id_reused", codes)
+            self.assertNotIn("trust.bundle_digest_reused", codes)
 
     def test_duplicate_readiness_input_json_keys_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -2304,6 +2619,7 @@ class IsoProductionReadinessTest(unittest.TestCase):
             self.assertEqual(
                 {blocker["code"] for blocker in blocked["blockers"]},
                 {
+                    "xsd.repository_fixture_manifest",
                     "xsd.strict_schema_backed_not_proven",
                     "xsd.profile_schema_backed_not_proven",
                     "xsd.missing_schema_fixtures",
@@ -2332,12 +2648,85 @@ class IsoProductionReadinessTest(unittest.TestCase):
             self.assertEqual(
                 {warning["code"] for warning in diagnostic["warnings"]},
                 {
+                    "xsd.repository_fixture_manifest",
                     "xsd.strict_schema_backed_not_proven",
                     "xsd.profile_schema_backed_not_proven",
                     "xsd.missing_schema_fixtures",
                     "xsd.missing_profile_schema_versions",
                 },
             )
+
+    def test_allow_reviewed_xsd_gaps_does_not_downgrade_unreviewed_profile_gaps(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            manifest_path = xsd_test.write_minimal_tree(
+                root / "xsd",
+                xsd_test.minimal_manifest(),
+            )
+            profile_catalog = xsd_test.write_profile_catalog(
+                root / "xsd" / "profiles.rs",
+                versions=["fooo.001.001.01", "fooo.001.001.02"],
+            )
+            xsd_summary = root / "xsd" / "unreviewed-profile-gap.summary.json"
+            rc, _stdout, stderr = xsd_test.run_verify(
+                [
+                    "--manifest",
+                    str(manifest_path),
+                    "--require-schema-backed-fixtures",
+                    "--require-fixture-for-schema",
+                    "--profile-catalog",
+                    str(profile_catalog),
+                    "--validate-xml-schema",
+                    "--summary-out",
+                    str(xsd_summary),
+                ]
+            )
+            self.assertEqual(rc, 0, stderr)
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+
+            rc, stdout, stderr = run_readiness(
+                [
+                    "--xsd-summary",
+                    str(xsd_summary),
+                    "--evidence-summary",
+                    str(evidence_summary),
+                    "--allow-reviewed-xsd-gaps",
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("requires at least one reviewed XSD gap warning", stderr)
+
+    def test_repository_xsd_summary_path_is_production_blocker(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            fixture_root = root / "fixtures" / "iso20022" / "xsd"
+            fixture_root.mkdir(parents=True)
+            fixture_xsd_summary = fixture_root / "xsd.summary.json"
+            fixture_xsd_summary.write_text(
+                xsd_summary.read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+
+            rc, stdout, stderr = run_readiness(
+                [
+                    "--xsd-summary",
+                    str(fixture_xsd_summary),
+                    "--evidence-summary",
+                    str(evidence_summary),
+                ]
+            )
+
+            self.assertEqual(rc, 1, stderr)
+            codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
+            self.assertIn("xsd.repository_xsd_summary", codes)
 
     def test_forged_xsd_reviewed_gap_entries_block_readiness(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -2431,7 +2820,6 @@ class IsoProductionReadinessTest(unittest.TestCase):
                             str(mutated_path),
                             "--evidence-summary",
                             str(evidence_summary),
-                            "--allow-reviewed-xsd-gaps",
                         ]
                     )
 
@@ -2551,6 +2939,20 @@ class IsoProductionReadinessTest(unittest.TestCase):
             fixture_count["verified_fixtures"] += 1
             fixture_count["schema_backed_fixtures"] += 1
             cases.append((fixture_count, "xsd.fixture_count_mismatch"))
+
+            target_namespace = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            target_namespace["schemas"][0]["target_namespace"] = (
+                "urn:iso:std:iso:20022:tech:xsd:barr.001.001.01"
+            )
+            cases.append((target_namespace, "xsd.schema_target_namespace_mismatch"))
+
+            fixture_message = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            fixture_message["fixtures"][0]["message_def_id"] = "barr.001.001.01"
+            cases.append((fixture_message, "xsd.fixture_schema_message_mismatch"))
+
+            fixture_payload = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            fixture_payload["fixtures"][0]["payload_root"] = "ForgedPayload"
+            cases.append((fixture_payload, "xsd.fixture_payload_root_mismatch"))
 
             backed_count = json.loads(xsd_summary.read_text(encoding="utf-8"))
             backed_count["fixtures"][0]["schema_backed"] = False
@@ -2711,7 +3113,6 @@ class IsoProductionReadinessTest(unittest.TestCase):
                             str(mutated_path),
                             "--evidence-summary",
                             str(evidence_summary),
-                            "--allow-reviewed-xsd-gaps",
                         ]
                     )
 
@@ -3152,6 +3553,66 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     refresh_digest(body)
                     mutated_path = write_json(
                         root / f"malformed-xsd-relative-path-{offset}.summary.json",
+                        body,
+                    )
+
+                    rc, stdout, stderr = run_readiness(
+                        [
+                            "--xsd-summary",
+                            str(mutated_path),
+                            "--evidence-summary",
+                            str(evidence_summary),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(message, stderr)
+                    self.assertNotIn(hidden, stderr)
+
+    def test_xsd_archived_identifiers_reject_unsafe_material_without_echo(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            hidden_unicode = "Payload\u0435Readiness"
+            hidden_secret = "token=readiness-namespace-secret"
+            hidden_long = "X" * (READINESS.MAX_XML_IDENTIFIER_CHARS + 1)
+            cases = (
+                (
+                    lambda body: body["schemas"][0].__setitem__(
+                        "payload_root",
+                        hidden_unicode,
+                    ),
+                    "schemas[0].payload_root must use printable ASCII",
+                    hidden_unicode,
+                ),
+                (
+                    lambda body: body["schemas"][0].__setitem__(
+                        "target_namespace",
+                        f"urn:iso:std:iso:20022:tech:xsd:{hidden_secret}",
+                    ),
+                    "schemas[0].target_namespace contains secret-looking material",
+                    hidden_secret,
+                ),
+                (
+                    lambda body: body["fixtures"][0].__setitem__(
+                        "payload_root",
+                        hidden_long,
+                    ),
+                    "fixtures[0].payload_root must be no longer than 256 characters",
+                    hidden_long,
+                ),
+            )
+            for offset, (mutate, message, hidden) in enumerate(cases):
+                with self.subTest(offset=offset):
+                    body = json.loads(xsd_summary.read_text(encoding="utf-8"))
+                    mutate(body)
+                    refresh_digest(body)
+                    mutated_path = write_json(
+                        root / f"malformed-xsd-identifier-{offset}.summary.json",
                         body,
                     )
 
@@ -3837,6 +4298,99 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
 
+    def test_repository_xsd_fixture_manifest_paths_are_diagnostic_only(self):
+        checked_in_manifest = REPO_ROOT / "fixtures" / "iso20022" / "xsd" / "fixture_manifest.json"
+        cases = (
+            "fixtures/iso20022/xsd/fixture_manifest.json",
+            str(checked_in_manifest),
+            "/ops/release/fixtures/iso20022/xsd/fixture_manifest.json",
+        )
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            for offset, manifest in enumerate(cases):
+                with self.subTest(manifest=manifest):
+                    xsd = json.loads(xsd_summary.read_text(encoding="utf-8"))
+                    xsd["manifest"] = manifest
+                    refresh_digest(xsd)
+                    mutated_path = write_json(
+                        root / f"repository-fixture-manifest-{offset}.summary.json",
+                        xsd,
+                    )
+
+                    rc, stdout, stderr = run_readiness(
+                        [
+                            "--xsd-summary",
+                            str(mutated_path),
+                            "--evidence-summary",
+                            str(evidence_summary),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 1, stderr)
+                    self.assertEqual(stderr, "")
+                    codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
+                    self.assertEqual(codes, {"xsd.repository_fixture_manifest"})
+
+                    rc, stdout, stderr = run_readiness(
+                        [
+                            "--xsd-summary",
+                            str(mutated_path),
+                            "--evidence-summary",
+                            str(evidence_summary),
+                            "--allow-reviewed-xsd-gaps",
+                        ]
+                    )
+
+                    self.assertEqual(rc, 0, stderr)
+                    diagnostic = json.loads(stdout)
+                    self.assertTrue(diagnostic["ok"])
+                    self.assertEqual(diagnostic["blockers"], [])
+                    self.assertEqual(
+                        {warning["code"] for warning in diagnostic["warnings"]},
+                        {"xsd.repository_fixture_manifest"},
+                    )
+
+    def test_repository_xsd_profile_catalog_paths_block_readiness(self):
+        checked_in_catalog = REPO_ROOT / "fixtures" / "iso20022" / "profiles.rs"
+        cases = (
+            "fixtures/iso20022/profiles.rs",
+            str(checked_in_catalog),
+            "/ops/release/fixtures/iso20022/profiles.rs",
+        )
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            for offset, catalog_path in enumerate(cases):
+                with self.subTest(catalog_path=catalog_path):
+                    xsd = json.loads(xsd_summary.read_text(encoding="utf-8"))
+                    xsd["profile_catalog"]["path"] = catalog_path
+                    refresh_digest(xsd)
+                    mutated_path = write_json(
+                        root / f"repository-fixture-profile-catalog-{offset}.summary.json",
+                        xsd,
+                    )
+
+                    rc, stdout, stderr = run_readiness(
+                        [
+                            "--xsd-summary",
+                            str(mutated_path),
+                            "--evidence-summary",
+                            str(evidence_summary),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 1, stderr)
+                    self.assertEqual(stderr, "")
+                    codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
+                    self.assertEqual(codes, {"xsd.repository_profile_catalog"})
+
     def test_archived_path_strings_reject_overlong_without_echo(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -3965,6 +4519,15 @@ class IsoProductionReadinessTest(unittest.TestCase):
             profile_catalog_count = json.loads(xsd_summary.read_text(encoding="utf-8"))
             profile_catalog_count["profile_catalog"]["checked_versions"] += 1
             cases.append((profile_catalog_count, "xsd.profile_catalog_checked_count_mismatch"))
+
+            profile_catalog_profiles = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            profile_catalog_profiles["profile_catalog"]["profiles"] += 1
+            cases.append(
+                (
+                    profile_catalog_profiles,
+                    "xsd.profile_catalog_profile_count_mismatch",
+                )
+            )
 
             profile_catalog_backed_count = json.loads(xsd_summary.read_text(encoding="utf-8"))
             profile_catalog_backed_count["profile_catalog"]["schema_backed_versions"] += 1
@@ -5373,6 +5936,86 @@ class IsoProductionReadinessTest(unittest.TestCase):
                         if value_kind == "non-ascii":
                             self.assertNotIn("unsupported", stderr)
 
+    def test_overlong_compact_clean_strings_are_rejected_without_echo(self):
+        overlong = "M" * (READINESS.MAX_CLEAN_STRING_CHARS + 1)
+        cases = (
+            (
+                "required",
+                lambda: READINESS._require_string({"provider": overlong}, "provider", "summary"),
+                f"summary.provider must be no longer than {READINESS.MAX_CLEAN_STRING_CHARS} characters",
+            ),
+            (
+                "cli",
+                lambda: READINESS._require_cli_string(overlong, "--provider"),
+                f"--provider must be no longer than {READINESS.MAX_CLEAN_STRING_CHARS} characters",
+            ),
+        )
+        for name, call, expected in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(READINESS.ReadinessError) as caught:
+                    call()
+
+                message = str(caught.exception)
+                self.assertIn(expected, message)
+                self.assertNotIn(overlong, message)
+
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            cases = (
+                (
+                    "receipt-kind",
+                    lambda evidence: evidence["canary_summaries"][0]["receipt_summary"][
+                        "receipt_kind"
+                    ].__setitem__(0, overlong),
+                    lambda evidence: refresh_digest(
+                        evidence["canary_summaries"][0]["receipt_summary"]
+                    ),
+                    "receipt_kind[0] must be no longer",
+                ),
+                (
+                    "stage-name",
+                    lambda evidence: evidence["canary_summaries"][0]["stage_names"].__setitem__(
+                        0,
+                        overlong,
+                    ),
+                    lambda _evidence: None,
+                    "stage_names[0] must be no longer",
+                ),
+            )
+            for name, mutate, refresh_nested, expected in cases:
+                with self.subTest(name=name):
+                    evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+                    mutate(evidence)
+                    refresh_nested(evidence)
+                    refresh_digest(evidence)
+                    mutated_path = write_json(
+                        root / f"overlong-{name}.summary.json",
+                        evidence,
+                    )
+
+                    rc, stdout, stderr = run_readiness(
+                        [
+                            "--xsd-summary",
+                            str(xsd_summary),
+                            "--evidence-summary",
+                            str(mutated_path),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(expected, stderr)
+                    self.assertIn(
+                        f"{READINESS.MAX_CLEAN_STRING_CHARS} characters",
+                        stderr,
+                    )
+                    self.assertNotIn(overlong, stderr)
+                    self.assertNotIn("unsupported", stderr)
+
     def test_secret_or_non_ascii_compact_stage_names_are_rejected_without_echo(self):
         def set_nested(evidence, parts, value):
             target = evidence
@@ -5839,6 +6482,82 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     self.assertIn(message, stderr)
                     if any(ord(ch) > 0x7E for ch in config_path):
                         self.assertNotIn(config_path, stderr)
+
+    def test_compact_canary_config_path_blocks_checked_in_runbook_templates(self):
+        checked_in_runbook = (
+            REPO_ROOT
+            / "fixtures"
+            / "iso20022"
+            / "operator_canary"
+            / "swift_cbpr_plus.preprod.example.json"
+        )
+        cases = (
+            "fixtures/iso20022/operator_canary/swift_cbpr_plus.preprod.example.json",
+            str(checked_in_runbook),
+            "/ops/release/fixtures/iso20022/operator_canary/swift_cbpr_plus.preprod.example.json",
+        )
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            for offset, config_path in enumerate(cases):
+                with self.subTest(config_path=config_path):
+                    evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+                    evidence["canary_summaries"][0]["config_path"] = config_path
+                    refresh_digest(evidence)
+                    mutated_path = write_json(
+                        root / f"template-canary-config-{offset}.summary.json",
+                        evidence,
+                    )
+
+                    rc, stdout, stderr = run_readiness(
+                        ["--xsd-summary", str(xsd_summary), "--evidence-summary", str(mutated_path)]
+                    )
+
+                    self.assertEqual(rc, 1, stderr)
+                    self.assertEqual(stderr, "")
+                    codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
+                    self.assertEqual(codes, {"evidence.repository_canary_config"})
+
+    def test_compact_trust_bundle_path_blocks_checked_in_templates(self):
+        checked_in_bundle = (
+            REPO_ROOT
+            / "fixtures"
+            / "iso20022"
+            / "trust_bundles"
+            / "swift_cbpr_plus.preprod.example.json"
+        )
+        cases = (
+            "fixtures/iso20022/trust_bundles/swift_cbpr_plus.preprod.example.json",
+            str(checked_in_bundle),
+            "/ops/release/fixtures/iso20022/trust_bundles/swift_cbpr_plus.preprod.example.json",
+        )
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            for offset, bundle_path in enumerate(cases):
+                with self.subTest(bundle_path=bundle_path):
+                    evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+                    evidence["trust_summaries"][0]["profiles"][0]["path"] = bundle_path
+                    refresh_digest(evidence)
+                    mutated_path = write_json(
+                        root / f"template-trust-bundle-{offset}.summary.json",
+                        evidence,
+                    )
+
+                    rc, stdout, stderr = run_readiness(
+                        ["--xsd-summary", str(xsd_summary), "--evidence-summary", str(mutated_path)]
+                    )
+
+                    self.assertEqual(rc, 1, stderr)
+                    self.assertEqual(stderr, "")
+                    codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
+                    self.assertEqual(codes, {"trust.repository_trust_bundle"})
 
     def test_compact_trust_summary_verified_at_is_rechecked_by_readiness(self):
         cases = [
@@ -6881,6 +7600,46 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
 
+    def test_compact_trust_der_proofs_cannot_be_reused_across_roles(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            cases = (
+                (
+                    "trusted-revoked",
+                    lambda profile: profile["revoked_certificate_der"][0].update(
+                        profile["x509_trust_anchor_der"][0]
+                    ),
+                ),
+                (
+                    "crl-ocsp",
+                    lambda profile: profile["x509_ocsp_response_der"][0].update(
+                        profile["x509_crl_der"][0]
+                    ),
+                ),
+            )
+            for name, mutate in cases:
+                with self.subTest(name=name):
+                    evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+                    profile = evidence["trust_summaries"][0]["profiles"][0]
+                    mutate(profile)
+                    refresh_digest(evidence)
+                    mutated_path = write_json(
+                        root / f"reused-trust-der-{name}.summary.json",
+                        evidence,
+                    )
+
+                    rc, stdout, stderr = run_readiness(
+                        ["--xsd-summary", str(xsd_summary), "--evidence-summary", str(mutated_path)]
+                    )
+
+                    self.assertEqual(rc, 1, stderr)
+                    codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
+                    self.assertIn("trust.der_proof_reused_across_roles", codes)
+
     def test_trust_verified_bundle_count_must_match_profiles(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -7429,6 +8188,45 @@ class IsoProductionReadinessTest(unittest.TestCase):
             codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
             self.assertIn("evidence.archive_receipt_missing_canary_digest", codes)
 
+    def test_compact_receipt_source_path_blocks_checked_in_iso_fixtures(self):
+        checked_in_fixture = REPO_ROOT / "fixtures" / "iso20022" / "pacs008_fixture.xml"
+        cases = (
+            "fixtures/iso20022/pacs008_fixture.xml",
+            str(checked_in_fixture),
+            "/ops/release/fixtures/iso20022/pacs008_fixture.xml",
+        )
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            for offset, source_path in enumerate(cases):
+                with self.subTest(source_path=source_path):
+                    evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+                    for receipt_summary in (
+                        evidence["canary_summaries"][0]["receipt_summary"],
+                        evidence["receipt_verification"],
+                    ):
+                        receipt_summary["receipts"][1]["source_path"] = source_path
+                        refresh_digest(receipt_summary)
+                    refresh_digest(evidence)
+                    mutated_path = write_json(
+                        root / f"fixture-source-receipt-{offset}.summary.json",
+                        evidence,
+                    )
+
+                    rc, stdout, stderr = run_readiness(
+                        ["--xsd-summary", str(xsd_summary), "--evidence-summary", str(mutated_path)]
+                    )
+
+                    self.assertEqual(rc, 1, stderr)
+                    self.assertEqual(stderr, "")
+                    codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
+                    self.assertIn("evidence.receipt_metadata_invalid", codes)
+                    self.assertIn("evidence.archive_receipt_metadata_invalid", codes)
+                    self.assertIn("checked-in ISO XML fixtures", stdout)
+
     def test_archive_receipts_must_not_include_unreferenced_digests(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -7547,6 +8345,39 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     lambda receipt: receipt.__setitem__("status_code", 201),
                 ),
                 (
+                    "canary-notary-anchor-path",
+                    ("canary_summaries", 0, "receipt_summary"),
+                    0,
+                    lambda receipt: receipt.__setitem__(
+                        "anchor_path",
+                        f"/ops/iso/notary/anchors/{receipt['index_sha256']}.notary.json",
+                    ),
+                ),
+                (
+                    "canary-notary-store-dir",
+                    ("canary_summaries", 0, "receipt_summary"),
+                    0,
+                    lambda receipt: receipt.__setitem__(
+                        "store_dir",
+                        "/ops/iso/other-notary-store",
+                    ),
+                ),
+                (
+                    "canary-notary-index-path",
+                    ("canary_summaries", 0, "receipt_summary"),
+                    0,
+                    lambda receipt: (
+                        receipt.__setitem__(
+                            "anchor_path",
+                            f"/ops/iso/other-notary/anchors/{receipt['index_sha256']}.notary.json",
+                        ),
+                        receipt.__setitem__(
+                            "index_path",
+                            "/ops/iso/other-notary/messages.index.json",
+                        ),
+                    ),
+                ),
+                (
                     "canary-response-body-digest",
                     ("canary_summaries", 0, "receipt_summary"),
                     0,
@@ -7566,6 +8397,39 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     ("receipt_verification",),
                     0,
                     lambda receipt: receipt.__setitem__("record_count", 2),
+                ),
+                (
+                    "archive-notary-anchor-path",
+                    ("receipt_verification",),
+                    0,
+                    lambda receipt: receipt.__setitem__(
+                        "anchor_path",
+                        f"/ops/iso/notary/anchors/{receipt['index_sha256']}.notary.json",
+                    ),
+                ),
+                (
+                    "archive-notary-store-dir",
+                    ("receipt_verification",),
+                    0,
+                    lambda receipt: receipt.__setitem__(
+                        "store_dir",
+                        "/ops/iso/other-notary-store",
+                    ),
+                ),
+                (
+                    "archive-notary-index-path",
+                    ("receipt_verification",),
+                    0,
+                    lambda receipt: (
+                        receipt.__setitem__(
+                            "anchor_path",
+                            f"/ops/iso/other-notary/anchors/{receipt['index_sha256']}.notary.json",
+                        ),
+                        receipt.__setitem__(
+                            "index_path",
+                            "/ops/iso/other-notary/messages.index.json",
+                        ),
+                    ),
                 ),
             )
             for name, summary_path, receipt_index, mutate in cases:
@@ -7611,6 +8475,50 @@ class IsoProductionReadinessTest(unittest.TestCase):
             codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
             self.assertIn("evidence.canary_receipt_path_reused", codes)
             self.assertIn("evidence.canary_receipt_digest_reused", codes)
+
+    def test_canary_source_material_cannot_be_reused_across_relabelled_canaries(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+            copied_canary = json.loads(json.dumps(evidence["canary_summaries"][0]))
+            copied_canary["path"] = "/ops/iso/relabelled-canary.summary.json"
+            copied_canary["config_path"] = "/ops/iso/relabelled-canary.json"
+            copied_canary["summary_sha256"] = "e" * 64
+            for offset, receipt in enumerate(copied_canary["receipt_summary"]["receipts"]):
+                receipt["path"] = (
+                    f"/ops/iso/relabelled-canary/{receipt['receipt_kind']}.{offset}.receipt.json"
+                )
+                receipt["receipt_sha256"] = f"{offset + 8:064x}"
+            refresh_digest(copied_canary["receipt_summary"])
+            evidence["canary_summaries"].append(copied_canary)
+            refresh_digest(evidence)
+            mutated_path = write_json(
+                root / "relabelled-canary-source-replay.summary.json",
+                evidence,
+            )
+
+            rc, stdout, stderr = run_readiness(
+                ["--xsd-summary", str(xsd_summary), "--evidence-summary", str(mutated_path)]
+            )
+
+            self.assertEqual(rc, 1, stderr)
+            codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
+            expected = {
+                "evidence.canary_receipt_source_path_reused",
+                "evidence.canary_receipt_payload_digest_reused",
+                "evidence.canary_receipt_anchor_path_reused",
+                "evidence.canary_receipt_anchor_digest_reused",
+                "evidence.canary_receipt_store_dir_reused",
+                "evidence.canary_receipt_index_path_reused",
+                "evidence.canary_receipt_index_digest_reused",
+            }
+            self.assertTrue(expected <= codes)
+            self.assertNotIn("evidence.canary_receipt_path_reused", codes)
+            self.assertNotIn("evidence.canary_receipt_digest_reused", codes)
 
     def test_receipt_summary_kind_lists_must_be_unique(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -7992,6 +8900,67 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     "evidence.receipt_metadata_invalid",
                 ),
                 (
+                    "canary-missing-notary-anchor-path",
+                    ("canary_summaries", 0, "receipt_summary"),
+                    0,
+                    lambda receipt: receipt.pop("anchor_path"),
+                    "evidence.receipt_metadata_invalid",
+                ),
+                (
+                    "canary-missing-notary-store-dir",
+                    ("canary_summaries", 0, "receipt_summary"),
+                    0,
+                    lambda receipt: receipt.pop("store_dir"),
+                    "evidence.receipt_metadata_invalid",
+                ),
+                (
+                    "canary-missing-notary-index-path",
+                    ("canary_summaries", 0, "receipt_summary"),
+                    0,
+                    lambda receipt: receipt.pop("index_path"),
+                    "evidence.receipt_metadata_invalid",
+                ),
+                (
+                    "canary-wrong-notary-anchor-path",
+                    ("canary_summaries", 0, "receipt_summary"),
+                    0,
+                    lambda receipt: receipt.__setitem__(
+                        "anchor_path",
+                        f"/ops/iso/notary/anchors/{'f' * 64}.notary.json",
+                    ),
+                    "evidence.receipt_metadata_invalid",
+                ),
+                (
+                    "canary-fixture-notary-anchor-path",
+                    ("canary_summaries", 0, "receipt_summary"),
+                    0,
+                    lambda receipt: receipt.__setitem__(
+                        "anchor_path",
+                        "/ops/release/fixtures/iso20022/latest.notary.json",
+                    ),
+                    "evidence.receipt_metadata_invalid",
+                ),
+                (
+                    "canary-fixture-notary-store-dir",
+                    ("canary_summaries", 0, "receipt_summary"),
+                    0,
+                    lambda receipt: receipt.__setitem__(
+                        "store_dir",
+                        "/ops/release/fixtures/iso20022/notary-store",
+                    ),
+                    "evidence.receipt_metadata_invalid",
+                ),
+                (
+                    "canary-fixture-notary-index-path",
+                    ("canary_summaries", 0, "receipt_summary"),
+                    0,
+                    lambda receipt: receipt.__setitem__(
+                        "index_path",
+                        "/ops/release/fixtures/iso20022/notary/messages.index.json",
+                    ),
+                    "evidence.receipt_metadata_invalid",
+                ),
+                (
                     "canary-empty-notary-record-count",
                     ("canary_summaries", 0, "receipt_summary"),
                     0,
@@ -8055,6 +9024,46 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     ("receipt_verification",),
                     0,
                     lambda receipt: receipt.__setitem__("record_count", 0),
+                    "evidence.archive_receipt_metadata_invalid",
+                ),
+                (
+                    "archive-wrong-notary-anchor-path",
+                    ("receipt_verification",),
+                    0,
+                    lambda receipt: receipt.__setitem__(
+                        "anchor_path",
+                        f"/ops/iso/notary/anchors/{'f' * 64}.notary.json",
+                    ),
+                    "evidence.archive_receipt_metadata_invalid",
+                ),
+                (
+                    "archive-fixture-notary-anchor-path",
+                    ("receipt_verification",),
+                    0,
+                    lambda receipt: receipt.__setitem__(
+                        "anchor_path",
+                        "/ops/release/fixtures/iso20022/latest.notary.json",
+                    ),
+                    "evidence.archive_receipt_metadata_invalid",
+                ),
+                (
+                    "archive-fixture-notary-store-dir",
+                    ("receipt_verification",),
+                    0,
+                    lambda receipt: receipt.__setitem__(
+                        "store_dir",
+                        "/ops/release/fixtures/iso20022/notary-store",
+                    ),
+                    "evidence.archive_receipt_metadata_invalid",
+                ),
+                (
+                    "archive-fixture-notary-index-path",
+                    ("receipt_verification",),
+                    0,
+                    lambda receipt: receipt.__setitem__(
+                        "index_path",
+                        "/ops/release/fixtures/iso20022/notary/messages.index.json",
+                    ),
                     "evidence.archive_receipt_metadata_invalid",
                 ),
                 (

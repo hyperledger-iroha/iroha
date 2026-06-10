@@ -54,7 +54,7 @@ fun irohaDir(): String {
     val props = Properties()
     val file = rootProject.file("local.properties")
     if (file.exists()) file.inputStream().use { props.load(it) }
-    return props.getProperty("iroha.dir") ?: rootProject.file("../..").absolutePath
+    return props.getProperty("iroha.dir") ?: rootProject.file("..").absolutePath
 }
 
 tasks.register<Exec>("buildNativeLibs") {

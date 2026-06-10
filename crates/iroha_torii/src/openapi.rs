@@ -5111,7 +5111,7 @@ fn sumeragi_paths() -> Map {
         Value::Object(json_get_operation(
             "Sumeragi",
             "Fetch RBC delivered status.",
-            "Return RBC delivered status for a block height and view.",
+            "Return complete-delivery RBC status for a block height and view; delivered=true requires a non-invalid positive complete chunk summary.",
             "#/components/schemas/JsonValue",
             vec![
                 Value::Object(block_height_parameter()),
@@ -11949,6 +11949,16 @@ mod tests {
             .expect("Sumeragi RBC sessions description");
         assert!(sumeragi_rbc_sessions_description.contains("raw DELIVER"));
         assert!(sumeragi_rbc_sessions_description.contains("complete-delivery"));
+        let sumeragi_rbc_delivered_description = paths
+            .get("/v1/sumeragi/rbc/delivered/{height}/{view}")
+            .and_then(Value::as_object)
+            .and_then(|path| path.get("get"))
+            .and_then(Value::as_object)
+            .and_then(|get| get.get("description"))
+            .and_then(Value::as_str)
+            .expect("Sumeragi RBC delivered description");
+        assert!(sumeragi_rbc_delivered_description.contains("complete-delivery"));
+        assert!(sumeragi_rbc_delivered_description.contains("non-invalid"));
         assert!(paths.contains_key("/v1/contracts/view/batch"));
         assert!(paths.contains_key("/v1/contracts/rollups/swaps/fills"));
         assert!(paths.contains_key("/v1/contracts/rollups/swaps/candles"));

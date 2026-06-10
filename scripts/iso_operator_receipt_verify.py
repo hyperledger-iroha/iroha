@@ -82,6 +82,10 @@ RESERVED_PLACEHOLDER_HOST_SUFFIXES = {
 TEMPLATE_CANARY_ENDPOINT_HOSTS = {
     "operator-canary.bank",
 }
+REPOSITORY_XML_FIXTURE_PARTS = (
+    "fixtures",
+    "iso20022",
+)
 NAT64_WELL_KNOWN_PREFIX = ipaddress.ip_network("64:ff9b::/96")
 IPV4_COMPATIBLE_IPV6_PREFIX = ipaddress.ip_network("::/96")
 MAX_RAIL_MESSAGE_ID_CHARS = 128
@@ -468,6 +472,7 @@ def _preflight_cli_paths(argv: list[str] | None, flags: set[str]) -> None:
                 if not value or value.startswith("--"):
                     raise ReceiptError(f"{flag} requires a path value")
                 _reject_raw_cli_path_smuggling(value, flag)
+                _reject_repository_iso_fixture_path(value, flag)
                 index += 2
                 matched = True
                 break
@@ -477,6 +482,7 @@ def _preflight_cli_paths(argv: list[str] | None, flags: set[str]) -> None:
                 if not value or value.startswith("--"):
                     raise ReceiptError(f"{flag} requires a path value")
                 _reject_raw_cli_path_smuggling(value, flag)
+                _reject_repository_iso_fixture_path(value, flag)
                 index += 1
                 matched = True
                 break
@@ -964,6 +970,29 @@ def _require_clean_path_string(value: Any, label: str) -> str:
     if any(part in {".", ".."} for part in parts):
         raise ReceiptError(f"{label} must not contain dot or parent segments")
     return path
+
+
+def _path_contains_component_sequence(raw: str, components: tuple[str, ...]) -> bool:
+    parts = [part.casefold() for part in raw.split("/") if part]
+    target = [part.casefold() for part in components]
+    if len(parts) < len(target):
+        return False
+    last_start = len(parts) - len(target)
+    return any(
+        parts[offset : offset + len(target)] == target
+        for offset in range(last_start + 1)
+    )
+
+
+def _path_is_repository_iso_fixture(raw: str) -> bool:
+    return _path_contains_component_sequence(raw, REPOSITORY_XML_FIXTURE_PARTS)
+
+
+def _reject_repository_iso_fixture_path(raw: str | Path, label: str) -> None:
+    if _path_is_repository_iso_fixture(str(raw)):
+        raise ReceiptError(
+            f"{label} must not point to checked-in ISO fixture artifacts"
+        )
 
 
 def _require_nonnegative_int(value: Any, label: str) -> int:
@@ -1521,7 +1550,12 @@ def _verify_anchor_path_peers(
         )
 
 
-def _verify_anchor_source(receipt: dict[str, Any], path: Path, *, require_source_files: bool) -> None:
+def _verify_anchor_source(
+    receipt: dict[str, Any],
+    path: Path,
+    *,
+    require_source_files: bool,
+) -> tuple[str | None, str | None]:
     anchor_sha256 = receipt.get(ANCHOR_DIGEST_FIELD)
     index_sha256 = receipt.get(INDEX_DIGEST_FIELD)
     if not _is_lower_hex_sha256(anchor_sha256):
@@ -1540,6 +1574,10 @@ def _verify_anchor_source(receipt: dict[str, Any], path: Path, *, require_source
         receipt.get("anchor_path"),
         f"{path} anchor_path",
     )
+    if _path_is_repository_iso_fixture(anchor_path_raw):
+        raise ReceiptError(
+            f"{path} anchor_path must not point to checked-in ISO fixture artifacts"
+        )
     anchor_path = Path(anchor_path_raw)
     export_dir = _anchor_export_dir_for_convention(
         anchor_path,
@@ -1551,7 +1589,7 @@ def _verify_anchor_source(receipt: dict[str, Any], path: Path, *, require_source
     if not anchor_path.exists():
         if require_source_files:
             raise ReceiptError(f"{path} references missing anchor_path {anchor_path}")
-        return
+        return (None, None)
 
     anchor = _load_json(anchor_path, max_bytes=MAX_AUDIT_EXPORT_JSON_BYTES)
     if not isinstance(anchor, dict):
@@ -1584,9 +1622,14 @@ def _verify_anchor_source(receipt: dict[str, Any], path: Path, *, require_source
         raise ReceiptError(f"{path} index_sha256 does not match embedded audit index")
     if audit_index.get("record_count") != record_count:
         raise ReceiptError(f"{path} record_count does not match embedded audit index")
+    store_dir = _record_store_dir(anchor, str(anchor_path))
+    if store_dir is not None and _path_is_repository_iso_fixture(str(store_dir)):
+        raise ReceiptError(
+            f"{anchor_path}.store_dir must not point to checked-in ISO fixture artifacts"
+        )
     _verify_persisted_record_sources(
         audit_index,
-        _record_store_dir(anchor, str(anchor_path)),
+        store_dir,
         str(anchor_path),
         require_source_files=require_source_files,
     )
@@ -1598,6 +1641,7 @@ def _verify_anchor_source(receipt: dict[str, Any], path: Path, *, require_source
         require_source_files=require_source_files,
     )
     index_file = export_dir / INDEX_FILE
+    index_path = str(index_file) if index_file.exists() else None
     if index_file.exists():
         exported_index = _verify_audit_index_source(
             _load_json(index_file, max_bytes=MAX_AUDIT_EXPORT_JSON_BYTES),
@@ -1607,6 +1651,7 @@ def _verify_anchor_source(receipt: dict[str, Any], path: Path, *, require_source
             raise ReceiptError(f"{path} embedded audit index differs from {index_file}")
     elif require_source_files:
         raise ReceiptError(f"{path} references missing audit index {index_file}")
+    return (str(store_dir) if store_dir is not None else None, index_path)
 
 
 def _normalize_optional_string(
@@ -1795,6 +1840,10 @@ def _verify_rail_source(
     sidecar_path = Path(sidecar_path_raw)
     if xml_path.suffix != ".xml":
         raise ReceiptError(f"{path} xml_path must point to a .xml file")
+    if _path_is_repository_iso_fixture(xml_path_raw):
+        raise ReceiptError(
+            f"{path} xml_path must not point to checked-in ISO XML fixtures"
+        )
     expected_sidecar = xml_path.with_suffix(xml_path.suffix + ".json")
     if sidecar_path.resolve() != expected_sidecar.resolve():
         raise ReceiptError(f"{path} sidecar_path must match xml_path sidecar")
@@ -1863,7 +1912,13 @@ def verify_receipt_file(
         endpoint = _require_clean_string(receipt.get("endpoint"), f"{path} endpoint")
         _require_https(endpoint, allow_insecure_http=allow_insecure_http, label=str(path))
         _check_endpoint_digest(receipt, path, endpoint)
-        _verify_anchor_source(receipt, path, require_source_files=require_source_files)
+        verified_store_dir, verified_index_path = _verify_anchor_source(
+            receipt,
+            path,
+            require_source_files=require_source_files,
+        )
+        receipt["_verified_store_dir"] = verified_store_dir
+        receipt["_verified_index_path"] = verified_index_path
     elif kind == "iso-rail-gateway":
         _check_timestamp(receipt, "submitted_at", path)
         endpoint_url = _require_clean_string(
@@ -1888,6 +1943,7 @@ def verify_receipt_file(
 def discover_receipts(receipt_dir: Path) -> list[Path]:
     """Return receipt files in deterministic order."""
 
+    _reject_repository_iso_fixture_path(receipt_dir, "receipt_dir")
     _reject_symlinked_existing_ancestors(receipt_dir.parent)
     try:
         metadata = receipt_dir.lstat()
@@ -1927,6 +1983,9 @@ def _receipt_metadata(path: Path, receipt: dict[str, Any]) -> dict[str, Any]:
     if receipt["receipt_kind"] == "iso-audit-notary":
         metadata.update(
             {
+                "anchor_path": receipt.get("anchor_path"),
+                "store_dir": receipt.get("_verified_store_dir"),
+                "index_path": receipt.get("_verified_index_path"),
                 "anchor_sha256": receipt.get(ANCHOR_DIGEST_FIELD),
                 "index_sha256": receipt.get(INDEX_DIGEST_FIELD),
                 "record_count": receipt.get("record_count"),
@@ -1939,6 +1998,7 @@ def _receipt_metadata(path: Path, receipt: dict[str, Any]) -> dict[str, Any]:
                 "payload_sha256": receipt.get("payload_sha256"),
                 "profile": receipt.get("profile"),
                 "rail_message_id": receipt.get("rail_message_id"),
+                "source_path": receipt.get("xml_path"),
             }
         )
     return metadata
@@ -1981,6 +2041,10 @@ def _reject_unused_local_overrides(args: argparse.Namespace, receipts: list[dict
 
 
 def run(args: argparse.Namespace) -> int:
+    for offset, path in enumerate(args.receipt):
+        _reject_repository_iso_fixture_path(path, f"receipt[{offset}]")
+    for offset, receipt_dir in enumerate(args.receipt_dir):
+        _reject_repository_iso_fixture_path(receipt_dir, f"receipt_dir[{offset}]")
     paths = list(args.receipt)
     for receipt_dir in args.receipt_dir:
         paths.extend(discover_receipts(receipt_dir))
