@@ -7,7 +7,7 @@ use std::sync::Condvar;
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     sync::{
-        Mutex, OnceLock,
+        Mutex, MutexGuard, OnceLock,
         atomic::{AtomicUsize, Ordering as StdOrdering},
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -1057,9 +1057,7 @@ pub struct PvpSettlementEventUpdate {
 
 /// Record a `DvP` settlement telemetry update.
 pub fn record_dvp_settlement_event(update: DvpSettlementEventUpdate) {
-    let mut guard = settlement_status_slot()
-        .lock()
-        .expect("settlement status mutex poisoned");
+    let mut guard = lock_operator_status_slot(settlement_status_slot(), "settlement status");
     let entry = &mut guard.dvp;
     match update.outcome {
         SettlementOutcomeKind::Success => {
@@ -1091,9 +1089,7 @@ pub fn record_dvp_settlement_event(update: DvpSettlementEventUpdate) {
 
 /// Record a `PvP` settlement telemetry update.
 pub fn record_pvp_settlement_event(update: PvpSettlementEventUpdate) {
-    let mut guard = settlement_status_slot()
-        .lock()
-        .expect("settlement status mutex poisoned");
+    let mut guard = lock_operator_status_slot(settlement_status_slot(), "settlement status");
     let entry = &mut guard.pvp;
     match update.outcome {
         SettlementOutcomeKind::Success => {
@@ -1126,9 +1122,7 @@ pub fn record_pvp_settlement_event(update: PvpSettlementEventUpdate) {
 
 /// Read-only snapshot of settlement telemetry state.
 pub fn settlement_snapshot() -> SettlementStatusSnapshot {
-    let guard = settlement_status_slot()
-        .lock()
-        .expect("settlement status mutex poisoned");
+    let guard = lock_operator_status_slot(settlement_status_slot(), "settlement status");
     SettlementStatusSnapshot {
         dvp: guard.dvp.clone(),
         pvp: guard.pvp.clone(),
@@ -1139,6 +1133,40 @@ fn rbc_store_evictions_slot() -> &'static Mutex<VecDeque<RbcEvictedSession>> {
     RBC_STORE_RECENT_EVICTIONS
         .get_or_init(|| Mutex::new(VecDeque::with_capacity(RBC_STORE_RECENT_EVICTIONS_CAP)))
 }
+
+fn lock_rbc_store_evictions_slot(
+    slot: &'static Mutex<VecDeque<RbcEvictedSession>>,
+) -> MutexGuard<'static, VecDeque<RbcEvictedSession>> {
+    match slot.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            iroha_logger::warn!(
+                "RBC store eviction history mutex was poisoned; recovering operator eviction snapshot"
+            );
+            poisoned.into_inner()
+        }
+    }
+}
+
+fn rbc_store_evictions_lock() -> MutexGuard<'static, VecDeque<RbcEvictedSession>> {
+    lock_rbc_store_evictions_slot(rbc_store_evictions_slot())
+}
+
+fn lock_operator_status_slot<T>(
+    slot: &'static Mutex<T>,
+    label: &'static str,
+) -> MutexGuard<'static, T> {
+    match slot.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            iroha_logger::warn!(
+                "Sumeragi {label} mutex was poisoned; recovering operator status snapshot"
+            );
+            poisoned.into_inner()
+        }
+    }
+}
+
 static COLLECTORS_TARGETED_CURRENT: AtomicU64 = AtomicU64::new(0);
 static COLLECTORS_TARGETED_LAST_COMMIT: AtomicU64 = AtomicU64::new(0);
 static REDUNDANT_SEND_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -1686,30 +1714,28 @@ pub fn set_highest_qc_hash(hash: HashOf<BlockHeader>) {
     };
     let h = UntypedHash::from(hash);
     let slot = HIGHEST_QC_HASH.get_or_init(|| Mutex::new(None));
-    *slot.lock().unwrap() = Some(h);
+    *lock_operator_status_slot(slot, "highest QC hash") = Some(h);
 }
 
 /// Get the subject block hash for the current `HighestQC` if known.
 pub fn highest_qc_hash() -> Option<HashOf<BlockHeader>> {
     let slot = HIGHEST_QC_HASH.get_or_init(|| Mutex::new(None));
-    slot.lock()
-        .unwrap()
+    lock_operator_status_slot(slot, "highest QC hash")
         .as_ref()
-        .map(Clone::clone)
+        .cloned()
         .map(HashOf::<BlockHeader>::from_untyped_unchecked)
 }
 
 fn set_locked_qc_hash(hash: Option<HashOf<BlockHeader>>) {
     let slot = LOCKED_QC_HASH.get_or_init(|| Mutex::new(None));
-    *slot.lock().unwrap() = hash.map(UntypedHash::from);
+    *lock_operator_status_slot(slot, "locked QC hash") = hash.map(UntypedHash::from);
 }
 
 fn locked_qc_hash() -> Option<HashOf<BlockHeader>> {
     let slot = LOCKED_QC_HASH.get_or_init(|| Mutex::new(None));
-    slot.lock()
-        .unwrap()
+    lock_operator_status_slot(slot, "locked QC hash")
         .as_ref()
-        .map(Clone::clone)
+        .cloned()
         .map(HashOf::<BlockHeader>::from_untyped_unchecked)
 }
 
@@ -1719,7 +1745,7 @@ fn membership_view_hash() -> Option<[u8; 32]> {
     }
     MEMBERSHIP_VIEW_HASH
         .get()
-        .and_then(|slot| slot.lock().ok().map(|hash| *hash))
+        .map(|slot| *lock_operator_status_slot(slot, "membership view hash"))
 }
 
 /// Snapshot the current membership view hash for mismatch detection.
@@ -1885,14 +1911,9 @@ pub fn reset_rbc_mismatch_for_tests() {
 /// Reset vote validation drop history for unit tests.
 pub fn reset_vote_validation_drops_for_tests() {
     if let Some(slot) = VOTE_VALIDATION_DROPS.get() {
-        let mut guard = slot
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        guard.clear();
+        lock_operator_status_slot(slot, "vote validation drop history").clear();
     }
-    if let Some(mut registry) = vote_validation_drop_peer_registry() {
-        registry.clear();
-    }
+    vote_validation_drop_peer_registry().clear();
     VOTE_VALIDATION_DROPS_TOTAL.store(0, Ordering::Relaxed);
 }
 
@@ -1915,9 +1936,7 @@ pub fn reset_membership_snapshot_for_tests() {
     MEMBERSHIP_EPOCH.store(0, Ordering::Relaxed);
     MEMBERSHIP_HASH_SET.store(false, Ordering::Relaxed);
     if let Some(slot) = MEMBERSHIP_VIEW_HASH.get() {
-        if let Ok(mut guard) = slot.lock() {
-            *guard = [0u8; 32];
-        }
+        *lock_operator_status_slot(slot, "membership view hash") = [0u8; 32];
     }
 }
 
@@ -1928,7 +1947,7 @@ pub fn set_prf_context(seed: [u8; 32], height: u64, view: u64) {
     PRF_HEIGHT.store(height, Ordering::Relaxed);
     PRF_VIEW.store(view, Ordering::Relaxed);
     let slot = PRF_SEED.get_or_init(|| Mutex::new(None));
-    *slot.lock().unwrap() = Some(seed);
+    *lock_operator_status_slot(slot, "PRF seed") = Some(seed);
 }
 
 /// Record the current and staged consensus mode tags and activation height (best-effort).
@@ -1938,18 +1957,20 @@ pub fn set_mode_tags(
     staged_mode_activation_height: Option<u64>,
 ) {
     let mode_slot = MODE_TAG.get_or_init(|| Mutex::new(String::new()));
-    *mode_slot.lock().unwrap() = mode_tag.to_string();
+    *lock_operator_status_slot(mode_slot, "mode tag") = mode_tag.to_string();
     let staged_slot = STAGED_MODE_TAG.get_or_init(|| Mutex::new(None));
-    *staged_slot.lock().unwrap() = staged_mode_tag.map(ToOwned::to_owned);
+    *lock_operator_status_slot(staged_slot, "staged mode tag") =
+        staged_mode_tag.map(ToOwned::to_owned);
     let activation_slot = STAGED_MODE_ACTIVATION_HEIGHT.get_or_init(|| Mutex::new(None));
-    *activation_slot.lock().unwrap() = staged_mode_activation_height;
+    *lock_operator_status_slot(activation_slot, "staged mode activation height") =
+        staged_mode_activation_height;
 }
 
 /// Record the number of blocks since a staged mode activation height was reached without a flip.
 /// `None` resets the lag to an unset state.
 pub fn set_mode_activation_lag(lag_blocks: Option<u64>) {
     let slot = MODE_ACTIVATION_LAG_BLOCKS.get_or_init(|| Mutex::new(None));
-    *slot.lock().unwrap() = lag_blocks;
+    *lock_operator_status_slot(slot, "mode activation lag") = lag_blocks;
 }
 
 /// Record whether runtime mode flips are currently allowed by configuration.
@@ -1969,9 +1990,7 @@ pub fn clear_mode_flip_blocked() {
 
 fn set_last_flip_error(reason: Option<String>) {
     let slot = MODE_LAST_FLIP_ERROR.get_or_init(|| Mutex::new(None));
-    if let Ok(mut guard) = slot.lock() {
-        *guard = reason;
-    }
+    *lock_operator_status_slot(slot, "mode flip last error") = reason;
 }
 
 fn set_last_flip_timestamp(now_ms: u64) {
@@ -2007,19 +2026,19 @@ pub fn note_mode_flip_blocked(reason: &str, now_ms: u64) {
 pub fn mode_tags() -> (String, Option<String>, Option<u64>, Option<u64>) {
     let mode = MODE_TAG
         .get()
-        .and_then(|slot| slot.lock().ok().map(|s| s.clone()))
+        .map(|slot| lock_operator_status_slot(slot, "mode tag").clone())
         .unwrap_or_default();
     let staged = STAGED_MODE_TAG
         .get()
-        .and_then(|slot| slot.lock().ok().map(|s| s.clone()))
+        .map(|slot| lock_operator_status_slot(slot, "staged mode tag").clone())
         .unwrap_or(None);
     let activation = STAGED_MODE_ACTIVATION_HEIGHT
         .get()
-        .and_then(|slot| slot.lock().ok().map(|v| *v))
+        .map(|slot| *lock_operator_status_slot(slot, "staged mode activation height"))
         .unwrap_or(None);
     let lag = MODE_ACTIVATION_LAG_BLOCKS
         .get()
-        .and_then(|slot| slot.lock().ok().map(|v| *v))
+        .map(|slot| *lock_operator_status_slot(slot, "mode activation lag"))
         .unwrap_or(None);
     (mode, staged, activation, lag)
 }
@@ -2027,14 +2046,14 @@ pub fn mode_tags() -> (String, Option<String>, Option<u64>, Option<u64>) {
 /// Store the latest consensus handshake caps (best-effort; used for status/telemetry).
 pub fn set_consensus_caps(caps: &iroha_p2p::ConsensusConfigCaps) {
     let slot = CONSENSUS_CAPS.get_or_init(|| Mutex::new(None));
-    *slot.lock().unwrap() = Some(*caps);
+    *lock_operator_status_slot(slot, "consensus caps") = Some(*caps);
 }
 
 /// Fetch the last recorded consensus handshake caps.
 pub fn consensus_caps() -> Option<iroha_p2p::ConsensusConfigCaps> {
     CONSENSUS_CAPS
         .get()
-        .and_then(|slot| slot.lock().ok().and_then(|caps| *caps))
+        .and_then(|slot| *lock_operator_status_slot(slot, "consensus caps"))
 }
 
 /// Store the latest effective consensus timing values (best-effort).
@@ -2180,7 +2199,7 @@ pub fn set_membership_view_hash(hash: [u8; 32], height: u64, view: u64, epoch: u
     MEMBERSHIP_VIEW.store(view, Ordering::Relaxed);
     MEMBERSHIP_EPOCH.store(epoch, Ordering::Relaxed);
     let slot = MEMBERSHIP_VIEW_HASH.get_or_init(|| Mutex::new([0u8; 32]));
-    *slot.lock().unwrap() = hash;
+    *lock_operator_status_slot(slot, "membership view hash") = hash;
     MEMBERSHIP_HASH_SET.store(true, Ordering::Relaxed);
 }
 
@@ -2190,12 +2209,12 @@ pub fn prf_context() -> (Option<[u8; 32]>, u64, u64) {
     let _guard = mode_tags_test_guard();
     let h = PRF_HEIGHT.load(Ordering::Relaxed);
     let v = PRF_VIEW.load(Ordering::Relaxed);
-    let seed = PRF_SEED
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .unwrap()
-        .as_ref()
-        .copied();
+    let seed = {
+        let slot = PRF_SEED.get_or_init(|| Mutex::new(None));
+        lock_operator_status_slot(slot, "PRF seed")
+            .as_ref()
+            .copied()
+    };
     (seed, h, v)
 }
 
@@ -2374,9 +2393,7 @@ pub fn record_nexus_fee_event(event: NexusFeeEvent) {
     let Some(_guard) = try_reentrant_test_guard(&RBC_STATUS_TEST_LOCK) else {
         return;
     };
-    let mut guard = nexus_fee_slot()
-        .lock()
-        .expect("nexus fee status mutex poisoned");
+    let mut guard = lock_operator_status_slot(nexus_fee_slot(), "nexus fee status");
     match event {
         NexusFeeEvent::Charged {
             payer_kind,
@@ -2457,9 +2474,7 @@ where
     let Some(_guard) = try_reentrant_test_guard(&RBC_STATUS_TEST_LOCK) else {
         return;
     };
-    let mut guard = nexus_staking_slot()
-        .lock()
-        .expect("nexus staking status mutex poisoned");
+    let mut guard = lock_operator_status_slot(nexus_staking_slot(), "nexus staking status");
     let entry = guard
         .entry(lane_id)
         .or_insert_with(|| NexusStakingLaneSnapshot {
@@ -2520,17 +2535,12 @@ pub fn record_public_lane_slash(lane_id: LaneId) {
 
 /// Latest aggregated Nexus fee snapshot.
 pub fn nexus_fee_snapshot() -> NexusFeeSnapshot {
-    nexus_fee_slot()
-        .lock()
-        .expect("nexus fee status mutex poisoned")
-        .clone()
+    lock_operator_status_slot(nexus_fee_slot(), "nexus fee status").clone()
 }
 
 /// Latest aggregated Nexus staking snapshot.
 pub fn nexus_staking_snapshot() -> NexusStakingSnapshot {
-    let guard = nexus_staking_slot()
-        .lock()
-        .expect("nexus staking status mutex poisoned");
+    let guard = lock_operator_status_slot(nexus_staking_slot(), "nexus staking status");
     let mut lanes: Vec<_> = guard.values().cloned().collect();
     lanes.sort_by_key(|lane| lane.lane_id.as_u32());
     NexusStakingSnapshot { lanes }
@@ -2555,15 +2565,11 @@ pub fn reset_nexus_economics_for_tests() {
     #[cfg(test)]
     let _guard = rbc_status_test_guard();
     {
-        let mut guard = nexus_fee_slot()
-            .lock()
-            .expect("nexus fee status mutex poisoned");
+        let mut guard = lock_operator_status_slot(nexus_fee_slot(), "nexus fee status");
         *guard = NexusFeeSnapshot::default();
     }
     {
-        let mut guard = nexus_staking_slot()
-            .lock()
-            .expect("nexus staking status mutex poisoned");
+        let mut guard = lock_operator_status_slot(nexus_staking_slot(), "nexus staking status");
         guard.clear();
     }
 }
@@ -4225,9 +4231,8 @@ fn precommit_signer_history_slot() -> &'static Mutex<VecDeque<PrecommitSignerRec
 pub fn record_validator_checkpoint(checkpoint: ValidatorSetCheckpoint) {
     #[cfg(test)]
     let _guard = commit_history_test_guard();
-    let mut guard = checkpoint_history_slot()
-        .lock()
-        .expect("validator checkpoint history mutex poisoned");
+    let mut guard =
+        lock_operator_status_slot(checkpoint_history_slot(), "validator checkpoint history");
     guard.push_back(checkpoint);
     while guard.len() > VALIDATOR_CHECKPOINT_HISTORY_CAP {
         guard.pop_front();
@@ -4239,9 +4244,7 @@ pub fn record_validator_checkpoint(checkpoint: ValidatorSetCheckpoint) {
 pub fn validator_checkpoint_history() -> Vec<ValidatorSetCheckpoint> {
     #[cfg(test)]
     let _guard = commit_history_test_guard();
-    checkpoint_history_slot()
-        .lock()
-        .expect("validator checkpoint history mutex poisoned")
+    lock_operator_status_slot(checkpoint_history_slot(), "validator checkpoint history")
         .iter()
         .rev()
         .cloned()
@@ -4252,9 +4255,8 @@ pub fn validator_checkpoint_history() -> Vec<ValidatorSetCheckpoint> {
 pub fn record_commit_qc(cert: Qc) {
     #[cfg(test)]
     let _guard = commit_history_test_guard();
-    let mut guard = commit_cert_history_slot()
-        .lock()
-        .expect("commit certificate history mutex poisoned");
+    let mut guard =
+        lock_operator_status_slot(commit_cert_history_slot(), "commit certificate history");
     // Keep the latest certificate per (height, block_hash) to avoid stale duplicates while
     // preserving alternate views for other hashes at the same height.
     guard.retain(|entry| {
@@ -4273,12 +4275,11 @@ pub fn record_commit_qc(cert: Qc) {
 pub fn commit_qc_history() -> Vec<Qc> {
     #[cfg(test)]
     let _guard = commit_history_test_guard();
-    let mut entries: Vec<_> = commit_cert_history_slot()
-        .lock()
-        .expect("commit certificate history mutex poisoned")
-        .iter()
-        .cloned()
-        .collect();
+    let mut entries: Vec<_> =
+        lock_operator_status_slot(commit_cert_history_slot(), "commit certificate history")
+            .iter()
+            .cloned()
+            .collect();
     entries.sort_by(|a, b| b.height.cmp(&a.height).then_with(|| b.view.cmp(&a.view)));
     entries
 }
@@ -4287,9 +4288,8 @@ pub fn commit_qc_history() -> Vec<Qc> {
 pub fn record_precommit_signers(record: PrecommitSignerRecord) {
     #[cfg(test)]
     let _guard = commit_history_test_guard();
-    let mut guard = precommit_signer_history_slot()
-        .lock()
-        .expect("precommit signer history mutex poisoned");
+    let mut guard =
+        lock_operator_status_slot(precommit_signer_history_slot(), "precommit signer history");
     guard.retain(|entry| {
         !(entry.height == record.height
             && entry.block_hash == record.block_hash
@@ -4306,12 +4306,11 @@ pub fn record_precommit_signers(record: PrecommitSignerRecord) {
 pub fn precommit_signer_history() -> Vec<PrecommitSignerRecord> {
     #[cfg(test)]
     let _guard = commit_history_test_guard();
-    let mut entries: Vec<_> = precommit_signer_history_slot()
-        .lock()
-        .expect("precommit signer history mutex poisoned")
-        .iter()
-        .cloned()
-        .collect();
+    let mut entries: Vec<_> =
+        lock_operator_status_slot(precommit_signer_history_slot(), "precommit signer history")
+            .iter()
+            .cloned()
+            .collect();
     entries.sort_by(|a, b| b.height.cmp(&a.height).then_with(|| b.view.cmp(&a.view)));
     entries
 }
@@ -4346,9 +4345,8 @@ fn npos_election_history_slot() -> &'static Mutex<VecDeque<ValidatorElectionOutc
 
 /// Record a validator election outcome, retaining a bounded history (newest-last order).
 pub fn record_npos_election(outcome: ValidatorElectionOutcome) {
-    let mut guard = npos_election_history_slot()
-        .lock()
-        .expect("npos election history mutex poisoned");
+    let mut guard =
+        lock_operator_status_slot(npos_election_history_slot(), "npos election history");
     guard.push_back(outcome);
     while guard.len() > NPOS_ELECTION_HISTORY_CAP {
         guard.pop_front();
@@ -4358,9 +4356,7 @@ pub fn record_npos_election(outcome: ValidatorElectionOutcome) {
 /// Return the most recent validator election outcome, if present.
 #[must_use]
 pub fn latest_npos_election() -> Option<ValidatorElectionOutcome> {
-    npos_election_history_slot()
-        .lock()
-        .expect("npos election history mutex poisoned")
+    lock_operator_status_slot(npos_election_history_slot(), "npos election history")
         .iter()
         .next_back()
         .cloned()
@@ -4368,9 +4364,7 @@ pub fn latest_npos_election() -> Option<ValidatorElectionOutcome> {
 
 /// Record a consensus key lifecycle entry, retaining a bounded history (newest-last order).
 pub fn record_consensus_key(record: ConsensusKeyRecord) {
-    let mut guard = key_history_slot()
-        .lock()
-        .expect("key lifecycle history mutex poisoned");
+    let mut guard = lock_operator_status_slot(key_history_slot(), "key lifecycle history");
     guard.retain(|existing| existing.id != record.id);
     guard.push_back(record);
     while guard.len() > KEY_LIFECYCLE_HISTORY_CAP {
@@ -4381,9 +4375,7 @@ pub fn record_consensus_key(record: ConsensusKeyRecord) {
 /// Return recorded consensus key lifecycle entries in newest-first order.
 #[must_use]
 pub fn consensus_key_history() -> Vec<ConsensusKeyRecord> {
-    key_history_slot()
-        .lock()
-        .expect("key lifecycle history mutex poisoned")
+    lock_operator_status_slot(key_history_slot(), "key lifecycle history")
         .iter()
         .rev()
         .cloned()
@@ -4394,9 +4386,8 @@ pub fn consensus_key_history() -> Vec<ConsensusKeyRecord> {
 /// Clear validator checkpoint history (test-only helper).
 pub fn reset_validator_checkpoints_for_tests() {
     let _guard = commit_history_test_guard();
-    let mut guard = checkpoint_history_slot()
-        .lock()
-        .expect("validator checkpoint history mutex poisoned");
+    let mut guard =
+        lock_operator_status_slot(checkpoint_history_slot(), "validator checkpoint history");
     guard.clear();
 }
 
@@ -4404,9 +4395,8 @@ pub fn reset_validator_checkpoints_for_tests() {
 pub fn reset_commit_certs_for_tests() {
     #[cfg(test)]
     let _guard = commit_history_test_guard();
-    let mut guard = commit_cert_history_slot()
-        .lock()
-        .expect("commit certificate history mutex poisoned");
+    let mut guard =
+        lock_operator_status_slot(commit_cert_history_slot(), "commit certificate history");
     guard.clear();
 }
 
@@ -4420,26 +4410,21 @@ pub fn reset_commit_quorum_for_tests() {
     COMMIT_QUORUM_SET_B.store(0, Ordering::Relaxed);
     COMMIT_QUORUM_REQUIRED.store(0, Ordering::Relaxed);
     COMMIT_QUORUM_LAST_UPDATED_MS.store(0, Ordering::Relaxed);
-    if let Ok(mut guard) = commit_quorum_hash_slot().lock() {
-        *guard = None;
-    }
+    *lock_operator_status_slot(commit_quorum_hash_slot(), "commit quorum hash") = None;
 }
 
 #[cfg(test)]
 /// Clear `NPoS` election history (test-only helper).
 pub fn reset_npos_elections_for_tests() {
-    let mut guard = npos_election_history_slot()
-        .lock()
-        .expect("npos election history mutex poisoned");
+    let mut guard =
+        lock_operator_status_slot(npos_election_history_slot(), "npos election history");
     guard.clear();
 }
 
 #[cfg(test)]
 /// Clear key lifecycle history (test-only helper).
 pub fn reset_consensus_keys_for_tests() {
-    let mut guard = key_history_slot()
-        .lock()
-        .expect("key lifecycle history mutex poisoned");
+    let mut guard = lock_operator_status_slot(key_history_slot(), "key lifecycle history");
     guard.clear();
 }
 
@@ -4447,9 +4432,7 @@ fn recent_rbc_evictions() -> Vec<RbcEvictedSession> {
     RBC_STORE_RECENT_EVICTIONS
         .get()
         .map(|slot| {
-            let guard = slot
-                .lock()
-                .expect("RBC store eviction history mutex poisoned");
+            let guard = lock_rbc_store_evictions_slot(slot);
             guard.iter().rev().map(Clone::clone).collect::<Vec<_>>()
         })
         .unwrap_or_default()
@@ -4505,11 +4488,11 @@ fn block_sync_roster_snapshot() -> BlockSyncRosterSnapshot {
 
 fn view_change_cause_snapshot() -> ViewChangeCauseSnapshot {
     let last_ts = VIEW_CHANGE_CAUSE_LAST_TS_MS.load(Ordering::Relaxed);
-    let last_cause = VIEW_CHANGE_CAUSE_LAST_LABEL
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .expect("view change cause mutex poisoned")
-        .clone();
+    let last_cause = lock_operator_status_slot(
+        VIEW_CHANGE_CAUSE_LAST_LABEL.get_or_init(|| Mutex::new(None)),
+        "view change cause",
+    )
+    .clone();
     ViewChangeCauseSnapshot {
         commit_failure_total: VIEW_CHANGE_CAUSE_COMMIT_FAILURE_TOTAL.load(Ordering::Relaxed),
         quorum_timeout_total: VIEW_CHANGE_CAUSE_QUORUM_TIMEOUT_TOTAL.load(Ordering::Relaxed),
@@ -4567,22 +4550,22 @@ fn consensus_roster_recovery_dwell_snapshot() -> BTreeMap<&'static str, u64> {
 }
 
 fn validation_reject_snapshot() -> ValidationRejectSnapshot {
-    let last_reason = VALIDATION_REJECT_REASON
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .expect("validation reject reason mutex poisoned");
-    let last_height = VALIDATION_REJECT_LAST_HEIGHT
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .expect("validation reject height mutex poisoned");
-    let last_view = VALIDATION_REJECT_LAST_VIEW
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .expect("validation reject view mutex poisoned");
-    let last_block = VALIDATION_REJECT_LAST_BLOCK
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .expect("validation reject block mutex poisoned");
+    let last_reason = lock_operator_status_slot(
+        VALIDATION_REJECT_REASON.get_or_init(|| Mutex::new(None)),
+        "validation reject reason",
+    );
+    let last_height = lock_operator_status_slot(
+        VALIDATION_REJECT_LAST_HEIGHT.get_or_init(|| Mutex::new(None)),
+        "validation reject height",
+    );
+    let last_view = lock_operator_status_slot(
+        VALIDATION_REJECT_LAST_VIEW.get_or_init(|| Mutex::new(None)),
+        "validation reject view",
+    );
+    let last_block = lock_operator_status_slot(
+        VALIDATION_REJECT_LAST_BLOCK.get_or_init(|| Mutex::new(None)),
+        "validation reject block",
+    );
 
     ValidationRejectSnapshot {
         total: VALIDATION_REJECT_TOTAL.load(Ordering::Relaxed),
@@ -4604,10 +4587,10 @@ fn validation_reject_snapshot() -> ValidationRejectSnapshot {
 fn peer_key_policy_snapshot() -> PeerKeyPolicySnapshot {
     #[cfg(test)]
     let _guard = peer_key_policy_test_guard();
-    let last_reason = PEER_KEY_POLICY_REASON
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .expect("peer key policy reason mutex poisoned");
+    let last_reason = lock_operator_status_slot(
+        PEER_KEY_POLICY_REASON.get_or_init(|| Mutex::new(None)),
+        "peer key policy reason",
+    );
 
     PeerKeyPolicySnapshot {
         total: PEER_KEY_POLICY_REJECT_TOTAL.load(Ordering::Relaxed),
@@ -4656,9 +4639,7 @@ fn consensus_message_handling_snapshot() -> ConsensusMessageHandlingSnapshot {
     let Some(slot) = MESSAGE_HANDLING_TOTALS.get() else {
         return ConsensusMessageHandlingSnapshot::default();
     };
-    let guard = slot
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let guard = lock_operator_status_slot(slot, "consensus message handling totals");
     let entries = guard
         .iter()
         .map(|(key, total)| ConsensusMessageHandlingEntry {
@@ -4671,22 +4652,16 @@ fn consensus_message_handling_snapshot() -> ConsensusMessageHandlingSnapshot {
     ConsensusMessageHandlingSnapshot { entries }
 }
 
-fn vote_validation_drop_peer_registry() -> Option<
-    std::sync::MutexGuard<
-        'static,
-        BTreeMap<VoteValidationDropPeerKey, VoteValidationDropPeerState>,
-    >,
-> {
-    VOTE_VALIDATION_DROPS_BY_PEER
-        .get_or_init(|| Mutex::new(BTreeMap::new()))
-        .lock()
-        .ok()
+fn vote_validation_drop_peer_registry()
+-> MutexGuard<'static, BTreeMap<VoteValidationDropPeerKey, VoteValidationDropPeerState>> {
+    lock_operator_status_slot(
+        VOTE_VALIDATION_DROPS_BY_PEER.get_or_init(|| Mutex::new(BTreeMap::new())),
+        "vote validation drop peer registry",
+    )
 }
 
 fn vote_validation_drop_peer_entries() -> Vec<VoteValidationDropPeerEntry> {
-    let Some(registry) = vote_validation_drop_peer_registry() else {
-        return Vec::new();
-    };
+    let registry = vote_validation_drop_peer_registry();
     registry
         .iter()
         .map(|(key, entry)| VoteValidationDropPeerEntry {
@@ -4714,9 +4689,7 @@ fn vote_validation_drop_snapshot() -> VoteValidationDropSnapshot {
     let entries = VOTE_VALIDATION_DROPS
         .get()
         .map(|slot| {
-            let guard = slot
-                .lock()
-                .expect("vote validation drop history mutex poisoned");
+            let guard = lock_operator_status_slot(slot, "vote validation drop history");
             guard.iter().rev().cloned().collect::<Vec<_>>()
         })
         .unwrap_or_default();
@@ -4756,38 +4729,38 @@ pub fn snapshot() -> StatusSnapshot {
     let (lane_governance_sealed_total, lane_governance_sealed_aliases, lane_governance_entries) =
         lane_governance_sealed_summary();
     let lane_relay_envelopes = lane_relay_envelopes_snapshot();
-    let kura_last_hash = (*KURA_STORE_LAST_HASH
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .expect("kura store failure hash mutex poisoned"))
+    let kura_last_hash = (*lock_operator_status_slot(
+        KURA_STORE_LAST_HASH.get_or_init(|| Mutex::new(None)),
+        "kura store failure hash",
+    ))
     .map(HashOf::from_untyped_unchecked);
-    let kura_stage_last_hash = (*KURA_STAGE_LAST_HASH
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .expect("kura stage hash mutex poisoned"))
+    let kura_stage_last_hash = (*lock_operator_status_slot(
+        KURA_STAGE_LAST_HASH.get_or_init(|| Mutex::new(None)),
+        "kura stage hash",
+    ))
     .map(HashOf::from_untyped_unchecked);
-    let kura_stage_rollback_last_hash = (*KURA_STAGE_ROLLBACK_LAST_HASH
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .expect("kura stage rollback hash mutex poisoned"))
+    let kura_stage_rollback_last_hash = (*lock_operator_status_slot(
+        KURA_STAGE_ROLLBACK_LAST_HASH.get_or_init(|| Mutex::new(None)),
+        "kura stage rollback hash",
+    ))
     .map(HashOf::from_untyped_unchecked);
-    let kura_stage_rollback_last_reason = *KURA_STAGE_ROLLBACK_LAST_REASON
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .expect("kura stage rollback reason mutex poisoned");
-    let kura_lock_reset_last_hash = (*KURA_LOCK_RESET_LAST_HASH
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .expect("kura lock reset hash mutex poisoned"))
+    let kura_stage_rollback_last_reason = *lock_operator_status_slot(
+        KURA_STAGE_ROLLBACK_LAST_REASON.get_or_init(|| Mutex::new(None)),
+        "kura stage rollback reason",
+    );
+    let kura_lock_reset_last_hash = (*lock_operator_status_slot(
+        KURA_LOCK_RESET_LAST_HASH.get_or_init(|| Mutex::new(None)),
+        "kura lock reset hash",
+    ))
     .map(HashOf::from_untyped_unchecked);
-    let kura_lock_reset_last_reason = *KURA_LOCK_RESET_LAST_REASON
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .expect("kura lock reset reason mutex poisoned");
-    let kura_post_commit_sidecar_last_hash = (*KURA_POST_COMMIT_SIDECAR_LAST_HASH
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .expect("kura post-commit sidecar hash mutex poisoned"))
+    let kura_lock_reset_last_reason = *lock_operator_status_slot(
+        KURA_LOCK_RESET_LAST_REASON.get_or_init(|| Mutex::new(None)),
+        "kura lock reset reason",
+    );
+    let kura_post_commit_sidecar_last_hash = (*lock_operator_status_slot(
+        KURA_POST_COMMIT_SIDECAR_LAST_HASH.get_or_init(|| Mutex::new(None)),
+        "kura post-commit sidecar hash",
+    ))
     .map(HashOf::from_untyped_unchecked);
     let (
         consensus_penalties_applied_total,
@@ -4807,7 +4780,7 @@ pub fn snapshot() -> StatusSnapshot {
         .then(|| MODE_LAST_FLIP_TS_MS.load(Ordering::Relaxed));
     let last_flip_error = MODE_LAST_FLIP_ERROR
         .get()
-        .and_then(|slot| slot.lock().ok().and_then(|err| err.clone()));
+        .and_then(|slot| lock_operator_status_slot(slot, "mode flip last error").clone());
 
     StatusSnapshot {
         mode_tag,
@@ -5342,9 +5315,7 @@ pub fn record_consensus_message_handling(
     #[cfg(test)]
     let _guard = message_handling_test_guard();
     let slot = MESSAGE_HANDLING_TOTALS.get_or_init(|| Mutex::new(BTreeMap::new()));
-    let mut guard = slot
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut guard = lock_operator_status_slot(slot, "consensus message handling totals");
     let key = ConsensusMessageHandlingKey {
         kind,
         outcome,
@@ -5387,9 +5358,7 @@ pub fn record_vote_validation_drop(record: VoteValidationDropRecord) {
         timestamp_ms: now_ms,
     };
     let slot = VOTE_VALIDATION_DROPS.get_or_init(|| Mutex::new(VecDeque::new()));
-    let mut guard = slot
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut guard = lock_operator_status_slot(slot, "vote validation drop history");
     guard.push_back(entry);
     while guard.len() > VOTE_VALIDATION_DROPS_CAP {
         guard.pop_front();
@@ -5399,9 +5368,7 @@ pub fn record_vote_validation_drop(record: VoteValidationDropRecord) {
         return;
     };
     let roster_hash = record.roster_hash;
-    let Some(mut registry) = vote_validation_drop_peer_registry() else {
-        return;
-    };
+    let mut registry = vote_validation_drop_peer_registry();
     let key = VoteValidationDropPeerKey {
         peer_id: peer_id.clone(),
         roster_hash,
@@ -5815,28 +5782,32 @@ pub fn record_validation_reject(
         .unwrap_or(0);
     VALIDATION_REJECT_LAST_TS_MS.store(now_ms, Ordering::Relaxed);
 
-    if let Ok(mut guard) = VALIDATION_REJECT_REASON
-        .get_or_init(|| Mutex::new(None))
-        .lock()
     {
+        let mut guard = lock_operator_status_slot(
+            VALIDATION_REJECT_REASON.get_or_init(|| Mutex::new(None)),
+            "validation reject reason",
+        );
         *guard = Some(reason);
     }
-    if let Ok(mut guard) = VALIDATION_REJECT_LAST_HEIGHT
-        .get_or_init(|| Mutex::new(None))
-        .lock()
     {
+        let mut guard = lock_operator_status_slot(
+            VALIDATION_REJECT_LAST_HEIGHT.get_or_init(|| Mutex::new(None)),
+            "validation reject height",
+        );
         *guard = Some(height);
     }
-    if let Ok(mut guard) = VALIDATION_REJECT_LAST_VIEW
-        .get_or_init(|| Mutex::new(None))
-        .lock()
     {
+        let mut guard = lock_operator_status_slot(
+            VALIDATION_REJECT_LAST_VIEW.get_or_init(|| Mutex::new(None)),
+            "validation reject view",
+        );
         *guard = Some(view);
     }
-    if let Ok(mut guard) = VALIDATION_REJECT_LAST_BLOCK
-        .get_or_init(|| Mutex::new(None))
-        .lock()
     {
+        let mut guard = lock_operator_status_slot(
+            VALIDATION_REJECT_LAST_BLOCK.get_or_init(|| Mutex::new(None)),
+            "validation reject block",
+        );
         *guard = Some(Hash::from(block_hash));
     }
 }
@@ -5893,12 +5864,11 @@ pub fn record_peer_key_policy_reject(reason: PeerKeyPolicyRejectReason) {
         .unwrap_or(0);
     PEER_KEY_POLICY_LAST_TS_MS.store(now_ms, Ordering::Relaxed);
 
-    if let Ok(mut guard) = PEER_KEY_POLICY_REASON
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-    {
-        *guard = Some(reason.as_str());
-    }
+    let mut guard = lock_operator_status_slot(
+        PEER_KEY_POLICY_REASON.get_or_init(|| Mutex::new(None)),
+        "peer key policy reason",
+    );
+    *guard = Some(reason.as_str());
 }
 
 /// Record which roster source was used during block sync.
@@ -5995,9 +5965,8 @@ pub fn record_view_change_cause(cause: &str) {
     }
     VIEW_CHANGE_CAUSE_LAST_TS_MS.store(now_ms, Ordering::Relaxed);
     let slot = VIEW_CHANGE_CAUSE_LAST_LABEL.get_or_init(|| Mutex::new(None));
-    if let Ok(mut guard) = slot.lock() {
-        *guard = Some(cause.to_string());
-    }
+    let mut guard = lock_operator_status_slot(slot, "view change cause");
+    *guard = Some(cause.to_string());
 }
 
 /// Record a kura persistence failure for a block.
@@ -6007,10 +5976,10 @@ pub fn record_kura_store_failure(height: u64, view: u64, block_hash: HashOf<Bloc
     KURA_STORE_FAILURE_TOTAL.fetch_add(1, Ordering::Relaxed);
     KURA_STORE_LAST_HEIGHT.store(height, Ordering::Relaxed);
     KURA_STORE_LAST_VIEW.store(view, Ordering::Relaxed);
-    let mut guard = KURA_STORE_LAST_HASH
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .expect("kura store failure hash mutex poisoned");
+    let mut guard = lock_operator_status_slot(
+        KURA_STORE_LAST_HASH.get_or_init(|| Mutex::new(None)),
+        "kura store failure hash",
+    );
     *guard = Some(UntypedHash::from(block_hash));
 }
 
@@ -6033,10 +6002,10 @@ pub fn record_kura_post_commit_sidecar_failure(
     KURA_POST_COMMIT_SIDECAR_FAILURE_TOTAL.fetch_add(1, Ordering::Relaxed);
     KURA_POST_COMMIT_SIDECAR_LAST_HEIGHT.store(height, Ordering::Relaxed);
     KURA_POST_COMMIT_SIDECAR_LAST_VIEW.store(view, Ordering::Relaxed);
-    let mut guard = KURA_POST_COMMIT_SIDECAR_LAST_HASH
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .expect("kura post-commit sidecar hash mutex poisoned");
+    let mut guard = lock_operator_status_slot(
+        KURA_POST_COMMIT_SIDECAR_LAST_HASH.get_or_init(|| Mutex::new(None)),
+        "kura post-commit sidecar hash",
+    );
     *guard = Some(UntypedHash::from(block_hash));
 }
 
@@ -6047,10 +6016,10 @@ pub fn record_kura_stage(height: u64, view: u64, block_hash: HashOf<BlockHeader>
     KURA_STAGE_TOTAL.fetch_add(1, Ordering::Relaxed);
     KURA_STAGE_LAST_HEIGHT.store(height, Ordering::Relaxed);
     KURA_STAGE_LAST_VIEW.store(view, Ordering::Relaxed);
-    let mut guard = KURA_STAGE_LAST_HASH
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .expect("kura stage hash mutex poisoned");
+    let mut guard = lock_operator_status_slot(
+        KURA_STAGE_LAST_HASH.get_or_init(|| Mutex::new(None)),
+        "kura stage hash",
+    );
     *guard = Some(UntypedHash::from(block_hash));
 }
 
@@ -6066,15 +6035,15 @@ pub fn record_kura_stage_rollback(
     KURA_STAGE_ROLLBACK_TOTAL.fetch_add(1, Ordering::Relaxed);
     KURA_STAGE_ROLLBACK_LAST_HEIGHT.store(height, Ordering::Relaxed);
     KURA_STAGE_ROLLBACK_LAST_VIEW.store(view, Ordering::Relaxed);
-    let mut hash_guard = KURA_STAGE_ROLLBACK_LAST_HASH
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .expect("kura stage rollback hash mutex poisoned");
+    let mut hash_guard = lock_operator_status_slot(
+        KURA_STAGE_ROLLBACK_LAST_HASH.get_or_init(|| Mutex::new(None)),
+        "kura stage rollback hash",
+    );
     *hash_guard = Some(UntypedHash::from(block_hash));
-    let mut reason_guard = KURA_STAGE_ROLLBACK_LAST_REASON
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .expect("kura stage rollback reason mutex poisoned");
+    let mut reason_guard = lock_operator_status_slot(
+        KURA_STAGE_ROLLBACK_LAST_REASON.get_or_init(|| Mutex::new(None)),
+        "kura stage rollback reason",
+    );
     *reason_guard = Some(reason);
 }
 
@@ -6090,15 +6059,15 @@ pub fn record_kura_lock_reset(
     KURA_LOCK_RESET_TOTAL.fetch_add(1, Ordering::Relaxed);
     KURA_LOCK_RESET_LAST_HEIGHT.store(height, Ordering::Relaxed);
     KURA_LOCK_RESET_LAST_VIEW.store(view, Ordering::Relaxed);
-    let mut hash_guard = KURA_LOCK_RESET_LAST_HASH
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .expect("kura lock reset hash mutex poisoned");
+    let mut hash_guard = lock_operator_status_slot(
+        KURA_LOCK_RESET_LAST_HASH.get_or_init(|| Mutex::new(None)),
+        "kura lock reset hash",
+    );
     *hash_guard = block_hash.map(UntypedHash::from);
-    let mut reason_guard = KURA_LOCK_RESET_LAST_REASON
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .expect("kura lock reset reason mutex poisoned");
+    let mut reason_guard = lock_operator_status_slot(
+        KURA_LOCK_RESET_LAST_REASON.get_or_init(|| Mutex::new(None)),
+        "kura lock reset reason",
+    );
     *reason_guard = Some(reason);
 }
 
@@ -6222,9 +6191,7 @@ pub(crate) fn reset_missing_block_fetch_counters_for_tests() {
 pub(crate) fn reset_message_handling_for_tests() {
     let _guard = message_handling_test_guard();
     if let Some(slot) = MESSAGE_HANDLING_TOTALS.get() {
-        slot.lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clear();
+        lock_operator_status_slot(slot, "consensus message handling totals").clear();
     }
 }
 
@@ -6264,9 +6231,8 @@ pub(crate) fn reset_block_sync_counters_for_tests() {
 #[cfg(test)]
 pub(crate) fn reset_precommit_signer_history_for_tests() {
     let _guard = commit_history_test_guard();
-    let mut guard = precommit_signer_history_slot()
-        .lock()
-        .expect("precommit signer history mutex poisoned");
+    let mut guard =
+        lock_operator_status_slot(precommit_signer_history_slot(), "precommit signer history");
     guard.clear();
 }
 
@@ -6293,9 +6259,7 @@ pub(crate) fn reset_view_change_cause_counters_for_tests() {
     VIEW_CHANGE_CAUSE_LAST_MISSING_QC_TS_MS.store(0, Ordering::Relaxed);
     VIEW_CHANGE_CAUSE_LAST_VALIDATION_REJECT_TS_MS.store(0, Ordering::Relaxed);
     if let Some(slot) = VIEW_CHANGE_CAUSE_LAST_LABEL.get() {
-        if let Ok(mut guard) = slot.lock() {
-            guard.take();
-        }
+        lock_operator_status_slot(slot, "view change cause").take();
     }
 }
 
@@ -6311,24 +6275,16 @@ pub(crate) fn reset_validation_reject_counters_for_tests() {
     VALIDATION_REJECT_TOPOLOGY_TOTAL.store(0, Ordering::Relaxed);
     VALIDATION_REJECT_LAST_TS_MS.store(0, Ordering::Relaxed);
     if let Some(slot) = VALIDATION_REJECT_REASON.get() {
-        if let Ok(mut guard) = slot.lock() {
-            guard.take();
-        }
+        lock_operator_status_slot(slot, "validation reject reason").take();
     }
     if let Some(slot) = VALIDATION_REJECT_LAST_HEIGHT.get() {
-        if let Ok(mut guard) = slot.lock() {
-            guard.take();
-        }
+        lock_operator_status_slot(slot, "validation reject height").take();
     }
     if let Some(slot) = VALIDATION_REJECT_LAST_VIEW.get() {
-        if let Ok(mut guard) = slot.lock() {
-            guard.take();
-        }
+        lock_operator_status_slot(slot, "validation reject view").take();
     }
     if let Some(slot) = VALIDATION_REJECT_LAST_BLOCK.get() {
-        if let Ok(mut guard) = slot.lock() {
-            guard.take();
-        }
+        lock_operator_status_slot(slot, "validation reject block").take();
     }
 }
 
@@ -6345,9 +6301,7 @@ pub(crate) fn reset_peer_key_policy_counters_for_tests() {
     PEER_KEY_POLICY_ID_COLLISION_TOTAL.store(0, Ordering::Relaxed);
     PEER_KEY_POLICY_LAST_TS_MS.store(0, Ordering::Relaxed);
     if let Some(slot) = PEER_KEY_POLICY_REASON.get() {
-        if let Ok(mut guard) = slot.lock() {
-            guard.take();
-        }
+        lock_operator_status_slot(slot, "peer key policy reason").take();
     }
 }
 
@@ -6380,37 +6334,31 @@ pub(crate) fn reset_kura_store_counters_for_tests() {
     KURA_POST_COMMIT_SIDECAR_LAST_HEIGHT.store(0, Ordering::Relaxed);
     KURA_POST_COMMIT_SIDECAR_LAST_VIEW.store(0, Ordering::Relaxed);
     if let Some(slot) = KURA_STORE_LAST_HASH.get() {
-        let mut guard = slot.lock().expect("kura store hash mutex poisoned");
+        let mut guard = lock_operator_status_slot(slot, "kura store failure hash");
         *guard = None;
     }
     if let Some(slot) = KURA_POST_COMMIT_SIDECAR_LAST_HASH.get() {
-        let mut guard = slot
-            .lock()
-            .expect("kura post-commit sidecar hash mutex poisoned");
+        let mut guard = lock_operator_status_slot(slot, "kura post-commit sidecar hash");
         *guard = None;
     }
     if let Some(slot) = KURA_STAGE_LAST_HASH.get() {
-        let mut guard = slot.lock().expect("kura stage hash mutex poisoned");
+        let mut guard = lock_operator_status_slot(slot, "kura stage hash");
         *guard = None;
     }
     if let Some(slot) = KURA_STAGE_ROLLBACK_LAST_HASH.get() {
-        let mut guard = slot
-            .lock()
-            .expect("kura stage rollback hash mutex poisoned");
+        let mut guard = lock_operator_status_slot(slot, "kura stage rollback hash");
         *guard = None;
     }
     if let Some(slot) = KURA_STAGE_ROLLBACK_LAST_REASON.get() {
-        let mut guard = slot
-            .lock()
-            .expect("kura stage rollback reason mutex poisoned");
+        let mut guard = lock_operator_status_slot(slot, "kura stage rollback reason");
         guard.take();
     }
     if let Some(slot) = KURA_LOCK_RESET_LAST_HASH.get() {
-        let mut guard = slot.lock().expect("kura lock reset hash mutex poisoned");
+        let mut guard = lock_operator_status_slot(slot, "kura lock reset hash");
         *guard = None;
     }
     if let Some(slot) = KURA_LOCK_RESET_LAST_REASON.get() {
-        let mut guard = slot.lock().expect("kura lock reset reason mutex poisoned");
+        let mut guard = lock_operator_status_slot(slot, "kura lock reset reason");
         guard.take();
     }
 }
@@ -6535,7 +6483,7 @@ pub fn phase_latencies_snapshot() -> PhaseLatenciesSnapshot {
 
 /// Record an availability vote ingestion for the local collector.
 pub fn record_availability_vote(collector_idx: u64, peer: &PeerId) {
-    let mut stats = availability_slot().lock().unwrap();
+    let mut stats = lock_operator_status_slot(availability_slot(), "availability vote stats");
     stats.total_votes = stats.total_votes.saturating_add(1);
     let entry = stats
         .per_peer
@@ -6550,7 +6498,7 @@ pub fn record_availability_vote(collector_idx: u64, peer: &PeerId) {
 
 /// Snapshot availability vote ingestion counters for `/v1/sumeragi/telemetry`.
 pub fn availability_snapshot() -> AvailabilitySnapshot {
-    let stats = availability_slot().lock().unwrap();
+    let stats = lock_operator_status_slot(availability_slot(), "availability vote stats");
     let mut collectors: Vec<AvailabilityCollectorSnapshot> = stats
         .per_peer
         .iter()
@@ -6569,13 +6517,13 @@ pub fn availability_snapshot() -> AvailabilitySnapshot {
 
 /// Record the last observed QC assembly latency for the given kind (e.g., `availability`).
 pub fn record_qc_latency(kind: &'static str, ms: u64) {
-    let mut slot = qc_latency_slot().lock().unwrap();
+    let mut slot = lock_operator_status_slot(qc_latency_slot(), "QC latency stats");
     slot.insert(kind, ms);
 }
 
 /// Snapshot QC assembly latencies for `/v1/sumeragi/telemetry`.
 pub fn qc_latency_snapshot() -> Vec<(String, u64)> {
-    let slot = qc_latency_slot().lock().unwrap();
+    let slot = lock_operator_status_slot(qc_latency_slot(), "QC latency stats");
     let mut out: Vec<(String, u64)> = slot.iter().map(|(k, v)| ((*k).to_string(), *v)).collect();
     out.sort_by(|a, b| a.0.cmp(&b.0));
     out
@@ -6583,7 +6531,7 @@ pub fn qc_latency_snapshot() -> Vec<(String, u64)> {
 
 /// Update the aggregated RBC backlog snapshot for telemetry consumers.
 pub fn set_rbc_backlog_snapshot(total_missing: u64, max_missing: u64, pending_sessions: u64) {
-    let mut slot = rbc_backlog_slot().lock().unwrap();
+    let mut slot = lock_operator_status_slot(rbc_backlog_slot(), "RBC backlog snapshot");
     *slot = RbcBacklogSnapshot {
         total_missing_chunks: total_missing,
         max_missing_chunks: max_missing,
@@ -6593,21 +6541,22 @@ pub fn set_rbc_backlog_snapshot(total_missing: u64, max_missing: u64, pending_se
 
 /// Snapshot RBC backlog aggregation for `/v1/sumeragi/telemetry`.
 pub fn rbc_backlog_snapshot() -> RbcBacklogSnapshot {
-    *rbc_backlog_slot().lock().unwrap()
+    *lock_operator_status_slot(rbc_backlog_slot(), "RBC backlog snapshot")
 }
 
 /// Replace the pending-RBC snapshot used by `/v1/sumeragi/status`.
 pub fn set_pending_rbc_snapshot(snapshot: PendingRbcSnapshot) {
     #[cfg(test)]
     let _guard = rbc_status_test_guard();
-    *pending_rbc_slot().lock().unwrap() = snapshot;
+    *lock_operator_status_slot(pending_rbc_slot(), "pending RBC snapshot") = snapshot;
 }
 
 /// Snapshot pending-RBC aggregation for `/v1/sumeragi/status`.
 pub fn pending_rbc_snapshot() -> PendingRbcSnapshot {
     #[cfg(test)]
     let _guard = rbc_status_test_guard();
-    let mut snapshot = pending_rbc_slot().lock().unwrap().clone();
+    let mut snapshot =
+        lock_operator_status_slot(pending_rbc_slot(), "pending RBC snapshot").clone();
     snapshot.drops_total = PENDING_RBC_DROPS_TOTAL.load(Ordering::Relaxed);
     snapshot.drops_cap_total = PENDING_RBC_DROPS_CAP_TOTAL.load(Ordering::Relaxed);
     snapshot.drops_cap_bytes_total = PENDING_RBC_DROPS_CAP_BYTES_TOTAL.load(Ordering::Relaxed);
@@ -6738,7 +6687,7 @@ fn pipeline_execution_slot() -> &'static Mutex<PipelineExecutionSnapshot> {
 
 /// Replace the lane-activity snapshot used by `/v1/sumeragi/status`.
 pub fn set_lane_activity_snapshot(entries: Vec<LaneActivitySnapshot>) {
-    *lane_activity_slot().lock().unwrap() = entries;
+    *lock_operator_status_slot(lane_activity_slot(), "lane activity snapshot") = entries;
 }
 
 /// Replace the aggregate pipeline-execution snapshot used by `/v1/sumeragi/status`.
@@ -6747,12 +6696,12 @@ pub fn set_pipeline_execution_snapshot(snapshot: PipelineExecutionSnapshot) {
     let Some(_guard) = try_reentrant_test_guard(&RBC_STATUS_TEST_LOCK) else {
         return;
     };
-    *pipeline_execution_slot().lock().unwrap() = snapshot;
+    *lock_operator_status_slot(pipeline_execution_slot(), "pipeline execution snapshot") = snapshot;
 }
 
 /// Replace the access-set source summary used by `/v1/sumeragi/status`.
 pub fn set_access_set_source_summary(summary: AccessSetSourceSummary) {
-    *access_set_source_slot().lock().unwrap() = summary;
+    *lock_operator_status_slot(access_set_source_slot(), "access-set source snapshot") = summary;
 }
 
 /// Record the latest conflict rate (basis points) for the pipeline DAG.
@@ -6762,23 +6711,23 @@ pub fn set_pipeline_conflict_rate_bps(bps: u64) {
 
 /// Replace the dataspace-activity snapshot used by `/v1/sumeragi/status`.
 pub fn set_dataspace_activity_snapshot(entries: Vec<DataspaceActivitySnapshot>) {
-    *dataspace_activity_slot().lock().unwrap() = entries;
+    *lock_operator_status_slot(dataspace_activity_slot(), "dataspace activity snapshot") = entries;
 }
 
 fn lane_activity_snapshot() -> Vec<LaneActivitySnapshot> {
-    lane_activity_slot().lock().unwrap().clone()
+    lock_operator_status_slot(lane_activity_slot(), "lane activity snapshot").clone()
 }
 
 fn pipeline_execution_snapshot() -> PipelineExecutionSnapshot {
-    *pipeline_execution_slot().lock().unwrap()
+    *lock_operator_status_slot(pipeline_execution_slot(), "pipeline execution snapshot")
 }
 
 fn access_set_source_snapshot() -> AccessSetSourceSummary {
-    *access_set_source_slot().lock().unwrap()
+    *lock_operator_status_slot(access_set_source_slot(), "access-set source snapshot")
 }
 
 fn dataspace_activity_snapshot() -> Vec<DataspaceActivitySnapshot> {
-    dataspace_activity_slot().lock().unwrap().clone()
+    lock_operator_status_slot(dataspace_activity_slot(), "dataspace activity snapshot").clone()
 }
 
 fn rbc_lane_backlog_slot() -> &'static Mutex<Vec<LaneRbcSnapshot>> {
@@ -6791,20 +6740,27 @@ fn rbc_dataspace_backlog_slot() -> &'static Mutex<Vec<DataspaceRbcSnapshot>> {
 
 /// Replace the aggregated RBC lane backlog snapshot used by `/v1/sumeragi/status`.
 pub fn set_rbc_lane_backlog(entries: Vec<LaneRbcSnapshot>) {
-    *rbc_lane_backlog_slot().lock().unwrap() = entries;
+    *lock_operator_status_slot(rbc_lane_backlog_slot(), "RBC lane backlog snapshot") = entries;
 }
 
 /// Replace the aggregated RBC dataspace backlog snapshot used by `/v1/sumeragi/status`.
 pub fn set_rbc_dataspace_backlog(entries: Vec<DataspaceRbcSnapshot>) {
-    *rbc_dataspace_backlog_slot().lock().unwrap() = entries;
+    *lock_operator_status_slot(
+        rbc_dataspace_backlog_slot(),
+        "RBC dataspace backlog snapshot",
+    ) = entries;
 }
 
 fn rbc_lane_backlog_snapshot() -> Vec<LaneRbcSnapshot> {
-    rbc_lane_backlog_slot().lock().unwrap().clone()
+    lock_operator_status_slot(rbc_lane_backlog_slot(), "RBC lane backlog snapshot").clone()
 }
 
 fn rbc_dataspace_backlog_snapshot() -> Vec<DataspaceRbcSnapshot> {
-    rbc_dataspace_backlog_slot().lock().unwrap().clone()
+    lock_operator_status_slot(
+        rbc_dataspace_backlog_slot(),
+        "RBC dataspace backlog snapshot",
+    )
+    .clone()
 }
 
 fn lane_commitments_slot() -> &'static Mutex<Vec<LaneCommitmentSnapshot>> {
@@ -6892,32 +6848,32 @@ pub fn set_lane_commitments(
     dataspace_entries: Vec<DataspaceCommitmentSnapshot>,
 ) {
     {
-        let mut guard = lane_commitments_slot()
-            .lock()
-            .expect("lane commitments lock poisoned");
+        let mut guard =
+            lock_operator_status_slot(lane_commitments_slot(), "lane commitments snapshot");
         *guard = lane_entries;
     }
     {
-        let mut guard = dataspace_commitments_slot()
-            .lock()
-            .expect("dataspace commitments lock poisoned");
+        let mut guard = lock_operator_status_slot(
+            dataspace_commitments_slot(),
+            "dataspace commitments snapshot",
+        );
         *guard = dataspace_entries;
     }
 }
 
 /// Replace the aggregated lane settlement commitments used by `/v1/sumeragi/status`.
 pub fn set_lane_settlement_commitments(entries: Vec<LaneBlockCommitment>) {
-    let mut guard = lane_settlement_commitments_slot()
-        .lock()
-        .expect("lane settlement commitments lock poisoned");
+    let mut guard = lock_operator_status_slot(
+        lane_settlement_commitments_slot(),
+        "lane settlement commitments snapshot",
+    );
     *guard = entries;
 }
 
 /// Replace the stored lane relay envelopes captured during block sealing.
 pub fn set_lane_relay_envelopes(entries: Vec<LaneRelayEnvelope>) {
-    let mut guard = lane_relay_envelopes_slot()
-        .lock()
-        .expect("lane relay envelopes lock poisoned");
+    let mut guard =
+        lock_operator_status_slot(lane_relay_envelopes_slot(), "lane relay envelopes snapshot");
     guard.clear();
     for envelope in entries {
         upsert_lane_relay_envelope(&mut guard, envelope);
@@ -6926,40 +6882,35 @@ pub fn set_lane_relay_envelopes(entries: Vec<LaneRelayEnvelope>) {
 
 /// Append a single validated lane relay envelope to the cached snapshot.
 pub fn push_lane_relay_envelope(envelope: LaneRelayEnvelope) {
-    let mut guard = lane_relay_envelopes_slot()
-        .lock()
-        .expect("lane relay envelopes lock poisoned");
+    let mut guard =
+        lock_operator_status_slot(lane_relay_envelopes_slot(), "lane relay envelopes snapshot");
     upsert_lane_relay_envelope(&mut guard, envelope);
 }
 
 fn lane_commitments_snapshot() -> Vec<LaneCommitmentSnapshot> {
-    lane_commitments_slot()
-        .lock()
-        .expect("lane commitments lock poisoned")
-        .clone()
+    lock_operator_status_slot(lane_commitments_slot(), "lane commitments snapshot").clone()
 }
 
 fn dataspace_commitments_snapshot() -> Vec<DataspaceCommitmentSnapshot> {
-    dataspace_commitments_slot()
-        .lock()
-        .expect("dataspace commitments lock poisoned")
-        .clone()
+    lock_operator_status_slot(
+        dataspace_commitments_slot(),
+        "dataspace commitments snapshot",
+    )
+    .clone()
 }
 
 fn lane_settlement_commitments_snapshot() -> Vec<LaneBlockCommitment> {
-    lane_settlement_commitments_slot()
-        .lock()
-        .expect("lane settlement commitments lock poisoned")
-        .clone()
+    lock_operator_status_slot(
+        lane_settlement_commitments_slot(),
+        "lane settlement commitments snapshot",
+    )
+    .clone()
 }
 
 #[allow(dead_code)]
 /// Returns the cached lane relay envelopes snapshot used by Sumeragi status endpoints.
 pub fn lane_relay_envelopes_snapshot() -> Vec<LaneRelayEnvelope> {
-    lane_relay_envelopes_slot()
-        .lock()
-        .expect("lane relay envelopes lock poisoned")
-        .clone()
+    lock_operator_status_slot(lane_relay_envelopes_slot(), "lane relay envelopes snapshot").clone()
 }
 
 fn lane_governance_slot() -> &'static Mutex<Vec<LaneGovernanceSnapshot>> {
@@ -6968,18 +6919,13 @@ fn lane_governance_slot() -> &'static Mutex<Vec<LaneGovernanceSnapshot>> {
 
 /// Replace the governance manifest snapshot used by `/v1/sumeragi/status`.
 pub fn set_lane_governance_snapshot(entries: Vec<LaneGovernanceSnapshot>) {
-    *lane_governance_slot()
-        .lock()
-        .expect("lane governance lock poisoned") = entries;
+    *lock_operator_status_slot(lane_governance_slot(), "lane governance snapshot") = entries;
 }
 
 #[cfg_attr(not(any(test, feature = "telemetry")), allow(dead_code))]
 /// Returns the cached governance manifest snapshot for Sumeragi status endpoints.
 pub fn lane_governance_snapshot() -> Vec<LaneGovernanceSnapshot> {
-    lane_governance_slot()
-        .lock()
-        .expect("lane governance lock poisoned")
-        .clone()
+    lock_operator_status_slot(lane_governance_slot(), "lane governance snapshot").clone()
 }
 
 fn runtime_upgrade_hook_snapshot(hook: &RuntimeUpgradeHook) -> LaneRuntimeUpgradeHookSnapshot {
@@ -7149,9 +7095,7 @@ pub fn record_rbc_store_evictions(keys: &[super::rbc_store::SessionKey]) {
     }
 
     {
-        let mut history = rbc_store_evictions_slot()
-            .lock()
-            .expect("RBC store eviction history mutex poisoned");
+        let mut history = rbc_store_evictions_lock();
         for &(block_hash, height, view) in keys {
             let hash_bytes: [u8; 32] = UntypedHash::from(block_hash).into();
             history.push_back(RbcEvictedSession {
@@ -7503,9 +7447,8 @@ pub fn record_commit_quorum_snapshot(
     COMMIT_QUORUM_SET_B.store(set_b_signatures, Ordering::Relaxed);
     COMMIT_QUORUM_REQUIRED.store(required, Ordering::Relaxed);
     COMMIT_QUORUM_LAST_UPDATED_MS.store(now_timestamp_ms(), Ordering::Relaxed);
-    if let Ok(mut guard) = commit_quorum_hash_slot().lock() {
-        *guard = Some(block_hash.into());
-    }
+    *lock_operator_status_slot(commit_quorum_hash_slot(), "commit quorum hash") =
+        Some(block_hash.into());
 }
 
 /// Increment the counter tracking prevote-quorum timeouts that forced a view change.
@@ -7840,10 +7783,8 @@ fn commit_inflight_snapshot() -> CommitInflightSnapshot {
 }
 
 fn commit_quorum_snapshot() -> CommitQuorumSnapshot {
-    let block_hash = commit_quorum_hash_slot()
-        .lock()
-        .ok()
-        .and_then(|hash| hash.map(HashOf::from_untyped_unchecked));
+    let block_hash = (*lock_operator_status_slot(commit_quorum_hash_slot(), "commit quorum hash"))
+        .map(HashOf::from_untyped_unchecked);
     CommitQuorumSnapshot {
         height: COMMIT_QUORUM_HEIGHT.load(Ordering::Relaxed),
         view: COMMIT_QUORUM_VIEW.load(Ordering::Relaxed),
@@ -7992,27 +7933,34 @@ pub(crate) fn reset_round_trace_for_tests() {
 
 #[cfg(test)]
 pub(crate) fn reset_availability_stats_for_tests() {
-    let mut stats = availability_slot().lock().unwrap();
+    let mut stats = lock_operator_status_slot(availability_slot(), "availability vote stats");
     stats.total_votes = 0;
     stats.per_peer.clear();
 }
 
 #[cfg(test)]
 pub(crate) fn reset_qc_latency_stats_for_tests() {
-    qc_latency_slot().lock().unwrap().clear();
+    lock_operator_status_slot(qc_latency_slot(), "QC latency stats").clear();
 }
 
 #[cfg(test)]
 pub(crate) fn reset_rbc_backlog_stats_for_tests() {
     let _guard = rbc_status_test_guard();
-    *rbc_backlog_slot().lock().unwrap() = RbcBacklogSnapshot::default();
-    lane_activity_slot().lock().unwrap().clear();
-    *pipeline_execution_slot().lock().unwrap() = PipelineExecutionSnapshot::default();
-    *access_set_source_slot().lock().unwrap() = AccessSetSourceSummary::default();
+    *lock_operator_status_slot(rbc_backlog_slot(), "RBC backlog snapshot") =
+        RbcBacklogSnapshot::default();
+    lock_operator_status_slot(lane_activity_slot(), "lane activity snapshot").clear();
+    *lock_operator_status_slot(pipeline_execution_slot(), "pipeline execution snapshot") =
+        PipelineExecutionSnapshot::default();
+    *lock_operator_status_slot(access_set_source_slot(), "access-set source snapshot") =
+        AccessSetSourceSummary::default();
     PIPELINE_CONFLICT_RATE_BPS.store(0, Ordering::Relaxed);
-    dataspace_activity_slot().lock().unwrap().clear();
-    rbc_lane_backlog_slot().lock().unwrap().clear();
-    rbc_dataspace_backlog_slot().lock().unwrap().clear();
+    lock_operator_status_slot(dataspace_activity_slot(), "dataspace activity snapshot").clear();
+    lock_operator_status_slot(rbc_lane_backlog_slot(), "RBC lane backlog snapshot").clear();
+    lock_operator_status_slot(
+        rbc_dataspace_backlog_slot(),
+        "RBC dataspace backlog snapshot",
+    )
+    .clear();
 }
 
 #[cfg(test)]
@@ -8036,7 +7984,8 @@ pub(crate) fn reset_pending_rbc_for_tests() {
     PENDING_RBC_STASH_DELIVER_ROSTER_HASH_MISMATCH_TOTAL.store(0, Ordering::Relaxed);
     PENDING_RBC_STASH_DELIVER_ROSTER_UNVERIFIED_TOTAL.store(0, Ordering::Relaxed);
     PENDING_RBC_STASH_CHUNK_TOTAL.store(0, Ordering::Relaxed);
-    *pending_rbc_slot().lock().unwrap() = PendingRbcSnapshot::default();
+    *lock_operator_status_slot(pending_rbc_slot(), "pending RBC snapshot") =
+        PendingRbcSnapshot::default();
 }
 
 #[cfg(test)]
@@ -8390,9 +8339,7 @@ pub(crate) fn reset_rbc_store_evictions_for_tests() {
     RBC_STORE_PERSIST_DROPS_TOTAL.store(0, Ordering::Relaxed);
     RBC_STORE_EVICTIONS_TOTAL.store(0, Ordering::Relaxed);
     if let Some(slot) = RBC_STORE_RECENT_EVICTIONS.get() {
-        slot.lock()
-            .expect("RBC store eviction history mutex poisoned")
-            .clear();
+        lock_rbc_store_evictions_slot(slot).clear();
     }
 }
 
@@ -8531,15 +8478,14 @@ pub struct PhaseLatenciesSnapshot {
 #[cfg(test)]
 /// Reset settlement telemetry counters for use in tests.
 pub fn settlement_status_reset_for_tests() {
-    if let Ok(mut guard) = settlement_status_slot().lock() {
-        *guard = SettlementStatusState::default();
-    }
+    let mut guard = lock_operator_status_slot(settlement_status_slot(), "settlement status");
+    *guard = SettlementStatusState::default();
 }
 
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::{BTreeMap, BTreeSet},
+        collections::{BTreeMap, BTreeSet, VecDeque},
         num::{NonZeroU64, NonZeroUsize},
         str::FromStr,
         sync::atomic::Ordering,
@@ -8628,6 +8574,185 @@ mod tests {
         assert_eq!(snap.locked_qc_height, 10);
         assert_eq!(snap.locked_qc_view, 2);
         assert_eq!(snap.locked_qc_subject, Some(hash_2));
+    }
+
+    #[test]
+    fn core_consensus_status_snapshots_recover_poisoned_locks() {
+        let _qc_guard = super::qc_status_test_guard();
+        let _mode_guard = super::mode_tags_test_guard();
+        let _membership_guard = super::membership_status_test_guard();
+        super::HIGHEST_QC_HEIGHT.store(0, Ordering::Relaxed);
+        super::HIGHEST_QC_VIEW.store(0, Ordering::Relaxed);
+        super::PRF_HEIGHT.store(0, Ordering::Relaxed);
+        super::PRF_VIEW.store(0, Ordering::Relaxed);
+        super::set_locked_qc(0, 0, None);
+        super::reset_membership_snapshot_for_tests();
+        super::reset_commit_quorum_for_tests();
+        super::set_mode_tags("", None, None);
+        super::set_mode_activation_lag(None);
+        if let Some(slot) = super::HIGHEST_QC_HASH.get() {
+            *super::lock_operator_status_slot(slot, "highest QC hash") = None;
+        }
+        if let Some(slot) = super::PRF_SEED.get() {
+            *super::lock_operator_status_slot(slot, "PRF seed") = None;
+        }
+        if let Some(slot) = super::CONSENSUS_CAPS.get() {
+            *super::lock_operator_status_slot(slot, "consensus caps") = None;
+        }
+
+        let poison_slots: [fn(); 10] = [
+            || {
+                let slot = super::HIGHEST_QC_HASH.get_or_init(|| std::sync::Mutex::new(None));
+                let _guard = slot
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                panic!("poison highest QC hash for recovery test");
+            },
+            || {
+                let slot = super::LOCKED_QC_HASH.get_or_init(|| std::sync::Mutex::new(None));
+                let _guard = slot
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                panic!("poison locked QC hash for recovery test");
+            },
+            || {
+                let slot =
+                    super::MEMBERSHIP_VIEW_HASH.get_or_init(|| std::sync::Mutex::new([0u8; 32]));
+                let _guard = slot
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                panic!("poison membership view hash for recovery test");
+            },
+            || {
+                let slot = super::PRF_SEED.get_or_init(|| std::sync::Mutex::new(None));
+                let _guard = slot
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                panic!("poison PRF seed for recovery test");
+            },
+            || {
+                let slot = super::MODE_TAG.get_or_init(|| std::sync::Mutex::new(String::new()));
+                let _guard = slot
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                panic!("poison mode tag for recovery test");
+            },
+            || {
+                let slot = super::STAGED_MODE_TAG.get_or_init(|| std::sync::Mutex::new(None));
+                let _guard = slot
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                panic!("poison staged mode tag for recovery test");
+            },
+            || {
+                let slot = super::STAGED_MODE_ACTIVATION_HEIGHT
+                    .get_or_init(|| std::sync::Mutex::new(None));
+                let _guard = slot
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                panic!("poison staged mode activation height for recovery test");
+            },
+            || {
+                let slot =
+                    super::MODE_ACTIVATION_LAG_BLOCKS.get_or_init(|| std::sync::Mutex::new(None));
+                let _guard = slot
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                panic!("poison mode activation lag for recovery test");
+            },
+            || {
+                let slot = super::CONSENSUS_CAPS.get_or_init(|| std::sync::Mutex::new(None));
+                let _guard = slot
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                panic!("poison consensus caps for recovery test");
+            },
+            || {
+                let _guard = super::commit_quorum_hash_slot()
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                panic!("poison commit quorum hash for recovery test");
+            },
+        ];
+        for poison_slot in poison_slots {
+            let poison = std::panic::catch_unwind(poison_slot);
+            assert!(poison.is_err());
+        }
+
+        let highest_hash = HashOf::<BlockHeader>::from_untyped_unchecked(UntypedHash::prehashed(
+            [0x11; UntypedHash::LENGTH],
+        ));
+        let locked_hash = HashOf::<BlockHeader>::from_untyped_unchecked(UntypedHash::prehashed(
+            [0x22; UntypedHash::LENGTH],
+        ));
+        let quorum_hash = HashOf::<BlockHeader>::from_untyped_unchecked(UntypedHash::prehashed(
+            [0x33; UntypedHash::LENGTH],
+        ));
+        let membership_hash = [0x44; 32];
+        let prf_seed = [0x55; 32];
+        let caps = iroha_p2p::ConsensusConfigCaps {
+            collectors_k: 3,
+            redundant_send_r: 2,
+            da_enabled: true,
+            rbc_chunk_max_bytes: 65_536,
+            rbc_encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
+            rbc_rs16_data_shards: 0,
+            rbc_rs16_parity_shards: 0,
+            rbc_session_ttl_ms: 120_000,
+            rbc_store_max_sessions: 1_024,
+            rbc_store_soft_sessions: 768,
+            rbc_store_max_bytes: 536_870_912,
+            rbc_store_soft_bytes: 402_653_184,
+        };
+
+        super::set_highest_qc(8, 2);
+        super::set_highest_qc_hash(highest_hash);
+        super::set_locked_qc(8, 3, Some(locked_hash));
+        super::set_membership_view_hash(membership_hash, 8, 3, 1);
+        super::set_prf_context(prf_seed, 8, 3);
+        super::set_mode_tags(PERMISSIONED_TAG, Some(NPOS_TAG), Some(12));
+        super::set_mode_activation_lag(Some(4));
+        super::set_consensus_caps(&caps);
+        super::record_commit_quorum_snapshot(8, 3, quorum_hash, 5, 4, 1, 4);
+
+        let snapshot = super::snapshot();
+        assert_eq!(snapshot.highest_qc_height, 8);
+        assert_eq!(snapshot.highest_qc_view, 2);
+        assert_eq!(snapshot.highest_qc_subject, Some(highest_hash));
+        assert_eq!(snapshot.locked_qc_height, 8);
+        assert_eq!(snapshot.locked_qc_view, 3);
+        assert_eq!(snapshot.locked_qc_subject, Some(locked_hash));
+        assert_eq!(snapshot.membership_view_hash, Some(membership_hash));
+        assert_eq!(snapshot.prf_epoch_seed, Some(prf_seed));
+        assert_eq!(snapshot.mode_tag, PERMISSIONED_TAG);
+        assert_eq!(snapshot.staged_mode_tag.as_deref(), Some(NPOS_TAG));
+        assert_eq!(snapshot.staged_mode_activation_height, Some(12));
+        assert_eq!(snapshot.mode_activation_lag_blocks, Some(4));
+        assert_eq!(snapshot.consensus_caps, Some(caps));
+        assert_eq!(snapshot.commit_quorum.block_hash, Some(quorum_hash));
+        assert_eq!(snapshot.commit_quorum.signatures_required, 4);
+
+        super::set_locked_qc(0, 0, None);
+        super::HIGHEST_QC_HEIGHT.store(0, Ordering::Relaxed);
+        super::HIGHEST_QC_VIEW.store(0, Ordering::Relaxed);
+        super::PRF_HEIGHT.store(0, Ordering::Relaxed);
+        super::PRF_VIEW.store(0, Ordering::Relaxed);
+        super::reset_membership_snapshot_for_tests();
+        super::reset_commit_quorum_for_tests();
+        super::set_mode_tags("", None, None);
+        super::set_mode_activation_lag(None);
+        *super::lock_operator_status_slot(
+            super::HIGHEST_QC_HASH.get_or_init(|| std::sync::Mutex::new(None)),
+            "highest QC hash",
+        ) = None;
+        *super::lock_operator_status_slot(
+            super::PRF_SEED.get_or_init(|| std::sync::Mutex::new(None)),
+            "PRF seed",
+        ) = None;
+        *super::lock_operator_status_slot(
+            super::CONSENSUS_CAPS.get_or_init(|| std::sync::Mutex::new(None)),
+            "consensus caps",
+        ) = None;
     }
 
     #[test]
@@ -9014,6 +9139,59 @@ mod tests {
     }
 
     #[test]
+    fn vote_validation_drop_snapshot_recovers_poisoned_history_locks() {
+        let _guard = super::vote_validation_drops_test_guard();
+        super::reset_vote_validation_drops_for_tests();
+        let peer = PeerId::new(KeyPair::random().public_key().clone());
+        let roster_hash = HashOf::new(&vec![peer.clone()]);
+
+        let poison_history = std::panic::catch_unwind(|| {
+            let slot =
+                super::VOTE_VALIDATION_DROPS.get_or_init(|| std::sync::Mutex::new(VecDeque::new()));
+            let _guard = slot
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            panic!("poison vote-validation drop history for recovery test");
+        });
+        assert!(poison_history.is_err());
+        let poison_peer_registry = std::panic::catch_unwind(|| {
+            let slot = super::VOTE_VALIDATION_DROPS_BY_PEER
+                .get_or_init(|| std::sync::Mutex::new(BTreeMap::new()));
+            let _guard = slot
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            panic!("poison vote-validation drop peer registry for recovery test");
+        });
+        assert!(poison_peer_registry.is_err());
+
+        super::record_vote_validation_drop(vote_validation_drop_record(
+            super::VoteValidationDropReason::SignatureInvalid,
+            8,
+            3,
+            2,
+            0,
+            Some(peer.clone()),
+            Some(roster_hash),
+            1,
+        ));
+
+        let snap = super::snapshot().vote_validation_drops;
+        assert_eq!(snap.total, 1);
+        assert_eq!(snap.entries.len(), 1);
+        assert_eq!(snap.entries[0].peer_id, Some(peer.clone()));
+        assert_eq!(snap.peer_entries.len(), 1);
+        assert_eq!(snap.peer_entries[0].peer_id, peer);
+        assert_eq!(snap.peer_entries[0].total, 1);
+        assert_eq!(snap.peer_entries[0].roster_hash, Some(roster_hash));
+
+        super::reset_vote_validation_drops_for_tests();
+        let cleared = super::snapshot().vote_validation_drops;
+        assert_eq!(cleared.total, 0);
+        assert!(cleared.entries.is_empty());
+        assert!(cleared.peer_entries.is_empty());
+    }
+
+    #[test]
     fn vote_validation_drop_without_peer_records_entry_without_peer_aggregate() {
         let _guard = super::vote_validation_drops_test_guard();
         super::reset_vote_validation_drops_for_tests();
@@ -9263,8 +9441,7 @@ mod tests {
         let peer = PeerId::new(KeyPair::random().public_key().clone());
         let roster_hash = HashOf::new(&vec![peer.clone()]);
         {
-            let mut registry =
-                super::vote_validation_drop_peer_registry().expect("peer registry lock");
+            let mut registry = super::vote_validation_drop_peer_registry();
             registry.insert(
                 super::VoteValidationDropPeerKey {
                     peer_id: peer.clone(),
@@ -9544,6 +9721,7 @@ mod tests {
 
     #[test]
     fn consensus_key_history_is_capped_and_ordered() {
+        let _guard = super::commit_history_test_guard();
         super::reset_consensus_keys_for_tests();
         for idx in 0..(super::KEY_LIFECYCLE_HISTORY_CAP as u64 + 5) {
             let ident =
@@ -9571,6 +9749,167 @@ mod tests {
         let oldest = history.last().expect("history has tail");
         assert_eq!(oldest.activation_height, 5);
         assert_eq!(oldest.status, ConsensusKeyStatus::Active);
+    }
+
+    #[test]
+    fn consensus_histories_recover_poisoned_locks() {
+        let _guard = super::commit_history_test_guard();
+        super::reset_validator_checkpoints_for_tests();
+        super::reset_commit_certs_for_tests();
+        super::reset_precommit_signer_history_for_tests();
+        super::reset_npos_elections_for_tests();
+        super::reset_consensus_keys_for_tests();
+
+        let poison_slots: [fn(); 5] = [
+            || {
+                let _guard = super::checkpoint_history_slot()
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                panic!("poison validator checkpoint history for recovery test");
+            },
+            || {
+                let _guard = super::commit_cert_history_slot()
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                panic!("poison commit certificate history for recovery test");
+            },
+            || {
+                let _guard = super::precommit_signer_history_slot()
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                panic!("poison precommit signer history for recovery test");
+            },
+            || {
+                let _guard = super::npos_election_history_slot()
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                panic!("poison npos election history for recovery test");
+            },
+            || {
+                let _guard = super::key_history_slot()
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                panic!("poison key lifecycle history for recovery test");
+            },
+        ];
+        for poison_slot in poison_slots {
+            let poison = std::panic::catch_unwind(poison_slot);
+            assert!(poison.is_err());
+        }
+
+        let peer_a = PeerId::new(KeyPair::random().public_key().clone());
+        let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+        let validator_set = vec![peer_a.clone(), peer_b.clone()];
+        let validator_set_hash = HashOf::new(&validator_set);
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(UntypedHash::prehashed(
+            [0xCE; UntypedHash::LENGTH],
+        ));
+        let zero_root = UntypedHash::prehashed([0u8; UntypedHash::LENGTH]);
+
+        let checkpoint = ValidatorSetCheckpoint::new(
+            42,
+            7,
+            block_hash,
+            zero_root,
+            zero_root,
+            validator_set.clone(),
+            Vec::new(),
+            Vec::new(),
+            iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+            None,
+        );
+        super::record_validator_checkpoint(checkpoint.clone());
+
+        let cert = Qc {
+            phase: Phase::Commit,
+            subject_block_hash: block_hash,
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
+            height: 42,
+            view: 7,
+            epoch: 1,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
+            mode_tag: PERMISSIONED_TAG.to_string(),
+            highest_qc: None,
+            validator_set_hash,
+            validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set: validator_set.clone(),
+            aggregate: QcAggregate {
+                signers_bitmap: Vec::new(),
+                bls_aggregate_signature: Vec::new(),
+            },
+        };
+        super::record_commit_qc(cert.clone());
+
+        let mut signers = BTreeSet::new();
+        signers.insert(0);
+        let precommit = PrecommitSignerRecord {
+            block_hash,
+            height: 42,
+            view: 7,
+            epoch: 1,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
+            signers,
+            roster_len: validator_set.len(),
+            bls_aggregate_signature: vec![0xAB],
+            mode_tag: PERMISSIONED_TAG.to_string(),
+            validator_set: validator_set.clone(),
+            stake_snapshot: None,
+        };
+        super::record_precommit_signers(precommit.clone());
+
+        let election =
+            iroha_data_model::consensus::ValidatorElectionOutcome::empty(1, 42, [0x44; 32]);
+        super::record_npos_election(election.clone());
+
+        let key_record = ConsensusKeyRecord {
+            id: ConsensusKeyId::new(
+                ConsensusKeyRole::Validator,
+                Ident::from_str("poisoned-history-validator").expect("static ident must parse"),
+            ),
+            public_key: KeyPair::random().public_key().clone(),
+            pop: None,
+            activation_height: 42,
+            expiry_height: None,
+            hsm: None,
+            replaces: None,
+            status: ConsensusKeyStatus::Active,
+        };
+        super::record_consensus_key(key_record.clone());
+
+        assert_eq!(
+            super::validator_checkpoint_history().first(),
+            Some(&checkpoint)
+        );
+        assert_eq!(super::commit_qc_history().first(), Some(&cert));
+        let signer_history = super::precommit_signer_history();
+        let latest_signers = signer_history.first().expect("precommit signer record");
+        assert_eq!(latest_signers.block_hash, precommit.block_hash);
+        assert_eq!(latest_signers.height, precommit.height);
+        assert_eq!(latest_signers.view, precommit.view);
+        assert_eq!(super::latest_npos_election(), Some(election.clone()));
+        assert_eq!(super::consensus_key_history().first(), Some(&key_record));
+
+        let snapshot = super::snapshot();
+        assert_eq!(snapshot.commit_qc.height, 42);
+        assert_eq!(snapshot.commit_qc.view, 7);
+        assert_eq!(snapshot.npos_election.as_ref(), Some(&election));
+
+        super::reset_validator_checkpoints_for_tests();
+        super::reset_commit_certs_for_tests();
+        super::reset_precommit_signer_history_for_tests();
+        super::reset_npos_elections_for_tests();
+        super::reset_consensus_keys_for_tests();
+
+        assert!(super::validator_checkpoint_history().is_empty());
+        assert!(super::commit_qc_history().is_empty());
+        assert!(super::precommit_signer_history().is_empty());
+        assert_eq!(super::latest_npos_election(), None);
+        assert!(super::consensus_key_history().is_empty());
     }
 
     #[test]
@@ -9913,6 +10252,44 @@ mod tests {
     }
 
     #[test]
+    fn consensus_message_handling_recovers_poisoned_totals() {
+        let _guard = super::message_handling_test_guard();
+        super::reset_message_handling_for_tests();
+
+        {
+            let slot = super::MESSAGE_HANDLING_TOTALS
+                .get_or_init(|| std::sync::Mutex::new(BTreeMap::new()));
+            let _ = std::panic::catch_unwind(|| {
+                let _guard = slot
+                    .lock()
+                    .expect("consensus message handling totals lock should be held");
+                panic!("poison consensus message handling totals for recovery test");
+            });
+        }
+
+        super::record_consensus_message_handling(
+            super::ConsensusMessageKind::Proposal,
+            super::ConsensusMessageOutcome::Dropped,
+            super::ConsensusMessageReason::InvalidPayload,
+        );
+
+        let snapshot = super::snapshot();
+        let entry = snapshot
+            .consensus_message_handling
+            .entries
+            .iter()
+            .find(|entry| {
+                entry.kind == super::ConsensusMessageKind::Proposal
+                    && entry.outcome == super::ConsensusMessageOutcome::Dropped
+                    && entry.reason == super::ConsensusMessageReason::InvalidPayload
+            })
+            .expect("post-poison consensus message handling entry");
+        assert_eq!(entry.total, 1);
+
+        super::reset_message_handling_for_tests();
+    }
+
+    #[test]
     fn consensus_message_handling_labels_include_new_variants() {
         assert_eq!(
             super::ConsensusMessageKind::ProposalHint.as_str(),
@@ -10238,6 +10615,32 @@ mod tests {
     }
 
     #[test]
+    fn view_change_cause_snapshot_recovers_poisoned_label_lock() {
+        let _guard = super::view_change_cause_test_guard();
+        super::reset_view_change_cause_counters_for_tests();
+
+        let poison = std::panic::catch_unwind(|| {
+            let slot =
+                super::VIEW_CHANGE_CAUSE_LAST_LABEL.get_or_init(|| std::sync::Mutex::new(None));
+            let _guard = slot
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            panic!("poison view-change cause label for recovery test");
+        });
+        assert!(poison.is_err());
+
+        super::record_view_change_cause("da_gate");
+
+        let snapshot = super::snapshot().view_change_causes;
+        assert_eq!(snapshot.da_gate_total, 1);
+        assert_eq!(snapshot.last_cause.as_deref(), Some("da_gate"));
+        assert!(snapshot.last_cause_timestamp_ms > 0);
+
+        super::reset_view_change_cause_counters_for_tests();
+        assert_eq!(super::snapshot().view_change_causes.last_cause, None);
+    }
+
+    #[test]
     fn validation_reject_snapshot_tracks_last_reject() {
         let _guard = super::validation_reject_test_guard();
         super::reset_validation_reject_counters_for_tests();
@@ -10261,6 +10664,73 @@ mod tests {
     }
 
     #[test]
+    fn validation_reject_snapshot_recovers_poisoned_last_field_locks() {
+        let _guard = super::validation_reject_test_guard();
+        super::reset_validation_reject_counters_for_tests();
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(UntypedHash::prehashed(
+            [0xC3; UntypedHash::LENGTH],
+        ));
+
+        let poison_slots: [fn(); 4] = [
+            || {
+                let slot =
+                    super::VALIDATION_REJECT_REASON.get_or_init(|| std::sync::Mutex::new(None));
+                let _guard = slot
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                panic!("poison validation-reject reason for recovery test");
+            },
+            || {
+                let slot = super::VALIDATION_REJECT_LAST_HEIGHT
+                    .get_or_init(|| std::sync::Mutex::new(None));
+                let _guard = slot
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                panic!("poison validation-reject height for recovery test");
+            },
+            || {
+                let slot =
+                    super::VALIDATION_REJECT_LAST_VIEW.get_or_init(|| std::sync::Mutex::new(None));
+                let _guard = slot
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                panic!("poison validation-reject view for recovery test");
+            },
+            || {
+                let slot =
+                    super::VALIDATION_REJECT_LAST_BLOCK.get_or_init(|| std::sync::Mutex::new(None));
+                let _guard = slot
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                panic!("poison validation-reject block for recovery test");
+            },
+        ];
+        for poison_slot in poison_slots {
+            let poison = std::panic::catch_unwind(poison_slot);
+            assert!(poison.is_err());
+        }
+
+        super::record_validation_reject("execution", 9, 4, block_hash);
+
+        let snapshot = super::snapshot().validation_rejects;
+        assert_eq!(snapshot.total, 1);
+        assert_eq!(snapshot.execution_total, 1);
+        assert_eq!(snapshot.last_reason, Some("execution"));
+        assert_eq!(snapshot.last_height, Some(9));
+        assert_eq!(snapshot.last_view, Some(4));
+        assert_eq!(snapshot.last_block, Some(block_hash));
+        assert!(snapshot.last_timestamp_ms > 0);
+
+        super::reset_validation_reject_counters_for_tests();
+        let cleared = super::snapshot().validation_rejects;
+        assert_eq!(cleared.total, 0);
+        assert_eq!(cleared.last_reason, None);
+        assert_eq!(cleared.last_height, None);
+        assert_eq!(cleared.last_view, None);
+        assert_eq!(cleared.last_block, None);
+    }
+
+    #[test]
     fn peer_key_policy_snapshot_tracks_last_reject() {
         let _guard = super::peer_key_policy_test_guard();
         super::reset_peer_key_policy_counters_for_tests();
@@ -10275,6 +10745,34 @@ mod tests {
         assert!(snapshot.last_timestamp_ms > 0);
 
         super::reset_peer_key_policy_counters_for_tests();
+    }
+
+    #[test]
+    fn peer_key_policy_snapshot_recovers_poisoned_reason_lock() {
+        let _guard = super::peer_key_policy_test_guard();
+        super::reset_peer_key_policy_counters_for_tests();
+
+        let poison = std::panic::catch_unwind(|| {
+            let slot = super::PEER_KEY_POLICY_REASON.get_or_init(|| std::sync::Mutex::new(None));
+            let _guard = slot
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            panic!("poison peer-key policy reason for recovery test");
+        });
+        assert!(poison.is_err());
+
+        super::record_peer_key_policy_reject(super::PeerKeyPolicyRejectReason::LeadTimeViolation);
+
+        let snapshot = super::snapshot().peer_key_policy;
+        assert_eq!(snapshot.total, 1);
+        assert_eq!(snapshot.lead_time_violation_total, 1);
+        assert_eq!(snapshot.last_reason, Some("lead_time_violation"));
+        assert!(snapshot.last_timestamp_ms > 0);
+
+        super::reset_peer_key_policy_counters_for_tests();
+        let cleared = super::snapshot().peer_key_policy;
+        assert_eq!(cleared.total, 0);
+        assert_eq!(cleared.last_reason, None);
     }
 
     #[test]
@@ -10391,6 +10889,110 @@ mod tests {
             Some("kura_abort")
         );
         super::reset_kura_store_counters_for_tests();
+    }
+
+    #[test]
+    fn kura_store_snapshot_recovers_poisoned_last_field_locks() {
+        let _guard = super::kura_store_test_guard();
+        super::reset_kura_store_counters_for_tests();
+        let hash = HashOf::<BlockHeader>::from_untyped_unchecked(UntypedHash::prehashed(
+            [0xA3; UntypedHash::LENGTH],
+        ));
+
+        let poison_slots: [fn(); 7] = [
+            || {
+                let slot = super::KURA_STORE_LAST_HASH.get_or_init(|| std::sync::Mutex::new(None));
+                let _guard = slot
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                panic!("poison kura store hash for recovery test");
+            },
+            || {
+                let slot = super::KURA_POST_COMMIT_SIDECAR_LAST_HASH
+                    .get_or_init(|| std::sync::Mutex::new(None));
+                let _guard = slot
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                panic!("poison kura post-commit sidecar hash for recovery test");
+            },
+            || {
+                let slot = super::KURA_STAGE_LAST_HASH.get_or_init(|| std::sync::Mutex::new(None));
+                let _guard = slot
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                panic!("poison kura stage hash for recovery test");
+            },
+            || {
+                let slot = super::KURA_STAGE_ROLLBACK_LAST_HASH
+                    .get_or_init(|| std::sync::Mutex::new(None));
+                let _guard = slot
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                panic!("poison kura stage rollback hash for recovery test");
+            },
+            || {
+                let slot = super::KURA_STAGE_ROLLBACK_LAST_REASON
+                    .get_or_init(|| std::sync::Mutex::new(None));
+                let _guard = slot
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                panic!("poison kura stage rollback reason for recovery test");
+            },
+            || {
+                let slot =
+                    super::KURA_LOCK_RESET_LAST_HASH.get_or_init(|| std::sync::Mutex::new(None));
+                let _guard = slot
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                panic!("poison kura lock reset hash for recovery test");
+            },
+            || {
+                let slot =
+                    super::KURA_LOCK_RESET_LAST_REASON.get_or_init(|| std::sync::Mutex::new(None));
+                let _guard = slot
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                panic!("poison kura lock reset reason for recovery test");
+            },
+        ];
+        for poison_slot in poison_slots {
+            let poison = std::panic::catch_unwind(poison_slot);
+            assert!(poison.is_err());
+        }
+
+        super::record_kura_store_failure(11, 2, hash);
+        super::record_kura_post_commit_sidecar_failure(12, 3, hash);
+        super::record_kura_stage(13, 4, hash);
+        super::record_kura_stage_rollback(14, 5, hash, "rollback_after_poison");
+        super::record_kura_lock_reset(15, 6, Some(hash), "lock_reset_after_poison");
+
+        let snapshot = super::snapshot().kura_store;
+        assert_eq!(snapshot.failures_total, 1);
+        assert_eq!(snapshot.last_hash, Some(hash));
+        assert_eq!(snapshot.post_commit_sidecar_failure_total, 1);
+        assert_eq!(snapshot.post_commit_sidecar_last_hash, Some(hash));
+        assert_eq!(snapshot.stage_total, 1);
+        assert_eq!(snapshot.stage_last_hash, Some(hash));
+        assert_eq!(snapshot.rollback_total, 1);
+        assert_eq!(snapshot.rollback_last_hash, Some(hash));
+        assert_eq!(snapshot.rollback_last_reason, Some("rollback_after_poison"));
+        assert_eq!(snapshot.lock_reset_total, 1);
+        assert_eq!(snapshot.lock_reset_last_hash, Some(hash));
+        assert_eq!(
+            snapshot.lock_reset_last_reason,
+            Some("lock_reset_after_poison")
+        );
+
+        super::reset_kura_store_counters_for_tests();
+        let cleared = super::snapshot().kura_store;
+        assert_eq!(cleared.failures_total, 0);
+        assert_eq!(cleared.last_hash, None);
+        assert_eq!(cleared.post_commit_sidecar_last_hash, None);
+        assert_eq!(cleared.stage_last_hash, None);
+        assert_eq!(cleared.rollback_last_hash, None);
+        assert_eq!(cleared.rollback_last_reason, None);
+        assert_eq!(cleared.lock_reset_last_hash, None);
+        assert_eq!(cleared.lock_reset_last_reason, None);
     }
 
     #[test]
@@ -10601,6 +11203,35 @@ mod tests {
         assert_eq!(oldest_retained.block_hash, expected_oldest_hash);
         assert_eq!(oldest_retained.height, oldest_retained_key.1);
         assert_eq!(oldest_retained.view, oldest_retained_key.2);
+    }
+
+    #[test]
+    fn rbc_store_eviction_history_recovers_poisoned_lock() {
+        let _guard = super::rbc_status_test_guard();
+        super::reset_rbc_store_evictions_for_tests();
+        let key = rbc_store_test_key(0xA5, 17, 3);
+
+        let poison = std::panic::catch_unwind(|| {
+            let _guard = super::rbc_store_evictions_slot()
+                .lock()
+                .expect("fresh RBC store eviction history lock");
+            panic!("poison RBC store eviction history for recovery test");
+        });
+        assert!(poison.is_err());
+
+        super::record_rbc_store_evictions(&[key]);
+        let snapshot = super::snapshot();
+        assert_eq!(snapshot.rbc_store_evictions_total, 1);
+        let [eviction] = snapshot.rbc_store_recent_evictions.as_slice() else {
+            panic!("poisoned eviction history should recover one entry");
+        };
+        let expected_hash: [u8; UntypedHash::LENGTH] = UntypedHash::from(key.0).into();
+        assert_eq!(eviction.block_hash, expected_hash);
+        assert_eq!(eviction.height, key.1);
+        assert_eq!(eviction.view, key.2);
+
+        super::reset_rbc_store_evictions_for_tests();
+        assert!(super::snapshot().rbc_store_recent_evictions.is_empty());
     }
 
     #[test]
@@ -11090,6 +11721,74 @@ mod tests {
     }
 
     #[test]
+    fn settlement_status_snapshot_recovers_poisoned_lock() {
+        let _guard = super::rbc_status_test_guard();
+        super::settlement_status_reset_for_tests();
+
+        let poison = std::panic::catch_unwind(|| {
+            let _guard = super::settlement_status_slot()
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            panic!("poison settlement status snapshot for recovery test");
+        });
+        assert!(poison.is_err());
+
+        super::record_dvp_settlement_event(super::DvpSettlementEventUpdate {
+            observed_at_ms: 1_700_000_000_001,
+            settlement_id: Some("dvp-poison-recovery".to_string()),
+            plan_order: super::SettlementExecutionOrder::DeliveryThenPayment,
+            plan_atomicity: super::SettlementAtomicity::AllOrNothing,
+            outcome: super::SettlementOutcomeKind::Success,
+            failure_reason: None,
+            final_state_label: "both".to_string(),
+            delivery_committed: true,
+            payment_committed: true,
+        });
+        super::record_pvp_settlement_event(super::PvpSettlementEventUpdate {
+            observed_at_ms: 1_700_000_000_002,
+            settlement_id: Some("pvp-poison-recovery".to_string()),
+            plan_order: super::SettlementExecutionOrder::DeliveryThenPayment,
+            plan_atomicity: super::SettlementAtomicity::AllOrNothing,
+            outcome: super::SettlementOutcomeKind::Failure,
+            failure_reason: Some("counter-leg-failed".to_string()),
+            final_state_label: "primary_only".to_string(),
+            primary_committed: true,
+            counter_committed: false,
+            fx_window_ms: Some(17),
+        });
+
+        let snapshot = super::settlement_snapshot();
+        assert_eq!(snapshot.dvp.success_total, 1);
+        assert_eq!(snapshot.dvp.final_state_totals.get("both"), Some(&1));
+        let dvp_last = snapshot.dvp.last_event.expect("DvP last event");
+        assert_eq!(
+            dvp_last.settlement_id.as_deref(),
+            Some("dvp-poison-recovery")
+        );
+        assert!(dvp_last.delivery_committed);
+        assert!(dvp_last.payment_committed);
+
+        assert_eq!(snapshot.pvp.failure_total, 1);
+        assert_eq!(
+            snapshot.pvp.failure_reasons.get("counter-leg-failed"),
+            Some(&1)
+        );
+        let pvp_last = snapshot.pvp.last_event.expect("PvP last event");
+        assert_eq!(
+            pvp_last.settlement_id.as_deref(),
+            Some("pvp-poison-recovery")
+        );
+        assert_eq!(pvp_last.fx_window_ms, Some(17));
+
+        super::settlement_status_reset_for_tests();
+        let reset = super::settlement_snapshot();
+        assert_eq!(reset.dvp.success_total, 0);
+        assert_eq!(reset.pvp.failure_total, 0);
+        assert!(reset.dvp.last_event.is_none());
+        assert!(reset.pvp.last_event.is_none());
+    }
+
+    #[test]
     fn nexus_fee_snapshot_tracks_events() {
         let _guard = super::nexus_fee_test_lock()
             .lock()
@@ -11141,6 +11840,62 @@ mod tests {
         assert_eq!(lane_entry.bonded, bonded);
         assert_eq!(lane_entry.pending_unbond, pending);
         assert_eq!(lane_entry.slash_total, 1);
+    }
+
+    #[test]
+    fn nexus_economics_snapshots_recover_poisoned_locks() {
+        let _guard = super::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        super::reset_nexus_economics_for_tests();
+
+        let poison_fee = std::panic::catch_unwind(|| {
+            let _guard = super::nexus_fee_slot()
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            panic!("poison nexus fee status for recovery test");
+        });
+        assert!(poison_fee.is_err());
+        let poison_staking = std::panic::catch_unwind(|| {
+            let _guard = super::nexus_staking_slot()
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            panic!("poison nexus staking status for recovery test");
+        });
+        assert!(poison_staking.is_err());
+
+        super::record_nexus_fee_event(super::NexusFeeEvent::Charged {
+            payer_kind: super::NexusFeePayer::Sponsor,
+            payer_id: "sponsor-poison-recovery".to_string(),
+            amount: Numeric::from(19_u32),
+            asset_id: "xor-poison-recovery".to_string(),
+        });
+        let lane = LaneId::new(23);
+        let bonded = Numeric::new(700, 0);
+        let pending = Numeric::new(125, 0);
+        super::record_public_lane_bonded_delta(lane, &bonded, true);
+        super::record_public_lane_pending_unbond_delta(lane, &pending, true);
+        super::record_public_lane_slash(lane);
+
+        let fee = super::nexus_fee_snapshot();
+        assert_eq!(fee.charged_total, 1);
+        assert_eq!(fee.charged_via_sponsor_total, 1);
+        assert_eq!(fee.last_payer, Some(super::NexusFeePayer::Sponsor));
+        assert_eq!(
+            fee.last_payer_id.as_deref(),
+            Some("sponsor-poison-recovery")
+        );
+
+        let staking = super::nexus_staking_snapshot();
+        let lane_snapshot = staking.lanes.first().expect("staking lane snapshot");
+        assert_eq!(lane_snapshot.lane_id, lane);
+        assert_eq!(lane_snapshot.bonded, bonded);
+        assert_eq!(lane_snapshot.pending_unbond, pending);
+        assert_eq!(lane_snapshot.slash_total, 1);
+
+        super::reset_nexus_economics_for_tests();
+        assert_eq!(super::nexus_fee_snapshot().charged_total, 0);
+        assert!(super::nexus_staking_snapshot().lanes.is_empty());
     }
 
     #[test]
@@ -11307,6 +12062,266 @@ mod tests {
     }
 
     #[test]
+    fn da_lane_status_snapshots_recover_poisoned_locks() {
+        let _rbc_guard = super::rbc_status_test_guard();
+        let _lane_guard = super::lane_relay_test_guard();
+        super::reset_availability_stats_for_tests();
+        super::reset_qc_latency_stats_for_tests();
+        super::reset_rbc_backlog_stats_for_tests();
+        super::reset_pending_rbc_for_tests();
+        super::set_lane_commitments(Vec::new(), Vec::new());
+        super::set_lane_settlement_commitments(Vec::new());
+        super::set_lane_relay_envelopes(Vec::new());
+        super::set_lane_governance_snapshot(Vec::new());
+
+        let poison_slots: [fn(); 15] = [
+            || {
+                let _guard = super::availability_slot()
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                panic!("poison availability stats for recovery test");
+            },
+            || {
+                let _guard = super::qc_latency_slot()
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                panic!("poison QC latency stats for recovery test");
+            },
+            || {
+                let _guard = super::rbc_backlog_slot()
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                panic!("poison RBC backlog snapshot for recovery test");
+            },
+            || {
+                let _guard = super::pending_rbc_slot()
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                panic!("poison pending RBC snapshot for recovery test");
+            },
+            || {
+                let _guard = super::lane_activity_slot()
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                panic!("poison lane activity snapshot for recovery test");
+            },
+            || {
+                let _guard = super::pipeline_execution_slot()
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                panic!("poison pipeline execution snapshot for recovery test");
+            },
+            || {
+                let _guard = super::access_set_source_slot()
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                panic!("poison access-set source snapshot for recovery test");
+            },
+            || {
+                let _guard = super::dataspace_activity_slot()
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                panic!("poison dataspace activity snapshot for recovery test");
+            },
+            || {
+                let _guard = super::rbc_lane_backlog_slot()
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                panic!("poison RBC lane backlog snapshot for recovery test");
+            },
+            || {
+                let _guard = super::rbc_dataspace_backlog_slot()
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                panic!("poison RBC dataspace backlog snapshot for recovery test");
+            },
+            || {
+                let _guard = super::lane_commitments_slot()
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                panic!("poison lane commitments snapshot for recovery test");
+            },
+            || {
+                let _guard = super::dataspace_commitments_slot()
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                panic!("poison dataspace commitments snapshot for recovery test");
+            },
+            || {
+                let _guard = super::lane_settlement_commitments_slot()
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                panic!("poison lane settlement commitments snapshot for recovery test");
+            },
+            || {
+                let _guard = super::lane_relay_envelopes_slot()
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                panic!("poison lane relay envelopes snapshot for recovery test");
+            },
+            || {
+                let _guard = super::lane_governance_slot()
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                panic!("poison lane governance snapshot for recovery test");
+            },
+        ];
+        for poison_slot in poison_slots {
+            let poison = std::panic::catch_unwind(poison_slot);
+            assert!(poison.is_err());
+        }
+
+        let peer = PeerId::new(KeyPair::random().public_key().clone());
+        super::record_availability_vote(5, &peer);
+        super::record_qc_latency("availability", 88);
+        super::set_rbc_backlog_snapshot(9, 4, 2);
+        super::set_pending_rbc_snapshot(super::PendingRbcSnapshot {
+            sessions: 1,
+            chunks: 2,
+            bytes: 128,
+            entries: vec![super::PendingRbcEntrySnapshot {
+                height: 12,
+                view: 3,
+                chunks: 2,
+                bytes: 128,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        super::set_lane_activity_snapshot(vec![super::LaneActivitySnapshot {
+            lane_id: 7,
+            tx_vertices: 3,
+            rbc_chunks: 5,
+            rbc_bytes_total: 512,
+            ..Default::default()
+        }]);
+        super::set_pipeline_execution_snapshot(super::PipelineExecutionSnapshot {
+            tx_vertices_total: 3,
+            rbc_chunks_total: 5,
+            rbc_bytes_total: 512,
+            ..Default::default()
+        });
+        super::set_access_set_source_summary(super::AccessSetSourceSummary {
+            manifest_hints: 1,
+            entrypoint_hints: 2,
+            prepass_merge: 3,
+            conservative_fallback: 4,
+        });
+        super::set_dataspace_activity_snapshot(vec![super::DataspaceActivitySnapshot {
+            lane_id: 7,
+            dataspace_id: 42,
+            tx_served: 3,
+        }]);
+        super::set_rbc_lane_backlog(vec![super::LaneRbcSnapshot {
+            lane_id: 7,
+            tx_count: 3,
+            total_chunks: 5,
+            pending_chunks: 2,
+            rbc_bytes_total: 512,
+        }]);
+        super::set_rbc_dataspace_backlog(vec![super::DataspaceRbcSnapshot {
+            lane_id: 7,
+            dataspace_id: 42,
+            tx_count: 3,
+            total_chunks: 5,
+            pending_chunks: 2,
+            rbc_bytes_total: 512,
+        }]);
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(UntypedHash::prehashed(
+            [0xA4; UntypedHash::LENGTH],
+        ));
+        super::set_lane_commitments(
+            vec![super::LaneCommitmentSnapshot {
+                block_height: 12,
+                lane_id: 7,
+                tx_count: 3,
+                total_chunks: 5,
+                rbc_bytes_total: 512,
+                teu_total: 99,
+                block_hash,
+            }],
+            vec![super::DataspaceCommitmentSnapshot {
+                block_height: 12,
+                lane_id: 7,
+                dataspace_id: 42,
+                tx_count: 3,
+                total_chunks: 5,
+                rbc_bytes_total: 512,
+                teu_total: 99,
+                block_hash,
+            }],
+        );
+        let settlement = sample_lane_commitment(12, 7, 42);
+        super::set_lane_settlement_commitments(vec![settlement]);
+        let envelope = lane_relay_envelope(12, 7);
+        super::set_lane_relay_envelopes(vec![envelope.clone()]);
+        super::set_lane_governance_snapshot(vec![super::LaneGovernanceSnapshot {
+            lane_id: 7,
+            alias: "lane-seven".to_string(),
+            dataspace_id: 42,
+            visibility: LaneVisibility::Public.as_str().to_string(),
+            storage_profile: LaneStorageProfile::FullReplica.as_str().to_string(),
+            manifest_required: true,
+            manifest_ready: false,
+            ..Default::default()
+        }]);
+
+        let availability = super::availability_snapshot();
+        assert_eq!(availability.total, 1);
+        assert_eq!(availability.collectors[0].collector_idx, 5);
+        assert_eq!(
+            super::qc_latency_snapshot(),
+            vec![("availability".to_string(), 88)]
+        );
+
+        let backlog = super::rbc_backlog_snapshot();
+        assert_eq!(backlog.pending_sessions, 2);
+        let snapshot = super::snapshot();
+        assert_eq!(snapshot.pending_rbc.sessions, 1);
+        assert_eq!(snapshot.pending_rbc.entries[0].height, 12);
+        assert_eq!(snapshot.lane_activity[0].lane_id, 7);
+        assert_eq!(snapshot.pipeline_execution.rbc_chunks_total, 5);
+        assert_eq!(snapshot.access_set_sources.prepass_merge, 3);
+        assert_eq!(snapshot.dataspace_activity[0].dataspace_id, 42);
+        assert_eq!(snapshot.rbc_lane_backlog[0].pending_chunks, 2);
+        assert_eq!(snapshot.rbc_dataspace_backlog[0].dataspace_id, 42);
+        assert_eq!(snapshot.lane_commitments[0].lane_id, 7);
+        assert_eq!(snapshot.dataspace_commitments[0].dataspace_id, 42);
+        assert_eq!(
+            snapshot.lane_settlement_commitments[0].lane_id,
+            LaneId::new(7)
+        );
+        assert_eq!(
+            snapshot.lane_relay_envelopes[0].block_height,
+            envelope.block_height
+        );
+        assert_eq!(snapshot.lane_governance_sealed_total, 1);
+        assert_eq!(
+            snapshot.lane_governance_sealed_aliases,
+            vec!["lane-seven".to_string()]
+        );
+
+        super::reset_availability_stats_for_tests();
+        super::reset_qc_latency_stats_for_tests();
+        super::reset_rbc_backlog_stats_for_tests();
+        super::reset_pending_rbc_for_tests();
+        super::set_lane_commitments(Vec::new(), Vec::new());
+        super::set_lane_settlement_commitments(Vec::new());
+        super::set_lane_relay_envelopes(Vec::new());
+        super::set_lane_governance_snapshot(Vec::new());
+        let cleared = super::snapshot();
+        assert_eq!(super::availability_snapshot().total, 0);
+        assert!(super::qc_latency_snapshot().is_empty());
+        assert_eq!(super::rbc_backlog_snapshot().pending_sessions, 0);
+        assert_eq!(cleared.pending_rbc.sessions, 0);
+        assert!(cleared.lane_activity.is_empty());
+        assert!(cleared.rbc_lane_backlog.is_empty());
+        assert!(cleared.lane_commitments.is_empty());
+        assert!(cleared.lane_relay_envelopes.is_empty());
+        assert_eq!(cleared.lane_governance_sealed_total, 0);
+    }
+
+    #[test]
     fn lane_relay_envelopes_are_deduplicated_and_bounded() {
         let _guard = super::lane_relay_test_guard();
         super::set_lane_relay_envelopes(Vec::new());
@@ -11421,7 +12436,17 @@ mod tests {
         super::MODE_LAST_FLIP_TS_SET.store(false, Ordering::Relaxed);
         super::MODE_FLIP_BLOCKED.store(false, Ordering::Relaxed);
         if let Some(slot) = super::MODE_LAST_FLIP_ERROR.get() {
-            *slot.lock().unwrap() = None;
+            *super::lock_operator_status_slot(slot, "mode flip last error") = None;
+        }
+
+        {
+            let slot = super::MODE_LAST_FLIP_ERROR.get_or_init(|| std::sync::Mutex::new(None));
+            let _ = std::panic::catch_unwind(|| {
+                let _guard = slot
+                    .lock()
+                    .expect("mode flip last error lock should be held");
+                panic!("poison mode flip last error for recovery test");
+            });
         }
 
         super::set_mode_flip_kill_switch(false);

@@ -20,7 +20,7 @@ if str(SCRIPT_DIR) not in sys.path:
 import check_android_device_lab_slot as device_lab  # noqa: E402
 
 
-DEFAULT_APP_PACKAGE_NAME = "org.hyperledger.iroha.android.offlinewallet"
+DEFAULT_APP_PACKAGE_NAME = "org.hyperledger.iroha.sdk.offline.wallet.lab"
 DEFAULT_VERIFIER = "android-keystore-attestation-harness"
 HARNESS_RESULT_FIELDS: frozenset[str] = frozenset(
     {

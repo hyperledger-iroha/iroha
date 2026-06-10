@@ -60657,10 +60657,13 @@ mod tests {
             &material,
             &replayed_vk_hash
         ));
-        assert!(!sccp_source_chain_proof_matches_adapter_deployment(
-            &deployment_bound_proof,
-            &replayed_vk_hash,
-        ));
+        assert!(
+            !sccp_source_chain_proof_matches_adapter_deployment(
+                &deployment_bound_proof,
+                &replayed_vk_hash,
+            ),
+            "deployment matcher must reject replayed adapter verifier key hashes"
+        );
         assert!(
             !verify_sccp_source_chain_proof_envelope_production_with_material_and_deployment(
                 &deployment_bound_proof,

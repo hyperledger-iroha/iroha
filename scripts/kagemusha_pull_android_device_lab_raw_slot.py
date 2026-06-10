@@ -109,7 +109,10 @@ def _validate_harness_result(
     errors: list[str],
 ) -> None:
     for field in sorted(set(harness) - HARNESS_RESULT_ALLOWED_FIELDS):
-        errors.append(f"attestation/harness-result.json contains unexpected field {field}")
+        errors.append(
+            "attestation/harness-result.json contains unexpected field "
+            f"{device_lab._display_path(field)}"
+        )
     alias = harness.get("alias")
     if not isinstance(alias, str) or not alias:
         errors.append("attestation/harness-result.json alias must be a non-empty string")

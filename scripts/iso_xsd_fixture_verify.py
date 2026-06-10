@@ -2519,19 +2519,26 @@ def verify_manifest(path: Path, args: argparse.Namespace) -> dict[str, Any]:
     missing_profile_schema_versions = (
         profile_catalog["missing_schema_versions"] if profile_catalog else []
     )
-    if profile_catalog is not None and blocked_message_ids:
+    if blocked_message_ids:
         blocked_gap_message_ids = {
             fixture["message_def_id"] for fixture in missing_schema_fixtures
-        } | {
-            schema["message_def_id"] for schema in schema_only
-        } | {
-            missing["message_def_id"] for missing in missing_profile_schema_versions
-        }
+        } | {schema["message_def_id"] for schema in schema_only}
+        if profile_catalog is not None:
+            blocked_gap_message_ids |= {
+                missing["message_def_id"] for missing in missing_profile_schema_versions
+            }
         for message_def_id in sorted(blocked_message_ids - blocked_gap_message_ids):
-            raise FixtureManifestError(
-                f"{path}.blocked_schema_sources includes {message_def_id} "
-                "without a current missing schema/profile gap"
-            )
+            if profile_catalog is None:
+                raise FixtureManifestError(
+                    f"{path}.blocked_schema_sources includes {message_def_id} "
+                    "without a current missing fixture/schema gap; pass "
+                    "--profile-catalog to prove profile-version gaps"
+                )
+            else:
+                raise FixtureManifestError(
+                    f"{path}.blocked_schema_sources includes {message_def_id} "
+                    "without a current missing schema/profile gap"
+                )
     if args.require_profile_schema_backed_versions and missing_profile_schema_versions:
         first = missing_profile_schema_versions[0]
         raise FixtureManifestError(

@@ -12,11 +12,11 @@ object OfflineJsonParser {
         val root = parse(payload)
         val obj = expectObject(root, "root")
         return OfflineReadiness(
-            asBoolean(obj["offline_note"], "offline_note"),
-            asBoolean(obj["offline_one_use_keys"], "offline_one_use_keys"),
+            asOptionalBoolean(obj["offline_note"], false),
+            asOptionalBoolean(obj["offline_one_use_keys"], false),
             asOptionalBoolean(obj["offline_recursive_note_proof"], false),
-            asBoolean(obj["offline_fountain_qr"], "offline_fountain_qr"),
-            asBoolean(obj["offline_sync_optional"], "offline_sync_optional"),
+            asOptionalBoolean(obj["offline_fountain_qr"], false),
+            asOptionalBoolean(obj["offline_sync_optional"], false),
             asBoolean(obj["offline_telemetry"], "offline_telemetry"),
             asOptionalBoolean(obj["offline_kagemusha_abi7"], false),
             asOptionalString(obj["offline_kagemusha_abi7_mode"]),
@@ -34,12 +34,15 @@ object OfflineJsonParser {
         val root = parse(payload)
         val obj = expectObject(root, "root")
         return OfflineV2Readiness(
-            asBoolean(obj["offline_note_v2"], "offline_note_v2"),
-            asBoolean(obj["offline_one_use_keys"], "offline_one_use_keys"),
-            asBoolean(obj["offline_recursive_note_proof"], "offline_recursive_note_proof"),
-            asBoolean(obj["offline_fountain_qr_v1"], "offline_fountain_qr_v1"),
-            asBoolean(obj["offline_sync_optional"], "offline_sync_optional"),
             asBoolean(obj["offline_telemetry"], "offline_telemetry"),
+            asOptionalBoolean(obj["offline_kagemusha_abi7"], false),
+            asOptionalString(obj["offline_kagemusha_abi7_mode"]),
+            asOptionalInt(
+                obj["offline_kagemusha_abi7_bridge_abi_version"],
+                "offline_kagemusha_abi7_bridge_abi_version",
+            ),
+            asOptionalString(obj["offline_kagemusha_abi7_circuit_id"]),
+            asOptionalBoolean(obj["offline_kagemusha_abi7_artifacts"], false),
         )
     }
 

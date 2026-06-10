@@ -65,6 +65,7 @@ bash scripts/formal/sumeragi_apalache.sh rbc-deliver-acceptance-bug-prefer-chunk
 bash scripts/formal/sumeragi_apalache.sh rbc-deliver-acceptance-bug-ignore-missing-chunks
 bash scripts/formal/sumeragi_apalache.sh rbc-deliver-acceptance-bug-reject-allowed-missing-chunks
 bash scripts/formal/sumeragi_apalache.sh rbc-deliver-acceptance-bug-require-chunks-for-zero-total
+bash scripts/formal/sumeragi_apalache.sh rbc-deliver-acceptance-bug-accept-overcounted-chunks
 bash scripts/formal/sumeragi_apalache.sh rbc-deliver-acceptance-bug-ignore-chunk-root-mismatch
 bash scripts/formal/sumeragi_apalache.sh rbc-deliver-acceptance-bug-reject-absent-root
 bash scripts/formal/sumeragi_apalache.sh rbc-deliver-acceptance-bug-wrong-defer-ready-count
@@ -99,6 +100,10 @@ bash scripts/formal/sumeragi_apalache.sh rbc-deliver-emission-bug-terminal-keeps
 bash scripts/formal/sumeragi_apalache.sh rbc-deliver-emission-bug-terminal-drops-session
 bash scripts/formal/sumeragi_apalache.sh rbc-deliver-emission-bug-hydration-missing-reinserts
 bash scripts/formal/sumeragi_apalache.sh rbc-deliver-emission-bug-hydration-terminal-keeps-deferrals
+bash scripts/formal/sumeragi_apalache.sh rbc-deliver-emission-bug-hydration-zero-total-defers
+bash scripts/formal/sumeragi_apalache.sh rbc-deliver-emission-bug-hydration-overcount-defers
+bash scripts/formal/sumeragi_apalache.sh rbc-deliver-emission-bug-hydration-zero-total-skips-broadcast
+bash scripts/formal/sumeragi_apalache.sh rbc-deliver-emission-bug-hydration-overcount-skips-broadcast
 bash scripts/formal/sumeragi_apalache.sh rbc-deliver-emission-bug-roster-missing-delivers
 bash scripts/formal/sumeragi_apalache.sh rbc-deliver-emission-bug-unverified-delivers
 bash scripts/formal/sumeragi_apalache.sh rbc-deliver-emission-bug-unverified-skips-payload-rebroadcast
@@ -336,9 +341,14 @@ bash scripts/formal/sumeragi_apalache.sh rbc-delivered-payload-bytes-bug-missing
 bash scripts/formal/sumeragi_apalache.sh rbc-delivered-payload-bytes-bug-chunk-sum-not-saturating
 bash scripts/formal/sumeragi_apalache.sh rbc-delivered-payload-bytes-bug-take-recorded-reports-again
 bash scripts/formal/sumeragi_apalache.sh rbc-delivered-payload-bytes-bug-take-not-delivered-uses-fallback
+bash scripts/formal/sumeragi_apalache.sh rbc-delivered-payload-bytes-bug-take-invalid-uses-fallback
+bash scripts/formal/sumeragi_apalache.sh rbc-delivered-payload-bytes-bug-take-missing-hash-uses-fallback
 bash scripts/formal/sumeragi_apalache.sh rbc-delivered-payload-bytes-bug-take-none-sets-recorded
 bash scripts/formal/sumeragi_apalache.sh rbc-delivered-payload-bytes-bug-fallback-ignored-for-incomplete
 bash scripts/formal/sumeragi_apalache.sh rbc-delivered-payload-bytes-bug-fallback-does-not-set-recorded
+bash scripts/formal/sumeragi_apalache.sh rbc-delivered-payload-bytes-bug-zero-total-uses-fallback
+bash scripts/formal/sumeragi_apalache.sh rbc-delivered-payload-bytes-bug-overcount-uses-fallback
+bash scripts/formal/sumeragi_apalache.sh rbc-delivered-payload-bytes-bug-mismatch-uses-fallback
 bash scripts/formal/sumeragi_apalache.sh rbc-delivered-payload-bytes-bug-computed-uses-fallback
 bash scripts/formal/sumeragi_apalache.sh rbc-delivered-payload-bytes-bug-computed-does-not-set-recorded
 bash scripts/formal/sumeragi_apalache.sh rbc-delivered-payload-bytes-bug-missing-slot-ignores-fallback
@@ -880,10 +890,12 @@ bash scripts/formal/sumeragi_apalache.sh commit-inflight-status-bug-typed-core-m
 bash scripts/formal/sumeragi_apalache.sh commit-inflight-status-bug-typed-timeout-mismatch
 bash scripts/formal/sumeragi_apalache.sh commit-inflight-status-bug-typed-queue-depth-mismatch
 bash scripts/formal/sumeragi_apalache.sh rbc-status-lookup-bug-is-delivered-accepts-incomplete
+bash scripts/formal/sumeragi_apalache.sh rbc-status-lookup-bug-is-delivered-accepts-overcount
 bash scripts/formal/sumeragi_apalache.sh rbc-status-lookup-bug-is-delivered-accepts-invalid
 bash scripts/formal/sumeragi_apalache.sh rbc-status-lookup-bug-is-delivered-checks-payload
 bash scripts/formal/sumeragi_apalache.sh rbc-status-lookup-bug-is-delivered-ignores-other-view
 bash scripts/formal/sumeragi_apalache.sh rbc-status-lookup-bug-delivered-accepts-incomplete
+bash scripts/formal/sumeragi_apalache.sh rbc-status-lookup-bug-delivered-accepts-overcount
 bash scripts/formal/sumeragi_apalache.sh rbc-status-lookup-bug-delivered-accepts-invalid
 bash scripts/formal/sumeragi_apalache.sh rbc-status-lookup-bug-delivered-accepts-missing-payload
 bash scripts/formal/sumeragi_apalache.sh rbc-status-lookup-bug-delivered-accepts-wrong-payload
@@ -892,6 +904,7 @@ bash scripts/formal/sumeragi_apalache.sh rbc-status-lookup-bug-complete-requires
 bash scripts/formal/sumeragi_apalache.sh rbc-status-lookup-bug-complete-accepts-wrong-view
 bash scripts/formal/sumeragi_apalache.sh rbc-status-lookup-bug-complete-accepts-invalid
 bash scripts/formal/sumeragi_apalache.sh rbc-status-lookup-bug-complete-accepts-incomplete
+bash scripts/formal/sumeragi_apalache.sh rbc-status-lookup-bug-complete-accepts-overcount
 bash scripts/formal/sumeragi_apalache.sh rbc-status-lookup-bug-complete-accepts-wrong-payload
 bash scripts/formal/sumeragi_apalache.sh rbc-status-lookup-bug-stale-zero-ttl-expires
 bash scripts/formal/sumeragi_apalache.sh rbc-status-lookup-bug-stale-boundary-expires
@@ -988,6 +1001,8 @@ bash scripts/formal/sumeragi_apalache.sh rbc-backlog-status-bug-summary-invalid-
 bash scripts/formal/sumeragi_apalache.sh rbc-backlog-status-bug-summary-authoritative-counts
 bash scripts/formal/sumeragi_apalache.sh rbc-backlog-status-bug-summary-missing-chunks-ignored
 bash scripts/formal/sumeragi_apalache.sh rbc-backlog-status-bug-summary-missing-uses-received
+bash scripts/formal/sumeragi_apalache.sh rbc-backlog-status-bug-summary-malformed-uses-saturating-zero
+bash scripts/formal/sumeragi_apalache.sh rbc-backlog-status-bug-summary-authoritative-malformed-ignored
 bash scripts/formal/sumeragi_apalache.sh rbc-backlog-status-bug-summary-pending-tip-ignored
 bash scripts/formal/sumeragi_apalache.sh rbc-backlog-status-bug-summary-pending-next-ignored
 bash scripts/formal/sumeragi_apalache.sh rbc-backlog-status-bug-summary-pending-future-counts
@@ -996,6 +1011,8 @@ bash scripts/formal/sumeragi_apalache.sh rbc-backlog-status-bug-summary-drops-de
 bash scripts/formal/sumeragi_apalache.sh rbc-backlog-status-bug-proposal-pending-tip-counts
 bash scripts/formal/sumeragi_apalache.sh rbc-backlog-status-bug-proposal-blocking-pending-ignored
 bash scripts/formal/sumeragi_apalache.sh rbc-backlog-status-bug-proposal-session-ignores-missing
+bash scripts/formal/sumeragi_apalache.sh rbc-backlog-status-bug-proposal-malformed-uses-saturating-zero
+bash scripts/formal/sumeragi_apalache.sh rbc-backlog-status-bug-proposal-authoritative-malformed-ignored
 bash scripts/formal/sumeragi_apalache.sh rbc-backlog-status-bug-proposal-inactive-counts
 bash scripts/formal/sumeragi_apalache.sh rbc-backlog-status-bug-soft-exact-session-triggers
 bash scripts/formal/sumeragi_apalache.sh rbc-backlog-status-bug-soft-exact-missing-triggers
@@ -1004,6 +1021,7 @@ bash scripts/formal/sumeragi_apalache.sh rbc-backlog-status-bug-soft-ignores-mis
 bash scripts/formal/sumeragi_apalache.sh rbc-backlog-status-bug-snapshot-counts-delivered-as-pending
 bash scripts/formal/sumeragi_apalache.sh rbc-backlog-status-bug-snapshot-ignores-undelivered
 bash scripts/formal/sumeragi_apalache.sh rbc-backlog-status-bug-snapshot-max-uses-total
+bash scripts/formal/sumeragi_apalache.sh rbc-backlog-status-bug-snapshot-malformed-uses-saturating-zero
 bash scripts/formal/sumeragi_apalache.sh rbc-backlog-status-bug-snapshot-pending-stash-ignored
 bash scripts/formal/sumeragi_apalache.sh rbc-backlog-status-bug-snapshot-caps-zeroed
 bash scripts/formal/sumeragi_apalache.sh rbc-backlog-status-bug-snapshot-pending-stash-as-session
@@ -1398,6 +1416,16 @@ bash scripts/formal/sumeragi_apalache.sh rbc-recovery-helper-bug-needs-wrong-pay
 bash scripts/formal/sumeragi_apalache.sh rbc-recovery-helper-bug-needs-incomplete-match-skips
 bash scripts/formal/sumeragi_apalache.sh rbc-recovery-helper-bug-needs-missing-payload-skips
 bash scripts/formal/sumeragi_apalache.sh rbc-recovery-helper-bug-needs-zero-chunk-skips
+bash scripts/formal/sumeragi_apalache.sh rbc-recovery-helper-bug-needs-overcount-skips
+bash scripts/formal/sumeragi_apalache.sh rbc-payload-hydration-bug-empty-payload-accepted
+bash scripts/formal/sumeragi_apalache.sh rbc-payload-hydration-bug-hash-mismatch-accepted
+bash scripts/formal/sumeragi_apalache.sh rbc-payload-hydration-bug-zero-total-rejected
+bash scripts/formal/sumeragi_apalache.sh rbc-payload-hydration-bug-zero-total-helper-skips
+bash scripts/formal/sumeragi_apalache.sh rbc-payload-hydration-bug-overcount-helper-skips
+bash scripts/formal/sumeragi_apalache.sh rbc-payload-hydration-bug-overcount-keeps-received
+bash scripts/formal/sumeragi_apalache.sh rbc-payload-hydration-bug-zero-total-digest-mismatch-accepted
+bash scripts/formal/sumeragi_apalache.sh rbc-payload-hydration-bug-zero-total-root-mismatch-accepted
+bash scripts/formal/sumeragi_apalache.sh rbc-payload-hydration-bug-count-mismatch-accepted
 bash scripts/formal/sumeragi_apalache.sh rbc-missing-block-recovery-bug-needs-known-local-fetches
 bash scripts/formal/sumeragi_apalache.sh rbc-missing-block-recovery-bug-needs-missing-session-skips
 bash scripts/formal/sumeragi_apalache.sh rbc-missing-block-recovery-bug-needs-payload-hash-skips
@@ -1405,6 +1433,7 @@ bash scripts/formal/sumeragi_apalache.sh rbc-missing-block-recovery-bug-needs-he
 bash scripts/formal/sumeragi_apalache.sh rbc-missing-block-recovery-bug-needs-signature-skips
 bash scripts/formal/sumeragi_apalache.sh rbc-missing-block-recovery-bug-needs-invalid-skips
 bash scripts/formal/sumeragi_apalache.sh rbc-missing-block-recovery-bug-needs-complete-fetches
+bash scripts/formal/sumeragi_apalache.sh rbc-missing-block-recovery-bug-materialize-missing-payload-hash
 bash scripts/formal/sumeragi_apalache.sh rbc-missing-block-recovery-bug-force-invalid-fetches
 bash scripts/formal/sumeragi_apalache.sh rbc-missing-block-recovery-bug-force-payload-available-fetches
 bash scripts/formal/sumeragi_apalache.sh rbc-missing-block-recovery-bug-force-frontier-gap-skips
@@ -4597,6 +4626,7 @@ bash scripts/formal/sumeragi_apalache.sh rbc-availability-reschedule-bug-deliver
 bash scripts/formal/sumeragi_apalache.sh rbc-availability-reschedule-bug-complete-ready-blocks
 bash scripts/formal/sumeragi_apalache.sh rbc-availability-reschedule-bug-missing-chunks-ignored
 bash scripts/formal/sumeragi_apalache.sh rbc-availability-reschedule-bug-zero-total-counts-missing
+bash scripts/formal/sumeragi_apalache.sh rbc-availability-reschedule-bug-overcount-counts-complete
 bash scripts/formal/sumeragi_apalache.sh rbc-availability-reschedule-bug-not-ready-ignored
 bash scripts/formal/sumeragi_apalache.sh rbc-availability-reschedule-bug-complete-not-ready-allowed
 bash scripts/formal/sumeragi_apalache.sh vote-backed-reassembly-stall-bug-hard-cap-uses-min

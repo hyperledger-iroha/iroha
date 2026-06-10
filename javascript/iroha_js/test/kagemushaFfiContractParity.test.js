@@ -282,6 +282,93 @@ function assertRunnerRejectsDotnetSdk(script, envName, label) {
   }
 }
 
+function assertRunnerPrintsDotnetAndBridgeEvidence(script, envName, label) {
+  const tmp = mkdtempSync(`${tmpdir()}/iroha-dotnet-runner-evidence-`);
+  const fakeDotnet = `${tmp}/dotnet`;
+  const fakeCargo = `${tmp}/cargo`;
+  const bridgeTarget = `${tmp}/bridge-target`;
+  try {
+    writeFileSync(
+      fakeDotnet,
+      [
+        "#!/usr/bin/env bash",
+        "case \"${1:-}\" in",
+        "  --version)",
+        "    printf '%s\\n' '8.0.100'",
+        "    exit 0",
+        "    ;;",
+        "  --info)",
+        "    printf '%s\\n' '.NET SDK:'",
+        "    printf '%s\\n' ' Version: 8.0.100'",
+        "    printf '%s\\n' ' RID: fake-x64'",
+        "    exit 0",
+        "    ;;",
+        "  test)",
+        "    printf '%s\\n' \"fake dotnet test: $*\"",
+        "    exit 0",
+        "    ;;",
+        "esac",
+        "printf '%s\\n' \"unexpected fake dotnet invocation: $*\" >&2",
+        "exit 64",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(
+      fakeCargo,
+      [
+        "#!/usr/bin/env bash",
+        "if [[ \"${1:-}\" != 'build' || \"${2:-}\" != '-p' || \"${3:-}\" != 'connect_norito_bridge' ]]; then",
+        "  printf '%s\\n' \"unexpected fake cargo invocation: $*\" >&2",
+        "  exit 64",
+        "fi",
+        "mkdir -p \"${CARGO_TARGET_DIR}/debug\"",
+        "printf '%s\\n' 'fake connect_norito_bridge' > \"${CARGO_TARGET_DIR}/debug/libconnect_norito_bridge.so\"",
+        "printf '%s\\n' 'fake connect_norito_bridge' > \"${CARGO_TARGET_DIR}/debug/libconnect_norito_bridge.dylib\"",
+        "printf '%s\\n' 'fake connect_norito_bridge' > \"${CARGO_TARGET_DIR}/debug/connect_norito_bridge.dll\"",
+        "printf '%s\\n' 'fake cargo bridge build'",
+        "exit 0",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(fakeDotnet, 0o755);
+    chmodSync(fakeCargo, 0o755);
+
+    const result = spawnSync("bash", [script], {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: `${tmp}:${process.env.PATH}`,
+        [envName]: fakeDotnet,
+        KAGEMUSHA_RECURSIVE_SPEND_CSHARP_BRIDGE_TARGET_DIR: bridgeTarget,
+      },
+    });
+
+    assert.equal(result.status, 0, `${label} must succeed with fake .NET 8 and fake bridge build`);
+    assert.match(result.stdout, /^8\.0\.100$/m, `${label} must print dotnet version evidence`);
+    assert.match(result.stdout, /dotnet --info:\n\.NET SDK:\n Version: 8\.0\.100\n RID: fake-x64/u);
+    assert.match(result.stdout, /fake cargo bridge build/u, `${label} must build the native bridge first`);
+    assert.match(
+      result.stdout,
+      /connect_norito_bridge native bridge: .*connect_norito_bridge\.(?:dll|dylib|so)/u,
+      `${label} must print the built native bridge path`,
+    );
+    assert.match(
+      result.stdout,
+      /connect_norito_bridge native bridge sha256: [0-9a-fA-F]{64}/u,
+      `${label} must print the built native bridge digest`,
+    );
+    assert.match(result.stdout, /fake dotnet test: test /u, `${label} must invoke dotnet test`);
+    assert.ok(
+      result.stdout.indexOf("connect_norito_bridge native bridge sha256:") <
+        result.stdout.indexOf("fake dotnet test: test "),
+      `${label} must print native bridge evidence before running tests`,
+    );
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 function negativeControlModesFromInventory(text, startMarker, endMarker) {
   const start = text.indexOf(startMarker);
   assert.notEqual(start, -1, `missing ${startMarker}`);
@@ -2504,6 +2591,14 @@ test("Kagemusha C# SDK runner rejects non-.NET-8 overrides before tests", () => 
   );
 });
 
+test("Kagemusha C# SDK runner prints host and bridge evidence before tests", () => {
+  assertRunnerPrintsDotnetAndBridgeEvidence(
+    "ci/check_kagemusha_recursive_spend_csharp_sdk.sh",
+    "KAGEMUSHA_RECURSIVE_SPEND_DOTNET_BIN",
+    "Kagemusha C# SDK runner",
+  );
+});
+
 test("recursive Kagemusha witnessless Reserved-lineage policy stays enabled in public docs", () => {
   const docs = [
     "docs/source/offline_kagemusha.md",
@@ -2738,6 +2833,10 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-compact-key-timestamp-raw",
     "--negative-control-compact-key-evidence-filename",
     "--negative-control-compact-key-closed-schema",
+    "--negative-control-release-bundle-evidence-inventory-schema",
+    "--negative-control-release-bundle-evidence-inventory-keysets",
+    "--negative-control-release-bundle-section-schema",
+    "--negative-control-release-bundle-android-manifest-schema",
   ];
 
   assertWorkflowRunsNegativeControlModes(
@@ -2825,6 +2924,26 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "--negative-control-compact-key-closed-schema",
       /compact_key_evidence_unexpected_field[\s\S]*?compact_key_evidence_allows_extra_fields/u,
       "ABI-7 compact key evidence closed schema",
+    ],
+    [
+      "--negative-control-release-bundle-evidence-inventory-schema",
+      /_check_release_bundle_evidence_inventory_shape\(evidence\)[\s\S]*?blockers\.extend\(\[\]\)/u,
+      "Kagemusha release bundle evidence inventory schema",
+    ],
+    [
+      "--negative-control-release-bundle-evidence-inventory-keysets",
+      /_check_release_bundle_cross_section_shape\(bundle\)[\s\S]*?blockers\.extend\(\[\]\)/u,
+      "Kagemusha release bundle evidence inventory key sets",
+    ],
+    [
+      "--negative-control-release-bundle-section-schema",
+      /_check_release_bundle_section_shapes\(bundle\)[\s\S]*?blockers\.extend\(\[\]\)/u,
+      "Kagemusha release bundle section schema",
+    ],
+    [
+      "--negative-control-release-bundle-android-manifest-schema",
+      /_check_release_bundle_android_section_shape\(bundle\)[\s\S]*?blockers\.extend\(\[\]\)/u,
+      "Kagemusha release bundle Android manifest schema",
     ],
     [
       "--negative-control-release-bundle-compact-generator-log-inventory",
@@ -3038,6 +3157,11 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
     "--negative-control-core-append-digest-wrapper-bypass",
     "--negative-control-core-append-boundary-profile-comparison",
     "--negative-control-data-model-proof-public-input-circuit-binding",
+    "--negative-control-data-model-semantic-proof-append-opening",
+    "--negative-control-data-model-public-input-one-hop-append-opening",
+    "--negative-control-data-model-generic-proof-scalar-projection",
+    "--negative-control-data-model-spend-proof-artifact-circuit-gates",
+    "--negative-control-data-model-previous-proof-opening-bundle-binding",
     "--negative-control-data-model-previous-proof-field-binding",
     "--negative-control-data-model-previous-proof-stale-hash-fixture",
     "--negative-control-core-recursive-public-input-schema-order",
@@ -3086,6 +3210,106 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
     proofPublicInputCircuitBranch,
     /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "proof public-input circuit binding negative control must not unconditionally pass after run_checks",
+  );
+
+  const semanticProofAppendOpeningBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-data-model-semantic-proof-append-opening":'),
+    guard.indexOf('if mode == "--negative-control-data-model-public-input-one-hop-append-opening":'),
+  );
+  assert.match(
+    semanticProofAppendOpeningBranch,
+    /accumulator\.append_opening_preflight_digest != \[0u8; Hash::LENGTH\][\s\S]*?false && accumulator\.append_opening_preflight_digest/u,
+    "semantic proof append-opening negative control must bypass the semantic-circuit append-opening guard",
+  );
+  assert.match(
+    semanticProofAppendOpeningBranch,
+    /text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "semantic proof append-opening negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    semanticProofAppendOpeningBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: semantic proof append-opening drift was not detected"\)/u,
+    "semantic proof append-opening negative control must only pass after detecting injected drift",
+  );
+
+  const oneHopAppendOpeningBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-data-model-public-input-one-hop-append-opening":'),
+    guard.indexOf('if mode == "--negative-control-data-model-generic-proof-scalar-projection":'),
+  );
+  assert.match(
+    oneHopAppendOpeningBranch,
+    /append_opening_preflight_digest != \[0u8; Hash::LENGTH\] && self\.hop_count <= 1[\s\S]*?append_opening_preflight_digest != \[0u8; Hash::LENGTH\] && self\.hop_count == 0/u,
+    "one-hop append-opening negative control must relax the impossible one-hop public-input guard",
+  );
+  assert.match(
+    oneHopAppendOpeningBranch,
+    /text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "one-hop append-opening negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    oneHopAppendOpeningBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: one-hop append-opening public-input drift was not detected"\)/u,
+    "one-hop append-opening negative control must only pass after detecting injected drift",
+  );
+
+  const genericProofScalarBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-data-model-generic-proof-scalar-projection":'),
+    guard.indexOf('if mode == "--negative-control-data-model-spend-proof-artifact-circuit-gates":'),
+  );
+  assert.match(
+    genericProofScalarBranch,
+    /self\.public_inputs\\n[\s\S]*?recursive_verifier_scalar_projection_digest[\s\S]*?\[0u8; Hash::LENGTH\]/u,
+    "generic proof scalar-projection negative control must replace the generic-circuit scalar binding with zero",
+  );
+  assert.match(
+    genericProofScalarBranch,
+    /text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "generic proof scalar-projection negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    genericProofScalarBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: generic proof scalar-projection drift was not detected"\)/u,
+    "generic proof scalar-projection negative control must only pass after detecting injected drift",
+  );
+
+  const spendProofArtifactCircuitBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-data-model-spend-proof-artifact-circuit-gates":'),
+    guard.indexOf('if mode == "--negative-control-data-model-previous-proof-opening-bundle-binding":'),
+  );
+  assert.match(
+    spendProofArtifactCircuitBranch,
+    /&& public_inputs\.append_boundary_digest == \[0u8; Hash::LENGTH\][\s\S]*?&& false/u,
+    "spend proof artifact circuit-gate negative control must remove the lineage append-boundary guard",
+  );
+  assert.match(
+    spendProofArtifactCircuitBranch,
+    /text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "spend proof artifact circuit-gate negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    spendProofArtifactCircuitBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: spend proof artifact circuit gate drift was not detected"\)/u,
+    "spend proof artifact circuit-gate negative control must only pass after detecting injected drift",
+  );
+
+  const previousProofOpeningBundleBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-data-model-previous-proof-opening-bundle-binding":'),
+    guard.indexOf('if mode == "--negative-control-data-model-previous-proof-field-binding":'),
+  );
+  assert.match(
+    previousProofOpeningBundleBranch,
+    /previous_bundle\.validate_public_input_binding\(\)\?;[\s\S]*?""/u,
+    "previous-proof opening bundle-binding negative control must remove the bundle binding call",
+  );
+  assert.match(
+    previousProofOpeningBundleBranch,
+    /text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "previous-proof opening bundle-binding negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    previousProofOpeningBundleBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: previous-proof opening bundle binding drift was not detected"\)/u,
+    "previous-proof opening bundle-binding negative control must only pass after detecting injected drift",
   );
 
   const previousProofFieldBranch = guard.slice(
@@ -4026,6 +4250,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-python-sdk-native-build-script",
     "--negative-control-python-sdk-venv-activation-script",
     "--negative-control-python-sdk-bytecode-script",
+    "--negative-control-python-sdk-test-filter-script",
+    "--negative-control-python-sdk-workflow-inventory",
     "--negative-control-python-lineage-frozen-copy",
     "--negative-control-python-sdk-test-workflow",
     "--negative-control-python-host-test-workflow",
@@ -4036,6 +4262,9 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-jvm-sdk-java-distribution-workflow",
     "--negative-control-jvm-sdk-java-version-workflow",
     "--negative-control-jvm-sdk-test-workflow",
+    "--negative-control-jvm-sdk-test-filter-script",
+    "--negative-control-jvm-sdk-workflow-inventory",
+    "--negative-control-jvm-sdk-android-workflow-inventory",
     "--negative-control-jvm-sdk-jdk21-script",
     "--negative-control-jvm-sdk-java-home-override-script",
     "--negative-control-jvm-sdk-java-home-reject-script",
@@ -4054,6 +4283,10 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-swift-sdk-job-workflow",
     "--negative-control-swift-sdk-runner-workflow",
     "--negative-control-swift-sdk-parse-workflow",
+    "--negative-control-swift-sdk-parse-surface-script",
+    "--negative-control-swift-sdk-privacy-parse-script",
+    "--negative-control-swift-sdk-workflow-inventory",
+    "--negative-control-swift-sdk-source-workflow-inventory",
     "--negative-control-swift-sdk-uc4-skip",
     "--negative-control-swift-lineage-data-copy",
     "--negative-control-swift-recursive-compact-verifier-bool",
@@ -4070,9 +4303,13 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-csharp-sdk-dotnet-version-workflow",
     "--negative-control-csharp-sdk-setup-order-workflow",
     "--negative-control-csharp-sdk-dotnet-version-script",
+    "--negative-control-csharp-sdk-dotnet-info-script",
     "--negative-control-csharp-sdk-dotnet-override-script",
     "--negative-control-csharp-sdk-dotnet-major-script",
     "--negative-control-csharp-sdk-native-bridge-script",
+    "--negative-control-csharp-sdk-native-library-evidence-script",
+    "--negative-control-csharp-sdk-test-filter-script",
+    "--negative-control-csharp-sdk-workflow-inventory",
     "--negative-control-csharp-archive-copy",
     "--negative-control-csharp-recursive-compact-verifier-unavailable",
     "--negative-control-csharp-sdk-test-workflow",
@@ -4089,6 +4326,10 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-js-sdk-node-setup-order-workflow",
     "--negative-control-js-sdk-install-workflow",
     "--negative-control-js-sdk-test-workflow",
+    "--negative-control-js-sdk-transaction-builder-filter-script",
+    "--negative-control-js-sdk-privacy-native-filter-script",
+    "--negative-control-js-sdk-workflow-inventory",
+    "--negative-control-sdk-privacy-workflow-inventory-matrix",
     "--negative-control-js-sdk-install-order-workflow",
     "--negative-control-js-sdk-test-order-workflow",
     "--negative-control-js-sdk-needs-workflow",
@@ -4156,6 +4397,57 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       `Kagemusha workflow must run SDK parity ${mode}`,
     );
   }
+
+  const expectedPrivacyWorkflowPaths = [
+    "IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridge.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridgeTest.java",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridgeTest.kt",
+    "javascript/iroha_js/src/crypto.js",
+    "javascript/iroha_js/dist/crypto.js",
+    "javascript/iroha_js/test/privacyNative.test.js",
+    "python/iroha_python/src/iroha_python/crypto.py",
+    "python/iroha_python/src/iroha_python/privacy_catalog.py",
+    "python/iroha_python/tests/privacy_catalog_test.py",
+    "python/iroha_python/tests/crypto_algorithms_test.py",
+    "csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyNative.cs",
+    "csharp/tests/Hyperledger.Iroha.Sdk.Tests/PrivacyNativeTests.cs",
+  ];
+  assert.deepStrictEqual(
+    quotedStringsFromInventory(
+      guard,
+      "SDK_PRIVACY_WORKFLOW_INVENTORY_PATHS = (",
+      "SDK_PARITY_MAIN_COMMAND =",
+    ),
+    [...expectedPrivacyWorkflowPaths].sort(),
+    "SDK privacy workflow inventory matrix must pin every SDK privacy/native trigger path",
+  );
+  assertWorkflowIncludesPaths(
+    workflow,
+    expectedPrivacyWorkflowPaths,
+    "Kagemusha SDK privacy workflow inventory matrix",
+  );
+  const privacyWorkflowInventoryMatrixBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-sdk-privacy-workflow-inventory-matrix":'),
+    guard.indexOf('if mode == "--negative-control-js-sdk-install-order-workflow":'),
+  );
+  assert.match(
+    privacyWorkflowInventoryMatrixBranch,
+    /for relative in SDK_PRIVACY_WORKFLOW_INVENTORY_PATHS:[\s\S]*if relative not in message:[\s\S]*rejected\.append\(relative\)/u,
+    "SDK privacy workflow inventory matrix must require each missing path to be named by the guard",
+  );
+  assert.match(
+    privacyWorkflowInventoryMatrixBranch,
+    /else:[\s\S]*negative control failed: SDK privacy workflow inventory drift was not detected for /u,
+    "SDK privacy workflow inventory matrix must fail if any path removal is not detected",
+  );
+  assert.match(
+    privacyWorkflowInventoryMatrixBranch,
+    /text_overrides\.pop\(target, None\)[\s\S]*checked \{len\(rejected\)\} SDK privacy workflow paths/u,
+    "SDK privacy workflow inventory matrix must clear overrides and report checked path count",
+  );
 
   const preferredModeFallbackBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-cross-sdk-preferred-mode-fallback":'),
@@ -5454,14 +5746,34 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "Kagemusha JVM SDK runner must reject inherited non-JDK-21 JAVA_HOME values",
   );
   assert.match(
+    jvmRunner,
+    /--tests org\.hyperledger\.iroha\.sdk\.privacy\.PrivacyNativeBridgeTest[\s\S]*ANDROID_HARNESS_MAINS=[^\n]*org\.hyperledger\.iroha\.android\.privacy\.PrivacyNativeBridgeTest/,
+    "Kagemusha JVM SDK runner must exercise Kotlin and Android privacy native bridge tests",
+  );
+  assert.match(
     swiftRunner,
     /SWIFTC_BIN="\$\{KAGEMUSHA_RECURSIVE_SPEND_SWIFTC_BIN:-swiftc\}"/,
     "Kagemusha Swift SDK runner must keep the documented swiftc override variable",
   );
   assert.match(
+    swiftRunner,
+    /IrohaSwift\/Sources\/IrohaSwift\/PrivacyNativeBridge\.swift[\s\S]*IrohaSwift\/Tests\/IrohaSwiftTests\/PrivacyNativeBridgeTests\.swift/,
+    "Kagemusha Swift SDK runner must parse the privacy native bridge source and tests",
+  );
+  assert.match(
     csharpRunner,
     /DOTNET_BIN="\$\{KAGEMUSHA_RECURSIVE_SPEND_DOTNET_BIN:-dotnet\}"/,
     "Kagemusha C# SDK runner must keep the documented dotnet override variable",
+  );
+  assert.match(
+    csharpRunner,
+    /BRIDGE_LIBRARY_NAME="libconnect_norito_bridge\.dylib"[\s\S]*BRIDGE_LIBRARY_NAME="connect_norito_bridge\.dll"[\s\S]*BRIDGE_LIBRARY_NAME="libconnect_norito_bridge\.so"[\s\S]*BRIDGE_LIBRARY_PATH="\$\{BRIDGE_LIBRARY_DIR\}\/\$\{BRIDGE_LIBRARY_NAME\}"[\s\S]*connect_norito_bridge native bridge:/,
+    "Kagemusha C# SDK runner must verify and print the freshly built native bridge path",
+  );
+  assert.match(
+    csharpRunner,
+    /printf 'dotnet --info:\\n'[\s\S]*"\$\{DOTNET_BIN\}" --info[\s\S]*connect_norito_bridge native bridge sha256:/,
+    "Kagemusha C# SDK runner must print host and bridge digest evidence",
   );
   assert.match(
     pythonRunner,
@@ -5490,7 +5802,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jsRunner,
-    /Kagemusha recursive spend\|Kagemusha record-backed\|Kagemusha \.\* SDK runner\|browser crypto exposes native-only helpers as safe stubs[\s\S]*test\/crypto\.browser\.test\.js[\s\S]*test\/kagemushaFfiContractParity\.test\.js[\s\S]*test\/kagemushaRecursiveSpend\.test\.js[\s\S]*test\/package_dist\.test\.js/,
-    "Kagemusha JavaScript SDK runner must exercise recursive spend, package-dist, and runtime-gate meta tests",
+    /Kagemusha recursive spend\|Kagemusha record-backed\|Kagemusha \.\* SDK runner\|browser crypto exposes native-only helpers as safe stubs\|buildKagemusha\|privacy native availability probes build and verify with Norito request archives\|privacy native wrappers require binary Norito request archives[\s\S]*test\/crypto\.browser\.test\.js[\s\S]*test\/kagemushaFfiContractParity\.test\.js[\s\S]*test\/kagemushaRecursiveSpend\.test\.js[\s\S]*test\/package_dist\.test\.js[\s\S]*test\/privacyNative\.test\.js[\s\S]*test\/transactionBuilder\.test\.js/,
+    "Kagemusha JavaScript SDK runner must exercise recursive spend, privacy-native, package-dist, transaction-builder, and runtime-gate meta tests",
   );
 });

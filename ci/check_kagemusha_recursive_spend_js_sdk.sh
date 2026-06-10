@@ -63,8 +63,10 @@ case "${NODE_VERSION}" in
     ;;
 esac
 
-"${NODE_BIN}" --test --test-name-pattern "Kagemusha recursive spend|Kagemusha record-backed|Kagemusha .* SDK runner|browser crypto exposes native-only helpers as safe stubs" \
+"${NODE_BIN}" --test --test-name-pattern "Kagemusha recursive spend|Kagemusha record-backed|Kagemusha .* SDK runner|browser crypto exposes native-only helpers as safe stubs|buildKagemusha|privacy native availability probes build and verify with Norito request archives|privacy native wrappers require binary Norito request archives" \
   test/crypto.browser.test.js \
   test/kagemushaFfiContractParity.test.js \
   test/kagemushaRecursiveSpend.test.js \
-  test/package_dist.test.js
+  test/package_dist.test.js \
+  test/privacyNative.test.js \
+  test/transactionBuilder.test.js

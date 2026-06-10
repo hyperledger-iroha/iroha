@@ -32,12 +32,55 @@ and completed history lives in [`status.md`](./status.md).
   loading and P/Invoke symbol probing enabled for the ABI-6 recursive spend and
   ABI-7 compact-token, recursive aggregation, recursive compact
   verifier/projection, and instruction transaction-builder surfaces. The
+  standalone runner now builds `connect_norito_bridge`, resolves the
+  platform-specific native library name, fails if the freshly built artifact is
+  missing, prints the selected native bridge path, and prepends that directory
+  to the macOS, Linux, and Windows loader paths before invoking `dotnet test`.
+  The
   Windows pass must also pin the C# negative controls for malformed Norito
   input/output headers, caller archive-copy immutability, verifier-unavailable
   status mapping, transaction-builder schema and wire-name drift, and
   package/evidence parity. After the Windows run passes, update `status.md`
   with the C# SDK evidence and rerun the Kagemusha SDK parity or production
   readiness guards needed to clear the C# row.
+  Windows-machine TODOs:
+  - Select a .NET 8 SDK and capture `dotnet --version` in the run log.
+  - Capture the Windows `dotnet --info` output, including RID/architecture, so
+    the native C# pass is tied to the host that loaded the bridge.
+  - Run `ci/check_kagemusha_recursive_spend_csharp_sdk.sh`, or the equivalent
+    direct `dotnet test` command with the same native bridge path setup.
+  - Confirm the Windows runner log prints `connect_norito_bridge native bridge:`
+    and `connect_norito_bridge native bridge sha256:` for the freshly built
+    `connect_norito_bridge.dll` before the P/Invoke tests start.
+  - Confirm the pass includes `KagemushaRecursiveSpendNativeTests`,
+    `PrivacyNativeTests`, and `TransactionBuilderTests`.
+  - Confirm `KagemushaRecursiveSpendNativeTests` exercises
+    `KagemushaOverlongCompactLength`, `overlongVersionLengthArchive`,
+    `overlongCircuitStringArchive`, and `invalidUtf8CircuitArchive` so the C#
+    parser rejects non-canonical compact lengths and invalid UTF-8 lineage
+    archive circuit fields on Windows.
+  - Re-run `ci/check_kagemusha_recursive_spend_sdk_parity.sh` after recording
+    the Windows evidence so C# SDK parity status can be cleared explicitly.
+- Kagemusha JVM SDK validation must keep the focused runner aligned with the
+  parity inventory: Kotlin/JVM runs recursive spend, instruction archive,
+  Offline Note, Offline Note V2, and privacy native bridge tests, while the
+  Android Java harness runs recursive spend, Offline Note V2, Offline Note,
+  privacy native bridge, and transaction-builder archive tests.
+- Kagemusha JavaScript SDK validation must keep the focused Node 20 runner
+  aligned with the parity inventory by executing the Kagemusha recursive spend,
+  package/browser, privacy native bridge, and transaction-builder archive test
+  names together.
+- Kagemusha Swift SDK validation must keep the macOS parse runner aligned with
+  the parity inventory by parsing every Kagemusha/Offline Note source and test
+  file tracked for Swift, including recursive compact, instruction transaction
+  encoder, and privacy native bridge coverage.
+- Kagemusha Python SDK validation must keep the focused Python 3.11 runner on
+  the Kagemusha, privacy catalog, and crypto algorithm pytest files because
+  those files cover the Python transaction helpers, native archive guards, and
+  package export surfaces used by the SDK parity inventory. The workflow path
+  inventory must also watch the Python privacy catalog and crypto helper source
+  files so changes to those runner-covered surfaces trigger the focused SDK
+  pass.
 - Kagemusha Android production readiness now has host-side verifier-report
   rendering, a signed-slot assembler, a physical-device raw artifact exporter,
   a strict host puller for those raw slots, and a dedicated
@@ -49,12 +92,26 @@ and completed history lives in [`status.md`](./status.md).
   aliases or post-preflight source swaps before signed slot installation. Fresh
   raw exports now include `attestation/harness-result.json`, and the raw puller
   requires that harness result to match the slot challenge before the host
-  verifier report and signed slot can be assembled. The
+  verifier report and signed slot can be assembled. Signed slots now preserve
+  the same `attestation/harness-result.json`, include it in signed
+  `artifact_digests`, and reject legacy signed evidence that drops the raw
+  StrongBox harness output. The standalone Android scanner also rejects copied
+  Kagemusha matrix rows by reporting hash-only duplicate device fingerprints or
+  attestation challenges across otherwise-valid slots, and the production
+  readiness rollup mirrors that non-secret duplicate inventory with
+  release-bundle schema validation, verify-existing validation, exact standard
+  matrix and signer-pin manifest checks, and drift checks. The
   latest attached Pixel 6 / Android 16 slot
-  `google-pixel-6-6a-physical-1781070293478` verifies and signs successfully
+  `google-pixel-6-6a-physical-1781077370103` verifies and signs successfully
   through the lab-app path; remaining Android release work is evidence
   acquisition for the rest of the standard matrix: Pixel 7, Pixel 8, Pixel
   Fold/Tablet, Samsung Galaxy S23, and Samsung Galaxy S24.
+- Kagemusha Reserved-lineage table-base handling must stay proof-witness
+  specific: lineage witnesses may carry previous recursive proofs whose
+  fixed-window table-base public input differs from the current bundle proof,
+  while opening length, parameter fingerprint, schedule, shared manifest,
+  scalar projection, transition-profile, and proof-hash checks remain stable
+  verifier-context gates.
 - Kagemusha Reserved-lineage proof evidence now has a staged-run finalizer that
   requires a zero exit marker, validates staged lineage artifacts and the
   captured production proof log, writes canonical `lineage-proof-evidence.json`,
@@ -88,6 +145,10 @@ and completed history lives in [`status.md`](./status.md).
   producing only the init key-log, so the remaining lineage release blocker is
   successful production-width init/append key-artifact generation plus the
   heavy ignored proof run, followed by finalization into `artifacts/kagemusha`.
+  A lower-memory key-generation-only verifier-slice shape path is now
+  implemented and source-pinned for the one-hop and append circuits, but release
+  evidence still requires a successful production-width run on a host that can
+  complete init/append key generation without OS termination.
 - Kagemusha ABI-7 recursive compact key evidence now has a staged-run finalizer
   that requires a zero exit marker, validates staged artifacts and the generator
   log, writes canonical `recursive-compact-key-evidence.json`, and refuses
@@ -1111,7 +1172,13 @@ and completed history lives in [`status.md`](./status.md).
   mismatches as caller input errors. Swift, Kotlin/JVM, Java
   Android, JavaScript/Node, Python, and C# lineage key artifact helpers also
   require proving-key archive payloads to contain the selected circuit id bytes
-  and verifier-key commitment before native request construction. Swift,
+  and verifier-key commitment before native request construction.
+  Swift, Kotlin/JVM, Java Android, JavaScript/Node, Python, and C# additionally
+  parse the canonical `KagemushaRecursiveSpendLineageKeyArtifactsV1` archive
+  fields and reject stale schemas, unsupported flags, byte-smuggled bindings,
+  wrong versions, empty proving keys, trailing payloads, non-canonical compact
+  Norito length encodings, and invalid UTF-8 circuit family fields before native
+  loading. Swift,
   Kotlin/JVM, Java Android, JavaScript/Node, Python, and C# compact-token,
   recursive aggregation,
   recursive compact, and recursive spend validators also reject over-cap caller
@@ -2935,7 +3002,8 @@ and completed history lives in [`status.md`](./status.md).
   identifier-style secret-looking path material rejected before summary
   emission, while requiring the
   `blocked_schema_sources` review list to be recorded explicitly even when
-  empty,
+  empty and to match a current fixture/schema gap or, with a profile catalog, a
+  current profile-version gap,
   rejects XSD files with known restricted Standards
   Editor redistribution terms, parses the embedded default rail profile catalog
   on demand, and records which concrete advertised message versions are
@@ -4417,7 +4485,8 @@ and completed history lives in [`status.md`](./status.md).
   direct RBC READY/DELIVER deferral throttle semantics,
   direct RBC missing-INIT broad rebroadcast semantics,
   round-gap marker/snapshot/EMA status component/anchor semantics,
-  direct RBC missing BlockCreated recovery semantics,
+  direct RBC missing BlockCreated recovery and authoritative-only
+  materialization semantics,
   direct RBC unverified-roster escape-hatch semantics,
   RBC signing-preimage component/anchor binding semantics,
   classic Vote/VRF signing-preimage aggregate exactness,
@@ -4506,8 +4575,8 @@ and completed history lives in [`status.md`](./status.md).
 - Sumeragi prepare-quorum phase-gating validation is closed for the current
   formal slice: the dedicated 2026-06-03 Apalache fast run reached `NoError`
   up to computation length `10` with `CommitPhasesNeverBypassPrepareQuorum`
-  loaded, and the formal coverage guard still reports `504` PR modes,
-  `9788` expected-failure modes, and `10293` documented modes.
+	  loaded, and the formal coverage guard now reports `505` PR modes,
+	  `9873` expected-failure modes, and `10379` documented modes.
 - The focused SCCP prover corridor is green for the current production-hardening
   slice across JavaScript, Python, Swift, Kotlin/JVM, Java Android, the Rust
   `iroha_sccp` verifier crate, core bridge-proof admission tests, and on-chain
@@ -11001,15 +11070,50 @@ fixture corridor into broader release validation.
   bytes, and complete RBC chunk sets must reconstruct to the advertised payload
   hash before they unlock authoritative validation/recovery progress or advance
   the internal `AuthoritativePayload` stage.
-  The DA/RBC availability reschedule gate now follows the same zero-chunk
-  invariant: a non-invalid zero-chunk session with READY quorum remains
-  unresolved before the availability timeout unless local block payload bytes
-  are already available; the timeout boundary still releases the reschedule
-  gate.
-  Core Sumeragi DA/RBC readiness no longer carries obsolete exact-frontier or
-  frontier-first ignored unit tests: stale direct-rotation and generic-handoff
-  fixtures were removed, active `force_view_change_if_idle` coverage now
-  asserts current non-leader timeout rotation semantics, and the only remaining
+  The DA/RBC availability reschedule gate now follows the same invalid-shape
+  invariant: non-invalid zero-chunk or over-counted sessions with READY quorum
+  remain unresolved before the availability timeout unless local block payload
+  bytes are already available; the timeout boundary still releases the
+  reschedule gate. The direct availability reschedule TLA gate includes the
+  over-counted case and expected-failure mutation.
+  RBC recovery-helper coverage now also pins non-invalid over-counted metadata
+  as payload-repairable, matching zero-chunk metadata rather than treating the
+  impossible count as complete recovery evidence.
+  Receiver-side RBC DELIVER acceptance now rejects impossible live chunk shapes
+  (`total_chunks == 0` or `received_chunks > total_chunks`) as invalid payload
+  evidence after READY quorum, including under the DA missing-chunk policy, and
+  the direct DELIVER acceptance TLA gate models that invalid-shape branch plus
+  an over-counted expected-failure mutation.
+	  Delivered-payload telemetry follows the same shape boundary: authoritative
+	  local fallback bytes can account for incomplete valid raw deliveries, but
+	  zero-total or over-counted delivered sessions cannot emit payload-byte
+	  metrics or consume the once-only telemetry marker. The delivered-payload byte
+	  TLA gate now also covers invalid-session, missing-hash, invalid-shape, and
+	  payload-mismatch fallback rejection, and the actor-level local-payload
+	  telemetry fallback now uses the same invalid-shape guard before status,
+	  cleanup, or DELIVER emission can record bytes.
+	  Live maintenance now carries that invalid-shape invariant through READY and
+	  DELIVER emission, rebroadcast scheduling, and operator backlog accounting:
+	  malformed zero-total or over-counted sessions first try local-payload
+	  hydration; exact authoritative local payloads can rebuild zero-total
+	  metadata into the deterministic positive chunk layout, while sessions that
+	  remain malformed stay deferred/repair-visible instead of signing from
+	  malformed counters or reporting zero missing pressure. The RBC
+	  backlog-status TLA gate now also models malformed summary/proposal/snapshot
+	  pressure so saturating-to-zero accounting and authoritative-payload skips
+	  stay pinned as expected failures. A dedicated RBC payload-hydration TLA
+		  gate now pins the post-fetch transition as well: zero-total adoption,
+		  over-count recounting, invalid/complete skip gates, and empty/hash/count
+		  mismatch rejection each have explicit mutations. Direct helper
+		  regressions and TLA mutations now also pin hostile zero-total digest/root
+		  metadata so local repair cannot silently accept INIT-bound mismatch
+		  evidence. The local DELIVER-emission formal gate now also models repaired
+		  zero-total and over-counted sessions reaching DELIVER, with mutations for
+		  stale deferral and missing broadcast side effects.
+		  Core Sumeragi DA/RBC readiness no longer carries obsolete exact-frontier or
+	  frontier-first ignored unit tests: stale direct-rotation and generic-handoff
+	  fixtures were removed, active `force_view_change_if_idle` coverage now
+	  asserts current non-leader timeout rotation semantics, and the only remaining
   ignored core Sumeragi tests are deliberate deep-topology model coverage.
   Sumeragi operator docs now match the manifest guard policy lanes: strict
   lanes keep DA-gated commit/proposal sealing blocked until the manifest guard
@@ -11093,14 +11197,27 @@ fixture corridor into broader release validation.
   Committed-block RBC cleanup now shares that exact complete-delivery boundary:
   raw delivered sessions with missing chunks or mismatched complete bytes remain
   retained after commit, while verified delivered payloads still drain runtime
-  session state and retain the final status snapshot. Committed-tip repair
+  session state and retain the final status snapshot. Stale-view RBC pruning now
+  uses the same boundary, so raw-delivered incomplete sessions keep runtime and
+  repair state even when the payload is locally available. Committed-tip repair
   scheduling and committed-delivery suppression use the same verified boundary,
   so retained raw-delivered tip sessions remain repair-active until chunks
-  verify.
+  verify. Session TTL pruning now also ages out retained status summaries and
+  persisted snapshots without requiring a live RBC session to still be present,
+  so committed-cleanup leftovers do not survive indefinitely on quiet nodes. RBC
+  roster refresh now clears stale READY and DELIVER deferrals whenever changed
+  roster evidence resets READY signatures, preventing retry bookkeeping from
+  leaking across commit-topology changes. Local DELIVER emission now rejects
+  complete chunk sets with mismatched chunk roots before arming missing-payload
+  retry state, and terminal invalidation paths clear pending READY/DELIVER
+  deferrals together with pending RBC messages. The
+  four-peer NPoS/DA late-VRF persistence gate now passes on the current tree,
+  advancing past the previously documented height-4 RBC stall and finalizing the
+  epoch after recording the late reveal.
   The RBC status lookup formal model now matches the current helper contract:
   `is_delivered` requires delivered, non-invalid, complete chunk metadata while
   intentionally not checking payload equality, and the expected-failure configs
-  now mutate incomplete/invalid acceptance instead of the obsolete
+  now mutate incomplete/invalid/over-counted acceptance instead of the obsolete
   "requires complete" case.
   Operator backlog aggregation now ignores invalid RBC sessions, so conflicting
   or mismatched evidence stays diagnosable through invalid/mismatch status

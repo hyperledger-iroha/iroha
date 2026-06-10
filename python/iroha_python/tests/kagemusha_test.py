@@ -147,6 +147,15 @@ def _build_test_crc64_table() -> tuple[int, ...]:
 
 
 _TEST_CRC64_TABLE = _build_test_crc64_table()
+_TEST_NORITO_COMPACT_LEN_FLAG = 0x02
+_TEST_NORITO_PACKED_STRUCT_FLAG = 0x04
+_TEST_NORITO_FIELD_BITSET_FLAG = 0x20
+_KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH = bytes.fromhex(
+    "c88489618a012c283ff3bb2ebabc7775"
+)
+_OLD_KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH = bytes.fromhex(
+    "119f4df38a98ef5848ad0aadb9715779"
+)
 
 
 def _test_crc64(payload: bytes) -> int:
@@ -162,6 +171,58 @@ def _kagemusha_norito_frame_from_payload(schema_byte: int, payload: bytes) -> by
     frame[23:31] = len(payload).to_bytes(8, "little")
     frame[31:39] = _test_crc64(payload).to_bytes(8, "little")
     return bytes(frame)
+
+
+def _kagemusha_norito_frame_from_schema_hash(
+    schema_hash: bytes,
+    payload: bytes,
+    flags: int = 0,
+) -> bytes:
+    frame = bytearray(40 + len(payload))
+    frame[0:4] = b"NRT0"
+    frame[6:22] = schema_hash
+    frame[23:31] = len(payload).to_bytes(8, "little")
+    frame[31:39] = _test_crc64(payload).to_bytes(8, "little")
+    frame[39] = flags
+    frame[40:] = payload
+    return bytes(frame)
+
+
+def _kagemusha_norito_length(value: int, flags: int = 0) -> bytes:
+    if not flags & _TEST_NORITO_COMPACT_LEN_FLAG:
+        return value.to_bytes(8, "little")
+    remaining = value
+    output = bytearray()
+    while remaining >= 0x80:
+        output.append((remaining & 0x7F) | 0x80)
+        remaining >>= 7
+    output.append(remaining)
+    return bytes(output)
+
+
+def _kagemusha_overlong_compact_length(value: int) -> bytes:
+    if value < 0 or value >= 0x80:
+        raise ValueError("test helper only encodes small overlong lengths")
+    return bytes([value | 0x80, 0x00])
+
+
+def _kagemusha_norito_field(
+    payload: bytes,
+    flags: int = _TEST_NORITO_COMPACT_LEN_FLAG,
+) -> bytes:
+    return _kagemusha_norito_length(len(payload), flags) + payload
+
+
+def _kagemusha_norito_string(
+    value: str,
+    flags: int = _TEST_NORITO_COMPACT_LEN_FLAG,
+) -> bytes:
+    payload = value.encode("utf-8")
+    return _kagemusha_norito_length(len(payload), flags) + payload
+
+
+def _kagemusha_norito_byte_vec(value: bytes) -> bytes:
+    return len(value).to_bytes(8, "little") + value
 
 
 def _kagemusha_zk1_tlv(tag: bytes, payload: bytes) -> bytes:
@@ -193,12 +254,34 @@ def _kagemusha_lineage_proving_key_archive(
     verifier_key: bytes,
     seed: int,
 ) -> bytes:
-    return _kagemusha_norito_frame_from_payload(
-        0x9A,
-        b"\x01\x00"
-        + circuit_id.encode("utf-8")
-        + _kagemusha_verifier_key_commitment(verifier_key)
-        + bytes([seed]) * 64,
+    return _kagemusha_lineage_proving_key_archive_raw(
+        1,
+        circuit_id,
+        _kagemusha_verifier_key_commitment(verifier_key),
+        bytes([seed]) * 64,
+    )
+
+
+def _kagemusha_lineage_proving_key_archive_raw(
+    version: int,
+    circuit_id: str,
+    verifier_key_commitment: bytes,
+    proving_key: bytes,
+    flags: int = _TEST_NORITO_COMPACT_LEN_FLAG,
+    schema_hash: bytes = _KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH,
+    trailing_payload: bytes = b"",
+) -> bytes:
+    payload = (
+        _kagemusha_norito_field(version.to_bytes(2, "little"), flags)
+        + _kagemusha_norito_field(_kagemusha_norito_string(circuit_id, flags), flags)
+        + _kagemusha_norito_field(verifier_key_commitment, flags)
+        + _kagemusha_norito_field(_kagemusha_norito_byte_vec(proving_key), flags)
+        + trailing_payload
+    )
+    return _kagemusha_norito_frame_from_schema_hash(
+        schema_hash,
+        payload,
+        flags,
     )
 
 
@@ -1932,11 +2015,11 @@ def test_recursive_kagemusha_lineage_key_artifacts_validate_inputs() -> None:
             init_verifier_key,
             b"not-norito",
         )
-    missing_circuit_archive = _kagemusha_norito_frame_from_payload(
-        0x9A,
-        b"package"
-        + _kagemusha_verifier_key_commitment(init_verifier_key)
-        + bytes([0xA5]) * 64,
+    missing_circuit_archive = _kagemusha_lineage_proving_key_archive_raw(
+        1,
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+        _kagemusha_verifier_key_commitment(init_verifier_key),
+        bytes([0xA5]) * 64,
     )
     with pytest.raises(ValueError, match="lineage_proving_key_archive"):
         kagemusha.kagemusha_recursive_spend_lineage_key_artifacts_for_init(
@@ -1944,6 +2027,24 @@ def test_recursive_kagemusha_lineage_key_artifacts_validate_inputs() -> None:
             kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
             init_verifier_key,
             missing_circuit_archive,
+        )
+    smuggled_circuit_archive = _kagemusha_lineage_proving_key_archive_raw(
+        1,
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+        _kagemusha_verifier_key_commitment(init_verifier_key),
+        (
+            kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1.encode(
+                "utf-8",
+            )
+            + bytes([0xA6]) * 64
+        ),
+    )
+    with pytest.raises(ValueError, match="lineage_proving_key_archive"):
+        kagemusha.kagemusha_recursive_spend_lineage_key_artifacts_for_init(
+            128,
+            kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+            init_verifier_key,
+            smuggled_circuit_archive,
         )
     wrong_commitment_archive = _kagemusha_lineage_proving_key_archive(
         kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
@@ -1956,6 +2057,168 @@ def test_recursive_kagemusha_lineage_key_artifacts_validate_inputs() -> None:
             kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
             init_verifier_key,
             wrong_commitment_archive,
+        )
+    smuggled_commitment_archive = _kagemusha_lineage_proving_key_archive_raw(
+        1,
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+        _kagemusha_verifier_key_commitment(append_verifier_key),
+        _kagemusha_verifier_key_commitment(init_verifier_key) + bytes([0xA7]) * 64,
+    )
+    with pytest.raises(ValueError, match="lineage_proving_key_archive"):
+        kagemusha.kagemusha_recursive_spend_lineage_key_artifacts_for_init(
+            128,
+            kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+            init_verifier_key,
+            smuggled_commitment_archive,
+        )
+    wrong_version_archive = _kagemusha_lineage_proving_key_archive_raw(
+        2,
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+        _kagemusha_verifier_key_commitment(init_verifier_key),
+        bytes([0xA8]) * 64,
+    )
+    with pytest.raises(ValueError, match="lineage_proving_key_archive"):
+        kagemusha.kagemusha_recursive_spend_lineage_key_artifacts_for_init(
+            128,
+            kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+            init_verifier_key,
+            wrong_version_archive,
+        )
+    empty_proving_key_archive = _kagemusha_lineage_proving_key_archive_raw(
+        1,
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+        _kagemusha_verifier_key_commitment(init_verifier_key),
+        b"",
+    )
+    with pytest.raises(ValueError, match="lineage_proving_key_archive"):
+        kagemusha.kagemusha_recursive_spend_lineage_key_artifacts_for_init(
+            128,
+            kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+            init_verifier_key,
+            empty_proving_key_archive,
+        )
+    trailing_payload_archive = _kagemusha_lineage_proving_key_archive_raw(
+        1,
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+        _kagemusha_verifier_key_commitment(init_verifier_key),
+        bytes([0xA9]) * 64,
+        trailing_payload=b"\x7f",
+    )
+    with pytest.raises(ValueError, match="lineage_proving_key_archive"):
+        kagemusha.kagemusha_recursive_spend_lineage_key_artifacts_for_init(
+            128,
+            kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+            init_verifier_key,
+            trailing_payload_archive,
+        )
+    old_schema_archive = _kagemusha_lineage_proving_key_archive_raw(
+        1,
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+        _kagemusha_verifier_key_commitment(init_verifier_key),
+        bytes([0xAA]) * 64,
+        schema_hash=_OLD_KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH,
+    )
+    with pytest.raises(ValueError, match="lineage_proving_key_archive"):
+        kagemusha.kagemusha_recursive_spend_lineage_key_artifacts_for_init(
+            128,
+            kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+            init_verifier_key,
+            old_schema_archive,
+        )
+    packed_struct_archive = _kagemusha_lineage_proving_key_archive_raw(
+        1,
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+        _kagemusha_verifier_key_commitment(init_verifier_key),
+        bytes([0xAB]) * 64,
+        flags=_TEST_NORITO_COMPACT_LEN_FLAG | _TEST_NORITO_PACKED_STRUCT_FLAG,
+    )
+    with pytest.raises(ValueError, match="lineage_proving_key_archive"):
+        kagemusha.kagemusha_recursive_spend_lineage_key_artifacts_for_init(
+            128,
+            kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+            init_verifier_key,
+            packed_struct_archive,
+        )
+    field_bitset_archive = _kagemusha_lineage_proving_key_archive_raw(
+        1,
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+        _kagemusha_verifier_key_commitment(init_verifier_key),
+        bytes([0xAC]) * 64,
+        flags=_TEST_NORITO_COMPACT_LEN_FLAG | _TEST_NORITO_FIELD_BITSET_FLAG,
+    )
+    with pytest.raises(ValueError, match="lineage_proving_key_archive"):
+        kagemusha.kagemusha_recursive_spend_lineage_key_artifacts_for_init(
+            128,
+            kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+            init_verifier_key,
+            field_bitset_archive,
+        )
+    overlong_version_length_payload = (
+        _kagemusha_overlong_compact_length(2)
+        + (1).to_bytes(2, "little")
+        + _kagemusha_norito_field(
+            _kagemusha_norito_string(
+                kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+            ),
+        )
+        + _kagemusha_norito_field(_kagemusha_verifier_key_commitment(init_verifier_key))
+        + _kagemusha_norito_field(_kagemusha_norito_byte_vec(bytes([0xAD]) * 64))
+    )
+    overlong_version_length_archive = _kagemusha_norito_frame_from_schema_hash(
+        _KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH,
+        overlong_version_length_payload,
+        _TEST_NORITO_COMPACT_LEN_FLAG,
+    )
+    with pytest.raises(ValueError, match="lineage_proving_key_archive"):
+        kagemusha.kagemusha_recursive_spend_lineage_key_artifacts_for_init(
+            128,
+            kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+            init_verifier_key,
+            overlong_version_length_archive,
+        )
+    circuit_id_bytes = (
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1.encode(
+            "utf-8",
+        )
+    )
+    overlong_circuit_string_payload = (
+        _kagemusha_norito_field((1).to_bytes(2, "little"))
+        + _kagemusha_norito_field(
+            _kagemusha_overlong_compact_length(len(circuit_id_bytes)) + circuit_id_bytes,
+        )
+        + _kagemusha_norito_field(_kagemusha_verifier_key_commitment(init_verifier_key))
+        + _kagemusha_norito_field(_kagemusha_norito_byte_vec(bytes([0xAE]) * 64))
+    )
+    overlong_circuit_string_archive = _kagemusha_norito_frame_from_schema_hash(
+        _KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH,
+        overlong_circuit_string_payload,
+        _TEST_NORITO_COMPACT_LEN_FLAG,
+    )
+    with pytest.raises(ValueError, match="lineage_proving_key_archive"):
+        kagemusha.kagemusha_recursive_spend_lineage_key_artifacts_for_init(
+            128,
+            kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+            init_verifier_key,
+            overlong_circuit_string_archive,
+        )
+    invalid_utf8_circuit_archive = _kagemusha_norito_frame_from_schema_hash(
+        _KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH,
+        (
+            _kagemusha_norito_field((1).to_bytes(2, "little"))
+            + _kagemusha_norito_field(_kagemusha_norito_length(1) + b"\xff")
+            + _kagemusha_norito_field(_kagemusha_verifier_key_commitment(init_verifier_key))
+            + _kagemusha_norito_field(
+                _kagemusha_norito_byte_vec(circuit_id_bytes + bytes([0xAF]) * 64),
+            )
+        ),
+        _TEST_NORITO_COMPACT_LEN_FLAG,
+    )
+    with pytest.raises(ValueError, match="lineage_proving_key_archive"):
+        kagemusha.kagemusha_recursive_spend_lineage_key_artifacts_for_init(
+            128,
+            kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+            init_verifier_key,
+            invalid_utf8_circuit_archive,
         )
     with pytest.raises(ValueError, match="lineage_proving_key_archive"):
         kagemusha.kagemusha_recursive_spend_lineage_key_artifacts_for_init(

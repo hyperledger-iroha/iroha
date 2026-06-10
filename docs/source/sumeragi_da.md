@@ -56,6 +56,9 @@ deferral bookkeeping as terminal. Inbound duplicate `DELIVER` handling follows
 the same rule: duplicate delivery frames for partial raw-delivered sessions may
 still record valid bundled READY signatures, drive READY/repair bookkeeping,
 and must not clear deferral state early.
+Malformed live sessions with `total_chunks = 0` are rejected as invalid payload
+state by the receiver-side `DELIVER` gate, including when DA mode allows
+locally-authoritative missing chunk bytes.
 
 Pending-block validation priority uses the same exact-payload boundary. A live
 RBC session or retained RBC status summary may elevate validation as
@@ -85,18 +88,37 @@ The periodic RBC repair loop follows the same boundary when re-attempting local
 local READY after a roster becomes authoritative, instead of waiting for the raw
 DELIVER marker to become useful on its own.
 
+Before local `READY`/`DELIVER` signing or stalled-session rebroadcast accounting
+treats a malformed live chunk shape as terminal, the node first tries to hydrate
+the session from authoritative local payload bytes. Exact local payloads can
+rebuild zero-total metadata into the deterministic positive chunk layout and
+recount over-counted `received_chunks`; sessions that cannot be repaired remain
+deferred and repair-visible instead of signing from malformed counters.
+
 Reschedule availability gates use the same verified complete-delivery boundary,
 so a `delivered=true` session with a READY quorum but mismatched complete bytes
 remains availability-unresolved until repair verifies the advertised payload or
-the configured availability timeout releases the gate.
+the configured availability timeout releases the gate. Invalid chunk shapes
+(`total_chunks == 0` or `received_chunks > total_chunks`) also remain
+availability-unresolved before timeout, even when READY quorum is present.
 
 Committed-block RBC cleanup also waits for verified complete delivery before
 draining runtime session state. A raw delivered marker with missing or
 mismatched chunks remains retained after commit so local repair and persisted
 status can converge; only exact delivered payload evidence is settled cleanup
-state. The same rule applies to committed-tip repair scheduling: retained
-raw-delivered sessions at the current tip remain repair-active, while verified
-complete delivered sessions are idle.
+state. Stale-view pruning uses the same boundary and will not purge
+raw-delivered sessions with incomplete chunks even if the block payload is
+already locally available. The same rule applies to committed-tip repair
+scheduling: retained raw-delivered sessions at the current tip remain
+repair-active, while verified complete delivered sessions are idle. Session TTL
+cleanup still ages out retained status summaries and persisted snapshots once
+they become stale, even when committed cleanup has already removed the live
+runtime session. RBC roster refresh also clears stale READY/DELIVER deferral
+bookkeeping whenever it resets READY signatures for a changed roster, so old
+retry state cannot leak across commit-topology changes. Local DELIVER emission
+also rejects complete chunk sets with mismatched chunk roots before arming
+missing-payload retry state, and terminal invalidation clears pending
+READY/DELIVER deferrals together with pending RBC messages.
 
 Invalid RBC sessions remain available through detailed status surfaces, but they
 do not contribute to operator backlog counters or lane/dataspace backlog gauges;
@@ -111,15 +133,25 @@ the invalid/mismatch counters instead of treated as live missing-chunk work.
   `view`, `block_hash`, raw `delivered`, derived `complete_delivery`,
   `recovered`, `invalid`, `lane_backlog`, `dataspace_backlog`) fetched from
   `/v1/sumeragi/rbc/sessions`. `complete_delivery` is false for invalid,
-  zero-chunk, and chunk-incomplete summaries even when raw `delivered` is true.
+  zero-chunk, over-counted, and chunk-incomplete summaries even when raw
+  `delivered` is true.
 - Per-height/view delivered probe from
   `/v1/sumeragi/rbc/delivered/{height}/{view}`. Its `delivered=true` result
   requires a non-invalid, positive, count-complete chunk summary; invalid,
-  zero-chunk, or chunk-incomplete summaries remain visible with
+  zero-chunk, over-counted, or chunk-incomplete summaries remain visible with
   `present=true` and `delivered=false`.
+- Receiver-side RBC DELIVER acceptance applies the same fail-closed shape rule
+  to live sessions: after READY quorum is satisfied, `total_chunks == 0` or
+  `received_chunks > total_chunks` is invalid payload evidence, including when
+  local DA policy otherwise allows missing chunks.
 - Prometheus counters per peer: `sumeragi_rbc_payload_bytes_delivered_total`,
   `sumeragi_rbc_deliver_broadcasts_total`, and
-  `sumeragi_rbc_ready_broadcasts_total` obtained from `/metrics`.
+  `sumeragi_rbc_ready_broadcasts_total` obtained from `/metrics`. Delivered
+  payload-byte telemetry may use authoritative local payload bytes for
+  incomplete but valid raw-delivered sessions, but malformed zero-total and
+  over-counted raw-delivered sessions must first hydrate into a positive,
+  count-complete shape before payload bytes or local-DELIVER accounting can be
+  recorded from them.
 - Per-lane/dataspace backlog gauges scraped from Prometheus:
   `sumeragi_rbc_lane_{tx_count,total_chunks,pending_chunks,bytes_total}` labeled by
   `lane_id` and `sumeragi_rbc_dataspace_{tx_count,total_chunks,pending_chunks,bytes_total}`
@@ -233,6 +265,15 @@ alert when real runs drift beyond these ceilings:
 
 Nightly CI consumes the same JSON summaries and renders the Markdown report so
 dashboards can track historical compliance with these budgets.
+
+Malformed live RBC chunk counters remain operator-visible. Sessions with
+`total_chunks == 0` or `received_chunks > total_chunks` are not treated as
+complete delivery, even when a local block payload is available. Maintenance
+paths first try to hydrate the session from canonical local payload bytes.
+Zero-total metadata is rebuilt from the deterministic positive chunk layout when
+that exact local payload is available; if the counter shape remains malformed,
+READY/DELIVER emission stays deferred and generic plus lane/dataspace backlog
+snapshots keep trusted missing pressure visible for repair diagnostics.
 
 .. mdinclude:: generated/sumeragi_da_report.md
 

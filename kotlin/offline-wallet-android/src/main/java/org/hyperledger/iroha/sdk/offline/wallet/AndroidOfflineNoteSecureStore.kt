@@ -123,12 +123,6 @@ class AndroidOfflineNoteSecureStore @JvmOverloads constructor(
     private fun decrypt(envelope: String): ByteArray {
         require(envelope.startsWith(VALUE_PREFIX)) { "unknown Offline Note wallet note envelope" }
         val parts = envelope.removePrefix(VALUE_PREFIX).split(':')
-        if (parts.size == 2) {
-            require(parts[0].toLongOrNull() == null) {
-                "invalid Offline Note wallet note envelope"
-            }
-            return decryptWithKeyAlias(keyAlias, parts[0], parts[1])
-        }
         require(parts.size == 3) { "invalid Offline Note wallet note envelope" }
         val revision = parts[0].toLongOrNull()
             ?: throw IllegalArgumentException("invalid Offline Note wallet note revision")

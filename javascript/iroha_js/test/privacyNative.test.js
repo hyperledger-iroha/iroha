@@ -800,6 +800,82 @@ test("privacy native wrappers return opaque archive bytes", () => {
   });
 });
 
+test("privacyProofRequestV1 clears component copies after native dispatch", () => {
+  const publicInputs = Buffer.from("public-inputs");
+  const witness = Uint8Array.from(Buffer.from("secret-witness"));
+  const proofBacking = Uint8Array.from([
+    0x99,
+    ...Buffer.from("proof-bytes"),
+    0x88,
+  ]);
+  const proof = new DataView(proofBacking.buffer, 1, "proof-bytes".length);
+  const captured = [];
+
+  withNativeBinding(
+    completePrivacyBinding({
+      privacyProofRequestV1(_algorithmId, _entrypoint, _vkRef, publicCopy, witnessCopy, proofCopy) {
+        captured.push([publicCopy, witnessCopy, proofCopy]);
+        assert.notEqual(publicCopy, publicInputs);
+        assert.notEqual(witnessCopy, witness);
+        assert.notEqual(proofCopy.buffer, proofBacking.buffer);
+        assert.deepEqual(Buffer.from(publicCopy), publicInputs);
+        assert.deepEqual(Buffer.from(witnessCopy), Buffer.from(witness));
+        assert.deepEqual(Buffer.from(proofCopy), Buffer.from("proof-bytes"));
+        return Uint8Array.from(PRIVACY_REQUEST_ARCHIVE);
+      },
+    }),
+    () => {
+      assert.deepEqual(
+        privacyProofRequestV1({
+          algorithmId: "verange-transparent-range-v1",
+          entrypoint: "buildVeRangeProofV1",
+          vkRef: "bulletproofs:verange_transparent_range_v1",
+          publicInputs,
+          witness,
+          proof,
+        }),
+        PRIVACY_REQUEST_ARCHIVE,
+      );
+    },
+  );
+
+  withNativeBinding(
+    completePrivacyBinding({
+      privacyProofRequestV1(_algorithmId, _entrypoint, _vkRef, publicCopy, witnessCopy, proofCopy) {
+        captured.push([publicCopy, witnessCopy, proofCopy]);
+        throw new Error("native proof request failure with private component bytes");
+      },
+    }),
+    () => {
+      const error = captureThrown(() =>
+        privacyProofRequestV1({
+          algorithmId: "verange-transparent-range-v1",
+          entrypoint: "buildVeRangeProofV1",
+          vkRef: "bulletproofs:verange_transparent_range_v1",
+          publicInputs,
+          witness,
+          proof,
+        }),
+      );
+      assert.match(error.message, /native privacyProofRequestV1 failed/);
+      assert.equal(String(error).includes("private component bytes"), false);
+    },
+  );
+
+  assert.equal(captured.length, 2);
+  for (const copies of captured) {
+    for (const copy of copies) {
+      assert.equal(copy.every((value) => value === 0), true);
+    }
+  }
+  assert.deepEqual(publicInputs, Buffer.from("public-inputs"));
+  assert.deepEqual(Buffer.from(witness), Buffer.from("secret-witness"));
+  assert.deepEqual(
+    Buffer.from(proofBacking.subarray(1, 1 + "proof-bytes".length)),
+    Buffer.from("proof-bytes"),
+  );
+});
+
 test("privacyProofRequestV1 validates text and byte fields before native dispatch", () => {
   withNativeBinding(
     completePrivacyBinding({

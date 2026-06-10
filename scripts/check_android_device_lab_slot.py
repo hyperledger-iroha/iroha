@@ -3645,11 +3645,38 @@ def build_summary(
             "required_device_families": list(KAGEMUSHA_STANDARD_DEVICE_FAMILIES),
             "covered_device_families": covered,
             "missing_device_families": missing,
+            "duplicate_bindings": kagemusha_duplicate_matrix_bindings(reports),
             "trusted_signer_public_key_sha256": sorted(
                 (trusted_signer_public_keys or {}).keys()
             ),
         }
     return summary
+
+
+def kagemusha_duplicate_matrix_bindings(reports: list[dict]) -> dict[str, list[dict[str, Any]]]:
+    """Return duplicated physical-device bindings without exposing raw values."""
+
+    duplicates: dict[str, list[dict[str, Any]]] = {}
+    for field in ("device_fingerprint_sha256", "attestation_challenge_sha256"):
+        seen: dict[str, list[str]] = {}
+        for report in reports:
+            if report.get("status") != "ok":
+                continue
+            slot = report.get("slot")
+            value = report.get("kagemusha", {}).get(field)
+            if not isinstance(slot, str) or not isinstance(value, str) or not value:
+                continue
+            seen.setdefault(value, []).append(slot)
+        for value, slots in sorted(seen.items()):
+            if len(slots) <= 1:
+                continue
+            duplicates.setdefault(field, []).append(
+                {
+                    "slots": sorted(slots),
+                    "value_sha256": value,
+                }
+            )
+    return duplicates
 
 
 def validate_summary_output_path(path: Path, label: str) -> list[str]:
@@ -4009,6 +4036,16 @@ def main(argv: list[str] | None = None) -> int:
                 + ", ".join(missing),
                 file=sys.stderr,
             )
+    if require_kagemusha:
+        duplicate_bindings = kagemusha_duplicate_matrix_bindings(reports)
+        for field, entries in sorted(duplicate_bindings.items()):
+            for entry in entries:
+                failures += 1
+                print(
+                    "[device-lab] duplicate Kagemusha "
+                    f"{field} across slots: {', '.join(entry['slots'])}",
+                    file=sys.stderr,
+                )
 
     summary = build_summary(
         root,

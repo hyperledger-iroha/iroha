@@ -148,6 +148,38 @@ public final class AndroidOfflineNoteSecureStoreInstrumentedTest {
   }
 
   @Test
+  public void testTwoPartCiphertextEnvelopeCannotDecrypt() throws Exception {
+    final Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+    final AndroidOfflineNoteSecureStore store =
+        new AndroidOfflineNoteSecureStore(context, PREFS, KEY_ALIAS);
+    store.clear();
+
+    final OfflineNoteWalletNote note = sourceWalletNote(loadFixture());
+    store.upsert(note);
+    final SharedPreferences preferences = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+    final String noteKey = "note." + note.noteCommitmentHex();
+    final String encrypted = preferences.getString(noteKey, null);
+    assertTrue(encrypted != null && encrypted.startsWith("enc:1:"));
+    final String[] parts = encrypted.split(":", -1);
+    if (parts.length != 4) {
+      throw new IllegalArgumentException("expected encrypted envelope");
+    }
+    if (!preferences.edit().putString(noteKey, "enc:" + parts[2] + ":" + parts[3]).commit()) {
+      throw new IllegalStateException("failed to tamper ciphertext envelope");
+    }
+
+    try {
+      store.listNotes();
+      fail("two-part Offline Note ciphertext envelope should not decrypt");
+    } catch (final Exception expected) {
+      assertTrue(expected instanceof IllegalArgumentException);
+      assertTrue(expected.getMessage().contains("invalid Offline Note wallet note envelope"));
+    } finally {
+      store.clear();
+    }
+  }
+
+  @Test
   public void testNonNumericCiphertextRevisionCannotDecrypt() throws Exception {
     final Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
     final AndroidOfflineNoteSecureStore store =

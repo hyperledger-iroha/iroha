@@ -752,6 +752,63 @@ def _normalise_output_path(
     return slot_path / relative, relative
 
 
+def _attestation_certificate_chain_bytes_for_harness(
+    slot_path: Path,
+    metadata: dict[str, Any],
+    errors: list[str],
+) -> bytes | None:
+    chain_relative = metadata.get("attestation_certificate_chain_path")
+    if not isinstance(chain_relative, str) or not chain_relative.strip():
+        return None
+    relative = device_lab._normalise_safe_relative_path(
+        chain_relative.strip(),
+        errors,
+        "slot.json attestation_certificate_chain_path",
+    )
+    if relative is None:
+        return None
+    if relative.split("/", 1)[0] != "attestation":
+        errors.append(
+            "slot.json attestation_certificate_chain_path must stay under attestation/"
+        )
+        return None
+    artifact_path, artifact_stat, artifact_errors = _validate_slot_artifact_for_digest(
+        slot_path,
+        relative,
+    )
+    if artifact_errors:
+        errors.extend(artifact_errors)
+        return None
+    assert artifact_path is not None and artifact_stat is not None
+    chain_bytes, read_errors = _read_validated_slot_artifact_bytes(
+        artifact_path,
+        artifact_stat,
+        relative,
+    )
+    if read_errors:
+        errors.extend(read_errors)
+        return None
+    return chain_bytes
+
+
+def _preflight_attestation_harness_result(
+    slot_path: Path,
+    metadata: dict[str, Any],
+    errors: list[str],
+) -> None:
+    chain_bytes = _attestation_certificate_chain_bytes_for_harness(
+        slot_path,
+        metadata,
+        errors,
+    )
+    device_lab.validate_attestation_harness_result(
+        slot_path,
+        metadata,
+        errors,
+        attestation_certificate_chain_bytes=chain_bytes,
+    )
+
+
 def _artifact_digests(
     slot_path: Path,
     errors: list[str],
@@ -766,6 +823,7 @@ def _artifact_digests(
     device_lab.validate_required_kagemusha_slot_artifact_shapes(slot_path, errors)
     if metadata is not None:
         device_lab.validate_attestation_report(slot_path, metadata, errors)
+        _preflight_attestation_harness_result(slot_path, metadata, errors)
     if len(errors) != initial_error_count:
         return None
     for relative in device_lab._required_signed_evidence_digest_paths(

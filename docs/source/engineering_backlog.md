@@ -2879,7 +2879,9 @@ redistributable schemas, and official trust/revocation bundles.
 	  separately from explicit null source objects in both direct preflight and
 	  archived readiness replay,
 	  the manifest must explicitly record `blocked_schema_sources` as an array even
-  when no reviewed restricted source candidates are present. The aggregate
+  when no reviewed restricted source candidates are present, and blocked-source
+  records must match a current fixture/schema gap or, with a profile catalog, a
+  current profile-version gap. The aggregate
   readiness gate replays the same repository-coordinate checks and
   rejects secret-looking repository coordinates before output for archived XSD
   summaries, preventing public mirrors with embedded
@@ -3846,13 +3848,11 @@ redistributable schemas, and official trust/revocation bundles.
     deferring committed-block catch-up until after VRF metadata handling,
     epoch-record hydration before reveal validation, stale pending-seal
     retention, and external Torii VRF metadata gossip. The focused core units
-    for those paths are green. The remaining integration blocker is now a
-    separate four-peer NPoS/DA liveness stall: the late reveal is accepted in
-    Sumeragi status, but the network repeatedly stalls at height 4 with RBC
-    READY/DELIVER data waiting on missing INIT/chunk state before the pending
-    VRF seal can be committed. Fix that h4 DA/RBC stall, then rerun
+    for those paths are green. The four-peer NPoS/DA late-reveal persistence
+    gate was rerun on 2026-06-10 after the DA/RBC cleanup hardening and passed:
     `sumeragi_randomness::npos_late_vrf_reveal_clears_penalty_and_preserves_seed`
-    as the final persistence gate.
+    advanced past the earlier height-4 READY/DELIVER stall, recorded the late
+    reveal, and finalized the epoch with clean peer shutdown.
   - Focused commit, block-sync, VRF, QC-validation, roster-selection, Torii VRF
     OpenAPI/parser, and data-model consensus roundtrip tests are green as of
     2026-05-02 with `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-verify`.

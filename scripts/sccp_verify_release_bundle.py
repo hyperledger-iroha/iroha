@@ -3502,6 +3502,7 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "adapter verifier commitment helper must reject opaque nested FastPQ proof bytes",
             "adapter verifier commitment helper must verify canonical nested FastPQ proof bytes",
             "adapter verifier commitment helper must reject stale adapter transcript hashes",
+            "deployment matcher must reject replayed adapter verifier key hashes",
         ),
     ),
     (

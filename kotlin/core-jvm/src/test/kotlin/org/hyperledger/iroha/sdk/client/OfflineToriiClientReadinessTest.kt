@@ -14,10 +14,6 @@ class OfflineToriiClientReadinessTest {
         val executor = CapturingExecutor(
             """
             {
-              "offline_note": true,
-              "offline_one_use_keys": true,
-              "offline_fountain_qr": true,
-              "offline_sync_optional": true,
               "offline_telemetry": true,
               "offline_kagemusha_abi7": true,
               "offline_kagemusha_abi7_mode": "recursive_compact_v1",
@@ -38,11 +34,11 @@ class OfflineToriiClientReadinessTest {
         assertEquals("/v1/offline/readiness", executor.lastRequest.uri.path)
         assertEquals("", executor.lastBody)
         assertEquals("application/json", firstHeader(executor.lastRequest, "Accept"))
-        assertEquals(true, readiness.offlineNote)
-        assertEquals(true, readiness.offlineOneUseKeys)
+        assertEquals(false, readiness.offlineNote)
+        assertEquals(false, readiness.offlineOneUseKeys)
         assertEquals(false, readiness.offlineRecursiveNoteProof)
-        assertEquals(true, readiness.offlineFountainQr)
-        assertEquals(true, readiness.offlineSyncOptional)
+        assertEquals(false, readiness.offlineFountainQr)
+        assertEquals(false, readiness.offlineSyncOptional)
         assertEquals(true, readiness.offlineTelemetry)
         assertEquals(true, readiness.offlineKagemushaAbi7)
         assertEquals("recursive_compact_v1", readiness.offlineKagemushaAbi7Mode)

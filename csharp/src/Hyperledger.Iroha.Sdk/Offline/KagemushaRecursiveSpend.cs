@@ -222,6 +222,22 @@ public static class KagemushaRecursiveSpendNative
     private static readonly byte[] KagemushaZk1TlvCid1 = Encoding.ASCII.GetBytes("CID1");
     private static readonly byte[] KagemushaZk1TlvIpaK = Encoding.ASCII.GetBytes("IPAK");
     private static readonly byte[] KagemushaZk1TlvH2Vk = Encoding.ASCII.GetBytes("H2VK");
+    private const byte KagemushaNoritoCompactLenFlag = 0x02;
+    private const byte KagemushaNoritoPackedStructFlag = 0x04;
+    private const byte PrivacyNoritoFieldBitsetFlag = 0x20;
+    private const ushort KagemushaLineageProvingKeyArchiveVersionV1 = 1;
+    private static readonly byte[] KagemushaLineageProvingKeyArchiveSchemaHash = new byte[]
+    {
+        0xc8, 0x84, 0x89, 0x61, 0x8a, 0x01, 0x2c, 0x28,
+        0x3f, 0xf3, 0xbb, 0x2e, 0xba, 0xbc, 0x77, 0x75,
+    };
+    private static readonly Encoding StrictUtf8 = new UTF8Encoding(false, true);
+
+    private readonly record struct LineageProvingKeyArchive(
+        ushort Version,
+        string CircuitFamily,
+        byte[] VerifierKeyCommitment,
+        byte[] ProvingKey);
 
     public static bool IsAvailable()
     {
@@ -640,6 +656,16 @@ public static class KagemushaRecursiveSpendNative
         {
             throw new ArgumentException("lineage_proving_key_archive");
         }
+        var archive = DecodeLineageProvingKeyArchivePayload(
+            archivePayload,
+            lineageProvingKeyArchive[39]);
+        if (archive.Version != KagemushaLineageProvingKeyArchiveVersionV1
+            || archive.CircuitFamily != proofCircuitId
+            || !archive.VerifierKeyCommitment.AsSpan().SequenceEqual(verifierKeyCommitment)
+            || archive.ProvingKey.Length == 0)
+        {
+            throw new ArgumentException("lineage_proving_key_archive");
+        }
     }
 
     private static string LineageVerifierKeyEnvelopeCircuitId(byte[] lineageVerifierKey)
@@ -731,16 +757,156 @@ public static class KagemushaRecursiveSpendNative
         {
             throw new ArgumentException("lineage_proving_key_archive");
         }
+        if (!lineageProvingKeyArchive.AsSpan(6, 16)
+                .SequenceEqual(KagemushaLineageProvingKeyArchiveSchemaHash)
+            || (lineageProvingKeyArchive[39] & KagemushaNoritoPackedStructFlag) != 0
+            || (lineageProvingKeyArchive[39] & PrivacyNoritoFieldBitsetFlag) != 0)
+        {
+            throw new ArgumentException("lineage_proving_key_archive");
+        }
 
         var payloadLength = BinaryPrimitives.ReadUInt64LittleEndian(
             lineageProvingKeyArchive.AsSpan(23, 8));
-        if (payloadLength == 0 || payloadLength > int.MaxValue)
+        if (payloadLength == 0
+            || payloadLength > int.MaxValue
+            || payloadLength > (ulong)(lineageProvingKeyArchive.Length - 40))
         {
             throw new ArgumentException("lineage_proving_key_archive");
         }
 
         var payloadOffset = lineageProvingKeyArchive.Length - (int)payloadLength;
         return lineageProvingKeyArchive.AsSpan(payloadOffset, (int)payloadLength).ToArray();
+    }
+
+    private static LineageProvingKeyArchive DecodeLineageProvingKeyArchivePayload(
+        byte[] payload,
+        byte flags)
+    {
+        try
+        {
+            var offset = 0;
+            var versionPayload = ReadNoritoField(payload, ref offset, flags);
+            if (versionPayload.Length != 2)
+            {
+                throw new ArgumentException("lineage_proving_key_archive");
+            }
+            var version = BinaryPrimitives.ReadUInt16LittleEndian(versionPayload);
+
+            var circuitFamily = DecodeNoritoString(
+                ReadNoritoField(payload, ref offset, flags),
+                flags);
+
+            var verifierKeyCommitment = ReadNoritoField(payload, ref offset, flags);
+            if (verifierKeyCommitment.Length != 32)
+            {
+                throw new ArgumentException("lineage_proving_key_archive");
+            }
+
+            var provingKey = DecodeNoritoByteVec(
+                ReadNoritoField(payload, ref offset, flags));
+            if (offset != payload.Length)
+            {
+                throw new ArgumentException("lineage_proving_key_archive");
+            }
+
+            return new LineageProvingKeyArchive(
+                version,
+                circuitFamily,
+                verifierKeyCommitment,
+                provingKey);
+        }
+        catch (ArgumentException)
+        {
+            throw new ArgumentException("lineage_proving_key_archive");
+        }
+    }
+
+    private static byte[] ReadNoritoField(byte[] buffer, ref int offset, byte flags)
+    {
+        var length = ReadNoritoLength(buffer, ref offset, flags);
+        if (length > buffer.Length - offset)
+        {
+            throw new ArgumentException("lineage_proving_key_archive");
+        }
+        var field = buffer.AsSpan(offset, length).ToArray();
+        offset += length;
+        return field;
+    }
+
+    private static int ReadNoritoLength(byte[] buffer, ref int offset, byte flags)
+    {
+        if ((flags & KagemushaNoritoCompactLenFlag) == 0)
+        {
+            if (offset + 8 > buffer.Length)
+            {
+                throw new ArgumentException("lineage_proving_key_archive");
+            }
+            var value = BinaryPrimitives.ReadUInt64LittleEndian(buffer.AsSpan(offset, 8));
+            if (value > int.MaxValue)
+            {
+                throw new ArgumentException("lineage_proving_key_archive");
+            }
+            offset += 8;
+            return (int)value;
+        }
+
+        ulong value = 0;
+        var shift = 0;
+        var startOffset = offset;
+        for (var index = 0; index < 10; index++)
+        {
+            if (offset >= buffer.Length)
+            {
+                throw new ArgumentException("lineage_proving_key_archive");
+            }
+            var current = buffer[offset++];
+            var currentValue = current & 0x7f;
+            if (shift >= 63 && currentValue > 1)
+            {
+                throw new ArgumentException("lineage_proving_key_archive");
+            }
+            value |= (ulong)currentValue << shift;
+            if ((current & 0x80) == 0)
+            {
+                var encodedLength = offset - startOffset;
+                if (encodedLength > 1 && value < (1UL << (7 * (encodedLength - 1))))
+                {
+                    throw new ArgumentException("lineage_proving_key_archive");
+                }
+                if (value > int.MaxValue)
+                {
+                    throw new ArgumentException("lineage_proving_key_archive");
+                }
+                return (int)value;
+            }
+            shift += 7;
+        }
+        throw new ArgumentException("lineage_proving_key_archive");
+    }
+
+    private static string DecodeNoritoString(byte[] payload, byte flags)
+    {
+        var offset = 0;
+        var length = ReadNoritoLength(payload, ref offset, flags);
+        if (length != payload.Length - offset)
+        {
+            throw new ArgumentException("lineage_proving_key_archive");
+        }
+        return StrictUtf8.GetString(payload, offset, length);
+    }
+
+    private static byte[] DecodeNoritoByteVec(byte[] payload)
+    {
+        if (payload.Length < 8)
+        {
+            throw new ArgumentException("lineage_proving_key_archive");
+        }
+        var length = BinaryPrimitives.ReadUInt64LittleEndian(payload.AsSpan(0, 8));
+        if (length > int.MaxValue || length != (ulong)(payload.Length - 8))
+        {
+            throw new ArgumentException("lineage_proving_key_archive");
+        }
+        return payload.AsSpan(8, (int)length).ToArray();
     }
 
     private static byte[] VerifyingKeyCommitment(

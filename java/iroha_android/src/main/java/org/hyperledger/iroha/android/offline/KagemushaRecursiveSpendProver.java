@@ -1,6 +1,9 @@
 package org.hyperledger.iroha.android.offline;
 
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
@@ -53,6 +56,17 @@ public final class KagemushaRecursiveSpendProver {
       "IPAK".getBytes(StandardCharsets.US_ASCII);
   private static final byte[] KAGEMUSHA_ZK1_TLV_H2VK =
       "H2VK".getBytes(StandardCharsets.US_ASCII);
+  private static final int KAGEMUSHA_NORITO_COMPACT_LEN_FLAG = 0x02;
+  private static final int KAGEMUSHA_NORITO_PACKED_STRUCT_FLAG = 0x04;
+  private static final int PRIVACY_NORITO_FIELD_BITSET_FLAG = 0x20;
+  private static final int KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_VERSION_V1 = 1;
+  private static final byte[] KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH =
+      new byte[] {
+        (byte) 0xC8, (byte) 0x84, (byte) 0x89, 0x61,
+        (byte) 0x8A, 0x01, 0x2C, 0x28,
+        0x3F, (byte) 0xF3, (byte) 0xBB, 0x2E,
+        (byte) 0xBA, (byte) 0xBC, 0x77, 0x75
+      };
   private static final boolean NATIVE_AVAILABLE = loadLibrary();
 
   public enum Mode {
@@ -199,6 +213,15 @@ public final class KagemushaRecursiveSpendProver {
         || indexOfSlice(archivePayload, verifierKeyCommitment) < 0) {
       throw new IllegalArgumentException("lineage_proving_key_archive");
     }
+    final LineageProvingKeyArchive archive =
+        decodeLineageProvingKeyArchivePayload(
+            archivePayload, lineageProvingKeyArchive[39] & 0xFF);
+    if (archive.version != KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_VERSION_V1
+        || !proofCircuitId.equals(archive.circuitFamily)
+        || !Arrays.equals(archive.verifierKeyCommitment, verifierKeyCommitment)
+        || archive.provingKey.length == 0) {
+      throw new IllegalArgumentException("lineage_proving_key_archive");
+    }
   }
 
   private static String lineageVerifierKeyEnvelopeCircuitId(final byte[] lineageVerifierKey) {
@@ -258,12 +281,140 @@ public final class KagemushaRecursiveSpendProver {
             lineageProvingKeyArchive)) {
       throw new IllegalArgumentException("lineage_proving_key_archive");
     }
+    if (!Arrays.equals(
+            Arrays.copyOfRange(lineageProvingKeyArchive, 6, 22),
+            KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH)
+        || (lineageProvingKeyArchive[39] & KAGEMUSHA_NORITO_PACKED_STRUCT_FLAG) != 0
+        || (lineageProvingKeyArchive[39] & PRIVACY_NORITO_FIELD_BITSET_FLAG) != 0) {
+      throw new IllegalArgumentException("lineage_proving_key_archive");
+    }
     final long payloadLength = readLongLittleEndian(lineageProvingKeyArchive, 23);
     if (payloadLength <= 0 || payloadLength > Integer.MAX_VALUE) {
       throw new IllegalArgumentException("lineage_proving_key_archive");
     }
     final int payloadOffset = lineageProvingKeyArchive.length - (int) payloadLength;
     return Arrays.copyOfRange(lineageProvingKeyArchive, payloadOffset, lineageProvingKeyArchive.length);
+  }
+
+  private static LineageProvingKeyArchive decodeLineageProvingKeyArchivePayload(
+      final byte[] payload, final int flags) {
+    int offset = 0;
+    NoritoField field = readNoritoField(payload, offset, flags);
+    if (field.payload.length != 2) {
+      throw new IllegalArgumentException("lineage_proving_key_archive");
+    }
+    final int version = readUnsignedShortLittleEndian(field.payload, 0);
+    offset = field.offset;
+
+    field = readNoritoField(payload, offset, flags);
+    final String circuitFamily = decodeNoritoString(field.payload, flags);
+    offset = field.offset;
+
+    field = readNoritoField(payload, offset, flags);
+    final byte[] verifierKeyCommitment = field.payload;
+    if (verifierKeyCommitment.length != 32) {
+      throw new IllegalArgumentException("lineage_proving_key_archive");
+    }
+    offset = field.offset;
+
+    field = readNoritoField(payload, offset, flags);
+    final byte[] provingKey = decodeNoritoByteVec(field.payload);
+    offset = field.offset;
+    if (offset != payload.length) {
+      throw new IllegalArgumentException("lineage_proving_key_archive");
+    }
+    return new LineageProvingKeyArchive(
+        version, circuitFamily, verifierKeyCommitment, provingKey);
+  }
+
+  private static NoritoField readNoritoField(
+      final byte[] buffer, final int offset, final int flags) {
+    final NoritoLength length = readNoritoLength(buffer, offset, flags);
+    final long payloadEnd = (long) length.offset + length.value;
+    if (payloadEnd > buffer.length) {
+      throw new IllegalArgumentException("lineage_proving_key_archive");
+    }
+    return new NoritoField(
+        Arrays.copyOfRange(buffer, length.offset, (int) payloadEnd),
+        (int) payloadEnd);
+  }
+
+  private static NoritoLength readNoritoLength(
+      final byte[] buffer, final int offset, final int flags) {
+    if (offset < 0) {
+      throw new IllegalArgumentException("lineage_proving_key_archive");
+    }
+    if ((flags & KAGEMUSHA_NORITO_COMPACT_LEN_FLAG) == 0) {
+      if (offset + 8 > buffer.length) {
+        throw new IllegalArgumentException("lineage_proving_key_archive");
+      }
+      final long value = readLongLittleEndian(buffer, offset);
+      if (value < 0 || value > Integer.MAX_VALUE || value > buffer.length) {
+        throw new IllegalArgumentException("lineage_proving_key_archive");
+      }
+      return new NoritoLength((int) value, offset + 8);
+    }
+
+    long value = 0L;
+    int shift = 0;
+    int cursor = offset;
+    for (int index = 0; index < 10; index++) {
+      if (cursor >= buffer.length) {
+        throw new IllegalArgumentException("lineage_proving_key_archive");
+      }
+      final int valueByte = buffer[cursor] & 0xFF;
+      cursor += 1;
+      final long chunk = valueByte & 0x7FL;
+      if (shift >= 63 && chunk != 0L) {
+        throw new IllegalArgumentException("lineage_proving_key_archive");
+      }
+      value |= chunk << shift;
+      if ((valueByte & 0x80) == 0) {
+        final int encodedLength = cursor - offset;
+        if (encodedLength > 5) {
+          throw new IllegalArgumentException("lineage_proving_key_archive");
+        }
+        if (encodedLength > 1 && value < (1L << (7 * (encodedLength - 1)))) {
+          throw new IllegalArgumentException("lineage_proving_key_archive");
+        }
+        if (value > Integer.MAX_VALUE || value > buffer.length) {
+          throw new IllegalArgumentException("lineage_proving_key_archive");
+        }
+        return new NoritoLength((int) value, cursor);
+      }
+      shift += 7;
+    }
+    throw new IllegalArgumentException("lineage_proving_key_archive");
+  }
+
+  private static String decodeNoritoString(final byte[] payload, final int flags) {
+    final NoritoLength length = readNoritoLength(payload, 0, flags);
+    final int end = length.offset + length.value;
+    if (end != payload.length) {
+      throw new IllegalArgumentException("lineage_proving_key_archive");
+    }
+    try {
+      return StandardCharsets.UTF_8
+          .newDecoder()
+          .onMalformedInput(CodingErrorAction.REPORT)
+          .onUnmappableCharacter(CodingErrorAction.REPORT)
+          .decode(ByteBuffer.wrap(payload, length.offset, length.value))
+          .toString();
+    } catch (final CharacterCodingException ex) {
+      throw new IllegalArgumentException("lineage_proving_key_archive", ex);
+    }
+  }
+
+  private static byte[] decodeNoritoByteVec(final byte[] payload) {
+    if (payload.length < 8) {
+      throw new IllegalArgumentException("lineage_proving_key_archive");
+    }
+    final long length = readLongLittleEndian(payload, 0);
+    final long end = 8L + length;
+    if (length < 0 || end != payload.length) {
+      throw new IllegalArgumentException("lineage_proving_key_archive");
+    }
+    return Arrays.copyOfRange(payload, 8, (int) end);
   }
 
   private static byte[] verifyingKeyCommitment(
@@ -324,6 +475,10 @@ public final class KagemushaRecursiveSpendProver {
         | ((bytes[offset + 3] & 0xFF) << 24);
   }
 
+  private static int readUnsignedShortLittleEndian(final byte[] bytes, final int offset) {
+    return (bytes[offset] & 0xFF) | ((bytes[offset + 1] & 0xFF) << 8);
+  }
+
   private static long readLongLittleEndian(final byte[] bytes, final int offset) {
     long value = 0L;
     for (int index = 0; index < 8; index++) {
@@ -338,6 +493,44 @@ public final class KagemushaRecursiveSpendProver {
       output[index] = (byte) ((value >>> ((7 - index) * 8)) & 0xFF);
     }
     return output;
+  }
+
+  private static final class LineageProvingKeyArchive {
+    private final int version;
+    private final String circuitFamily;
+    private final byte[] verifierKeyCommitment;
+    private final byte[] provingKey;
+
+    private LineageProvingKeyArchive(
+        final int version,
+        final String circuitFamily,
+        final byte[] verifierKeyCommitment,
+        final byte[] provingKey) {
+      this.version = version;
+      this.circuitFamily = circuitFamily;
+      this.verifierKeyCommitment = verifierKeyCommitment;
+      this.provingKey = provingKey;
+    }
+  }
+
+  private static final class NoritoField {
+    private final byte[] payload;
+    private final int offset;
+
+    private NoritoField(final byte[] payload, final int offset) {
+      this.payload = payload;
+      this.offset = offset;
+    }
+  }
+
+  private static final class NoritoLength {
+    private final int value;
+    private final int offset;
+
+    private NoritoLength(final int value, final int offset) {
+      this.value = value;
+      this.offset = offset;
+    }
   }
 
   public static LineageKeyArtifacts lineageKeyArtifacts(

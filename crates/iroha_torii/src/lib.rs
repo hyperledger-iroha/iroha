@@ -6124,45 +6124,8 @@ async fn handler_offline_note_readiness(
 ) -> Result<impl IntoResponse, Error> {
     let offline = &app.state.settlement.offline;
     let offline_kagemusha_abi7 = offline.kagemusha_enabled && !offline.kagemusha_force_legacy;
-    let verifier_key_id = json_object([
-        json_entry("backend", iroha_core::zk::ZK_BACKEND_HALO2_IPA),
-        json_entry("name", iroha_core::zk::OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID),
-    ]);
-    let schema_hash =
-        hex::encode(iroha_data_model::offline::offline_note_recursive_public_inputs_schema_hash());
     json_ok(json_object([
-        json_entry("offline_note", true),
-        json_entry("offline_one_use_keys", true),
-        json_entry("offline_recursive_note_proof", true),
-        json_entry(
-            "offline_recursive_note_proof_backend",
-            iroha_core::zk::ZK_BACKEND_HALO2_IPA,
-        ),
-        json_entry(
-            "offline_recursive_note_proof_circuit_id",
-            iroha_core::zk::OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID,
-        ),
-        json_entry(
-            "offline_recursive_note_proof_public_inputs_schema_hash",
-            schema_hash,
-        ),
-        json_entry(
-            "offline_recursive_note_proof_public_instance_columns",
-            iroha_core::zk::OFFLINE_NOTE_INSTANCE_COLUMNS as u64,
-        ),
-        json_entry(
-            "offline_recursive_note_proof_verifier_key_id",
-            verifier_key_id,
-        ),
-        json_entry("offline_fountain_qr", true),
-        json_entry("offline_sync_optional", true),
         json_entry("offline_telemetry", true),
-        json_entry("offline_bearer_cash_v1", true),
-        json_entry("offline_kagemusha_enabled", offline.kagemusha_enabled),
-        json_entry(
-            "offline_kagemusha_force_legacy",
-            offline.kagemusha_force_legacy,
-        ),
         json_entry("offline_kagemusha_abi7", offline_kagemusha_abi7),
         json_entry("offline_kagemusha_abi7_mode", "recursive_compact_v1"),
         json_entry("offline_kagemusha_abi7_bridge_abi_version", 7_u64),
@@ -6177,43 +6140,20 @@ async fn handler_offline_note_readiness(
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_offline_v2_note_readiness(
-    State(_app): State<SharedAppState>,
+    State(app): State<SharedAppState>,
 ) -> Result<impl IntoResponse, Error> {
-    const OFFLINE_NOTE_V2_RECURSIVE_CIRCUIT_ID: &str = "offline-note-v2-recursive-v1";
-    let verifier_key_id = json_object([
-        json_entry("backend", iroha_core::zk::ZK_BACKEND_HALO2_IPA),
-        json_entry("name", OFFLINE_NOTE_V2_RECURSIVE_CIRCUIT_ID),
-    ]);
-    let schema_hash = hex::encode(
-        iroha_data_model::offline::offline_note_v2_recursive_public_inputs_schema_hash(),
-    );
+    let offline = &app.state.settlement.offline;
+    let offline_kagemusha_abi7 = offline.kagemusha_enabled && !offline.kagemusha_force_legacy;
     json_ok(json_object([
-        json_entry("offline_note_v2", true),
-        json_entry("offline_one_use_keys", true),
-        json_entry("offline_recursive_note_proof", true),
-        json_entry(
-            "offline_recursive_note_proof_backend",
-            iroha_core::zk::ZK_BACKEND_HALO2_IPA,
-        ),
-        json_entry(
-            "offline_recursive_note_proof_circuit_id",
-            OFFLINE_NOTE_V2_RECURSIVE_CIRCUIT_ID,
-        ),
-        json_entry(
-            "offline_recursive_note_proof_public_inputs_schema_hash",
-            schema_hash,
-        ),
-        json_entry(
-            "offline_recursive_note_proof_public_instance_columns",
-            iroha_core::zk::OFFLINE_NOTE_INSTANCE_COLUMNS as u64,
-        ),
-        json_entry(
-            "offline_recursive_note_proof_verifier_key_id",
-            verifier_key_id,
-        ),
-        json_entry("offline_fountain_qr_v1", true),
-        json_entry("offline_sync_optional", true),
         json_entry("offline_telemetry", true),
+        json_entry("offline_kagemusha_abi7", offline_kagemusha_abi7),
+        json_entry("offline_kagemusha_abi7_mode", "recursive_compact_v1"),
+        json_entry("offline_kagemusha_abi7_bridge_abi_version", 7_u64),
+        json_entry(
+            "offline_kagemusha_abi7_circuit_id",
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1,
+        ),
+        json_entry("offline_kagemusha_abi7_artifacts", offline_kagemusha_abi7),
     ]))
 }
 
@@ -36876,16 +36816,8 @@ impl Torii {
                     get(handler_offline_v2_note_readiness),
                 )
                 .route(
-                    "/v1/offline/keys/refill",
-                    post(handler_offline_note_keys_refill),
-                )
-                .route(
                     "/v1/offline/v2/keys/refill",
                     post(handler_offline_v2_note_keys_refill),
-                )
-                .route(
-                    "/v1/offline/notes/issue",
-                    post(handler_offline_note_notes_issue),
                 )
                 .route(
                     "/v1/offline/v2/notes/issue",

@@ -4,7 +4,7 @@
 use core::sync::atomic::{AtomicU64, Ordering};
 use std::{
     collections::BTreeMap,
-    sync::{Mutex, OnceLock},
+    sync::{Mutex, MutexGuard, OnceLock},
 };
 
 /// Report for VRF penalties at a given epoch.
@@ -27,16 +27,28 @@ fn reports() -> &'static Mutex<BTreeMap<u64, VrfPenaltiesReport>> {
     REPORTS.get_or_init(|| Mutex::new(BTreeMap::new()))
 }
 
+fn lock_reports() -> MutexGuard<'static, BTreeMap<u64, VrfPenaltiesReport>> {
+    match reports().lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            iroha_logger::warn!(
+                "VRF penalties epoch-report mutex was poisoned; recovering operator report store"
+            );
+            poisoned.into_inner()
+        }
+    }
+}
+
 /// Insert or replace the report for an epoch.
 pub fn update(report: VrfPenaltiesReport) {
-    let mut g = reports().lock().unwrap();
+    let mut g = lock_reports();
     LAST_EPOCH.store(report.epoch, Ordering::Relaxed);
     g.insert(report.epoch, report);
 }
 
 /// Fetch the report for a specific epoch, if present.
 pub fn get(epoch: u64) -> Option<VrfPenaltiesReport> {
-    reports().lock().unwrap().get(&epoch).cloned()
+    lock_reports().get(&epoch).cloned()
 }
 
 /// Return the latest epoch index for which a report was stored (best-effort).
@@ -47,7 +59,7 @@ pub fn last_epoch_index() -> u64 {
 /// Clear all reports (tests only).
 #[cfg(test)]
 pub fn clear() {
-    reports().lock().unwrap().clear();
+    lock_reports().clear();
     LAST_EPOCH.store(0, Ordering::Relaxed);
 }
 
@@ -219,5 +231,46 @@ mod tests {
             Vec::new(),
             6,
         );
+    }
+
+    #[test]
+    fn vrf_penalties_report_recovers_poisoned_store() {
+        let _guard = report_test_guard();
+        clear();
+
+        let _ = std::panic::catch_unwind(|| {
+            let mut guard = reports()
+                .lock()
+                .expect("VRF penalties report lock should be held");
+            guard.insert(
+                2,
+                VrfPenaltiesReport {
+                    epoch: 2,
+                    committed_no_reveal: vec![0],
+                    no_participation: Vec::new(),
+                    roster_len: 1,
+                },
+            );
+            panic!("poison VRF penalties report store for recovery test");
+        });
+
+        update(VrfPenaltiesReport {
+            epoch: 13,
+            committed_no_reveal: vec![1, 4],
+            no_participation: vec![2],
+            roster_len: 5,
+        });
+        assert_eq!(last_epoch_index(), 13);
+        assert_report(
+            get(13).expect("post-poison report should be stored"),
+            13,
+            vec![1, 4],
+            vec![2],
+            5,
+        );
+
+        clear();
+        assert_eq!(last_epoch_index(), 0);
+        assert!(get(13).is_none());
     }
 }

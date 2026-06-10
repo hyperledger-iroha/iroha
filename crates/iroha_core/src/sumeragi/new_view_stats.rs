@@ -4,7 +4,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    sync::{Mutex, OnceLock},
+    sync::{Mutex, MutexGuard, OnceLock},
 };
 
 use iroha_data_model::prelude::PeerId;
@@ -24,9 +24,21 @@ fn global() -> &'static Mutex<Store> {
     GLOBAL.get_or_init(|| Mutex::new(Store::default()))
 }
 
+fn lock_store() -> MutexGuard<'static, Store> {
+    match global().lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            iroha_logger::warn!(
+                "NEW_VIEW stats mutex was poisoned; recovering operator receipt tracker"
+            );
+            poisoned.into_inner()
+        }
+    }
+}
+
 /// Note a `NEW_VIEW` receipt from `sender` for (height, view). Returns the current count.
 pub fn note_receipt(height: u64, view: u64, sender: &PeerId) -> u64 {
-    let mut g = global().lock().unwrap();
+    let mut g = lock_store();
     let key = (height, view);
     {
         let set = g.by_hv.entry(key).or_default();
@@ -40,7 +52,7 @@ pub fn note_receipt(height: u64, view: u64, sender: &PeerId) -> u64 {
 
 /// Snapshot deduplicated counts as a flat vector of (height, view, count).
 pub fn snapshot_counts() -> Vec<(u64, u64, u64)> {
-    let g = global().lock().unwrap();
+    let g = lock_store();
     g.by_hv
         .iter()
         .map(|(&(h, v), set)| (h, v, set.len() as u64))
@@ -63,7 +75,7 @@ mod tests {
     }
 
     fn reset_store() {
-        let mut guard = global().lock().unwrap();
+        let mut guard = lock_store();
         guard.by_hv.clear();
     }
 
@@ -97,5 +109,23 @@ mod tests {
         assert_eq!(first.1, (total - NEW_VIEW_STATS_CAP) as u64);
         let last = snapshot.last().expect("snapshot should not be empty");
         assert_eq!(last.1, (total - 1) as u64);
+    }
+
+    #[test]
+    fn new_view_stats_recovers_poisoned_store() {
+        let _guard = test_guard();
+        reset_store();
+
+        let peer = PeerId::new(KeyPair::random().public_key().clone());
+        let _ = std::panic::catch_unwind(|| {
+            let mut guard = global().lock().expect("new view stats lock should be held");
+            guard.by_hv.insert((1, 0), BTreeSet::new());
+            panic!("poison NEW_VIEW stats store for recovery test");
+        });
+
+        assert_eq!(note_receipt(12, 3, &peer), 1);
+        assert!(snapshot_counts().contains(&(12, 3, 1)));
+
+        reset_store();
     }
 }
