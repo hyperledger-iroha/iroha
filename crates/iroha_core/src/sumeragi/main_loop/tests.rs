@@ -8092,18 +8092,27 @@ async fn block_sync_known_hintless_formal_gate_matrix() {
                      height: u64,
                      view: u64| {
         let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
-        vote_admission_signed_vote(
-            actor,
-            keypairs,
-            &topology,
-            Phase::Commit,
+        let chain = actor.common_config.chain.clone();
+        let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+        let signature_topology =
+            super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
+        let mut vote = crate::sumeragi::consensus::Vote {
+            phase: Phase::Commit,
             block_hash,
             height,
             view,
-            None,
-            0,
-        )
-        .0
+            epoch: actor.epoch_for_height(height),
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
+            highest_qc: None,
+            signer: 0,
+            bls_sig: Vec::new(),
+            parent_state_root: zero_state_root(),
+            post_state_root: zero_state_root(),
+        };
+        bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
+        sign_vote_for_view_with_seed(&mut vote, &chain, &topology, keypairs, mode_tag, prf_seed);
+        vote
     };
     let make_sidecars = |actor: &Actor,
                          keypairs: &[KeyPair],
@@ -186784,18 +186793,27 @@ async fn block_sync_vote_deferral_formal_gate_matrix() {
                      view: u64,
                      signer: ValidatorIndex| {
         let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
-        vote_admission_signed_vote(
-            actor,
-            keypairs,
-            &topology,
-            Phase::Commit,
+        let chain = actor.common_config.chain.clone();
+        let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+        let signature_topology =
+            super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
+        let mut vote = crate::sumeragi::consensus::Vote {
+            phase: Phase::Commit,
             block_hash,
             height,
             view,
-            None,
+            epoch: actor.epoch_for_height(height),
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
+            highest_qc: None,
             signer,
-        )
-        .0
+            bls_sig: Vec::new(),
+            parent_state_root: zero_state_root(),
+            post_state_root: zero_state_root(),
+        };
+        bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
+        sign_vote_for_view_with_seed(&mut vote, &chain, &topology, keypairs, mode_tag, prf_seed);
+        vote
     };
     let make_sidecars = |actor: &Actor,
                          keypairs: &[KeyPair],

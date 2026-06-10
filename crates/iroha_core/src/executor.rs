@@ -529,10 +529,13 @@ fn metadata_string(metadata: &Metadata, key: &str) -> Option<String> {
 
 fn should_charge_pipeline_gas_asset(
     skip_nexus_fee: bool,
+    nexus_enabled: bool,
     nexus_fees: &NexusFees,
     gas_asset_opt: &Option<String>,
 ) -> bool {
-    !skip_nexus_fee && gas_asset_opt.is_some() && nexus_fees.per_gas_unit_fee <= Numeric::zero()
+    !skip_nexus_fee
+        && gas_asset_opt.is_some()
+        && (!nexus_enabled || nexus_fees.per_gas_unit_fee <= Numeric::zero())
 }
 
 fn is_sora_v2_tx_hash_literal(value: &str) -> bool {
@@ -1807,6 +1810,7 @@ pub(crate) fn charge_fees_for_applied_overlay_with_encoded_len(
 
     if should_charge_pipeline_gas_asset(
         skip_nexus_fee,
+        state_transaction.nexus.enabled,
         &state_transaction.nexus.fees,
         &gas_asset_opt,
     ) && let Some(gas_asset_id_str) = gas_asset_opt
@@ -2447,6 +2451,7 @@ impl Executor {
         // 5) Charge gas fees when configured and the transaction specified a gas asset.
         if should_charge_pipeline_gas_asset(
             skip_nexus_fee,
+            state_transaction.nexus.enabled,
             &state_transaction.nexus.fees,
             &gas_asset_opt,
         ) && let Some(gas_asset_id_str) = gas_asset_opt
@@ -3154,6 +3159,7 @@ impl Executor {
 
                 if should_charge_pipeline_gas_asset(
                     skip_nexus_fee,
+                    state_transaction.nexus.enabled,
                     &state_transaction.nexus.fees,
                     &gas_asset_opt,
                 ) && let Some(gas_asset_id_str) = gas_asset_opt
@@ -3403,6 +3409,7 @@ impl Executor {
                 // Charge gas fees: if a gas asset was provided and accepted by policy.
                 if should_charge_pipeline_gas_asset(
                     skip_nexus_fee,
+                    state_transaction.nexus.enabled,
                     &state_transaction.nexus.fees,
                     &gas_asset_opt,
                 ) && let Some(gas_asset_id_str) = gas_asset_opt
@@ -6076,6 +6083,7 @@ mod tests {
         nexus_fees.per_gas_unit_fee = Numeric::zero();
         assert!(should_charge_pipeline_gas_asset(
             false,
+            true,
             &nexus_fees,
             &gas_asset
         ));
@@ -6083,16 +6091,29 @@ mod tests {
         nexus_fees.per_gas_unit_fee = Numeric::new(1, 3);
         assert!(!should_charge_pipeline_gas_asset(
             false,
+            true,
+            &nexus_fees,
+            &gas_asset
+        ));
+        assert!(should_charge_pipeline_gas_asset(
+            false,
+            false,
             &nexus_fees,
             &gas_asset
         ));
 
         assert!(!should_charge_pipeline_gas_asset(
             true,
+            true,
             &nexus_fees,
             &gas_asset
         ));
-        assert!(!should_charge_pipeline_gas_asset(false, &nexus_fees, &None));
+        assert!(!should_charge_pipeline_gas_asset(
+            false,
+            false,
+            &nexus_fees,
+            &None
+        ));
     }
 
     fn seed_verified_nexus_fee_budget(

@@ -2,6 +2,37 @@
 
 Last updated: 2026-06-09
 
+## 2026-06-09 iroha_core failure sweep stabilization
+
+- Restored the default ZK consensus policy hash to the bytes derived from the
+  default confidential/ZK configuration, unblocking state, replay, block
+  validation, and Soracloud admission paths that compare the stable policy hash.
+- Kept legacy pipeline gas-asset charging active when Nexus fees are disabled,
+  while preserving the Nexus gas-fee path when Nexus is enabled.
+- Updated Kotodama/IVM trigger fixtures to use the strict public-entrypoint
+  calling pattern and refreshed the shared Soracloud BFV identifier vector
+  fixture from the repository hash implementation.
+- Corrected Sumeragi block-sync positive test helpers to generate
+  matching-epoch embedded commit votes so production vote epoch filtering stays
+  strict.
+- Validation:
+  - `cargo test -p iroha_core block::valid::tests:: -- --nocapture`
+    (`67` passed)
+  - `cargo test -p iroha_core block::tests:: -- --nocapture`
+    (`66` passed)
+  - `cargo test -p iroha_core kura::tests:: -- --nocapture`
+    (`177` passed)
+  - `cargo test -p iroha_core smartcontracts::isi::soracloud::tests::soracloud_bfv_operation_vectors -- --nocapture`
+    (`2` passed)
+  - `cargo test -p iroha_core state::replay_validation_tests:: -- --nocapture`
+    (`8` passed)
+  - `cargo test -p iroha_core sumeragi::main_loop::commit::tests:: -- --nocapture`
+    (`43` passed)
+  - `cargo test -p iroha_core sumeragi::main_loop::tests::block_sync_ -- --nocapture`
+    (`129` passed)
+  - `cargo test -p iroha_core --features telemetry executor::tests::block_fee_units_recorded_on_apply -- --nocapture`
+    (`1` passed)
+
 ## 2026-06-09 Kagemusha Android output temp cleanup failure reporting
 
 - Android device-lab `--json-out` summary writes and signed-evidence helper
