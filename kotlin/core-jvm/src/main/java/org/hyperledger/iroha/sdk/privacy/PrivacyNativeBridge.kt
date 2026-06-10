@@ -132,8 +132,24 @@ class PrivacyNativeBridge private constructor() {
             buildProof(requestArchive)
 
         @JvmStatic
+        fun buildVeRangeProofV1(requestArchive: ByteArray?): ByteArray =
+            buildProof(requestArchive)
+
+        @JvmStatic
+        fun buildJindoLatticeProofV0(requestArchive: ByteArray?): ByteArray =
+            buildProof(requestArchive)
+
+        @JvmStatic
         fun verifyProof(requestArchive: ByteArray?): ByteArray =
             call("verify proof", requestArchive, ::nativeVerifyProof)
+
+        @JvmStatic
+        fun verifyJindoPolynomialCommitmentV0(requestArchive: ByteArray?): ByteArray =
+            verifyProof(requestArchive)
+
+        @JvmStatic
+        fun verifyVeRangeProofV1(requestArchive: ByteArray?): ByteArray =
+            verifyProof(requestArchive)
 
         internal fun call(
             label: String,
