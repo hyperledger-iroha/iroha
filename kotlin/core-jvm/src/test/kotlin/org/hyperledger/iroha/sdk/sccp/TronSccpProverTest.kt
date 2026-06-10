@@ -1,5 +1,8 @@
 package org.hyperledger.iroha.sdk.sccp
 
+import java.io.ByteArrayOutputStream
+import org.bouncycastle.crypto.digests.KeccakDigest
+import org.hyperledger.iroha.sdk.crypto.Blake2b
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -52,6 +55,19 @@ class TronSccpProverTest {
         assertFailsWith<IllegalArgumentException> {
             SccpTron.routeCanaryEvidenceHash(evidence.copy(routeCanaryEvidenceHash = "0x" + "78".repeat(32)))
         }
+        listOf(
+            evidence.copy(routeAllowlistHash = evidence.destinationBindingHash),
+            evidence.copy(routeAllowlistHash = evidence.sourceVerifierMaterialHash),
+            evidence.copy(routeAllowlistHash = evidence.sourceAdapterEngineDeploymentHash),
+            evidence.copy(sourceVerifierMaterialHash = evidence.destinationBindingHash),
+            evidence.copy(sourceAdapterEngineDeploymentHash = evidence.destinationBindingHash),
+            evidence.copy(sourceAdapterEngineDeploymentHash = evidence.sourceVerifierMaterialHash),
+        ).forEach { replay ->
+            val failure = assertFailsWith<IllegalArgumentException> {
+                SccpTron.routeCanaryEvidenceHash(replay)
+            }
+            assertTrue(failure.message?.contains("TRON route canary governed hashes") == true)
+        }
     }
 
     @Test
@@ -65,10 +81,10 @@ class TronSccpProverTest {
 
         assertEquals(
             listOf(
-                "0x0ffdbc782e79d1dc508e08af01e87f16d93b6e58e4861a0b8155455e3ee7a683",
-                "0x0c5398ea95021a790e276e3ece1592b32b85751dc77e50293c867a5f2e0131bb",
+                "0x065b440c575edfc60df3235cfcf9e94d9b109e34d2ec6474934ab183d1306607",
+                "0x23bc72d067e4874a3c42a8e8efa48c64e2612f164e6332c5b2a65e1e23950939",
                 "0x21aac4195d8db839756f61c0780675823e15456c92acf135c36e02367c8fd11f",
-                "0x01c73f2f9156a52493a9beabeec73e62deed32fcef2e3e6fac86a79f0764f0bc",
+                "0x00d836b75e1646c15194e6e7db40b834b101fe4dad47ab46607d91c9a026ec70",
                 "0x0ca6bbc36d23183d027c8df09f06c39e64abbb0bb4d6a4c37369d2c36f41a888",
                 "0x2b153d0fe1bc6e2a6d44e851523edb1511dac55443ca80c22cbe9cb7423886dc",
                 "0x2697e4e42f34b673b4aa254c6a92de09304e84c1a667c7d266777775a231efb4",
@@ -90,7 +106,7 @@ class TronSccpProverTest {
 
     @Test
     fun proofRequestBindsPublicSignalsAndRelayContext() {
-        val bundleBytes = byteArrayOf(5, 6, 7)
+        val bundleBytes = sampleBundleBytes()
         val sourceProofBytes = byteArrayOf(9, 10)
         val request = SccpTron.buildProofRequest(
             sampleProofRequestInput(bundleBytes = bundleBytes, sourceProofBytes = sourceProofBytes),
@@ -116,7 +132,7 @@ class TronSccpProverTest {
         val boundRequest = SccpTron.buildProofRequest(
             TronSccpProofRequestInput(
                 publicInputs = samplePublicInputs(),
-                bundleBytes = byteArrayOf(5, 6, 7),
+                bundleBytes = sampleBundleBytes(),
                 sourceProofBytes = byteArrayOf(9, 10),
                 statementHash = "56".repeat(32),
                 destinationBinding = destinationBinding,
@@ -134,7 +150,8 @@ class TronSccpProverTest {
         assertTrue(
             request.requestHash != SccpTron.buildProofRequest(
                 sampleProofRequestInput(
-                    bundleBytes = byteArrayOf(5, 6, 7, 9),
+                    publicInputs = sampleBundleFixture(nonce = 328L).publicInputs,
+                    bundleBytes = sampleBundleFixture(nonce = 328L).bundleBytes,
                     sourceProofBytes = byteArrayOf(10),
                 ),
             ).requestHash,
@@ -232,7 +249,7 @@ class TronSccpProverTest {
         val wrongBindingSource = assertFailsWith<IllegalArgumentException> {
             TronSccpProofRequestInput(
                 publicInputs = samplePublicInputs(),
-                bundleBytes = byteArrayOf(5, 6, 7),
+                bundleBytes = sampleBundleBytes(),
                 statementHash = "56".repeat(32),
                 destinationBinding = destinationBinding.copy(sourceDomain = SccpSourceProofs.DOMAIN_ETH),
             )
@@ -242,7 +259,7 @@ class TronSccpProverTest {
         val forgedBindingHash = assertFailsWith<IllegalArgumentException> {
             TronSccpProofRequestInput(
                 publicInputs = samplePublicInputs(),
-                bundleBytes = byteArrayOf(5, 6, 7),
+                bundleBytes = sampleBundleBytes(),
                 statementHash = "56".repeat(32),
                 destinationBinding = destinationBinding.copy(hash = "0x" + "99".repeat(32)),
             )
@@ -251,7 +268,7 @@ class TronSccpProverTest {
 
         bundleBytes[0] = 99
         sourceProofBytes[0] = 99
-        assertContentEquals(byteArrayOf(5, 6, 7), request.bundleBytes)
+        assertContentEquals(sampleBundleBytes(), request.bundleBytes)
         assertContentEquals(byteArrayOf(9, 10), request.sourceProofBytes)
 
         val exposedPublicInputs = request.publicInputsBytes
@@ -261,7 +278,7 @@ class TronSccpProverTest {
         exposedBundle[0] = 99
         exposedSourceProof[0] = 99
         assertTrue(request.publicInputsBytes[0].toInt() != 99)
-        assertContentEquals(byteArrayOf(5, 6, 7), request.bundleBytes)
+        assertContentEquals(sampleBundleBytes(), request.bundleBytes)
         assertContentEquals(byteArrayOf(9, 10), request.sourceProofBytes)
 
         val callbackSnapshot = SccpTron.callbackRequestSnapshot(request)
@@ -271,7 +288,7 @@ class TronSccpProverTest {
         val snapshotSourceProof = callbackSnapshot.sourceProofBytes
         snapshotBundle[0] = 77
         snapshotSourceProof[0] = 77
-        assertContentEquals(byteArrayOf(5, 6, 7), callbackSnapshot.bundleBytes)
+        assertContentEquals(sampleBundleBytes(), callbackSnapshot.bundleBytes)
         assertContentEquals(byteArrayOf(9, 10), callbackSnapshot.sourceProofBytes)
     }
 
@@ -287,7 +304,7 @@ class TronSccpProverTest {
     fun proverResolvesWitnessProviderBeforeBuildingRequest() {
         var resolved = false
         val proofBytes = sampleGroth16ProofBytes()
-        val bundleBytes = byteArrayOf(5, 6, 7)
+        val bundleBytes = sampleBundleBytes()
         val input = sampleProductionProofRequestInput(bundleBytes = bundleBytes)
         val prover = TronSccpProver(
             witnessProvider = TronSccpWitnessProvider { input ->
@@ -295,7 +312,11 @@ class TronSccpProverTest {
                 assertFalse(input.bundleBytes === bundleBytes)
                 input.bundleBytes[0] = 0x7f
                 resolved = true
-                input.copy(sourceProofBytes = byteArrayOf(9, 10))
+                sampleProductionProofRequestInput(
+                    publicInputs = input.publicInputs,
+                    sourceProofBytes = byteArrayOf(9, 10),
+                    statementHash = input.statementHash,
+                )
             },
             proofEngine = TronSccpProofEngine { request ->
                 assertTrue(resolved)
@@ -307,8 +328,8 @@ class TronSccpProverTest {
         val result = prover.prove(input)
 
         assertContentEquals(byteArrayOf(9, 10), result.sourceProofBytes)
-        assertContentEquals(byteArrayOf(5, 6, 7), input.bundleBytes)
-        assertContentEquals(byteArrayOf(5, 6, 7), bundleBytes)
+        assertContentEquals(sampleBundleBytes(), input.bundleBytes)
+        assertContentEquals(sampleBundleBytes(), bundleBytes)
     }
 
     @Test
@@ -382,7 +403,7 @@ class TronSccpProverTest {
         )
         mutatedRequestView.bundleBytes[0] = 9
         SccpTron.wrapProofResult(proofBytes, mutatedRequestView)
-        assertContentEquals(byteArrayOf(5, 6, 7), mutatedRequestView.bundleBytes)
+        assertContentEquals(sampleBundleBytes(), mutatedRequestView.bundleBytes)
     }
 
     @Test
@@ -517,7 +538,7 @@ class TronSccpProverTest {
         assertEquals("0x" + "00".repeat(30) + "0180", "0x" + hexLower(submission.callData.copyOfRange(260, 292)))
         assertEquals(SccpTron.messageTransparentPublicInputAbiWords(samplePublicInputs()), submission.publicInputWords)
         assertEquals(proofResult.publicSignalWords, submission.publicSignalWords)
-        assertContentEquals(byteArrayOf(5, 6, 7), proofResult.bundleBytes)
+        assertContentEquals(sampleBundleBytes(), proofResult.bundleBytes)
         assertContentEquals(byteArrayOf(9, 10), proofResult.sourceProofBytes)
         assertContentEquals(proofBytes, submission.proofBytes)
         assertContentEquals(submission.callData, submission.envelopeBytes)
@@ -599,7 +620,7 @@ class TronSccpProverTest {
         val staleRequestError = assertFailsWith<IllegalArgumentException> {
             SccpTron.buildSubmission(
                 TronSccpSubmissionInput(
-                    proofResult = proofResult.copy(bundleBytes = byteArrayOf(5, 6, 8)),
+                    proofResult = proofResult.copy(sourceProofBytes = byteArrayOf(9, 11)),
                 ),
             )
         }
@@ -631,12 +652,16 @@ class TronSccpProverTest {
         assertTrue(wrongTargetError.message?.contains("TRON") == true)
     }
 
-    private fun sampleGroth16ProofBytes(overrides: Map<Int, ByteArray> = emptyMap()): ByteArray {
+    private fun sampleGroth16ProofBytes(
+        overrides: Map<Int, ByteArray> = emptyMap(),
+        publicInputs: TronSccpPublicInputsInput = samplePublicInputs(),
+        sourceDomain: Int = SccpTron.DOMAIN_SORA,
+    ): ByteArray {
         val words = mutableListOf(
             abiWord(1),
-            repeatedWord(0x11),
-            abiWord(SccpTron.DOMAIN_SORA.toLong()),
-            repeatedWord(0x33),
+            hexWord(publicInputs.messageId.removePrefix("0x")),
+            abiWord(sourceDomain.toLong()),
+            hexWord(publicInputs.commitmentRoot.removePrefix("0x")),
             abiWord(1),
             abiWord(2),
             hexWord("1800deef121f1e76426a00665e5c4479674322d4f75edadd46debd5cd992f6ed"),
@@ -683,9 +708,129 @@ class TronSccpProverTest {
         return builder.toString()
     }
 
+    private data class SampleBundleFixture(
+        val publicInputs: TronSccpPublicInputsInput,
+        val bundleBytes: ByteArray,
+    )
+
+    private fun sampleBundleBytes(
+        sourceDomain: Int = SccpTron.DOMAIN_SORA,
+        nonce: Long = 327L,
+    ): ByteArray =
+        sampleBundleFixture(
+            sourceDomain = sourceDomain,
+            nonce = nonce,
+        ).bundleBytes
+
+    private fun sampleBundleFixture(
+        sourceDomain: Int = SccpTron.DOMAIN_SORA,
+        nonce: Long = 327L,
+    ): SampleBundleFixture {
+        val payloadBody = ByteArrayOutputStream()
+        payloadBody.write(1)
+        writeTestU32Le(payloadBody, sourceDomain)
+        writeTestU32Le(payloadBody, SccpTron.DOMAIN_TRON)
+        writeTestU64Le(payloadBody, nonce)
+        writeTestU32Le(payloadBody, SccpTron.DOMAIN_SORA)
+        payloadBody.write(1)
+        writeTestBytes(payloadBody, "xor#sccp".toByteArray(Charsets.UTF_8))
+        writeTestU128Le(payloadBody, 42L)
+        payloadBody.write(1)
+        writeTestBytes(payloadBody, "alice@sora".toByteArray(Charsets.UTF_8))
+        payloadBody.write(5)
+        writeTestBytes(payloadBody, "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8".toByteArray(Charsets.UTF_8))
+        payloadBody.write(1)
+        writeTestBytes(payloadBody, "sora-tron-xor".toByteArray(Charsets.UTF_8))
+
+        val payloadBodyBytes = payloadBody.toByteArray()
+        val payloadBytes = byteArrayOf(0x02) + payloadBodyBytes
+        val messageId = "0x" + hexLower(prefixedKeccakBytes("sccp:transfer:v1", payloadBodyBytes))
+        val payloadHash = "0x" + hexLower(
+            Blake2b.digest256("sccp:payload:v1".toByteArray(Charsets.UTF_8) + payloadBytes),
+        )
+
+        val commitment = ByteArrayOutputStream()
+        commitment.write(1)
+        commitment.write(6)
+        writeTestU32Le(commitment, SccpTron.DOMAIN_TRON)
+        commitment.write(hexBytes(messageId.removePrefix("0x")))
+        commitment.write(hexBytes(payloadHash.removePrefix("0x")))
+        val commitmentBytes = commitment.toByteArray()
+        val currentRoot = Blake2b.digest256("sccp:hub:leaf:v1".toByteArray(Charsets.UTF_8) + commitmentBytes)
+        val commitmentRoot = "0x" + hexLower(currentRoot)
+
+        val merkleProof = ByteArrayOutputStream()
+        writeTestU32Le(merkleProof, 0)
+
+        val bundle = ByteArrayOutputStream()
+        bundle.write(1)
+        bundle.write(currentRoot)
+        writeTestBytes(bundle, commitmentBytes)
+        writeTestBytes(bundle, merkleProof.toByteArray())
+        writeTestBytes(bundle, payloadBytes)
+        writeTestBytes(bundle, byteArrayOf(0x01, 0x02, 0x03))
+
+        return SampleBundleFixture(
+            publicInputs = TronSccpPublicInputsInput(
+                messageId = messageId,
+                payloadHash = payloadHash,
+                targetDomain = SccpTron.DOMAIN_TRON,
+                commitmentRoot = commitmentRoot,
+                finalityHeight = "19",
+                finalityBlockHash = "44".repeat(32),
+            ),
+            bundleBytes = bundle.toByteArray(),
+        )
+    }
+
+    private fun writeTestBytes(out: ByteArrayOutputStream, value: ByteArray) {
+        writeTestU32Le(out, value.size)
+        out.write(value)
+    }
+
+    private fun writeTestU32Le(out: ByteArrayOutputStream, value: Int) {
+        require(value >= 0)
+        out.write(value and 0xff)
+        out.write((value ushr 8) and 0xff)
+        out.write((value ushr 16) and 0xff)
+        out.write((value ushr 24) and 0xff)
+    }
+
+    private fun writeTestU64Le(out: ByteArrayOutputStream, value: Long) {
+        var working = value
+        repeat(8) {
+            out.write((working and 0xffL).toInt())
+            working = working ushr 8
+        }
+    }
+
+    private fun writeTestU128Le(out: ByteArrayOutputStream, value: Long) {
+        writeTestU64Le(out, value)
+        writeTestU64Le(out, 0L)
+    }
+
+    private fun hexBytes(hex: String): ByteArray {
+        require(hex.length % 2 == 0)
+        val out = ByteArray(hex.length / 2)
+        for (index in out.indices) {
+            out[index] = hex.substring(index * 2, index * 2 + 2).toInt(16).toByte()
+        }
+        return out
+    }
+
+    private fun prefixedKeccakBytes(prefix: String, payload: ByteArray): ByteArray {
+        val digest = KeccakDigest(256)
+        val prefixBytes = prefix.toByteArray(Charsets.UTF_8)
+        digest.update(prefixBytes, 0, prefixBytes.size)
+        digest.update(payload, 0, payload.size)
+        val out = ByteArray(32)
+        digest.doFinal(out, 0)
+        return out
+    }
+
     private fun sampleProofRequestInput(
         publicInputs: TronSccpPublicInputsInput = samplePublicInputs(),
-        bundleBytes: ByteArray = byteArrayOf(5, 6, 7),
+        bundleBytes: ByteArray = sampleBundleBytes(),
         sourceProofBytes: ByteArray = ByteArray(0),
         sourceDomain: Int = SccpTron.DOMAIN_SORA,
         statementHash: String = "56".repeat(32),
@@ -704,7 +849,7 @@ class TronSccpProverTest {
 
     private fun sampleProductionProofRequestInput(
         publicInputs: TronSccpPublicInputsInput = samplePublicInputs(),
-        bundleBytes: ByteArray = byteArrayOf(5, 6, 7),
+        bundleBytes: ByteArray = sampleBundleBytes(),
         sourceProofBytes: ByteArray = ByteArray(0),
         sourceDomain: Int = SccpTron.DOMAIN_SORA,
         statementHash: String = "56".repeat(32),
@@ -764,16 +909,18 @@ class TronSccpProverTest {
     }
 
     private fun samplePublicInputs(
-        payloadHash: String = "22".repeat(32),
+        payloadHash: String? = null,
         targetDomain: Int = SccpTron.DOMAIN_TRON,
         finalityHeight: String = "19",
-    ): TronSccpPublicInputsInput =
-        TronSccpPublicInputsInput(
-            messageId = "11".repeat(32),
-            payloadHash = payloadHash,
+    ): TronSccpPublicInputsInput {
+        val fixture = sampleBundleFixture()
+        return TronSccpPublicInputsInput(
+            messageId = fixture.publicInputs.messageId,
+            payloadHash = payloadHash ?: fixture.publicInputs.payloadHash,
             targetDomain = targetDomain,
-            commitmentRoot = "33".repeat(32),
+            commitmentRoot = fixture.publicInputs.commitmentRoot,
             finalityHeight = finalityHeight,
-            finalityBlockHash = "44".repeat(32),
+            finalityBlockHash = fixture.publicInputs.finalityBlockHash,
         )
+    }
 }

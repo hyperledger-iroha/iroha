@@ -16720,6 +16720,15 @@ def canonical_solana_sccp_route_canary_evidence_bytes(input_value: Any) -> bytes
         ),
         "sourceAdapterEngineDeploymentHash",
     )
+    _require_sccp_hash_roles_distinct(
+        "Solana route canary governed hashes",
+        {
+            "routeAllowlistHash": route_allowlist_hash,
+            "destinationBindingHash": destination_binding_hash,
+            "sourceVerifierMaterialHash": source_material_hash,
+            "sourceAdapterEngineDeploymentHash": source_deployment_hash,
+        },
+    )
     evidence = _normalize_solana_destination_programdata_evidence(value)
     return b"".join(
         (
@@ -16816,6 +16825,15 @@ def canonical_ton_sccp_route_canary_evidence_bytes(input_value: Any) -> bytes:
             "source_adapter_engine_deployment_hash",
         ),
         "sourceAdapterEngineDeploymentHash",
+    )
+    _require_sccp_hash_roles_distinct(
+        "TON route canary governed hashes",
+        {
+            "routeAllowlistHash": route_allowlist_hash,
+            "destinationBindingHash": destination_binding_hash,
+            "sourceVerifierMaterialHash": source_verifier_material_hash,
+            "sourceAdapterEngineDeploymentHash": source_adapter_engine_deployment_hash,
+        },
     )
     verifier_contract_address = _normalize_ton_raw_address(
         _mapping_value_without_aliases(
@@ -16941,12 +16959,33 @@ def _require_tron_route_canary_true(value: Any, label: str) -> None:
         raise TypeError(f"{label} must be true")
 
 
+def _require_sccp_hash_roles_distinct(
+    context: str, fields: Mapping[str, bytes]
+) -> None:
+    seen: Dict[bytes, str] = {}
+    for label, raw in fields.items():
+        previous_label = seen.get(raw)
+        if previous_label is not None:
+            raise TypeError(
+                f"{context} must be distinct: {label} matches {previous_label}"
+            )
+        seen[raw] = label
+
+
 def _tron_sccp_route_allowlist_hash(
     *,
     source_verifier_material_hash: bytes,
     source_adapter_engine_deployment_hash: bytes,
     destination_binding_hash: bytes,
 ) -> bytes:
+    _require_sccp_hash_roles_distinct(
+        "TRON route allowlist governed hashes",
+        {
+            "sourceVerifierMaterialHash": source_verifier_material_hash,
+            "sourceAdapterEngineDeploymentHash": source_adapter_engine_deployment_hash,
+            "destinationBindingHash": destination_binding_hash,
+        },
+    )
     payload = b"".join(
         (
             _write_u8(1),
@@ -17022,6 +17061,15 @@ def _normalize_tron_sccp_route_canary_evidence(input_value: Any) -> Dict[str, by
             "source_adapter_engine_deployment_hash",
         ),
         "sourceAdapterEngineDeploymentHash",
+    )
+    _require_sccp_hash_roles_distinct(
+        "TRON route canary governed hashes",
+        {
+            "routeAllowlistHash": route_allowlist_hash,
+            "destinationBindingHash": destination_binding_hash,
+            "sourceVerifierMaterialHash": source_verifier_material_hash,
+            "sourceAdapterEngineDeploymentHash": source_adapter_engine_deployment_hash,
+        },
     )
     expected_route_allowlist_hash = _tron_sccp_route_allowlist_hash(
         source_verifier_material_hash=source_verifier_material_hash,
@@ -22244,10 +22292,11 @@ def build_evm_sccp_proof_request(input_value: Any) -> Mapping[str, Any]:
         _mapping_value_without_aliases(value, "publicInputs", "publicInputs", "public_inputs")
     )
     public_inputs_bytes = canonical_sccp_message_transparent_public_inputs_bytes(public_inputs)
-    bundle_bytes = _require_non_empty_bytes(
+    bundle_bytes = _to_bytes(
         _mapping_value_without_aliases(value, "bundleBytes", "bundleBytes", "bundle_bytes"),
         "bundleBytes",
     )
+    _require_native_recursive_proof_bytes(bundle_bytes, "bundleBytes")
     source_proof_input = _mapping_optional_value_without_aliases(
         value,
         "sourceProofBytes",
@@ -22282,6 +22331,13 @@ def build_evm_sccp_proof_request(input_value: Any) -> Mapping[str, Any]:
         raise ValueError("sourceDomain must be SORA")
     if source_domain == public_inputs["target_domain"]:
         raise ValueError("sourceDomain and publicInputs.targetDomain must differ")
+    bundle_summary = _require_sccp_proof_request_bundle_matches_public_inputs(
+        public_inputs,
+        bundle_bytes,
+        source_proof_bytes,
+    )
+    if bundle_summary["source_domain"] != source_domain:
+        raise TypeError("bundleBytes.sourceDomain must match sourceDomain")
     proof_context_input = _mapping_optional_value_without_aliases(
         value,
         "proofContext",
@@ -22390,6 +22446,13 @@ def build_tron_sccp_proof_request(input_value: Any) -> Mapping[str, Any]:
         raise ValueError("sourceDomain must be SORA")
     if source_domain == public_inputs["target_domain"]:
         raise ValueError("sourceDomain and publicInputs.targetDomain must differ")
+    bundle_summary = _require_sccp_proof_request_bundle_matches_public_inputs(
+        public_inputs,
+        bundle_bytes,
+        source_proof_bytes,
+    )
+    if bundle_summary["source_domain"] != source_domain:
+        raise TypeError("bundleBytes.sourceDomain must match sourceDomain")
     proof_context_input = _mapping_optional_value_without_aliases(
         value,
         "proofContext",
@@ -24012,6 +24075,11 @@ def _require_production_groth16_destination_binding(
 
 
 def _require_production_evm_proof_request(request: Mapping[str, Any]) -> None:
+    if "bundle_bytes" in request:
+        _require_native_recursive_proof_bytes(
+            _to_bytes(request["bundle_bytes"], "bundleBytes"),
+            "bundleBytes",
+        )
     _require_canonical_evm_proof_request(request)
     if request["version"] != 1:
         raise TypeError("EVM-family SCCP proof request version must be 1")
@@ -24026,11 +24094,16 @@ def _require_production_evm_proof_request(request: Mapping[str, Any]) -> None:
         evm_sccp_destination_binding,
         "EVM-family SCCP",
     )
-    _require_non_empty_bytes(request["bundle_bytes"], "bundleBytes")
+    _require_native_recursive_proof_bytes(request["bundle_bytes"], "bundleBytes")
     _require_optional_nonzero_bytes(request["source_proof_bytes"], "sourceProofBytes")
 
 
 def _require_production_tron_proof_request(request: Mapping[str, Any]) -> None:
+    if "bundle_bytes" in request:
+        _require_native_recursive_proof_bytes(
+            _to_bytes(request["bundle_bytes"], "bundleBytes"),
+            "bundleBytes",
+        )
     _require_canonical_tron_proof_request(request)
     if request["version"] != 1:
         raise TypeError("TRON SCCP proof request version must be 1")
@@ -24045,7 +24118,7 @@ def _require_production_tron_proof_request(request: Mapping[str, Any]) -> None:
         tron_sccp_destination_binding,
         "TRON SCCP",
     )
-    _require_non_empty_bytes(request["bundle_bytes"], "bundleBytes")
+    _require_native_recursive_proof_bytes(request["bundle_bytes"], "bundleBytes")
     _require_optional_nonzero_bytes(request["source_proof_bytes"], "sourceProofBytes")
 
 

@@ -1,7 +1,9 @@
 package org.hyperledger.iroha.android.sccp;
 
 import com.sun.net.httpserver.HttpServer;
+import java.io.ByteArrayOutputStream;
 import java.io.OutputStream;
+import java.math.BigInteger;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -12,6 +14,8 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import org.bouncycastle.crypto.digests.KeccakDigest;
+import org.hyperledger.iroha.android.crypto.Blake2b;
 
 public final class EvmSccpProverTests {
   private static final String ETHEREUM_SYNC_COMMITTEE_SUPERMAJORITY_BITS =
@@ -63,7 +67,7 @@ public final class EvmSccpProverTests {
         : "statement hash must be normalized";
     assert ("0x" + repeat("78", 32)).equals(request.destinationBindingHash())
         : "destination binding hash must be normalized";
-    assert "0xfb990c2ffdf826c9beb0e74105b060af467570720a1382b48abc42d32850f5ea"
+    assert "0xba200357f3f21f7b6eec2c60b95576ab5fce91ee518981a3a139bdec1e03e789"
         .equals(request.requestHash()) : "request hash must bind EVM proof material";
     final EvmSccpProver.ProofRequest callbackSnapshot =
         EvmSccpProver.callbackRequestSnapshot(request);
@@ -84,7 +88,7 @@ public final class EvmSccpProverTests {
     final byte[] snapshotSourceProof = callbackSnapshot.sourceProofBytes();
     snapshotBundle[0] = 77;
     snapshotSourceProof[0] = 77;
-    assert Arrays.equals(new byte[] {5, 6, 7}, callbackSnapshot.bundleBytes())
+    assert Arrays.equals(sampleBundleBytes(), callbackSnapshot.bundleBytes())
         : "snapshot bundle bytes must be defensive copies";
     assert Arrays.equals(new byte[] {9, 10}, callbackSnapshot.sourceProofBytes())
         : "snapshot source proof bytes must be defensive copies";
@@ -95,7 +99,7 @@ public final class EvmSccpProverTests {
         EvmSccpProver.buildProofRequest(
             new EvmSccpProver.ProofRequestInput(
                 samplePublicInputs(EvmSccpProver.DOMAIN_ETH),
-                new byte[] {5, 6, 7},
+                sampleBundleBytes(),
                 new byte[] {9, 10},
                 repeat("56", 32),
                 destinationBinding));
@@ -117,8 +121,12 @@ public final class EvmSccpProverTests {
     final EvmSccpProver.ProofRequest shiftedSplitRequest =
         EvmSccpProver.buildProofRequest(
             new EvmSccpProver.ProofRequestInput(
-                samplePublicInputs(EvmSccpProver.DOMAIN_ETH),
-                new byte[] {5, 6, 7, 9},
+                sampleBundleFixture(
+                        SolanaSccpProver.DOMAIN_SORA, EvmSccpProver.DOMAIN_ETH, 328L)
+                    .publicInputs,
+                sampleBundleFixture(
+                        SolanaSccpProver.DOMAIN_SORA, EvmSccpProver.DOMAIN_ETH, 328L)
+                    .bundleBytes,
                 new byte[] {10},
                 repeat("56", 32),
                 repeat("78", 32),
@@ -132,7 +140,7 @@ public final class EvmSccpProverTests {
         EvmSccpProver.buildProofRequest(
             new EvmSccpProver.ProofRequestInput(
                 samplePublicInputs(EvmSccpProver.DOMAIN_ETH),
-                new byte[] {5, 6, 7},
+                sampleBundleBytes(),
                 new byte[] {9, 10},
                 repeat("56", 32),
                 repeat("78", 32),
@@ -152,7 +160,7 @@ public final class EvmSccpProverTests {
       EvmSccpProver.buildProofRequest(
           new EvmSccpProver.ProofRequestInput(
               samplePublicInputs(EvmSccpProver.DOMAIN_ETH),
-              new byte[] {5, 6, 7},
+              sampleBundleBytes(),
               new byte[] {9, 10},
               repeat("56", 32),
               repeat("78", 32),
@@ -170,7 +178,7 @@ public final class EvmSccpProverTests {
       EvmSccpProver.buildProofRequest(
           new EvmSccpProver.ProofRequestInput(
               samplePublicInputs(EvmSccpProver.DOMAIN_ETH),
-              new byte[] {5, 6, 7},
+              sampleBundleBytes(),
               new byte[] {9, 10},
               repeat("56", 32),
               repeat("78", 32),
@@ -385,7 +393,7 @@ public final class EvmSccpProverTests {
     try {
       new EvmSccpProver.ProofRequestInput(
           samplePublicInputs(EvmSccpProver.DOMAIN_ETH),
-          new byte[] {5, 6, 7},
+          sampleBundleBytes(),
           repeat("56", 32),
           bscDestinationBinding);
     } catch (final IllegalArgumentException ex) {
@@ -456,7 +464,7 @@ public final class EvmSccpProverTests {
         EvmSccpProver.buildProofRequest(
             new EvmSccpProver.ProofRequestInput(
                 samplePublicInputs(EvmSccpProver.DOMAIN_ETH),
-                new byte[] {5, 6, 7},
+                sampleBundleBytes(),
                 new byte[] {9, 10},
                 repeat("56", 32),
                 sampleDestinationBinding(samplePublicInputs(EvmSccpProver.DOMAIN_ETH)),
@@ -567,7 +575,7 @@ public final class EvmSccpProverTests {
   private static void proverResolvesWitnessProviderBeforeBuildingRequest() {
     final boolean[] resolved = new boolean[] {false};
     final byte[] proofBytes = sampleGroth16ProofBytes();
-    final byte[] bundleBytes = new byte[] {5, 6, 7};
+    final byte[] bundleBytes = sampleBundleBytes();
     final EvmSccpProver.ProofRequestInput userInput =
         sampleProductionProofRequestInput(
             samplePublicInputs(EvmSccpProver.DOMAIN_ETH), bundleBytes, new byte[0], repeat("56", 32));
@@ -596,9 +604,9 @@ public final class EvmSccpProverTests {
 
     assert Arrays.equals(new byte[] {9, 10}, result.sourceProofBytes())
         : "wrapped result must preserve provider-resolved source proof bytes";
-    assert Arrays.equals(new byte[] {5, 6, 7}, userInput.bundleBytes())
+    assert Arrays.equals(sampleBundleBytes(), userInput.bundleBytes())
         : "UI-owned EVM bundle bytes must not be mutated by witness provider";
-    assert Arrays.equals(new byte[] {5, 6, 7}, bundleBytes)
+    assert Arrays.equals(sampleBundleBytes(), bundleBytes)
         : "UI-owned EVM bundle array must not be mutated by witness provider";
   }
 
@@ -734,7 +742,7 @@ public final class EvmSccpProverTests {
         .equals(submission.publicInputWords()) : "public input ABI words must be exposed";
     assert proofResult.publicSignalWords().equals(submission.publicSignalWords())
         : "public signal words must be carried";
-    assert Arrays.equals(new byte[] {5, 6, 7}, proofResult.bundleBytes())
+    assert Arrays.equals(sampleBundleBytes(), proofResult.bundleBytes())
         : "proof results must retain request bundle bytes";
     assert Arrays.equals(new byte[] {9, 10}, proofResult.sourceProofBytes())
         : "proof results must retain source proof bytes";
@@ -838,7 +846,7 @@ public final class EvmSccpProverTests {
     try {
       EvmSccpProver.buildSubmission(
           new EvmSccpProver.SubmissionInput(
-              evmResultWithBundleBytes(proofResult, new byte[] {5, 6, 8})));
+              evmResultWithSourceProofBytes(proofResult, new byte[] {9, 11})));
     } catch (final IllegalArgumentException ex) {
       threw = ex.getMessage().contains("requestHash");
     }
@@ -877,7 +885,6 @@ public final class EvmSccpProverTests {
   }
 
   private static void bscMainnetFacadeRequiresChainId56AndBscTarget() {
-    final byte[] proofBytes = sampleGroth16ProofBytes();
     final SourceSccpProofs.EvmDestinationBinding binding =
         BscSccpProver.destinationBinding(
             "0x" + repeat("11", 20),
@@ -900,7 +907,7 @@ public final class EvmSccpProverTests {
         BscSccpProver.buildProofRequest(
             new EvmSccpProver.ProofRequestInput(
                 samplePublicInputs(EvmSccpProver.DOMAIN_BSC),
-                new byte[] {5, 6, 7},
+                sampleBundleBytes(EvmSccpProver.DOMAIN_BSC),
                 new byte[] {9, 10},
                 repeat("56", 32),
                 binding));
@@ -909,6 +916,7 @@ public final class EvmSccpProverTests {
     assert binding.hash.equals(request.destinationBindingHash())
         : "BSC request must bind the BSC destination binding";
 
+    final byte[] proofBytes = sampleGroth16ProofBytes(request.publicInputs());
     final EvmSccpProver.ProofResult result =
         BscSccpProver.wrapProofResult(proofBytes, request);
     boolean threw = false;
@@ -980,7 +988,7 @@ public final class EvmSccpProverTests {
       BscSccpProver.buildProofRequest(
           new EvmSccpProver.ProofRequestInput(
               samplePublicInputs(EvmSccpProver.DOMAIN_BSC),
-              new byte[] {5, 6, 7},
+              sampleBundleBytes(EvmSccpProver.DOMAIN_BSC),
               new byte[0],
               repeat("56", 32),
               wrongNetworkBinding));
@@ -1182,7 +1190,7 @@ public final class EvmSccpProverTests {
     final EvmSccpProver.ProofRequestInput input =
         new EvmSccpProver.ProofRequestInput(
             samplePublicInputs(EvmSccpProver.DOMAIN_ETH),
-            new byte[] {5, 6, 7},
+            sampleBundleBytes(),
             new byte[] {9, 10},
             repeat("56", 32),
             binding);
@@ -2396,7 +2404,7 @@ public final class EvmSccpProverTests {
       EthereumMainnetSccp.buildProofRequest(
           new EvmSccpProver.ProofRequestInput(
               samplePublicInputs(EvmSccpProver.DOMAIN_BSC),
-              new byte[] {5, 6, 7},
+              sampleBundleBytes(EvmSccpProver.DOMAIN_BSC),
               new byte[0],
               repeat("56", 32),
               bscBinding));
@@ -2416,7 +2424,7 @@ public final class EvmSccpProverTests {
           .proveOutboundToEthereum(
               new EvmSccpProver.ProofRequestInput(
                   samplePublicInputs(EvmSccpProver.DOMAIN_BSC),
-                  new byte[] {5, 6, 7},
+                  sampleBundleBytes(EvmSccpProver.DOMAIN_BSC),
                   new byte[0],
                   repeat("56", 32),
                   bscBinding));
@@ -2432,7 +2440,7 @@ public final class EvmSccpProverTests {
       EthereumMainnetSccp.buildProofRequest(
           new EvmSccpProver.ProofRequestInput(
               samplePublicInputs(EvmSccpProver.DOMAIN_ETH),
-              new byte[] {5, 6, 7},
+              sampleBundleBytes(),
               new byte[0],
               repeat("56", 32),
               binding.hash,
@@ -7003,7 +7011,7 @@ public final class EvmSccpProverTests {
   }
 
   private static void mainnetFacadesSnapshotWitnessProviderInputs() {
-    final byte[] ethBundleBytes = new byte[] {5, 6, 7};
+    final byte[] ethBundleBytes = sampleBundleBytes();
     final byte[] ethSourceProofBytes = new byte[] {9, 10};
     final String ethNativeVerifierKeyHash =
         sha256Hex(nativeEvmProverArtifactBytes("java android verifier key v1"));
@@ -7031,19 +7039,19 @@ public final class EvmSccpProverTests {
                   input.sourceProofBytes()[0] = 0x7e;
                   return new EvmSccpProver.ProofRequestInput(
                       input.publicInputs(),
-                      new byte[] {8, 8, 8},
+                      sampleBundleBytes(input.publicInputs().targetDomain()),
                       new byte[] {9, 9},
                       input.statementHash(),
                       input.destinationBinding());
                 },
                 null)
             .buildOutboundProofRequest(ethInput);
-    assert Arrays.equals(new byte[] {5, 6, 7}, ethBundleBytes)
+    assert Arrays.equals(sampleBundleBytes(), ethBundleBytes)
         : "Ethereum facade must not let witness providers mutate app-owned bundle bytes";
     assert Arrays.equals(new byte[] {9, 10}, ethSourceProofBytes)
         : "Ethereum facade must not let witness providers mutate app-owned source proof bytes";
-    assert Arrays.equals(new byte[] {8, 8, 8}, ethRequest.bundleBytes())
-        : "Ethereum facade must use witness-resolved bundle bytes";
+    assert Arrays.equals(sampleBundleBytes(), ethRequest.bundleBytes())
+        : "Ethereum facade must use witness-resolved canonical bundle bytes";
     assert Arrays.equals(new byte[] {9, 9}, ethRequest.sourceProofBytes())
         : "Ethereum facade must use witness-resolved source proof bytes";
     final EvmSccpProver.ProofRequest[] seenEthProofRequest =
@@ -7079,7 +7087,7 @@ public final class EvmSccpProverTests {
         .proveOutboundToEthereum(ethInput);
     assert seenEthProofRequest[0] != null
         : "Ethereum proof engine must receive a callback request";
-    assert Arrays.equals(new byte[] {5, 6, 7}, ethProofResult.bundleBytes())
+    assert Arrays.equals(sampleBundleBytes(), ethProofResult.bundleBytes())
         : "Ethereum proof result must keep the original bundle bytes";
     assert Arrays.equals(new byte[] {9, 10}, ethProofResult.sourceProofBytes())
         : "Ethereum proof result must keep the original source proof bytes";
@@ -7110,7 +7118,7 @@ public final class EvmSccpProverTests {
                   input.sourceProofBytes()[0] = 0x7e;
                   return new EvmSccpProver.ProofRequestInput(
                       input.publicInputs(),
-                      new byte[] {4, 4, 4},
+                      sampleBundleBytes(input.publicInputs().targetDomain()),
                       new byte[] {5, 5},
                       input.statementHash(),
                       input.destinationBinding());
@@ -7121,24 +7129,34 @@ public final class EvmSccpProverTests {
         : "BSC facade must not let witness providers mutate app-owned bundle bytes";
     assert Arrays.equals(new byte[] {6, 7}, bscSourceProofBytes)
         : "BSC facade must not let witness providers mutate app-owned source proof bytes";
-    assert Arrays.equals(new byte[] {4, 4, 4}, bscRequest.bundleBytes())
-        : "BSC facade must use witness-resolved bundle bytes";
+    assert Arrays.equals(sampleBundleBytes(EvmSccpProver.DOMAIN_BSC), bscRequest.bundleBytes())
+        : "BSC facade must use witness-resolved canonical bundle bytes";
     assert Arrays.equals(new byte[] {5, 5}, bscRequest.sourceProofBytes())
         : "BSC facade must use witness-resolved source proof bytes";
   }
 
   private static byte[] sampleGroth16ProofBytes() {
-    return flattenGroth16ProofWords(sampleGroth16ProofWords());
+    return sampleGroth16ProofBytes(samplePublicInputs(EvmSccpProver.DOMAIN_ETH));
+  }
+
+  private static byte[] sampleGroth16ProofBytes(
+      final EvmSccpProver.PublicInputsInput publicInputs) {
+    return flattenGroth16ProofWords(
+        sampleGroth16ProofWords(publicInputs, EvmSccpProver.DOMAIN_SORA));
   }
 
   private static byte[] sampleGroth16ProofBytes(final int wordIndex, final byte[] word) {
-    final byte[][] words = sampleGroth16ProofWords();
+    final byte[][] words =
+        sampleGroth16ProofWords(
+            samplePublicInputs(EvmSccpProver.DOMAIN_ETH), EvmSccpProver.DOMAIN_SORA);
     words[wordIndex] = Arrays.copyOf(word, word.length);
     return flattenGroth16ProofWords(words);
   }
 
   private static byte[] sampleGroth16ProofBytesWithZeroB() {
-    final byte[][] words = sampleGroth16ProofWords();
+    final byte[][] words =
+        sampleGroth16ProofWords(
+            samplePublicInputs(EvmSccpProver.DOMAIN_ETH), EvmSccpProver.DOMAIN_SORA);
     words[6] = new byte[32];
     words[7] = new byte[32];
     words[8] = new byte[32];
@@ -7147,7 +7165,9 @@ public final class EvmSccpProverTests {
   }
 
   private static byte[] sampleGroth16ProofBytesWithNonSubgroupB() {
-    final byte[][] words = sampleGroth16ProofWords();
+    final byte[][] words =
+        sampleGroth16ProofWords(
+            samplePublicInputs(EvmSccpProver.DOMAIN_ETH), EvmSccpProver.DOMAIN_SORA);
     words[6] = abiWord(0);
     words[7] = abiWord(1);
     words[8] = hexWord("0cf32d3c49a2cb8a092f24ec3201e68dc299b6216e6321ee60573e3a7f596ea8");
@@ -7155,12 +7175,13 @@ public final class EvmSccpProverTests {
     return flattenGroth16ProofWords(words);
   }
 
-  private static byte[][] sampleGroth16ProofWords() {
+  private static byte[][] sampleGroth16ProofWords(
+      final EvmSccpProver.PublicInputsInput publicInputs, final int sourceDomain) {
     return new byte[][] {
       abiWord(1),
-      repeatedWord(0x11),
-      abiWord(SolanaSccpProver.DOMAIN_SORA),
-      repeatedWord(0x33),
+      hexWord(stripHex(publicInputs.messageId())),
+      abiWord(sourceDomain),
+      hexWord(stripHex(publicInputs.commitmentRoot())),
       abiWord(1),
       abiWord(2),
       hexWord("1800deef121f1e76426a00665e5c4479674322d4f75edadd46debd5cd992f6ed"),
@@ -7319,6 +7340,25 @@ public final class EvmSccpProverTests {
         result.destinationBinding());
   }
 
+  private static EvmSccpProver.ProofResult evmResultWithSourceProofBytes(
+      final EvmSccpProver.ProofResult result, final byte[] sourceProofBytes) {
+    return new EvmSccpProver.ProofResult(
+        result.version(),
+        result.backend(),
+        result.proofBytes(),
+        result.proofBase64(),
+        result.publicInputs(),
+        result.publicSignalWords(),
+        result.bundleBytes(),
+        sourceProofBytes,
+        result.proofContext(),
+        result.statementHash(),
+        result.destinationBindingHash(),
+        result.requestHash(),
+        result.envelopeHash(),
+        result.destinationBinding());
+  }
+
   private static EvmSccpProver.ProofResult evmResultWithProofBase64(
       final EvmSccpProver.ProofResult result, final String proofBase64) {
     return new EvmSccpProver.ProofResult(
@@ -7408,7 +7448,7 @@ public final class EvmSccpProverTests {
       final int sourceDomain) {
     return new EvmSccpProver.ProofRequestInput(
         publicInputs,
-        new byte[] {5, 6, 7},
+        sampleBundleBytes(publicInputs.targetDomain()),
         sourceProofBytes,
         statementHash,
         destinationBindingHash,
@@ -7421,7 +7461,7 @@ public final class EvmSccpProverTests {
       final byte[] sourceProofBytes,
       final String statementHash) {
     return sampleProductionProofRequestInput(
-        publicInputs, new byte[] {5, 6, 7}, sourceProofBytes, statementHash);
+        publicInputs, sampleBundleBytes(publicInputs.targetDomain()), sourceProofBytes, statementHash);
   }
 
   private static EvmSccpProver.ProofRequestInput sampleProductionProofRequestInput(
@@ -7437,6 +7477,162 @@ public final class EvmSccpProverTests {
         sampleDestinationBinding(publicInputs),
         EvmSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
         SolanaSccpProver.DOMAIN_SORA);
+  }
+
+  private static final class SampleBundleFixture {
+    final EvmSccpProver.PublicInputsInput publicInputs;
+    final byte[] bundleBytes;
+
+    SampleBundleFixture(
+        final EvmSccpProver.PublicInputsInput publicInputs, final byte[] bundleBytes) {
+      this.publicInputs = publicInputs;
+      this.bundleBytes = bundleBytes;
+    }
+  }
+
+  private static byte[] sampleBundleBytes() {
+    return sampleBundleFixture(EvmSccpProver.DOMAIN_ETH).bundleBytes;
+  }
+
+  private static byte[] sampleBundleBytes(final int targetDomain) {
+    return sampleBundleFixture(targetDomain).bundleBytes;
+  }
+
+  private static SampleBundleFixture sampleBundleFixture(final int targetDomain) {
+    return sampleBundleFixture(SolanaSccpProver.DOMAIN_SORA, targetDomain, 327L);
+  }
+
+  private static SampleBundleFixture sampleBundleFixture(
+      final int sourceDomain, final int targetDomain, final long nonce) {
+    final int recipientCodec = targetDomain == TronSccpProver.DOMAIN_TRON ? 5 : 2;
+    final String recipient =
+        targetDomain == TronSccpProver.DOMAIN_TRON
+            ? "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8"
+            : "0x" + repeat("11", 20);
+    final String routeId =
+        targetDomain == EvmSccpProver.DOMAIN_BSC
+            ? "sora-bsc-xor"
+            : targetDomain == TronSccpProver.DOMAIN_TRON ? "sora-tron-xor" : "sora-eth-xor";
+
+    final ByteArrayOutputStream payloadBody = new ByteArrayOutputStream();
+    payloadBody.write(1);
+    writeTestU32Le(payloadBody, sourceDomain);
+    writeTestU32Le(payloadBody, targetDomain);
+    writeTestU64Le(payloadBody, BigInteger.valueOf(nonce));
+    writeTestU32Le(payloadBody, SolanaSccpProver.DOMAIN_SORA);
+    payloadBody.write(1);
+    writeTestBytes(payloadBody, "xor#sccp".getBytes(StandardCharsets.UTF_8));
+    writeTestU128Le(payloadBody, BigInteger.valueOf(42L));
+    payloadBody.write(1);
+    writeTestBytes(payloadBody, "alice@sora".getBytes(StandardCharsets.UTF_8));
+    payloadBody.write(recipientCodec);
+    writeTestBytes(payloadBody, recipient.getBytes(StandardCharsets.UTF_8));
+    payloadBody.write(1);
+    writeTestBytes(payloadBody, routeId.getBytes(StandardCharsets.UTF_8));
+
+    final byte[] payloadBodyBytes = payloadBody.toByteArray();
+    final byte[] payloadBytes = concatTestBytes(new byte[] {0x02}, payloadBodyBytes);
+    final String messageId =
+        "0x" + hexLower(prefixedKeccakBytes("sccp:transfer:v1", payloadBodyBytes));
+    final String payloadHash =
+        "0x"
+            + hexLower(
+                Blake2b.digest256(
+                    concatTestBytes("sccp:payload:v1".getBytes(StandardCharsets.UTF_8), payloadBytes)));
+
+    final ByteArrayOutputStream commitment = new ByteArrayOutputStream();
+    commitment.write(1);
+    commitment.write(6);
+    writeTestU32Le(commitment, targetDomain);
+    writeTestRawBytes(commitment, hexBytes(messageId.substring(2)));
+    writeTestRawBytes(commitment, hexBytes(payloadHash.substring(2)));
+    final byte[] commitmentBytes = commitment.toByteArray();
+    final byte[] currentRoot =
+        Blake2b.digest256(
+            concatTestBytes("sccp:hub:leaf:v1".getBytes(StandardCharsets.UTF_8), commitmentBytes));
+    final String commitmentRoot = "0x" + hexLower(currentRoot);
+
+    final ByteArrayOutputStream merkleProof = new ByteArrayOutputStream();
+    writeTestU32Le(merkleProof, 0);
+
+    final ByteArrayOutputStream bundle = new ByteArrayOutputStream();
+    bundle.write(1);
+    writeTestRawBytes(bundle, currentRoot);
+    writeTestBytes(bundle, commitmentBytes);
+    writeTestBytes(bundle, merkleProof.toByteArray());
+    writeTestBytes(bundle, payloadBytes);
+    writeTestBytes(bundle, new byte[] {0x01, 0x02, 0x03});
+
+    return new SampleBundleFixture(
+        new EvmSccpProver.PublicInputsInput(
+            1, messageId, payloadHash, targetDomain, commitmentRoot, "19", repeat("44", 32)),
+        bundle.toByteArray());
+  }
+
+  private static void writeTestBytes(final ByteArrayOutputStream out, final byte[] value) {
+    writeTestU32Le(out, value.length);
+    writeTestRawBytes(out, value);
+  }
+
+  private static void writeTestRawBytes(final ByteArrayOutputStream out, final byte[] value) {
+    out.write(value, 0, value.length);
+  }
+
+  private static void writeTestU32Le(final ByteArrayOutputStream out, final int value) {
+    if (value < 0) {
+      throw new IllegalArgumentException("u32 test value must be non-negative");
+    }
+    out.write(value & 0xff);
+    out.write((value >>> 8) & 0xff);
+    out.write((value >>> 16) & 0xff);
+    out.write((value >>> 24) & 0xff);
+  }
+
+  private static void writeTestU64Le(final ByteArrayOutputStream out, final BigInteger value) {
+    BigInteger working = value;
+    for (int index = 0; index < 8; index++) {
+      out.write(working.and(BigInteger.valueOf(0xffL)).intValue());
+      working = working.shiftRight(8);
+    }
+  }
+
+  private static void writeTestU128Le(final ByteArrayOutputStream out, final BigInteger value) {
+    BigInteger working = value;
+    for (int index = 0; index < 16; index++) {
+      out.write(working.and(BigInteger.valueOf(0xffL)).intValue());
+      working = working.shiftRight(8);
+    }
+  }
+
+  private static byte[] concatTestBytes(final byte[] left, final byte[] right) {
+    final byte[] out = Arrays.copyOf(left, left.length + right.length);
+    System.arraycopy(right, 0, out, left.length, right.length);
+    return out;
+  }
+
+  private static byte[] hexBytes(final String hex) {
+    if ((hex.length() & 1) != 0) {
+      throw new IllegalArgumentException("hex test value must have even length");
+    }
+    final byte[] out = new byte[hex.length() / 2];
+    for (int index = 0; index < out.length; index++) {
+      out[index] = (byte) Integer.parseInt(hex.substring(index * 2, index * 2 + 2), 16);
+    }
+    return out;
+  }
+
+  private static String stripHex(final String value) {
+    return value.startsWith("0x") ? value.substring(2) : value;
+  }
+
+  private static byte[] prefixedKeccakBytes(final String prefix, final byte[] payload) {
+    final KeccakDigest digest = new KeccakDigest(256);
+    final byte[] prefixBytes = prefix.getBytes(StandardCharsets.UTF_8);
+    digest.update(prefixBytes, 0, prefixBytes.length);
+    digest.update(payload, 0, payload.length);
+    final byte[] out = new byte[32];
+    digest.doFinal(out, 0);
+    return out;
   }
 
   private static SourceSccpProofs.EvmDestinationBinding sampleDestinationBinding(
@@ -7457,14 +7653,15 @@ public final class EvmSccpProverTests {
 
   private static EvmSccpProver.PublicInputsInput samplePublicInputs(
       final int targetDomain, final String finalityHeight) {
+    final EvmSccpProver.PublicInputsInput fixture = sampleBundleFixture(targetDomain).publicInputs;
     return new EvmSccpProver.PublicInputsInput(
         1,
-        repeat("11", 32),
-        repeat("22", 32),
+        fixture.messageId(),
+        fixture.payloadHash(),
         targetDomain,
-        repeat("33", 32),
+        fixture.commitmentRoot(),
         finalityHeight,
-        repeat("44", 32));
+        fixture.finalityBlockHash());
   }
 
   private static EthereumMainnetSccp.BeaconRestResponse beaconResponse(final String json) {

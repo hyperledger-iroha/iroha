@@ -199,6 +199,20 @@ public final class TronSccpProver {
     final byte[] sourceAdapterEngineDeploymentHash =
         nonZeroHex32Bytes(
             input.sourceAdapterEngineDeploymentHash(), "sourceAdapterEngineDeploymentHash");
+    requireHashRolesDistinct(
+        "TRON route canary governed hashes",
+        new String[] {
+          "routeAllowlistHash",
+          "destinationBindingHash",
+          "sourceVerifierMaterialHash",
+          "sourceAdapterEngineDeploymentHash"
+        },
+        new byte[][] {
+          routeAllowlistHash,
+          destinationBindingHash,
+          sourceVerifierMaterialHash,
+          sourceAdapterEngineDeploymentHash
+        });
     final byte[] expectedRouteAllowlistHash =
         routeAllowlistHashBytes(
             sourceVerifierMaterialHash, sourceAdapterEngineDeploymentHash, destinationBindingHash);
@@ -359,6 +373,9 @@ public final class TronSccpProver {
     if (!GROTH16_BN254_PROOF_BACKEND_V1.equals(input.backend())) {
       throw new IllegalArgumentException("backend must be tron-groth16-bn254-v1");
     }
+    if (input.sourceDomain() != DOMAIN_SORA) {
+      throw new IllegalArgumentException("sourceDomain must be SORA");
+    }
     final byte[] publicInputsBytes = canonicalPublicInputsBytes(input.publicInputs());
     final ProofContext proofContext =
         normalizeProofContext(input.statementHash(), input.destinationBindingHash());
@@ -374,6 +391,17 @@ public final class TronSccpProver {
     }
     final byte[] sourceProofBytes =
         requireOptionalSourceProofBytes(input.sourceProofBytes(), "sourceProofBytes");
+    final SccpMessageProofBundles.BundleSummary bundleSummary =
+        SccpMessageProofBundles.requireMatchesPublicInputs(
+            input.publicInputs().targetDomain(),
+            normalizeHex32(input.publicInputs().messageId(), "publicInputs.messageId"),
+            normalizeHex32(input.publicInputs().payloadHash(), "publicInputs.payloadHash"),
+            normalizeHex32(input.publicInputs().commitmentRoot(), "publicInputs.commitmentRoot"),
+            bundleBytes,
+            sourceProofBytes);
+    if (bundleSummary.sourceDomain != input.sourceDomain()) {
+      throw new IllegalArgumentException("bundleBytes.sourceDomain must match sourceDomain");
+    }
     final ByteArrayOutputStream preimage = new ByteArrayOutputStream();
     write(preimage, publicInputsBytes);
     writeU32Le(preimage, bundleBytes.length);
@@ -1223,6 +1251,16 @@ public final class TronSccpProver {
       final byte[] sourceVerifierMaterialHash,
       final byte[] sourceAdapterEngineDeploymentHash,
       final byte[] destinationBindingHash) {
+    requireHashRolesDistinct(
+        "TRON route allowlist governed hashes",
+        new String[] {
+          "sourceVerifierMaterialHash",
+          "sourceAdapterEngineDeploymentHash",
+          "destinationBindingHash"
+        },
+        new byte[][] {
+          sourceVerifierMaterialHash, sourceAdapterEngineDeploymentHash, destinationBindingHash
+        });
     final ByteArrayOutputStream out = new ByteArrayOutputStream();
     out.write(1);
     writeU32Le(out, DOMAIN_TRON);
@@ -1291,6 +1329,18 @@ public final class TronSccpProver {
                   + fieldNames[j]
                   + " matches "
                   + fieldNames[i]);
+        }
+      }
+    }
+  }
+
+  private static void requireHashRolesDistinct(
+      final String context, final String[] labels, final byte[][] values) {
+    for (int index = 0; index < values.length; index++) {
+      for (int previous = 0; previous < index; previous++) {
+        if (Arrays.equals(values[index], values[previous])) {
+          throw new IllegalArgumentException(
+              context + " must be distinct: " + labels[index] + " matches " + labels[previous]);
         }
       }
     }

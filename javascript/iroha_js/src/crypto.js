@@ -1459,6 +1459,13 @@ function kagemushaReadNoritoLength(buffer, offset, flags, name) {
     cursor += 1;
     value |= (byte & 0x7fn) << shift;
     if ((byte & 0x80n) === 0n) {
+      const encodedLength = cursor - offset;
+      if (
+        encodedLength > 1 &&
+        value < (1n << (7n * BigInt(encodedLength - 1)))
+      ) {
+        throw new Error(`${name} varint is non-canonical`);
+      }
       if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
         throw new Error(`${name} exceeds safe length`);
       }
@@ -2489,18 +2496,24 @@ export function privacyProofRequestV1(input) {
   });
   const witnessBuffer = toPrivacyRequestComponentBuffer(witness, "witness");
   const proofBuffer = toPrivacyRequestComponentBuffer(proof, "proof");
-  const native = ensurePrivacyNative(resolveNativeBinding(), "privacyProofRequestV1");
-  const result = invokePrivacyNative(
-    native,
-    "privacyProofRequestV1",
-    algorithmIdText,
-    entrypointText,
-    vkRefText,
-    publicInputsBuffer,
-    witnessBuffer,
-    proofBuffer,
-  );
-  return privacyRequestNativeOutputToBuffer(result, "privacyProofRequestV1");
+  try {
+    const native = ensurePrivacyNative(resolveNativeBinding(), "privacyProofRequestV1");
+    const result = invokePrivacyNative(
+      native,
+      "privacyProofRequestV1",
+      algorithmIdText,
+      entrypointText,
+      vkRefText,
+      publicInputsBuffer,
+      witnessBuffer,
+      proofBuffer,
+    );
+    return privacyRequestNativeOutputToBuffer(result, "privacyProofRequestV1");
+  } finally {
+    publicInputsBuffer.fill(0);
+    witnessBuffer.fill(0);
+    proofBuffer.fill(0);
+  }
 }
 
 export function privacyBuildProofV1(requestArchive) {

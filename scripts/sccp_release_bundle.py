@@ -13,6 +13,7 @@ import stat
 import sys
 from pathlib import Path, PurePosixPath
 from typing import Any
+from urllib.parse import unquote
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -99,6 +100,46 @@ def _path_markdown_unsafe_character(path: str) -> str | None:
     return None
 
 
+def _native_evm_prover_duplicate_json_key_error(key: Any) -> str:
+    label = "native EVM Groth16 prover bundle"
+    if not isinstance(key, str) or not key:
+        return f"{label} JSON contains malformed duplicate key"
+    if _path_control_character(key) is not None:
+        return f"{label} JSON contains duplicate key with control character"
+    if not key.isascii():
+        return f"{label} JSON contains duplicate key with non-ASCII character"
+    if key.strip() != key:
+        return f"{label} JSON contains duplicate key with surrounding whitespace"
+    if any(character.isspace() for character in key):
+        return f"{label} JSON contains duplicate key with whitespace"
+    if _path_markdown_unsafe_character(key) is not None:
+        return f"{label} JSON contains duplicate key with Markdown-unsafe character"
+    return f"{label} JSON contains duplicate key: {key}"
+
+
+def _path_percent_encoded_traversal(path: str) -> str | None:
+    decoded = path
+    seen = {decoded}
+    for _ in range(32):
+        if "%" not in decoded:
+            return None
+        decoded = unquote(decoded)
+        if decoded in seen:
+            return None
+        seen.add(decoded)
+        decoded_path = PurePosixPath(decoded)
+        if (
+            decoded_path.is_absolute()
+            or ".." in decoded_path.parts
+            or "\\" in decoded
+            or decoded != decoded_path.as_posix()
+        ):
+            return repr(path)
+    if "%" in decoded:
+        return repr(path)
+    return None
+
+
 def _artifact(path: Path, root: Path) -> dict[str, Any]:
     payload = path.read_bytes()
     artifact_path = path.relative_to(root).as_posix()
@@ -118,6 +159,12 @@ def _artifact(path: Path, root: Path) -> dict[str, Any]:
         raise ValueError(
             "release artifact path contains Markdown-unsafe character "
             f"{markdown_unsafe_character}: {artifact_path!r}"
+        )
+    percent_traversal = _path_percent_encoded_traversal(artifact_path)
+    if percent_traversal is not None:
+        raise ValueError(
+            "release artifact path contains percent-encoded traversal segment: "
+            f"{percent_traversal}"
         )
     return {
         "path": artifact_path,
@@ -266,6 +313,13 @@ def _native_evm_manifest_relative_path(value: Any, label: str) -> PurePosixPath:
             f"{label} path contains Markdown-unsafe character "
             f"{markdown_unsafe_character}: {value!r}"
         )
+    percent_traversal = _path_percent_encoded_traversal(value)
+    if percent_traversal is not None:
+        raise ValueError(
+            "native EVM Groth16 prover bundle "
+            f"{label} path contains percent-encoded traversal segment: "
+            f"{percent_traversal}"
+        )
     if ":" in value:
         raise ValueError(
             f"native EVM Groth16 prover bundle {label} path must not contain URI schemes or drive prefixes"
@@ -302,10 +356,7 @@ def _native_evm_prover_payload_sources(
     try:
         payload = _load_json_without_duplicate_keys(source)
     except DuplicateJsonKeyError as exc:
-        raise ValueError(
-            "native EVM Groth16 prover bundle JSON contains duplicate key: "
-            f"{exc.key}"
-        ) from exc
+        raise ValueError(_native_evm_prover_duplicate_json_key_error(exc.key)) from exc
     if not isinstance(payload, dict):
         raise ValueError("native EVM Groth16 prover bundle must be a JSON object")
 
@@ -447,6 +498,24 @@ USER_PROVER_SUBMISSION_SURFACE_FIELDS = (
     "required_phases",
     "validation_status",
 )
+READINESS_REPORT_BUNDLE_FIELDS = (
+    "inputs",
+    "input_artifacts",
+    "release_checklist",
+    "corridor",
+    "cryptographic_evidence",
+    "user_prover_submission_surfaces",
+    "native_evm_prover_bundle",
+    "source_inventory",
+    "evidence",
+)
+READINESS_REPORT_ROOT_FIELDS = (
+    "production_ready",
+    "blockers",
+    *READINESS_REPORT_BUNDLE_FIELDS,
+)
+RELEASE_CHECKLIST_FIELDS = ("ready", "items")
+RELEASE_CHECKLIST_ITEM_FIELDS = ("id", "title", "ready", "blockers")
 
 
 def _require_report_mapping(
@@ -478,12 +547,60 @@ def _require_report_fields(
             errors.append(f"{label} missing field: {field}")
 
 
+def _unknown_report_field_errors(
+    payload: dict[str, Any],
+    label: str,
+    allowed_fields: tuple[str, ...],
+) -> list[str]:
+    return [
+        f"{label} contains unknown field: {field}"
+        for field in sorted(set(payload) - set(allowed_fields), key=str)
+    ]
+
+
+def _string_list_field_errors(
+    label: str,
+    payload: dict[str, Any],
+    field: str,
+    *,
+    allow_empty: bool,
+) -> list[str]:
+    errors: list[str] = []
+    value = payload.get(field)
+    if not isinstance(value, list):
+        return [f"{label} {field} must be a list of non-empty strings"]
+    if not allow_empty and not value:
+        errors.append(f"{label} {field} must not be empty")
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, str) or not item:
+            errors.append(f"{label} {field} must be a list of non-empty strings")
+            continue
+        if item.strip() != item:
+            errors.append(
+                f"{label} {field} must be a list of non-empty strings "
+                "with no surrounding whitespace"
+            )
+        if item in seen:
+            errors.append(f"{label} {field} must not contain duplicate strings")
+        seen.add(item)
+    return errors
+
+
 def _release_report_preflight_errors(report: Any, *, label: str) -> list[str]:
     errors: list[str] = []
     payload = _require_report_mapping(report, label, errors)
     if errors:
         return errors
     _require_report_fields(payload, label, ("production_ready", "blockers"), errors)
+    if type(payload.get("production_ready")) is not bool:
+        errors.append(f"{label} production_ready must be true or false")
+    errors.extend(
+        _string_list_field_errors(label, payload, "blockers", allow_empty=True)
+    )
+    blockers = payload.get("blockers")
+    if payload.get("production_ready") is True and isinstance(blockers, list) and blockers:
+        errors.append(f"{label} blockers must be empty when production_ready is true")
     return errors
 
 
@@ -501,22 +618,12 @@ def _release_report_bundle_errors(report: Any, *, label: str) -> list[str]:
     if not isinstance(payload, dict):
         return errors
 
-    _require_report_fields(
-        payload,
-        label,
-        (
-            "input_artifacts",
-            "release_checklist",
-            "corridor",
-            "cryptographic_evidence",
-            "user_prover_submission_surfaces",
-            "native_evm_prover_bundle",
-            "source_inventory",
-            "evidence",
-        ),
-        errors,
+    errors.extend(
+        _unknown_report_field_errors(payload, label, READINESS_REPORT_ROOT_FIELDS)
     )
+    _require_report_fields(payload, label, READINESS_REPORT_BUNDLE_FIELDS, errors)
 
+    _require_report_list(payload.get("inputs"), f"{label}.inputs", errors)
     for index, artifact in enumerate(
         _require_report_list(payload.get("input_artifacts"), f"{label}.input_artifacts", errors)
     ):
@@ -528,10 +635,17 @@ def _release_report_bundle_errors(report: Any, *, label: str) -> list[str]:
         errors,
     )
     if checklist:
+        errors.extend(
+            _unknown_report_field_errors(
+                checklist,
+                f"{label}.release_checklist",
+                RELEASE_CHECKLIST_FIELDS,
+            )
+        )
         _require_report_fields(
             checklist,
             f"{label}.release_checklist",
-            ("ready", "items"),
+            RELEASE_CHECKLIST_FIELDS,
             errors,
         )
         for index, item in enumerate(
@@ -547,10 +661,17 @@ def _release_report_bundle_errors(report: Any, *, label: str) -> list[str]:
                 errors,
             )
             if item_payload:
+                errors.extend(
+                    _unknown_report_field_errors(
+                        item_payload,
+                        f"{label}.release_checklist.items[{index}]",
+                        RELEASE_CHECKLIST_ITEM_FIELDS,
+                    )
+                )
                 _require_report_fields(
                     item_payload,
                     f"{label}.release_checklist.items[{index}]",
-                    ("id", "ready"),
+                    RELEASE_CHECKLIST_ITEM_FIELDS,
                     errors,
                 )
 
@@ -907,6 +1028,27 @@ def _reject_symlink_sources(paths: list[Path]) -> None:
                 )
 
 
+def _evidence_input_identity(path: Path) -> tuple[object, ...]:
+    try:
+        status = path.stat()
+    except FileNotFoundError:
+        return ("path", path.resolve())
+    return ("file", status.st_dev, status.st_ino)
+
+
+def _reject_duplicate_evidence_inputs(paths: list[Path]) -> None:
+    seen: dict[tuple[object, ...], Path] = {}
+    for path in paths:
+        identity = _evidence_input_identity(path)
+        previous = seen.get(identity)
+        if previous is not None:
+            raise ValueError(
+                "release bundle evidence input path is duplicated: "
+                f"{path} duplicates {previous}"
+            )
+        seen[identity] = path
+
+
 def _reject_symlinked_existing_output_path(path: Path) -> None:
     current = Path(path.anchor) if path.is_absolute() else Path(".")
     parts = path.parts[1:] if path.is_absolute() else path.parts
@@ -995,6 +1137,7 @@ def main(argv: list[str] | None = None) -> int:
             native_evm_prover_bundle=args.native_evm_prover_bundle,
             force=args.force,
         )
+        _reject_duplicate_evidence_inputs(args.toml)
         preflight_report = report_module._build_report(
             args.toml,
             args.phase_result,

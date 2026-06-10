@@ -239,6 +239,9 @@ ADVERSARIAL_COVERAGE = {
                 'field: "previous_recursive_proof_open_envelopes_archive.vk_commitment"',
                 'field: "previous_recursive_proof_open_envelopes_archive.public_inputs_schema_hash"',
                 'field: "previous_recursive_proof_open_envelopes_archive.domain_tag"',
+                "kagemusha_recursive_previous_proof_open_envelope_domain_tag",
+                "mismatched_previous_opening_bundle",
+                "recursive-transition-previous-opening-mismatched-proof-chain",
                 "reserved_output_append_with_stale_previous_proof_payload",
                 "previous_recursive_proof_open_envelopes_archive_digest",
                 "append_opening_preflight_digest",
@@ -275,6 +278,20 @@ ADVERSARIAL_COVERAGE = {
                 "legacy evidence-only append profiles omit append opening preflight bytes",
                 "binding append opening preflight bytes must change the transition profile digest",
                 "binding the full append opening preflight contract must change the transition profile digest",
+                "digest_only_semantic_bundle",
+                "kagemusha_recursive_spend_proof_artifact_digest(&recursive_proof)",
+                "digest_only_lineage_bundle",
+                "recursive-spend-lineage-digest-only-append-opening",
+                "forged_scalar_projection_public_input.recursive_proof",
+                "append_opening_preflight_digest",
+                "kagemusha_recursive_public_inputs_reject_one_hop_append_opening_preflight",
+                "forged-one-hop-append-opening-preflight",
+                "kagemusha_recursive_aggregation_proof_rejects_spend_state_on_generic_circuit",
+                "forged-generic-recursive-proof-chain",
+                "forged-generic-transition-profile-binding",
+                "forged-generic-append-opening-preflight",
+                "forged-generic-append-boundary",
+                "forged-generic-recursive-scalar-projection",
                 "KagemushaRecursiveSpendLineageAppendBoundaryV1",
                 "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_CHAIN_ASSET_BINDING_DOMAIN_V1",
                 "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_FINAL_NOTE_BINDING_DOMAIN_V1",
@@ -343,6 +360,10 @@ ADVERSARIAL_COVERAGE = {
         "forged-hop-proof-vk-hash",
         "forged-hop-proof-circuit-id",
         "stale_hop_proof_schema",
+        "validate_kagemusha_recursive_spend_redeem_lineage_record_selection",
+        "one_hop_witnessless_lineage_wrong_record",
+        "reserved_previous_proof_wrong_record",
+        'field: "lineage_verifier_record.circuit_id"',
         "previous_proof_count_mismatch",
     ),
     "crates/iroha_core/src/zk.rs": (
@@ -466,6 +487,9 @@ ADVERSARIAL_COVERAGE = {
         "fixed-window shared-table manifest digest",
         "final note spend nullifier collides with a lineage input nullifier",
         "spend nullifier collides with a lineage output commitment",
+        "prefix_spliced_previous_proof",
+        "lineage witness must reject previous proofs from another prefix",
+        "previous_recursive_proof.folded_public_inputs_hash",
         "lineage profile without scalar projection must reject",
         "metadata-valid one-hop lineage profile must be chain-admission capable",
         "two-hop lineage profile must use the append verifier-slice layout",
@@ -506,6 +530,9 @@ ADVERSARIAL_COVERAGE = {
         "Kagemusha Reserved-lineage append public inputs {label} mismatch",
         "KagemushaRecursiveAggregationAppendVerifierSlice",
         "KagemushaRecursiveAggregationAppendVerifierSliceConfig",
+        "KagemushaRecursiveAggregationOneHopVerifierSliceKeygenShape",
+        "KagemushaRecursiveAggregationAppendVerifierSliceKeygenShape",
+        "synthesize_non_native_vesta_ipa_verifier_shared_table_native_scalar_keygen_shape",
         "KagemushaRecursiveSpendLineageBackendProfile",
         "kagemusha_recursive_spend_lineage_append_vk_box",
         "build_kagemusha_recursive_spend_lineage_append_vk_box",
@@ -522,6 +549,9 @@ ADVERSARIAL_COVERAGE = {
         "fn kagemusha_recursive_aggregation_append_verifier_slice_circuit_accepts_two_opening_profile",
         "fn kagemusha_recursive_aggregation_append_verifier_slice_circuit_rejects_scalar_projection_public_input_splice",
         "fn kagemusha_recursive_aggregation_append_verifier_slice_circuit_rejects_current_verifier_transcript_digest_splice",
+        "fn one_hop_keygen_shape_matches_full_circuit_verifier_key",
+        "fn append_keygen_shape_matches_full_circuit_verifier_key",
+        "keygen shape must preserve the verifier-key commitment",
         "previous recursive proof preflight requires exactly one witness",
         "append-boundary digest must be non-zero",
         "scalar-projection digest mismatch",
@@ -699,6 +729,9 @@ ADVERSARIAL_COVERAGE = {
         "reserved lineage bundle with record-backed witness",
         "fn kagemusha_recursive_spend_redeem_bridge_accepts_witnessless_reserved_lineage_public_binding",
         "witnessless reserved-lineage redeem validates before backend proof verification",
+        "bridge must reject lineage verifier record with mismatched circuit id",
+        "bridge must reject final lineage verifier record with mismatched circuit id",
+        "lineage_verifier_record.circuit_id",
         "bridge must reject the fixture's backend-invalid reserved-lineage proof",
     ),
     "crates/iroha_js_host/src/lib.rs": (
@@ -753,6 +786,7 @@ ADVERSARIAL_COVERAGE = {
         "missing recursive spend top-up anchor must reject",
         "zero recursive spend redeem VK commitment must reject",
         "fn kagemusha_recursive_spend_redeem_instruction_requires_lineage_record_for_reserved_previous_proof",
+        "JS host must reject lineage verifier-record circuit-id mismatch",
         "JS host must reject forged lineage verifier-record commitment",
         "kagemusha_recursive_spend_transition_profile_append_evidence_with_previous_proof_openings",
         "kagemusha_recursive_spend_transition_profile_append_evidence_with_opening_preflight_contract",
@@ -805,6 +839,8 @@ ADVERSARIAL_COVERAGE = {
         "encode JS host mixed lineage Pallas archive",
         "fn kagemusha_recursive_spend_redeem_instruction_rejects_backend_invalid_lineage",
         "witnessless reserved-lineage redeem validates before backend proof verification",
+        "JS host must reject final lineage verifier-record circuit-id mismatch",
+        "lineage_verifier_record.circuit_id",
         "reserved-lineage Kagemusha recursive spend proof did not verify",
         "reserved-lineage redeem without verifier-slice columns must reject",
         "fn kagemusha_recursive_spend_redeem_instruction_rejects_malformed_lineage_witnesses",
@@ -864,6 +900,7 @@ ADVERSARIAL_COVERAGE = {
         "Python native redeem builder must reject missing top-up anchors",
         "Python native redeem builder must reject zero redeem VK commitment",
         "fn kagemusha_recursive_spend_redeem_python_requires_lineage_record_for_reserved_previous_proof",
+        "Python native redeem builder must reject lineage verifier-record circuit mismatch",
         "Python native redeem builder must reject forged lineage verifier record",
         "can_prove_kagemusha_recursive_spend_append_output_proof_circuit_id(",
         "output_append_is_currently_provable",
@@ -921,6 +958,8 @@ ADVERSARIAL_COVERAGE = {
         "Python host must reject missing Reserved-lineage key artifacts",
         "fn kagemusha_recursive_spend_redeem_python_native_accepts_witnessless_reserved_lineage_public_binding",
         "witnessless reserved-lineage redeem validates before backend proof verification",
+        "Python native redeem builder must reject final lineage verifier-record circuit mismatch",
+        "lineage_verifier_record.circuit_id",
         "Python native redeem builder must reject backend-invalid reserved-lineage proof",
         "reserved-lineage redeem without verifier-slice columns must reject",
         "fn kagemusha_recursive_spend_redeem_python_function_rejects_structurally_invalid_lineage",
@@ -1930,6 +1969,26 @@ POLICY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-proof-public-input-circuit-binding",
     ),
     (
+        "data-model semantic proof append-opening negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-semantic-proof-append-opening",
+    ),
+    (
+        "data-model one-hop append-opening public-input negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-public-input-one-hop-append-opening",
+    ),
+    (
+        "data-model generic proof scalar-projection negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-generic-proof-scalar-projection",
+    ),
+    (
+        "data-model spend proof artifact circuit gates negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-spend-proof-artifact-circuit-gates",
+    ),
+    (
+        "data-model previous-proof opening bundle binding negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-previous-proof-opening-bundle-binding",
+    ),
+    (
         "data-model recursive spend previous-proof field binding negative control",
         "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-previous-proof-field-binding",
     ),
@@ -2655,6 +2714,64 @@ def check_rust_reserved_lineage_policy():
         or "append_boundary_digest: accumulator.append_boundary_digest" not in rust
     ):
         fail("missing Rust non-circular accumulator/public-input append boundary binding")
+    public_inputs_impl_start = rust.find("impl KagemushaRecursiveAggregationProofPublicInputs")
+    if public_inputs_impl_start < 0:
+        fail("missing Rust recursive proof public-input implementation block")
+    public_inputs_impl_body = extract_balanced_block(
+        rust,
+        rust.find("{", public_inputs_impl_start),
+        "{",
+        "}",
+        "recursive proof public-input implementation",
+    )
+    public_inputs_validate_body = extract_rust_function_body(
+        public_inputs_impl_body,
+        "pub fn validate_context(&self)",
+        "recursive proof public-input validate_context",
+    )
+    if (
+        "if self.append_opening_preflight_digest != [0u8; Hash::LENGTH] && self.hop_count <= 1"
+        not in public_inputs_validate_body
+    ):
+        fail("missing Rust one-hop append-opening public-input rejection")
+    if "kagemusha_recursive_public_inputs_reject_one_hop_append_opening_preflight" not in rust:
+        fail("missing Rust adversarial test for one-hop append-opening public inputs")
+    proof_impl_start = rust.find("impl KagemushaRecursiveAggregationProof {")
+    if proof_impl_start < 0:
+        fail("missing Rust recursive aggregation proof implementation block")
+    proof_impl_body = extract_balanced_block(
+        rust,
+        rust.find("{", proof_impl_start),
+        "{",
+        "}",
+        "recursive aggregation proof implementation",
+    )
+    proof_validate_body = extract_rust_function_body(
+        proof_impl_body,
+        "pub fn validate_public_input_binding(&self)",
+        "recursive aggregation proof validate_public_input_binding",
+    )
+    for field in (
+        "recursive_proof_chain_digest",
+        "transition_profile_binding_digest",
+        "append_boundary_digest",
+        "append_opening_preflight_digest",
+        "recursive_verifier_scalar_projection_digest",
+    ):
+        if (
+            f'"{field}"' not in proof_validate_body
+            or re.search(
+                rf"self\.public_inputs\s*\.\s*{re.escape(field)}",
+                proof_validate_body,
+            )
+            is None
+        ):
+            fail(f"missing Rust generic proof spend-state rejection for {field}")
+    if (
+        "kagemusha_recursive_aggregation_proof_rejects_spend_state_on_generic_circuit"
+        not in rust
+    ):
+        fail("missing Rust adversarial test for generic proof spend-state rejection")
 
     for name, needles in (
         (
@@ -3295,6 +3412,39 @@ def check_recursive_append_semantic_non_zero_groups():
 
 def check_recursive_spend_proof_public_input_circuit_binding():
     data_model = read("crates/iroha_data_model/src/offline/mod.rs")
+    validator_body = extract_rust_function_body(
+        data_model,
+        "fn validate_kagemusha_recursive_spend_proof_public_input_binding(",
+        "recursive spend proof artifact circuit gate binding",
+    )
+    require_ordered_needles(
+        validator_body,
+        "recursive spend proof artifact circuit gate binding",
+        (
+            "let public_inputs = &recursive_proof.public_inputs;",
+            '"recursive_proof_chain_digest"',
+            "public_inputs.recursive_proof_chain_digest",
+            '"transition_profile_binding_digest"',
+            "public_inputs.transition_profile_binding_digest",
+            "if digest == [0u8; Hash::LENGTH]",
+            "KagemushaFoldError::RecursiveSpendPublicInputMismatch { field }",
+            "KagemushaRecursiveSpendProofCircuit::SemanticAggregation => {",
+            '"append_boundary_digest"',
+            "public_inputs.append_boundary_digest",
+            '"append_opening_preflight_digest"',
+            "public_inputs.append_opening_preflight_digest",
+            '"recursive_verifier_scalar_projection_digest"',
+            "public_inputs.recursive_verifier_scalar_projection_digest",
+            "if digest != [0u8; Hash::LENGTH]",
+            "KagemushaFoldError::RecursiveSpendPublicInputMismatch { field }",
+            "KagemushaRecursiveSpendProofCircuit::Lineage => {",
+            "if public_inputs.recursive_verifier_scalar_projection_digest == [0u8; Hash::LENGTH]",
+            'field: "recursive_verifier_scalar_projection_digest"',
+            "if public_inputs.append_opening_preflight_digest != [0u8; Hash::LENGTH]",
+            "&& public_inputs.append_boundary_digest == [0u8; Hash::LENGTH]",
+            'field: "append_boundary_digest"',
+        ),
+    )
     body = extract_rust_function_body(
         data_model,
         "fn expected_kagemusha_recursive_spend_public_inputs_for_proof(",
@@ -3310,6 +3460,12 @@ def check_recursive_spend_proof_public_input_circuit_binding():
             'field: "append_boundary_digest"',
             "if recursive_proof.public_inputs.append_boundary_digest != [0u8; Hash::LENGTH]",
             'field: "append_boundary_digest"',
+            "if accumulator.append_opening_preflight_digest != [0u8; Hash::LENGTH]",
+            'field: "append_opening_preflight_digest"',
+            "if recursive_proof",
+            ".public_inputs",
+            ".append_opening_preflight_digest",
+            'field: "append_opening_preflight_digest"',
             "KagemushaRecursiveSpendProofCircuit::Lineage => {",
             "let scalar_projection = recursive_proof",
             ".recursive_verifier_scalar_projection_digest;",
@@ -3330,6 +3486,30 @@ def check_recursive_spend_proof_public_input_circuit_binding():
 
 def check_recursive_spend_previous_proof_field_binding():
     data_model = read("crates/iroha_data_model/src/offline/mod.rs")
+    opening_domain_tag_body = extract_rust_function_body(
+        data_model,
+        "pub fn kagemusha_recursive_previous_proof_open_envelope_domain_tag(",
+        "previous proof opening domain-tag bundle binding",
+    )
+    require_ordered_needles(
+        opening_domain_tag_body,
+        "previous proof opening domain-tag bundle binding",
+        (
+            "previous_bundle.validate_public_input_binding()?;",
+            "validate_kagemusha_recursive_spend_proof_public_input_binding(proof)?;",
+            "kagemusha_recursive_spend_proof_artifact_digest(proof)?",
+        ),
+    )
+    for needle in (
+        "mismatched_previous_opening_bundle",
+        "recursive-transition-previous-opening-mismatched-proof-chain",
+        "kagemusha_recursive_previous_proof_open_envelope_domain_tag",
+    ):
+        if needle not in data_model:
+            fail(
+                "previous proof opening metadata bundle binding is missing "
+                f"adversarial coverage: {needle}"
+            )
     body = extract_rust_function_body(
         data_model,
         "fn ensure_recursive_spend_previous_proof_matches(",
@@ -4068,6 +4248,101 @@ if mode == "--negative-control-data-model-proof-public-input-circuit-binding":
         print(str(error).splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: proof public-input circuit binding drift was not detected")
+
+if mode == "--negative-control-data-model-semantic-proof-append-opening":
+    target = "crates/iroha_data_model/src/offline/mod.rs"
+    source = read(target)
+    mutated = source.replace(
+        "if accumulator.append_opening_preflight_digest != [0u8; Hash::LENGTH] {",
+        "if false && accumulator.append_opening_preflight_digest != [0u8; Hash::LENGTH] {",
+        1,
+    )
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate semantic proof append-opening guard")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected semantic proof append-opening drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: semantic proof append-opening drift was not detected")
+
+if mode == "--negative-control-data-model-public-input-one-hop-append-opening":
+    target = "crates/iroha_data_model/src/offline/mod.rs"
+    source = read(target)
+    mutated = source.replace(
+        "if self.append_opening_preflight_digest != [0u8; Hash::LENGTH] && self.hop_count <= 1 {",
+        "if self.append_opening_preflight_digest != [0u8; Hash::LENGTH] && self.hop_count == 0 {",
+        1,
+    )
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate one-hop append-opening public-input guard")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected one-hop append-opening public-input drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: one-hop append-opening public-input drift was not detected")
+
+if mode == "--negative-control-data-model-generic-proof-scalar-projection":
+    target = "crates/iroha_data_model/src/offline/mod.rs"
+    source = read(target)
+    mutated = source.replace(
+        "                self.public_inputs\n                    .recursive_verifier_scalar_projection_digest,\n",
+        "                [0u8; Hash::LENGTH],\n",
+        1,
+    )
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate generic proof scalar-projection guard")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected generic proof scalar-projection drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: generic proof scalar-projection drift was not detected")
+
+if mode == "--negative-control-data-model-spend-proof-artifact-circuit-gates":
+    target = "crates/iroha_data_model/src/offline/mod.rs"
+    source = read(target)
+    mutated = source.replace(
+        "                && public_inputs.append_boundary_digest == [0u8; Hash::LENGTH]\n",
+        "                && false\n",
+        1,
+    )
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate spend proof artifact circuit gate")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected spend proof artifact circuit gate drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: spend proof artifact circuit gate drift was not detected")
+
+if mode == "--negative-control-data-model-previous-proof-opening-bundle-binding":
+    target = "crates/iroha_data_model/src/offline/mod.rs"
+    source = read(target)
+    mutated = source.replace(
+        "    previous_bundle.validate_public_input_binding()?;\n",
+        "",
+        1,
+    )
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate previous-proof opening bundle binding")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected previous-proof opening bundle binding drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: previous-proof opening bundle binding drift was not detected")
 
 if mode == "--negative-control-data-model-previous-proof-field-binding":
     target = "crates/iroha_data_model/src/offline/mod.rs"

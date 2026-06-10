@@ -17,11 +17,11 @@ public final class OfflineJsonParser {
     final Object root = parse(payload);
     final Map<String, Object> object = expectObject(root, "root");
     return new OfflineReadiness(
-        asBoolean(object.get("offline_note"), "offline_note"),
-        asBoolean(object.get("offline_one_use_keys"), "offline_one_use_keys"),
+        asOptionalBoolean(object.get("offline_note"), false),
+        asOptionalBoolean(object.get("offline_one_use_keys"), false),
         asOptionalBoolean(object.get("offline_recursive_note_proof"), false),
-        asBoolean(object.get("offline_fountain_qr"), "offline_fountain_qr"),
-        asBoolean(object.get("offline_sync_optional"), "offline_sync_optional"),
+        asOptionalBoolean(object.get("offline_fountain_qr"), false),
+        asOptionalBoolean(object.get("offline_sync_optional"), false),
         asBoolean(object.get("offline_telemetry"), "offline_telemetry"),
         asOptionalBoolean(object.get("offline_kagemusha_abi7"), false),
         asNullableString(object.get("offline_kagemusha_abi7_mode")),
@@ -34,12 +34,12 @@ public final class OfflineJsonParser {
     final Object root = parse(payload);
     final Map<String, Object> object = expectObject(root, "root");
     return new OfflineV2Readiness(
-        asBoolean(object.get("offline_note_v2"), "offline_note_v2"),
-        asBoolean(object.get("offline_one_use_keys"), "offline_one_use_keys"),
-        asBoolean(object.get("offline_recursive_note_proof"), "offline_recursive_note_proof"),
-        asBoolean(object.get("offline_fountain_qr_v1"), "offline_fountain_qr_v1"),
-        asBoolean(object.get("offline_sync_optional"), "offline_sync_optional"),
-        asBoolean(object.get("offline_telemetry"), "offline_telemetry"));
+        asBoolean(object.get("offline_telemetry"), "offline_telemetry"),
+        asOptionalBoolean(object.get("offline_kagemusha_abi7"), false),
+        asNullableString(object.get("offline_kagemusha_abi7_mode")),
+        asOptionalInteger(object.get("offline_kagemusha_abi7_bridge_abi_version")),
+        asNullableString(object.get("offline_kagemusha_abi7_circuit_id")),
+        asOptionalBoolean(object.get("offline_kagemusha_abi7_artifacts"), false));
   }
 
   public static String canonicalJson(final byte[] payload) {

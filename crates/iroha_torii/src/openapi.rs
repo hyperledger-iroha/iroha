@@ -664,7 +664,7 @@ fn offline_paths() -> Map {
         Value::Object(json_get_operation(
             "Offline",
             "Report Offline feature readiness.",
-            "Returns readiness signals for device-bound one-use notes, Fountain QR transport, and Kagemusha ABI-7 bearer-cash runtime support.",
+            "Returns readiness signals for the SDK-backed Kagemusha ABI-7 bearer-cash runtime.",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
@@ -674,22 +674,12 @@ fn offline_paths() -> Map {
         Value::Object(json_get_operation(
             "Offline",
             "Report Offline V2 feature readiness.",
-            "Returns readiness signals for versioned Offline V2 notes, one-use keys, recursive proofs, and Fountain QR transport.",
+            "Returns readiness signals for the SDK-backed Kagemusha ABI-7 bearer-cash runtime.",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
     );
     for (path, summary, description) in [
-        (
-            "/v1/offline/keys/refill",
-            "Refill Offline issuer keys.",
-            "POST issuer key-refill material. The JSON body must include account_id, timestamp_ms, nonce, and exactly one of signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
-        ),
-        (
-            "/v1/offline/notes/issue",
-            "Issue an Offline note.",
-            "POST an Offline note issuance request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one of signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
-        ),
         (
             "/v1/offline/v2/keys/refill",
             "Refill Offline V2 issuer keys.",
@@ -12080,8 +12070,8 @@ mod tests {
         assert!(paths.contains_key("/v1/soranet/privacy/event"));
         assert!(paths.contains_key("/v1/webhooks"));
         assert!(paths.contains_key("/v1/notify/devices"));
-        assert!(paths.contains_key("/v1/offline/keys/refill"));
-        assert!(paths.contains_key("/v1/offline/notes/issue"));
+        assert!(!paths.contains_key("/v1/offline/keys/refill"));
+        assert!(!paths.contains_key("/v1/offline/notes/issue"));
         assert!(paths.contains_key("/v1/offline/v2/readiness"));
         assert!(paths.contains_key("/v1/offline/v2/keys/refill"));
         assert!(paths.contains_key("/v1/offline/v2/notes/issue"));
@@ -12093,7 +12083,7 @@ mod tests {
         assert!(!paths.contains_key("/v1/offline/revocations"));
         assert!(!paths.contains_key("/v1/offline/revocations/bundle"));
         let refill_post = paths
-            .get("/v1/offline/keys/refill")
+            .get("/v1/offline/v2/keys/refill")
             .and_then(Value::as_object)
             .and_then(|path| path.get("post"))
             .and_then(Value::as_object)

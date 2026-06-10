@@ -6728,8 +6728,10 @@ pub struct SccpRouteManifestDto {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub bsc_source_bridge_address: Option<String>,
-    /// Legacy TRON-named SCCP source bridge contract address.
-    pub sccp_tron_source_bridge_address: String,
+    /// TRON SCCP source bridge contract address.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub sccp_tron_source_bridge_address: Option<String>,
     /// Generic destination verifier contract address.
     pub destination_verifier_address: String,
     /// Generic verifier contract address.
@@ -6746,10 +6748,14 @@ pub struct SccpRouteManifestDto {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub evm_verifier_address: Option<String>,
-    /// Legacy TRON-named destination verifier contract address.
-    pub tron_verifier_address: String,
-    /// Legacy TRON-named destination verifier contract address.
-    pub sccp_tron_destination_verifier_address: String,
+    /// TRON destination verifier contract address.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub tron_verifier_address: Option<String>,
+    /// TRON SCCP destination verifier contract address.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub sccp_tron_destination_verifier_address: Option<String>,
     /// Destination rollout proof material.
     pub destination_rollout: SccpRouteManifestDestinationRolloutDto,
     /// Destination binding material.
@@ -6930,6 +6936,7 @@ fn sccp_route_manifest_dto(
     manifest: &iroha_config::parameters::actual::SccpRouteManifest,
 ) -> SccpRouteManifestDto {
     let is_bsc = manifest.counterparty_domain == iroha_sccp::SCCP_DOMAIN_BSC;
+    let is_tron = manifest.counterparty_domain == iroha_sccp::SCCP_DOMAIN_TRON;
     let source_bridge_address = manifest.sccp_tron_source_bridge_address.clone();
     let verifier_address = manifest.tron_verifier_address.clone();
     SccpRouteManifestDto {
@@ -6949,14 +6956,14 @@ fn sccp_route_manifest_dto(
         source_bridge_address: source_bridge_address.clone(),
         sccp_bsc_source_bridge_address: is_bsc.then(|| source_bridge_address.clone()),
         bsc_source_bridge_address: is_bsc.then(|| source_bridge_address.clone()),
-        sccp_tron_source_bridge_address: source_bridge_address,
+        sccp_tron_source_bridge_address: is_tron.then(|| source_bridge_address.clone()),
         destination_verifier_address: verifier_address.clone(),
         verifier_address: verifier_address.clone(),
         sccp_bsc_destination_verifier_address: is_bsc.then(|| verifier_address.clone()),
         bsc_verifier_address: is_bsc.then(|| verifier_address.clone()),
         evm_verifier_address: is_bsc.then(|| verifier_address.clone()),
-        tron_verifier_address: verifier_address.clone(),
-        sccp_tron_destination_verifier_address: verifier_address.clone(),
+        tron_verifier_address: is_tron.then(|| verifier_address.clone()),
+        sccp_tron_destination_verifier_address: is_tron.then(|| verifier_address.clone()),
         destination_rollout: SccpRouteManifestDestinationRolloutDto {
             version: 1,
             destination_network_id: manifest.network_id_hex.clone(),
@@ -12244,10 +12251,6 @@ mod sccp_message_backend_tests {
             "0x4444444444444444444444444444444444444444"
         );
         assert_eq!(
-            dto.sccp_tron_source_bridge_address,
-            "0x3333333333333333333333333333333333333333"
-        );
-        assert_eq!(
             dto.source_bridge_address,
             "0x3333333333333333333333333333333333333333"
         );
@@ -12279,6 +12282,9 @@ mod sccp_message_backend_tests {
             dto.evm_verifier_address.as_deref(),
             Some("0x4444444444444444444444444444444444444444")
         );
+        assert!(dto.sccp_tron_source_bridge_address.is_none());
+        assert!(dto.tron_verifier_address.is_none());
+        assert!(dto.sccp_tron_destination_verifier_address.is_none());
         let proof_artifact_hash = format!("0x{}", "4c".repeat(32));
         let proving_key_hash = format!("0x{}", "4d".repeat(32));
         assert_eq!(
@@ -12335,10 +12341,6 @@ mod sccp_message_backend_tests {
             iroha_sccp::SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1
         );
         assert_eq!(
-            routes[0].sccp_tron_source_bridge_address,
-            "0x3333333333333333333333333333333333333333"
-        );
-        assert_eq!(
             routes[0].source_bridge_address,
             "0x3333333333333333333333333333333333333333"
         );
@@ -12350,6 +12352,9 @@ mod sccp_message_backend_tests {
             routes[0].bsc_verifier_address.as_deref(),
             Some("0x4444444444444444444444444444444444444444")
         );
+        assert!(routes[0].sccp_tron_source_bridge_address.is_none());
+        assert!(routes[0].tron_verifier_address.is_none());
+        assert!(routes[0].sccp_tron_destination_verifier_address.is_none());
     }
 
     #[test]
@@ -12365,6 +12370,18 @@ mod sccp_message_backend_tests {
         assert_eq!(
             dto.destination_verifier_address,
             "0x4444444444444444444444444444444444444444"
+        );
+        assert_eq!(
+            dto.sccp_tron_source_bridge_address.as_deref(),
+            Some("0x3333333333333333333333333333333333333333")
+        );
+        assert_eq!(
+            dto.tron_verifier_address.as_deref(),
+            Some("0x4444444444444444444444444444444444444444")
+        );
+        assert_eq!(
+            dto.sccp_tron_destination_verifier_address.as_deref(),
+            Some("0x4444444444444444444444444444444444444444")
         );
         assert!(dto.sccp_bsc_source_bridge_address.is_none());
         assert!(dto.bsc_source_bridge_address.is_none());
@@ -12392,6 +12409,9 @@ mod sccp_message_backend_tests {
             dto.destination_rollout.verifier_backend,
             iroha_sccp::SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1
         );
+        assert!(dto.sccp_tron_source_bridge_address.is_none());
+        assert!(dto.tron_verifier_address.is_none());
+        assert!(dto.sccp_tron_destination_verifier_address.is_none());
         assert!(dto.sccp_bsc_source_bridge_address.is_none());
         assert!(dto.bsc_source_bridge_address.is_none());
         assert!(dto.sccp_bsc_destination_verifier_address.is_none());

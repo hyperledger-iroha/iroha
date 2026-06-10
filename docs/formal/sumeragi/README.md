@@ -9842,11 +9842,99 @@ Temporal properties:
   every first entry into `Delivered` is also classified as a `ReadyQuorum` exit
   with complete evidence preserved, and that the commit-artifact effects match
   exactly one of the finality-installing or pending-delivery branches.
+- `RbcDeliveryEntryFinalityAlwaysCompletesCommittedDelivery` proves that a
+  finalizing RBC DELIVER entry from `ReadyQuorum` immediately installs the
+  complete committed-delivery envelope: the exact-source certificate stack is
+  present, the active view is recorded as the commit view, delivered RBC
+  evidence remains complete, and only the GST-elapsed observation gate can stay
+  enabled.
 - `RbcDeliveryEntryPendingAlwaysInstallsCompleteWaitState` proves that a
   non-final RBC DELIVER entry from `ReadyQuorum` installs the delivered-pending
   complete wait-state envelope immediately: delivered evidence is preserved,
   commit artifacts and finality certificates remain absent, and the post-state
   exposes only the consensus/GST timeout surface with RBC/fault gates closed.
+- `RbcDeliveryEntryAlwaysCompletesFinalityOrWaitState` proves that every first
+  entry into `Delivered` is closed by exactly the delivery branch selected by
+  buffered commit evidence: either the exact-source committed-delivery
+  certificate envelope is installed, or the complete delivered-pending wait
+  state is installed with commit artifacts still absent.
+- `RbcDeliveryEntryAlwaysMatchesCommitArtifactOutcome` proves that first entry
+  into `Delivered` leaves committed-state and commit-certificate artifacts
+  present if and only if buffered commit evidence selected the finality branch;
+  otherwise the delivered post-state keeps commit votes, stake, and commit-view
+  witnesses absent.
+- `RbcDeliveryEntryAlwaysMatchesPostGateSurfaceOutcome` proves that first
+  delivery entry closes all RBC and fault gates in both branches, exposes only
+  GST elapsed after a finalizing delivery, and exposes only the consensus/GST
+  timeout surface after a pending delivery.
+- `RbcDeliveryEntryAlwaysMatchesConsensusFrameOutcome` proves that first
+  delivery entry preserves the consensus frame around RBC delivery: view, GST,
+  prepare votes, live commit counters, signed stake, and view evidence remain
+  stable; the finality branch only commits the phase and clears the NewView
+  handoff, while the pending branch preserves phase and NewView votes.
+- `RbcDeliveryEntryFinalityAlwaysMatchesCertifiedSourceStack` proves that the
+  finalizing first delivery entry installs the certified finality-source stack
+  through the RBC DELIVER source exactly: the RBC-deliver finality branch is
+  selected, honest and Byzantine commit-vote finality sources are excluded, and
+  the resulting certificate stack matches the committed delivery artifacts.
+- `RbcDeliveryEntryFinalityAlwaysInstallsCommittedPostStateInvariants` proves
+  that the same finalizing first delivery entry installs the committed
+  post-state invariant bundle: committed phase/certificate/live-gate predicates
+  match finality, live vote/stake/honest-support and RBC evidence obligations
+  hold, the NewView handoff is cleared, and progress/fault gates are closed.
+- `RbcDeliveryEntryFinalityAlwaysSplitsPostStateGate` proves that the same
+  finalizing first delivery entry has an exact post-state gate split: pre-GST
+  delivery finality leaves only `GstElapsed` enabled, while post-GST delivery
+  finality reaches the committed+GST terminal gate surface.
+- `RbcDeliveryEntryFinalityPreGstPostStateOnlyLeavesGstElapsed` proves the
+  pre-GST branch of first-delivery finality explicitly: the post-state is
+  committed, keeps GST unobserved, closes progress/fault gates, and leaves only
+  `GstElapsed` enabled.
+- `RbcDeliveryEntryFinalityPostGstPostStateIsTerminal` proves the post-GST
+  branch of first-delivery finality explicitly: the post-state is committed,
+  GST-observed, and terminal with every progress, fault, timeout, and
+  `GstElapsed` gate disabled.
+- `RbcDeliveryEntryPendingAlwaysMatchesNonFinalWaitSurface` proves that first
+  delivery entry without buffered commit evidence installs the non-final
+  delivered wait surface: consensus counters stay stable, commit artifacts and
+  certificates remain absent, delivered evidence stays complete, live commit
+  gates remain unsatisfied, RBC/fault gates close, and GST/timeout gates match
+  the resulting pending consensus surface.
+- `RbcDeliveryEntryPendingAlwaysSplitsPostStateTimerGate` proves that the same
+  non-final delivery-entry branch has an exact timer-gate split: pre-GST
+  post-state keeps both `GstElapsed` and timeout enabled, while post-GST
+  post-state disables `GstElapsed` and enables timeout exactly when honest
+  progress is unavailable.
+- `RbcDeliveryEntryPendingPreGstPostStateAlwaysKeepsWaitTimers` proves the
+  pre-GST branch of non-final delivery entry explicitly: the post-state remains
+  uncommitted, keeps delivered-without-finality evidence, closes RBC/fault
+  gates, and enables both `GstElapsed` and timeout.
+- `RbcDeliveryEntryPendingPostGstPostStateAlwaysTracksProgressTimeout` proves
+  the post-GST branch of non-final delivery entry explicitly: `GstElapsed` is
+  disabled and timeout is enabled exactly when no honest post-GST progress gate
+  is available.
+- `RbcDeliveryEntryPendingAlwaysInstallsDeliveredWaitPredicate` proves that
+  the non-final first delivery entry installs the shared
+  `RbcDeliveredWithoutFinalityWaitsForCommitEvidence` post-state predicate
+  used by delivered-pending continuation theorems, including the
+  non-committed phase, prepare-quorum, no-certificate, no-live-commit, and RBC
+  progress-closure obligations.
+- `RbcDeliveryEntryPendingAlwaysOpensDeliveredPendingContinuationSurface`
+  proves that the same non-final first delivery entry exposes the full
+  delivered-pending continuation surface explicitly: complete delivered
+  evidence, zero commit artifacts, no finality stack, closed RBC/fault gates,
+  exact GST/timeout gates, and the installed delivered-wait predicate.
+- `RbcDeliveryEntryCommitEvidenceBranchAlwaysOpensExactContinuation` proves
+  that first delivery entry opens exactly the continuation selected by buffered
+  commit evidence: a certified committed-delivery continuation when the live
+  commit gate is satisfied, otherwise the delivered-pending continuation
+  surface with commit artifacts still absent.
+- `RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesExclusiveOutcome` proves
+  that the same first delivery entry has a single commit-evidence outcome
+  discriminator: `committed'`, committed phase, finality-stack presence,
+  certificate quorums, and the live commit gate all agree; the certified
+  branch records exact commit evidence, while the pending branch keeps commit
+  artifacts absent and waits for commit evidence.
 - `RbcProgressEvidenceNeverDiverges` proves that every reachable RBC progress
   state keeps the evidence expected for that state: initialized states keep
   validated header/digest evidence, chunk-covered states keep full chunk

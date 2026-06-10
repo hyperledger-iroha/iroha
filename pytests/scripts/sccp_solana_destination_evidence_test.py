@@ -350,6 +350,40 @@ def test_solana_route_allowlist_hash_matches_lane_evidence_vector():
         == SOLANA_ROUTE_ALLOWLIST_HASH_VECTOR
     )
 
+    for replayed in (
+        {
+            "source_verifier_material_hash": bytes.fromhex(
+                SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH
+            ),
+            "source_adapter_engine_deployment_hash": bytes.fromhex(
+                SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH
+            ),
+            "destination_binding_hash": bytes.fromhex(SOLANA_DESTINATION_BINDING_VECTOR),
+        },
+        {
+            "source_verifier_material_hash": bytes.fromhex(SOURCE_VERIFIER_MATERIAL_HASH),
+            "source_adapter_engine_deployment_hash": bytes.fromhex(
+                SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH
+            ),
+            "destination_binding_hash": bytes.fromhex(SOURCE_VERIFIER_MATERIAL_HASH),
+        },
+        {
+            "source_verifier_material_hash": bytes.fromhex(SOURCE_VERIFIER_MATERIAL_HASH),
+            "source_adapter_engine_deployment_hash": bytes.fromhex(
+                SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH
+            ),
+            "destination_binding_hash": bytes.fromhex(
+                SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH
+            ),
+        },
+    ):
+        try:
+            module.solana_route_allowlist_hash(**replayed)
+        except ValueError as exc:
+            assert "Solana route allowlist evidence hashes must be distinct" in str(exc)
+        else:
+            raise AssertionError("Solana route allowlist accepted replayed hash role")
+
 
 def test_solana_route_canary_rejects_verifier_code_hash_role_reuse():
     module = load_evidence_module()
@@ -398,6 +432,24 @@ def test_solana_route_canary_rejects_verifier_code_hash_role_reuse():
         else:
             raise AssertionError(
                 f"Solana route canary accepted verifier code hash replay of {field}"
+            )
+
+    for field, source_field in (
+        ("route_allowlist_hash", "destination_binding_hash"),
+        ("route_allowlist_hash", "source_verifier_material_hash"),
+        ("route_allowlist_hash", "source_adapter_engine_deployment_hash"),
+        ("destination_binding_hash", "source_verifier_material_hash"),
+        ("destination_binding_hash", "source_adapter_engine_deployment_hash"),
+    ):
+        replay_args = dict(args)
+        replay_args[field] = replay_args[source_field]
+        try:
+            module.solana_route_canary_evidence_hash(**replay_args)
+        except ValueError as exc:
+            assert "Solana route canary governed hashes must be distinct" in str(exc)
+        else:
+            raise AssertionError(
+                f"Solana route canary accepted governed hash replay of {field}"
             )
 
 

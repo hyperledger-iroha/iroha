@@ -333,6 +333,46 @@ def test_ton_route_allowlist_hash_matches_lane_evidence_vector():
         == TON_ROUTE_ALLOWLIST_HASH_VECTOR
     )
 
+    for replayed in (
+        {
+            "source_verifier_material_hash": bytes.fromhex(
+                TON_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_WITH_AUDIT_HASH_VECTOR
+            ),
+            "source_adapter_engine_deployment_hash": bytes.fromhex(
+                TON_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_WITH_AUDIT_HASH_VECTOR
+            ),
+            "destination_binding_hash": bytes.fromhex(TON_DESTINATION_BINDING_VECTOR),
+        },
+        {
+            "source_verifier_material_hash": bytes.fromhex(
+                TON_SOURCE_VERIFIER_MATERIAL_HASH_VECTOR
+            ),
+            "source_adapter_engine_deployment_hash": bytes.fromhex(
+                TON_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_WITH_AUDIT_HASH_VECTOR
+            ),
+            "destination_binding_hash": bytes.fromhex(
+                TON_SOURCE_VERIFIER_MATERIAL_HASH_VECTOR
+            ),
+        },
+        {
+            "source_verifier_material_hash": bytes.fromhex(
+                TON_SOURCE_VERIFIER_MATERIAL_HASH_VECTOR
+            ),
+            "source_adapter_engine_deployment_hash": bytes.fromhex(
+                TON_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_WITH_AUDIT_HASH_VECTOR
+            ),
+            "destination_binding_hash": bytes.fromhex(
+                TON_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_WITH_AUDIT_HASH_VECTOR
+            ),
+        },
+    ):
+        try:
+            module.ton_route_allowlist_hash(**replayed)
+        except ValueError as exc:
+            assert "TON route allowlist evidence hashes must be distinct" in str(exc)
+        else:
+            raise AssertionError("TON route allowlist accepted replayed hash role")
+
 
 def test_ton_route_canary_rejects_live_account_hash_role_reuse():
     module = load_evidence_module()
@@ -366,6 +406,37 @@ def test_ton_route_canary_rejects_live_account_hash_role_reuse():
         assert "last_transaction_hash must differ from account_state_hash" in str(exc)
     else:
         raise AssertionError("TON destination TOML accepted reused canary hash role")
+
+    base_args = ton_args(module)
+    for field, source_field in (
+        ("route_allowlist_hash", "expected_destination_binding_hash"),
+        ("route_allowlist_hash", "source_verifier_material_hash"),
+        ("route_allowlist_hash", "source_adapter_engine_deployment_hash"),
+        ("expected_destination_binding_hash", "source_verifier_material_hash"),
+        ("expected_destination_binding_hash", "source_adapter_engine_deployment_hash"),
+    ):
+        replay_args = ton_args(module)
+        setattr(replay_args, field, getattr(base_args, source_field))
+        try:
+            module.ton_route_canary_evidence_hash(
+                route_allowlist_hash=replay_args.route_allowlist_hash,
+                destination_binding_hash=replay_args.expected_destination_binding_hash,
+                source_verifier_material_hash=replay_args.source_verifier_material_hash,
+                source_adapter_engine_deployment_hash=(
+                    replay_args.source_adapter_engine_deployment_hash
+                ),
+                verifier_contract_address=replay_args.verifier_contract_address,
+                verifier_code_hash=replay_args.verifier_code_hash,
+                account_status=replay_args.account_status,
+                account_state_hash=replay_args.account_state_hash,
+                last_transaction_lt=replay_args.last_transaction_lt,
+                last_transaction_hash=replay_args.last_transaction_hash,
+                verifier_code_boc_root_hash=replay_args.verifier_code_hash,
+            )
+        except ValueError as exc:
+            assert "TON route canary governed hashes must be distinct" in str(exc)
+        else:
+            raise AssertionError(f"TON route canary accepted governed replay of {field}")
 
 
 def test_ton_cli_derives_verifier_code_hash_from_code_boc(capsys, tmp_path):

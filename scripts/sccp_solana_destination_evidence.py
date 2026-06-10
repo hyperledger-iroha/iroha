@@ -220,6 +220,21 @@ def _require_verifier_code_hash_role_separation(
             raise ValueError(f"verifier_code_hash must differ from {role}")
 
 
+def _require_distinct_hash_roles(
+    fields: tuple[tuple[str, bytes], ...],
+    *,
+    label: str,
+) -> None:
+    seen: dict[bytes, str] = {}
+    for field, raw in fields:
+        if not any(raw):
+            continue
+        previous_field = seen.get(raw)
+        if previous_field is not None:
+            raise ValueError(f"{label} must be distinct: {field} matches {previous_field}")
+        seen[raw] = field
+
+
 def _require_solana_program_id(value: str, *, label: str) -> str:
     try:
         return normalize_solana_program_id(value, label=label)
@@ -416,6 +431,17 @@ def solana_route_allowlist_hash(
         label="destination_binding_hash",
         byte_length=32,
     )
+    _require_distinct_hash_roles(
+        (
+            ("source_verifier_material_hash", source_verifier_material_hash),
+            (
+                "source_adapter_engine_deployment_hash",
+                source_adapter_engine_deployment_hash,
+            ),
+            ("destination_binding_hash", destination_binding_hash),
+        ),
+        label="Solana route allowlist evidence hashes",
+    )
     payload = bytearray()
     _push_u8(payload, 1)
     _push_u32(payload, SCCP_DOMAIN_SOL)
@@ -493,6 +519,18 @@ def solana_route_canary_evidence_hash(
         source_adapter_engine_deployment_hash,
         label="source_adapter_engine_deployment_hash",
         byte_length=32,
+    )
+    _require_distinct_hash_roles(
+        (
+            ("route_allowlist_hash", route_allowlist_hash),
+            ("destination_binding_hash", destination_binding_hash),
+            ("source_verifier_material_hash", source_verifier_material_hash),
+            (
+                "source_adapter_engine_deployment_hash",
+                source_adapter_engine_deployment_hash,
+            ),
+        ),
+        label="Solana route canary governed hashes",
     )
     verifier_program_id = _require_solana_program_id(
         verifier_program_id,

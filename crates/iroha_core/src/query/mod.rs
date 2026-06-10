@@ -97,7 +97,11 @@ fn next_height_for_state(state: &mut crate::state::State) -> (NonZeroUsize, NonZ
     let state_ptr: *mut crate::state::State = state;
     let key = state_ptr as usize;
     let mut guard = map.lock().expect("state height mutex");
-    let entry = guard.entry(key).or_insert_with(|| state.committed_height());
+    let committed_height = state.committed_height();
+    let entry = guard.entry(key).or_insert(committed_height);
+    if *entry != committed_height {
+        *entry = committed_height;
+    }
     *entry = entry.saturating_add(1);
     let next = *entry;
     let nz_usize = NonZeroUsize::new(next).expect("height non-zero");

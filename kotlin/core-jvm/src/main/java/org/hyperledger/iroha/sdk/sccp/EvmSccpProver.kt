@@ -1574,10 +1574,22 @@ object SccpEvm {
         require(input.backend == GROTH16_BN254_PROOF_BACKEND_V1) {
             "backend must be evm-groth16-bn254-v1"
         }
+        require(input.sourceDomain == DOMAIN_SORA) { "sourceDomain must be SORA" }
         val bundleBytes = input.bundleBytes.copyOf()
         val sourceProofBytes = requireOptionalSourceProofBytes(input.sourceProofBytes, "sourceProofBytes")
         require(bundleBytes.isNotEmpty()) { "bundleBytes must not be empty" }
         val publicInputsBytes = canonicalPublicInputsBytes(input.publicInputs)
+        val bundleSummary = SccpMessageProofBundles.requireMatchesPublicInputs(
+            targetDomain = input.publicInputs.targetDomain,
+            messageId = normalizeHex32(input.publicInputs.messageId, "publicInputs.messageId"),
+            payloadHash = normalizeHex32(input.publicInputs.payloadHash, "publicInputs.payloadHash"),
+            commitmentRoot = normalizeHex32(input.publicInputs.commitmentRoot, "publicInputs.commitmentRoot"),
+            bundleBytes = bundleBytes,
+            sourceProofBytes = sourceProofBytes,
+        )
+        require(bundleSummary.sourceDomain == input.sourceDomain) {
+            "bundleBytes.sourceDomain must match sourceDomain"
+        }
         val proofContext = normalizeProofContext(input.statementHash, input.destinationBindingHash)
         val proverArtifacts = normalizeOptionalGroth16ProverArtifacts(
             input.proofArtifactHash,

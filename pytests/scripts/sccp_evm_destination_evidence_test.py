@@ -466,6 +466,40 @@ def test_evm_route_allowlist_hash_matches_lane_evidence_vectors():
     assert eth_hash != bsc_hash
     assert bsc_hash != bsc_testnet_hash
 
+    for replayed in (
+        {
+            "source_verifier_material_hash": bytes.fromhex(
+                EVM_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH
+            ),
+            "source_adapter_engine_deployment_hash": bytes.fromhex(
+                EVM_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH
+            ),
+            "destination_binding_hash": bytes.fromhex(ETH_DESTINATION_BINDING_VECTOR),
+        },
+        {
+            "source_verifier_material_hash": bytes.fromhex(EVM_SOURCE_VERIFIER_MATERIAL_HASH),
+            "source_adapter_engine_deployment_hash": bytes.fromhex(
+                EVM_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH
+            ),
+            "destination_binding_hash": bytes.fromhex(EVM_SOURCE_VERIFIER_MATERIAL_HASH),
+        },
+        {
+            "source_verifier_material_hash": bytes.fromhex(EVM_SOURCE_VERIFIER_MATERIAL_HASH),
+            "source_adapter_engine_deployment_hash": bytes.fromhex(
+                EVM_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH
+            ),
+            "destination_binding_hash": bytes.fromhex(
+                EVM_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH
+            ),
+        },
+    ):
+        try:
+            module.evm_route_allowlist_hash(domain=1, **replayed)
+        except ValueError as exc:
+            assert "EVM route allowlist evidence hashes must be distinct" in str(exc)
+        else:
+            raise AssertionError("EVM route allowlist accepted replayed governed hash role")
+
 
 def test_evm_route_canary_transaction_hash_binds_target_domain():
     module = load_evidence_module()
@@ -543,6 +577,16 @@ def test_evm_route_canary_transaction_hash_binds_target_domain():
         assert "target_domain must be ETH or BSC" in str(exc)
     else:
         raise AssertionError("non-EVM route canary target domain was accepted")
+
+    try:
+        module.evm_route_canary_transaction_evidence_hash(
+            target_domain=module.SCCP_DOMAIN_ETH,
+            **{**eth_common, "route_allowlist_hash": eth_common["destination_binding_hash"]},
+        )
+    except ValueError as exc:
+        assert "EVM route canary governed hashes must be distinct" in str(exc)
+    else:
+        raise AssertionError("EVM route canary accepted route/destination hash role reuse")
 
     for field, source_field in (
         ("message_id", "transaction_hash"),

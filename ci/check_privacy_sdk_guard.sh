@@ -1318,8 +1318,9 @@ def check_zk_ace_proof_builder_coverage(errors):
         "ZK-ACE capability must stay fail-closed through getPrivacyCapabilities",
         "ZK-ACE capability audit references must be frozen",
         "ZK-ACE descriptor must expose the concrete STARK/FRI SHA-256 Goldilocks verifier profile",
-        "buildShieldedZkAceAuthorizedTransferInstruction",
-        "planned shielded SDK entrypoints",
+        "buildZkAceAuthorizedTransferInstruction",
+        "ZK-ACE descriptor must not advertise planned entrypoints after transparent authorization admission",
+        "ZK-ACE production gate must not report planned entrypoints after transparent authorization admission",
         "ZK-ACE production gate must not claim audit references before signoff",
         "ZK-ACE production gate must keep every required gate false",
         "ZK-ACE production gate must not inherit verifier-backend allowlist admission",
@@ -1957,7 +1958,6 @@ def check_public_privacy_required_production_plan_rows_coverage(errors):
         ("zk-x509-onchain-identity-v0", "sdk-builder", "zk-x509"),
         ("jindo-lattice-pcs-zk-v0", "sdk-builder", "lattice-pcs-sis"),
         ("sis-hints-anoncred-pq-v0", "sdk-builder", "sis-with-hints"),
-        ("zk-ace-pq-authorization-v0", "chain-executable", "stark-fri"),
         ("orchard-halo2-actions-v1", "research-target-as-of-2026-05", "halo2-ipa-orchard"),
         ("penumbra-masp-v1", "research-target-as-of-2026-05", "groth16-bls12-377"),
         (
@@ -2247,7 +2247,7 @@ def check_public_privacy_required_production_plan_rows_coverage(errors):
         ("zk-x509-onchain-identity-v0", "buildZkX509IdentityProofV0", "buildSubmitZkX509IdentityProofInstruction"),
         ("jindo-lattice-pcs-zk-v0", "buildJindoLatticeProofV0", "verifyJindoPolynomialCommitmentV0"),
         ("sis-hints-anoncred-pq-v0", "buildSisHintsAnonymousCredentialProofV0", "buildSubmitSisHintsCredentialProofInstruction"),
-        ("zk-ace-pq-authorization-v0", "buildShieldedZkAceAuthorizationProofV1", "buildShieldedZkAceAuthorizedTransferInstruction"),
+        ("zk-ace-pq-authorization-v0",),
         ("orchard-halo2-actions-v1", "buildOrchardActionBundleProofV1", "buildOrchardActionBundleInstruction"),
         ("penumbra-masp-v1", "buildPenumbraSpendProofV1", "buildPenumbraOutputProofV1", "buildPenumbraShieldedPoolTransaction"),
         ("monero-fcmp-plus-plus-v1", "buildFcmpPlusPlusMembershipProofV1", "buildFcmpPlusPlusTransferInstruction"),
@@ -2386,8 +2386,8 @@ def check_public_privacy_required_production_plan_rows_coverage(errors):
             if backend_family == "stark-fri"
         ]
         require(
-            production_allowlist_rows == ["zk-ace-pq-authorization-v0"],
-            f"{label} must keep stark-fri production allowlist backend scoped to ZK-ACE only",
+            production_allowlist_rows == [],
+            f"{label} must not keep production-allowlisted required plan rows before evidence admission",
             errors,
         )
         for algorithm_id, implementation_stage, backend_family in expected_rows:
@@ -3436,7 +3436,6 @@ def check_native_privacy_required_production_plan_rows_coverage(errors):
         ("zk-x509-onchain-identity-v0", "zkvm-x509-identity", "zk-x509"),
         ("jindo-lattice-pcs-zk-v0", "lattice-polynomial-commitment", "lattice-pcs-sis"),
         ("sis-hints-anoncred-pq-v0", "lattice-anonymous-credentials", "sis-with-hints"),
-        ("zk-ace-pq-authorization-v0", "stark/fri/sha256-goldilocks", "stark-fri"),
         ("orchard-halo2-actions-v1", "halo2-pasta-action-bundle", "halo2-ipa-orchard"),
         ("penumbra-masp-v1", "groth16-bls12-377-decaf377", "groth16-bls12-377"),
         (
@@ -3505,9 +3504,8 @@ def check_native_privacy_required_production_plan_rows_coverage(errors):
         if backend_family == "stark-fri"
     ]
     require(
-        native_production_allowlist_rows
-        == [("zk-ace-pq-authorization-v0", "stark/fri/sha256-goldilocks", "stark-fri")],
-        "Privacy FFI parity tests must keep native production allowlist row scoped to ZK-ACE sha256-goldilocks",
+        native_production_allowlist_rows == [],
+        "Privacy FFI parity tests must keep native production allowlist rows empty until evidence admission",
         errors,
     )
     for algorithm_id, proof_family, backend_family in expected_rows:
@@ -3682,6 +3680,84 @@ def check_native_privacy_production_gate_state_fail_closed_coverage(errors):
             )
             is not None,
             f"{label} must pin ZK-ACE native capability profile and fail-closed gate blockers",
+            errors,
+        )
+
+
+def check_native_privacy_review_scope_coverage(errors):
+    ffi_parity = read("javascript/iroha_js/test/privacyFfiContractParity.test.js")
+    native_sources = (
+        ("C bridge privacy FFI", read("crates/connect_norito_bridge/src/lib.rs")),
+        ("JS NAPI privacy FFI", read("crates/iroha_js_host/src/lib.rs")),
+        ("Python PyO3 privacy FFI", read("python/iroha_python/iroha_python_rs/src/lib.rs")),
+    )
+
+    for snippet in (
+        "PRIVACY_PRODUCTION_REVIEW_SCOPE_VERSION",
+        "privacy-production-review-scope-v1",
+        "PrivacyProductionReviewScopeV1",
+        "privacy_production_review_scope_is_valid",
+        "wrong review scope algorithm",
+        "wrong review scope chain",
+        "wrong review scope verifier key",
+        "mutated review scope public input schema",
+        "missing review scope SDK entrypoint",
+        "dev fixture review scope SDK entrypoint",
+        "missing review scope required state",
+        "bad review scope fuzz hash",
+        "bad review scope performance hash",
+        "mock review scope localnet run",
+        "must bind review artifacts to algorithm, chain, verifier, schema, SDK, state, fuzz/perf, and localnet scope",
+    ):
+        require(
+            snippet in ffi_parity,
+            f"Privacy FFI parity tests must keep native review-scope evidence coverage for {snippet}",
+            errors,
+        )
+    for label, text in native_sources:
+        require(
+            re.search(
+                r"struct\s+PrivacyProductionReviewScopeV1[\s\S]*version:\s*&'static str[\s\S]*algorithm_id:\s*&'static str[\s\S]*chain_id:\s*&'static str[\s\S]*verifier_key_id:\s*&'static str[\s\S]*proof_family:\s*&'static str[\s\S]*public_inputs_schema:\s*Option<&'static str>[\s\S]*sdk_entrypoints:\s*Vec<&'static str>[\s\S]*required_state:\s*Vec<&'static str>[\s\S]*fuzz_artifact_hash:\s*&'static str[\s\S]*performance_artifact_hash:\s*&'static str[\s\S]*localnet_run_id:\s*&'static str",
+                text,
+            )
+            is not None,
+            f"{label} must define versioned internal review scope evidence",
+            errors,
+        )
+        require(
+            re.search(
+                r'fn\s+privacy_production_review_scope_is_valid[\s\S]*PRIVACY_PRODUCTION_REVIEW_SCOPE_VERSION[\s\S]*row\.review_scope\.algorithm_id\s*==\s*row\.algorithm_id[\s\S]*row\.review_scope\.chain_id\s*==\s*row\.chain_id[\s\S]*row\.review_scope\.verifier_key_id\s*==\s*row\.verifier_key_id[\s\S]*row\.review_scope\.public_inputs_schema\s*==\s*row\.public_inputs_schema[\s\S]*row\.review_scope\.localnet_run_id\s*==\s*row\.localnet_acceptance\.run_id',
+                text,
+            )
+            is not None,
+            f"{label} must bind review scope to the admitted production evidence row",
+            errors,
+        )
+        require(
+            re.search(
+                r'privacy_production_evidence_row_is_valid[\s\S]*privacy_production_review_scope_is_valid\(row,\s*entry\)',
+                text,
+            )
+            is not None,
+            f"{label} must require review-scope validation before production capability admission",
+            errors,
+        )
+        require(
+            re.search(
+                r'fn\s+assert_privacy_evidence_rejected_for_all_rows[\s\S]*for\s+entry\s+in\s+PRIVACY_ALGORITHM_ENTRIES[\s\S]*privacy_production_evidence_row_is_valid',
+                text,
+            )
+            is not None,
+            f"{label} must run production evidence rejection assertions across every privacy row",
+            errors,
+        )
+        require(
+            re.search(
+                r'privacy_production_evidence_rejects_adversarial_bindings_for_all_rows[\s\S]*wrong algorithm[\s\S]*duplicate localnet peer id[\s\S]*wrong localnet chain[\s\S]*bad localnet smoke hash[\s\S]*reused localnet replay hash[\s\S]*wrong review scope algorithm[\s\S]*wrong review scope chain[\s\S]*wrong review scope verifier key[\s\S]*mutated review scope public input schema[\s\S]*missing review scope SDK entrypoint[\s\S]*dev fixture review scope SDK entrypoint[\s\S]*review scope required state mismatch[\s\S]*bad review scope fuzz hash[\s\S]*bad review scope performance hash[\s\S]*mock review scope localnet run',
+                text,
+            )
+            is not None,
+            f"{label} must reject adversarial review-scope evidence mutations for every privacy row",
             errors,
         )
 
@@ -5533,8 +5609,6 @@ def check_privacy_chain_backend_allowlist_coverage(errors):
         "pub fn is_production_verify_backend_label",
         "EXPECTED_REQUIRED_PRIVACY_PRODUCTION_ALLOWLIST_BACKEND_LABELS",
         "EXPECTED_REQUIRED_PRIVACY_PRODUCTION_ALLOWLIST_RUST_BACKEND_LABELS",
-        'Object.freeze(["zk-ace-pq-authorization-v0", "stark-fri"])',
-        'Object.freeze(["zk-ace-pq-authorization-v0", "stark-fri"])',
         "required production-plan backend exceptions must map every public label to a Rust verifier backend label",
         "Rust production verifier backend allowlist test",
         "must be explicitly covered by the Rust production allowlist test",
@@ -5639,8 +5713,8 @@ def check_privacy_chain_backend_allowlist_coverage(errors):
     else:
         required_allowlist_labels = re.findall(r'"([^"]+)"', required_allowlist_match.group(1))
         require(
-            required_allowlist_labels == ["stark-fri"],
-            "Privacy FFI parity tests must keep exact required production allowlist backend labels ['stark-fri']",
+            required_allowlist_labels == [],
+            "Privacy FFI parity tests must keep exact required production allowlist backend labels empty before evidence admission",
             errors,
         )
 
@@ -6675,6 +6749,7 @@ def run_checks():
     check_native_privacy_planned_ledger_mutation_proof_builder_coverage(errors)
     check_native_privacy_proofed_sdk_ledger_mutation_pairing_coverage(errors)
     check_native_privacy_production_gate_state_fail_closed_coverage(errors)
+    check_native_privacy_review_scope_coverage(errors)
     check_native_privacy_capability_claim_quarantine_coverage(errors)
     check_native_privacy_capability_archive_invariant_coverage(errors)
     check_privacy_ffi_build_empty_public_inputs_coverage(errors)

@@ -2011,12 +2011,46 @@ TEXT_REQUIREMENTS = {
         "_lineage_proof_log_entries",
         "_stable_release_bundle",
         "_check_release_bundle_manifest_shape",
+        "RELEASE_BUNDLE_ALLOWED_EVIDENCE_KEYS",
+        "RELEASE_BUNDLE_SINGLE_EVIDENCE_KEYS",
+        "RELEASE_BUNDLE_MAP_EVIDENCE_KEYS",
+        "RELEASE_BUNDLE_EVIDENCE_ENTRY_FIELDS",
+        "RELEASE_BUNDLE_ALLOWED_SECTION_KEYS",
+        "RELEASE_BUNDLE_ALLOWED_ANDROID_SECTION_KEYS",
+        "ANDROID_DUPLICATE_BINDING_SUMMARY_FIELDS",
+        "ANDROID_DUPLICATE_BINDING_ENTRY_FIELDS",
+        "_check_release_bundle_evidence_inventory_shape",
+        "_check_release_bundle_evidence_entry_shape",
         "_check_release_bundle_evidence_paths",
-        'blockers.extend(_check_release_bundle_evidence_paths(bundle.get("evidence")))',
+        "_check_release_bundle_section_shapes",
+        "_check_release_bundle_android_section_shape",
+        "_check_release_bundle_cross_section_shape",
+        "evidence = bundle.get(\"evidence\")",
+        "blockers.extend(_check_release_bundle_evidence_inventory_shape(evidence))",
+        "blockers.extend(_check_release_bundle_evidence_paths(evidence))",
+        "blockers.extend(_check_release_bundle_section_shapes(bundle))",
+        "blockers.extend(_check_release_bundle_android_section_shape(bundle))",
+        "blockers.extend(_check_release_bundle_cross_section_shape(bundle))",
         "kagemusha_release_bundle_manifest_evidence_shape",
+        "kagemusha_release_bundle_manifest_evidence_entry_shape",
+        "kagemusha_release_bundle_manifest_evidence_unexpected_field",
+        "kagemusha_release_bundle_manifest_evidence_missing_field",
+        "kagemusha_release_bundle_manifest_evidence_inventory_shape",
+        "kagemusha_release_bundle_manifest_evidence_artifact_kind",
+        "kagemusha_release_bundle_manifest_evidence_inventory_keys",
         "kagemusha_release_bundle_manifest_evidence_path",
         "kagemusha_release_bundle_manifest_evidence_sha256",
         "kagemusha_release_bundle_manifest_evidence_size",
+        "kagemusha_release_bundle_manifest_section_shape",
+        "kagemusha_release_bundle_manifest_section_unexpected_field",
+        "kagemusha_release_bundle_manifest_section_missing_field",
+        "kagemusha_release_bundle_manifest_section_state",
+        "kagemusha_release_bundle_manifest_section_timestamp",
+        "kagemusha_release_bundle_manifest_section_sha256",
+        "kagemusha_release_bundle_manifest_section_size",
+        "kagemusha_release_bundle_manifest_android_device_families",
+        "kagemusha_release_bundle_manifest_android_signer_sha256",
+        "kagemusha_release_summary_android_duplicate_bindings_slots",
         '"size_bytes" not in item',
         "kagemusha_release_bundle_manifest_drift",
         "[kagemusha-release-bundle] verified",
@@ -2787,6 +2821,29 @@ TEXT_REQUIREMENTS = {
         "test_kagemusha_release_bundle_verify_existing_rejects_boolean_evidence_size",
         "test_kagemusha_release_bundle_verify_existing_rejects_zero_evidence_size",
         "test_kagemusha_release_bundle_verify_existing_rejects_missing_evidence_size",
+        "test_kagemusha_release_bundle_verify_existing_rejects_unexpected_evidence_group",
+        "test_kagemusha_release_bundle_verify_existing_rejects_missing_evidence_entry_field",
+        "test_kagemusha_release_bundle_verify_existing_rejects_unexpected_evidence_entry_field",
+        "test_kagemusha_release_bundle_verify_existing_rejects_android_slot_artifact_kind",
+        "test_kagemusha_release_bundle_verify_existing_rejects_missing_lineage_artifact_inventory_key",
+        "test_kagemusha_release_bundle_verify_existing_rejects_android_evidence_slot_inventory_drift",
+        "test_kagemusha_release_bundle_verify_existing_rejects_missing_section",
+        "test_kagemusha_release_bundle_verify_existing_rejects_missing_section_field",
+        "test_kagemusha_release_bundle_verify_existing_rejects_unexpected_section_field",
+        "test_kagemusha_release_bundle_verify_existing_rejects_section_state_drift",
+        "test_kagemusha_release_bundle_verify_existing_rejects_section_timestamp",
+        "test_kagemusha_release_bundle_verify_existing_rejects_section_sha256",
+        "test_kagemusha_release_bundle_verify_existing_rejects_section_size",
+        "test_kagemusha_release_bundle_verify_existing_rejects_section_list",
+        "test_kagemusha_release_bundle_verify_existing_rejects_unexpected_android_field",
+        "test_kagemusha_release_bundle_verify_existing_rejects_missing_android_duplicate_bindings",
+        "test_kagemusha_release_bundle_verify_existing_rejects_malformed_android_duplicate_bindings",
+        "test_kagemusha_release_bundle_verify_existing_rejects_noncanonical_android_duplicate_binding_slots",
+        "test_kagemusha_release_bundle_verify_existing_rejects_bad_android_signer_digest",
+        "test_kagemusha_release_bundle_verify_existing_rejects_empty_android_signers",
+        "test_kagemusha_release_bundle_verify_existing_rejects_incomplete_android_families",
+        "test_kagemusha_release_bundle_verify_existing_rejects_unknown_android_family",
+        "test_kagemusha_release_bundle_verify_existing_rejects_nonempty_android_missing_families",
         "test_kagemusha_release_bundle_rejects_empty_compact_generator_log_inventory",
         "test_kagemusha_release_bundle_verify_existing_rejects_duplicate_manifest_json_key",
         "test_kagemusha_release_bundle_verify_existing_rejects_nonfinite_manifest_json_constant",
@@ -2820,6 +2877,14 @@ TEXT_REQUIREMENTS = {
         "test_kagemusha_release_bundle_rejects_malformed_android_signed_evidence_summary_sha256",
         "test_kagemusha_release_bundle_rejects_unsafe_android_signed_evidence_summary_path_without_leak",
         "test_kagemusha_release_bundle_rejects_noncanonical_android_signed_evidence_summary_timestamp",
+        "test_kagemusha_release_bundle_rejects_missing_android_duplicate_bindings_summary",
+        "test_kagemusha_release_bundle_rejects_unexpected_android_duplicate_binding_field",
+        "test_kagemusha_release_bundle_rejects_malformed_android_duplicate_binding_digest",
+        "test_kagemusha_release_bundle_rejects_singleton_android_duplicate_binding_slots",
+        "test_kagemusha_release_bundle_rejects_repeated_android_duplicate_binding_slot",
+        "test_kagemusha_release_bundle_rejects_noncanonical_android_duplicate_binding_slots",
+        "test_kagemusha_release_bundle_rejects_secret_android_duplicate_binding_slot_without_leak",
+        "test_kagemusha_release_bundle_rejects_android_duplicate_binding_summary_drift",
         "test_kagemusha_release_bundle_rejects_all_zero_lineage_artifact",
         "test_kagemusha_release_bundle_rejects_placeholder_compact_artifact",
         "test_kagemusha_release_bundle_rejects_all_placeholder_compact_prefixes",
@@ -3643,6 +3708,10 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-summary-drift",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-summary-section-schema",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-signed-evidence-summary-schema",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-evidence-inventory-schema",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-evidence-inventory-keysets",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-section-schema",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-manifest-schema",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-artifact-inventory",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-slot-artifact-inventory",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-compact-placeholder-inventory",
@@ -7142,6 +7211,50 @@ if mode == "--negative-control-release-bundle-android-signed-evidence-summary-sc
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-release-bundle-evidence-inventory-schema":
+    run_negative_control(
+        "Kagemusha release bundle evidence inventory schema gate",
+        lambda: override_text(
+            "scripts/kagemusha_release_bundle.py",
+            "blockers.extend(_check_release_bundle_evidence_inventory_shape(evidence))",
+            "blockers.extend([])",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-release-bundle-evidence-inventory-keysets":
+    run_negative_control(
+        "Kagemusha release bundle evidence inventory key-set gate",
+        lambda: override_text(
+            "scripts/kagemusha_release_bundle.py",
+            "blockers.extend(_check_release_bundle_cross_section_shape(bundle))",
+            "blockers.extend([])",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-release-bundle-section-schema":
+    run_negative_control(
+        "Kagemusha release bundle section schema gate",
+        lambda: override_text(
+            "scripts/kagemusha_release_bundle.py",
+            "blockers.extend(_check_release_bundle_section_shapes(bundle))",
+            "blockers.extend([])",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-release-bundle-android-manifest-schema":
+    run_negative_control(
+        "Kagemusha release bundle Android manifest schema gate",
+        lambda: override_text(
+            "scripts/kagemusha_release_bundle.py",
+            "blockers.extend(_check_release_bundle_android_section_shape(bundle))",
+            "blockers.extend([])",
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-release-bundle-artifact-inventory":
     run_negative_control(
         "Kagemusha release bundle artifact inventory",
@@ -7356,7 +7469,7 @@ if mode == "--negative-control-release-bundle-verify-existing-evidence-path-shap
         "Kagemusha release bundle verify-existing evidence path-shape gate",
         lambda: override_text(
             "scripts/kagemusha_release_bundle.py",
-            'blockers.extend(_check_release_bundle_evidence_paths(bundle.get("evidence")))',
+            "blockers.extend(_check_release_bundle_evidence_paths(evidence))",
             "blockers.extend([])",
         ),
     )

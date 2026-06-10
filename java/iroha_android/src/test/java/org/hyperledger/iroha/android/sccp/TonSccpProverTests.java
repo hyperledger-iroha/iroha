@@ -118,6 +118,40 @@ public final class TonSccpProverTests {
       mismatchedCodeRootThrew = ex.getMessage().contains("verifierCodeBocRootHash");
     }
     assert mismatchedCodeRootThrew : "TON canary must reject mismatched verifier BoC root";
+
+    final String canonicalDestinationBindingHash =
+        SourceSccpProofs.destinationBindingHash(TonSccpProver.DOMAIN_TON);
+    assertThrows(
+        () ->
+            TonSccpProver.routeCanaryEvidenceHash(
+                sampleRouteCanaryEvidenceWithGovernedHashes(
+                    canonicalDestinationBindingHash, canonicalDestinationBindingHash, null, null)),
+        "TON route canary governed hashes");
+    assertThrows(
+        () ->
+            TonSccpProver.routeCanaryEvidenceHash(
+                sampleRouteCanaryEvidenceWithGovernedHashes(null, null, "0x" + repeat("31", 32), null)),
+        "TON route canary governed hashes");
+    assertThrows(
+        () ->
+            TonSccpProver.routeCanaryEvidenceHash(
+                sampleRouteCanaryEvidenceWithGovernedHashes(null, null, null, "0x" + repeat("31", 32))),
+        "TON route canary governed hashes");
+    assertThrows(
+        () ->
+            TonSccpProver.routeCanaryEvidenceHash(
+                sampleRouteCanaryEvidenceWithGovernedHashes(null, canonicalDestinationBindingHash, canonicalDestinationBindingHash, null)),
+        "TON route canary governed hashes");
+    assertThrows(
+        () ->
+            TonSccpProver.routeCanaryEvidenceHash(
+                sampleRouteCanaryEvidenceWithGovernedHashes(null, canonicalDestinationBindingHash, null, canonicalDestinationBindingHash)),
+        "TON route canary governed hashes");
+    assertThrows(
+        () ->
+            TonSccpProver.routeCanaryEvidenceHash(
+                sampleRouteCanaryEvidenceWithGovernedHashes(null, null, null, "0x" + repeat("33", 32))),
+        "TON route canary governed hashes");
   }
 
   private static void buildsTonMessageBodyBoc() {
@@ -4512,6 +4546,40 @@ public final class TonSccpProverTests {
         lastTransactionLt,
         "0x" + repeat("66", 32),
         verifierCodeBocRootHash);
+  }
+
+  private static TonSccpProver.RouteCanaryEvidenceInput sampleRouteCanaryEvidenceWithGovernedHashes(
+      final String routeAllowlistHash,
+      final String destinationBindingHash,
+      final String sourceVerifierMaterialHash,
+      final String sourceAdapterEngineDeploymentHash) {
+    return new TonSccpProver.RouteCanaryEvidenceInput(
+        routeAllowlistHash == null ? "0x" + repeat("31", 32) : routeAllowlistHash,
+        destinationBindingHash == null
+            ? SourceSccpProofs.destinationBindingHash(TonSccpProver.DOMAIN_TON)
+            : destinationBindingHash,
+        null,
+        sourceVerifierMaterialHash == null ? "0x" + repeat("33", 32) : sourceVerifierMaterialHash,
+        sourceAdapterEngineDeploymentHash == null
+            ? "0x" + repeat("34", 32)
+            : sourceAdapterEngineDeploymentHash,
+        "0:" + repeat("11", 32),
+        "0x" + repeat("44", 32),
+        "active",
+        "0x" + repeat("55", 32),
+        "123456789",
+        "0x" + repeat("66", 32),
+        "0x" + repeat("44", 32));
+  }
+
+  private static void assertThrows(final Runnable operation, final String messageFragment) {
+    boolean threw = false;
+    try {
+      operation.run();
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains(messageFragment);
+    }
+    assert threw : "expected exception containing " + messageFragment;
   }
 
   private static byte[] concatTestBytes(final byte[] left, final byte[] right) {

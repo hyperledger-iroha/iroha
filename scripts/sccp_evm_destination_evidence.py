@@ -675,6 +675,17 @@ def evm_route_allowlist_hash(
         label="destination_binding_hash",
         byte_length=32,
     )
+    _require_distinct_hash_roles(
+        (
+            ("source_verifier_material_hash", source_verifier_material_hash),
+            (
+                "source_adapter_engine_deployment_hash",
+                source_adapter_engine_deployment_hash,
+            ),
+            ("destination_binding_hash", destination_binding_hash),
+        ),
+        label="EVM route allowlist evidence hashes",
+    )
     payload = bytearray()
     _push_u8(payload, 1)
     _push_u32(payload, domain)
@@ -828,6 +839,13 @@ def evm_route_canary_transaction_evidence_hash(
         target_domain,
         network_id,
         bsc_network=bsc_network,
+    )
+    _require_distinct_hash_roles(
+        (
+            ("route_allowlist_hash", route_allowlist_hash),
+            ("destination_binding_hash", destination_binding_hash),
+        ),
+        label="EVM route canary governed hashes",
     )
     _require_distinct_hash_roles(
         (

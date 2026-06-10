@@ -78,6 +78,10 @@ ANDROID_SIGNED_EVIDENCE_SUMMARY_SHA256_FIELDS = frozenset(
         *(digest_field for _, _, digest_field in ANDROID_SLOT_RELEASE_ARTIFACTS),
     )
 )
+ANDROID_DUPLICATE_BINDING_SUMMARY_FIELDS = frozenset(
+    ("device_fingerprint_sha256", "attestation_challenge_sha256")
+)
+ANDROID_DUPLICATE_BINDING_ENTRY_FIELDS = frozenset(("slots", "value_sha256"))
 SUMMARY_ALLOWED_TOP_LEVEL_KEYS = frozenset(
     (
         "schema",
@@ -108,6 +112,79 @@ RELEASE_BUNDLE_ALLOWED_TOP_LEVEL_KEYS = frozenset(
         "blockers",
     )
 )
+RELEASE_BUNDLE_ALLOWED_ANDROID_SECTION_KEYS = frozenset(
+    (
+        "covered_device_families",
+        "missing_device_families",
+        "duplicate_bindings",
+        "signed_evidence",
+        "trusted_signer_public_key_sha256",
+    )
+)
+RELEASE_BUNDLE_ALLOWED_EVIDENCE_KEYS = frozenset(
+    (
+        "readiness_summary",
+        "lineage_proof_evidence",
+        "compact_key_evidence",
+        "lineage_artifacts",
+        "lineage_proof_logs",
+        "compact_key_artifacts",
+        "compact_key_generator_log",
+        "android_signed_evidence",
+        "android_slot_artifacts",
+    )
+)
+RELEASE_BUNDLE_SINGLE_EVIDENCE_KEYS = frozenset(
+    (
+        "readiness_summary",
+        "lineage_proof_evidence",
+        "compact_key_evidence",
+        "compact_key_generator_log",
+    )
+)
+RELEASE_BUNDLE_MAP_EVIDENCE_KEYS = frozenset(
+    (
+        "lineage_artifacts",
+        "lineage_proof_logs",
+        "compact_key_artifacts",
+        "android_signed_evidence",
+    )
+)
+RELEASE_BUNDLE_EVIDENCE_ENTRY_FIELDS = frozenset(("path", "sha256", "size_bytes"))
+RELEASE_BUNDLE_ALLOWED_SECTION_KEYS: dict[str, frozenset[str]] = {
+    "abi6_reserved_lineage": frozenset(
+        (
+            "manifest_path",
+            "schema",
+            "bridge_abi_version",
+            "operation_count",
+            "limits",
+            "modes",
+        )
+    ),
+    "abi7_recursive_compact": frozenset(("state", "circuit_id")),
+    "lineage_key_release_tooling": frozenset(("state", "checked_files")),
+    "lineage_proof_evidence": frozenset(
+        (
+            "state",
+            "generated_at_utc",
+            "artifact_sha256",
+            "artifact_size_bytes",
+            "test_log_sha256",
+        )
+    ),
+    "compact_key_evidence": frozenset(
+        (
+            "state",
+            "generated_at_utc",
+            "artifact_sha256",
+            "artifact_size_bytes",
+            "generator_log_sha256",
+            "generator_log_artifact_sha256",
+            "generator_log_artifact_size_bytes",
+        )
+    ),
+}
 SUMMARY_ALLOWED_SECTION_KEYS: dict[str, frozenset[str]] = {
     "abi6_reserved_lineage": frozenset(
         (
@@ -178,6 +255,7 @@ SUMMARY_ALLOWED_SECTION_KEYS: dict[str, frozenset[str]] = {
             "slots",
             "covered_device_families",
             "missing_device_families",
+            "duplicate_bindings",
             "signed_evidence",
             "min_signed_at_utc",
             "max_signed_at_utc",
@@ -766,6 +844,138 @@ def _check_android_signed_evidence_summary_shape(
     return blockers
 
 
+def _check_android_duplicate_bindings_summary_shape(
+    android: dict[str, Any],
+) -> list[dict[str, Any]]:
+    blockers: list[dict[str, Any]] = []
+    duplicate_bindings = android.get("duplicate_bindings")
+    if not isinstance(duplicate_bindings, dict):
+        return [
+            _blocker(
+                "kagemusha_release_summary_android_duplicate_bindings_shape",
+                "Android duplicate-bindings summary must be a JSON object",
+            )
+        ]
+
+    for raw_field, entries in duplicate_bindings.items():
+        field = _display_summary_field(raw_field)
+        if raw_field not in ANDROID_DUPLICATE_BINDING_SUMMARY_FIELDS:
+            blockers.append(
+                _blocker(
+                    "kagemusha_release_summary_android_duplicate_bindings_unexpected_field",
+                    "Android duplicate-bindings summary contains an unexpected field",
+                    field=field,
+                )
+            )
+            continue
+        if not isinstance(entries, list):
+            blockers.append(
+                _blocker(
+                    "kagemusha_release_summary_android_duplicate_bindings_shape",
+                    "Android duplicate-bindings summary entries must be a list",
+                    field=field,
+                )
+            )
+            continue
+        for index, entry in enumerate(entries):
+            if not isinstance(entry, dict):
+                blockers.append(
+                    _blocker(
+                        "kagemusha_release_summary_android_duplicate_bindings_shape",
+                        "Android duplicate-bindings summary entry must be a JSON object",
+                        field=field,
+                        index=index,
+                    )
+                )
+                continue
+            unexpected_fields = sorted(
+                set(entry) - ANDROID_DUPLICATE_BINDING_ENTRY_FIELDS
+            )
+            for entry_field in unexpected_fields:
+                blockers.append(
+                    _blocker(
+                        "kagemusha_release_summary_android_duplicate_bindings_unexpected_field",
+                        "Android duplicate-bindings summary entry contains an unexpected field",
+                        field=field,
+                        entry_field=_display_summary_field(entry_field),
+                        index=index,
+                    )
+                )
+            missing_fields = sorted(
+                ANDROID_DUPLICATE_BINDING_ENTRY_FIELDS - set(entry)
+            )
+            for entry_field in missing_fields:
+                blockers.append(
+                    _blocker(
+                        "kagemusha_release_summary_android_duplicate_bindings_missing_field",
+                        "Android duplicate-bindings summary entry is missing a required field",
+                        field=field,
+                        entry_field=entry_field,
+                        index=index,
+                    )
+                )
+            value_sha256 = entry.get("value_sha256")
+            if (
+                not isinstance(value_sha256, str)
+                or not device_lab.SHA256_HEX_RE.fullmatch(value_sha256)
+                or value_sha256 == "0" * 64
+            ):
+                blockers.append(
+                    _blocker(
+                        "kagemusha_release_summary_android_duplicate_bindings_sha256",
+                        "Android duplicate-bindings summary value must be a non-zero lowercase sha256 hex digest",
+                        field=field,
+                        index=index,
+                    )
+                )
+            slots = entry.get("slots")
+            if not isinstance(slots, list) or not slots:
+                blockers.append(
+                    _blocker(
+                        "kagemusha_release_summary_android_duplicate_bindings_slots",
+                        "Android duplicate-bindings summary slots must be a non-empty list",
+                        field=field,
+                        index=index,
+                    )
+                )
+                continue
+            validated_slots: list[str] = []
+            for raw_slot in slots:
+                slot, slot_blockers = _validate_android_manifest_slot(raw_slot)
+                for blocker in slot_blockers:
+                    blockers.append(
+                        {
+                            **blocker,
+                            "code": "kagemusha_release_summary_android_duplicate_bindings_slot",
+                            "field": field,
+                            "index": index,
+                        }
+                    )
+                if slot is not None:
+                    validated_slots.append(slot)
+            if len(set(validated_slots)) < 2:
+                blockers.append(
+                    _blocker(
+                        "kagemusha_release_summary_android_duplicate_bindings_slots",
+                        "Android duplicate-bindings summary must name at least two distinct slots",
+                        field=field,
+                        index=index,
+                    )
+                )
+            elif len(validated_slots) == len(slots) and validated_slots != sorted(
+                set(validated_slots)
+            ):
+                blockers.append(
+                    _blocker(
+                        "kagemusha_release_summary_android_duplicate_bindings_slots",
+                        "Android duplicate-bindings summary slots must be unique and sorted",
+                        field=field,
+                        index=index,
+                    )
+                )
+    return blockers
+
+
 def _check_ready_summary_shape(summary: dict[str, Any]) -> list[dict[str, Any]]:
     blockers: list[dict[str, Any]] = []
     if _contains_secret_string(summary):
@@ -851,6 +1061,7 @@ def _check_ready_summary_shape(summary: dict[str, Any]) -> list[dict[str, Any]]:
             )
         )
     else:
+        blockers.extend(_check_android_duplicate_bindings_summary_shape(android))
         blockers.extend(_check_android_signed_evidence_summary_shape(android))
     for name, state in SUMMARY_REQUIRED_SECTION_STATES.items():
         section = _section(summary, name)
@@ -947,6 +1158,7 @@ def _compare_validated_sections(
     for field in (
         "covered_device_families",
         "missing_device_families",
+        "duplicate_bindings",
         "signed_evidence",
         "trusted_signer_public_key_sha256",
     ):
@@ -1366,6 +1578,203 @@ def _stable_release_bundle(bundle: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _check_release_bundle_evidence_entry_shape(
+    entry: Any,
+    *,
+    group: str,
+    item: str | None = None,
+    artifact: str | None = None,
+) -> list[dict[str, Any]]:
+    blockers: list[dict[str, Any]] = []
+    extra = {"group": group}
+    if item is not None:
+        extra["item"] = _display_summary_field(item)
+    if artifact is not None:
+        extra["artifact"] = _display_summary_field(artifact)
+    if not isinstance(entry, dict):
+        return [
+            _blocker(
+                "kagemusha_release_bundle_manifest_evidence_entry_shape",
+                "Kagemusha release bundle evidence entry must be a JSON object",
+                **extra,
+            )
+        ]
+    for field in sorted(set(entry) - RELEASE_BUNDLE_EVIDENCE_ENTRY_FIELDS):
+        blockers.append(
+            _blocker(
+                "kagemusha_release_bundle_manifest_evidence_unexpected_field",
+                "Kagemusha release bundle evidence entry contains an unexpected field",
+                field=_display_summary_field(field),
+                **extra,
+            )
+        )
+    for field in sorted(RELEASE_BUNDLE_EVIDENCE_ENTRY_FIELDS - set(entry)):
+        blockers.append(
+            _blocker(
+                "kagemusha_release_bundle_manifest_evidence_missing_field",
+                "Kagemusha release bundle evidence entry is missing a required field",
+                field=field,
+                **extra,
+            )
+        )
+    return blockers
+
+
+def _check_release_bundle_evidence_inventory_shape(
+    value: Any,
+) -> list[dict[str, Any]]:
+    blockers: list[dict[str, Any]] = []
+    if not isinstance(value, dict):
+        return [
+            _blocker(
+                "kagemusha_release_bundle_manifest_evidence_shape",
+                "Kagemusha release bundle evidence inventory must be a JSON object",
+            )
+        ]
+    for field in sorted(set(value) - RELEASE_BUNDLE_ALLOWED_EVIDENCE_KEYS):
+        blockers.append(
+            _blocker(
+                "kagemusha_release_bundle_manifest_evidence_unexpected_field",
+                "Kagemusha release bundle evidence inventory contains an unexpected field",
+                field=_display_summary_field(field),
+            )
+        )
+    for field in sorted(RELEASE_BUNDLE_ALLOWED_EVIDENCE_KEYS - set(value)):
+        blockers.append(
+            _blocker(
+                "kagemusha_release_bundle_manifest_evidence_missing_field",
+                "Kagemusha release bundle evidence inventory is missing a required field",
+                field=field,
+            )
+        )
+
+    for group in sorted(RELEASE_BUNDLE_SINGLE_EVIDENCE_KEYS & set(value)):
+        blockers.extend(
+            _check_release_bundle_evidence_entry_shape(value.get(group), group=group)
+        )
+    for group in sorted(RELEASE_BUNDLE_MAP_EVIDENCE_KEYS & set(value)):
+        entries = value.get(group)
+        if not isinstance(entries, dict) or not entries:
+            blockers.append(
+                _blocker(
+                    "kagemusha_release_bundle_manifest_evidence_inventory_shape",
+                    "Kagemusha release bundle evidence group must be a non-empty JSON object",
+                    group=group,
+                )
+            )
+            continue
+        expected_items = {
+            "lineage_artifacts": set(readiness.LINEAGE_PROOF_REQUIRED_ARTIFACTS),
+            "lineage_proof_logs": set(readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS),
+            "compact_key_artifacts": set(readiness.COMPACT_KEY_REQUIRED_ARTIFACTS),
+        }.get(group)
+        if expected_items is not None and set(entries) != expected_items:
+            blockers.append(
+                _blocker(
+                    "kagemusha_release_bundle_manifest_evidence_inventory_keys",
+                    "Kagemusha release bundle evidence group does not match the required inventory",
+                    group=group,
+                )
+            )
+        for item, entry in entries.items():
+            if not isinstance(item, str) or not item:
+                blockers.append(
+                    _blocker(
+                        "kagemusha_release_bundle_manifest_evidence_inventory_shape",
+                        "Kagemusha release bundle evidence item names must be non-empty strings",
+                        group=group,
+                    )
+                )
+                continue
+            blockers.extend(
+                _check_release_bundle_evidence_entry_shape(
+                    entry,
+                    group=group,
+                    item=item,
+                )
+            )
+
+    android_slot_artifacts = value.get("android_slot_artifacts")
+    if "android_slot_artifacts" in value:
+        if not isinstance(android_slot_artifacts, dict) or not android_slot_artifacts:
+            blockers.append(
+                _blocker(
+                    "kagemusha_release_bundle_manifest_evidence_inventory_shape",
+                    "Kagemusha release bundle Android slot artifacts must be a non-empty JSON object",
+                    group="android_slot_artifacts",
+                )
+            )
+        else:
+            expected_artifacts = {item[0] for item in ANDROID_SLOT_RELEASE_ARTIFACTS}
+            for raw_slot, artifacts in android_slot_artifacts.items():
+                slot, slot_blockers = _validate_android_manifest_slot(raw_slot)
+                for blocker in slot_blockers:
+                    blockers.append(
+                        {
+                            **blocker,
+                            "code": "kagemusha_release_bundle_manifest_evidence_slot",
+                            "group": "android_slot_artifacts",
+                        }
+                    )
+                if not isinstance(artifacts, dict) or not artifacts:
+                    blockers.append(
+                        _blocker(
+                            "kagemusha_release_bundle_manifest_evidence_inventory_shape",
+                            "Kagemusha release bundle Android slot artifact entry must be a non-empty JSON object",
+                            group="android_slot_artifacts",
+                            item=_display_summary_field(raw_slot),
+                        )
+                    )
+                    continue
+                if set(artifacts) != expected_artifacts:
+                    blockers.append(
+                        _blocker(
+                            "kagemusha_release_bundle_manifest_evidence_artifact_kind",
+                            "Kagemusha release bundle Android slot artifacts must exactly match release-critical artifact kinds",
+                            group="android_slot_artifacts",
+                            item=_display_summary_field(raw_slot),
+                        )
+                    )
+                for raw_artifact, entry in artifacts.items():
+                    artifact = _display_summary_field(raw_artifact)
+                    if raw_artifact not in expected_artifacts:
+                        continue
+                    blockers.extend(
+                        _check_release_bundle_evidence_entry_shape(
+                            entry,
+                            group="android_slot_artifacts",
+                            item=slot if slot is not None else None,
+                            artifact=artifact,
+                        )
+                    )
+    return blockers
+
+
+def _check_release_bundle_cross_section_shape(
+    bundle: dict[str, Any],
+) -> list[dict[str, Any]]:
+    blockers: list[dict[str, Any]] = []
+    evidence = bundle.get("evidence")
+    android = bundle.get("android_device_lab")
+    if not isinstance(evidence, dict) or not isinstance(android, dict):
+        return blockers
+    signed_evidence_summary = android.get("signed_evidence")
+    if not isinstance(signed_evidence_summary, dict):
+        return blockers
+    expected_slots = set(signed_evidence_summary)
+    for group in ("android_signed_evidence", "android_slot_artifacts"):
+        entries = evidence.get(group)
+        if isinstance(entries, dict) and set(entries) != expected_slots:
+            blockers.append(
+                _blocker(
+                    "kagemusha_release_bundle_manifest_evidence_inventory_keys",
+                    "Kagemusha release bundle Android evidence group does not match signed-evidence slots",
+                    group=group,
+                )
+            )
+    return blockers
+
+
 def _check_release_bundle_evidence_paths(value: Any) -> list[dict[str, Any]]:
     blockers: list[dict[str, Any]] = []
     if not isinstance(value, dict):
@@ -1439,6 +1848,324 @@ def _check_release_bundle_evidence_paths(value: Any) -> list[dict[str, Any]]:
     return blockers
 
 
+def _release_manifest_android_blocker(blocker: dict[str, Any]) -> dict[str, Any]:
+    mapped = dict(blocker)
+    code = mapped.get("code")
+    if isinstance(code, str) and code.startswith("kagemusha_release_summary_android_"):
+        mapped["code"] = code.replace(
+            "kagemusha_release_summary_android_",
+            "kagemusha_release_bundle_manifest_android_",
+            1,
+        )
+    return mapped
+
+
+def _check_release_bundle_section_shapes(
+    bundle: dict[str, Any],
+) -> list[dict[str, Any]]:
+    blockers: list[dict[str, Any]] = []
+    for section_name, allowed_fields in RELEASE_BUNDLE_ALLOWED_SECTION_KEYS.items():
+        section = bundle.get(section_name)
+        if not isinstance(section, dict):
+            blockers.append(
+                _blocker(
+                    "kagemusha_release_bundle_manifest_section_shape",
+                    "Kagemusha release bundle section must be a JSON object",
+                    section=section_name,
+                )
+            )
+            continue
+        for field in sorted(set(section) - allowed_fields):
+            blockers.append(
+                _blocker(
+                    "kagemusha_release_bundle_manifest_section_unexpected_field",
+                    "Kagemusha release bundle section contains an unexpected field",
+                    section=section_name,
+                    field=_display_summary_field(field),
+                )
+            )
+        for field in sorted(allowed_fields - set(section)):
+            blockers.append(
+                _blocker(
+                    "kagemusha_release_bundle_manifest_section_missing_field",
+                    "Kagemusha release bundle section is missing a required field",
+                    section=section_name,
+                    field=field,
+                )
+            )
+        expected_state = SUMMARY_REQUIRED_SECTION_STATES.get(section_name)
+        state = section.get("state")
+        if expected_state is not None and state != expected_state:
+            blockers.append(
+                _blocker(
+                    "kagemusha_release_bundle_manifest_section_state",
+                    "Kagemusha release bundle section state is not ready",
+                    section=section_name,
+                    expected_state=expected_state,
+                )
+            )
+
+    abi6 = bundle.get("abi6_reserved_lineage")
+    if isinstance(abi6, dict):
+        for field in ("manifest_path", "schema"):
+            value = abi6.get(field)
+            if not isinstance(value, str) or not value:
+                blockers.append(
+                    _blocker(
+                        "kagemusha_release_bundle_manifest_section_string",
+                        "Kagemusha release bundle section field must be a non-empty string",
+                        section="abi6_reserved_lineage",
+                        field=field,
+                    )
+                )
+        for field in ("bridge_abi_version", "operation_count"):
+            value = abi6.get(field)
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                blockers.append(
+                    _blocker(
+                        "kagemusha_release_bundle_manifest_section_integer",
+                        "Kagemusha release bundle section field must be a positive integer",
+                        section="abi6_reserved_lineage",
+                        field=field,
+                    )
+                )
+        for field in ("limits", "modes"):
+            if not isinstance(abi6.get(field), dict):
+                blockers.append(
+                    _blocker(
+                        "kagemusha_release_bundle_manifest_section_object",
+                        "Kagemusha release bundle section field must be a JSON object",
+                        section="abi6_reserved_lineage",
+                        field=field,
+                    )
+                )
+
+    abi7 = bundle.get("abi7_recursive_compact")
+    if isinstance(abi7, dict):
+        circuit_id = abi7.get("circuit_id")
+        if not isinstance(circuit_id, str) or not circuit_id:
+            blockers.append(
+                _blocker(
+                    "kagemusha_release_bundle_manifest_section_string",
+                    "Kagemusha release bundle section field must be a non-empty string",
+                    section="abi7_recursive_compact",
+                    field="circuit_id",
+                )
+            )
+
+    tooling = bundle.get("lineage_key_release_tooling")
+    if isinstance(tooling, dict):
+        checked_files = tooling.get("checked_files")
+        if (
+            not isinstance(checked_files, list)
+            or not checked_files
+            or not all(isinstance(item, str) and item for item in checked_files)
+        ):
+            blockers.append(
+                _blocker(
+                    "kagemusha_release_bundle_manifest_section_list",
+                    "Kagemusha release bundle section list field must contain non-empty strings",
+                    section="lineage_key_release_tooling",
+                    field="checked_files",
+                )
+            )
+
+    for section_name in ("lineage_proof_evidence", "compact_key_evidence"):
+        section = bundle.get(section_name)
+        if not isinstance(section, dict):
+            continue
+        generated_at = section.get("generated_at_utc")
+        if (
+            not isinstance(generated_at, str)
+            or not device_lab.SIGNED_AT_UTC_RE.fullmatch(generated_at)
+        ):
+            blockers.append(
+                _blocker(
+                    "kagemusha_release_bundle_manifest_section_timestamp",
+                    "Kagemusha release bundle section timestamp must be canonical UTC YYYY-MM-DDTHH:MM:SSZ",
+                    section=section_name,
+                    field="generated_at_utc",
+                )
+            )
+        else:
+            _, parse_blocker = readiness.parse_utc_timestamp(
+                generated_at,
+                f"Kagemusha release bundle {section_name} generated_at_utc",
+            )
+            if parse_blocker is not None:
+                parse_blocker["code"] = (
+                    "kagemusha_release_bundle_manifest_section_timestamp"
+                )
+                parse_blocker["section"] = section_name
+                parse_blocker["field"] = "generated_at_utc"
+                blockers.append(parse_blocker)
+        sha256_map_fields = ["artifact_sha256"]
+        if section_name == "lineage_proof_evidence":
+            sha256_map_fields.append("test_log_sha256")
+        else:
+            sha256_map_fields.append("generator_log_artifact_sha256")
+            generator_log_sha256 = section.get("generator_log_sha256")
+            if (
+                not isinstance(generator_log_sha256, str)
+                or not device_lab.SHA256_HEX_RE.fullmatch(generator_log_sha256)
+                or generator_log_sha256 == "0" * 64
+            ):
+                blockers.append(
+                    _blocker(
+                        "kagemusha_release_bundle_manifest_section_sha256",
+                        "Kagemusha release bundle section SHA-256 field must be a non-zero lowercase hex digest",
+                        section=section_name,
+                        field="generator_log_sha256",
+                    )
+                )
+        for field in sha256_map_fields:
+            value = section.get(field)
+            if (
+                not isinstance(value, dict)
+                or not value
+                or any(
+                    not isinstance(key, str)
+                    or not key
+                    or not isinstance(digest, str)
+                    or not device_lab.SHA256_HEX_RE.fullmatch(digest)
+                    or digest == "0" * 64
+                    for key, digest in value.items()
+                )
+            ):
+                blockers.append(
+                    _blocker(
+                        "kagemusha_release_bundle_manifest_section_sha256",
+                        "Kagemusha release bundle section SHA-256 map must contain non-zero lowercase hex digests",
+                        section=section_name,
+                        field=field,
+                    )
+                )
+        size_map_fields = ["artifact_size_bytes"]
+        if section_name == "compact_key_evidence":
+            size_map_fields.append("generator_log_artifact_size_bytes")
+        for field in size_map_fields:
+            value = section.get(field)
+            if (
+                not isinstance(value, dict)
+                or not value
+                or any(
+                    not isinstance(key, str)
+                    or not key
+                    or isinstance(size, bool)
+                    or not isinstance(size, int)
+                    or size <= 0
+                    for key, size in value.items()
+                )
+            ):
+                blockers.append(
+                    _blocker(
+                        "kagemusha_release_bundle_manifest_section_size",
+                        "Kagemusha release bundle section size map must contain positive integer sizes",
+                        section=section_name,
+                        field=field,
+                    )
+                )
+    return blockers
+
+
+def _check_release_bundle_android_section_shape(
+    bundle: dict[str, Any],
+) -> list[dict[str, Any]]:
+    blockers: list[dict[str, Any]] = []
+    android = bundle.get("android_device_lab")
+    if not isinstance(android, dict):
+        return [
+            _blocker(
+                "kagemusha_release_bundle_manifest_android_shape",
+                "Kagemusha release bundle Android section must be a JSON object",
+            )
+        ]
+
+    for field in sorted(set(android) - RELEASE_BUNDLE_ALLOWED_ANDROID_SECTION_KEYS):
+        blockers.append(
+            _blocker(
+                "kagemusha_release_bundle_manifest_android_unexpected_field",
+                "Kagemusha release bundle Android section contains an unexpected field",
+                field=_display_summary_field(field),
+            )
+        )
+    for field in sorted(RELEASE_BUNDLE_ALLOWED_ANDROID_SECTION_KEYS - set(android)):
+        blockers.append(
+            _blocker(
+                "kagemusha_release_bundle_manifest_android_missing_field",
+                "Kagemusha release bundle Android section is missing a required field",
+                field=field,
+            )
+        )
+
+    list_fields_ok: dict[str, bool] = {}
+    for field in (
+        "covered_device_families",
+        "missing_device_families",
+        "trusted_signer_public_key_sha256",
+    ):
+        value = android.get(field)
+        field_ok = isinstance(value, list) and all(
+            isinstance(item, str) and item for item in value
+        )
+        list_fields_ok[field] = field_ok
+        if not field_ok:
+            blockers.append(
+                _blocker(
+                    "kagemusha_release_bundle_manifest_android_list_shape",
+                    "Kagemusha release bundle Android list fields must contain non-empty strings",
+                    field=field,
+                )
+            )
+
+    if list_fields_ok.get("covered_device_families"):
+        expected_families = sorted(device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES)
+        if android.get("covered_device_families") != expected_families:
+            blockers.append(
+                _blocker(
+                    "kagemusha_release_bundle_manifest_android_device_families",
+                    "Kagemusha release bundle Android covered_device_families must exactly match the standard matrix",
+                )
+            )
+    if (
+        list_fields_ok.get("missing_device_families")
+        and android.get("missing_device_families") != []
+    ):
+        blockers.append(
+            _blocker(
+                "kagemusha_release_bundle_manifest_android_device_families",
+                "Kagemusha release bundle Android missing_device_families must be empty",
+            )
+        )
+    if list_fields_ok.get("trusted_signer_public_key_sha256"):
+        signer_digests = android.get("trusted_signer_public_key_sha256")
+        assert isinstance(signer_digests, list)
+        if (
+            not signer_digests
+            or signer_digests != sorted(set(signer_digests))
+            or any(
+                not device_lab.SHA256_HEX_RE.fullmatch(digest)
+                or digest == "0" * 64
+                for digest in signer_digests
+            )
+        ):
+            blockers.append(
+                _blocker(
+                    "kagemusha_release_bundle_manifest_android_signer_sha256",
+                    "Kagemusha release bundle Android trusted signer digests must be unique sorted non-zero lowercase sha256 hex strings",
+                )
+            )
+    blockers.extend(
+        _release_manifest_android_blocker(item)
+        for item in _check_android_duplicate_bindings_summary_shape(android)
+    )
+    blockers.extend(
+        _release_manifest_android_blocker(item)
+        for item in _check_android_signed_evidence_summary_shape(android)
+    )
+    return blockers
+
+
 def _check_release_bundle_manifest_shape(bundle: dict[str, Any]) -> list[dict[str, Any]]:
     blockers: list[dict[str, Any]] = []
     if _contains_secret_string(bundle):
@@ -1501,7 +2228,12 @@ def _check_release_bundle_manifest_shape(bundle: dict[str, Any]) -> list[dict[st
                 "Kagemusha release bundle manifest must not contain blockers",
             )
         )
-    blockers.extend(_check_release_bundle_evidence_paths(bundle.get("evidence")))
+    evidence = bundle.get("evidence")
+    blockers.extend(_check_release_bundle_evidence_inventory_shape(evidence))
+    blockers.extend(_check_release_bundle_evidence_paths(evidence))
+    blockers.extend(_check_release_bundle_section_shapes(bundle))
+    blockers.extend(_check_release_bundle_android_section_shape(bundle))
+    blockers.extend(_check_release_bundle_cross_section_shape(bundle))
     return blockers
 
 
@@ -1772,6 +2504,7 @@ def build_release_bundle(
         "android_device_lab": {
             "covered_device_families": android.get("covered_device_families", []),
             "missing_device_families": android.get("missing_device_families", []),
+            "duplicate_bindings": android.get("duplicate_bindings", {}),
             "signed_evidence": android.get("signed_evidence", {}),
             "trusted_signer_public_key_sha256": android.get(
                 "trusted_signer_public_key_sha256",

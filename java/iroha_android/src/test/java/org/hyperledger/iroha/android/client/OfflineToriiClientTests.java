@@ -32,10 +32,6 @@ public final class OfflineToriiClientTests {
             200,
             """
             {
-              "offline_note": true,
-              "offline_one_use_keys": true,
-              "offline_fountain_qr": true,
-              "offline_sync_optional": true,
               "offline_telemetry": true,
               "offline_kagemusha_abi7": true,
               "offline_kagemusha_abi7_mode": "recursive_compact_v1",
@@ -59,11 +55,11 @@ public final class OfflineToriiClientTests {
         : "readiness path mismatch";
     assert "application/json".equals(firstHeader(executor.lastRequest, "Accept"))
         : "accept header mismatch";
-    assert readiness.offlineNote() : "offline_note mismatch";
-    assert readiness.offlineOneUseKeys() : "offline_one_use_keys mismatch";
+    assert !readiness.offlineNote() : "offline_note mismatch";
+    assert !readiness.offlineOneUseKeys() : "offline_one_use_keys mismatch";
     assert !readiness.offlineRecursiveNoteProof() : "offline_recursive_note_proof mismatch";
-    assert readiness.offlineFountainQr() : "offline_fountain_qr mismatch";
-    assert readiness.offlineSyncOptional() : "offline_sync_optional mismatch";
+    assert !readiness.offlineFountainQr() : "offline_fountain_qr mismatch";
+    assert !readiness.offlineSyncOptional() : "offline_sync_optional mismatch";
     assert readiness.offlineTelemetry() : "offline_telemetry mismatch";
     assert readiness.offlineKagemushaAbi7() : "offline_kagemusha_abi7 mismatch";
     assert "recursive_compact_v1".equals(readiness.offlineKagemushaAbi7Mode())
@@ -82,12 +78,12 @@ public final class OfflineToriiClientTests {
             200,
             """
             {
-              "offline_note_v2": true,
-              "offline_one_use_keys": true,
-              "offline_recursive_note_proof": false,
-              "offline_fountain_qr_v1": true,
-              "offline_sync_optional": true,
-              "offline_telemetry": true
+              "offline_telemetry": true,
+              "offline_kagemusha_abi7": true,
+              "offline_kagemusha_abi7_mode": "recursive_compact_v1",
+              "offline_kagemusha_abi7_bridge_abi_version": 7,
+              "offline_kagemusha_abi7_circuit_id": "kagemusha-recursive-compact-v1",
+              "offline_kagemusha_abi7_artifacts": true
             }
             """);
     final OfflineToriiClient client =
@@ -104,12 +100,16 @@ public final class OfflineToriiClientTests {
         : "v2 readiness path mismatch";
     assert "application/json".equals(firstHeader(executor.lastRequest, "Accept"))
         : "v2 accept header mismatch";
-    assert readiness.offlineNoteV2() : "offline_note_v2 mismatch";
-    assert readiness.offlineOneUseKeys() : "offline_one_use_keys mismatch";
-    assert !readiness.offlineRecursiveNoteProof() : "offline_recursive_note_proof mismatch";
-    assert readiness.offlineFountainQrV1() : "offline_fountain_qr_v1 mismatch";
-    assert readiness.offlineSyncOptional() : "offline_sync_optional mismatch";
     assert readiness.offlineTelemetry() : "offline_telemetry mismatch";
+    assert readiness.offlineKagemushaAbi7() : "offline_kagemusha_abi7 mismatch";
+    assert "recursive_compact_v1".equals(readiness.offlineKagemushaAbi7Mode())
+        : "offline_kagemusha_abi7_mode mismatch";
+    assert Integer.valueOf(7).equals(readiness.offlineKagemushaAbi7BridgeAbiVersion())
+        : "offline_kagemusha_abi7_bridge_abi_version mismatch";
+    assert "kagemusha-recursive-compact-v1".equals(readiness.offlineKagemushaAbi7CircuitId())
+        : "offline_kagemusha_abi7_circuit_id mismatch";
+    assert readiness.offlineKagemushaAbi7Artifacts()
+        : "offline_kagemusha_abi7_artifacts mismatch";
   }
 
   private static void propagatesNon2xxResponses() {

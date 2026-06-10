@@ -332,7 +332,8 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   rejects omitted `source` separately from explicit null source objects in both
   direct preflight and archived readiness replay,
   requires the `blocked_schema_sources` review list to be explicitly recorded
-  even when empty,
+  even when empty, and requires blocked-source records to match a current
+  fixture/schema gap or, with a profile catalog, a current profile-version gap,
   rejects XSDs that contain
   known restricted Standards Editor redistribution terms, rejects duplicate, malformed, or
   unknown-key profile catalog profile/message/direction/version entries, and
@@ -996,7 +997,7 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   provider/environment/trust-source identity values, before emitting the final
   readiness rollup, preserves normalized XSD blocked-source evidence in
   the public readiness summary, rejects blocked-source records that no longer
-  correspond to a current missing schema/profile gap, and rejects replayed
+  correspond to a current missing fixture/schema/profile gap, and rejects replayed
   blocked-source references or candidate digests across repeated XSD summaries.
   Readiness replay also rechecks that blocked-source marker lists contain
   explicit redistribution restriction evidence rather than copyright-only

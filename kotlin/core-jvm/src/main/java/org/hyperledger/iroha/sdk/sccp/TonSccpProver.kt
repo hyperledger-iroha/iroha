@@ -186,6 +186,15 @@ object SccpTon {
             input.sourceAdapterEngineDeploymentHash,
             "sourceAdapterEngineDeploymentHash",
         )
+        requireHashRolesDistinct(
+            "TON route canary governed hashes",
+            listOf(
+                "routeAllowlistHash" to routeAllowlistHash,
+                "destinationBindingHash" to destinationBindingHash,
+                "sourceVerifierMaterialHash" to sourceVerifierMaterialHash,
+                "sourceAdapterEngineDeploymentHash" to sourceAdapterEngineDeploymentHash,
+            ),
+        )
         val verifierContractAddress =
             normalizeTonRawAddress(input.verifierContractAddress, "verifierContractAddress")
         val verifierCodeHash = nonZeroHex32Bytes(input.verifierCodeHash, "verifierCodeHash")
@@ -4671,6 +4680,16 @@ object SccpTon {
         val bytes = hex32Bytes(value, field)
         require(bytes.any { it.toInt() != 0 }) { "$field must not be zero" }
         return bytes
+    }
+
+    private fun requireHashRolesDistinct(context: String, fields: List<Pair<String, ByteArray>>) {
+        val seen = mutableMapOf<String, String>()
+        for ((field, bytes) in fields) {
+            val encoded = hexLower(bytes)
+            val previous = seen[encoded]
+            require(previous == null) { "$context must be distinct: $field matches $previous" }
+            seen[encoded] = field
+        }
     }
 
     private fun normalizeHex32(value: String, field: String): String = "0x" + hexLower(hex32Bytes(value, field))

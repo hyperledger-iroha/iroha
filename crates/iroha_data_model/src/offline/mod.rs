@@ -3829,6 +3829,13 @@ impl KagemushaRecursiveAggregationProofPublicInputs {
                 },
             );
         }
+        if self.append_opening_preflight_digest != [0u8; Hash::LENGTH] && self.hop_count <= 1 {
+            return Err(
+                KagemushaFoldError::RecursiveAggregationProofPublicInputMismatch {
+                    field: "append_opening_preflight_digest",
+                },
+            );
+        }
         if self.append_boundary_digest != [0u8; Hash::LENGTH]
             && (self.append_opening_preflight_digest == [0u8; Hash::LENGTH] || self.hop_count <= 1)
         {
@@ -3897,6 +3904,35 @@ impl KagemushaRecursiveAggregationProof {
                     actual: self.verifier_key_id.name.clone(),
                 },
             );
+        }
+        for (field, digest) in [
+            (
+                "recursive_proof_chain_digest",
+                self.public_inputs.recursive_proof_chain_digest,
+            ),
+            (
+                "transition_profile_binding_digest",
+                self.public_inputs.transition_profile_binding_digest,
+            ),
+            (
+                "append_boundary_digest",
+                self.public_inputs.append_boundary_digest,
+            ),
+            (
+                "append_opening_preflight_digest",
+                self.public_inputs.append_opening_preflight_digest,
+            ),
+            (
+                "recursive_verifier_scalar_projection_digest",
+                self.public_inputs
+                    .recursive_verifier_scalar_projection_digest,
+            ),
+        ] {
+            if digest != [0u8; Hash::LENGTH] {
+                return Err(
+                    KagemushaFoldError::RecursiveAggregationProofPublicInputMismatch { field },
+                );
+            }
         }
         let expected = self.public_inputs.public_inputs_hash()?;
         if self.public_inputs_hash != expected {
@@ -4205,6 +4241,57 @@ fn validate_kagemusha_recursive_spend_proof_public_input_binding(
             },
         );
     }
+    let public_inputs = &recursive_proof.public_inputs;
+    for (field, digest) in [
+        (
+            "recursive_proof_chain_digest",
+            public_inputs.recursive_proof_chain_digest,
+        ),
+        (
+            "transition_profile_binding_digest",
+            public_inputs.transition_profile_binding_digest,
+        ),
+    ] {
+        if digest == [0u8; Hash::LENGTH] {
+            return Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch { field });
+        }
+    }
+    match circuit {
+        KagemushaRecursiveSpendProofCircuit::SemanticAggregation => {
+            for (field, digest) in [
+                (
+                    "append_boundary_digest",
+                    public_inputs.append_boundary_digest,
+                ),
+                (
+                    "append_opening_preflight_digest",
+                    public_inputs.append_opening_preflight_digest,
+                ),
+                (
+                    "recursive_verifier_scalar_projection_digest",
+                    public_inputs.recursive_verifier_scalar_projection_digest,
+                ),
+            ] {
+                if digest != [0u8; Hash::LENGTH] {
+                    return Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch { field });
+                }
+            }
+        }
+        KagemushaRecursiveSpendProofCircuit::Lineage => {
+            if public_inputs.recursive_verifier_scalar_projection_digest == [0u8; Hash::LENGTH] {
+                return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+                    field: "recursive_verifier_scalar_projection_digest",
+                });
+            }
+            if public_inputs.append_opening_preflight_digest != [0u8; Hash::LENGTH]
+                && public_inputs.append_boundary_digest == [0u8; Hash::LENGTH]
+            {
+                return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+                    field: "append_boundary_digest",
+                });
+            }
+        }
+    }
     Ok(circuit)
 }
 
@@ -4224,6 +4311,20 @@ fn expected_kagemusha_recursive_spend_public_inputs_for_proof(
             if recursive_proof.public_inputs.append_boundary_digest != [0u8; Hash::LENGTH] {
                 return Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch {
                     field: "append_boundary_digest",
+                });
+            }
+            if accumulator.append_opening_preflight_digest != [0u8; Hash::LENGTH] {
+                return Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch {
+                    field: "append_opening_preflight_digest",
+                });
+            }
+            if recursive_proof
+                .public_inputs
+                .append_opening_preflight_digest
+                != [0u8; Hash::LENGTH]
+            {
+                return Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch {
+                    field: "append_opening_preflight_digest",
                 });
             }
         }
@@ -4321,17 +4422,7 @@ fn ensure_recursive_spend_previous_proof_matches(
 pub fn kagemusha_recursive_spend_proof_artifact_digest(
     recursive_proof: &KagemushaRecursiveAggregationProof,
 ) -> Result<[u8; Hash::LENGTH], KagemushaFoldError> {
-    let circuit = validate_kagemusha_recursive_spend_proof_public_input_binding(recursive_proof)?;
-    if circuit == KagemushaRecursiveSpendProofCircuit::Lineage
-        && recursive_proof
-            .public_inputs
-            .recursive_verifier_scalar_projection_digest
-            == [0u8; Hash::LENGTH]
-    {
-        return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
-            field: "recursive_verifier_scalar_projection_digest",
-        });
-    }
+    validate_kagemusha_recursive_spend_proof_public_input_binding(recursive_proof)?;
     kagemusha_poseidon_preimage(&KagemushaRecursiveSpendProofArtifactDigestPreimage {
         domain: KAGEMUSHA_RECURSIVE_SPEND_PROOF_ARTIFACT_DIGEST_DOMAIN.to_owned(),
         recursive_proof: recursive_proof.clone(),
@@ -8286,6 +8377,7 @@ pub fn kagemusha_recursive_previous_proof_open_envelope_domain_tag(
     previous_bundle: &KagemushaRecursiveSpendBundleV1,
     proof_envelope: &crate::zk::OpenVerifyEnvelope,
 ) -> Result<[u8; Hash::LENGTH], KagemushaFoldError> {
+    previous_bundle.validate_public_input_binding()?;
     let proof = &previous_bundle.recursive_proof;
     validate_kagemusha_recursive_spend_proof_public_input_binding(proof)?;
     let mut hasher = iroha_zkp_halo2::poseidon::PoseidonByteHasher::new();
@@ -8626,13 +8718,34 @@ fn validate_kagemusha_recursive_spend_redeem_lineage_record_selection(
             }
             let record = lineage_verifier_record
                 .ok_or(KagemushaFoldError::InvalidRecursiveSpendProof { field: fields.root })?;
-            validate_kagemusha_recursive_spend_lineage_verifier_record_metadata(record, fields)
+            validate_kagemusha_recursive_spend_lineage_verifier_record_metadata(record, fields)?;
+            if record.circuit_id != bundle.recursive_proof.verifier_key_id.name {
+                return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+                    field: fields.circuit_id,
+                });
+            }
+            Ok(())
         }
         KagemushaRecursiveSpendProofCircuit::SemanticAggregation => {
             if witness_has_reserved_previous {
                 let record = lineage_verifier_record
                     .ok_or(KagemushaFoldError::InvalidRecursiveSpendProof { field: fields.root })?;
-                validate_kagemusha_recursive_spend_lineage_verifier_record_metadata(record, fields)
+                validate_kagemusha_recursive_spend_lineage_verifier_record_metadata(
+                    record, fields,
+                )?;
+                if let Some(witness) = lineage_witness {
+                    for previous_proof in &witness.previous_recursive_proofs {
+                        if is_kagemusha_recursive_spend_lineage_proof_circuit_id(
+                            &previous_proof.verifier_key_id.name,
+                        ) && record.circuit_id != previous_proof.verifier_key_id.name
+                        {
+                            return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+                                field: fields.circuit_id,
+                            });
+                        }
+                    }
+                }
+                Ok(())
             } else if lineage_verifier_record.is_some() {
                 Err(KagemushaFoldError::InvalidRecursiveSpendProof { field: fields.root })
             } else {
@@ -12612,6 +12725,12 @@ mod offline_note_tests {
         recursive_proof
             .validate_public_input_binding()
             .expect("recursive proof public inputs bind to proof metadata");
+        assert!(matches!(
+            kagemusha_recursive_spend_proof_artifact_digest(&recursive_proof),
+            Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch {
+                field: "recursive_proof_chain_digest"
+            })
+        ));
         let bundle = KagemushaRecursiveAggregationProofBundle {
             evidence,
             recursive_proof,
@@ -12832,6 +12951,144 @@ mod offline_note_tests {
             changed_domain.validate_evidence_binding(),
             Err(KagemushaFoldError::InvalidRecursiveAggregationProofPublicInputDomain { .. })
         ));
+    }
+
+    #[test]
+    fn kagemusha_recursive_public_inputs_reject_one_hop_append_opening_preflight() {
+        let chain_id: ChainId = "kagemusha-recursive-one-hop-append-opening"
+            .parse()
+            .expect("chain id");
+        let asset = kagemusha_asset("kgm-recursive-one-hop-append-opening");
+        let step = kagemusha_step(
+            fixed_hash(b"kagemusha-recursive-one-hop-append-opening-root-0"),
+            fixed_hash(b"kagemusha-recursive-one-hop-append-opening-root-1"),
+            0x25,
+            0x45,
+            b"recursive-one-hop-append-opening-proof",
+        );
+        let evidence = kagemusha_recursive_spend_one_hop_evidence(
+            &chain_id,
+            &asset,
+            step,
+            b"recursive-one-hop-append-opening-witness",
+        );
+        let mut public_inputs =
+            kagemusha_recursive_aggregation_proof_public_inputs_from_evidence(&evidence)
+                .expect("recursive one-hop public inputs");
+        assert_eq!(public_inputs.hop_count, 1);
+        public_inputs.append_opening_preflight_digest =
+            fixed_hash(b"forged-one-hop-append-opening-preflight");
+        let public_inputs_hash = public_inputs
+            .public_inputs_hash()
+            .expect("forged one-hop append opening public-input hash");
+        assert!(matches!(
+            public_inputs.validate_context(),
+            Err(
+                KagemushaFoldError::RecursiveAggregationProofPublicInputMismatch {
+                    field: "append_opening_preflight_digest"
+                }
+            )
+        ));
+
+        let recursive_proof = KagemushaRecursiveAggregationProof {
+            verifier_key_id: VerifyingKeyId::new(
+                "halo2/ipa",
+                KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+            ),
+            public_inputs,
+            public_inputs_hash,
+            proof: ProofBox::new("halo2/ipa".into(), vec![0xA5; 64]),
+        };
+        assert!(matches!(
+            recursive_proof.validate_public_input_binding(),
+            Err(
+                KagemushaFoldError::RecursiveAggregationProofPublicInputMismatch {
+                    field: "append_opening_preflight_digest"
+                }
+            )
+        ));
+    }
+
+    #[test]
+    fn kagemusha_recursive_aggregation_proof_rejects_spend_state_on_generic_circuit() {
+        let evidence = sample_kagemusha_recursive_aggregation_evidence();
+        let forged_spend_state_cases: [(
+            &'static str,
+            fn(&mut KagemushaRecursiveAggregationProofPublicInputs),
+        ); 5] = [
+            (
+                "recursive_proof_chain_digest",
+                |public_inputs: &mut KagemushaRecursiveAggregationProofPublicInputs| {
+                    public_inputs.recursive_proof_chain_digest =
+                        fixed_hash(b"forged-generic-recursive-proof-chain");
+                },
+            ),
+            (
+                "transition_profile_binding_digest",
+                |public_inputs: &mut KagemushaRecursiveAggregationProofPublicInputs| {
+                    public_inputs.transition_profile_binding_digest =
+                        fixed_hash(b"forged-generic-transition-profile-binding");
+                },
+            ),
+            (
+                "append_opening_preflight_digest",
+                |public_inputs: &mut KagemushaRecursiveAggregationProofPublicInputs| {
+                    public_inputs.append_opening_preflight_digest =
+                        fixed_hash(b"forged-generic-append-opening-preflight");
+                },
+            ),
+            (
+                "append_boundary_digest",
+                |public_inputs: &mut KagemushaRecursiveAggregationProofPublicInputs| {
+                    public_inputs.append_opening_preflight_digest =
+                        fixed_hash(b"forged-generic-boundary-opening-preflight");
+                    public_inputs.append_boundary_digest =
+                        fixed_hash(b"forged-generic-append-boundary");
+                },
+            ),
+            (
+                "recursive_verifier_scalar_projection_digest",
+                |public_inputs: &mut KagemushaRecursiveAggregationProofPublicInputs| {
+                    public_inputs.recursive_verifier_scalar_projection_digest =
+                        fixed_hash(b"forged-generic-recursive-scalar-projection");
+                },
+            ),
+        ];
+        for (expected_field, mutate) in forged_spend_state_cases {
+            let mut public_inputs =
+                kagemusha_recursive_aggregation_proof_public_inputs_from_evidence(&evidence)
+                    .expect("recursive proof public inputs");
+            public_inputs
+                .validate_context()
+                .expect("plain recursive proof public inputs validate before mutation");
+            mutate(&mut public_inputs);
+            public_inputs
+                .validate_context()
+                .expect("spend-only field ownership remains a proof-circuit policy check");
+            let public_inputs_hash = public_inputs
+                .public_inputs_hash()
+                .expect("forged spend-state public-input hash");
+            let recursive_proof = KagemushaRecursiveAggregationProof {
+                verifier_key_id: VerifyingKeyId::new(
+                    "halo2/ipa",
+                    KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+                ),
+                public_inputs,
+                public_inputs_hash,
+                proof: ProofBox::new("halo2/ipa".into(), vec![0xA5; 64]),
+            };
+            let err = recursive_proof
+                .validate_public_input_binding()
+                .expect_err("generic recursive proof must reject spend-only public inputs");
+            assert!(
+                matches!(
+                    err,
+                    KagemushaFoldError::RecursiveAggregationProofPublicInputMismatch { field }
+                    if field == expected_field
+                ),
+                "unexpected generic proof spend-state error for {expected_field}: {err:?}"
+            );
+        }
     }
 
     #[test]
@@ -13287,6 +13544,51 @@ mod offline_note_tests {
                 .expect("legacy append transition profile binding digest"),
             "accumulator transition binding must expose append opening preflight digest"
         );
+        let digest_only_semantic_bundle =
+            kagemusha_recursive_spend_bundle(accumulator1_with_append_opening_preflight.clone());
+        assert!(matches!(
+            digest_only_semantic_bundle.validate_public_input_binding(),
+            Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch {
+                field: "append_opening_preflight_digest"
+            })
+        ));
+        assert!(matches!(
+            kagemusha_recursive_spend_compact_payment_token_from_bundle(
+                &digest_only_semantic_bundle
+            ),
+            Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch {
+                field: "append_opening_preflight_digest"
+            })
+        ));
+        assert!(matches!(
+            kagemusha_recursive_spend_proof_artifact_digest(
+                &digest_only_semantic_bundle.recursive_proof
+            ),
+            Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch {
+                field: "append_opening_preflight_digest"
+            })
+        ));
+        let digest_only_lineage_bundle = KagemushaRecursiveSpendBundleV1 {
+            accumulator: accumulator1_with_append_opening_preflight.clone(),
+            recursive_proof: kagemusha_recursive_spend_lineage_proof(
+                &accumulator1_with_append_opening_preflight,
+                b"recursive-spend-lineage-digest-only-append-opening",
+            ),
+        };
+        assert!(matches!(
+            digest_only_lineage_bundle.validate_public_input_binding(),
+            Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+                field: "append_boundary_digest"
+            })
+        ));
+        assert!(matches!(
+            kagemusha_recursive_spend_proof_artifact_digest(
+                &digest_only_lineage_bundle.recursive_proof
+            ),
+            Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+                field: "append_boundary_digest"
+            })
+        ));
         let attached_previous_proof0_artifact =
             kagemusha_recursive_spend_proof_artifact_digest(&previous_bundle0.recursive_proof)
                 .expect("attached previous proof artifact digest");
@@ -13940,6 +14242,39 @@ mod offline_note_tests {
             &mut previous_bundle0,
             b"recursive-transition-previous-openings-vk",
         );
+        let valid_previous_proof_envelope: crate::zk::OpenVerifyEnvelope =
+            norito::decode_from_bytes(&previous_bundle0.recursive_proof.proof.bytes)
+                .expect("decode valid previous recursive proof envelope");
+        let mut mismatched_previous_opening_bundle = previous_bundle0.clone();
+        mismatched_previous_opening_bundle
+            .recursive_proof
+            .public_inputs
+            .recursive_proof_chain_digest =
+            fixed_hash(b"recursive-transition-previous-opening-mismatched-proof-chain");
+        mismatched_previous_opening_bundle
+            .recursive_proof
+            .public_inputs_hash = mismatched_previous_opening_bundle
+            .recursive_proof
+            .public_inputs
+            .public_inputs_hash()
+            .expect("mismatched previous opening proof public-input hash");
+        assert!(matches!(
+            kagemusha_recursive_previous_proof_open_envelope_domain_tag(
+                &mismatched_previous_opening_bundle,
+                &valid_previous_proof_envelope,
+            ),
+            Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch {
+                field: "recursive_proof_chain_digest"
+            })
+        ));
+        assert!(matches!(
+            kagemusha_recursive_previous_proof_open_envelope_metadata(
+                &mismatched_previous_opening_bundle
+            ),
+            Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch {
+                field: "recursive_proof_chain_digest"
+            })
+        ));
         let previous_openings_archive =
             kagemusha_recursive_spend_previous_proof_open_envelope_archive(&previous_bundle0, 0x94);
         let profile_with_previous_openings =
@@ -15089,7 +15424,7 @@ mod offline_note_tests {
             .expect("missing append boundary public-input hash");
         assert!(matches!(
             missing_append_boundary.validate_public_input_binding(),
-            Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch {
+            Err(KagemushaFoldError::InvalidRecursiveSpendProof {
                 field: "append_boundary_digest"
             })
         ));
@@ -15573,6 +15908,16 @@ mod offline_note_tests {
                 .name,
             KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
         );
+        assert_ne!(
+            witness_from_reserved_previous.previous_recursive_proofs[0]
+                .public_inputs
+                .fixed_window_table_base_digest,
+            bundle1
+                .recursive_proof
+                .public_inputs
+                .fixed_window_table_base_digest,
+            "lineage previous-proof table bases are proof-witness-specific, not shared context"
+        );
         let mut reserved_append_with_semantic_record = reserved_append_with_lineage_record.clone();
         reserved_append_with_semantic_record
             .previous_lineage_verifier_record
@@ -15718,6 +16063,21 @@ mod offline_note_tests {
             one_hop_witnessless_lineage_missing_record.validate_public_binding(),
             Err(KagemushaFoldError::InvalidRecursiveSpendProof {
                 field: "lineage_verifier_record"
+            })
+        ));
+        let mut one_hop_witnessless_lineage_wrong_record =
+            one_hop_witnessless_lineage_redeem.clone();
+        one_hop_witnessless_lineage_wrong_record.lineage_verifier_record =
+            Some(kagemusha_recursive_spend_active_lineage_verifier_record());
+        one_hop_witnessless_lineage_wrong_record
+            .lineage_verifier_record
+            .as_mut()
+            .expect("lineage verifier record")
+            .circuit_id = KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1.to_owned();
+        assert!(matches!(
+            one_hop_witnessless_lineage_wrong_record.validate_public_binding(),
+            Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+                field: "lineage_verifier_record.circuit_id"
             })
         ));
         let mut two_hop_witnessless_lineage_redeem = valid_redeem_request.clone();
@@ -15939,6 +16299,18 @@ mod offline_note_tests {
         reserved_previous_proof
             .validate_public_binding()
             .expect("lineage witness accepts reserved-lineage previous proof with verifier record");
+        let mut reserved_previous_proof_wrong_record = reserved_previous_proof.clone();
+        reserved_previous_proof_wrong_record
+            .lineage_verifier_record
+            .as_mut()
+            .expect("lineage verifier record")
+            .circuit_id = KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1.to_owned();
+        assert!(matches!(
+            reserved_previous_proof_wrong_record.validate_public_binding(),
+            Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+                field: "lineage_verifier_record.circuit_id"
+            })
+        ));
 
         let previous_context_splice_cases: [(
             &str,
@@ -16020,8 +16392,8 @@ mod offline_note_tests {
             .expect("scalar-spliced previous proof public-input hash");
         assert!(matches!(
             scalar_spliced_previous_proof.validate_public_binding(),
-            Err(KagemushaFoldError::InvalidRecursiveSpendProof {
-                field: "lineage_witness.previous_recursive_proofs.recursive_verifier_scalar_projection_digest"
+            Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch {
+                field: "recursive_verifier_scalar_projection_digest"
             })
         ));
 
@@ -16843,9 +17215,11 @@ mod offline_note_tests {
             .expect("forged append opening public-input hash");
         assert!(matches!(
             forged_append_opening_public_input.validate_public_input_binding(),
-            Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch {
-                field: "append_opening_preflight_digest"
-            })
+            Err(
+                KagemushaFoldError::RecursiveAggregationProofPublicInputMismatch {
+                    field: "append_opening_preflight_digest"
+                }
+            )
         ));
 
         let mut forged_append_boundary_public_input = bundle.clone();
@@ -16912,6 +17286,14 @@ mod offline_note_tests {
             .expect("forged scalar projection public-input hash");
         assert!(matches!(
             forged_scalar_projection_public_input.validate_public_input_binding(),
+            Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch {
+                field: "recursive_verifier_scalar_projection_digest"
+            })
+        ));
+        assert!(matches!(
+            kagemusha_recursive_spend_proof_artifact_digest(
+                &forged_scalar_projection_public_input.recursive_proof
+            ),
             Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch {
                 field: "recursive_verifier_scalar_projection_digest"
             })
