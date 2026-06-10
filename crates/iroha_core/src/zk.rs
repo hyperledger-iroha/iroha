@@ -2364,7 +2364,7 @@ fn derive_halo2_ipa_kagemusha_recursive_one_hop_verifier_slice_proving_key_bytes
     let pk = halo2_backend::keygen_pk(
         &params,
         parsed_vk,
-        &pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<
+        &pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSliceKeygenShape::<
             LEN,
             KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
             KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
@@ -2518,7 +2518,7 @@ fn derive_halo2_ipa_kagemusha_recursive_append_verifier_slice_proving_key_bytes_
     let pk = halo2_backend::keygen_pk(
         &params,
         parsed_vk,
-        &pasta_tiny::KagemushaRecursiveAggregationAppendVerifierSlice::<
+        &pasta_tiny::KagemushaRecursiveAggregationAppendVerifierSliceKeygenShape::<
             LEN,
             KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
             KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
@@ -2655,7 +2655,7 @@ fn build_kagemusha_recursive_one_hop_verifier_slice_vk_box<const LEN: usize>(
     circuit_id: &str,
 ) -> Result<VerifyingKeyBox, halo2_backend::Error> {
     let params = pasta_params_new(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K);
-    let circuit = pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<
+    let circuit = pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSliceKeygenShape::<
         LEN,
         KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
         KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
@@ -2728,7 +2728,7 @@ fn build_kagemusha_recursive_append_verifier_slice_vk_box<const LEN: usize>(
     circuit_id: &str,
 ) -> Result<VerifyingKeyBox, halo2_backend::Error> {
     let params = pasta_params_new(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K);
-    let circuit = pasta_tiny::KagemushaRecursiveAggregationAppendVerifierSlice::<
+    let circuit = pasta_tiny::KagemushaRecursiveAggregationAppendVerifierSliceKeygenShape::<
         LEN,
         KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
         KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
@@ -4746,7 +4746,7 @@ fn cached_kagemusha_recursive_spend_lineage_proving_key<const LEN: usize>(
     let proving_key = halo2_backend::keygen_pk(
         params,
         parsed_vk.clone(),
-        &pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<
+        &pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSliceKeygenShape::<
             LEN,
             KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
             KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
@@ -4787,7 +4787,7 @@ fn cached_kagemusha_recursive_spend_lineage_append_proving_key<const LEN: usize>
     let proving_key = halo2_backend::keygen_pk(
         params,
         parsed_vk.clone(),
-        &pasta_tiny::KagemushaRecursiveAggregationAppendVerifierSlice::<
+        &pasta_tiny::KagemushaRecursiveAggregationAppendVerifierSliceKeygenShape::<
             LEN,
             KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
             KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
@@ -23348,6 +23348,67 @@ mod kagemusha_recursive_aggregation_semantic_circuit_tests {
             hop_count_minus_one_bits(values),
             inverses,
         ));
+    }
+}
+
+#[cfg(all(test, feature = "zk-halo2-ipa"))]
+mod kagemusha_recursive_keygen_shape_tests {
+    use super::*;
+
+    const KEYGEN_SHAPE_TEST_STACK_BYTES: usize = 128 * 1024 * 1024;
+
+    fn assert_verifying_keys_match<Full, Shape, FullBuilder, ShapeBuilder>(
+        full: FullBuilder,
+        shape: ShapeBuilder,
+    ) where
+        Full: halo2_proofs::plonk::Circuit<halo2_backend::Scalar> + Send + 'static,
+        Shape: halo2_proofs::plonk::Circuit<halo2_backend::Scalar> + Send + 'static,
+        FullBuilder: FnOnce() -> Full + Send + 'static,
+        ShapeBuilder: FnOnce() -> Shape + Send + 'static,
+    {
+        std::thread::Builder::new()
+            .name("kagemusha-keygen-shape-equivalence".to_owned())
+            .stack_size(KEYGEN_SHAPE_TEST_STACK_BYTES)
+            .spawn(move || {
+                let full = full();
+                let shape = shape();
+                let params = halo2_backend::params_new(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K);
+                let full_vk = halo2_backend::keygen_vk(&params, &full).expect("full verifier key");
+                let shape_vk =
+                    halo2_backend::keygen_vk(&params, &shape).expect("shape verifier key");
+                assert_eq!(
+                    halo2_backend::verifying_key_to_processed_bytes(&full_vk),
+                    halo2_backend::verifying_key_to_processed_bytes(&shape_vk),
+                    "keygen shape must preserve the verifier-key commitment"
+                );
+            })
+            .expect("spawn keygen-shape equivalence worker")
+            .join()
+            .expect("keygen-shape equivalence worker");
+    }
+
+    #[test]
+    fn one_hop_keygen_shape_matches_full_circuit_verifier_key() {
+        assert_verifying_keys_match(
+            pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<2, 1, 1>::default,
+            pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSliceKeygenShape::<
+                2,
+                1,
+                1,
+            >::default,
+        );
+    }
+
+    #[test]
+    fn append_keygen_shape_matches_full_circuit_verifier_key() {
+        assert_verifying_keys_match(
+            pasta_tiny::KagemushaRecursiveAggregationAppendVerifierSlice::<2, 1, 1>::default,
+            pasta_tiny::KagemushaRecursiveAggregationAppendVerifierSliceKeygenShape::<
+                2,
+                1,
+                1,
+            >::default,
+        );
     }
 }
 
@@ -41959,6 +42020,25 @@ mod kagemusha_folded_real_prover_tests {
             "unexpected missing previous-proof error: {err}"
         );
 
+        let mut prefix_spliced_previous_proof = lineage_witness.clone();
+        let previous_proof = &mut prefix_spliced_previous_proof.previous_recursive_proofs[0];
+        previous_proof.public_inputs.folded_public_inputs_hash =
+            fixed_bytes(b"kagemusha-recursive-spend-forged-previous-folded-hash");
+        previous_proof.public_inputs_hash = previous_proof
+            .public_inputs
+            .public_inputs_hash()
+            .expect("forged previous proof public-input hash");
+        let err = verify_kagemusha_recursive_spend_lineage_witness_with_record(
+            &appended,
+            &prefix_spliced_previous_proof,
+            &recursive_record,
+        )
+        .expect_err("lineage witness must reject previous proofs from another prefix");
+        assert!(
+            err.contains("previous_recursive_proof.folded_public_inputs_hash"),
+            "unexpected prefix-spliced previous-proof error: {err}"
+        );
+
         let mut forged_bundle = appended.clone();
         forged_bundle.accumulator.current_note.spend_nullifier =
             fixed_bytes(b"kagemusha-recursive-spend-forged-final-nullifier");
@@ -41979,7 +42059,7 @@ mod kagemusha_folded_real_prover_tests {
         )
         .expect_err("lineage witness must reject accumulator forgery");
         assert!(
-            err.contains("accumulator does not match"),
+            err.contains("final current note does not match redeem bundle"),
             "unexpected forged accumulator error: {err}"
         );
 
@@ -42275,10 +42355,12 @@ mod kagemusha_folded_real_prover_tests {
                 KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID,
                 &recursive_vk,
                 None,
-            )
-            .expect_err("semantic previous proofs must not be upgraded into reserved-lineage output");
+        )
+        .expect_err("semantic previous proofs must not be upgraded into reserved-lineage output");
         assert!(
-            err.contains("cannot select output proof circuit"),
+            err.contains("cannot select output proof circuit")
+                || err
+                    .contains("previous recursive proof open-envelope 0 witness derivation failed"),
             "unexpected matched previous-proof archive error: {err}"
         );
 
@@ -42316,6 +42398,9 @@ mod kagemusha_folded_real_prover_tests {
         let mut lineage_previous = first_bundle.clone();
         lineage_previous.recursive_proof.verifier_key_id.name =
             KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID.to_owned();
+        mutate_open_verify_envelope(&mut lineage_previous.recursive_proof.proof, |envelope| {
+            envelope.circuit_id = KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID.to_owned();
+        });
         lineage_previous
             .recursive_proof
             .public_inputs
@@ -42401,17 +42486,17 @@ mod kagemusha_folded_real_prover_tests {
                 &recursive_vk,
                 None,
             )
-            .expect_err("Reserved-lineage append output must reject a non-lineage verifier record");
+            .expect_err("Reserved-lineage append output must reject an invalid previous-proof opening");
         assert!(
-            err.contains("reserved-lineage") && err.contains("did not verify"),
-            "unexpected reserved-previous Reserved-lineage output verifier-record error: {err}"
+            err.contains("previous recursive proof open-envelope 0 witness derivation failed"),
+            "unexpected reserved-previous Reserved-lineage output archive error: {err}"
         );
 
         let err =
             prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive(
                 &lineage_previous,
                 Some(&recursive_record),
-                &second_envelope_archive,
+                &[],
                 &second_record_bundle,
                 &second_envelope_archive,
                 second_note.clone(),
@@ -42421,7 +42506,7 @@ mod kagemusha_folded_real_prover_tests {
             )
             .expect_err("append must reject a non-lineage verifier record for reserved previous proofs");
         assert!(
-            err.contains("reserved-lineage") && err.contains("did not verify"),
+            err.contains("reserved-lineage") && err.contains("not a Reserved-lineage profile"),
             "unexpected malformed lineage verifier-record error: {err}"
         );
 
@@ -51426,6 +51511,334 @@ mod pasta_tiny {
                 },
             )
         }
+    }
+
+    /// Key-generation-only shape for a one-hop recursive verifier slice.
+    ///
+    /// Halo2 keygen records selectors and fixed columns, but ignores advice
+    /// values. This wrapper synthesizes the same constraint shape as
+    /// [`KagemushaRecursiveAggregationOneHopVerifierSlice`] while streaming small
+    /// default sub-witnesses instead of materializing the full recursive verifier
+    /// witness tree.
+    #[derive(Clone, Copy, Debug, Default)]
+    pub struct KagemushaRecursiveAggregationOneHopVerifierSliceKeygenShape<
+        const LEN: usize,
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >;
+
+    impl<const LEN: usize, const WINDOWS: usize, const WINDOW_BITS: usize> Circuit<Scalar>
+        for KagemushaRecursiveAggregationOneHopVerifierSliceKeygenShape<LEN, WINDOWS, WINDOW_BITS>
+    {
+        type Config = KagemushaRecursiveAggregationOneHopVerifierSliceConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            *self
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            <KagemushaRecursiveAggregationOneHopVerifierSlice<LEN, WINDOWS, WINDOW_BITS> as Circuit<
+                Scalar,
+            >>::configure(meta)
+        }
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            KagemushaRecursiveAggregationSemantic::default()
+                .synthesize(config.semantic, layouter.namespace(|| "recursive_semantic"))?;
+            synthesize_non_native_vesta_ipa_verifier_shared_table_native_scalar_keygen_shape::<
+                LEN,
+                WINDOWS,
+                WINDOW_BITS,
+            >(config.verifier, layouter.namespace(|| "one_hop_verifier"))?;
+            layouter.assign_region(
+                || "one_hop_verifier_scalar_projection",
+                |mut region| {
+                    assign_kagemusha_one_hop_verifier_scalar_projection_region(
+                        &mut region,
+                        &config.scalar_projection,
+                        [Scalar::from(0); KAGEMUSHA_ONE_HOP_VERIFIER_SCALAR_PROJECTION_INPUTS],
+                    )
+                },
+            )?;
+            layouter.assign_region(
+                || "one_hop_recursive_verifier_slice_link",
+                |mut region| config.link.enable(&mut region, 0),
+            )
+        }
+    }
+
+    /// Key-generation-only shape for an append recursive verifier slice.
+    ///
+    /// The proof circuit still uses
+    /// [`KagemushaRecursiveAggregationAppendVerifierSlice`]. This wrapper is only
+    /// used by VK/PK derivation to avoid allocating two full recursive verifier
+    /// witness trees before Halo2 discards advice values.
+    #[derive(Clone, Copy, Debug, Default)]
+    pub struct KagemushaRecursiveAggregationAppendVerifierSliceKeygenShape<
+        const LEN: usize,
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >;
+
+    impl<const LEN: usize, const WINDOWS: usize, const WINDOW_BITS: usize> Circuit<Scalar>
+        for KagemushaRecursiveAggregationAppendVerifierSliceKeygenShape<LEN, WINDOWS, WINDOW_BITS>
+    {
+        type Config = KagemushaRecursiveAggregationAppendVerifierSliceConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            *self
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            <KagemushaRecursiveAggregationAppendVerifierSlice<LEN, WINDOWS, WINDOW_BITS> as Circuit<
+                Scalar,
+            >>::configure(meta)
+        }
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            KagemushaRecursiveAggregationSemantic::default()
+                .synthesize(config.semantic, layouter.namespace(|| "recursive_semantic"))?;
+            synthesize_non_native_vesta_ipa_verifier_shared_table_native_scalar_keygen_shape::<
+                LEN,
+                WINDOWS,
+                WINDOW_BITS,
+            >(
+                config.previous_recursive_proof_verifier,
+                layouter.namespace(|| "previous_recursive_proof_verifier"),
+            )?;
+            synthesize_non_native_vesta_ipa_verifier_shared_table_native_scalar_keygen_shape::<
+                LEN,
+                WINDOWS,
+                WINDOW_BITS,
+            >(
+                config.current_hop_verifier,
+                layouter.namespace(|| "current_hop_verifier"),
+            )?;
+            layouter.assign_region(
+                || "append_verifier_scalar_projection",
+                |mut region| {
+                    assign_kagemusha_append_verifier_scalar_projection_region(
+                        &mut region,
+                        &config.scalar_projection,
+                        [Scalar::from(0); KAGEMUSHA_APPEND_VERIFIER_SCALAR_PROJECTION_INPUTS],
+                    )
+                },
+            )?;
+            layouter.assign_region(
+                || "append_recursive_verifier_slice_link",
+                |mut region| {
+                    config.link.enable(&mut region, 0)?;
+                    for (index, column) in
+                        config.append_non_zero_inverses.iter().copied().enumerate()
+                    {
+                        crate::zk::assign_advice_compat(
+                            &mut region,
+                            move || format!("append_non_zero_inverse{index}"),
+                            column,
+                            0,
+                            || Value::known(Scalar::from(0)),
+                        )?;
+                    }
+                    Ok(())
+                },
+            )
+        }
+    }
+
+    fn synthesize_non_native_vesta_ipa_verifier_shared_table_native_scalar_keygen_shape<
+        const LEN: usize,
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        config: NonNativeVestaIpaVerifierSharedTableNativeScalarConfig,
+        mut layouter: impl Layouter<Scalar>,
+    ) -> Result<(), PlonkError> {
+        let rounds = ipa_power_of_two_rounds(LEN).ok_or(PlonkError::Synthesis)?;
+        let transcript_round_values = vec![Scalar::from(0); rounds];
+        let transcript_round_states = vec![Scalar::from(0); rounds + 1];
+        let scalar_witness = NativePastaFpScalar::default();
+        layouter.assign_region(
+            || "non_native_vesta_ipa_verifier_shared_table_native_scalar",
+            |mut region| {
+                config.link.enable(&mut region, 0)?;
+
+                assign_native_pasta_fp_ipa_transcript_binding_region(
+                    &mut region,
+                    &config.transcript_binding,
+                    Scalar::from(0),
+                    &transcript_round_values,
+                    &transcript_round_values,
+                    &transcript_round_values,
+                    Scalar::from(0),
+                    Scalar::from(0),
+                    &transcript_round_states,
+                )?;
+
+                let final_b_layer = config.b_reduction.vectors.len().saturating_sub(1);
+                for (layer_index, config_layer) in config.b_reduction.vectors.iter().enumerate() {
+                    let expose_public = layer_index == 0 || layer_index == final_b_layer;
+                    for scalar_config in config_layer {
+                        assign_native_pasta_fp_scalar_region(
+                            &mut region,
+                            scalar_config,
+                            &scalar_witness,
+                            expose_public,
+                        )?;
+                    }
+                }
+                for scalar_config in &config.b_reduction.challenges {
+                    assign_native_pasta_fp_scalar_region(
+                        &mut region,
+                        scalar_config,
+                        &scalar_witness,
+                        true,
+                    )?;
+                }
+                for scalar_config in &config.b_reduction.challenge_inverses {
+                    assign_native_pasta_fp_scalar_region(
+                        &mut region,
+                        scalar_config,
+                        &scalar_witness,
+                        true,
+                    )?;
+                }
+                config.b_reduction.link.enable(&mut region, 0)?;
+
+                for round_config in &config.round_accumulators {
+                    round_config.link.enable(&mut region, 0)?;
+                    assign_native_pasta_fp_scalar_region(
+                        &mut region,
+                        &round_config.challenge,
+                        &scalar_witness,
+                        false,
+                    )?;
+                    assign_native_pasta_fp_scalar_region(
+                        &mut region,
+                        &round_config.challenge_inverse,
+                        &scalar_witness,
+                        false,
+                    )?;
+                    assign_non_native_vesta_affine_windowed_msm_shared_table_native_scalar_keygen_shape::<
+                        WINDOWS,
+                        WINDOW_BITS,
+                    >(&mut region, &round_config.msm)?;
+                }
+
+                for config_round in &config.generator_folds {
+                    for generator_config in config_round {
+                        generator_config.link.enable(&mut region, 0)?;
+                        assign_native_pasta_fp_scalar_region(
+                            &mut region,
+                            &generator_config.challenge,
+                            &scalar_witness,
+                            false,
+                        )?;
+                        assign_native_pasta_fp_scalar_region(
+                            &mut region,
+                            &generator_config.challenge_inverse,
+                            &scalar_witness,
+                            false,
+                        )?;
+                        assign_non_native_vesta_affine_windowed_msm_shared_table_native_scalar_keygen_shape::<
+                            WINDOWS,
+                            WINDOW_BITS,
+                        >(&mut region, &generator_config.g_msm)?;
+                        assign_non_native_vesta_affine_windowed_msm_shared_table_native_scalar_keygen_shape::<
+                            WINDOWS,
+                            WINDOW_BITS,
+                        >(&mut region, &generator_config.h_msm)?;
+                    }
+                }
+
+                config.final_msm.product_link.enable(&mut region, 0)?;
+                assign_non_native_vesta_affine_windowed_msm_shared_table_native_scalar_keygen_shape::<
+                    WINDOWS,
+                    WINDOW_BITS,
+                >(&mut region, &config.final_msm.msm)
+            },
+        )
+    }
+
+    fn assign_non_native_vesta_affine_windowed_msm_shared_table_native_scalar_keygen_shape<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NonNativeVestaAffineWindowedMsmSharedTableNativeScalarConfig,
+    ) -> Result<(), PlonkError> {
+        let sum_witness = NonNativeVestaAffineCompleteAdd::default();
+        config.link.enable(region, 0)?;
+        for term_config in &config.term_muls {
+            assign_non_native_vesta_affine_windowed_scalar_mul_shared_table_native_scalar_keygen_shape::<
+                WINDOWS,
+                WINDOW_BITS,
+            >(region, term_config)?;
+        }
+        for sum_config in &config.sum_adds {
+            assign_non_native_vesta_affine_complete_add_region(region, sum_config, &sum_witness)?;
+        }
+        Ok(())
+    }
+
+    fn assign_non_native_vesta_affine_windowed_scalar_mul_shared_table_native_scalar_keygen_shape<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NonNativeVestaAffineWindowedScalarMulSharedTableNativeScalarConfig,
+    ) -> Result<(), PlonkError> {
+        let scalar_witness =
+            NativePastaFpFixedWindowDecomposition::<WINDOWS, WINDOW_BITS>::default();
+        let table_witness = NonNativeVestaAffineFixedWindowTable::<WINDOW_BITS>::default();
+        let selection_witness =
+            NonNativeVestaAffineFixedWindowSelectFromTable::<WINDOW_BITS>::default();
+        let complete_add_witness = NonNativeVestaAffineCompleteAdd::default();
+
+        config.link.enable(region, 0)?;
+        assign_native_pasta_fp_fixed_window_decomposition_region(
+            region,
+            &config.scalar,
+            &scalar_witness,
+        )?;
+        for table_config in &config.tables {
+            assign_non_native_vesta_affine_fixed_window_table_region(
+                region,
+                table_config,
+                &table_witness,
+            )?;
+        }
+        for selection_config in &config.selections {
+            assign_non_native_vesta_affine_fixed_window_select_from_table_region(
+                region,
+                selection_config,
+                &selection_witness,
+            )?;
+        }
+        for transition_configs in &config.window_base_doubles {
+            for double_config in transition_configs {
+                assign_non_native_vesta_affine_complete_add_region(
+                    region,
+                    double_config,
+                    &complete_add_witness,
+                )?;
+            }
+        }
+        for sum_config in &config.sum_adds {
+            assign_non_native_vesta_affine_complete_add_region(
+                region,
+                sum_config,
+                &complete_add_witness,
+            )?;
+        }
+        Ok(())
     }
 
     /// Reusable config for a non-native `u64` limb range/decomposition check.

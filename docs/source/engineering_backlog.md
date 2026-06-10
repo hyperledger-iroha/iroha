@@ -2656,7 +2656,9 @@ redistributable schemas, and official trust/revocation bundles.
 	  separately from explicit null source objects in both direct preflight and
 	  archived readiness replay,
 	  the manifest must explicitly record `blocked_schema_sources` as an array even
-  when no reviewed restricted source candidates are present. The aggregate
+  when no reviewed restricted source candidates are present, and blocked-source
+  records must match a current fixture/schema gap or, with a profile catalog, a
+  current profile-version gap. The aggregate
   readiness gate replays the same repository-coordinate checks and
   rejects secret-looking repository coordinates before output for archived XSD
   summaries, preventing public mirrors with embedded

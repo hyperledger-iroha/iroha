@@ -10227,6 +10227,7 @@ const PRIVACY_BUILD_PROOF_RESULT_SCHEMA_BYTE: u8 = 0x42;
 const PRIVACY_VERIFY_PROOF_RESULT_SCHEMA_BYTE: u8 = 0x56;
 const PRIVACY_REQUEST_SCHEMA_BYTE: u8 = 0x52;
 const PRIVACY_PRODUCTION_GATE_VERSION: &str = "privacy-production-gate-v1";
+const PRIVACY_PRODUCTION_REVIEW_SCOPE_VERSION: &str = "privacy-production-review-scope-v1";
 const PRIVACY_PRODUCTION_GATE_MISSING_ENGINE: &str =
     "real protocol engine is not production-enabled";
 const PRIVACY_PRODUCTION_GATE_MISSING_ALLOWLIST: &str =
@@ -10364,11 +10365,6 @@ const PRIVACY_REQUIRED_PRODUCTION_PLAN_ROWS: &[(&str, &str, &str)] = &[
         "sis-hints-anoncred-pq-v0",
         "lattice-anonymous-credentials",
         "sis-with-hints",
-    ),
-    (
-        "zk-ace-pq-authorization-v0",
-        "stark/fri/sha256-goldilocks",
-        "stark-fri",
     ),
     (
         "orchard-halo2-actions-v1",
@@ -10517,10 +10513,7 @@ const PRIVACY_ALGORITHM_ENTRIES: &[PrivacyAlgorithmEntry] = &[
             "buildZkAceAuthorizedTransferInstruction",
             "buildZkAceAuthorizationProofV1",
         ],
-        planned_entrypoints: &[
-            "buildShieldedZkAceAuthorizationProofV1",
-            "buildShieldedZkAceAuthorizedTransferInstruction",
-        ],
+        planned_entrypoints: &[],
     },
     PrivacyAlgorithmEntry {
         id: "anonymous-pgc-k-out-of-n-v1",
@@ -10796,11 +10789,17 @@ struct PrivacyProductionLocalnetEvidenceV1 {
     run_id: &'static str,
     target: &'static str,
     peer_count: u8,
+    peer_ids: [&'static str; 4],
+    chain_id: &'static str,
     smoke_passed: bool,
+    smoke_tx_hash: &'static str,
     replay_rejected: bool,
+    replay_rejection_hash: &'static str,
     restart_persistence_checked: bool,
     restart_replay_rejected: bool,
+    restart_replay_rejection_hash: &'static str,
     state_recovery_passed: bool,
+    state_recovery_hash: &'static str,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -10817,12 +10816,28 @@ struct PrivacyProductionSdkParityArtifactV1 {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+struct PrivacyProductionReviewScopeV1 {
+    version: &'static str,
+    algorithm_id: &'static str,
+    chain_id: &'static str,
+    verifier_key_id: &'static str,
+    proof_family: &'static str,
+    public_inputs_schema: Option<&'static str>,
+    sdk_entrypoints: Vec<&'static str>,
+    required_state: Vec<&'static str>,
+    fuzz_artifact_hash: &'static str,
+    performance_artifact_hash: &'static str,
+    localnet_run_id: &'static str,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct PrivacyProductionEvidenceRowV1 {
     algorithm_id: &'static str,
     chain_id: &'static str,
     reviewer_identity: &'static str,
     review_artifact_hash: &'static str,
     review_artifact_signature: &'static str,
+    review_scope: PrivacyProductionReviewScopeV1,
     verifier_key_id: &'static str,
     proof_family: &'static str,
     public_inputs_schema: Option<&'static str>,
@@ -11139,17 +11154,62 @@ fn privacy_production_localnet_run_id_is_valid(value: &str) -> bool {
     compact.contains("4-peer") || compact.contains("4peer")
 }
 
+fn privacy_production_localnet_peer_ids_are_valid(peer_ids: &[&str; 4]) -> bool {
+    for (index, peer_id) in peer_ids.iter().enumerate() {
+        if !privacy_evidence_public_text_is_clean(peer_id, 160)
+            || privacy_evidence_text_has_non_production_marker(peer_id)
+            || peer_id.contains("..")
+            || !peer_id.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b':' | b'-' | b'@')
+            })
+            || peer_ids[(index + 1)..]
+                .iter()
+                .any(|candidate| candidate == peer_id)
+        {
+            return false;
+        }
+    }
+    true
+}
+
+fn privacy_production_localnet_artifact_hashes_are_valid(
+    acceptance: PrivacyProductionLocalnetEvidenceV1,
+) -> bool {
+    let hashes = [
+        acceptance.smoke_tx_hash,
+        acceptance.replay_rejection_hash,
+        acceptance.restart_replay_rejection_hash,
+        acceptance.state_recovery_hash,
+    ];
+    for (index, hash) in hashes.iter().enumerate() {
+        if !privacy_production_evidence_hash_is_valid(hash)
+            || hashes[(index + 1)..]
+                .iter()
+                .any(|candidate| candidate == hash)
+        {
+            return false;
+        }
+    }
+    true
+}
+
 fn privacy_production_localnet_evidence_is_valid(
     acceptance: PrivacyProductionLocalnetEvidenceV1,
+    expected_chain_id: &str,
 ) -> bool {
     privacy_production_localnet_run_id_is_valid(acceptance.run_id)
         && acceptance.target == PRIVACY_PRODUCTION_LOCALNET_TARGET
         && acceptance.peer_count == PRIVACY_PRODUCTION_LOCALNET_PEER_COUNT
+        && privacy_production_localnet_peer_ids_are_valid(&acceptance.peer_ids)
+        && acceptance.chain_id == expected_chain_id
+        && privacy_text_field_is_portable_identifier(acceptance.chain_id)
+        && !privacy_evidence_text_has_non_production_marker(acceptance.chain_id)
         && acceptance.smoke_passed
         && acceptance.replay_rejected
         && acceptance.restart_persistence_checked
         && acceptance.restart_replay_rejected
         && acceptance.state_recovery_passed
+        && privacy_production_localnet_artifact_hashes_are_valid(acceptance)
 }
 
 fn privacy_string_slice_matches_vec(values: &[&'static str], expected: &[String]) -> bool {
@@ -11284,6 +11344,30 @@ fn privacy_production_evidence_required_state_is_valid(
             .all(|item| privacy_evidence_public_text_is_clean(item, 256))
 }
 
+fn privacy_production_review_scope_is_valid(
+    row: &PrivacyProductionEvidenceRowV1,
+    entry: &PrivacyAlgorithmEntry,
+) -> bool {
+    row.review_scope.version == PRIVACY_PRODUCTION_REVIEW_SCOPE_VERSION
+        && row.review_scope.algorithm_id == row.algorithm_id
+        && row.review_scope.algorithm_id == entry.id
+        && row.review_scope.chain_id == row.chain_id
+        && row.review_scope.verifier_key_id == row.verifier_key_id
+        && row.review_scope.proof_family == row.proof_family
+        && row.review_scope.public_inputs_schema == row.public_inputs_schema
+        && privacy_string_slice_matches_slice(
+            &row.review_scope.sdk_entrypoints,
+            &row.sdk_entrypoints,
+        )
+        && privacy_string_slice_matches_slice(&row.review_scope.required_state, &row.required_state)
+        && row.review_scope.fuzz_artifact_hash == row.fuzz_artifact_hash
+        && row.review_scope.performance_artifact_hash == row.performance_artifact_hash
+        && row.review_scope.localnet_run_id == row.localnet_acceptance.run_id
+        && privacy_production_evidence_hash_is_valid(row.review_scope.fuzz_artifact_hash)
+        && privacy_production_evidence_hash_is_valid(row.review_scope.performance_artifact_hash)
+        && privacy_production_localnet_run_id_is_valid(row.review_scope.localnet_run_id)
+}
+
 fn privacy_production_evidence_row_is_valid(
     row: &PrivacyProductionEvidenceRowV1,
     entry: &PrivacyAlgorithmEntry,
@@ -11302,6 +11386,7 @@ fn privacy_production_evidence_row_is_valid(
         && !privacy_evidence_text_has_non_production_marker(row.reviewer_identity)
         && privacy_production_evidence_hash_is_valid(row.review_artifact_hash)
         && privacy_production_review_signature_is_valid(row.review_artifact_signature)
+        && privacy_production_review_scope_is_valid(row, entry)
         && row.verifier_key_id == privacy_expected_verifier_key_id(entry)
         && privacy_text_field_is_portable_identifier(row.verifier_key_id)
         && row.proof_family == entry.proof_family
@@ -11312,7 +11397,7 @@ fn privacy_production_evidence_row_is_valid(
         && privacy_production_evidence_required_state_is_valid(row, entry)
         && privacy_production_evidence_hash_is_valid(row.fuzz_artifact_hash)
         && privacy_production_evidence_hash_is_valid(row.performance_artifact_hash)
-        && privacy_production_localnet_evidence_is_valid(row.localnet_acceptance)
+        && privacy_production_localnet_evidence_is_valid(row.localnet_acceptance, expected_chain_id)
         && privacy_production_gate_evidence_is_valid(entry, &row.gate_evidence)
 }
 
@@ -13830,7 +13915,7 @@ mod tests {
         assert!(privacy_required_production_plan_rows_are_present(
             PRIVACY_ALGORITHM_ENTRIES
         ));
-        assert_eq!(PRIVACY_REQUIRED_PRODUCTION_PLAN_ROWS.len(), 16);
+        assert_eq!(PRIVACY_REQUIRED_PRODUCTION_PLAN_ROWS.len(), 15);
         assert_eq!(PRIVACY_RESEARCH_TARGET_ALGORITHM_IDS.len(), 6);
         assert!(
             PRIVACY_ALGORITHM_ENTRIES
@@ -15178,8 +15263,22 @@ mod tests {
 
     const PRIVACY_TEST_PRODUCTION_CHAIN_ID: &str = "boi-privacy-4peer-chain";
     const PRIVACY_TEST_PRODUCTION_LOCALNET_RUN_ID: &str = "boi-privacy-4peer-localnet-2026-01-02";
+    const PRIVACY_TEST_PRODUCTION_LOCALNET_PEER_IDS: [&str; 4] = [
+        "boi-privacy-peer-1@localnet",
+        "boi-privacy-peer-2@localnet",
+        "boi-privacy-peer-3@localnet",
+        "boi-privacy-peer-4@localnet",
+    ];
     const PRIVACY_TEST_PRODUCTION_HASH: &str =
         "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const PRIVACY_TEST_PRODUCTION_SMOKE_HASH: &str =
+        "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const PRIVACY_TEST_PRODUCTION_REPLAY_HASH: &str =
+        "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+    const PRIVACY_TEST_PRODUCTION_RESTART_REPLAY_HASH: &str =
+        "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+    const PRIVACY_TEST_PRODUCTION_STATE_RECOVERY_HASH: &str =
+        "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
     const PRIVACY_TEST_PRODUCTION_SIGNATURE: &str = "ed25519:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
     fn privacy_test_production_entrypoints(entry: &PrivacyAlgorithmEntry) -> Vec<&'static str> {
@@ -15238,6 +15337,25 @@ mod tests {
             .collect()
     }
 
+    fn privacy_test_review_scope(
+        entry: &PrivacyAlgorithmEntry,
+        sdk_entrypoints: &[&'static str],
+    ) -> PrivacyProductionReviewScopeV1 {
+        PrivacyProductionReviewScopeV1 {
+            version: PRIVACY_PRODUCTION_REVIEW_SCOPE_VERSION,
+            algorithm_id: entry.id,
+            chain_id: PRIVACY_TEST_PRODUCTION_CHAIN_ID,
+            verifier_key_id: privacy_expected_verifier_key_id(entry),
+            proof_family: entry.proof_family,
+            public_inputs_schema: privacy_expected_public_inputs_schema(entry),
+            sdk_entrypoints: sdk_entrypoints.to_vec(),
+            required_state: privacy_expected_required_state(entry).to_vec(),
+            fuzz_artifact_hash: PRIVACY_TEST_PRODUCTION_HASH,
+            performance_artifact_hash: PRIVACY_TEST_PRODUCTION_HASH,
+            localnet_run_id: PRIVACY_TEST_PRODUCTION_LOCALNET_RUN_ID,
+        }
+    }
+
     fn privacy_test_evidence_row(entry: &PrivacyAlgorithmEntry) -> PrivacyProductionEvidenceRowV1 {
         let sdk_entrypoints = privacy_test_production_entrypoints(entry);
         PrivacyProductionEvidenceRowV1 {
@@ -15246,6 +15364,7 @@ mod tests {
             reviewer_identity: "boi-crypto-reviewer-1",
             review_artifact_hash: PRIVACY_TEST_PRODUCTION_HASH,
             review_artifact_signature: PRIVACY_TEST_PRODUCTION_SIGNATURE,
+            review_scope: privacy_test_review_scope(entry, &sdk_entrypoints),
             verifier_key_id: privacy_expected_verifier_key_id(entry),
             proof_family: entry.proof_family,
             public_inputs_schema: privacy_expected_public_inputs_schema(entry),
@@ -15259,11 +15378,17 @@ mod tests {
                 run_id: PRIVACY_TEST_PRODUCTION_LOCALNET_RUN_ID,
                 target: PRIVACY_PRODUCTION_LOCALNET_TARGET,
                 peer_count: PRIVACY_PRODUCTION_LOCALNET_PEER_COUNT,
+                peer_ids: PRIVACY_TEST_PRODUCTION_LOCALNET_PEER_IDS,
+                chain_id: PRIVACY_TEST_PRODUCTION_CHAIN_ID,
                 smoke_passed: true,
+                smoke_tx_hash: PRIVACY_TEST_PRODUCTION_SMOKE_HASH,
                 replay_rejected: true,
+                replay_rejection_hash: PRIVACY_TEST_PRODUCTION_REPLAY_HASH,
                 restart_persistence_checked: true,
                 restart_replay_rejected: true,
+                restart_replay_rejection_hash: PRIVACY_TEST_PRODUCTION_RESTART_REPLAY_HASH,
                 state_recovery_passed: true,
+                state_recovery_hash: PRIVACY_TEST_PRODUCTION_STATE_RECOVERY_HASH,
             },
             gate_evidence: privacy_test_gate_evidence(entry),
         }
@@ -15303,6 +15428,45 @@ mod tests {
             !zk_ace.production_gate.ready,
             "{case} gate must fail closed"
         );
+    }
+
+    fn assert_privacy_evidence_rejected_for_all_rows<F>(case: &str, mutate: F)
+    where
+        F: Fn(&mut PrivacyProductionEvidenceRowV1),
+    {
+        for entry in PRIVACY_ALGORITHM_ENTRIES {
+            let mut row = privacy_test_evidence_row(entry);
+            mutate(&mut row);
+
+            assert!(
+                !privacy_production_evidence_row_is_valid(
+                    &row,
+                    entry,
+                    Some(PRIVACY_TEST_PRODUCTION_CHAIN_ID)
+                ),
+                "{case} evidence row must be rejected before capability admission for {}",
+                entry.id,
+            );
+            let capabilities = privacy_capabilities_with_production_evidence(
+                &[row],
+                Some(PRIVACY_TEST_PRODUCTION_CHAIN_ID),
+            );
+            let algorithm = capabilities
+                .algorithms
+                .iter()
+                .find(|algorithm| algorithm.algorithm_id == entry.id)
+                .expect("privacy capability row");
+            assert!(
+                !algorithm.production_ready,
+                "{case} must keep {} fail-closed",
+                entry.id,
+            );
+            assert!(
+                !algorithm.production_gate.ready,
+                "{case} gate must fail closed for {}",
+                entry.id,
+            );
+        }
     }
 
     #[test]
@@ -15556,6 +15720,18 @@ mod tests {
         assert_zk_ace_evidence_rejected("three-peer localnet downgrade", |row| {
             row.localnet_acceptance.peer_count = 3;
         });
+        assert_zk_ace_evidence_rejected("duplicate localnet peer id", |row| {
+            row.localnet_acceptance.peer_ids[3] = row.localnet_acceptance.peer_ids[0];
+        });
+        assert_zk_ace_evidence_rejected("wrong localnet chain", |row| {
+            row.localnet_acceptance.chain_id = "boi-privacy-other-4peer-chain";
+        });
+        assert_zk_ace_evidence_rejected("bad localnet smoke hash", |row| {
+            row.localnet_acceptance.smoke_tx_hash = "sha256:not-a-hex-digest";
+        });
+        assert_zk_ace_evidence_rejected("reused localnet replay hash", |row| {
+            row.localnet_acceptance.replay_rejection_hash = row.localnet_acceptance.smoke_tx_hash;
+        });
         assert_zk_ace_evidence_rejected("replay acceptance", |row| {
             row.localnet_acceptance.replay_rejected = false;
         });
@@ -15582,6 +15758,185 @@ mod tests {
         });
         assert_zk_ace_evidence_rejected("missing required state", |row| {
             row.required_state.pop();
+        });
+        assert_zk_ace_evidence_rejected("wrong review scope algorithm", |row| {
+            row.review_scope.algorithm_id = "transparent-transfer";
+        });
+        assert_zk_ace_evidence_rejected("wrong review scope chain", |row| {
+            row.review_scope.chain_id = "boi-privacy-other-4peer-chain";
+        });
+        assert_zk_ace_evidence_rejected("wrong review scope verifier key", |row| {
+            row.review_scope.verifier_key_id = "shadow_zk_ace_verifier";
+        });
+        assert_zk_ace_evidence_rejected("mutated review scope public input schema", |row| {
+            row.review_scope.public_inputs_schema = Some("identity_commitment,tx_digest,chain_id");
+        });
+        assert_zk_ace_evidence_rejected("missing review scope SDK entrypoint", |row| {
+            row.review_scope.sdk_entrypoints.pop();
+        });
+        assert_zk_ace_evidence_rejected("dev fixture review scope SDK entrypoint", |row| {
+            row.review_scope
+                .sdk_entrypoints
+                .push("buildZkAceDevProofFixture");
+        });
+        assert_zk_ace_evidence_rejected("missing review scope required state", |row| {
+            row.review_scope.required_state.pop();
+        });
+        assert_zk_ace_evidence_rejected("bad review scope fuzz hash", |row| {
+            row.review_scope.fuzz_artifact_hash = "sha256:not-a-hex-digest";
+        });
+        assert_zk_ace_evidence_rejected("bad review scope performance hash", |row| {
+            row.review_scope.performance_artifact_hash = "sha256:not-a-hex-digest";
+        });
+        assert_zk_ace_evidence_rejected("mock review scope localnet run", |row| {
+            row.review_scope.localnet_run_id = "mock-privacy-4peer-localnet-2026-01-02";
+        });
+    }
+
+    #[test]
+    fn privacy_production_evidence_rejects_adversarial_bindings_for_all_rows() {
+        assert_privacy_evidence_rejected_for_all_rows("wrong algorithm", |row| {
+            row.algorithm_id = "shadow-privacy-row-v1";
+            row.review_scope.algorithm_id = "shadow-privacy-row-v1";
+        });
+        assert_privacy_evidence_rejected_for_all_rows("wrong chain", |row| {
+            row.chain_id = "boi-privacy-other-4peer-chain";
+        });
+        assert_privacy_evidence_rejected_for_all_rows("mock chain marker", |row| {
+            row.chain_id = "mock-privacy-4peer-chain";
+        });
+        assert_privacy_evidence_rejected_for_all_rows("wrong verifier key", |row| {
+            row.verifier_key_id = "shadow_verifier_key";
+        });
+        assert_privacy_evidence_rejected_for_all_rows("mutated public input schema", |row| {
+            row.public_inputs_schema = Some("mutated_public_inputs");
+        });
+        assert_privacy_evidence_rejected_for_all_rows("extra SDK entrypoint", |row| {
+            row.sdk_entrypoints.push("buildShadowProof");
+        });
+        assert_privacy_evidence_rejected_for_all_rows("dev fixture entrypoint", |row| {
+            row.sdk_entrypoints.push("buildShadowDevFixture");
+        });
+        assert_privacy_evidence_rejected_for_all_rows("local verifier entrypoint", |row| {
+            row.sdk_entrypoints.push("verifyShadowProofLocally");
+        });
+        assert_privacy_evidence_rejected_for_all_rows("missing SDK export surface", |row| {
+            row.sdk_exports.pop();
+        });
+        assert_privacy_evidence_rejected_for_all_rows("mismatched SDK export entrypoint", |row| {
+            row.sdk_exports[0].entrypoints.push("buildShadowProof");
+        });
+        assert_privacy_evidence_rejected_for_all_rows("dev fixture SDK export", |row| {
+            row.sdk_exports[0].entrypoints.push("buildShadowDevFixture");
+        });
+        assert_privacy_evidence_rejected_for_all_rows("missing SDK parity artifact", |row| {
+            row.sdk_parity_artifacts.pop();
+        });
+        assert_privacy_evidence_rejected_for_all_rows("wrong SDK parity artifact kind", |row| {
+            row.sdk_parity_artifacts[0].kind = "fixture_vectors";
+        });
+        assert_privacy_evidence_rejected_for_all_rows("bad SDK parity artifact hash", |row| {
+            row.sdk_parity_artifacts[0].artifact_hash = "sha256:not-a-hex-digest";
+        });
+        assert_privacy_evidence_rejected_for_all_rows("three-peer localnet downgrade", |row| {
+            row.localnet_acceptance.peer_count = 3;
+        });
+        assert_privacy_evidence_rejected_for_all_rows("duplicate localnet peer id", |row| {
+            row.localnet_acceptance.peer_ids[3] = row.localnet_acceptance.peer_ids[0];
+        });
+        assert_privacy_evidence_rejected_for_all_rows("wrong localnet chain", |row| {
+            row.localnet_acceptance.chain_id = "boi-privacy-other-4peer-chain";
+        });
+        assert_privacy_evidence_rejected_for_all_rows("localnet smoke failure", |row| {
+            row.localnet_acceptance.smoke_passed = false;
+        });
+        assert_privacy_evidence_rejected_for_all_rows("bad localnet smoke hash", |row| {
+            row.localnet_acceptance.smoke_tx_hash = "sha256:not-a-hex-digest";
+        });
+        assert_privacy_evidence_rejected_for_all_rows("replay acceptance", |row| {
+            row.localnet_acceptance.replay_rejected = false;
+        });
+        assert_privacy_evidence_rejected_for_all_rows("reused localnet replay hash", |row| {
+            row.localnet_acceptance.replay_rejection_hash = row.localnet_acceptance.smoke_tx_hash;
+        });
+        assert_privacy_evidence_rejected_for_all_rows("restart persistence omitted", |row| {
+            row.localnet_acceptance.restart_persistence_checked = false;
+        });
+        assert_privacy_evidence_rejected_for_all_rows("restart replay acceptance", |row| {
+            row.localnet_acceptance.restart_replay_rejected = false;
+        });
+        assert_privacy_evidence_rejected_for_all_rows("state recovery omitted", |row| {
+            row.localnet_acceptance.state_recovery_passed = false;
+        });
+        assert_privacy_evidence_rejected_for_all_rows("mock localnet run", |row| {
+            row.localnet_acceptance.run_id = "mock-privacy-4peer-localnet-2026-01-02";
+        });
+        assert_privacy_evidence_rejected_for_all_rows("missing production gate evidence", |row| {
+            row.gate_evidence.pop();
+        });
+        assert_privacy_evidence_rejected_for_all_rows(
+            "duplicated production gate evidence",
+            |row| {
+                row.gate_evidence.push(row.gate_evidence[0]);
+            },
+        );
+        assert_privacy_evidence_rejected_for_all_rows("bad review artifact hash", |row| {
+            row.review_artifact_hash = "sha256:not-a-hex-digest";
+        });
+        assert_privacy_evidence_rejected_for_all_rows("unsigned review artifact", |row| {
+            row.review_artifact_signature = "ed25519:bbbb";
+        });
+        assert_privacy_evidence_rejected_for_all_rows("mock reviewer identity", |row| {
+            row.reviewer_identity = "mock-crypto-reviewer";
+        });
+        assert_privacy_evidence_rejected_for_all_rows("required state mismatch", |row| {
+            row.required_state.push("shadow unchecked state");
+        });
+        assert_privacy_evidence_rejected_for_all_rows("wrong review scope algorithm", |row| {
+            row.review_scope.algorithm_id = "shadow-privacy-row-v1";
+        });
+        assert_privacy_evidence_rejected_for_all_rows("wrong review scope chain", |row| {
+            row.review_scope.chain_id = "boi-privacy-other-4peer-chain";
+        });
+        assert_privacy_evidence_rejected_for_all_rows("wrong review scope verifier key", |row| {
+            row.review_scope.verifier_key_id = "shadow_verifier_key";
+        });
+        assert_privacy_evidence_rejected_for_all_rows(
+            "mutated review scope public input schema",
+            |row| {
+                row.review_scope.public_inputs_schema = Some("mutated_public_inputs");
+            },
+        );
+        assert_privacy_evidence_rejected_for_all_rows(
+            "missing review scope SDK entrypoint",
+            |row| {
+                row.review_scope.sdk_entrypoints.pop();
+            },
+        );
+        assert_privacy_evidence_rejected_for_all_rows(
+            "dev fixture review scope SDK entrypoint",
+            |row| {
+                row.review_scope
+                    .sdk_entrypoints
+                    .push("buildShadowDevFixture");
+            },
+        );
+        assert_privacy_evidence_rejected_for_all_rows(
+            "review scope required state mismatch",
+            |row| {
+                row.review_scope
+                    .required_state
+                    .push("shadow unchecked state");
+            },
+        );
+        assert_privacy_evidence_rejected_for_all_rows("bad review scope fuzz hash", |row| {
+            row.review_scope.fuzz_artifact_hash = "sha256:not-a-hex-digest";
+        });
+        assert_privacy_evidence_rejected_for_all_rows("bad review scope performance hash", |row| {
+            row.review_scope.performance_artifact_hash = "sha256:not-a-hex-digest";
+        });
+        assert_privacy_evidence_rejected_for_all_rows("mock review scope localnet run", |row| {
+            row.review_scope.localnet_run_id = "mock-privacy-4peer-localnet-2026-01-02";
         });
     }
 
@@ -15618,6 +15973,41 @@ mod tests {
             !duplicate_zk_ace.production_ready,
             "duplicate valid evidence rows must not admit readiness",
         );
+    }
+
+    #[test]
+    fn privacy_production_evidence_rejects_missing_chain_and_duplicates_for_all_rows() {
+        for entry in PRIVACY_ALGORITHM_ENTRIES {
+            let row = privacy_test_evidence_row(entry);
+
+            let no_chain_capabilities =
+                privacy_capabilities_with_production_evidence(&[row.clone()], None);
+            let no_chain_algorithm = no_chain_capabilities
+                .algorithms
+                .iter()
+                .find(|algorithm| algorithm.algorithm_id == entry.id)
+                .expect("privacy capability row");
+            assert!(
+                !no_chain_algorithm.production_ready,
+                "evidence cannot admit {} without expected chain binding",
+                entry.id,
+            );
+
+            let duplicate_capabilities = privacy_capabilities_with_production_evidence(
+                &[row.clone(), row],
+                Some(PRIVACY_TEST_PRODUCTION_CHAIN_ID),
+            );
+            let duplicate_algorithm = duplicate_capabilities
+                .algorithms
+                .iter()
+                .find(|algorithm| algorithm.algorithm_id == entry.id)
+                .expect("privacy capability row");
+            assert!(
+                !duplicate_algorithm.production_ready,
+                "duplicate valid evidence rows must not admit {}",
+                entry.id,
+            );
+        }
     }
 
     #[test]
@@ -19041,6 +19431,35 @@ mod tests {
             .validate_public_binding()
             .expect("semantic final redeem accepts reserved previous proof with lineage record");
 
+        let mut wrong_record_circuit = with_record.clone();
+        wrong_record_circuit
+            .lineage_verifier_record
+            .as_mut()
+            .expect("lineage verifier record")
+            .circuit_id =
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
+                .to_owned();
+        let err = wrong_record_circuit
+            .validate_public_binding()
+            .expect_err("semantic final redeem must reject mismatched previous lineage record");
+        assert!(
+            err.to_string()
+                .contains("lineage_verifier_record.circuit_id"),
+            "unexpected wrong-circuit lineage-record public-binding error: {err}"
+        );
+        let err =
+            match kagemusha_recursive_spend_redeem_instruction_from_request(wrong_record_circuit) {
+                Ok(_) => {
+                    panic!("JS host must reject lineage verifier-record circuit-id mismatch")
+                }
+                Err(err) => err,
+            };
+        assert!(
+            err.to_string()
+                .contains("lineage_verifier_record.circuit_id"),
+            "unexpected wrong-circuit lineage-record rejection: {err}"
+        );
+
         let mut forged_record = with_record.clone();
         forged_record
             .lineage_verifier_record
@@ -19079,6 +19498,35 @@ mod tests {
         request.lineage_verifier_record = Some(lineage_record);
         request.validate_public_binding().expect(
             "witnessless reserved-lineage redeem validates before backend proof verification",
+        );
+
+        let mut wrong_record_circuit = request.clone();
+        wrong_record_circuit
+            .lineage_verifier_record
+            .as_mut()
+            .expect("lineage verifier record")
+            .circuit_id =
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
+                .to_owned();
+        let err = wrong_record_circuit
+            .validate_public_binding()
+            .expect_err("reserved-lineage redeem must reject mismatched final lineage record");
+        assert!(
+            err.to_string()
+                .contains("lineage_verifier_record.circuit_id"),
+            "unexpected wrong-circuit final lineage-record error: {err}"
+        );
+        let err =
+            match kagemusha_recursive_spend_redeem_instruction_from_request(wrong_record_circuit) {
+                Ok(_) => {
+                    panic!("JS host must reject final lineage verifier-record circuit-id mismatch")
+                }
+                Err(err) => err,
+            };
+        assert!(
+            err.to_string()
+                .contains("lineage_verifier_record.circuit_id"),
+            "unexpected wrong-circuit final lineage-record rejection: {err}"
         );
 
         let mut forged_record = request.clone();

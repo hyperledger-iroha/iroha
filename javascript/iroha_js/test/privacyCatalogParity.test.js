@@ -344,7 +344,6 @@ const REQUIRED_PRIVACY_PLAN_ROWS = Object.freeze([
   Object.freeze(["zk-x509-onchain-identity-v0", "sdk-builder", "zk-x509"]),
   Object.freeze(["jindo-lattice-pcs-zk-v0", "sdk-builder", "lattice-pcs-sis"]),
   Object.freeze(["sis-hints-anoncred-pq-v0", "sdk-builder", "sis-with-hints"]),
-  Object.freeze(["zk-ace-pq-authorization-v0", "chain-executable", "stark-fri"]),
   Object.freeze([
     "orchard-halo2-actions-v1",
     "research-target-as-of-2026-05",
@@ -956,10 +955,7 @@ const REQUIRED_PRIVACY_PLAN_PLANNED_SDK_ENTRYPOINTS_BY_ALGORITHM_ID = Object.fre
     "buildSisHintsAnonymousCredentialProofV0",
     "buildSubmitSisHintsCredentialProofInstruction",
   ]),
-  "zk-ace-pq-authorization-v0": Object.freeze([
-    "buildShieldedZkAceAuthorizationProofV1",
-    "buildShieldedZkAceAuthorizedTransferInstruction",
-  ]),
+  "zk-ace-pq-authorization-v0": Object.freeze([]),
   "orchard-halo2-actions-v1": Object.freeze([
     "buildOrchardActionBundleProofV1",
     "buildOrchardActionBundleInstruction",
@@ -1405,11 +1401,28 @@ function productionEvidenceRow(descriptor, { chainId, localnetRunId }) {
       runId: localnetRunId,
       target: "localnet",
       peerCount: 4,
+      peerIds: [
+        "boi-privacy-peer-1@localnet",
+        "boi-privacy-peer-2@localnet",
+        "boi-privacy-peer-3@localnet",
+        "boi-privacy-peer-4@localnet",
+      ],
+      chainId,
       smokePassed: true,
+      smokeTxHash: productionTestArtifact(`localnet-smoke-${descriptor.id}`).uri,
       replayRejected: true,
+      replayRejectionHash: productionTestArtifact(
+        `localnet-replay-${descriptor.id}`,
+      ).uri,
       restartPersistenceChecked: true,
       restartReplayRejected: true,
+      restartReplayRejectionHash: productionTestArtifact(
+        `localnet-restart-replay-${descriptor.id}`,
+      ).uri,
       stateRecoveryPassed: true,
+      stateRecoveryHash: productionTestArtifact(
+        `localnet-state-recovery-${descriptor.id}`,
+      ).uri,
     },
     gateEvidence: Object.fromEntries(
       expectedRequiredProductionGateKeys(descriptor.id).map((key) => [
@@ -1422,7 +1435,7 @@ function productionEvidenceRow(descriptor, { chainId, localnetRunId }) {
 
 function productionEvidenceManifest(
   descriptors,
-  { chainId = "boi-localnet-4p", localnetRunId = "boi-localnet-run-2026-06-09" } = {},
+  { chainId = "boi-localnet-4p", localnetRunId = "boi-localnet-4peer-run-2026-06-09" } = {},
 ) {
   return {
     version: PRIVACY_PRODUCTION_EVIDENCE_REGISTRY_VERSION,
@@ -2096,11 +2109,8 @@ function assertZkAceExecutableDescriptorShape(label, descriptor) {
   );
   assert.deepEqual(
     descriptor.plannedSdkEntrypoints,
-    [
-      "buildShieldedZkAceAuthorizationProofV1",
-      "buildShieldedZkAceAuthorizedTransferInstruction",
-    ],
-    `${label} ZK-ACE descriptor must keep shielded builders planned until production gates pass`,
+    [],
+    `${label} ZK-ACE descriptor must not advertise planned entrypoints after transparent authorization admission`,
   );
   assert.ok(
     !descriptor.plannedSdkEntrypoints.includes("buildZkAceAuthorizationProofV0"),
@@ -2162,8 +2172,8 @@ function assertZkAceExecutableDescriptorShape(label, descriptor) {
     `${label} ZK-ACE production gate must require the full proof gate set`,
   );
   assert.ok(
-    descriptor.productionGate.missing.includes("planned SDK entrypoints remain"),
-    `${label} ZK-ACE production gate must report planned shielded SDK entrypoints`,
+    !descriptor.productionGate.missing.includes("planned SDK entrypoints remain"),
+    `${label} ZK-ACE production gate must not report planned entrypoints after transparent authorization admission`,
   );
   assert.ok(
     descriptor.productionGate.missing.includes(
@@ -2176,7 +2186,6 @@ function assertZkAceExecutableDescriptorShape(label, descriptor) {
     [
       ...PRODUCTION_GATE_REQUIRED_REASONS,
       "implementation stage is not production-hardened",
-      "planned SDK entrypoints remain",
       "Iroha production allowlist is not enabled for this audited row",
     ],
     `${label} ZK-ACE production gate must stay fail-closed despite the STARK/FRI verifier profile allowlist`,
@@ -3284,7 +3293,19 @@ test("privacy algorithm JS catalogs accept complete internal review evidence", (
         "crypto-reviewer@internal.example",
       );
       assert.equal(descriptor.productionGate.localnetAcceptance.peer_count, 4);
+      assert.deepEqual(descriptor.productionGate.localnetAcceptance.peer_ids, [
+        "boi-privacy-peer-1@localnet",
+        "boi-privacy-peer-2@localnet",
+        "boi-privacy-peer-3@localnet",
+        "boi-privacy-peer-4@localnet",
+      ]);
+      assert.equal(descriptor.productionGate.localnetAcceptance.chain_id, chainId);
+      assert.match(descriptor.productionGate.localnetAcceptance.smoke_tx_hash, /^sha256:/);
       assert.equal(descriptor.productionGate.localnetAcceptance.replay_rejected, true);
+      assert.match(
+        descriptor.productionGate.localnetAcceptance.replay_rejection_hash,
+        /^sha256:/,
+      );
       assert.equal(
         descriptor.productionGate.localnetAcceptance.restart_replay_rejected,
         true,
@@ -3305,69 +3326,159 @@ test("privacy algorithm JS catalogs accept complete internal review evidence", (
 test("privacy algorithm JS catalogs reject malformed internal review evidence", () => {
   const chainId = "boi-localnet-4p";
   const mutators = [
-    (row) => {
-      delete row.reviewArtifact.signature;
-    },
-    (row) => {
-      row.reviewArtifact.uri = "https://audit.example/review.pdf";
-    },
-    (row) => {
-      row.sdkEntrypoints.python.push("buildZkAceDevProofFixture");
-    },
-    (row) => {
-      row.sdkEntrypoints.javascript.push("verifyZkAceProofLocally");
-    },
-    (row) => {
-      delete row.sdkParityArtifacts.golden_vectors.ffi;
-    },
-    (row) => {
-      row.sdkParityArtifacts.types.swift.label = "Mock Swift types SDK parity artifact";
-    },
-    (row) => {
-      row.verifierKeyId = "wrong_verifier_key";
-    },
-    (row) => {
-      row.publicInputsSchema = "mutated_schema";
-    },
-    (row) => {
-      row.localnetAcceptance.peerCount = 3;
-    },
-    (row) => {
-      row.localnetAcceptance.replayRejected = false;
-    },
-    (row) => {
-      row.localnetAcceptance.restartReplayRejected = false;
-    },
-    (row) => {
-      delete row.gateEvidence.real_proving;
-    },
+    [
+      "missing review artifact signature",
+      (row) => {
+        delete row.reviewArtifact.signature;
+      },
+    ],
+    [
+      "non-hash-addressed review artifact",
+      (row) => {
+        row.reviewArtifact.uri = "https://audit.example/review.pdf";
+      },
+    ],
+    [
+      "dev fixture SDK entrypoint",
+      (row) => {
+        row.sdkEntrypoints.python.push("buildShadowDevProofFixture");
+      },
+    ],
+    [
+      "local verifier SDK entrypoint",
+      (row) => {
+        row.sdkEntrypoints.javascript.push("verifyShadowProofLocally");
+      },
+    ],
+    [
+      "missing FFI golden vector parity artifact",
+      (row) => {
+        delete row.sdkParityArtifacts.golden_vectors.ffi;
+      },
+    ],
+    [
+      "mock SDK parity artifact label",
+      (row) => {
+        row.sdkParityArtifacts.types.swift.label = "Mock Swift types SDK parity artifact";
+      },
+    ],
+    [
+      "wrong verifier key",
+      (row) => {
+        row.verifierKeyId = "wrong_verifier_key";
+      },
+    ],
+    [
+      "mutated public-input schema",
+      (row) => {
+        row.publicInputsSchema = "mutated_schema";
+      },
+    ],
+    [
+      "three-peer localnet downgrade",
+      (row) => {
+        row.localnetAcceptance.peerCount = 3;
+      },
+    ],
+    [
+      "mock localnet run id",
+      (row) => {
+        row.localnetRunId = "mock-boi-localnet-4peer-run-2026-06-09";
+      },
+    ],
+    [
+      "duplicate localnet peer id",
+      (row) => {
+        row.localnetAcceptance.peerIds[3] = row.localnetAcceptance.peerIds[0];
+      },
+    ],
+    [
+      "wrong localnet chain",
+      (row) => {
+        row.localnetAcceptance.chainId = "boi-localnet-other-4p";
+      },
+    ],
+    [
+      "localnet smoke failure",
+      (row) => {
+        row.localnetAcceptance.smokePassed = false;
+      },
+    ],
+    [
+      "bad localnet smoke hash",
+      (row) => {
+        row.localnetAcceptance.smokeTxHash = "sha256:not-a-hex-digest";
+      },
+    ],
+    [
+      "replay acceptance",
+      (row) => {
+        row.localnetAcceptance.replayRejected = false;
+      },
+    ],
+    [
+      "reused localnet replay hash",
+      (row) => {
+        row.localnetAcceptance.replayRejectionHash =
+          row.localnetAcceptance.smokeTxHash;
+      },
+    ],
+    [
+      "restart persistence omitted",
+      (row) => {
+        row.localnetAcceptance.restartPersistenceChecked = false;
+      },
+    ],
+    [
+      "restart replay acceptance",
+      (row) => {
+        row.localnetAcceptance.restartReplayRejected = false;
+      },
+    ],
+    [
+      "state recovery omitted",
+      (row) => {
+        row.localnetAcceptance.stateRecoveryPassed = false;
+      },
+    ],
+    [
+      "missing production gate evidence",
+      (row, descriptor) => {
+        const [firstGate] = expectedRequiredProductionGateKeys(descriptor.id);
+        delete row.gateEvidence[firstGate];
+      },
+    ],
   ];
-  for (const [label, getDescriptor] of [
-    ["src", getSrcPrivacyAlgorithmDescriptor],
-    ["dist", getDistPrivacyAlgorithmDescriptor],
+  for (const [label, getDescriptors, getDescriptor] of [
+    ["src", getSrcPrivacyAlgorithmDescriptors, getSrcPrivacyAlgorithmDescriptor],
+    ["dist", getDistPrivacyAlgorithmDescriptors, getDistPrivacyAlgorithmDescriptor],
   ]) {
-    const target = getDescriptor("zk-ace-pq-authorization-v0");
-    for (const mutate of mutators) {
-      const row = productionEvidenceRow(target, {
-        chainId,
-        localnetRunId: "boi-localnet-run-2026-06-09",
-      });
-      mutate(row);
-      const manifest = {
-        version: PRIVACY_PRODUCTION_EVIDENCE_REGISTRY_VERSION,
-        rows: [row],
-      };
-      const descriptor = getDescriptor("zk-ace-pq-authorization-v0", manifest, {
-        chainId,
-      });
-      assert.equal(descriptor.productionReady, false, `${label} must reject malformed evidence`);
-      assert.equal(descriptor.productionGate.ready, false);
-      assert.ok(descriptor.plannedSdkEntrypoints.length > 0);
-      assert.ok(
-        descriptor.productionGate.missing.includes(
-          "Iroha production allowlist is not enabled for this audited row",
-        ),
-      );
+    for (const target of getDescriptors()) {
+      for (const [caseName, mutate] of mutators) {
+        const row = productionEvidenceRow(target, {
+          chainId,
+          localnetRunId: "boi-localnet-4peer-run-2026-06-09",
+        });
+        mutate(row, target);
+        const manifest = {
+          version: PRIVACY_PRODUCTION_EVIDENCE_REGISTRY_VERSION,
+          rows: [row],
+        };
+        const descriptor = getDescriptor(target.id, manifest, {
+          chainId,
+        });
+        assert.equal(
+          descriptor.productionReady,
+          false,
+          `${label} ${target.id} must reject ${caseName}`,
+        );
+        assert.equal(descriptor.productionGate.ready, false);
+        assert.ok(
+          descriptor.productionGate.missing.includes(
+            "Iroha production allowlist is not enabled for this audited row",
+          ),
+        );
+      }
     }
   }
 });
@@ -3383,7 +3494,7 @@ test("privacy algorithm JS catalogs reject chain-mismatched evidence", () => {
       rows: [
         productionEvidenceRow(target, {
           chainId: "boi-localnet-4p",
-          localnetRunId: "boi-localnet-run-2026-06-09",
+          localnetRunId: "boi-localnet-4peer-run-2026-06-09",
         }),
       ],
     };
@@ -3392,7 +3503,7 @@ test("privacy algorithm JS catalogs reject chain-mismatched evidence", () => {
     });
     assert.equal(descriptor.productionReady, false, `${label} must reject wrong chain evidence`);
     assert.equal(descriptor.productionGate.ready, false);
-    assert.ok(descriptor.plannedSdkEntrypoints.length > 0);
+    assert.deepEqual(descriptor.plannedSdkEntrypoints, []);
   }
 });
 

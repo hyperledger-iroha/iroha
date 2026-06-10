@@ -152,7 +152,13 @@ Production release criteria:
   signed evidence artifact hashes.
   Across the required standard matrix, production slots must not reuse the same
   device fingerprint or attestation challenge; copied lab evidence is blocked
-  even if each individual slot is otherwise signed and hash-consistent.
+  even if each individual slot is otherwise signed and hash-consistent. The
+  scanner and release-bundle validator expose this only as hash-backed
+  `duplicate_bindings` metadata with unique sorted slot lists, so raw
+  fingerprints or challenge material do not leak into release summaries.
+  Existing release manifests must also retain exact standard-matrix family
+  coverage, an empty missing-family list, and canonical trusted-signer SHA-256
+  pins during `--verify-existing`.
   The signed raw command list must exactly match the canonical Android
   production device-lab commands: the first runs the release assembly steps
   `:client-android:assembleRelease` and
@@ -213,6 +219,9 @@ Production release criteria:
   source swaps fail before a signed slot can be installed.
 - Generate signed lab evidence from an already completed slot with
   `python3 scripts/sign_android_device_lab_evidence.py --slot artifacts/android/device_lab/<slot-id> --private-key <runtime-only-lab-private-key.pem> --public-key <lab-public-key.pem> --signer-key-id <lab-signer-id>`.
+  Before signing or writing outputs, the helper validates the preserved
+  `attestation/harness-result.json` against the slot challenge and copied
+  certificate-chain count.
   The helper writes the signed evidence artifact, refreshes the slot artifact
 	  hash, and rewrites `sha256sum.txt`; private key paths are runtime inputs only
 	  and are not written to slot metadata or JSON summaries. Runtime private-key

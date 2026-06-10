@@ -252,6 +252,7 @@ SOURCE_PATHS = (
     "crates/iroha_js_host/src/lib.rs",
     "docs/source/offline_kagemusha.md",
     "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift",
+    "IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift",
     "IrohaSwift/Sources/IrohaSwift/KagemushaCompactPaymentTokenProver.swift",
     "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveAggregationProofBundleProver.swift",
     "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift",
@@ -266,6 +267,7 @@ SOURCE_PATHS = (
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveCompactPaymentTokenProverTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaInstructionTransactionEncoderTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/UC4DecodePaymentTokenTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteV2Tests.swift",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaCompactPaymentTokenProver.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveAggregationProofBundleProver.java",
@@ -274,8 +276,10 @@ SOURCE_PATHS = (
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveCompactPaymentTokenProver.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteHalo2Prover.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteV2.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridge.java",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaCompactPaymentTokenProver.kt",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/TransactionBuilderTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridgeTest.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteV2Test.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
@@ -285,10 +289,12 @@ SOURCE_PATHS = (
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveCompactPaymentTokenProver.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteHalo2Prover.java",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteV2.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaInstructionArchivesTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteV2Test.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProverTest.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridgeTest.kt",
     "javascript/iroha_js/src/crypto.js",
     "javascript/iroha_js/dist/crypto.js",
     "javascript/iroha_js/src/crypto.browser.js",
@@ -304,19 +310,26 @@ SOURCE_PATHS = (
     "javascript/iroha_js/test/transactionBuilder.test.js",
     "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
     "javascript/iroha_js/test/package_dist.test.js",
+    "javascript/iroha_js/test/privacyNative.test.js",
     "python/iroha_python/src/iroha_python/__init__.py",
+    "python/iroha_python/src/iroha_python/crypto.py",
     "python/iroha_python/src/iroha_python/kagemusha.py",
+    "python/iroha_python/src/iroha_python/privacy_catalog.py",
     "python/iroha_python/src/iroha_python/tx.py",
     "python/iroha_python/iroha_python_rs/src/lib.rs",
     "python/iroha_python/tests/kagemusha_test.py",
+    "python/iroha_python/tests/privacy_catalog_test.py",
+    "python/iroha_python/tests/crypto_algorithms_test.py",
     "csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj",
     "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
+    "csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyNative.cs",
     "csharp/src/Hyperledger.Iroha.Sdk/Transactions/KagemushaInstructionArchiveInstruction.cs",
     "csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionBuilder.cs",
     "csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionEncodingContext.cs",
     "csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionInstruction.cs",
     "csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj",
     "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
+    "csharp/tests/Hyperledger.Iroha.Sdk.Tests/PrivacyNativeTests.cs",
     "csharp/tests/Hyperledger.Iroha.Sdk.Tests/TransactionBuilderTests.cs",
 )
 
@@ -356,6 +369,24 @@ WORKFLOW_REQUIRED_PATHS = SOURCE_PATHS + (
     "ci/check_kagemusha_recursive_spend_swift_sdk.sh",
     "ci/check_kagemusha_recursive_spend_csharp_sdk.sh",
     "ci/check_kagemusha_recursive_spend_js_sdk.sh",
+)
+
+SDK_PRIVACY_WORKFLOW_INVENTORY_PATHS = (
+    "IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridge.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridgeTest.java",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridgeTest.kt",
+    "javascript/iroha_js/src/crypto.js",
+    "javascript/iroha_js/dist/crypto.js",
+    "javascript/iroha_js/test/privacyNative.test.js",
+    "python/iroha_python/src/iroha_python/crypto.py",
+    "python/iroha_python/src/iroha_python/privacy_catalog.py",
+    "python/iroha_python/tests/privacy_catalog_test.py",
+    "python/iroha_python/tests/crypto_algorithms_test.py",
+    "csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyNative.cs",
+    "csharp/tests/Hyperledger.Iroha.Sdk.Tests/PrivacyNativeTests.cs",
 )
 SDK_PARITY_MAIN_COMMAND = "ci/check_kagemusha_recursive_spend_sdk_parity.sh"
 PYTHON_BYTECODE_COMMAND = "bash ci/check_no_tracked_python_bytecode.sh"
@@ -741,6 +772,14 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-bytecode-script",
     ),
     (
+        "Python SDK test filter script negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-test-filter-script",
+    ),
+    (
+        "Python SDK workflow inventory negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-workflow-inventory",
+    ),
+    (
         "Python lineage frozen key copy negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-lineage-frozen-copy",
     ),
@@ -779,6 +818,18 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "JVM SDK test workflow negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-sdk-test-workflow",
+    ),
+    (
+        "JVM SDK test filter script negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-sdk-test-filter-script",
+    ),
+    (
+        "JVM SDK workflow inventory negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-sdk-workflow-inventory",
+    ),
+    (
+        "JVM SDK Android workflow inventory negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-sdk-android-workflow-inventory",
     ),
     (
         "JVM SDK JDK 21 script negative control",
@@ -851,6 +902,22 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "Swift SDK parse workflow negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-sdk-parse-workflow",
+    ),
+    (
+        "Swift SDK parse surface script negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-sdk-parse-surface-script",
+    ),
+    (
+        "Swift SDK privacy parse script negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-sdk-privacy-parse-script",
+    ),
+    (
+        "Swift SDK workflow inventory negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-sdk-workflow-inventory",
+    ),
+    (
+        "Swift SDK source workflow inventory negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-sdk-source-workflow-inventory",
     ),
     (
         "Swift UC4 diagnostic skip negative control",
@@ -929,6 +996,18 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-native-bridge-script",
     ),
     (
+        "C# SDK native library evidence script negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-native-library-evidence-script",
+    ),
+    (
+        "C# SDK test filter script negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-test-filter-script",
+    ),
+    (
+        "C# SDK workflow inventory negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-workflow-inventory",
+    ),
+    (
         "C# archive wrapper copy negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-archive-copy",
     ),
@@ -991,6 +1070,22 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "JavaScript SDK test workflow negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-test-workflow",
+    ),
+    (
+        "JavaScript SDK transaction-builder test filter negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-transaction-builder-filter-script",
+    ),
+    (
+        "JavaScript SDK privacy native test filter negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-privacy-native-filter-script",
+    ),
+    (
+        "JavaScript SDK workflow inventory negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-workflow-inventory",
+    ),
+    (
+        "SDK privacy workflow inventory matrix negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-privacy-workflow-inventory-matrix",
     ),
     (
         "JavaScript SDK install ordering workflow negative control",
@@ -1624,12 +1719,16 @@ def check_javascript_sdk_script(errors):
         errors,
     )
     require(
-        "Kagemusha recursive spend|Kagemusha record-backed|Kagemusha .* SDK runner|browser crypto exposes native-only helpers as safe stubs" in script
+        "Kagemusha recursive spend|Kagemusha record-backed|Kagemusha .* SDK runner|browser crypto exposes native-only helpers as safe stubs|buildKagemusha" in script
+        and "privacy native availability probes build and verify with Norito request archives" in script
+        and "privacy native wrappers require binary Norito request archives" in script
         and "test/crypto.browser.test.js" in script
         and "test/kagemushaFfiContractParity.test.js" in script
         and "test/kagemushaRecursiveSpend.test.js" in script
-        and "test/package_dist.test.js" in script,
-        "Kagemusha JavaScript SDK script must run recursive spend, browser-stub, package-dist, and runtime-gate meta tests",
+        and "test/package_dist.test.js" in script
+        and "test/privacyNative.test.js" in script
+        and "test/transactionBuilder.test.js" in script,
+        "Kagemusha JavaScript SDK script must run recursive spend, browser-stub, privacy native, package-dist, transaction-builder, and runtime-gate meta tests",
         errors,
     )
 
@@ -3251,14 +3350,33 @@ def check_jvm_sdk_script_pins_jdk21(texts, errors):
         "Kagemusha JVM SDK script must print the selected Java version",
         errors,
     )
+    for test_class in (
+        "org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendProverTest",
+        "org.hyperledger.iroha.sdk.offline.KagemushaInstructionArchivesTest",
+        "org.hyperledger.iroha.sdk.offline.OfflineNoteTest",
+        "org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test",
+        "org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridgeTest",
+    ):
+        require(
+            f"--tests {test_class}" in script,
+            f"Kagemusha JVM SDK script must run {test_class}",
+            errors,
+        )
     require(
         "KagemushaRecursiveAggregationProofBundleProver.java" in script,
         "Kagemusha JVM SDK script must compile the Android recursive aggregation prover wrapper",
         errors,
     )
     require(
-        "ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest" in script,
-        "Kagemusha JVM SDK script must run only the Android Kagemusha harness main",
+        (
+            "ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest,"
+            "org.hyperledger.iroha.android.offline.OfflineNoteV2Test,"
+            "org.hyperledger.iroha.android.offline.OfflineNoteTest,"
+            "org.hyperledger.iroha.android.privacy.PrivacyNativeBridgeTest,"
+            "org.hyperledger.iroha.android.tx.TransactionBuilderTests"
+        )
+        in script,
+        "Kagemusha JVM SDK script must run the focused Android Kagemusha harness mains",
         errors,
     )
     require(
@@ -3822,6 +3940,16 @@ def check_python(texts, errors):
         "Kagemusha Python SDK script must not write bytecode cache files during tests",
         errors,
     )
+    for test_path in (
+        "tests/kagemusha_test.py",
+        "tests/privacy_catalog_test.py",
+        "tests/crypto_algorithms_test.py",
+    ):
+        require(
+            test_path in script,
+            f"Kagemusha Python SDK script must run {test_path}",
+            errors,
+        )
     init = "python/iroha_python/src/iroha_python/__init__.py"
     wrapper = "python/iroha_python/src/iroha_python/kagemusha.py"
     tx_wrapper = "python/iroha_python/src/iroha_python/tx.py"
@@ -4706,6 +4834,31 @@ def check_swift_sdk_script_prints_swiftc_version(errors):
         "Kagemusha Swift SDK script must print the selected swiftc version",
         errors,
     )
+    for relative in (
+        "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift",
+        "IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift",
+        "IrohaSwift/Sources/IrohaSwift/Halo2OfflineNoteProver.swift",
+        "IrohaSwift/Sources/IrohaSwift/KagemushaCompactPaymentTokenProver.swift",
+        "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveAggregationProofBundleProver.swift",
+        "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift",
+        "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveCompactPaymentTokenProver.swift",
+        "IrohaSwift/Sources/IrohaSwift/KagemushaInstructionTransactionEncoder.swift",
+        "IrohaSwift/Sources/IrohaSwift/OfflineNoteV2.swift",
+        "IrohaSwift/Sources/IrohaSwift/OfflineNoritoDecoding.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/KagemushaCompactPaymentTokenProverTests.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveAggregationProofBundleProverTests.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveCompactPaymentTokenProverTests.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/KagemushaInstructionTransactionEncoderTests.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/UC4DecodePaymentTokenTests.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteV2Tests.swift",
+    ):
+        require(
+            relative in script,
+            f"Kagemusha Swift SDK script must parse {relative}",
+            errors,
+        )
     require(
         "IrohaSwift/Tests/IrohaSwiftTests/UC4DecodePaymentTokenTests.swift" in script,
         "Kagemusha Swift SDK script must parse the UC4 payment-token diagnostic test",
@@ -5725,6 +5878,20 @@ def check_csharp(texts, errors):
         errors,
     )
     require(
+        'BRIDGE_LIBRARY_NAME="connect_norito_bridge.dll"' in script
+        and 'BRIDGE_LIBRARY_NAME="libconnect_norito_bridge.dylib"' in script
+        and 'BRIDGE_LIBRARY_NAME="libconnect_norito_bridge.so"' in script,
+        "Kagemusha C# SDK script must resolve the platform-specific native bridge library name",
+        errors,
+    )
+    require(
+        'BRIDGE_LIBRARY_PATH="${BRIDGE_LIBRARY_DIR}/${BRIDGE_LIBRARY_NAME}"' in script
+        and '[[ ! -f "${BRIDGE_LIBRARY_PATH}" ]]' in script
+        and "connect_norito_bridge native bridge:" in script,
+        "Kagemusha C# SDK script must verify and print the freshly built native bridge path",
+        errors,
+    )
+    require(
         'export DYLD_LIBRARY_PATH="${BRIDGE_LIBRARY_DIR}${DYLD_LIBRARY_PATH:+:${DYLD_LIBRARY_PATH}}"' in script,
         "Kagemusha C# SDK script must expose the native bridge on macOS loader path",
         errors,
@@ -5737,6 +5904,11 @@ def check_csharp(texts, errors):
     require(
         'export PATH="${BRIDGE_LIBRARY_DIR}:${PATH}"' in script,
         "Kagemusha C# SDK script must expose the native bridge on Windows loader path",
+        errors,
+    )
+    require(
+        '--filter "FullyQualifiedName~KagemushaRecursiveSpendNativeTests|FullyQualifiedName~PrivacyNativeTests|FullyQualifiedName~TransactionBuilderTests"' in script,
+        "Kagemusha C# SDK script must run recursive spend, privacy native, and transaction builder tests",
         errors,
     )
     relative = "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs"
@@ -7239,6 +7411,40 @@ if mode == "--negative-control-python-sdk-bytecode-script":
         raise SystemExit(0)
     raise SystemExit("negative control failed: Python SDK bytecode script drift was not detected")
 
+if mode == "--negative-control-python-sdk-test-filter-script":
+    target = PYTHON_SDK_TEST_COMMAND
+    original = read(target)
+    mutated = original.replace("  tests/kagemusha_test.py \\\n", "", 1)
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate Python SDK test filter")
+    text_overrides[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        print("negative control rejected Python SDK test filter drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: Python SDK test filter drift was not detected")
+
+if mode == "--negative-control-python-sdk-workflow-inventory":
+    target = WORKFLOW_PATH
+    original = read(target)
+    mutated = original.replace(
+        '      - "python/iroha_python/src/iroha_python/privacy_catalog.py"\n',
+        "",
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate Python SDK workflow inventory")
+    text_overrides[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        print("negative control rejected Python SDK workflow inventory drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: Python SDK workflow inventory drift was not detected")
+
 if mode == "--negative-control-python-lineage-frozen-copy":
     mutated = dict(texts)
     target = "python/iroha_python/tests/kagemusha_test.py"
@@ -7424,6 +7630,74 @@ if mode == "--negative-control-jvm-sdk-test-workflow":
         print(str(error).splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: JVM SDK test workflow drift was not detected")
+
+if mode == "--negative-control-jvm-sdk-test-filter-script":
+    target = JVM_SDK_TEST_COMMAND
+    original = read(target)
+    mutated = original.replace(
+        "  --tests org.hyperledger.iroha.sdk.offline.KagemushaInstructionArchivesTest \\\n"
+        "  --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest \\\n"
+        "  --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test \\\n"
+        "  --tests org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridgeTest\n",
+        "",
+        1,
+    )
+    mutated = mutated.replace(
+        ",org.hyperledger.iroha.android.offline.OfflineNoteV2Test,"
+        "org.hyperledger.iroha.android.offline.OfflineNoteTest,"
+        "org.hyperledger.iroha.android.privacy.PrivacyNativeBridgeTest,"
+        "org.hyperledger.iroha.android.tx.TransactionBuilderTests",
+        "",
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate JVM SDK test filter")
+    text_overrides[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        print("negative control rejected JVM SDK test filter drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: JVM SDK test filter drift was not detected")
+
+if mode == "--negative-control-jvm-sdk-workflow-inventory":
+    target = WORKFLOW_PATH
+    original = read(target)
+    mutated = original.replace(
+        '      - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridgeTest.kt"\n',
+        "",
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate JVM SDK workflow inventory")
+    text_overrides[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        print("negative control rejected JVM SDK workflow inventory drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: JVM SDK workflow inventory drift was not detected")
+
+if mode == "--negative-control-jvm-sdk-android-workflow-inventory":
+    target = WORKFLOW_PATH
+    original = read(target)
+    mutated = original.replace(
+        '      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridgeTest.java"\n',
+        "",
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate JVM SDK Android workflow inventory")
+    text_overrides[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        print("negative control rejected JVM SDK Android workflow inventory drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: JVM SDK Android workflow inventory drift was not detected")
 
 if mode == "--negative-control-jvm-sdk-jdk21-script":
     target = JVM_SDK_TEST_COMMAND
@@ -7689,6 +7963,92 @@ if mode == "--negative-control-swift-sdk-parse-workflow":
         print(str(error).splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: Swift SDK parse workflow drift was not detected")
+
+if mode == "--negative-control-swift-sdk-parse-surface-script":
+    target = SWIFT_SDK_PARSE_COMMAND
+    original = read(target)
+    mutated = original.replace(
+        "  IrohaSwift/Sources/IrohaSwift/KagemushaInstructionTransactionEncoder.swift \\\n",
+        "",
+        1,
+    )
+    mutated = mutated.replace(
+        "  IrohaSwift/Tests/IrohaSwiftTests/KagemushaInstructionTransactionEncoderTests.swift \\\n",
+        "",
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate Swift SDK parse surface")
+    text_overrides[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        print("negative control rejected Swift SDK parse surface drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: Swift SDK parse surface drift was not detected")
+
+if mode == "--negative-control-swift-sdk-privacy-parse-script":
+    target = SWIFT_SDK_PARSE_COMMAND
+    original = read(target)
+    mutated = original.replace(
+        "  IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift \\\n",
+        "",
+        1,
+    )
+    mutated = mutated.replace(
+        "  IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift \\\n",
+        "",
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate Swift SDK privacy parse surface")
+    text_overrides[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        print("negative control rejected Swift SDK privacy parse drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: Swift SDK privacy parse drift was not detected")
+
+if mode == "--negative-control-swift-sdk-workflow-inventory":
+    target = WORKFLOW_PATH
+    original = read(target)
+    mutated = original.replace(
+        '      - "IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift"\n',
+        "",
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate Swift SDK workflow inventory")
+    text_overrides[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        print("negative control rejected Swift SDK workflow inventory drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: Swift SDK workflow inventory drift was not detected")
+
+if mode == "--negative-control-swift-sdk-source-workflow-inventory":
+    target = WORKFLOW_PATH
+    original = read(target)
+    mutated = original.replace(
+        '      - "IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift"\n',
+        "",
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate Swift SDK source workflow inventory")
+    text_overrides[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        print("negative control rejected Swift SDK source workflow inventory drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: Swift SDK source workflow inventory drift was not detected")
 
 if mode == "--negative-control-swift-sdk-uc4-skip":
     mutated_texts = dict(texts)
@@ -8126,6 +8486,68 @@ if mode == "--negative-control-csharp-sdk-native-bridge-script":
         raise SystemExit(0)
     raise SystemExit("negative control failed: C# SDK native bridge script drift was not detected")
 
+if mode == "--negative-control-csharp-sdk-native-library-evidence-script":
+    target = CSHARP_SDK_TEST_COMMAND
+    original = read(target)
+    mutated = original.replace(
+        'BRIDGE_LIBRARY_PATH="${BRIDGE_LIBRARY_DIR}/${BRIDGE_LIBRARY_NAME}"\n',
+        "",
+        1,
+    )
+    mutated = mutated.replace(
+        'printf \'connect_norito_bridge native bridge: %s\\n\' "${BRIDGE_LIBRARY_PATH}"\n',
+        "",
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate C# SDK native library evidence")
+    text_overrides[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        print("negative control rejected C# SDK native library evidence drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: C# SDK native library evidence drift was not detected")
+
+if mode == "--negative-control-csharp-sdk-test-filter-script":
+    target = CSHARP_SDK_TEST_COMMAND
+    original = read(target)
+    mutated = original.replace(
+        "|FullyQualifiedName~PrivacyNativeTests|FullyQualifiedName~TransactionBuilderTests",
+        "",
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate C# SDK test filter")
+    text_overrides[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        print("negative control rejected C# SDK test filter drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: C# SDK test filter drift was not detected")
+
+if mode == "--negative-control-csharp-sdk-workflow-inventory":
+    target = WORKFLOW_PATH
+    original = read(target)
+    mutated = original.replace(
+        '      - "csharp/tests/Hyperledger.Iroha.Sdk.Tests/PrivacyNativeTests.cs"\n',
+        "",
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate C# SDK workflow inventory")
+    text_overrides[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        print("negative control rejected C# SDK workflow inventory drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: C# SDK workflow inventory drift was not detected")
+
 if mode == "--negative-control-csharp-archive-copy":
     mutated_texts = dict(texts)
     test_target = "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs"
@@ -8476,6 +8898,96 @@ if mode == "--negative-control-js-sdk-test-workflow":
         print(str(error).splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: JavaScript SDK test workflow drift was not detected")
+
+if mode == "--negative-control-js-sdk-transaction-builder-filter-script":
+    target = JS_SDK_TEST_COMMAND
+    original = read(target)
+    mutated = original.replace("|buildKagemusha", "", 1)
+    mutated = mutated.replace(" \\\n  test/transactionBuilder.test.js", "", 1)
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate JavaScript SDK transaction-builder filter")
+    text_overrides[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        print("negative control rejected JavaScript SDK transaction-builder filter drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: JavaScript SDK transaction-builder filter drift was not detected")
+
+if mode == "--negative-control-js-sdk-privacy-native-filter-script":
+    target = JS_SDK_TEST_COMMAND
+    original = read(target)
+    mutated = original.replace(
+        "|privacy native availability probes build and verify with Norito request archives|privacy native wrappers require binary Norito request archives",
+        "",
+        1,
+    )
+    mutated = mutated.replace(" \\\n  test/privacyNative.test.js", "", 1)
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate JavaScript SDK privacy native filter")
+    text_overrides[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        print("negative control rejected JavaScript SDK privacy native filter drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: JavaScript SDK privacy native filter drift was not detected")
+
+if mode == "--negative-control-js-sdk-workflow-inventory":
+    target = WORKFLOW_PATH
+    original = read(target)
+    mutated = original.replace(
+        '      - "javascript/iroha_js/test/privacyNative.test.js"\n',
+        "",
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate JavaScript SDK workflow inventory")
+    text_overrides[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        print("negative control rejected JavaScript SDK workflow inventory drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: JavaScript SDK workflow inventory drift was not detected")
+
+if mode == "--negative-control-sdk-privacy-workflow-inventory-matrix":
+    target = WORKFLOW_PATH
+    original = read(target)
+    rejected = []
+    for relative in SDK_PRIVACY_WORKFLOW_INVENTORY_PATHS:
+        workflow_line = f'      - "{relative}"\n'
+        if workflow_line not in original:
+            raise SystemExit(
+                "negative control failed: SDK privacy workflow inventory path is missing before mutation: "
+                + relative
+            )
+        text_overrides[target] = original.replace(workflow_line, "", 1)
+        try:
+            run_checks(texts)
+        except ParityError as error:
+            message = str(error)
+            if relative not in message:
+                raise SystemExit(
+                    "negative control failed: SDK privacy workflow inventory drift for "
+                    + relative
+                    + " was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            rejected.append(relative)
+        else:
+            raise SystemExit(
+                "negative control failed: SDK privacy workflow inventory drift was not detected for "
+                + relative
+            )
+        finally:
+            text_overrides.pop(target, None)
+    print("negative control rejected SDK privacy workflow inventory matrix drift")
+    print(f"checked {len(rejected)} SDK privacy workflow paths")
+    raise SystemExit(0)
 
 if mode == "--negative-control-js-sdk-install-order-workflow":
     target = WORKFLOW_PATH

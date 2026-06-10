@@ -201,11 +201,30 @@ def _privacy_production_test_row(
             "run_id": localnet_run_id,
             "target": "localnet",
             "peer_count": 4,
+            "peer_ids": [
+                "boi-privacy-peer-1@localnet",
+                "boi-privacy-peer-2@localnet",
+                "boi-privacy-peer-3@localnet",
+                "boi-privacy-peer-4@localnet",
+            ],
+            "chain_id": chain_id,
             "smoke_passed": True,
+            "smoke_tx_hash": _privacy_production_test_artifact(
+                f"localnet-smoke-{algorithm_id}"
+            )["uri"],
             "replay_rejected": True,
+            "replay_rejection_hash": _privacy_production_test_artifact(
+                f"localnet-replay-{algorithm_id}"
+            )["uri"],
             "restart_persistence_checked": True,
             "restart_replay_rejected": True,
+            "restart_replay_rejection_hash": _privacy_production_test_artifact(
+                f"localnet-restart-replay-{algorithm_id}"
+            )["uri"],
             "state_recovery_passed": True,
+            "state_recovery_hash": _privacy_production_test_artifact(
+                f"localnet-state-recovery-{algorithm_id}"
+            )["uri"],
         },
         "gate_evidence": gate_evidence,
     }
@@ -215,7 +234,7 @@ def _privacy_production_test_manifest(
     descriptors: list[dict[str, object]],
     *,
     chain_id: str = "boi-localnet-4p",
-    localnet_run_id: str = "boi-localnet-run-2026-06-09",
+    localnet_run_id: str = "boi-localnet-4peer-run-2026-06-09",
 ) -> dict[str, object]:
     return {
         "version": privacy_catalog.PRIVACY_PRODUCTION_EVIDENCE_REGISTRY_VERSION,
@@ -2017,7 +2036,6 @@ def test_privacy_catalog_loader_rejects_bad_source_references(
 @pytest.mark.parametrize(
     "implementation_stage",
     [
-        "chain-executable",
         "sdk-builder",
         "component",
         "research-target-as-of-2026-05",
@@ -2291,7 +2309,6 @@ def test_privacy_catalog_loader_rejects_source_referenced_stages_without_sdk_sur
 @pytest.mark.parametrize(
     "implementation_stage",
     [
-        "chain-executable",
         "sdk-builder",
         "component",
         "research-target-as-of-2026-05",
@@ -2348,7 +2365,6 @@ def test_privacy_catalog_loader_rejects_source_referenced_stages_without_verifie
 @pytest.mark.parametrize(
     "implementation_stage",
     [
-        "chain-executable",
         "sdk-builder",
         "component",
         "research-target-as-of-2026-05",
@@ -2467,7 +2483,6 @@ def test_privacy_catalog_loader_rejects_source_referenced_stages_without_non_non
 @pytest.mark.parametrize(
     "implementation_stage",
     [
-        "chain-executable",
         "sdk-builder",
         "component",
         "research-target-as-of-2026-05",
@@ -3017,7 +3032,18 @@ def test_privacy_catalog_accepts_internal_review_evidence_for_all_rows() -> None
         assert gate["chain_id"] == chain_id
         assert gate["reviewer_identity"] == "crypto-reviewer@internal.example"
         assert gate["localnet_acceptance"]["peer_count"] == 4
+        assert gate["localnet_acceptance"]["peer_ids"] == [
+            "boi-privacy-peer-1@localnet",
+            "boi-privacy-peer-2@localnet",
+            "boi-privacy-peer-3@localnet",
+            "boi-privacy-peer-4@localnet",
+        ]
+        assert gate["localnet_acceptance"]["chain_id"] == chain_id
+        assert gate["localnet_acceptance"]["smoke_tx_hash"].startswith("sha256:")
         assert gate["localnet_acceptance"]["replay_rejected"] is True
+        assert gate["localnet_acceptance"]["replay_rejection_hash"].startswith(
+            "sha256:"
+        )
         assert gate["localnet_acceptance"]["restart_replay_rejected"] is True
         assert gate["audit_references"][0]["uri"].startswith("sha256:")
 
@@ -3042,120 +3068,174 @@ def test_privacy_catalog_accepts_internal_review_evidence_for_all_rows() -> None
     "mutator",
     [
         pytest.param(
-            lambda row: row["review_artifact"].pop("signature"),
+            lambda row, _descriptor: row["review_artifact"].pop("signature"),
             id="unsigned-review-artifact",
         ),
         pytest.param(
-            lambda row: row["review_artifact"].update(
+            lambda row, _descriptor: row["review_artifact"].update(
                 {"uri": "https://audit.example/review.pdf"}
             ),
             id="non-hash-addressed-review-artifact",
         ),
         pytest.param(
-            lambda row: row["sdk_entrypoints"]["python"].append(
-                "buildZkAceDevProofFixture"
+            lambda row, _descriptor: row["sdk_entrypoints"]["python"].append(
+                "buildShadowDevProofFixture"
             ),
             id="dev-fixture-sdk-entrypoint",
         ),
         pytest.param(
-            lambda row: row["sdk_entrypoints"]["javascript"].append(
-                "verifyZkAceProofLocally"
+            lambda row, _descriptor: row["sdk_entrypoints"]["javascript"].append(
+                "verifyShadowProofLocally"
             ),
             id="local-only-verifier-entrypoint",
         ),
         pytest.param(
-            lambda row: row["sdk_parity_artifacts"]["golden_vectors"].pop("ffi"),
+            lambda row, _descriptor: row["sdk_parity_artifacts"]["golden_vectors"].pop(
+                "ffi"
+            ),
             id="missing-ffi-sdk-parity-artifact",
         ),
         pytest.param(
-            lambda row: row["sdk_parity_artifacts"]["types"]["swift"].update(
+            lambda row, _descriptor: row["sdk_parity_artifacts"]["types"]["swift"].update(
                 {"label": "Mock Swift types SDK parity artifact"}
             ),
             id="mock-sdk-parity-artifact",
         ),
         pytest.param(
-            lambda row: row.update({"verifier_key_id": "wrong_verifier_key"}),
+            lambda row, _descriptor: row.update({"verifier_key_id": "wrong_verifier_key"}),
             id="wrong-verifier-key",
         ),
         pytest.param(
-            lambda row: row.update({"public_inputs_schema": "mutated_schema"}),
+            lambda row, _descriptor: row.update({"public_inputs_schema": "mutated_schema"}),
             id="wrong-public-input-schema",
         ),
         pytest.param(
-            lambda row: row["localnet_acceptance"].update({"peer_count": 3}),
+            lambda row, _descriptor: row["localnet_acceptance"].update({"peer_count": 3}),
             id="weak-localnet-peer-count",
         ),
         pytest.param(
-            lambda row: row["localnet_acceptance"].update(
+            lambda row, _descriptor: row.update(
+                {"localnet_run_id": "mock-boi-localnet-4peer-run-2026-06-09"}
+            ),
+            id="mock-localnet-run-id",
+        ),
+        pytest.param(
+            lambda row, _descriptor: row["localnet_acceptance"]["peer_ids"].__setitem__(
+                3,
+                row["localnet_acceptance"]["peer_ids"][0],
+            ),
+            id="duplicate-localnet-peer-id",
+        ),
+        pytest.param(
+            lambda row, _descriptor: row["localnet_acceptance"].update(
+                {"chain_id": "boi-localnet-other-4p"}
+            ),
+            id="wrong-localnet-chain",
+        ),
+        pytest.param(
+            lambda row, _descriptor: row["localnet_acceptance"].update(
+                {"smoke_passed": False}
+            ),
+            id="missing-localnet-smoke",
+        ),
+        pytest.param(
+            lambda row, _descriptor: row["localnet_acceptance"].update(
+                {"smoke_tx_hash": "sha256:not-a-hex-digest"}
+            ),
+            id="bad-localnet-smoke-hash",
+        ),
+        pytest.param(
+            lambda row, _descriptor: row["localnet_acceptance"].update(
                 {"replay_rejected": False}
             ),
             id="missing-replay-rejection",
         ),
         pytest.param(
-            lambda row: row["localnet_acceptance"].update(
+            lambda row, _descriptor: row["localnet_acceptance"].update(
+                {
+                    "replay_rejection_hash": row["localnet_acceptance"][
+                        "smoke_tx_hash"
+                    ]
+                }
+            ),
+            id="reused-localnet-replay-hash",
+        ),
+        pytest.param(
+            lambda row, _descriptor: row["localnet_acceptance"].update(
+                {"restart_persistence_checked": False}
+            ),
+            id="missing-restart-persistence",
+        ),
+        pytest.param(
+            lambda row, _descriptor: row["localnet_acceptance"].update(
                 {"restart_replay_rejected": False}
             ),
             id="missing-restart-replay-rejection",
         ),
         pytest.param(
-            lambda row: row["gate_evidence"].pop("real_proving"),
+            lambda row, _descriptor: row["localnet_acceptance"].update(
+                {"state_recovery_passed": False}
+            ),
+            id="missing-state-recovery",
+        ),
+        pytest.param(
+            lambda row, descriptor: row["gate_evidence"].pop(
+                _expected_required_production_gate_keys(descriptor["id"])[0]
+            ),
             id="missing-gate-evidence",
         ),
     ],
 )
 def test_privacy_catalog_rejects_invalid_internal_review_evidence(mutator) -> None:
     chain_id = "boi-localnet-4p"
-    target = get_privacy_algorithm_descriptor("zk-ace-pq-authorization-v0")
-    assert target is not None
-    row = _privacy_production_test_row(
-        target,
-        chain_id=chain_id,
-        localnet_run_id="boi-localnet-run-2026-06-09",
-    )
-    mutator(row)
-    manifest = {
-        "version": privacy_catalog.PRIVACY_PRODUCTION_EVIDENCE_REGISTRY_VERSION,
-        "rows": [row],
-    }
+    for target in get_privacy_algorithm_descriptors():
+        row = _privacy_production_test_row(
+            target,
+            chain_id=chain_id,
+            localnet_run_id="boi-localnet-4peer-run-2026-06-09",
+        )
+        mutator(row, target)
+        manifest = {
+            "version": privacy_catalog.PRIVACY_PRODUCTION_EVIDENCE_REGISTRY_VERSION,
+            "rows": [row],
+        }
 
-    descriptor = get_privacy_algorithm_descriptor(
-        "zk-ace-pq-authorization-v0",
-        manifest,
-        chain_id=chain_id,
-    )
+        descriptor = get_privacy_algorithm_descriptor(
+            str(target["id"]),
+            manifest,
+            chain_id=chain_id,
+        )
 
-    assert descriptor is not None
-    assert descriptor["production_ready"] is False
-    assert descriptor["production_gate"]["ready"] is False
-    assert descriptor["planned_sdk_entrypoints"]
-    assert "Iroha production allowlist is not enabled for this audited row" in descriptor[
-        "production_gate"
-    ]["missing"]
+        assert descriptor is not None
+        assert descriptor["production_ready"] is False
+        assert descriptor["production_gate"]["ready"] is False
+        assert (
+            "Iroha production allowlist is not enabled for this audited row"
+            in descriptor["production_gate"]["missing"]
+        )
 
 
 def test_privacy_catalog_rejects_chain_mismatched_internal_review_evidence() -> None:
-    target = get_privacy_algorithm_descriptor("zk-ace-pq-authorization-v0")
-    assert target is not None
-    row = _privacy_production_test_row(
-        target,
-        chain_id="boi-localnet-4p",
-        localnet_run_id="boi-localnet-run-2026-06-09",
-    )
-    manifest = {
-        "version": privacy_catalog.PRIVACY_PRODUCTION_EVIDENCE_REGISTRY_VERSION,
-        "rows": [row],
-    }
+    for target in get_privacy_algorithm_descriptors():
+        row = _privacy_production_test_row(
+            target,
+            chain_id="boi-localnet-4p",
+            localnet_run_id="boi-localnet-4peer-run-2026-06-09",
+        )
+        manifest = {
+            "version": privacy_catalog.PRIVACY_PRODUCTION_EVIDENCE_REGISTRY_VERSION,
+            "rows": [row],
+        }
 
-    descriptor = get_privacy_algorithm_descriptor(
-        "zk-ace-pq-authorization-v0",
-        manifest,
-        chain_id="wrong-chain",
-    )
+        descriptor = get_privacy_algorithm_descriptor(
+            str(target["id"]),
+            manifest,
+            chain_id="wrong-chain",
+        )
 
-    assert descriptor is not None
-    assert descriptor["production_ready"] is False
-    assert descriptor["production_gate"]["ready"] is False
-    assert descriptor["planned_sdk_entrypoints"]
+        assert descriptor is not None
+        assert descriptor["production_ready"] is False
+        assert descriptor["production_gate"]["ready"] is False
 
 
 @pytest.mark.parametrize(
@@ -6810,10 +6890,7 @@ def test_privacy_catalog_enforces_execution_and_metadata_invariants() -> None:
         "buildZkAceAuthorizedTransferInstruction",
         "buildZkAceAuthorizationProofV1",
     ]
-    assert zk_ace["planned_sdk_entrypoints"] == [
-        "buildShieldedZkAceAuthorizationProofV1",
-        "buildShieldedZkAceAuthorizedTransferInstruction",
-    ]
+    assert zk_ace["planned_sdk_entrypoints"] == []
     assert "buildZkAceAuthorizationProofV0" not in zk_ace["planned_sdk_entrypoints"]
     assert zk_ace["required_state"] == [
         "registered ZK-ACE identity commitment",
@@ -6848,7 +6925,6 @@ def test_privacy_catalog_enforces_execution_and_metadata_invariants() -> None:
     assert zk_ace["production_gate"]["missing"] == [
         *(label for _key, label in privacy_catalog.PRODUCTION_GATE_REQUIREMENTS),
         "implementation stage is not production-hardened",
-        "planned SDK entrypoints remain",
         "Iroha production allowlist is not enabled for this audited row",
     ]
 

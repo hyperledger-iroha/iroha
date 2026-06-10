@@ -65,7 +65,11 @@ java -version
 
 cd "${ROOT_DIR}/kotlin"
 ./gradlew --no-daemon -q :core-jvm:test \
-  --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendProverTest
+  --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendProverTest \
+  --tests org.hyperledger.iroha.sdk.offline.KagemushaInstructionArchivesTest \
+  --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest \
+  --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test \
+  --tests org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridgeTest
 
 cd "${ROOT_DIR}"
 javac -d "${JAVA_OUT}" \
@@ -78,6 +82,6 @@ java -ea -cp "${JAVA_OUT}" \
   org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest
 
 cd "${ROOT_DIR}/java/iroha_android"
-ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest \
+ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest,org.hyperledger.iroha.android.offline.OfflineNoteV2Test,org.hyperledger.iroha.android.offline.OfflineNoteTest,org.hyperledger.iroha.android.privacy.PrivacyNativeBridgeTest,org.hyperledger.iroha.android.tx.TransactionBuilderTests \
   ./gradlew --no-daemon -q :core:test \
   --tests org.hyperledger.iroha.android.GradleHarnessTests

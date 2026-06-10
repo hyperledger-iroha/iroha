@@ -1046,6 +1046,8 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                 [
                     "--manifest",
                     str(REPO_ROOT / "fixtures" / "iso20022" / "xsd" / "fixture_manifest.json"),
+                    "--profile-catalog",
+                    str(VERIFIER.DEFAULT_PROFILE_CATALOG),
                     "--summary-out",
                     str(summary_out),
                 ]
@@ -1503,13 +1505,25 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
         manifest = str(REPO_ROOT / "fixtures" / "iso20022" / "xsd" / "fixture_manifest.json")
 
         rc, _stdout, stderr = run_verify(
-            ["--manifest", manifest, "--require-schema-backed-fixtures"]
+            [
+                "--manifest",
+                manifest,
+                "--profile-catalog",
+                str(VERIFIER.DEFAULT_PROFILE_CATALOG),
+                "--require-schema-backed-fixtures",
+            ]
         )
         self.assertEqual(rc, 2)
         self.assertIn("not schema-backed", stderr)
 
         rc, _stdout, stderr = run_verify(
-            ["--manifest", manifest, "--require-fixture-for-schema"]
+            [
+                "--manifest",
+                manifest,
+                "--profile-catalog",
+                str(VERIFIER.DEFAULT_PROFILE_CATALOG),
+                "--require-fixture-for-schema",
+            ]
         )
         self.assertEqual(rc, 0, stderr)
         summary = json.loads(_stdout)
@@ -4296,6 +4310,53 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             self.assertEqual(rc, 2)
             self.assertIn("blocked_schema_sources includes barr.001.001.01", stderr)
             self.assertIn("without a current missing schema/profile gap", stderr)
+
+    def test_profile_only_blocked_source_requires_profile_catalog(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            manifest = minimal_manifest()
+            manifest["blocked_schema_sources"] = [blocked_schema_source()]
+            manifest_path = write_minimal_tree(root, manifest)
+
+            rc, stdout, stderr = run_verify(["--manifest", str(manifest_path)])
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("blocked_schema_sources includes barr.001.001.01", stderr)
+            self.assertIn("pass --profile-catalog to prove profile-version gaps", stderr)
+
+    def test_missing_fixture_blocked_source_does_not_require_profile_catalog(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            manifest = minimal_manifest()
+            manifest["fixtures"].append(
+                {
+                    "path": "../barr_fixture.xml",
+                    "message_def_id": "barr.001.001.01",
+                    "payload_root": "BarPayload",
+                    "missing_schema_reason": "Reviewed missing schema package.",
+                }
+            )
+            manifest["blocked_schema_sources"] = [blocked_schema_source()]
+            manifest_path = write_minimal_tree(root, manifest)
+            (root / "barr_fixture.xml").write_text(
+                fixture_xml("barr.001.001.01", "BarPayload"),
+                encoding="utf-8",
+            )
+
+            rc, stdout, stderr = run_verify(["--manifest", str(manifest_path)])
+
+            self.assertEqual(rc, 0, stderr)
+            summary = json.loads(stdout)
+            self.assertIsNone(summary["profile_catalog"])
+            self.assertEqual(
+                [entry["message_def_id"] for entry in summary["missing_schema_fixtures"]],
+                ["barr.001.001.01"],
+            )
+            self.assertEqual(
+                [entry["message_def_id"] for entry in summary["blocked_schema_sources"]],
+                ["barr.001.001.01"],
+            )
 
     def test_fixture_namespace_payload_root_and_document_root_drift_are_rejected(self):
         for xml, message in [

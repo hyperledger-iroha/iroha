@@ -32,12 +32,48 @@ and completed history lives in [`status.md`](./status.md).
   loading and P/Invoke symbol probing enabled for the ABI-6 recursive spend and
   ABI-7 compact-token, recursive aggregation, recursive compact
   verifier/projection, and instruction transaction-builder surfaces. The
+  standalone runner now builds `connect_norito_bridge`, resolves the
+  platform-specific native library name, fails if the freshly built artifact is
+  missing, prints the selected native bridge path, and prepends that directory
+  to the macOS, Linux, and Windows loader paths before invoking `dotnet test`.
+  The
   Windows pass must also pin the C# negative controls for malformed Norito
   input/output headers, caller archive-copy immutability, verifier-unavailable
   status mapping, transaction-builder schema and wire-name drift, and
   package/evidence parity. After the Windows run passes, update `status.md`
   with the C# SDK evidence and rerun the Kagemusha SDK parity or production
   readiness guards needed to clear the C# row.
+  Windows-machine TODOs:
+  - Select a .NET 8 SDK and capture `dotnet --version` in the run log.
+  - Run `ci/check_kagemusha_recursive_spend_csharp_sdk.sh`, or the equivalent
+    direct `dotnet test` command with the same native bridge path setup.
+  - Confirm the Windows runner log prints `connect_norito_bridge native bridge:`
+    with the freshly built `connect_norito_bridge.dll` path before the P/Invoke
+    tests start.
+  - Confirm the pass includes `KagemushaRecursiveSpendNativeTests`,
+    `PrivacyNativeTests`, and `TransactionBuilderTests`.
+  - Re-run `ci/check_kagemusha_recursive_spend_sdk_parity.sh` after recording
+    the Windows evidence so C# SDK parity status can be cleared explicitly.
+- Kagemusha JVM SDK validation must keep the focused runner aligned with the
+  parity inventory: Kotlin/JVM runs recursive spend, instruction archive,
+  Offline Note, Offline Note V2, and privacy native bridge tests, while the
+  Android Java harness runs recursive spend, Offline Note V2, Offline Note,
+  privacy native bridge, and transaction-builder archive tests.
+- Kagemusha JavaScript SDK validation must keep the focused Node 20 runner
+  aligned with the parity inventory by executing the Kagemusha recursive spend,
+  package/browser, privacy native bridge, and transaction-builder archive test
+  names together.
+- Kagemusha Swift SDK validation must keep the macOS parse runner aligned with
+  the parity inventory by parsing every Kagemusha/Offline Note source and test
+  file tracked for Swift, including recursive compact, instruction transaction
+  encoder, and privacy native bridge coverage.
+- Kagemusha Python SDK validation must keep the focused Python 3.11 runner on
+  the Kagemusha, privacy catalog, and crypto algorithm pytest files because
+  those files cover the Python transaction helpers, native archive guards, and
+  package export surfaces used by the SDK parity inventory. The workflow path
+  inventory must also watch the Python privacy catalog and crypto helper source
+  files so changes to those runner-covered surfaces trigger the focused SDK
+  pass.
 - Kagemusha Android production readiness now has host-side verifier-report
   rendering, a signed-slot assembler, a physical-device raw artifact exporter,
   a strict host puller for those raw slots, and a dedicated
@@ -49,12 +85,26 @@ and completed history lives in [`status.md`](./status.md).
   aliases or post-preflight source swaps before signed slot installation. Fresh
   raw exports now include `attestation/harness-result.json`, and the raw puller
   requires that harness result to match the slot challenge before the host
-  verifier report and signed slot can be assembled. The
+  verifier report and signed slot can be assembled. Signed slots now preserve
+  the same `attestation/harness-result.json`, include it in signed
+  `artifact_digests`, and reject legacy signed evidence that drops the raw
+  StrongBox harness output. The standalone Android scanner also rejects copied
+  Kagemusha matrix rows by reporting hash-only duplicate device fingerprints or
+  attestation challenges across otherwise-valid slots, and the production
+  readiness rollup mirrors that non-secret duplicate inventory with
+  release-bundle schema validation, verify-existing validation, exact standard
+  matrix and signer-pin manifest checks, and drift checks. The
   latest attached Pixel 6 / Android 16 slot
-  `google-pixel-6-6a-physical-1781070293478` verifies and signs successfully
+  `google-pixel-6-6a-physical-1781077370103` verifies and signs successfully
   through the lab-app path; remaining Android release work is evidence
   acquisition for the rest of the standard matrix: Pixel 7, Pixel 8, Pixel
   Fold/Tablet, Samsung Galaxy S23, and Samsung Galaxy S24.
+- Kagemusha Reserved-lineage table-base handling must stay proof-witness
+  specific: lineage witnesses may carry previous recursive proofs whose
+  fixed-window table-base public input differs from the current bundle proof,
+  while opening length, parameter fingerprint, schedule, shared manifest,
+  scalar projection, transition-profile, and proof-hash checks remain stable
+  verifier-context gates.
 - Kagemusha Reserved-lineage proof evidence now has a staged-run finalizer that
   requires a zero exit marker, validates staged lineage artifacts and the
   captured production proof log, writes canonical `lineage-proof-evidence.json`,
@@ -88,6 +138,9 @@ and completed history lives in [`status.md`](./status.md).
   producing only the init key-log, so the remaining lineage release blocker is
   successful production-width init/append key-artifact generation plus the
   heavy ignored proof run, followed by finalization into `artifacts/kagemusha`.
+  That blocker now needs either a lower-memory production key-generation path
+  for the LEN=128 verifier-slice circuits or a larger release host that can
+  complete init/append key generation without OS termination.
 - Kagemusha ABI-7 recursive compact key evidence now has a staged-run finalizer
   that requires a zero exit marker, validates staged artifacts and the generator
   log, writes canonical `recursive-compact-key-evidence.json`, and refuses
@@ -2576,7 +2629,8 @@ and completed history lives in [`status.md`](./status.md).
   identifier-style secret-looking path material rejected before summary
   emission, while requiring the
   `blocked_schema_sources` review list to be recorded explicitly even when
-  empty,
+  empty and to match a current fixture/schema gap or, with a profile catalog, a
+  current profile-version gap,
   rejects XSD files with known restricted Standards
   Editor redistribution terms, parses the embedded default rail profile catalog
   on demand, and records which concrete advertised message versions are

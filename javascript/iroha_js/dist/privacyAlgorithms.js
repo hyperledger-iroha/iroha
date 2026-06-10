@@ -97,7 +97,6 @@ const SOURCE_REFERENCED_IMPLEMENTATION_STAGES = new Set([
   "production-hardened",
 ]);
 const PRE_PRODUCTION_SOURCE_REFERENCED_IMPLEMENTATION_STAGES = new Set([
-  "chain-executable",
   "sdk-builder",
   "component",
   RESEARCH_STAGE_MAY_2026,
@@ -533,11 +532,17 @@ const PRIVACY_PRODUCTION_LOCALNET_ACCEPTANCE_KEYS = Object.freeze([
   "run_id",
   "target",
   "peer_count",
+  "peer_ids",
+  "chain_id",
   "smoke_passed",
+  "smoke_tx_hash",
   "replay_rejected",
+  "replay_rejection_hash",
   "restart_persistence_checked",
   "restart_replay_rejected",
+  "restart_replay_rejection_hash",
   "state_recovery_passed",
+  "state_recovery_hash",
 ]);
 const PRIVACY_PRODUCTION_SDK_ENTRYPOINT_SURFACES = Object.freeze([
   "rust_core",
@@ -593,11 +598,17 @@ const PRIVACY_PRODUCTION_EVIDENCE_KEY_MAP = Object.freeze({
   javaAndroid: "java_android",
   runId: "run_id",
   peerCount: "peer_count",
+  peerIds: "peer_ids",
+  chainId: "chain_id",
   smokePassed: "smoke_passed",
+  smokeTxHash: "smoke_tx_hash",
   replayRejected: "replay_rejected",
+  replayRejectionHash: "replay_rejection_hash",
   restartPersistenceChecked: "restart_persistence_checked",
   restartReplayRejected: "restart_replay_rejected",
+  restartReplayRejectionHash: "restart_replay_rejection_hash",
   stateRecoveryPassed: "state_recovery_passed",
+  stateRecoveryHash: "state_recovery_hash",
 });
 const BACKEND_FAMILY_BY_ALGORITHM_ID = Object.freeze({
   "transparent-transfer": "none",
@@ -644,7 +655,6 @@ const REQUIRED_PRIVACY_PLAN_ROWS = Object.freeze([
   Object.freeze(["zk-x509-onchain-identity-v0", "sdk-builder", "zk-x509"]),
   Object.freeze(["jindo-lattice-pcs-zk-v0", "sdk-builder", "lattice-pcs-sis"]),
   Object.freeze(["sis-hints-anoncred-pq-v0", "sdk-builder", "sis-with-hints"]),
-  Object.freeze(["zk-ace-pq-authorization-v0", "chain-executable", "stark-fri"]),
   Object.freeze([
     "orchard-halo2-actions-v1",
     "research-target-as-of-2026-05",
@@ -1256,10 +1266,7 @@ const REQUIRED_PRIVACY_PLAN_PLANNED_SDK_ENTRYPOINTS_BY_ALGORITHM_ID = Object.fre
     "buildSisHintsAnonymousCredentialProofV0",
     "buildSubmitSisHintsCredentialProofInstruction",
   ]),
-  "zk-ace-pq-authorization-v0": Object.freeze([
-    "buildShieldedZkAceAuthorizationProofV1",
-    "buildShieldedZkAceAuthorizedTransferInstruction",
-  ]),
+  "zk-ace-pq-authorization-v0": Object.freeze([]),
   "orchard-halo2-actions-v1": Object.freeze([
     "buildOrchardActionBundleProofV1",
     "buildOrchardActionBundleInstruction",
@@ -2293,6 +2300,34 @@ function evidenceHashUri(value) {
   return text;
 }
 
+function localnetPeerIdValue(value) {
+  const text = evidenceTextValue(value, 160);
+  if (
+    !text ||
+    entrypointIsDevFixture(text) ||
+    text.includes("..") ||
+    /[^A-Za-z0-9_.:@-]/.test(text)
+  ) {
+    return "";
+  }
+  return text;
+}
+
+function localnetRunIdValue(value) {
+  const text = evidenceTextValue(value, 160);
+  const compact = text.replaceAll("_", "-").toLowerCase();
+  if (
+    !text ||
+    entrypointIsDevFixture(text) ||
+    text.includes("..") ||
+    (!compact.includes("4-peer") && !compact.includes("4peer")) ||
+    /[^A-Za-z0-9_.:-]/.test(text)
+  ) {
+    return "";
+  }
+  return text;
+}
+
 function setEquals(left, right) {
   return left.size === right.size && [...left].every((item) => right.has(item));
 }
@@ -2461,7 +2496,7 @@ function evidenceNullableEquals(value, expected) {
   return evidenceTextValue(value, 512) === expected;
 }
 
-function evidenceLocalnetAcceptance(value, localnetRunId) {
+function evidenceLocalnetAcceptance(value, localnetRunId, chainId) {
   if (
     !isPlainObject(value) ||
     !setEquals(
@@ -2473,11 +2508,33 @@ function evidenceLocalnetAcceptance(value, localnetRunId) {
   }
   const runId = evidenceTextValue(value.run_id, 160);
   const target = evidenceTextValue(value.target, 32);
+  const peerIds = Array.isArray(value.peer_ids)
+    ? value.peer_ids.map((peerId) => localnetPeerIdValue(peerId))
+    : [];
+  const localnetChainId = evidenceTextValue(value.chain_id, 256);
+  const smokeTxHash = evidenceHashUri(value.smoke_tx_hash);
+  const replayRejectionHash = evidenceHashUri(value.replay_rejection_hash);
+  const restartReplayRejectionHash = evidenceHashUri(
+    value.restart_replay_rejection_hash,
+  );
+  const stateRecoveryHash = evidenceHashUri(value.state_recovery_hash);
+  const localnetArtifactHashes = [
+    smokeTxHash,
+    replayRejectionHash,
+    restartReplayRejectionHash,
+    stateRecoveryHash,
+  ];
   if (
     runId !== localnetRunId ||
     target !== "localnet" ||
     !Number.isInteger(value.peer_count) ||
-    value.peer_count !== 4
+    value.peer_count !== 4 ||
+    peerIds.length !== 4 ||
+    peerIds.some((peerId) => !peerId) ||
+    new Set(peerIds).size !== 4 ||
+    localnetChainId !== chainId ||
+    localnetArtifactHashes.some((hash) => !hash) ||
+    new Set(localnetArtifactHashes).size !== localnetArtifactHashes.length
   ) {
     return null;
   }
@@ -2495,6 +2552,12 @@ function evidenceLocalnetAcceptance(value, localnetRunId) {
     ["run_id", runId],
     ["target", "localnet"],
     ["peer_count", 4],
+    ["peer_ids", peerIds],
+    ["chain_id", localnetChainId],
+    ["smoke_tx_hash", smokeTxHash],
+    ["replay_rejection_hash", replayRejectionHash],
+    ["restart_replay_rejection_hash", restartReplayRejectionHash],
+    ["state_recovery_hash", stateRecoveryHash],
     ...requiredBooleans.map((key) => [key, true]),
   ]);
 }
@@ -2602,7 +2665,7 @@ function trustedProductionEvidence(descriptor, evidenceRows, options = undefined
     return null;
   }
   const reviewerIdentity = evidenceTextValue(source.reviewer_identity, 160);
-  const localnetRunId = evidenceTextValue(source.localnet_run_id, 160);
+  const localnetRunId = localnetRunIdValue(source.localnet_run_id);
   const reviewArtifact = evidenceReviewArtifact(source.review_artifact);
   if (!reviewerIdentity || !localnetRunId || reviewArtifact === null) {
     return null;
@@ -2635,6 +2698,7 @@ function trustedProductionEvidence(descriptor, evidenceRows, options = undefined
   const localnetAcceptance = evidenceLocalnetAcceptance(
     source.localnet_acceptance,
     localnetRunId,
+    evidenceChainId,
   );
   if (localnetAcceptance === null) {
     return null;
@@ -4055,10 +4119,7 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       "buildZkAceAuthorizedTransferInstruction",
       "buildZkAceAuthorizationProofV1",
     ]),
-    plannedSdkEntrypoints: Object.freeze([
-      "buildShieldedZkAceAuthorizationProofV1",
-      "buildShieldedZkAceAuthorizedTransferInstruction",
-    ]),
+    plannedSdkEntrypoints: Object.freeze([]),
     chainRequirements: Object.freeze([
       "zk::RegisterZkAceIdentityCommitment",
       "zk::RotateZkAceIdentityCommitment",

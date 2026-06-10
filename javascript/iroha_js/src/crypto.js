@@ -2489,18 +2489,24 @@ export function privacyProofRequestV1(input) {
   });
   const witnessBuffer = toPrivacyRequestComponentBuffer(witness, "witness");
   const proofBuffer = toPrivacyRequestComponentBuffer(proof, "proof");
-  const native = ensurePrivacyNative(resolveNativeBinding(), "privacyProofRequestV1");
-  const result = invokePrivacyNative(
-    native,
-    "privacyProofRequestV1",
-    algorithmIdText,
-    entrypointText,
-    vkRefText,
-    publicInputsBuffer,
-    witnessBuffer,
-    proofBuffer,
-  );
-  return privacyRequestNativeOutputToBuffer(result, "privacyProofRequestV1");
+  try {
+    const native = ensurePrivacyNative(resolveNativeBinding(), "privacyProofRequestV1");
+    const result = invokePrivacyNative(
+      native,
+      "privacyProofRequestV1",
+      algorithmIdText,
+      entrypointText,
+      vkRefText,
+      publicInputsBuffer,
+      witnessBuffer,
+      proofBuffer,
+    );
+    return privacyRequestNativeOutputToBuffer(result, "privacyProofRequestV1");
+  } finally {
+    publicInputsBuffer.fill(0);
+    witnessBuffer.fill(0);
+    proofBuffer.fill(0);
+  }
 }
 
 export function privacyBuildProofV1(requestArchive) {

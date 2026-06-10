@@ -17,27 +17,27 @@ public final class OfflineJsonParserTest {
     final String json =
         """
         {
-          "offline_note": true,
-          "offline_one_use_keys": true,
-          "offline_recursive_note_proof": false,
-          "offline_fountain_qr": true,
-          "offline_sync_optional": true,
-          "offline_telemetry": false
+          "offline_telemetry": true,
+          "offline_kagemusha_abi7": true,
+          "offline_kagemusha_abi7_mode": "recursive_compact_v1",
+          "offline_kagemusha_abi7_bridge_abi_version": 7,
+          "offline_kagemusha_abi7_circuit_id": "kagemusha-recursive-compact-v1",
+          "offline_kagemusha_abi7_artifacts": true
         }
         """;
     final OfflineReadiness readiness =
         OfflineJsonParser.parseOfflineReadiness(json.getBytes(StandardCharsets.UTF_8));
-    assert readiness.offlineNote();
-    assert readiness.offlineOneUseKeys();
+    assert !readiness.offlineNote();
+    assert !readiness.offlineOneUseKeys();
     assert !readiness.offlineRecursiveNoteProof();
-    assert readiness.offlineFountainQr();
-    assert readiness.offlineSyncOptional();
-    assert !readiness.offlineTelemetry();
-    assert !readiness.offlineKagemushaAbi7();
-    assert readiness.offlineKagemushaAbi7Mode() == null;
-    assert readiness.offlineKagemushaAbi7BridgeAbiVersion() == null;
-    assert readiness.offlineKagemushaAbi7CircuitId() == null;
-    assert !readiness.offlineKagemushaAbi7Artifacts();
+    assert !readiness.offlineFountainQr();
+    assert !readiness.offlineSyncOptional();
+    assert readiness.offlineTelemetry();
+    assert readiness.offlineKagemushaAbi7();
+    assert "recursive_compact_v1".equals(readiness.offlineKagemushaAbi7Mode());
+    assert Integer.valueOf(7).equals(readiness.offlineKagemushaAbi7BridgeAbiVersion());
+    assert "kagemusha-recursive-compact-v1".equals(readiness.offlineKagemushaAbi7CircuitId());
+    assert readiness.offlineKagemushaAbi7Artifacts();
   }
 
   private static void parsesOfflineTransfers() {

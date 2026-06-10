@@ -47,6 +47,7 @@ on:
       - "crates/iroha_js_host/Cargo.toml"
       - "crates/iroha_js_host/src/lib.rs"
       - "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift"
+      - "IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift"
       - "IrohaSwift/Sources/IrohaSwift/Halo2OfflineNoteProver.swift"
       - "IrohaSwift/Sources/IrohaSwift/KagemushaCompactPaymentTokenProver.swift"
       - "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveAggregationProofBundleProver.swift"
@@ -61,6 +62,7 @@ on:
       - "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveCompactPaymentTokenProverTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/KagemushaInstructionTransactionEncoderTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/UC4DecodePaymentTokenTests.swift"
+      - "IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteV2Tests.swift"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaCompactPaymentTokenProver.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteHalo2Prover.java"
@@ -70,6 +72,8 @@ on:
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveCompactPaymentTokenProver.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/TransactionBuilderTests.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridge.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridgeTest.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteV2Test.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java"
@@ -84,18 +88,22 @@ on:
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaInstructionArchives.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveCompactPaymentTokenProver.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaInstructionArchivesTest.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteV2Test.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProverTest.kt"
+      - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridgeTest.kt"
       - "csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj"
       - "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs"
+      - "csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyNative.cs"
       - "csharp/src/Hyperledger.Iroha.Sdk/Transactions/KagemushaInstructionArchiveInstruction.cs"
       - "csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionBuilder.cs"
       - "csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionEncodingContext.cs"
       - "csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionInstruction.cs"
       - "csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj"
       - "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs"
+      - "csharp/tests/Hyperledger.Iroha.Sdk.Tests/PrivacyNativeTests.cs"
       - "csharp/tests/Hyperledger.Iroha.Sdk.Tests/TransactionBuilderTests.cs"
       - "javascript/iroha_js/src/crypto.js"
       - "javascript/iroha_js/src/crypto.browser.js"
@@ -112,12 +120,17 @@ on:
       - "javascript/iroha_js/test/transactionBuilder.test.js"
       - "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js"
       - "javascript/iroha_js/test/package_dist.test.js"
+      - "javascript/iroha_js/test/privacyNative.test.js"
       - "python/iroha_python/src/iroha_python/__init__.py"
+      - "python/iroha_python/src/iroha_python/crypto.py"
       - "python/iroha_python/src/iroha_python/kagemusha.py"
+      - "python/iroha_python/src/iroha_python/privacy_catalog.py"
       - "python/iroha_python/src/iroha_python/tx.py"
       - "python/iroha_python/iroha_python_rs/Cargo.toml"
       - "python/iroha_python/iroha_python_rs/src/lib.rs"
       - "python/iroha_python/tests/kagemusha_test.py"
+      - "python/iroha_python/tests/privacy_catalog_test.py"
+      - "python/iroha_python/tests/crypto_algorithms_test.py"
       - "docs/source/offline_kagemusha.md"
       - "roadmap.md"
       - "status.md"
@@ -338,6 +351,8 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-native-build-script
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-venv-activation-script
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-bytecode-script
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-test-filter-script
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-workflow-inventory
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-lineage-frozen-copy
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-test-workflow
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-host-test-workflow
@@ -348,6 +363,9 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-sdk-java-distribution-workflow
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-sdk-java-version-workflow
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-sdk-test-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-sdk-test-filter-script
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-sdk-workflow-inventory
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-sdk-android-workflow-inventory
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-sdk-jdk21-script
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-sdk-java-home-override-script
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-sdk-java-home-reject-script
@@ -366,6 +384,10 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-sdk-job-workflow
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-sdk-runner-workflow
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-sdk-parse-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-sdk-parse-surface-script
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-sdk-privacy-parse-script
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-sdk-workflow-inventory
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-sdk-source-workflow-inventory
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-sdk-uc4-skip
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-lineage-data-copy
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-recursive-compact-verifier-bool
@@ -385,6 +407,9 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-dotnet-override-script
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-dotnet-major-script
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-native-bridge-script
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-native-library-evidence-script
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-test-filter-script
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-workflow-inventory
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-archive-copy
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-recursive-compact-verifier-unavailable
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-test-workflow
@@ -401,6 +426,10 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-node-setup-order-workflow
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-install-workflow
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-test-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-transaction-builder-filter-script
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-privacy-native-filter-script
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-workflow-inventory
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-privacy-workflow-inventory-matrix
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-install-order-workflow
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-test-order-workflow
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-needs-workflow
@@ -729,6 +758,10 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-summary-drift
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-summary-section-schema
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-signed-evidence-summary-schema
+          ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-evidence-inventory-schema
+          ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-evidence-inventory-keysets
+          ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-section-schema
+          ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-manifest-schema
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-artifact-inventory
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-slot-artifact-inventory
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-compact-placeholder-inventory
@@ -866,6 +899,11 @@ jobs:
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-self-consistent-boundary
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-transition-profile-current-hop-sets
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-proof-public-input-circuit-binding
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-semantic-proof-append-opening
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-public-input-one-hop-append-opening
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-generic-proof-scalar-projection
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-spend-proof-artifact-circuit-gates
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-previous-proof-opening-bundle-binding
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-previous-proof-field-binding
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-previous-proof-stale-hash-fixture
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-append-cap-boundary

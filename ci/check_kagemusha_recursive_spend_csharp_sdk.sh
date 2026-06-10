@@ -24,11 +24,28 @@ esac
 
 CARGO_TARGET_DIR="${BRIDGE_TARGET_DIR}" cargo build -p connect_norito_bridge
 BRIDGE_LIBRARY_DIR="${BRIDGE_TARGET_DIR}/debug"
+case "$(uname -s)" in
+  Darwin)
+    BRIDGE_LIBRARY_NAME="libconnect_norito_bridge.dylib"
+    ;;
+  MINGW*|MSYS*|CYGWIN*|Windows_NT)
+    BRIDGE_LIBRARY_NAME="connect_norito_bridge.dll"
+    ;;
+  *)
+    BRIDGE_LIBRARY_NAME="libconnect_norito_bridge.so"
+    ;;
+esac
+BRIDGE_LIBRARY_PATH="${BRIDGE_LIBRARY_DIR}/${BRIDGE_LIBRARY_NAME}"
+if [[ ! -f "${BRIDGE_LIBRARY_PATH}" ]]; then
+  echo "error: freshly built connect_norito_bridge native library was not found at ${BRIDGE_LIBRARY_PATH}" >&2
+  exit 1
+fi
+printf 'connect_norito_bridge native bridge: %s\n' "${BRIDGE_LIBRARY_PATH}"
 export DYLD_LIBRARY_PATH="${BRIDGE_LIBRARY_DIR}${DYLD_LIBRARY_PATH:+:${DYLD_LIBRARY_PATH}}"
 export LD_LIBRARY_PATH="${BRIDGE_LIBRARY_DIR}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 export PATH="${BRIDGE_LIBRARY_DIR}:${PATH}"
 
 "${DOTNET_BIN}" test \
   csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj \
-  --filter FullyQualifiedName~KagemushaRecursiveSpendNativeTests \
+  --filter "FullyQualifiedName~KagemushaRecursiveSpendNativeTests|FullyQualifiedName~PrivacyNativeTests|FullyQualifiedName~TransactionBuilderTests" \
   --logger "console;verbosity=minimal"

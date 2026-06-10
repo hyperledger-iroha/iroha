@@ -4957,7 +4957,7 @@ descriptorTest("privacy algorithm descriptors expose 2025-2026 BOI research targ
     "buildZkAceAuthorizedTransferInstruction",
     "buildZkAceAuthorizationProofV1",
   ]);
-  assert.ok(zkAce.plannedSdkEntrypoints.includes("buildShieldedZkAceAuthorizedTransferInstruction"));
+  assert.deepEqual(zkAce.plannedSdkEntrypoints, []);
   assert.equal(zkAce.plannedSdkEntrypoints.includes("buildZkAceAuthorizationProofV0"), false);
   assert.ok(zkAce.chainRequirements.includes("zk::SubmitZkAceAuthorizedTransfer"));
 

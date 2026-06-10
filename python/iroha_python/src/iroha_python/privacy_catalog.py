@@ -70,11 +70,17 @@ PRIVACY_PRODUCTION_LOCALNET_ACCEPTANCE_KEYS = frozenset(
         "run_id",
         "target",
         "peer_count",
+        "peer_ids",
+        "chain_id",
         "smoke_passed",
+        "smoke_tx_hash",
         "replay_rejected",
+        "replay_rejection_hash",
         "restart_persistence_checked",
         "restart_replay_rejected",
+        "restart_replay_rejection_hash",
         "state_recovery_passed",
+        "state_recovery_hash",
     )
 )
 PRIVACY_PRODUCTION_SDK_ENTRYPOINT_SURFACES = (
@@ -150,7 +156,6 @@ REQUIRED_PRIVACY_PLAN_ROWS = (
     ("zk-x509-onchain-identity-v0", "sdk-builder", "zk-x509"),
     ("jindo-lattice-pcs-zk-v0", "sdk-builder", "lattice-pcs-sis"),
     ("sis-hints-anoncred-pq-v0", "sdk-builder", "sis-with-hints"),
-    ("zk-ace-pq-authorization-v0", "chain-executable", "stark-fri"),
     ("orchard-halo2-actions-v1", "research-target-as-of-2026-05", "halo2-ipa-orchard"),
     ("penumbra-masp-v1", "research-target-as-of-2026-05", "groth16-bls12-377"),
     (
@@ -764,10 +769,7 @@ REQUIRED_PRIVACY_PLAN_PLANNED_SDK_ENTRYPOINTS_BY_ALGORITHM_ID = {
         "buildSisHintsAnonymousCredentialProofV0",
         "buildSubmitSisHintsCredentialProofInstruction",
     ),
-    "zk-ace-pq-authorization-v0": (
-        "buildShieldedZkAceAuthorizationProofV1",
-        "buildShieldedZkAceAuthorizedTransferInstruction",
-    ),
+    "zk-ace-pq-authorization-v0": (),
     "orchard-halo2-actions-v1": (
         "buildOrchardActionBundleProofV1",
         "buildOrchardActionBundleInstruction",
@@ -962,8 +964,7 @@ _RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON = (
     "er.\",\"Generate a ZK-ACE authorization proof and submit a protected transparent transfer.\"],\"sdkE"
     "ntrypoints\":[\"buildRegisterZkAceIdentityCommitmentInstruction\",\"buildRotateZkAceIdentityCommitme"
     "ntInstruction\",\"buildRevokeZkAceIdentityCommitmentInstruction\",\"buildZkAceAuthorizedTransferInst"
-    "ruction\",\"buildZkAceAuthorizationProofV1\"],\"plannedSdkEntrypoints\":[\"buildShieldedZkAceAuthor"
-    "izationProofV1\",\"buildShieldedZkAceAuthorizedTransferInstruction\"],\"chainRequirements\":[\"zk::RegisterZkAceIdentityCommitment\",\"zk::RotateZkA"
+    "ruction\",\"buildZkAceAuthorizationProofV1\"],\"plannedSdkEntrypoints\":[],\"chainRequirements\":[\"zk::RegisterZkAceIdentityCommitment\",\"zk::RotateZkA"
     "ceIdentityCommitment\",\"zk::RevokeZkAceIdentityCommitment\",\"zk::SubmitZkAceAuthorizedTransfer\",\"a"
     "ctive stark/fri/sha256-goldilocks ZK-ACE verifier key\",\"ZK-ACE identity source-account allowli"
     "st\"]},{\"id\":\"anonymous-pgc-k-out-of-n-v1\",\"na"
@@ -1446,7 +1447,6 @@ _SOURCE_REFERENCED_IMPLEMENTATION_STAGES = frozenset(
 )
 _PRE_PRODUCTION_SOURCE_REFERENCED_IMPLEMENTATION_STAGES = frozenset(
     (
-        "chain-executable",
         "sdk-builder",
         "component",
         _RESEARCH_STAGE_MAY_2026,
@@ -2934,22 +2934,83 @@ def _privacy_evidence_nullable_equals(value: Any, expected: Any) -> bool:
     return _privacy_evidence_text_value(value, limit=512) == expected
 
 
+def _privacy_evidence_localnet_peer_id(value: Any) -> str:
+    text = _privacy_evidence_text_value(value, limit=160)
+    if (
+        not text
+        or _entrypoint_is_dev_fixture(text)
+        or ".." in text
+        or any(
+            not (
+                char.isascii()
+                and (char.isalnum() or char in {"_", ".", ":", "-", "@"})
+            )
+            for char in text
+        )
+    ):
+        return ""
+    return text
+
+
+def _privacy_evidence_localnet_run_id(value: Any) -> str:
+    text = _privacy_evidence_text_value(value, limit=160)
+    compact = text.replace("_", "-").lower()
+    if (
+        not text
+        or _entrypoint_is_dev_fixture(text)
+        or ".." in text
+        or not ("4-peer" in compact or "4peer" in compact)
+        or any(
+            not (
+                char.isascii()
+                and (char.isalnum() or char in {"_", ".", ":", "-"})
+            )
+            for char in text
+        )
+    ):
+        return ""
+    return text
+
+
 def _privacy_evidence_localnet_acceptance(
     value: Any,
     *,
     localnet_run_id: str,
+    chain_id: str,
 ) -> dict[str, Any] | None:
     if not isinstance(value, Mapping) or set(value) != PRIVACY_PRODUCTION_LOCALNET_ACCEPTANCE_KEYS:
         return None
     run_id = _privacy_evidence_text_value(value.get("run_id"), limit=160)
     target = _privacy_evidence_text_value(value.get("target"), limit=32)
     peer_count = value.get("peer_count")
+    peer_ids_raw = value.get("peer_ids")
+    if not isinstance(peer_ids_raw, list) or len(peer_ids_raw) != 4:
+        return None
+    peer_ids = [_privacy_evidence_localnet_peer_id(peer_id) for peer_id in peer_ids_raw]
+    evidence_chain_id = _privacy_evidence_text_value(value.get("chain_id"), limit=256)
+    smoke_tx_hash = _privacy_evidence_hash_uri(value.get("smoke_tx_hash"))
+    replay_rejection_hash = _privacy_evidence_hash_uri(value.get("replay_rejection_hash"))
+    restart_replay_rejection_hash = _privacy_evidence_hash_uri(
+        value.get("restart_replay_rejection_hash")
+    )
+    state_recovery_hash = _privacy_evidence_hash_uri(value.get("state_recovery_hash"))
+    localnet_artifact_hashes = (
+        smoke_tx_hash,
+        replay_rejection_hash,
+        restart_replay_rejection_hash,
+        state_recovery_hash,
+    )
     if (
         run_id != localnet_run_id
         or target != "localnet"
         or not isinstance(peer_count, int)
         or isinstance(peer_count, bool)
         or peer_count != 4
+        or not all(peer_ids)
+        or len(set(peer_ids)) != 4
+        or evidence_chain_id != chain_id
+        or not all(localnet_artifact_hashes)
+        or len(set(localnet_artifact_hashes)) != len(localnet_artifact_hashes)
     ):
         return None
     required_booleans = (
@@ -2965,6 +3026,12 @@ def _privacy_evidence_localnet_acceptance(
         "run_id": run_id,
         "target": "localnet",
         "peer_count": 4,
+        "peer_ids": peer_ids,
+        "chain_id": evidence_chain_id,
+        "smoke_tx_hash": smoke_tx_hash,
+        "replay_rejection_hash": replay_rejection_hash,
+        "restart_replay_rejection_hash": restart_replay_rejection_hash,
+        "state_recovery_hash": state_recovery_hash,
         **{key: True for key in required_booleans},
     }
 
@@ -3051,9 +3118,8 @@ def _privacy_trusted_production_evidence(
         source.get("reviewer_identity"),
         limit=160,
     )
-    localnet_run_id = _privacy_evidence_text_value(
+    localnet_run_id = _privacy_evidence_localnet_run_id(
         source.get("localnet_run_id"),
-        limit=160,
     )
     review_artifact = _privacy_evidence_review_artifact(source.get("review_artifact"))
     if not reviewer_identity or not localnet_run_id or review_artifact is None:
@@ -3096,6 +3162,7 @@ def _privacy_trusted_production_evidence(
     localnet_acceptance = _privacy_evidence_localnet_acceptance(
         source.get("localnet_acceptance"),
         localnet_run_id=localnet_run_id,
+        chain_id=evidence_chain_id,
     )
     if localnet_acceptance is None:
         return None

@@ -8,6 +8,7 @@ cd "${ROOT_DIR}"
 "${SWIFTC_BIN}" --version
 "${SWIFTC_BIN}" -parse -parse-as-library \
   IrohaSwift/Sources/IrohaSwift/NativeBridge.swift \
+  IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift \
   IrohaSwift/Sources/IrohaSwift/Halo2OfflineNoteProver.swift \
   IrohaSwift/Sources/IrohaSwift/KagemushaCompactPaymentTokenProver.swift \
   IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveAggregationProofBundleProver.swift \
@@ -22,4 +23,5 @@ cd "${ROOT_DIR}"
   IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveCompactPaymentTokenProverTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/KagemushaInstructionTransactionEncoderTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/UC4DecodePaymentTokenTests.swift \
+  IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteV2Tests.swift
