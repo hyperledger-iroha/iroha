@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.sdk.offline
 
+import java.math.BigInteger
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
@@ -803,6 +804,78 @@ class KagemushaRecursiveSpendProverTest {
                     validRecursiveCompactInput,
                     validRecursiveCompactInput,
                     -1L,
+                )
+        }
+        assertIllegalArgumentContains("compactTokenArchive must not be empty") {
+            KagemushaRecursiveCompactPaymentTokenProver
+                .verifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(
+                    ByteArray(0),
+                    validRecursiveCompactInput,
+                    Long.MAX_VALUE,
+                )
+        }
+        assertIllegalArgumentContains("compactTokenArchive must not be empty") {
+            KagemushaRecursiveCompactPaymentTokenProver
+                .verifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(
+                    ByteArray(0),
+                    validRecursiveCompactInput,
+                    "9223372036854775808",
+                )
+        }
+        assertIllegalArgumentContains("compactTokenArchive must not be empty") {
+            KagemushaRecursiveCompactPaymentTokenProver
+                .verifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(
+                    ByteArray(0),
+                    validRecursiveCompactInput,
+                    BigInteger("18446744073709551615"),
+                )
+        }
+        assertIllegalArgumentContains("blockHeight must be a canonical unsigned decimal integer") {
+            KagemushaRecursiveCompactPaymentTokenProver
+                .verifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(
+                    validRecursiveCompactInput,
+                    validRecursiveCompactInput,
+                    "01",
+                )
+        }
+        assertIllegalArgumentContains("blockHeight must be a canonical unsigned decimal integer") {
+            KagemushaRecursiveCompactPaymentTokenProver
+                .verifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(
+                    validRecursiveCompactInput,
+                    validRecursiveCompactInput,
+                    " 1",
+                )
+        }
+        assertIllegalArgumentContains("blockHeight must fit in u64") {
+            KagemushaRecursiveCompactPaymentTokenProver
+                .verifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(
+                    validRecursiveCompactInput,
+                    validRecursiveCompactInput,
+                    "18446744073709551616",
+                )
+        }
+        assertIllegalArgumentContains("blockHeight must be non-negative") {
+            KagemushaRecursiveCompactPaymentTokenProver
+                .verifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(
+                    validRecursiveCompactInput,
+                    validRecursiveCompactInput,
+                    BigInteger("-1"),
+                )
+        }
+        assertIllegalArgumentContains("blockHeight must not be null") {
+            KagemushaRecursiveCompactPaymentTokenProver
+                .verifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(
+                    validRecursiveCompactInput,
+                    validRecursiveCompactInput,
+                    null as String?,
+                )
+        }
+        assertIllegalArgumentContains("blockHeight must not be null") {
+            KagemushaRecursiveCompactPaymentTokenProver
+                .verifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(
+                    validRecursiveCompactInput,
+                    validRecursiveCompactInput,
+                    null as BigInteger?,
                 )
         }
     }
@@ -1681,6 +1754,25 @@ class KagemushaRecursiveSpendProverTest {
         }
         assertTrue(malformed.message.orEmpty().contains("native redeem returned invalid Norito archive"))
 
+        val compressed = kagemushaNoritoFrameWithPayload(0x4b)
+        compressed[22] = 1
+        assertRejectsMalformedNativeRedeemOutput(compressed)
+
+        val unsupportedFlags = kagemushaNoritoFrameWithPayload(0x4b)
+        unsupportedFlags[39] = 0x08
+        assertRejectsMalformedNativeRedeemOutput(unsupportedFlags)
+
+        val invalidFieldBitset = kagemushaNoritoFrameWithPayload(0x4b)
+        invalidFieldBitset[39] = 0x20
+        assertRejectsMalformedNativeRedeemOutput(invalidFieldBitset)
+
+        assertRejectsMalformedNativeRedeemOutput(
+            withHeaderPadding(kagemushaNoritoFrameWithPayload(0x4b), byteArrayOf(0x7f)),
+        )
+        assertRejectsMalformedNativeRedeemOutput(
+            withHeaderPadding(kagemushaNoritoFrameWithPayload(0x4b), ByteArray(65)),
+        )
+
         val emptyPayload = assertFailsWith<IllegalStateException> {
             KagemushaRecursiveSpendProver.requireRecursiveSpendOutput(
                 kagemushaNoritoFrame(0x4b),
@@ -1693,6 +1785,13 @@ class KagemushaRecursiveSpendProverTest {
         assertTrue(
             output === KagemushaRecursiveSpendProver.requireRecursiveSpendOutput(output, "redeem"),
         )
+    }
+
+    private fun assertRejectsMalformedNativeRedeemOutput(output: ByteArray) {
+        val error = assertFailsWith<IllegalStateException> {
+            KagemushaRecursiveSpendProver.requireRecursiveSpendOutput(output, "redeem")
+        }
+        assertTrue(error.message.orEmpty().contains("native redeem returned invalid Norito archive"))
     }
 
     private fun sharedRecursiveSpendManifest(): String {
@@ -1759,6 +1858,18 @@ class KagemushaRecursiveSpendProverTest {
         frame[43] = 0x5a.toByte()
         frame[44] = 0x11.toByte()
         return frame
+    }
+
+    private fun withHeaderPadding(archive: ByteArray, padding: ByteArray): ByteArray {
+        val padded = ByteArray(archive.size + padding.size)
+        archive.copyInto(padded, endIndex = 40)
+        padding.copyInto(padded, destinationOffset = 40)
+        archive.copyInto(
+            destination = padded,
+            destinationOffset = 40 + padding.size,
+            startIndex = 40,
+        )
+        return padded
     }
 
     private fun kagemushaNoritoFrameFromPayload(schemaByte: Int, payload: ByteArray): ByteArray {

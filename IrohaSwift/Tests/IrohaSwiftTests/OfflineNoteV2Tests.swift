@@ -33,6 +33,247 @@ final class OfflineNoteV2Tests: XCTestCase {
         )
     }
 
+    func testOfflineNoteV2DecodersRoundTripRustNoritoVectors() throws {
+        let fixture = try Self.loadFixture()
+        let certificate = try Self.certificate(fixture.paymentToken.senderKeyCertificate)
+        let certificatePayload = try certificate.signingPayload()
+        let issue = try Self.issue(fixture)
+        let issuedClaim = try issue.issuedClaim()
+        let audit = try Self.audit(fixture)
+        let auditOutputClaim = audit.outputClaims[0]
+        let auditPublicInputs = try audit.publicInputs()
+        let redeem = try Self.redeem(fixture)
+        let redeemPublicInputs = try redeem.publicInputs()
+
+        XCTAssertEqual(
+            try OfflineNoteV2Decoding.decodeCertificatePayload(certificatePayload.noritoEncoded()),
+            certificatePayload
+        )
+        XCTAssertEqual(
+            try OfflineNoteV2Decoding.decodeKeyCertificatePayload(certificatePayload.noritoEncoded()),
+            certificatePayload
+        )
+        XCTAssertEqual(try OfflineNoteV2Decoding.decodeCertificate(certificate.noritoEncoded()), certificate)
+        XCTAssertEqual(try OfflineNoteV2Decoding.decodeIssue(issue.noritoEncoded()), issue)
+        XCTAssertEqual(try OfflineNoteV2Decoding.decodeIssuedClaim(issuedClaim.noritoEncoded()), issuedClaim)
+        XCTAssertEqual(
+            try OfflineNoteV2Decoding.decodeAuditOutputClaim(auditOutputClaim.noritoEncoded()),
+            auditOutputClaim
+        )
+        XCTAssertEqual(
+            try OfflineNoteV2Decoding.decodeRecursiveProof(audit.recursiveProof.noritoEncoded()),
+            audit.recursiveProof
+        )
+        XCTAssertEqual(try OfflineNoteV2Decoding.decodeAudit(audit.noritoEncoded()), audit)
+        XCTAssertEqual(
+            try OfflineNoteV2Decoding.decodeAuditPublicInputs(auditPublicInputs.noritoEncoded()),
+            auditPublicInputs
+        )
+        XCTAssertEqual(
+            try OfflineNoteV2Decoding.decodeRecursiveProof(redeem.recursiveProof.noritoEncoded()),
+            redeem.recursiveProof
+        )
+        XCTAssertEqual(try OfflineNoteV2Decoding.decodeRedeem(redeem.noritoEncoded()), redeem)
+        XCTAssertEqual(
+            try OfflineNoteV2Decoding.decodeRedeemPublicInputs(redeemPublicInputs.noritoEncoded()),
+            redeemPublicInputs
+        )
+
+        XCTAssertEqual(
+            try OfflineNoteV2Decoding.decodeIssue(try Self.base64(fixture.chainVectors.issue.noritoBase64)).noritoEncoded(),
+            try issue.noritoEncoded()
+        )
+        XCTAssertEqual(
+            try OfflineNoteV2Decoding.decodeAudit(try Self.base64(fixture.chainVectors.audit.noritoBase64)).noritoEncoded(),
+            try audit.noritoEncoded()
+        )
+        XCTAssertEqual(
+            try OfflineNoteV2Decoding.decodeRedeem(try Self.base64(fixture.chainVectors.redeem.noritoBase64)).noritoEncoded(),
+            try redeem.noritoEncoded()
+        )
+    }
+
+    func testOfflineNoteV2InstructionDecodersReadExplorerEnvelopeBytes() throws {
+        let fixture = try Self.loadFixture()
+        let issue = try Self.issue(fixture)
+        let audit = try Self.audit(fixture)
+        let redeem = try Self.redeem(fixture)
+
+        XCTAssertEqual(OfflineNoteV2TypeNames.issueInstruction, OfflineNoteTypeNames.issueInstruction)
+        XCTAssertEqual(OfflineNoteV2TypeNames.redeemInstruction, OfflineNoteTypeNames.redeemInstruction)
+        XCTAssertEqual(OfflineNoteV2TypeNames.auditInstruction, OfflineNoteTypeNames.auditInstruction)
+        XCTAssertFalse(OfflineNoteV2TypeNames.issueInstruction.hasSuffix("V2"))
+        XCTAssertFalse(OfflineNoteV2TypeNames.redeemInstruction.hasSuffix("V2"))
+        XCTAssertFalse(OfflineNoteV2TypeNames.auditInstruction.hasSuffix("V2"))
+
+        let issueWirePayload = Self.instructionWirePayload(
+            typeName: OfflineNoteV2TypeNames.issueInstruction,
+            modelPayload: try OfflineNoteV2Encoding.encodeIssue(issue)
+        )
+        let issueEnvelope = Self.rawInstructionPair(
+            wireName: OfflineNoteV2TypeNames.issueInstruction,
+            wirePayload: issueWirePayload
+        )
+        XCTAssertEqual(
+            try OfflineNoteV2Decoding.decodeIssueInstruction(issueEnvelope).noritoEncoded().base64EncodedString(),
+            try issue.noritoEncoded().base64EncodedString()
+        )
+        XCTAssertEqual(
+            try OfflineNoteV2Decoding.decodeIssueInstruction(issueWirePayload).noritoEncoded().base64EncodedString(),
+            try issue.noritoEncoded().base64EncodedString()
+        )
+
+        let auditEnvelope = Self.rawInstructionPair(
+            wireName: OfflineNoteV2TypeNames.auditInstruction,
+            wirePayload: Self.instructionWirePayload(
+                typeName: OfflineNoteV2TypeNames.auditInstruction,
+                modelPayload: try OfflineNoteV2Encoding.encodeAudit(audit)
+            ),
+            compact: false
+        )
+        XCTAssertEqual(
+            try OfflineNoteV2Decoding.decodeAuditInstruction(auditEnvelope).noritoEncoded().base64EncodedString(),
+            try audit.noritoEncoded().base64EncodedString()
+        )
+
+        let redeemEnvelope = Self.rawInstructionPair(
+            wireName: OfflineNoteV2TypeNames.redeemInstruction,
+            wirePayload: Self.instructionWirePayload(
+                typeName: OfflineNoteV2TypeNames.redeemInstruction,
+                modelPayload: try OfflineNoteV2Encoding.encodeRedeem(redeem)
+            )
+        )
+        XCTAssertEqual(
+            try OfflineNoteV2Decoding.decodeRedeemInstruction(redeemEnvelope).noritoEncoded().base64EncodedString(),
+            try redeem.noritoEncoded().base64EncodedString()
+        )
+    }
+
+    func testOfflineNoteV2InstructionDecodersReadLegacyAliasEnvelopeBytes() throws {
+        let fixture = try Self.loadFixture()
+        let issue = try Self.issue(fixture)
+        let audit = try Self.audit(fixture)
+        let redeem = try Self.redeem(fixture)
+        let issueAliasWirePayload = Self.instructionWirePayload(
+            typeName: OfflineNoteV2TypeNames.issueInstructionAlias,
+            modelPayload: try OfflineNoteV2Encoding.encodeIssue(issue)
+        )
+        let auditAliasWirePayload = Self.instructionWirePayload(
+            typeName: OfflineNoteV2TypeNames.auditInstructionAlias,
+            modelPayload: try OfflineNoteV2Encoding.encodeAudit(audit)
+        )
+        let redeemAliasWirePayload = Self.instructionWirePayload(
+            typeName: OfflineNoteV2TypeNames.redeemInstructionAlias,
+            modelPayload: try OfflineNoteV2Encoding.encodeRedeem(redeem)
+        )
+
+        XCTAssertEqual(
+            try OfflineNoteV2Decoding.decodeIssueInstruction(issueAliasWirePayload).noritoEncoded().base64EncodedString(),
+            try issue.noritoEncoded().base64EncodedString()
+        )
+        XCTAssertEqual(
+            try OfflineNoteV2Decoding.decodeIssueInstruction(Self.rawInstructionPair(
+                wireName: OfflineNoteV2TypeNames.issueInstructionAlias,
+                wirePayload: issueAliasWirePayload
+            )).noritoEncoded().base64EncodedString(),
+            try issue.noritoEncoded().base64EncodedString()
+        )
+        XCTAssertEqual(
+            try OfflineNoteV2Decoding.decodeAuditInstruction(Self.rawInstructionPair(
+                wireName: OfflineNoteV2TypeNames.auditInstructionAlias,
+                wirePayload: auditAliasWirePayload
+            )).noritoEncoded().base64EncodedString(),
+            try audit.noritoEncoded().base64EncodedString()
+        )
+        XCTAssertEqual(
+            try OfflineNoteV2Decoding.decodeRedeemInstruction(Self.rawInstructionPair(
+                wireName: OfflineNoteV2TypeNames.redeemInstructionAlias,
+                wirePayload: redeemAliasWirePayload
+            )).noritoEncoded().base64EncodedString(),
+            try redeem.noritoEncoded().base64EncodedString()
+        )
+    }
+
+    func testOfflineNoteV2InstructionDecodersRejectWrongEnvelopeShapes() throws {
+        let fixture = try Self.loadFixture()
+        let issue = try Self.issue(fixture)
+        let issueWirePayload = Self.instructionWirePayload(
+            typeName: OfflineNoteV2TypeNames.issueInstruction,
+            modelPayload: try OfflineNoteV2Encoding.encodeIssue(issue)
+        )
+        let issueEnvelope = Self.rawInstructionPair(
+            wireName: OfflineNoteV2TypeNames.issueInstruction,
+            wirePayload: issueWirePayload
+        )
+        let wrongWireEnvelope = Self.rawInstructionPair(
+            wireName: OfflineNoteV2TypeNames.redeemInstruction,
+            wirePayload: issueWirePayload
+        )
+        let wrongSchemaPayload = Self.instructionWirePayload(
+            typeName: OfflineNoteV2TypeNames.redeemInstruction,
+            modelPayload: try OfflineNoteV2Encoding.encodeIssue(issue)
+        )
+        let wrongSchemaEnvelope = Self.rawInstructionPair(
+            wireName: OfflineNoteV2TypeNames.issueInstruction,
+            wirePayload: wrongSchemaPayload
+        )
+
+        XCTAssertThrowsError(try OfflineNoteV2Decoding.decodeRedeemInstruction(issueEnvelope))
+        XCTAssertThrowsError(try OfflineNoteV2Decoding.decodeIssueInstruction(wrongWireEnvelope))
+        XCTAssertThrowsError(try OfflineNoteV2Decoding.decodeIssueInstruction(wrongSchemaEnvelope))
+        XCTAssertThrowsError(try OfflineNoteV2Decoding.decodeIssueInstruction(Data(issueEnvelope.dropLast())))
+    }
+
+    func testOfflineNoteV2DecodersRejectMalformedPayloads() throws {
+        let fixture = try Self.loadFixture()
+        let certificate = try Self.certificate(fixture.paymentToken.senderKeyCertificate)
+        let issue = try Self.issue(fixture)
+        let issueBytes = try issue.noritoEncoded()
+
+        XCTAssertThrowsError(try OfflineNoteV2Decoding.decodeIssue(Data(issueBytes.dropLast())))
+        XCTAssertThrowsError(try OfflineNoteV2Decoding.decodeIssue(try certificate.noritoEncoded()))
+        XCTAssertThrowsError(try OfflineNoteV2Decoding.decodeCertificatePayload(try certificate.noritoEncoded()))
+
+        var corruptedChecksum = issueBytes
+        corruptedChecksum[corruptedChecksum.count - 1] ^= 0x01
+        XCTAssertThrowsError(try OfflineNoteV2Decoding.decodeIssue(corruptedChecksum))
+
+        let nonCompactIssue = noritoEncode(
+            typeName: OfflineNoteV2TypeNames.issue,
+            payload: try OfflineNoteV2Encoding.encodeIssue(issue)
+        )
+        XCTAssertThrowsError(try OfflineNoteV2Decoding.decodeIssue(nonCompactIssue))
+
+        var trailingPayload = try OfflineNoteV2Encoding.encodeIssue(issue)
+        trailingPayload.append(0)
+        let trailingIssue = OfflineNoteV2Encoding.wrap(typeName: OfflineNoteV2TypeNames.issue, payload: trailingPayload)
+        XCTAssertThrowsError(try OfflineNoteV2Decoding.decodeIssue(trailingIssue))
+
+        let invalidProof = OfflineNoteV2Encoding.wrap(
+            typeName: OfflineNoteV2TypeNames.recursiveProof,
+            payload: Self.recursiveProofPayload(
+                publicInputsHash: Data(repeating: 0x02, count: 32),
+                proofBackend: OfflineNoteV2Constants.recursiveBackend,
+                proofBytes: Data([0x01])
+            )
+        )
+        XCTAssertThrowsError(try OfflineNoteV2Decoding.decodeRecursiveProof(invalidProof)) { error in
+            XCTAssertEqual(error as? OfflineNoteV2Error, .invalidHash(field: "public_inputs_hash"))
+        }
+
+        let emptyProofBytes = OfflineNoteV2Encoding.wrap(
+            typeName: OfflineNoteV2TypeNames.recursiveProof,
+            payload: Self.recursiveProofPayload(
+                publicInputsHash: try issue.issuedClaim().claimHash(),
+                proofBackend: OfflineNoteV2Constants.recursiveBackend,
+                proofBytes: Data()
+            )
+        )
+        XCTAssertThrowsError(try OfflineNoteV2Decoding.decodeRecursiveProof(emptyProofBytes)) { error in
+            XCTAssertEqual(error as? OfflineNoteV2Error, .emptyProofBytes)
+        }
+    }
+
     func testOfflineNoteV2PublicInputHashesMatchRustVectors() throws {
         let fixture = try Self.loadFixture()
         let audit = try Self.audit(fixture)
@@ -50,12 +291,15 @@ final class OfflineNoteV2Tests: XCTestCase {
         let authority = AccountId.make(publicKey: keypair.publicKey)
         let chainId = "00000000-0000-0000-0000-000000000000"
         let creationTimeMs: UInt64 = 1_706_000_000_000
+        let issueModel = try Self.issue(fixture)
+        let auditModel = try Self.audit(fixture)
+        let redeemModel = try Self.redeem(fixture)
 
         let issue = try SwiftTransactionEncoder.encodeIssueOfflineNoteV2(
             request: IssueOfflineNoteV2Request(
                 chainId: chainId,
                 authority: authority,
-                issue: Self.issue(fixture),
+                issue: issueModel,
                 ttlMs: 60_000
             ),
             keypair: keypair,
@@ -65,7 +309,7 @@ final class OfflineNoteV2Tests: XCTestCase {
             request: AuditOfflineNoteV2Request(
                 chainId: chainId,
                 authority: authority,
-                audit: Self.audit(fixture),
+                audit: auditModel,
                 ttlMs: 60_000
             ),
             keypair: keypair,
@@ -75,7 +319,7 @@ final class OfflineNoteV2Tests: XCTestCase {
             request: RedeemOfflineNoteV2Request(
                 chainId: chainId,
                 authority: authority,
-                redemption: Self.redeem(fixture),
+                redemption: redeemModel,
                 ttlMs: 60_000
             ),
             keypair: keypair,
@@ -90,6 +334,19 @@ final class OfflineNoteV2Tests: XCTestCase {
         }
         XCTAssertNotEqual(issue.transactionHash, audit.transactionHash)
         XCTAssertNotEqual(audit.transactionHash, redeem.transactionHash)
+
+        let issueInstruction = try Self.parseSingleOfflineNoteV2Instruction(issue)
+        let auditInstruction = try Self.parseSingleOfflineNoteV2Instruction(audit)
+        let redeemInstruction = try Self.parseSingleOfflineNoteV2Instruction(redeem)
+        XCTAssertEqual(issueInstruction.wireName, OfflineNoteV2TypeNames.issueInstruction)
+        XCTAssertEqual(auditInstruction.wireName, OfflineNoteV2TypeNames.auditInstruction)
+        XCTAssertEqual(redeemInstruction.wireName, OfflineNoteV2TypeNames.redeemInstruction)
+        XCTAssertFalse(issueInstruction.wireName.hasSuffix("V2"))
+        XCTAssertFalse(auditInstruction.wireName.hasSuffix("V2"))
+        XCTAssertFalse(redeemInstruction.wireName.hasSuffix("V2"))
+        XCTAssertEqual(try OfflineNoteV2Decoding.decodeIssueInstruction(issueInstruction.archive), issueModel)
+        XCTAssertEqual(try OfflineNoteV2Decoding.decodeAuditInstruction(auditInstruction.archive), auditModel)
+        XCTAssertEqual(try OfflineNoteV2Decoding.decodeRedeemInstruction(redeemInstruction.archive), redeemModel)
     }
 
     func testRedeemBuilderRejectsMismatchedProofBinding() throws {
@@ -780,6 +1037,144 @@ final class OfflineNoteV2Tests: XCTestCase {
             throw OfflineNoteV2FixtureError.invalidBase64
         }
         return data
+    }
+
+    private static func recursiveProofPayload(
+        publicInputsHash: Data,
+        proofBackend: String,
+        proofBytes: Data
+    ) -> Data {
+        var proofWriter = OfflineCompactNoritoWriter()
+        proofWriter.writeField(OfflineCompactNorito.encodeString(OfflineNoteV2Constants.recursiveBackend))
+        proofWriter.writeField(OfflineCompactNorito.encodeString(OfflineNoteV2Constants.recursiveVerifierName))
+
+        var proofBoxWriter = OfflineCompactNoritoWriter()
+        proofBoxWriter.writeField(OfflineCompactNorito.encodeString(proofBackend))
+        proofBoxWriter.writeField(OfflineNorito.encodeBytesVec(proofBytes))
+
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeField(proofWriter.data)
+        writer.writeField(publicInputsHash)
+        writer.writeField(proofBoxWriter.data)
+        return writer.data
+    }
+
+    private static func instructionWirePayload(typeName: String, modelPayload: Data) -> Data {
+        var payload = OfflineNoritoWriter()
+        payload.writeField(modelPayload)
+        return noritoEncode(typeName: typeName, payload: payload.data, flags: 0)
+    }
+
+    private static func rawInstructionPair(wireName: String, wirePayload: Data, compact: Bool = true) -> Data {
+        var data = Data()
+        writeInstructionField(encodeInstructionString(wireName, compact: compact), to: &data, compact: compact)
+        writeInstructionField(encodeInstructionBytesVec(wirePayload), to: &data, compact: compact)
+        return data
+    }
+
+    private static func encodeInstructionString(_ value: String, compact: Bool) -> Data {
+        let bytes = Data(value.utf8)
+        var data = Data()
+        appendInstructionLength(UInt64(bytes.count), to: &data, compact: compact)
+        data.append(bytes)
+        return data
+    }
+
+    private static func encodeInstructionBytesVec(_ value: Data) -> Data {
+        var data = Data()
+        appendInstructionLength(UInt64(value.count), to: &data, compact: false)
+        data.append(value)
+        return data
+    }
+
+    private static func writeInstructionField(_ payload: Data, to data: inout Data, compact: Bool) {
+        appendInstructionLength(UInt64(payload.count), to: &data, compact: compact)
+        data.append(payload)
+    }
+
+    private static func appendInstructionLength(_ value: UInt64, to data: inout Data, compact: Bool) {
+        if compact {
+            var remaining = value
+            while remaining >= 0x80 {
+                data.append(UInt8(remaining & 0x7f) | 0x80)
+                remaining >>= 7
+            }
+            data.append(UInt8(remaining))
+        } else {
+            var littleEndian = value.littleEndian
+            data.append(contentsOf: withUnsafeBytes(of: &littleEndian, Array.init))
+        }
+    }
+
+    private struct ParsedOfflineNoteV2Instruction {
+        let wireName: String
+        let archive: Data
+    }
+
+    private static func parseSingleOfflineNoteV2Instruction(
+        _ envelope: SignedTransactionEnvelope
+    ) throws -> ParsedOfflineNoteV2Instruction {
+        var signed = OfflineNoritoReader(data: envelope.signedTransaction)
+        _ = try signed.readField()
+        let transactionPayload = try signed.readField()
+        XCTAssertEqual(try signed.readField(), Data([0]))
+        XCTAssertEqual(try signed.readField(), Data([0]))
+        XCTAssertEqual(signed.remaining(), 0)
+
+        var transaction = OfflineNoritoReader(data: transactionPayload)
+        _ = try transaction.readField()
+        _ = try transaction.readField()
+        _ = try transaction.readField()
+        let executablePayload = try transaction.readField()
+        _ = try transaction.readField()
+        _ = try transaction.readField()
+        _ = try transaction.readField()
+        XCTAssertEqual(transaction.remaining(), 0)
+
+        let instructionPayload = try singleInstructionPayload(fromExecutablePayload: executablePayload)
+        var instruction = OfflineNoritoReader(data: instructionPayload)
+        let wireName = try readFieldString(&instruction)
+        let archive = try readFieldBytesVec(&instruction)
+        XCTAssertEqual(instruction.remaining(), 0)
+        return ParsedOfflineNoteV2Instruction(wireName: wireName, archive: archive)
+    }
+
+    private static func singleInstructionPayload(fromExecutablePayload payload: Data) throws -> Data {
+        var executable = OfflineNoritoReader(data: payload)
+        XCTAssertEqual(try executable.readUInt32LE(), 0)
+        let instructionsPayload = try executable.readField()
+        XCTAssertEqual(executable.remaining(), 0)
+
+        var instructions = OfflineNoritoReader(data: instructionsPayload)
+        XCTAssertEqual(try instructions.readUInt64LE(), 1)
+        let instructionPayload = try instructions.readField()
+        XCTAssertEqual(instructions.remaining(), 0)
+        return instructionPayload
+    }
+
+    private static func readFieldString(_ reader: inout OfflineNoritoReader) throws -> String {
+        var child = OfflineNoritoReader(data: try reader.readField())
+        let length = try child.readUInt64LE()
+        guard length <= UInt64(Int.max) else {
+            throw OfflineNoritoDecodingError.invalidField("string length overflow")
+        }
+        let bytes = try child.readBytes(Int(length))
+        XCTAssertEqual(child.remaining(), 0)
+        guard let value = String(data: bytes, encoding: .utf8) else {
+            throw OfflineNoritoDecodingError.invalidField("invalid UTF-8")
+        }
+        return value
+    }
+
+    private static func readFieldBytesVec(_ reader: inout OfflineNoritoReader) throws -> Data {
+        var child = OfflineNoritoReader(data: try reader.readField())
+        let length = try child.readUInt64LE()
+        guard length <= UInt64(Int.max) else {
+            throw OfflineNoritoDecodingError.invalidField("byte vector length overflow")
+        }
+        let bytes = try child.readBytes(Int(length))
+        XCTAssertEqual(child.remaining(), 0)
+        return bytes
     }
 }
 

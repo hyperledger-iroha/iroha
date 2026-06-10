@@ -620,6 +620,10 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     #endif
 
     static let privacyNativeArchiveMaxBytes = 64 * 1024 * 1024
+    private static let privacyRequestTextFieldMaxBytes = 1024
+    private static let privacyRequestPublicInputsMaxBytes = 1024 * 1024
+    private static let privacyRequestWitnessMaxBytes = privacyNativeArchiveMaxBytes / 2
+    private static let privacyRequestProofMaxBytes = privacyNativeArchiveMaxBytes / 2
     private static let privacyNoritoHeaderBytes = 40
     private static let privacyNoritoMaxHeaderPaddingBytes = 64
     private static let privacyNoritoSupportedFlagsMask: UInt8 = 0x27
@@ -1781,6 +1785,15 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
     ) -> Int32
+    private typealias PrivacyProofRequestFn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
     private typealias KagemushaRecursiveSpendLineageWitnessFromInitResultFn = @convention(c) (
         UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafePointer<UInt8>?, CUnsignedLong,
@@ -2007,6 +2020,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var kagemushaRecursiveSpendVerifyFn: KagemushaRecursiveSpendArchiveFn? = nil
     private var kagemushaRecursiveSpendRedeemFn: KagemushaRecursiveSpendArchiveFn? = nil
     private var privacyCapabilitiesFn: PrivacyCapabilitiesFn? = nil
+    private var privacyProofRequestFn: PrivacyProofRequestFn? = nil
     private var privacyBuildProofFn: PrivacyProofArchiveFn? = nil
     private var privacyVerifyProofFn: PrivacyProofArchiveFn? = nil
     private var privacyFreeFn: FreeFn? = nil
@@ -2146,6 +2160,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private let kagemushaRecursiveSpendVerifyFn: Any? = nil
     private let kagemushaRecursiveSpendRedeemFn: Any? = nil
     private let privacyCapabilitiesFn: Any? = nil
+    private let privacyProofRequestFn: Any? = nil
     private let privacyBuildProofFn: Any? = nil
     private let privacyVerifyProofFn: Any? = nil
     private let privacyFreeFn: Any? = nil
@@ -2168,6 +2183,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private func loadPrivacySymbols(from handle: UnsafeMutableRawPointer?) {
         guard let handle else {
             self.privacyCapabilitiesFn = nil
+            self.privacyProofRequestFn = nil
             self.privacyBuildProofFn = nil
             self.privacyVerifyProofFn = nil
             self.privacyFreeFn = nil
@@ -2177,6 +2193,11 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.privacyCapabilitiesFn = unsafeBitCast(capabilitiesSymbol, to: PrivacyCapabilitiesFn.self)
         } else {
             self.privacyCapabilitiesFn = nil
+        }
+        if let proofRequestSymbol = dlsym(handle, "iroha_privacy_proof_request_v1") {
+            self.privacyProofRequestFn = unsafeBitCast(proofRequestSymbol, to: PrivacyProofRequestFn.self)
+        } else {
+            self.privacyProofRequestFn = nil
         }
         if let buildProofSymbol = dlsym(handle, "iroha_privacy_build_proof_v1") {
             self.privacyBuildProofFn = unsafeBitCast(buildProofSymbol, to: PrivacyProofArchiveFn.self)
@@ -3301,6 +3322,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.kagemushaRecursiveSpendVerifyFn = nil
             self.kagemushaRecursiveSpendRedeemFn = nil
             self.privacyCapabilitiesFn = nil
+            self.privacyProofRequestFn = nil
             self.privacyBuildProofFn = nil
             self.privacyVerifyProofFn = nil
             self.privacyFreeFn = nil
@@ -3704,6 +3726,10 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private func probePrivacyNativeAvailability() {
         var available = true
         available = probePrivacyCapabilitiesFunction(privacyCapabilitiesFn) && available
+        available = probePrivacyProofRequestFunction(
+            privacyProofRequestFn,
+            expectedSchemaByte: Self.privacyRequestSchemaByte
+        ) && available
         available = probePrivacyProofFunction(
             privacyBuildProofFn,
             expectedSchemaByte: Self.privacyBuildProofResultSchemaByte
@@ -3727,6 +3753,58 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             outPtr: outPtr,
             outLen: outLen,
             expectedSchemaByte: Self.privacyCapabilitiesResultSchemaByte,
+            free: freePrivacyFn
+        )
+    }
+
+    private func probePrivacyProofRequestFunction(
+        _ function: PrivacyProofRequestFn?,
+        expectedSchemaByte: UInt8
+    ) -> Bool {
+        guard let function, let freePrivacyFn = privacyFreeFn ?? freeFn else {
+            return false
+        }
+        var outPtr: UnsafeMutablePointer<UInt8>? = nil
+        var outLen: CUnsignedLong = 0
+        var algorithmId = Array("verange-transparent-range-v1".utf8)
+        var entrypoint = Array("buildVeRangeProofV1".utf8)
+        var vkRef = Array("bulletproofs:verange_transparent_range_v1".utf8)
+        var publicInputs = Array("public-inputs".utf8)
+        defer {
+            Self.clearTemporaryPrivacyRequestArchive(&algorithmId)
+            Self.clearTemporaryPrivacyRequestArchive(&entrypoint)
+            Self.clearTemporaryPrivacyRequestArchive(&vkRef)
+            Self.clearTemporaryPrivacyRequestArchive(&publicInputs)
+        }
+        let status = algorithmId.withUnsafeBufferPointer { algorithmBuffer in
+            entrypoint.withUnsafeBufferPointer { entrypointBuffer in
+                vkRef.withUnsafeBufferPointer { vkRefBuffer in
+                    publicInputs.withUnsafeBufferPointer { publicInputsBuffer in
+                        function(
+                            algorithmBuffer.baseAddress,
+                            CUnsignedLong(algorithmBuffer.count),
+                            entrypointBuffer.baseAddress,
+                            CUnsignedLong(entrypointBuffer.count),
+                            vkRefBuffer.baseAddress,
+                            CUnsignedLong(vkRefBuffer.count),
+                            publicInputsBuffer.baseAddress,
+                            CUnsignedLong(publicInputsBuffer.count),
+                            nil,
+                            0,
+                            nil,
+                            0,
+                            &outPtr,
+                            &outLen
+                        )
+                    }
+                }
+            }
+        }
+        return consumePrivacyNativeProbeResult(
+            status: status,
+            outPtr: outPtr,
+            outLen: outLen,
+            expectedSchemaByte: expectedSchemaByte,
             free: freePrivacyFn
         )
     }
@@ -3880,6 +3958,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #if canImport(Darwin)
         guard bridgeEnabledForRuntime else { return false }
         return privacyCapabilitiesFn != nil
+            && privacyProofRequestFn != nil
             && privacyBuildProofFn != nil
             && privacyVerifyProofFn != nil
             && (privacyFreeFn != nil || freeFn != nil)
@@ -7239,6 +7318,95 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #endif
     }
 
+    public func privacyProofRequestV1(
+        algorithmId: String,
+        entrypoint: String,
+        vkRef: String,
+        publicInputs: Data,
+        witness: Data,
+        proof: Data
+    ) throws -> Data? {
+        #if canImport(Darwin)
+        guard let privacyProofRequestFn, let freePrivacyFn = privacyFreeFn ?? freeFn else {
+            return nil
+        }
+        var algorithmIdBytes = try Self.privacyRequestTextBytes(algorithmId)
+        var entrypointBytes = try Self.privacyRequestTextBytes(entrypoint)
+        var vkRefBytes = try Self.privacyRequestTextBytes(vkRef)
+        var publicInputBytes = try Self.privacyRequestComponentBytes(
+            publicInputs,
+            maxBytes: Self.privacyRequestPublicInputsMaxBytes,
+            allowEmpty: false
+        )
+        var witnessBytes = try Self.privacyRequestComponentBytes(
+            witness,
+            maxBytes: Self.privacyRequestWitnessMaxBytes,
+            allowEmpty: true
+        )
+        var proofBytes = try Self.privacyRequestComponentBytes(
+            proof,
+            maxBytes: Self.privacyRequestProofMaxBytes,
+            allowEmpty: true
+        )
+        defer {
+            Self.clearTemporaryPrivacyRequestArchive(&algorithmIdBytes)
+            Self.clearTemporaryPrivacyRequestArchive(&entrypointBytes)
+            Self.clearTemporaryPrivacyRequestArchive(&vkRefBytes)
+            Self.clearTemporaryPrivacyRequestArchive(&publicInputBytes)
+            Self.clearTemporaryPrivacyRequestArchive(&witnessBytes)
+            Self.clearTemporaryPrivacyRequestArchive(&proofBytes)
+        }
+        var outPtr: UnsafeMutablePointer<UInt8>? = nil
+        var outLen: CUnsignedLong = 0
+        let status = algorithmIdBytes.withUnsafeBufferPointer { algorithmBuffer in
+            entrypointBytes.withUnsafeBufferPointer { entrypointBuffer in
+                vkRefBytes.withUnsafeBufferPointer { vkRefBuffer in
+                    publicInputBytes.withUnsafeBufferPointer { publicInputBuffer in
+                        witnessBytes.withUnsafeBufferPointer { witnessBuffer in
+                            proofBytes.withUnsafeBufferPointer { proofBuffer in
+                                privacyProofRequestFn(
+                                    algorithmBuffer.baseAddress,
+                                    CUnsignedLong(algorithmBuffer.count),
+                                    entrypointBuffer.baseAddress,
+                                    CUnsignedLong(entrypointBuffer.count),
+                                    vkRefBuffer.baseAddress,
+                                    CUnsignedLong(vkRefBuffer.count),
+                                    publicInputBuffer.baseAddress,
+                                    CUnsignedLong(publicInputBuffer.count),
+                                    witnessBuffer.baseAddress,
+                                    CUnsignedLong(witnessBuffer.count),
+                                    proofBuffer.baseAddress,
+                                    CUnsignedLong(proofBuffer.count),
+                                    &outPtr,
+                                    &outLen
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if let error = NativeBridgeError.fromStatus(status) {
+            if let outPtr {
+                freePrivacyFn(outPtr)
+            }
+            throw error
+        }
+        guard let outPtr else {
+            throw NativeBridgeError.nullPointer
+        }
+        return try Self.readPrivacyNativeOutput(
+            pointer: outPtr,
+            length: outLen,
+            expectedSchemaByte: Self.privacyRequestSchemaByte
+        ) { pointer in
+            freePrivacyFn(pointer)
+        }
+        #else
+        return nil
+        #endif
+    }
+
     private func callPrivacyProof(
         requestArchive: Data,
         function: PrivacyProofArchiveFn?,
@@ -7278,6 +7446,28 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #else
         return nil
         #endif
+    }
+
+    static func privacyRequestTextBytes(_ value: String) throws -> [UInt8] {
+        let bytes = Array(value.utf8)
+        guard bytes.count <= Self.privacyRequestTextFieldMaxBytes else {
+            throw NativeBridgeError.invalidPrivacyRequest
+        }
+        return bytes
+    }
+
+    static func privacyRequestComponentBytes(
+        _ value: Data,
+        maxBytes: Int,
+        allowEmpty: Bool
+    ) throws -> [UInt8] {
+        guard allowEmpty || !value.isEmpty else {
+            throw NativeBridgeError.invalidPrivacyRequest
+        }
+        guard value.count <= maxBytes else {
+            throw NativeBridgeError.invalidPrivacyRequest
+        }
+        return Array(value)
     }
 
     static func withTemporaryPrivacyRequestArchive<T>(

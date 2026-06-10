@@ -1,3 +1,4 @@
+import argparse
 import contextlib
 import http.server
 import importlib.util
@@ -332,6 +333,52 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 self.assertNotIn(raw_path, message)
                 self.assertNotIn(decoded_secret, message)
                 self.assertNotIn("rail-path-leak", message)
+
+    def test_receipt_outputs_reject_repository_fixture_artifacts(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            receipt_dir = root / "fixtures" / "iso20022" / "rail-receipts"
+            receipt_path = root / "fixtures" / "iso20022" / "rail-receipt.json"
+
+            with self.assertRaisesRegex(
+                ADAPTER.AdapterError,
+                "receipt directory must not point to checked-in ISO fixture artifacts",
+            ):
+                ADAPTER._ensure_output_directory(receipt_dir, "receipt directory")
+
+            with self.assertRaisesRegex(
+                ADAPTER.AdapterError,
+                "output path must not point to checked-in ISO fixture artifacts",
+            ):
+                ADAPTER._write_text_output(receipt_path, "{}\n")
+
+            self.assertFalse((root / "fixtures").exists())
+
+    def test_receipt_dir_rejects_repository_fixture_before_inbox_loading(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            receipt_dir = root / "fixtures" / "iso20022" / "rail-receipts"
+
+            rc, stdout, stderr = run_main(
+                [
+                    "--inbox-dir",
+                    str(root / "missing-inbox"),
+                    "--torii-base-url",
+                    "http://127.0.0.1:1",
+                    "--allow-insecure-http",
+                    "--receipt-dir",
+                    str(receipt_dir),
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn(
+                "receipt_dir must not point to checked-in ISO fixture artifacts",
+                stderr,
+            )
+            self.assertNotIn("does not exist", stderr)
+            self.assertFalse((root / "fixtures").exists())
 
     def test_local_path_validators_reject_percent_encoded_smuggling(self):
         overlong_path = "out/" + ("a" * (ADAPTER.MAX_LOCAL_PATH_CHARS + 1))
@@ -678,6 +725,36 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             self.assertIn("payload_sha256 duplicates", stderr)
             self.assertNotIn(ADAPTER.sha256_hex(SAMPLE_XML), stderr)
             self.assertFalse((inbox / "receipts").exists())
+
+    def test_checked_in_xml_fixture_path_is_rejected_before_network_delivery(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            inbox = root / "fixtures" / "iso20022" / "rail-inbox"
+            receipt_dir = root / "rail-receipts"
+            inbox.mkdir(parents=True)
+            write_message(inbox)
+            with capture_server() as (base_url, requests):
+                rc, stdout, stderr = run_main(
+                    [
+                        "--inbox-dir",
+                        str(inbox),
+                        "--torii-base-url",
+                        base_url,
+                        "--allow-insecure-http",
+                        "--receipt-dir",
+                        str(receipt_dir),
+                    ]
+                )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertEqual(requests, [])
+            self.assertIn(
+                "inbox_dir must not point to checked-in ISO fixture artifacts",
+                stderr,
+            )
+            self.assertFalse((inbox / "receipts").exists())
+            self.assertFalse(receipt_dir.exists())
 
     def test_duplicate_rail_message_ids_are_rejected_before_network_delivery(self):
         with tempfile.TemporaryDirectory() as raw_inbox:
@@ -1036,6 +1113,90 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                     self.assertIn(message, stderr)
                     if "secret-looking" in name:
                         self.assertNotIn("rail-secret", stderr)
+
+    def test_direct_run_paths_reject_smuggling_before_inbox_loading(self):
+        def args_for(root, **overrides):
+            values = {
+                "inbox_dir": root / "missing-inbox",
+                "message": None,
+                "torii_base_url": "https://torii.example.invalid",
+                "receipt_dir": root / "receipts",
+                "bearer_token_file": None,
+                "timeout_secs": 1.0,
+                "response_limit_bytes": 1024,
+                "max_payload_bytes": 1024,
+                "allow_insecure_http": False,
+                "allow_default_profile": False,
+                "allow_legacy_colr007": False,
+                "dry_run": True,
+            }
+            values.update(overrides)
+            return argparse.Namespace(**values)
+
+        cases = (
+            (
+                "inbox whitespace",
+                lambda root: args_for(root, inbox_dir=root / "inbox dir"),
+                "inbox_dir must not contain whitespace",
+            ),
+            (
+                "inbox repository fixture",
+                lambda root: args_for(
+                    root,
+                    inbox_dir=root / "fixtures" / "iso20022" / "rail-inbox",
+                ),
+                "inbox_dir must not point to checked-in ISO fixture artifacts",
+            ),
+            (
+                "message parent",
+                lambda root: args_for(
+                    root,
+                    message=root / "nested" / ".." / "rail-status.xml",
+                ),
+                "message must not contain dot or parent segments",
+            ),
+            (
+                "receipt leading dash",
+                lambda root: args_for(
+                    root,
+                    receipt_dir=root / "nested" / "-receipts",
+                ),
+                "receipt_dir must not contain leading-dash path segments",
+            ),
+            (
+                "receipt repository fixture",
+                lambda root: args_for(
+                    root,
+                    receipt_dir=root / "fixtures" / "iso20022" / "rail-receipts",
+                ),
+                "receipt_dir must not point to checked-in ISO fixture artifacts",
+            ),
+            (
+                "token secret",
+                lambda root: args_for(
+                    root,
+                    bearer_token_file=root / "token=rail-secret",
+                ),
+                "bearer_token_file must not contain secret-looking material",
+            ),
+        )
+        for name, make_args, message in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+
+                    with self.assertRaises(ADAPTER.AdapterError) as caught:
+                        ADAPTER.run(make_args(root))
+
+                    error = str(caught.exception)
+                    self.assertIn(message, error)
+                    self.assertNotIn("does not exist", error)
+                    self.assertNotIn("rail-secret", error)
+
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            with self.assertRaisesRegex(ADAPTER.AdapterError, "provide --inbox-dir"):
+                ADAPTER.run(args_for(root, inbox_dir=None))
 
     def test_secret_looking_message_paths_are_rejected_before_receipt_output(self):
         with tempfile.TemporaryDirectory() as raw_inbox:

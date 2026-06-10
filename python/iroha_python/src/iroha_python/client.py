@@ -11591,6 +11591,76 @@ class ToriiClient(_BaseToriiClient):
             interval=interval,
         )
 
+    def verify_proof_and_wait(
+        self,
+        *,
+        chain_id: str,
+        authority: str,
+        private_key: Optional[bytes] = None,
+        private_key_hex: Optional[str] = None,
+        proof: Mapping[str, Any],
+        transaction_metadata: Optional[Mapping[str, Any]] = None,
+        wait: bool = True,
+        timeout: Optional[float] = 30.0,
+        interval: float = 1.0,
+    ) -> Mapping[str, Any]:
+        """Submit a generic `zk::VerifyProof` instruction."""
+
+        if not isinstance(proof, Mapping):
+            raise TypeError("proof must be a mapping")
+        draft = self._transaction_draft(
+            chain_id=chain_id,
+            authority=authority,
+            metadata=transaction_metadata,
+        )
+        draft.verify_proof(dict(proof))
+        return self._submit_transaction_draft_result(
+            draft,
+            private_key=private_key,
+            private_key_hex=private_key_hex,
+            wait=wait,
+            timeout=timeout,
+            interval=interval,
+        )
+
+    def register_asset_hidden_zk_pool_and_wait(
+        self,
+        *,
+        chain_id: str,
+        authority: str,
+        private_key: Optional[bytes] = None,
+        private_key_hex: Optional[str] = None,
+        pool_id: str,
+        storage_asset: str,
+        asset_set_root: Union[str, bytes, bytearray, memoryview],
+        vk_transfer: Union[str, Mapping[str, Any]],
+        transaction_metadata: Optional[Mapping[str, Any]] = None,
+        wait: bool = True,
+        timeout: Optional[float] = 30.0,
+        interval: float = 1.0,
+    ) -> Mapping[str, Any]:
+        """Register asset-hidden shielded pool verifier state."""
+
+        draft = self._transaction_draft(
+            chain_id=chain_id,
+            authority=authority,
+            metadata=transaction_metadata,
+        )
+        draft.register_asset_hidden_zk_pool(
+            pool_id,
+            storage_asset,
+            asset_set_root=asset_set_root,
+            vk_transfer=vk_transfer,
+        )
+        return self._submit_transaction_draft_result(
+            draft,
+            private_key=private_key,
+            private_key_hex=private_key_hex,
+            wait=wait,
+            timeout=timeout,
+            interval=interval,
+        )
+
     def register_zk_ace_identity_commitment_and_wait(
         self,
         *,
@@ -11848,6 +11918,46 @@ class ToriiClient(_BaseToriiClient):
             inputs=inputs,
             proof=proof,
             outputs=outputs,
+            root_hint=root_hint,
+        )
+        return self._submit_transaction_draft_result(
+            draft,
+            private_key=private_key,
+            private_key_hex=private_key_hex,
+            wait=wait,
+            timeout=timeout,
+            interval=interval,
+        )
+
+    def asset_hidden_zk_transfer_prepared_and_wait(
+        self,
+        *,
+        chain_id: str,
+        authority: str,
+        private_key: Optional[bytes] = None,
+        private_key_hex: Optional[str] = None,
+        pool_id: str,
+        inputs: Iterable[Union[str, bytes, bytearray, memoryview]],
+        outputs: Iterable[Union[str, bytes, bytearray, memoryview]],
+        proof: Mapping[str, Any],
+        root_hint: Optional[Union[str, bytes, bytearray, memoryview]] = None,
+        transaction_metadata: Optional[Mapping[str, Any]] = None,
+        wait: bool = True,
+        timeout: Optional[float] = 30.0,
+        interval: float = 1.0,
+    ) -> Mapping[str, Any]:
+        """Submit a prepared asset-hidden ZK transfer."""
+
+        draft = self._transaction_draft(
+            chain_id=chain_id,
+            authority=authority,
+            metadata=transaction_metadata,
+        )
+        draft.asset_hidden_zk_transfer_prepared(
+            pool_id,
+            inputs=inputs,
+            outputs=outputs,
+            proof=proof,
             root_hint=root_hint,
         )
         return self._submit_transaction_draft_result(

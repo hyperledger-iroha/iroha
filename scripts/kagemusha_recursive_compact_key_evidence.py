@@ -358,12 +358,15 @@ def validate_evidence_document(evidence: dict[str, Any], artifact_dir: Path) -> 
             path = Path(handle.name)
             handle.write(evidence_text)
     except OSError:
+        errors = ["recursive compact key evidence validation file could not be written"]
         if path is not None:
             try:
                 path.unlink(missing_ok=True)
             except OSError:
-                pass
-        return ["recursive compact key evidence validation file could not be written"]
+                errors.append(
+                    "recursive compact key evidence validation file could not be removed"
+                )
+        return errors
     result = readiness.check_compact_key_evidence(
         path,
         require_canonical_filename=False,
@@ -571,6 +574,7 @@ def write_evidence(path: Path, evidence: dict[str, Any]) -> list[str]:
     if len(evidence_text.encode("utf-8")) > readiness.MAX_COMPACT_KEY_EVIDENCE_JSON_BYTES:
         return ["--out evidence exceeds maximum size"]
     tmp_path: Path | None = None
+    write_errors: list[str] = []
     try:
         with tempfile.NamedTemporaryFile(
             "w",
@@ -586,28 +590,27 @@ def write_evidence(path: Path, evidence: dict[str, Any]) -> list[str]:
             os.fsync(handle.fileno())
         errors = validate_output_path(path, "--out")
         if errors:
-            return errors
-        os.replace(tmp_path, path)
-        tmp_path = None
+            write_errors.extend(errors)
+        else:
+            os.replace(tmp_path, path)
+            tmp_path = None
     except OSError:
-        return ["--out could not be written"]
+        write_errors.append("--out could not be written")
     finally:
         if tmp_path is not None:
-            try:
-                tmp_path.unlink(missing_ok=True)
-            except OSError:
-                pass
+            write_errors.extend(_cleanup_temp_output(tmp_path))
+    if write_errors:
+        return write_errors
     try:
         parent_fd = os.open(path.parent, os.O_RDONLY)
     except OSError:
-        parent_fd = None
-    if parent_fd is not None:
-        try:
-            os.fsync(parent_fd)
-        except OSError:
-            pass
-        finally:
-            os.close(parent_fd)
+        return ["--out parent directory could not be synced"]
+    try:
+        os.fsync(parent_fd)
+    except OSError:
+        return ["--out parent directory could not be synced"]
+    finally:
+        os.close(parent_fd)
     errors = validate_output_path(path, "--out")
     if errors:
         return errors
@@ -625,6 +628,14 @@ def write_evidence(path: Path, evidence: dict[str, Any]) -> list[str]:
         return readback_errors
     if readback_text != evidence_text:
         return ["--out write verification failed"]
+    return []
+
+
+def _cleanup_temp_output(path: Path) -> list[str]:
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        return ["--out temporary file could not be removed"]
     return []
 
 

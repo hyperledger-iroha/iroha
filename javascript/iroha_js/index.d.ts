@@ -159,7 +159,7 @@ export const SM2_PUBLIC_KEY_LENGTH: number;
 export const SM2_SIGNATURE_LENGTH: number;
 export const SM2_DEFAULT_DISTINGUISHED_ID: string;
 export const PRIVACY_FFI_VERSION_V1: 1;
-export const PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: 6;
+export const PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: 7;
 export const PRIVACY_FFI_STATUS_ERROR: 1;
 export const PRIVACY_FFI_ERROR_NULL_POINTER: 1;
 export const PRIVACY_FFI_ERROR_MALFORMED_NORITO: 2;
@@ -7919,6 +7919,15 @@ export type BinaryLike =
   | string;
 
 export type PrivacyNativeArchiveLike = Buffer | ArrayBuffer | ArrayBufferView;
+
+export interface PrivacyProofRequestV1Input {
+  algorithmId: string;
+  entrypoint: string;
+  vkRef: string;
+  publicInputs: PrivacyNativeArchiveLike;
+  witness?: PrivacyNativeArchiveLike;
+  proof?: PrivacyNativeArchiveLike;
+}
 
 export type VerifyingKeyIdLike = string | { backend: string; name: string };
 
@@ -17809,6 +17818,9 @@ export function kagemushaRecursiveSpendRedeem(
 export const PRIVACY_NATIVE_ARCHIVE_MAX_BYTES: number;
 export function isPrivacyNativeAvailable(): boolean;
 export function privacyCapabilitiesV1(): Buffer;
+export function privacyProofRequestV1(
+  input: PrivacyProofRequestV1Input,
+): Buffer;
 export function privacyBuildProofV1(
   requestArchive: PrivacyNativeArchiveLike,
 ): Buffer;

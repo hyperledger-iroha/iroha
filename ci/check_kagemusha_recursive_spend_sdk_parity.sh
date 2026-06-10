@@ -129,6 +129,7 @@ REQUIRED_RECURSIVE_COMPACT_PYTHON_METHODS = (
 REQUIRED_RECURSIVE_SPEND_COMPACT_PROJECTION_PYTHON_METHODS = (
     "kagemusha_recursive_spend_compact_payment_token_from_bundle",
     "kagemusha_verify_recursive_spend_compact_payment_token_projection",
+    "kagemusha_verify_recursive_spend_compact_payment_token_projection_at_height",
 )
 
 REQUIRED_RECURSIVE_COMPACT_PYTHON_PUBLIC_METHODS = (
@@ -257,29 +258,36 @@ SOURCE_PATHS = (
     "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveCompactPaymentTokenProver.swift",
     "IrohaSwift/Sources/IrohaSwift/KagemushaInstructionTransactionEncoder.swift",
     "IrohaSwift/Sources/IrohaSwift/Halo2OfflineNoteProver.swift",
+    "IrohaSwift/Sources/IrohaSwift/OfflineNoteV2.swift",
+    "IrohaSwift/Sources/IrohaSwift/OfflineNoritoDecoding.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaCompactPaymentTokenProverTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveAggregationProofBundleProverTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveCompactPaymentTokenProverTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaInstructionTransactionEncoderTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/UC4DecodePaymentTokenTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteV2Tests.swift",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaCompactPaymentTokenProver.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveAggregationProofBundleProver.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaInstructionArchives.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveCompactPaymentTokenProver.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteHalo2Prover.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteV2.java",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaCompactPaymentTokenProver.kt",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/TransactionBuilderTests.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteV2Test.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveAggregationProofBundleProver.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaInstructionArchives.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveCompactPaymentTokenProver.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteHalo2Prover.java",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteV2.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaInstructionArchivesTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteV2Test.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProverTest.kt",
     "javascript/iroha_js/src/crypto.js",
     "javascript/iroha_js/dist/crypto.js",
@@ -403,6 +411,18 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "JavaScript Kagemusha instruction transaction builder negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-kagemusha-instruction-transaction-builder",
+    ),
+    (
+        "JavaScript/Python native output header negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-python-native-output-headers",
+    ),
+    (
+        "Python Kagemusha instruction transaction builder negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-kagemusha-instruction-transaction-builder",
+    ),
+    (
+        "C# Kagemusha instruction transaction builder negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-kagemusha-instruction-transaction-builder",
     ),
     (
         "Python lineage key package binding negative control",
@@ -597,6 +617,18 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-recursive-spend-compact-projection-surface",
     ),
     (
+        "JavaScript compact projection block-height validation negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-compact-projection-block-height-validation",
+    ),
+    (
+        "Python recursive spend compact projection root export negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-recursive-spend-compact-projection-root-export",
+    ),
+    (
+        "JVM compact projection unsigned block-height negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-compact-projection-unsigned-block-height",
+    ),
+    (
         "native bridge zero-envelope Pallas guard negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-native-bridge-zero-envelope-pallas-guard",
     ),
@@ -769,6 +801,34 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-recursive-compact-shape-classifier",
     ),
     (
+        "Mobile recursive spend native output header negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-recursive-spend-native-output-headers",
+    ),
+    (
+        "JVM Offline Note V2 decoder placeholder negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-offline-note-v2-decoder-placeholder",
+    ),
+    (
+        "JVM Offline Note V2 instruction wrapper negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-offline-note-v2-instruction-wrapper",
+    ),
+    (
+        "JVM Offline Note V2 instruction decoder negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-offline-note-v2-instruction-decoder",
+    ),
+    (
+        "Offline Note V2 canonical instruction wire-name negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-offline-note-v2-canonical-instruction-wire-names",
+    ),
+    (
+        "Swift Offline Note V2 decoder placeholder negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-offline-note-v2-decoder-placeholder",
+    ),
+    (
+        "Swift Offline Note V2 instruction decoder negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-offline-note-v2-instruction-decoder",
+    ),
+    (
         "JVM SDK Android harness script negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-sdk-android-harness-script",
     ),
@@ -811,6 +871,14 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "Swift Kagemusha native output cap negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-kagemusha-native-output-cap",
+    ),
+    (
+        "Swift recursive spend native output header negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-native-output-headers",
+    ),
+    (
+        "Swift recursive spend native input header negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-native-input-headers",
     ),
     (
         "Swift Kagemusha instruction transaction builder negative control",
@@ -1855,6 +1923,14 @@ def check_recursive_compact_surface(texts, errors):
                 "native.kagemushaRecursiveSpendCompactPaymentTokenFromBundle(",
                 "native.kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection(",
                 "native.kagemushaVerifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(",
+                "const checkedBlockHeight = normalizeKagemushaBlockHeight(blockHeight);",
+                "checkedBlockHeight === null",
+                "normalizeKagemushaBlockHeight(blockHeight)",
+                "blockHeight must be a number or bigint",
+                "blockHeight must be an integer",
+                "blockHeight must be non-negative",
+                "blockHeight number must be a safe integer; use bigint for larger u64 values",
+                "blockHeight must fit in u64",
                 '"bundleArchive"',
                 '"verifierRecordArchive"',
                 "recursive spend compact Kagemusha payment-token projection requires native bridge ABI 7 with the compact projection symbol",
@@ -1917,6 +1993,14 @@ def check_recursive_compact_surface(texts, errors):
             "compact projection symbol",
             "compact projection verifier symbols",
             "rejectMalformedProbe(\"recursive-spend-compact-projection\"",
+            "0xffff_ffff_ffff_ffffn",
+            "0x1_0000_0000_0000_0000n",
+            "Number.MAX_SAFE_INTEGER + 1",
+            "blockHeight must be a number or bigint",
+            "blockHeight must be an integer",
+            "blockHeight must be non-negative",
+            "blockHeight number must be a safe integer; use bigint for larger u64 values",
+            "blockHeight must fit in u64",
         ),
         "JavaScript recursive spend compact projection tests",
         errors,
@@ -2218,9 +2302,14 @@ def check_recursive_compact_surface(texts, errors):
             "is_kagemusha_recursive_spend_compact_payment_token_projection_verifier_available",
             "globals()[_RECURSIVE_SPEND_COMPACT_TOKEN_FROM_BUNDLE_METHOD]",
             "globals()[_RECURSIVE_SPEND_COMPACT_TOKEN_PROJECTION_VERIFY_METHOD]",
+            "globals()[_RECURSIVE_SPEND_COMPACT_TOKEN_PROJECTION_VERIFY_AT_HEIGHT_METHOD]",
+            "_verify_recursive_spend_compact_payment_token_projection_at_height",
             '_norito_archive_bytes_named(bundle_archive, "bundle_archive")',
             '_assert_kagemusha_norito_archive(verifier_record, "verifier_record_archive")',
+            "_validate_kagemusha_block_height",
+            "block_height must be an integer",
             "block_height must be non-negative",
+            "block_height must fit in u64",
             "native bridge ABI 7 with the compact projection symbol",
             "compact projection verifier symbols",
         ),
@@ -2271,10 +2360,13 @@ def check_recursive_compact_surface(texts, errors):
             "is_kagemusha_recursive_spend_compact_payment_token_projection_verifier_available",
             "kagemusha_recursive_spend_compact_payment_token_from_bundle",
             "kagemusha_verify_recursive_spend_compact_payment_token_projection",
+            "kagemusha_verify_recursive_spend_compact_payment_token_projection_at_height",
             "bundle_archive must be a valid Norito archive",
             "bundle_archive must contain a non-empty Norito payload",
             "verifier_record_archive must be a valid Norito archive",
+            "block_height must be an integer",
             "block_height must be non-negative",
+            "block_height must fit in u64",
             "compact projection symbol",
             "compact projection verifier symbols",
         ),
@@ -2371,6 +2463,13 @@ def check_recursive_compact_surface(texts, errors):
             "testRejectsEmptyPayloadInputArchivesBeforeBridgeCall",
             "testRejectsMalformedNativeOutput",
             "testRejectsEmptyPayloadNativeOutput",
+            "malformedKagemushaNoritoArchives",
+            "compressed[22] = 0x01",
+            "unsupportedFlags[39] = NoritoHeader.varintOffsets",
+            "invalidFieldBitset[39] = NoritoHeader.fieldBitset",
+            "kagemushaNoritoFrameWithHeaderPadding",
+            "Data([0x7f])",
+            "Data(repeating: 0, count: 65)",
             ".oversizedRecordBundleArchive",
             ".oversizedPallasOpenEnvelopesArchive",
             ".oversizedCompactTokenArchive",
@@ -2405,6 +2504,44 @@ def check_recursive_compact_surface(texts, errors):
         "Swift recursive compact verifier tests",
         errors,
     )
+    require_regex(
+        texts,
+        "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveCompactPaymentTokenProverTests.swift",
+        r"testRejectsMalformedNativeOutput[\s\S]*"
+        r"malformedKagemushaNoritoArchives\(validArchive\)[\s\S]*"
+        r"testProjectionRejectsMalformedNativeOutput[\s\S]*"
+        r"malformedKagemushaNoritoArchives\(validArchive\)[\s\S]*"
+        r"invalidFieldBitset\[39\] = NoritoHeader\.fieldBitset[\s\S]*"
+        r"kagemushaNoritoFrameWithHeaderPadding",
+        "Swift recursive compact native output header guard tests",
+        errors,
+    )
+    require_regex(
+        texts,
+        "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveCompactPaymentTokenProverTests.swift",
+        r"testRejectsInvalidKeyArtifactsArchiveBeforeBridgeCall[\s\S]*"
+        r"malformedKagemushaNoritoArchives\(validArchive\)[\s\S]*"
+        r"testRejectsMalformedInputArchivesBeforeBridgeCall[\s\S]*"
+        r"malformedKagemushaNoritoArchives\(validArchive\)[\s\S]*"
+        r"testProjectionRejectsMalformedBundleArchiveBeforeBridgeCall[\s\S]*"
+        r"malformedKagemushaNoritoArchives\(validArchive\)[\s\S]*"
+        r"invalidFieldBitset\[39\] = NoritoHeader\.fieldBitset[\s\S]*"
+        r"kagemushaNoritoFrameWithHeaderPadding",
+        "Swift recursive compact input header guard tests",
+        errors,
+    )
+    require_regex(
+        texts,
+        "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveCompactPaymentTokenProverTests.swift",
+        r"testProjectionVerifierRejectsMalformedVerifierRecordBeforeBridgeCall[\s\S]*"
+        r"malformedKagemushaNoritoArchives\(validArchive\)[\s\S]*"
+        r"testVerifyRejectsMalformedCompactTokenArchiveBeforeBridgeCall[\s\S]*"
+        r"malformedKagemushaNoritoArchives\(validArchive\)[\s\S]*"
+        r"testVerifyRejectsInvalidVerifierKeysArchiveBeforeBridgeCall[\s\S]*"
+        r"malformedKagemushaNoritoArchives\(validArchive\)",
+        "Swift recursive compact input header guard tests",
+        errors,
+    )
 
     jvm_files = (
         (
@@ -2416,6 +2553,12 @@ def check_recursive_compact_surface(texts, errors):
             "recursiveCompactVerifierKeysArchive: ByteArray?",
             "fun verifyRecursiveSpendCompactPaymentTokenProjection(",
             "fun verifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(",
+            "blockHeight: String?",
+            "blockHeight: BigInteger?",
+            "private fun parseUnsignedBlockHeight(blockHeight: String?): Long",
+            "private fun parseUnsignedBlockHeight(blockHeight: BigInteger?): Long",
+            "blockHeight must be a canonical unsigned decimal integer",
+            "blockHeight must fit in u64",
             "private val nativeVerifierAvailable: Boolean = loadVerifierLibrary()",
             "private val nativeProjectionVerifierAvailable: Boolean = loadProjectionVerifierLibrary()",
             "check(nativeVerifierAvailable)",
@@ -2440,6 +2583,12 @@ def check_recursive_compact_surface(texts, errors):
             "final byte[] recursiveCompactVerifierKeysArchive",
             "public static boolean verifyRecursiveSpendCompactPaymentTokenProjection(",
             "public static boolean verifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(",
+            "final String blockHeight",
+            "final BigInteger blockHeight",
+            "private static long parseUnsignedBlockHeight(final String blockHeight)",
+            "private static long parseUnsignedBlockHeight(final BigInteger blockHeight)",
+            "blockHeight must be a canonical unsigned decimal integer",
+            "blockHeight must fit in u64",
             "NATIVE_VERIFIER_AVAILABLE = loadVerifierLibrary()",
             "NATIVE_PROJECTION_VERIFIER_AVAILABLE = loadProjectionVerifierLibrary()",
             "requireVerifierNative()",
@@ -2478,6 +2627,22 @@ def check_recursive_compact_surface(texts, errors):
             label,
             errors,
         )
+    require_regex(
+        texts,
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveCompactPaymentTokenProver.kt",
+        r"fun\s+verifyRecursiveCompactPaymentToken\([^)]*compactTokenArchive:\s+ByteArray\?[^)]*recursiveCompactVerifierKeysArchive:\s+ByteArray\?[^)]*\)\s*:\s*Boolean\s*\{[^}]*val\s+compactToken\s*=\s*ownedNativeInput\(compactTokenArchive,\s+\"compactTokenArchive\"\)[^}]*val\s+verifierKeys\s*=\s*ownedNativeInput\(recursiveCompactVerifierKeysArchive,\s+\"recursiveCompactVerifierKeysArchive\"\)",
+        "Kotlin recursive compact archive input copy",
+        errors,
+        flags=re.S,
+    )
+    require_regex(
+        texts,
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveCompactPaymentTokenProver.java",
+        r"public\s+static\s+boolean\s+verifyRecursiveCompactPaymentToken\([^)]*final\s+byte\[\]\s+compactTokenArchive[^)]*final\s+byte\[\]\s+recursiveCompactVerifierKeysArchive[^)]*\)\s*\{[^}]*final\s+byte\[\]\s+compactToken\s*=\s*ownedNativeInput\(compactTokenArchive,\s+\"compactTokenArchive\"\)[^}]*final\s+byte\[\]\s+verifierKeys\s*=\s*ownedNativeInput\(\s*recursiveCompactVerifierKeysArchive,\s+\"recursiveCompactVerifierKeysArchive\"\)",
+        "Android Java recursive compact archive input copy",
+        errors,
+        flags=re.S,
+    )
     require_contains(
         texts,
         "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
@@ -2490,6 +2655,26 @@ def check_recursive_compact_surface(texts, errors):
         "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java",
         ("KagemushaRecursiveCompactPaymentTokenProver.isNativeAvailable()",),
         "Android Java recursive compact spend-mode selector",
+        errors,
+    )
+    require_contains(
+        texts,
+        "crates/connect_norito_bridge/src/lib.rs",
+        (
+            "fn java_jlong_to_u64_bits(value: jni::sys::jlong) -> u64",
+            "let height = block_height.map(java_jlong_to_u64_bits);",
+            "kagemusha_recursive_spend_compact_projection_jni_height_uses_raw_u64_bits",
+            "java_jlong_to_u64_bits(i64::MIN)",
+            "java_jlong_to_u64_bits(-1), u64::MAX",
+        ),
+        "Rust JNI recursive compact projection raw u64 block-height carrier",
+        errors,
+    )
+    require_not_regex(
+        texts,
+        "crates/connect_norito_bridge/src/lib.rs",
+        r"Some\(value\)\s+if\s+value\s*<\s*0\s*=>\s*return\s+Err\(\"blockHeight must be non-negative\"\.to_owned\(\)\)",
+        "Rust JNI recursive compact projection block-height carrier",
         errors,
     )
     require_contains(
@@ -2518,6 +2703,13 @@ def check_recursive_compact_surface(texts, errors):
             "verifierRecordArchive must be a valid Norito archive",
             "verifierRecordArchive must contain a non-empty Norito payload",
             "blockHeight must be non-negative",
+            "Long.MAX_VALUE",
+            "\"9223372036854775808\"",
+            "BigInteger(\"18446744073709551615\")",
+            "\"18446744073709551616\"",
+            "blockHeight must be a canonical unsigned decimal integer",
+            "blockHeight must fit in u64",
+            "blockHeight must not be null",
         ),
         "Kotlin recursive compact verifier tests",
         errors,
@@ -2548,6 +2740,13 @@ def check_recursive_compact_surface(texts, errors):
             "verifierRecordArchive must be a valid Norito archive",
             "verifierRecordArchive must contain a non-empty Norito payload",
             "blockHeight must be non-negative",
+            "Long.MAX_VALUE",
+            "\"9223372036854775808\"",
+            "new BigInteger(\"18446744073709551615\")",
+            "\"18446744073709551616\"",
+            "blockHeight must be a canonical unsigned decimal integer",
+            "blockHeight must fit in u64",
+            "blockHeight must not be null",
         ),
         "Android Java recursive compact verifier tests",
         errors,
@@ -2622,6 +2821,10 @@ def check_recursive_compact_surface(texts, errors):
             "RecursiveSpendNativeReadBridgeOutputRejectsEmptyPayloadNoritoSuccessOutput",
             "RecursiveSpendNativeReadBridgeOutputReturnsValidNoritoSuccessOutput",
             "RecursiveSpendNativeReadBridgeOutputReportsRecursiveCompactUnavailable",
+            "AssertRejectsMalformedBridgeOutput",
+            "AssertRejectsMalformedBridgeOutput(compressed)",
+            "AssertRejectsMalformedBridgeOutput(unsupportedFlags)",
+            "AssertRejectsMalformedBridgeOutput(invalidFieldBitset)",
             "RecursiveSpendCompactProjectionRejectsInvalidBundleBeforeLoadingNativeBridge",
             "RecursiveSpendCompactProjectionVerifierRejectsInvalidInputsBeforeLoadingNativeBridge",
             "NormalizeRecursiveCompactVerifierOutput",
@@ -3325,6 +3528,10 @@ def check_javascript(texts, errors):
             "schema must match RedeemKagemushaRecursive",
             "checksum is invalid",
             "must not be compressed",
+            "flags: 0x08",
+            "flags: 0x20",
+            "invalidPadding[40] = 0xff",
+            "paddingLength: 65",
             "valid KagemushaTransfer Norito archive",
             "bytesBase64 must be canonical standard base64",
             "buildKagemushaInstructionTransaction wraps one archive instruction",
@@ -3399,10 +3606,27 @@ def check_javascript(texts, errors):
                 "Kagemusha recursive spend helpers reject malformed Norito native outputs",
                 "Kagemusha recursive spend helpers reject empty-payload Norito native outputs",
                 "native kagemushaRecursiveSpendRedeem returned invalid Norito archive",
-            "native kagemushaRecursiveSpendRedeem returned empty Norito payload",
-            "kagemushaNoritoFrameWithPayload",
-        ),
+                "native kagemushaRecursiveSpendRedeem returned empty Norito payload",
+                "assertRejectsMalformedNativeRedeemOutput",
+                "compressed[22] = 1",
+                "unsupportedFlags[39] = 0x08",
+                "invalidFieldBitset[39] = 0x20",
+                "kagemushaNoritoFrameWithHeaderPadding",
+                "Buffer.from([0x7f])",
+                "Buffer.alloc(65)",
+                "kagemushaNoritoFrameWithPayload",
+            ),
         "JavaScript native output Norito guard tests",
+        errors,
+    )
+    require_regex(
+        texts,
+        "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+        r"Kagemusha recursive spend helpers reject malformed Norito native outputs[\s\S]*"
+        r"invalidFieldBitset\[39\] = 0x20[\s\S]*"
+        r"assertRejectsMalformedNativeRedeemOutput\(invalidFieldBitset\)[\s\S]*"
+        r"kagemushaNoritoFrameWithHeaderPadding",
+        "JavaScript recursive spend native output header guard tests",
         errors,
     )
     for relative in (
@@ -3668,6 +3892,12 @@ def check_python(texts, errors):
             "instruction_archive must be a valid Norito archive",
             "schema must match RedeemKagemushaRecursive",
             "KAGEMUSHA_INSTRUCTION_ARCHIVE_WIRE_NAMES",
+            "compressed[22] = 1",
+            "unsupported_flags[39] = 0x08",
+            "invalid_field_bitset[39] = 0x20",
+            "non_zero_padding.insert(40, 0x7F)",
+            'excessive_padding[40:40] = b"\\x00" * 65',
+            "bad_request_flags[39] = 0x20",
             "redeem_request_archive must be a valid Norito archive",
             "draft.kagemusha_recursive_redeem(request_archive)",
         ),
@@ -3804,6 +4034,13 @@ def check_python(texts, errors):
             "test_recursive_kagemusha_helpers_reject_empty_payload_native_outputs",
             "returned invalid Norito archive",
             "returned empty Norito payload",
+            "assert_rejects_malformed_native_outputs",
+            "compressed[22] = 1",
+            "unsupported_flags[39] = 0x08",
+            "invalid_field_bitset[39] = 0x20",
+            "_kagemusha_norito_frame_with_header_padding",
+            'b"\\x7f"',
+            'b"\\x00" * 65',
             "_kagemusha_norito_frame_with_payload",
             "test_recursive_kagemusha_lineage_helpers_copy_mutable_archives_before_native",
             "memoryview(previous_witness_storage)",
@@ -3827,6 +4064,16 @@ def check_python(texts, errors):
             "init_artifacts.lineage_proving_key_archive =",
         ),
         "Python native output Norito guard tests",
+        errors,
+    )
+    require_regex(
+        texts,
+        "python/iroha_python/tests/kagemusha_test.py",
+        r"def test_recursive_kagemusha_helpers_reject_malformed_native_outputs[\s\S]*"
+        r"invalid_field_bitset\[39\] = 0x20[\s\S]*"
+        r"assert_rejects_malformed_native_outputs\(bytes\(invalid_field_bitset\)\)[\s\S]*"
+        r"_kagemusha_norito_frame_with_header_padding",
+        "Python recursive spend native output header guard tests",
         errors,
     )
     require_contains(
@@ -3901,6 +4148,153 @@ def check_swift(texts, errors):
     recursive_aggregation_test = "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveAggregationProofBundleProverTests.swift"
     instruction_encoder_test = "IrohaSwift/Tests/IrohaSwiftTests/KagemushaInstructionTransactionEncoderTests.swift"
     uc4_decode_test = "IrohaSwift/Tests/IrohaSwiftTests/UC4DecodePaymentTokenTests.swift"
+    offline_v2 = "IrohaSwift/Sources/IrohaSwift/OfflineNoteV2.swift"
+    offline_decoding = "IrohaSwift/Sources/IrohaSwift/OfflineNoritoDecoding.swift"
+    offline_v2_test = "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteV2Tests.swift"
+    require_contains(
+        texts,
+        offline_decoding,
+        (
+            "public enum OfflineNoteV2Decoding",
+            "decodeCertificatePayload",
+            "decodeKeyCertificatePayload",
+            "decodeCertificate",
+            "decodeIssue",
+            "decodeIssuedClaim",
+            "decodeAuditOutputClaim",
+            "decodeRecursiveProof",
+            "decodeRedeem",
+            "decodeRedeemPublicInputs",
+            "decodeAudit",
+            "decodeAuditPublicInputs",
+            "decodeIssueInstruction",
+            "decodeRedeemInstruction",
+            "decodeAuditInstruction",
+            "decodeKeyCertificatePayloadV2",
+            "decodeKeyCertificateV2",
+            "decodeIssueV2",
+            "decodeIssuedClaimV2",
+            "decodeAuditOutputClaimV2",
+            "decodeRecursiveProofV2",
+            "decodeRedeemV2",
+            "decodeRedeemPublicInputsV2",
+            "decodeAuditV2",
+            "decodeAuditPublicInputsV2",
+            "decodeIssueInstructionV2",
+            "decodeRedeemInstructionV2",
+            "decodeAuditInstructionV2",
+            "decodePayload(data, typeName: OfflineNoteV2TypeNames.issue",
+            "decodeKeyCertificatePayloadV2Fields",
+            "decodeKeyCertificateV2Fields",
+            "decodeIssueV2Fields",
+            "decodeIssuedClaimV2Fields",
+            "decodeAuditOutputClaimV2Fields",
+            "decodeRecursiveProofV2Fields",
+            "decodeRedeemV2Fields",
+            "decodeAuditV2Fields",
+            "readHashV2",
+            "readProofBoxV2",
+            "readAccountId",
+            "readAssetId",
+            "readNumeric",
+            "readVec",
+            "Offline Note payload must use compact lengths",
+            "trailing bytes",
+        ),
+        "Swift Offline Note V2 decoder surface",
+        errors,
+    )
+    require_regex(
+        texts,
+        offline_decoding,
+        r"public static func decodeIssueInstruction\(_ data: Data\) throws -> OfflineNoteIssueV2",
+        "Swift Offline Note V2 issue instruction decoder API",
+        errors,
+    )
+    require_regex(
+        texts,
+        offline_decoding,
+        r"public static func decodeRedeemInstruction\(_ data: Data\) throws -> OfflineNoteRedeemV2",
+        "Swift Offline Note V2 redeem instruction decoder API",
+        errors,
+    )
+    require_regex(
+        texts,
+        offline_decoding,
+        r"public static func decodeAuditInstruction\(_ data: Data\) throws -> OfflineNoteAuditBundleV2",
+        "Swift Offline Note V2 audit instruction decoder API",
+        errors,
+    )
+    require_not_regex(
+        texts,
+        offline_decoding,
+        r"Offline Note V2 decoding is not supported yet|UnsupportedOperationException",
+        "Swift Offline Note V2 decoder placeholder removal",
+        errors,
+    )
+    require_contains(
+        texts,
+        offline_v2,
+        (
+            "OfflineNoteV2TypeNames.recursiveProof",
+            "OfflineNoteV2TypeNames.auditOutputClaim",
+            "OfflineNoteV2Encoding.encodeRecursiveProof(self)",
+            "OfflineNoteV2Encoding.encodeAuditOutputClaim(self)",
+            'static let issueInstruction = "iroha_data_model::isi::offline::IssueOfflineNote"',
+            'static let redeemInstruction = "iroha_data_model::isi::offline::RedeemOfflineNote"',
+            'static let auditInstruction = "iroha_data_model::isi::offline::AuditOfflineNote"',
+            'static let issueInstructionAlias = "iroha_data_model::isi::offline::IssueOfflineNoteV2"',
+            'static let redeemInstructionAlias = "iroha_data_model::isi::offline::RedeemOfflineNoteV2"',
+            'static let auditInstructionAlias = "iroha_data_model::isi::offline::AuditOfflineNoteV2"',
+        ),
+        "Swift Offline Note V2 canonical instruction wire names",
+        errors,
+    )
+    require_contains(
+        texts,
+        offline_v2_test,
+        (
+            "testOfflineNoteV2DecodersRoundTripRustNoritoVectors",
+            "testOfflineNoteV2DecodersRejectMalformedPayloads",
+            "OfflineNoteV2Decoding.decodeCertificatePayload",
+            "OfflineNoteV2Decoding.decodeKeyCertificatePayload",
+            "OfflineNoteV2Decoding.decodeCertificate",
+            "OfflineNoteV2Decoding.decodeIssue",
+            "OfflineNoteV2Decoding.decodeIssuedClaim",
+            "OfflineNoteV2Decoding.decodeAuditOutputClaim",
+            "OfflineNoteV2Decoding.decodeRecursiveProof",
+            "OfflineNoteV2Decoding.decodeRedeem",
+            "OfflineNoteV2Decoding.decodeRedeemPublicInputs",
+            "OfflineNoteV2Decoding.decodeAudit",
+            "OfflineNoteV2Decoding.decodeAuditPublicInputs",
+            "testOfflineNoteV2InstructionDecodersReadExplorerEnvelopeBytes",
+            "testOfflineNoteV2InstructionDecodersReadLegacyAliasEnvelopeBytes",
+            "testOfflineNoteV2InstructionDecodersRejectWrongEnvelopeShapes",
+            "OfflineNoteV2Decoding.decodeIssueInstruction",
+            "OfflineNoteV2Decoding.decodeRedeemInstruction",
+            "OfflineNoteV2Decoding.decodeAuditInstruction",
+            "OfflineNoteTypeNames.issueInstruction",
+            "OfflineNoteV2TypeNames.issueInstructionAlias",
+            "parseSingleOfflineNoteV2Instruction",
+            "issueInstruction.wireName.hasSuffix(\"V2\")",
+            "auditInstruction.wireName.hasSuffix(\"V2\")",
+            "redeemInstruction.wireName.hasSuffix(\"V2\")",
+            "OfflineNoteV2Decoding.decodeIssueInstruction(issueInstruction.archive)",
+            "OfflineNoteV2Decoding.decodeAuditInstruction(auditInstruction.archive)",
+            "OfflineNoteV2Decoding.decodeRedeemInstruction(redeemInstruction.archive)",
+            "wrongWireEnvelope",
+            "wrongSchemaEnvelope",
+            "rawInstructionPair",
+            "instructionWirePayload",
+            "corruptedChecksum",
+            "nonCompactIssue",
+            "trailingIssue",
+            ".emptyProofBytes",
+            ".invalidHash(field: \"public_inputs_hash\")",
+        ),
+        "Swift Offline Note V2 decoder tests",
+        errors,
+    )
     require_contains(texts, prover, REQUIRED_PUBLIC_METHODS, "Swift public prover", errors)
     require_contains(
         texts,
@@ -4027,8 +4421,34 @@ def check_swift(texts, errors):
             ".emptyNativeOutputPayload",
             "validKagemushaNoritoArchive",
             "emptyPayloadKagemushaNoritoArchive",
+            "malformedKagemushaNoritoArchives",
+            "compressed[22] = 0x01",
+            "unsupportedFlags[39] = NoritoHeader.varintOffsets",
+            "invalidFieldBitset[39] = NoritoHeader.fieldBitset",
+            "kagemushaNoritoFrameWithHeaderPadding",
+            "Data([0x7f])",
+            "Data(repeating: 0, count: 65)",
         ),
         "Swift recursive spend input/output Norito guard tests",
+        errors,
+    )
+    require_regex(
+        texts,
+        test,
+        r"testRejectsMalformedNativeOutput[\s\S]*"
+        r"invalidFieldBitset\[39\] = NoritoHeader\.fieldBitset[\s\S]*"
+        r"Self\.kagemushaNoritoFrameWithHeaderPadding",
+        "Swift recursive spend native output header guard tests",
+        errors,
+    )
+    require_regex(
+        texts,
+        test,
+        r"testRejectsMalformedInputArchivesBeforeBridgeCall[\s\S]*"
+        r"Self\.malformedKagemushaNoritoArchives\(validArchive\)[\s\S]*"
+        r"invalidFieldBitset\[39\] = NoritoHeader\.fieldBitset[\s\S]*"
+        r"Self\.kagemushaNoritoFrameWithHeaderPadding",
+        "Swift recursive spend input header guard tests",
         errors,
     )
     require_contains(
@@ -4075,6 +4495,7 @@ def check_swift(texts, errors):
             ".unsupportedRequestArchiveType",
             ".unexpectedInstructionArchiveType(expected: .redeemRecursive, actual: .transfer)",
             "unsupportedFlagsArchive",
+            "invalidFieldBitsetArchive",
             "nonZeroPaddingArchive",
             "excessivePaddingArchive",
             "KagemushaRecursiveCompactPaymentTokenProver.nativeArchiveMaxBytes + 1",
@@ -4122,8 +4543,34 @@ def check_swift(texts, errors):
             ".emptyCompactTokenPayload",
             "validKagemushaNoritoArchive",
             "emptyPayloadKagemushaNoritoArchive",
+            "malformedKagemushaNoritoArchives",
+            "compressed[22] = 0x01",
+            "unsupportedFlags[39] = NoritoHeader.varintOffsets",
+            "invalidFieldBitset[39] = NoritoHeader.fieldBitset",
+            "kagemushaNoritoFrameWithHeaderPadding",
+            "Data([0x7f])",
+            "Data(repeating: 0, count: 65)",
         ),
         "Swift compact-token input/output Norito guard tests",
+        errors,
+    )
+    require_regex(
+        texts,
+        compact_test,
+        r"testRejectsMalformedNativeOutput[\s\S]*"
+        r"invalidFieldBitset\[39\] = NoritoHeader\.fieldBitset[\s\S]*"
+        r"kagemushaNoritoFrameWithHeaderPadding",
+        "Swift compact-token native output header guard tests",
+        errors,
+    )
+    require_regex(
+        texts,
+        compact_test,
+        r"testRejectsMalformedRecordBundleArchiveBeforeBridgeCall[\s\S]*"
+        r"malformedKagemushaNoritoArchives\(validArchive\)[\s\S]*"
+        r"invalidFieldBitset\[39\] = NoritoHeader\.fieldBitset[\s\S]*"
+        r"kagemushaNoritoFrameWithHeaderPadding",
+        "Swift compact-token input header guard tests",
         errors,
     )
     require_contains(
@@ -4171,8 +4618,34 @@ def check_swift(texts, errors):
             ".emptyProofBundlePayload",
             "validKagemushaNoritoArchive",
             "emptyPayloadKagemushaNoritoArchive",
+            "malformedKagemushaNoritoArchives",
+            "compressed[22] = 0x01",
+            "unsupportedFlags[39] = NoritoHeader.varintOffsets",
+            "invalidFieldBitset[39] = NoritoHeader.fieldBitset",
+            "kagemushaNoritoFrameWithHeaderPadding",
+            "Data([0x7f])",
+            "Data(repeating: 0, count: 65)",
         ),
         "Swift recursive aggregation input/output Norito guard tests",
+        errors,
+    )
+    require_regex(
+        texts,
+        recursive_aggregation_test,
+        r"testRejectsMalformedNativeOutput[\s\S]*"
+        r"invalidFieldBitset\[39\] = NoritoHeader\.fieldBitset[\s\S]*"
+        r"kagemushaNoritoFrameWithHeaderPadding",
+        "Swift recursive aggregation native output header guard tests",
+        errors,
+    )
+    require_regex(
+        texts,
+        recursive_aggregation_test,
+        r"testRejectsMalformedInputArchivesBeforeBridgeCall[\s\S]*"
+        r"malformedKagemushaNoritoArchives\(validArchive\)[\s\S]*"
+        r"invalidFieldBitset\[39\] = NoritoHeader\.fieldBitset[\s\S]*"
+        r"kagemushaNoritoFrameWithHeaderPadding",
+        "Swift recursive aggregation input header guard tests",
         errors,
     )
     require_contains(texts, bridge, REQUIRED_C_SYMBOLS, "Swift C symbol loader", errors)
@@ -4263,6 +4736,21 @@ def check_swift_sdk_script_prints_swiftc_version(errors):
         "Kagemusha Swift SDK script must parse the recursive aggregation prover tests",
         errors,
     )
+    require(
+        "IrohaSwift/Sources/IrohaSwift/OfflineNoteV2.swift" in script,
+        "Kagemusha Swift SDK script must parse Offline Note V2 models",
+        errors,
+    )
+    require(
+        "IrohaSwift/Sources/IrohaSwift/OfflineNoritoDecoding.swift" in script,
+        "Kagemusha Swift SDK script must parse Offline Note V2 decoder",
+        errors,
+    )
+    require(
+        "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteV2Tests.swift" in script,
+        "Kagemusha Swift SDK script must parse Offline Note V2 decoder tests",
+        errors,
+    )
 
 
 def check_java_kotlin(texts, errors):
@@ -4274,8 +4762,245 @@ def check_java_kotlin(texts, errors):
     kotlin = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt"
     java_recursive_compact = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveCompactPaymentTokenProver.java"
     kotlin_recursive_compact = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveCompactPaymentTokenProver.kt"
+    java_offline_v2 = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteV2.java"
+    kotlin_offline_v2 = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteV2.kt"
     java_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java"
     kotlin_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProverTest.kt"
+    java_offline_v2_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteV2Test.java"
+    kotlin_offline_v2_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteV2Test.kt"
+    for relative, label in (
+        (java_offline_v2, "Android Java Offline Note V2 decoder"),
+        (kotlin_offline_v2, "Kotlin Offline Note V2 decoder"),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "decodeCertificatePayload",
+                "decodeCertificate",
+                "decodeIssue",
+                "decodeIssuedClaim",
+                "decodeAuditOutputClaim",
+                "decodeRecursiveProof",
+                "decodeRedeem",
+                "decodeRedeemPublicInputs",
+                "decodeAudit",
+                "decodeAuditPublicInputs",
+                "encodeAuditOutputClaim",
+                "encodeRecursiveProof",
+                "NoritoCodec.decode",
+                "readAccountId",
+                "readAssetId",
+                "readNumeric",
+                "readVec",
+            ),
+            f"{label} surface",
+            errors,
+        )
+        require_not_regex(
+            texts,
+            relative,
+            r"Offline Note V2 decoding is not supported yet|UnsupportedOperationException",
+            f"{label} placeholder removal",
+            errors,
+        )
+    for relative, label in (
+        (java_offline_v2_test, "Android Java Offline Note V2 decoder tests"),
+        (kotlin_offline_v2_test, "Kotlin Offline Note V2 decoder tests"),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "offlineNoteV2DecodersRoundTripRustNoritoVectors",
+                "offlineNoteV2DecodersRejectMalformedPayloads",
+                "decodeIssue",
+                "decodeAudit",
+                "decodeRedeem",
+                "decodeCertificate(certificatePayloadBytes",
+            ),
+            label,
+            errors,
+        )
+    for relative, label, signatures in (
+        (
+            java_offline_v2,
+            "Android Java Offline Note V2 instruction decoder",
+            (
+                "public static IssueV2 decodeIssueInstruction(final byte[] bytes)",
+                "public static RedeemV2 decodeRedeemInstruction(final byte[] bytes)",
+                "public static AuditBundleV2 decodeAuditInstruction(final byte[] bytes)",
+                "INSTRUCTION_WRAPPER_PAYLOAD_ADAPTER",
+            ),
+        ),
+        (
+            kotlin_offline_v2,
+            "Kotlin Offline Note V2 instruction decoder",
+            (
+                "fun decodeIssueInstruction(bytes: ByteArray): IssueV2",
+                "fun decodeRedeemInstruction(bytes: ByteArray): RedeemV2",
+                "fun decodeAuditInstruction(bytes: ByteArray): AuditBundleV2",
+                "InstructionWrapperPayloadAdapter",
+            ),
+        ),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "decodeInstructionModel",
+                "extractInstructionWirePayload",
+                "tryDecodeInstructionPair",
+                "decodeModelPayload",
+                "isNoritoFrame",
+                "Offline Note V2 instruction envelope is invalid",
+                "Offline Note V2 instruction model payload is invalid",
+                "NoritoCodec.decode",
+                *signatures,
+            ),
+            f"{label} surface",
+            errors,
+        )
+    for relative, label in (
+        (java_offline_v2_test, "Android Java Offline Note V2 instruction decoder tests"),
+        (kotlin_offline_v2_test, "Kotlin Offline Note V2 instruction decoder tests"),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "offlineNoteV2InstructionDecodersReadExplorerEnvelopeBytes",
+                "offlineNoteV2InstructionDecodersRejectWrongEnvelopeShapes",
+                "decodeIssueInstruction",
+                "decodeRedeemInstruction",
+                "decodeAuditInstruction",
+                "rawInstructionPair",
+                "wirePayloadBytes",
+                "compact = false" if relative.endswith(".kt") else "false))",
+                "decodeIssueInstruction(issue.noritoEncoded())",
+            ),
+            label,
+            errors,
+        )
+    for relative, label, signatures in (
+        (
+            java_offline_v2,
+            "Android Java Offline Note V2 instruction wrapper",
+            (
+                "public static InstructionBox issueInstruction(final IssueV2 value)",
+                "public static InstructionBox redeemInstruction(final RedeemV2 value)",
+                "public static InstructionBox auditInstruction(final AuditBundleV2 value)",
+                "INSTRUCTION_WRAPPER_ADAPTER",
+            ),
+        ),
+        (
+            kotlin_offline_v2,
+            "Kotlin Offline Note V2 instruction wrapper",
+            (
+                "fun issueInstruction(value: IssueV2): InstructionBox",
+                "fun redeemInstruction(value: RedeemV2): InstructionBox",
+                "fun auditInstruction(value: AuditBundleV2): InstructionBox",
+                "InstructionWrapperAdapter",
+            ),
+        ),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "ISSUE_INSTRUCTION_SCHEMA",
+                "REDEEM_INSTRUCTION_SCHEMA",
+                "AUDIT_INSTRUCTION_SCHEMA",
+                "ISSUE_INSTRUCTION_ALIAS_SCHEMA",
+                "REDEEM_INSTRUCTION_ALIAS_SCHEMA",
+                "AUDIT_INSTRUCTION_ALIAS_SCHEMA",
+                "iroha_data_model::isi::offline::IssueOfflineNote",
+                "iroha_data_model::isi::offline::RedeemOfflineNote",
+                "iroha_data_model::isi::offline::AuditOfflineNote",
+                "IssueOfflineNoteV2",
+                "RedeemOfflineNoteV2",
+                "AuditOfflineNoteV2",
+                "InstructionBox.fromWirePayload",
+                "encodeInstructionWrapper",
+                "NoritoCodec.encode",
+                "value.validateProofBinding()",
+                "encodeIssue(value)",
+                "encodeRedeem(value)",
+                "encodeAudit(value)",
+                *signatures,
+            ),
+            f"{label} surface",
+            errors,
+        )
+        if relative.endswith(".java"):
+            require_regex(
+                texts,
+                relative,
+                r'public static final String ISSUE_INSTRUCTION_SCHEMA =\s*"iroha_data_model::isi::offline::IssueOfflineNote";',
+                f"{label} canonical instruction wire names",
+                errors,
+            )
+            require_regex(
+                texts,
+                relative,
+                r'public static final String REDEEM_INSTRUCTION_SCHEMA =\s*"iroha_data_model::isi::offline::RedeemOfflineNote";',
+                f"{label} canonical instruction wire names",
+                errors,
+            )
+            require_regex(
+                texts,
+                relative,
+                r'public static final String AUDIT_INSTRUCTION_SCHEMA =\s*"iroha_data_model::isi::offline::AuditOfflineNote";',
+                f"{label} canonical instruction wire names",
+                errors,
+            )
+        else:
+            require_regex(
+                texts,
+                relative,
+                r'const val ISSUE_INSTRUCTION_SCHEMA: String =\s*"iroha_data_model::isi::offline::IssueOfflineNote"',
+                f"{label} canonical instruction wire names",
+                errors,
+            )
+            require_regex(
+                texts,
+                relative,
+                r'const val REDEEM_INSTRUCTION_SCHEMA: String =\s*"iroha_data_model::isi::offline::RedeemOfflineNote"',
+                f"{label} canonical instruction wire names",
+                errors,
+            )
+            require_regex(
+                texts,
+                relative,
+                r'const val AUDIT_INSTRUCTION_SCHEMA: String =\s*"iroha_data_model::isi::offline::AuditOfflineNote"',
+                f"{label} canonical instruction wire names",
+                errors,
+            )
+    for relative, label in (
+        (java_offline_v2_test, "Android Java Offline Note V2 instruction wrapper tests"),
+        (kotlin_offline_v2_test, "Kotlin Offline Note V2 instruction wrapper tests"),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "offlineNoteV2InstructionWrappersProduceSchemaBoundPayloads",
+                "offlineNoteV2InstructionWrappersRejectProofMismatches",
+                "offlineNoteV2InstructionDecodersReadLegacyAliasEnvelopeBytes",
+                "IssueOfflineNoteV2",
+                "canonical issue instruction wire name",
+                "assertInstructionWrapper",
+                "decodeInstructionWrapper",
+                "payloadBytes",
+                "issueInstruction(issue)",
+                "auditInstruction(audit)",
+                "redeemInstruction(redeem)",
+                "redeemInstruction(redeem.replacingRecursiveProof",
+                "auditInstruction(audit.replacingRecursiveProof",
+            ),
+            label,
+            errors,
+        )
     for relative, label in ((java, "Android Java SDK"), (kotlin, "Kotlin JVM SDK")):
         require_contains(texts, relative, REQUIRED_PUBLIC_METHODS, label, errors)
         require_contains(texts, relative, JNI_METHODS, f"{label} native declarations", errors)
@@ -4631,6 +5356,10 @@ def check_java_kotlin(texts, errors):
             "recursiveRedeemTransactionPayloadFromRequest(",
             '"KagemushaRecursiveSpendRedeemRequestV1"',
             "tampered[tampered.lastIndex]",
+            "compressed[22] = 1",
+            "NoritoHeader.VARINT_OFFSETS",
+            "NoritoHeader.FIELD_BITSET",
+            "withNonZeroHeaderPadding",
         ),
         "Kotlin Kagemusha instruction archive transaction helper tests",
         errors,
@@ -4650,6 +5379,10 @@ def check_java_kotlin(texts, errors):
             "Arrays.equals(transferArchive, transferWire.payloadBytes())",
             '"KagemushaRecursiveSpendRedeemRequestV1"',
             "tampered[tampered.length - 1] ^= 0x01",
+            "compressed[22] = 1",
+            "NoritoHeader.VARINT_OFFSETS",
+            "NoritoHeader.FIELD_BITSET",
+            "withNonZeroHeaderPadding",
         ),
         "Android Java Kagemusha instruction archive transaction helper tests",
         errors,
@@ -4826,6 +5559,40 @@ def check_java_kotlin(texts, errors):
             "pallasOpenEnvelopesArchive must not be empty",
         ),
         "Kotlin record-backed native archive null negative tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        java_test,
+        (
+            "rejectsNullAndEmptyNativeRedeemOutput",
+            "assertRejectsMalformedNativeRedeemOutput",
+            "compressed[22] = 1",
+            "unsupportedFlags[39] = 0x08",
+            "invalidFieldBitset[39] = 0x20",
+            "withHeaderPadding(kagemushaNoritoFrameWithPayload(0x4b), new byte[] {0x7f})",
+            "withHeaderPadding(kagemushaNoritoFrameWithPayload(0x4b), new byte[65])",
+            "native redeem returned invalid Norito archive",
+            "native redeem returned empty Norito payload",
+        ),
+        "Android Java recursive spend native output Norito guard tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        kotlin_test,
+        (
+            "rejectsNullAndEmptyNativeRedeemOutput",
+            "assertRejectsMalformedNativeRedeemOutput",
+            "compressed[22] = 1",
+            "unsupportedFlags[39] = 0x08",
+            "invalidFieldBitset[39] = 0x20",
+            "withHeaderPadding(kagemushaNoritoFrameWithPayload(0x4b), byteArrayOf(0x7f))",
+            "withHeaderPadding(kagemushaNoritoFrameWithPayload(0x4b), ByteArray(65))",
+            "native redeem returned invalid Norito archive",
+            "native redeem returned empty Norito payload",
+        ),
+        "Kotlin recursive spend native output Norito guard tests",
         errors,
     )
     for relative, label in (
@@ -5117,6 +5884,11 @@ def check_csharp(texts, errors):
             "oversizedArchive",
             "NativeArchiveMaxBytes + 1",
             "must not exceed",
+            "compressed[22] = 1",
+            "unsupportedFlags[39] = 0x08",
+            "invalidFieldBitset[39] = 0x20",
+            "WithHeaderPadding(KagemushaNoritoFrameWithPayload(0x4b), new byte[] { 0x7f })",
+            "WithHeaderPadding(KagemushaNoritoFrameWithPayload(0x4b), new byte[65])",
             "new KagemushaRecursiveSpendArchive(bytes)",
             "new KagemushaRecursiveSpendTransitionProfileArchive(bytes)",
             "new KagemushaRecursiveSpendLineageAppendBoundaryArchive(bytes)",
@@ -5155,6 +5927,10 @@ def check_csharp(texts, errors):
             "Record bundle archive must be a valid Norito archive",
             "Pallas open-envelopes archive must contain a non-empty Norito payload",
             "KagemushaNoritoFrameWithPayload",
+            "AssertRejectsMalformedEverywhere",
+            "AssertRejectsMalformedEverywhere(compressed, validArchive)",
+            "AssertRejectsMalformedEverywhere(unsupportedFlags, validArchive)",
+            "AssertRejectsMalformedEverywhere(invalidFieldBitset, validArchive)",
         ),
         "C# recursive spend input Norito guard tests",
         errors,
@@ -5233,6 +6009,11 @@ def check_csharp(texts, errors):
             "Assert.Equal(archive, instruction.Payload)",
             'Assert.Equal("iroha_data_model::isi::offline::RedeemKagemushaRecursive", instruction.WireId)',
             'NoritoCodec.Encode("KagemushaRecursiveSpendRedeemRequestV1", new byte[] { 1, 2, 3 })',
+            "compressed[22] = 1",
+            "unsupportedFlags[39] = 0x08",
+            "invalidFieldBitset[39] = 0x20",
+            "WithHeaderPadding",
+            "new byte[65]",
         ),
         "C# Kagemusha instruction transaction builder tests",
         errors,
@@ -5482,6 +6263,7 @@ def check_sdk_readme_recursive_compact_unavailable_boundary(texts, errors):
             "isVerifierNativeAvailable",
             "verifyRecursiveSpendCompactPaymentTokenProjection(compactTokenArchive:verifierRecordArchive:blockHeight:)",
             "isProjectionVerifierNativeAvailable",
+            "type-safe optional `UInt64` `blockHeight`",
             "KagemushaRecursiveCompactPaymentTokenProverError.recursiveCompactUnavailable",
         ),
         "java/iroha_android/README.md": (
@@ -5492,6 +6274,7 @@ def check_sdk_readme_recursive_compact_unavailable_boundary(texts, errors):
             "verifyRecursiveSpendCompactPaymentTokenProjection(...)",
             "verifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(...)",
             "isProjectionVerifierNativeAvailable()",
+            "canonical unsigned decimal `String` or `BigInteger`",
             "isRecursiveCompactUnavailable(Throwable)",
             "IllegalStateException",
             "IllegalArgumentException",
@@ -5504,6 +6287,7 @@ def check_sdk_readme_recursive_compact_unavailable_boundary(texts, errors):
             "verifyRecursiveSpendCompactPaymentTokenProjection(...)",
             "verifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(...)",
             "isProjectionVerifierNativeAvailable()",
+            "canonical unsigned decimal `String` or `BigInteger`",
             "isRecursiveCompactUnavailable(error)",
             "IllegalStateException",
             "IllegalArgumentException",
@@ -5526,6 +6310,7 @@ def check_sdk_readme_recursive_compact_unavailable_boundary(texts, errors):
             "isKagemushaRecursiveCompactPaymentTokenVerifierNativeAvailable",
             "kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection(...)",
             "isKagemushaRecursiveSpendCompactPaymentTokenProjectionVerifierNativeAvailable()",
+            "non-integer, bool, negative-height, unsafe-number, or out-of-u64 height inputs",
         ),
         "python/iroha_python/README.md": (
             "kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes",
@@ -5535,6 +6320,8 @@ def check_sdk_readme_recursive_compact_unavailable_boundary(texts, errors):
             "is_kagemusha_recursive_compact_payment_token_prover_available",
             "is_kagemusha_recursive_compact_payment_token_verifier_available",
             "kagemusha_verify_recursive_spend_compact_payment_token_projection(...)",
+            "kagemusha_verify_recursive_spend_compact_payment_token_projection_at_height(...)",
+            "non-integer, bool, negative-height, or out-of-u64 height inputs",
             "is_kagemusha_recursive_spend_compact_payment_token_projection_verifier_available()",
             "RuntimeError",
         ),
@@ -6741,6 +7528,51 @@ if mode == "--negative-control-jvm-recursive-compact-shape-classifier":
         raise SystemExit(0)
     raise SystemExit("negative control failed: JVM recursive compact shape classifier drift was not detected")
 
+if mode == "--negative-control-mobile-recursive-spend-native-output-headers":
+    mutated_texts = dict(texts)
+    targets = (
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProverTest.kt",
+            "Kotlin recursive spend native output Norito guard tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "Android Java recursive spend native output Norito guard tests",
+        ),
+    )
+    missing_targets = []
+    expected_labels = []
+    for target, label in targets:
+        original = read(target)
+        mutated = original.replace(
+            "invalidFieldBitset[39] = 0x20",
+            "invalidFieldBitset[39] = 0x06",
+            1,
+        )
+        if mutated == original:
+            missing_targets.append(target)
+        mutated_texts[target] = mutated
+        expected_labels.append(label)
+    if missing_targets:
+        raise SystemExit(
+            "negative control failed: unable to mutate mobile native output header coverage for "
+            + ", ".join(missing_targets)
+        )
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: mobile native output header drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected mobile native output header drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: mobile native output header drift was not detected")
+
 if mode == "--negative-control-jvm-sdk-android-harness-script":
     target = JVM_SDK_TEST_COMMAND
     original = read(target)
@@ -6954,6 +7786,110 @@ if mode == "--negative-control-swift-kagemusha-native-output-cap":
         print(str(error).splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: Swift Kagemusha native output cap drift was not detected")
+
+if mode == "--negative-control-swift-native-output-headers":
+    mutated_texts = dict(texts)
+    targets = (
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift",
+            "Swift recursive spend native output header guard tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaCompactPaymentTokenProverTests.swift",
+            "Swift compact-token native output header guard tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveAggregationProofBundleProverTests.swift",
+            "Swift recursive aggregation native output header guard tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveCompactPaymentTokenProverTests.swift",
+            "Swift recursive compact native output header guard tests",
+        ),
+    )
+    missing_targets = []
+    expected_labels = []
+    for target, label in targets:
+        mutated = texts[target].replace(
+            "invalidFieldBitset[39] = NoritoHeader.fieldBitset",
+            "invalidFieldBitset[39] = NoritoHeader.packedStruct | NoritoHeader.compactLen",
+            1,
+        )
+        if mutated == texts[target]:
+            missing_targets.append(target)
+        mutated_texts[target] = mutated
+        expected_labels.append(label)
+    if missing_targets:
+        raise SystemExit(
+            "negative control failed: unable to mutate Swift native output header coverage for "
+            + ", ".join(missing_targets)
+        )
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: Swift native output header drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected Swift native output header drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: Swift native output header drift was not detected")
+
+if mode == "--negative-control-swift-native-input-headers":
+    mutated_texts = dict(texts)
+    targets = (
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift",
+            "Swift recursive spend input header guard tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaCompactPaymentTokenProverTests.swift",
+            "Swift compact-token input header guard tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveAggregationProofBundleProverTests.swift",
+            "Swift recursive aggregation input header guard tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveCompactPaymentTokenProverTests.swift",
+            "Swift recursive compact input header guard tests",
+        ),
+    )
+    missing_targets = []
+    expected_labels = []
+    for target, label in targets:
+        mutated = texts[target].replace(
+            "invalidFieldBitset[39] = NoritoHeader.fieldBitset",
+            "invalidFieldBitset[39] = NoritoHeader.packedStruct | NoritoHeader.compactLen",
+            1,
+        )
+        if mutated == texts[target]:
+            missing_targets.append(target)
+        mutated_texts[target] = mutated
+        expected_labels.append(label)
+    if missing_targets:
+        raise SystemExit(
+            "negative control failed: unable to mutate Swift native input header coverage for "
+            + ", ".join(missing_targets)
+        )
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: Swift native input header drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected Swift native input header drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: Swift native input header drift was not detected")
 
 if mode == "--negative-control-swift-kagemusha-instruction-transaction-builder":
     mutated_texts = dict(texts)
@@ -7199,8 +8135,24 @@ if mode == "--negative-control-csharp-archive-copy":
         "RecursiveSpendArchiveWrappersDefensivelyCopyNoritoBytes",
         "RecursiveSpendArchiveWrappersExposeNoritoBytes",
         1,
+    ).replace(
+        "invalidFieldBitset[39] = 0x20",
+        "invalidFieldBitset[39] = 0x06",
+    ).replace(
+        "AssertRejectsMalformedEverywhere(invalidFieldBitset, validArchive)",
+        "AssertRejectsMalformedEverywhere(validArchive, validArchive)",
+        1,
+    ).replace(
+        "AssertRejectsMalformedBridgeOutput(invalidFieldBitset)",
+        "AssertRejectsMalformedBridgeOutput(KagemushaNoritoFrameWithPayload(0x4b))",
+        1,
     )
-    if mutated_test == original_test:
+    if (
+        mutated_test == original_test
+        or "invalidFieldBitset[39] = 0x20" in mutated_test
+        or "AssertRejectsMalformedEverywhere(invalidFieldBitset, validArchive)" in mutated_test
+        or "AssertRejectsMalformedBridgeOutput(invalidFieldBitset)" in mutated_test
+    ):
         raise SystemExit("negative control failed: unable to mutate C# archive copy test")
     mutated_texts[test_target] = mutated_test
     original_source = read(source_target)
@@ -7219,6 +8171,8 @@ if mode == "--negative-control-csharp-archive-copy":
         for label in (
             "C# recursive spend archive wrapper copy tests",
             "C# recursive spend input Norito guard",
+            "C# recursive spend input Norito guard tests",
+            "C# recursive compact verifier tests",
         ):
             if label not in message:
                 raise SystemExit(
@@ -7711,6 +8665,110 @@ if mode == "--negative-control-js-kagemusha-instruction-transaction-builder":
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: JS Kagemusha instruction transaction builder drift was not detected"
+    )
+
+if mode == "--negative-control-js-python-native-output-headers":
+    mutated = dict(texts)
+    targets = (
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            "invalidFieldBitset[39] = 0x20;\n  assertRejectsMalformedNativeRedeemOutput(invalidFieldBitset);",
+            "invalidFieldBitset[39] = 0x06;\n  assertRejectsMalformedNativeRedeemOutput(invalidFieldBitset);",
+            "JavaScript recursive spend native output header guard tests",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            "invalid_field_bitset[39] = 0x20\n    assert_rejects_malformed_native_outputs(bytes(invalid_field_bitset))",
+            "invalid_field_bitset[39] = 0x06\n    assert_rejects_malformed_native_outputs(bytes(invalid_field_bitset))",
+            "Python recursive spend native output header guard tests",
+        ),
+    )
+    expected_labels = []
+    missing_targets = []
+    for target, needle, replacement, label in targets:
+        updated = texts[target].replace(needle, replacement, 1)
+        if updated == texts[target]:
+            missing_targets.append(target)
+        mutated[target] = updated
+        expected_labels.append(label)
+    if missing_targets:
+        raise SystemExit(
+            "negative control failed: unable to mutate JS/Python native output header coverage for "
+            + ", ".join(missing_targets)
+        )
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: JS/Python native output header drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected JS/Python native output header drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: JS/Python native output header drift was not detected")
+
+if mode == "--negative-control-python-kagemusha-instruction-transaction-builder":
+    mutated = dict(texts)
+    source_target = "python/iroha_python/src/iroha_python/kagemusha.py"
+    test_target = "python/iroha_python/tests/kagemusha_test.py"
+    mutated_source = texts[source_target].replace(
+        "def build_kagemusha_recursive_redeem_transaction(",
+        "def build_kagemusha_recursive_redeem_transaction_unchecked(",
+        1,
+    )
+    mutated_test = texts[test_target].replace(
+        "bad_request_flags[39] = 0x20",
+        "bad_request_flags[39] = 0x06",
+        1,
+    )
+    if mutated_source == texts[source_target] or mutated_test == texts[test_target]:
+        raise SystemExit(
+            "negative control failed: unable to mutate Python Kagemusha instruction transaction builder coverage"
+        )
+    mutated[source_target] = mutated_source
+    mutated[test_target] = mutated_test
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        print("negative control rejected Python Kagemusha instruction transaction builder drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: Python Kagemusha instruction transaction builder drift was not detected"
+    )
+
+if mode == "--negative-control-csharp-kagemusha-instruction-transaction-builder":
+    mutated = dict(texts)
+    source_target = "csharp/src/Hyperledger.Iroha.Sdk/Transactions/KagemushaInstructionArchiveInstruction.cs"
+    test_target = "csharp/tests/Hyperledger.Iroha.Sdk.Tests/TransactionBuilderTests.cs"
+    mutated_source = texts[source_target].replace(
+        "EncodeFramedPayload",
+        "EncodeUncheckedPayload",
+        1,
+    )
+    mutated_test = texts[test_target].replace(
+        "invalidFieldBitset[39] = 0x20",
+        "invalidFieldBitset[39] = 0x06",
+        1,
+    )
+    if mutated_source == texts[source_target] or mutated_test == texts[test_target]:
+        raise SystemExit(
+            "negative control failed: unable to mutate C# Kagemusha instruction transaction builder coverage"
+        )
+    mutated[source_target] = mutated_source
+    mutated[test_target] = mutated_test
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        print("negative control rejected C# Kagemusha instruction transaction builder drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: C# Kagemusha instruction transaction builder drift was not detected"
     )
 
 if mode == "--negative-control-python-lineage-key-package-binding":
@@ -8808,6 +9866,235 @@ if mode == "--negative-control-cross-sdk-preferred-mode-fallback":
         raise SystemExit(0)
     raise SystemExit("negative control failed: cross-SDK preferred-mode fallback drift was not detected")
 
+if mode == "--negative-control-jvm-offline-note-v2-decoder-placeholder":
+    mutated = dict(texts)
+    stale_placeholder = "\n// Offline Note V2 decoding is not supported yet\n"
+    mutations = (
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteV2.kt",
+            "Kotlin Offline Note V2 decoder placeholder removal",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteV2.java",
+            "Android Java Offline Note V2 decoder placeholder removal",
+        ),
+    )
+    expected_labels = []
+    for target, label in mutations:
+        if stale_placeholder in mutated[target]:
+            raise SystemExit(f"negative control failed: stale decoder placeholder already present in {target}")
+        mutated[target] += stale_placeholder
+        expected_labels.append(label)
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: Offline Note V2 decoder placeholder drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected JVM Offline Note V2 decoder placeholder drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: JVM Offline Note V2 decoder placeholder drift was not detected"
+    )
+
+if mode == "--negative-control-jvm-offline-note-v2-instruction-wrapper":
+    mutated = dict(texts)
+    mutations = (
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteV2.kt",
+            "fun issueInstruction(value: IssueV2): InstructionBox",
+            "fun issueInstructionDisabled(value: IssueV2): InstructionBox",
+            "Kotlin Offline Note V2 instruction wrapper surface",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteV2.java",
+            "public static InstructionBox issueInstruction(final IssueV2 value)",
+            "public static InstructionBox issueInstructionDisabled(final IssueV2 value)",
+            "Android Java Offline Note V2 instruction wrapper surface",
+        ),
+    )
+    expected_labels = []
+    for target, old, new, label in mutations:
+        updated = mutated[target].replace(old, new, 1)
+        if updated == mutated[target]:
+            raise SystemExit(f"negative control failed: unable to mutate {label}")
+        mutated[target] = updated
+        expected_labels.append(label)
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: JVM Offline Note V2 instruction wrapper drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected JVM Offline Note V2 instruction wrapper drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: JVM Offline Note V2 instruction wrapper drift was not detected"
+    )
+
+if mode == "--negative-control-jvm-offline-note-v2-instruction-decoder":
+    mutated = dict(texts)
+    mutations = (
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteV2.kt",
+            "fun decodeIssueInstruction(bytes: ByteArray): IssueV2",
+            "fun decodeIssueInstructionDisabled(bytes: ByteArray): IssueV2",
+            "Kotlin Offline Note V2 instruction decoder surface",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteV2.java",
+            "public static IssueV2 decodeIssueInstruction(final byte[] bytes)",
+            "public static IssueV2 decodeIssueInstructionDisabled(final byte[] bytes)",
+            "Android Java Offline Note V2 instruction decoder surface",
+        ),
+    )
+    expected_labels = []
+    for target, old, new, label in mutations:
+        updated = mutated[target].replace(old, new, 1)
+        if updated == mutated[target]:
+            raise SystemExit(f"negative control failed: unable to mutate {label}")
+        mutated[target] = updated
+        expected_labels.append(label)
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: JVM Offline Note V2 instruction decoder drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected JVM Offline Note V2 instruction decoder drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: JVM Offline Note V2 instruction decoder drift was not detected"
+    )
+
+if mode == "--negative-control-offline-note-v2-canonical-instruction-wire-names":
+    mutated = dict(texts)
+    mutations = (
+        (
+            "IrohaSwift/Sources/IrohaSwift/OfflineNoteV2.swift",
+            'static let issueInstruction = "iroha_data_model::isi::offline::IssueOfflineNote"',
+            'static let issueInstruction = "iroha_data_model::isi::offline::IssueOfflineNoteV2"',
+            "Swift Offline Note V2 canonical instruction wire names",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteV2.kt",
+            '"iroha_data_model::isi::offline::IssueOfflineNote"',
+            '"iroha_data_model::isi::offline::IssueOfflineNoteV2"',
+            "Kotlin Offline Note V2 instruction wrapper canonical instruction wire names",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteV2.java",
+            '"iroha_data_model::isi::offline::IssueOfflineNote";',
+            '"iroha_data_model::isi::offline::IssueOfflineNoteV2";',
+            "Android Java Offline Note V2 instruction wrapper canonical instruction wire names",
+        ),
+    )
+    expected_labels = []
+    for target, old, new, label in mutations:
+        updated = mutated[target].replace(old, new, 1)
+        if updated == mutated[target]:
+            raise SystemExit(f"negative control failed: unable to mutate {label}")
+        mutated[target] = updated
+        expected_labels.append(label)
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: Offline Note V2 canonical instruction wire-name drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected Offline Note V2 canonical instruction wire-name drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: Offline Note V2 canonical instruction wire-name drift was not detected"
+    )
+
+if mode == "--negative-control-swift-offline-note-v2-decoder-placeholder":
+    mutated = dict(texts)
+    target = "IrohaSwift/Sources/IrohaSwift/OfflineNoritoDecoding.swift"
+    stale_placeholder = "\n// Offline Note V2 decoding is not supported yet\n"
+    if stale_placeholder in mutated[target]:
+        raise SystemExit(f"negative control failed: stale decoder placeholder already present in {target}")
+    mutated[target] += stale_placeholder
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        label = "Swift Offline Note V2 decoder placeholder removal"
+        if label not in message:
+            raise SystemExit(
+                "negative control failed: Swift Offline Note V2 decoder placeholder drift was not detected"
+            )
+        print("negative control rejected Swift Offline Note V2 decoder placeholder drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: Swift Offline Note V2 decoder placeholder drift was not detected"
+    )
+
+if mode == "--negative-control-swift-offline-note-v2-instruction-decoder":
+    mutated = dict(texts)
+    target = "IrohaSwift/Sources/IrohaSwift/OfflineNoritoDecoding.swift"
+    mutations = (
+        (
+            "public static func decodeIssueInstruction(_ data: Data) throws -> OfflineNoteIssueV2",
+            "public static func decodeIssueInstructionDisabled(_ data: Data) throws -> OfflineNoteIssueV2",
+            "Swift Offline Note V2 issue instruction decoder API",
+        ),
+        (
+            "public static func decodeRedeemInstruction(_ data: Data) throws -> OfflineNoteRedeemV2",
+            "public static func decodeRedeemInstructionDisabled(_ data: Data) throws -> OfflineNoteRedeemV2",
+            "Swift Offline Note V2 redeem instruction decoder API",
+        ),
+        (
+            "public static func decodeAuditInstruction(_ data: Data) throws -> OfflineNoteAuditBundleV2",
+            "public static func decodeAuditInstructionDisabled(_ data: Data) throws -> OfflineNoteAuditBundleV2",
+            "Swift Offline Note V2 audit instruction decoder API",
+        ),
+    )
+    expected_labels = []
+    for old, new, label in mutations:
+        updated = mutated[target].replace(old, new, 1)
+        if updated == mutated[target]:
+            raise SystemExit(f"negative control failed: unable to mutate {label}")
+        mutated[target] = updated
+        expected_labels.append(label)
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: Swift Offline Note V2 instruction decoder drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected Swift Offline Note V2 instruction decoder drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: Swift Offline Note V2 instruction decoder drift was not detected"
+    )
+
 if mode == "--negative-control-rust-recursive-compact-unavailable-classifier":
     mutated_texts = dict(texts)
     old = """    matches!(
@@ -9507,6 +10794,97 @@ if mode == "--negative-control-recursive-spend-compact-projection-surface":
         "negative control failed: recursive spend compact projection surface drift was not detected"
     )
 
+if mode == "--negative-control-js-compact-projection-block-height-validation":
+    mutated_texts = dict(texts)
+    target = "javascript/iroha_js/src/crypto.js"
+    mutated = mutated_texts[target].replace(
+        "const checkedBlockHeight = normalizeKagemushaBlockHeight(blockHeight);",
+        "const checkedBlockHeight = blockHeight;",
+        1,
+    )
+    if mutated == mutated_texts[target]:
+        raise SystemExit(
+            "negative control failed: unable to mutate JavaScript compact projection block-height validation"
+        )
+    mutated_texts[target] = mutated
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        label = "JavaScript recursive spend compact projection gate"
+        if label not in message:
+            raise SystemExit(
+                "negative control failed: JavaScript compact projection block-height validation drift was not detected"
+            )
+        print("negative control rejected JavaScript compact projection block-height validation drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: JavaScript compact projection block-height validation drift was not detected"
+    )
+
+if mode == "--negative-control-python-recursive-spend-compact-projection-root-export":
+    mutated_texts = dict(texts)
+    target = "python/iroha_python/src/iroha_python/__init__.py"
+    method = "kagemusha_verify_recursive_spend_compact_payment_token_projection_at_height"
+    mutated = mutated_texts[target].replace(f'    "{method}",\n', "", 1)
+    mutated = mutated.replace(f"        {method},\n", "", 1)
+    if mutated == mutated_texts[target]:
+        raise SystemExit(
+            "negative control failed: unable to mutate Python recursive spend compact projection root export"
+        )
+    mutated_texts[target] = mutated
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        label = "Python package recursive spend compact projection re-exports"
+        if label not in message:
+            raise SystemExit(
+                "negative control failed: Python recursive spend compact projection root export drift was not detected"
+            )
+        print("negative control rejected Python recursive spend compact projection root export drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: Python recursive spend compact projection root export drift was not detected"
+    )
+
+if mode == "--negative-control-jvm-compact-projection-unsigned-block-height":
+    mutated_texts = dict(texts)
+    target = "crates/connect_norito_bridge/src/lib.rs"
+    mutated = mutated_texts[target].replace(
+        "let height = block_height.map(java_jlong_to_u64_bits);",
+        (
+            "let height = match block_height {\n"
+            "            Some(value) if value < 0 => return Err(\"blockHeight must be non-negative\".to_owned()),\n"
+            "            Some(value) => Some(value as u64),\n"
+            "            None => None,\n"
+            "        };"
+        ),
+        1,
+    )
+    if mutated == mutated_texts[target]:
+        raise SystemExit(
+            "negative control failed: unable to mutate JVM compact projection unsigned block-height carrier"
+        )
+    mutated_texts[target] = mutated
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        label = "Rust JNI recursive compact projection block-height carrier"
+        if label not in message:
+            raise SystemExit(
+                "negative control failed: JVM compact projection unsigned block-height drift was not detected"
+            )
+        print("negative control rejected JVM compact projection unsigned block-height drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: JVM compact projection unsigned block-height drift was not detected"
+    )
+
 if mode == "--negative-control-native-bridge-zero-envelope-pallas-guard":
     mutated = dict(texts)
     target = "crates/connect_norito_bridge/src/lib.rs"
@@ -9608,3 +10986,36 @@ if mode:
 run_checks(texts)
 print("recursive Kagemusha ABI-6/ABI-7 SDK parity is consistent")
 PY
+
+if [[ -z "$MODE" && "$(uname -s)" == "Darwin" ]]; then
+  BRIDGE_ROOT="$ROOT_DIR/dist/NoritoBridge.xcframework"
+  if [[ -d "$BRIDGE_ROOT" ]]; then
+    REQUIRED_BRIDGE_SYMBOLS=(
+      "connect_norito_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes"
+      "connect_norito_kagemusha_verify_recursive_compact_payment_token"
+      "connect_norito_kagemusha_recursive_spend_compact_payment_token_from_bundle"
+      "connect_norito_kagemusha_verify_recursive_spend_compact_payment_token_projection"
+    )
+    BRIDGE_LIBS=(
+      "$BRIDGE_ROOT/ios-arm64/libNoritoBridge.a"
+      "$BRIDGE_ROOT/ios-arm64_x86_64-simulator/libNoritoBridge.a"
+      "$BRIDGE_ROOT/macos-arm64/libNoritoBridge.a"
+    )
+    BRIDGE_SYMBOLS_DUMP=$(mktemp -t norito-bridge-symbols.XXXXXX)
+    trap 'rm -f "$BRIDGE_SYMBOLS_DUMP"' EXIT
+    for bridge_lib in "${BRIDGE_LIBS[@]}"; do
+      if [[ ! -f "$bridge_lib" ]]; then
+        echo "[-] NoritoBridge artifact missing library: $bridge_lib" >&2
+        exit 1
+      fi
+      nm -gU "$bridge_lib" > "$BRIDGE_SYMBOLS_DUMP" 2>/dev/null
+      for symbol in "${REQUIRED_BRIDGE_SYMBOLS[@]}"; do
+        if ! grep -q "_$symbol" "$BRIDGE_SYMBOLS_DUMP"; then
+          echo "[-] NoritoBridge artifact $bridge_lib is missing symbol: $symbol" >&2
+          exit 1
+        fi
+      done
+    done
+    echo "NoritoBridge XCFramework recursive Kagemusha symbols are present"
+  fi
+fi

@@ -12,14 +12,33 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import org.hyperledger.iroha.android.client.JsonParser;
+import org.hyperledger.iroha.android.model.InstructionBox;
+import org.hyperledger.iroha.norito.NoritoCodec;
+import org.hyperledger.iroha.norito.NoritoDecoder;
+import org.hyperledger.iroha.norito.NoritoEncoder;
+import org.hyperledger.iroha.norito.NoritoHeader;
+import org.hyperledger.iroha.norito.TypeAdapter;
 
 public final class OfflineNoteV2Test {
+  private static final String ISSUE_INSTRUCTION_ALIAS_SCHEMA =
+      "iroha_data_model::isi::offline::IssueOfflineNoteV2";
+  private static final String REDEEM_INSTRUCTION_ALIAS_SCHEMA =
+      "iroha_data_model::isi::offline::RedeemOfflineNoteV2";
+  private static final String AUDIT_INSTRUCTION_ALIAS_SCHEMA =
+      "iroha_data_model::isi::offline::AuditOfflineNoteV2";
 
   private OfflineNoteV2Test() {}
 
   public static void main(final String[] args) throws Exception {
     certificateSigningBytesMatchRustVector();
     offlineNoteV2ModelsMatchRustNoritoVectors();
+    offlineNoteV2DecodersRoundTripRustNoritoVectors();
+    offlineNoteV2DecodersRejectMalformedPayloads();
+    offlineNoteV2InstructionWrappersProduceSchemaBoundPayloads();
+    offlineNoteV2InstructionWrappersRejectProofMismatches();
+    offlineNoteV2InstructionDecodersReadExplorerEnvelopeBytes();
+    offlineNoteV2InstructionDecodersReadLegacyAliasEnvelopeBytes();
+    offlineNoteV2InstructionDecodersRejectWrongEnvelopeShapes();
     publicInputHashesMatchRustVectors();
     proofBindingRejectsMismatch();
     proofVerifierAndHashValidationRejectsMalformedValues();
@@ -65,6 +84,283 @@ public final class OfflineNoteV2Test {
         string(obj(chain, "redeem"), "norito_base64"),
         base64(redeem(fixture).noritoEncoded()),
         "redeem norito");
+  }
+
+  private static void offlineNoteV2DecodersRoundTripRustNoritoVectors() throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final Map<String, Object> chain = obj(fixture, "chain_vectors");
+    final OfflineNoteV2.KeyCertificateV2 sender =
+        certificate(obj(obj(fixture, "payment_token"), "sender_key_certificate"));
+    final OfflineNoteV2.IssueV2 issue = issue(fixture);
+    final OfflineNoteV2.AuditBundleV2 audit = audit(fixture);
+    final OfflineNoteV2.RedeemV2 redeem = redeem(fixture);
+
+    final byte[] certificatePayloadBytes = sender.signingPayload().noritoEncoded();
+    final byte[] certificateBytes = sender.noritoEncoded();
+    final byte[] issuedClaimBytes = issue.issuedClaim().noritoEncoded();
+    final byte[] auditOutputClaimBytes = OfflineNoteV2.encodeAuditOutputClaim(audit.outputClaims().get(0));
+    final byte[] recursiveProofBytes = OfflineNoteV2.encodeRecursiveProof(audit.recursiveProof());
+    final byte[] redeemPublicInputsBytes = redeem.publicInputs().noritoEncoded();
+    final byte[] auditPublicInputsBytes = audit.publicInputs().noritoEncoded();
+    final byte[] issueBytes = base64Bytes(string(obj(chain, "issue"), "norito_base64"));
+    final byte[] auditBytes = base64Bytes(string(obj(chain, "audit"), "norito_base64"));
+    final byte[] redeemBytes = base64Bytes(string(obj(chain, "redeem"), "norito_base64"));
+
+    assertEquals(
+        base64(certificatePayloadBytes),
+        base64(OfflineNoteV2.decodeCertificatePayload(certificatePayloadBytes).noritoEncoded()),
+        "decoded certificate payload");
+    assertEquals(
+        base64(certificateBytes),
+        base64(OfflineNoteV2.decodeCertificate(certificateBytes).noritoEncoded()),
+        "decoded certificate");
+    assertEquals(
+        base64(issuedClaimBytes),
+        base64(OfflineNoteV2.decodeIssuedClaim(issuedClaimBytes).noritoEncoded()),
+        "decoded issued claim");
+    assertEquals(
+        base64(auditOutputClaimBytes),
+        base64(
+            OfflineNoteV2.encodeAuditOutputClaim(
+                OfflineNoteV2.decodeAuditOutputClaim(auditOutputClaimBytes))),
+        "decoded audit output claim");
+    assertEquals(
+        base64(recursiveProofBytes),
+        base64(
+            OfflineNoteV2.encodeRecursiveProof(
+                OfflineNoteV2.decodeRecursiveProof(recursiveProofBytes))),
+        "decoded recursive proof");
+    assertEquals(
+        base64(redeemPublicInputsBytes),
+        base64(OfflineNoteV2.decodeRedeemPublicInputs(redeemPublicInputsBytes).noritoEncoded()),
+        "decoded redeem public inputs");
+    assertEquals(
+        base64(auditPublicInputsBytes),
+        base64(OfflineNoteV2.decodeAuditPublicInputs(auditPublicInputsBytes).noritoEncoded()),
+        "decoded audit public inputs");
+    assertEquals(
+        base64(issueBytes),
+        base64(OfflineNoteV2.decodeIssue(issueBytes).noritoEncoded()),
+        "decoded issue");
+
+    final OfflineNoteV2.AuditBundleV2 decodedAudit = OfflineNoteV2.decodeAudit(auditBytes);
+    decodedAudit.validateProofBinding();
+    assertEquals(base64(auditBytes), base64(decodedAudit.noritoEncoded()), "decoded audit");
+
+    final OfflineNoteV2.RedeemV2 decodedRedeem = OfflineNoteV2.decodeRedeem(redeemBytes);
+    decodedRedeem.validateProofBinding();
+    assertEquals(base64(redeemBytes), base64(decodedRedeem.noritoEncoded()), "decoded redeem");
+  }
+
+  private static void offlineNoteV2DecodersRejectMalformedPayloads() throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final Map<String, Object> chain = obj(fixture, "chain_vectors");
+    final byte[] issueBytes = base64Bytes(string(obj(chain, "issue"), "norito_base64"));
+    final OfflineNoteV2.KeyCertificateV2 sender =
+        certificate(obj(obj(fixture, "payment_token"), "sender_key_certificate"));
+    final byte[] certificatePayloadBytes = sender.signingPayload().noritoEncoded();
+
+    assertThrows(
+        () -> OfflineNoteV2.decodeIssue(Arrays.copyOf(issueBytes, issueBytes.length - 1)),
+        "truncated issue decode should fail");
+    assertThrows(
+        () -> OfflineNoteV2.decodeRedeem(issueBytes),
+        "schema-mismatched issue decode should fail");
+    final byte[] corruptedIssue = Arrays.copyOf(issueBytes, issueBytes.length);
+    corruptedIssue[corruptedIssue.length - 1] ^= 0x01;
+    assertThrows(
+        () -> OfflineNoteV2.decodeIssue(corruptedIssue),
+        "checksum-corrupted issue decode should fail");
+    assertThrows(
+        () -> OfflineNoteV2.decodeCertificate(certificatePayloadBytes),
+        "certificate payload cannot decode as full certificate");
+  }
+
+  private static void offlineNoteV2InstructionWrappersProduceSchemaBoundPayloads()
+      throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final OfflineNoteV2.IssueV2 issue = issue(fixture);
+    final OfflineNoteV2.AuditBundleV2 audit = audit(fixture);
+    final OfflineNoteV2.RedeemV2 redeem = redeem(fixture);
+
+    assertEquals(
+        "iroha_data_model::isi::offline::IssueOfflineNote",
+        OfflineNoteV2.ISSUE_INSTRUCTION_SCHEMA,
+        "canonical issue instruction wire name");
+    assertEquals(
+        "iroha_data_model::isi::offline::RedeemOfflineNote",
+        OfflineNoteV2.REDEEM_INSTRUCTION_SCHEMA,
+        "canonical redeem instruction wire name");
+    assertEquals(
+        "iroha_data_model::isi::offline::AuditOfflineNote",
+        OfflineNoteV2.AUDIT_INSTRUCTION_SCHEMA,
+        "canonical audit instruction wire name");
+    assertTrue(
+        !OfflineNoteV2.ISSUE_INSTRUCTION_SCHEMA.endsWith("V2"),
+        "issue instruction wire name must be chain-canonical");
+    assertTrue(
+        !OfflineNoteV2.REDEEM_INSTRUCTION_SCHEMA.endsWith("V2"),
+        "redeem instruction wire name must be chain-canonical");
+    assertTrue(
+        !OfflineNoteV2.AUDIT_INSTRUCTION_SCHEMA.endsWith("V2"),
+        "audit instruction wire name must be chain-canonical");
+
+    assertInstructionWrapper(
+        OfflineNoteV2.ISSUE_INSTRUCTION_SCHEMA,
+        OfflineNoteV2.encodeIssue(issue),
+        OfflineNoteV2.issueInstruction(issue));
+    assertInstructionWrapper(
+        OfflineNoteV2.AUDIT_INSTRUCTION_SCHEMA,
+        OfflineNoteV2.encodeAudit(audit),
+        OfflineNoteV2.auditInstruction(audit));
+    assertInstructionWrapper(
+        OfflineNoteV2.REDEEM_INSTRUCTION_SCHEMA,
+        OfflineNoteV2.encodeRedeem(redeem),
+        OfflineNoteV2.redeemInstruction(redeem));
+  }
+
+  private static void offlineNoteV2InstructionWrappersRejectProofMismatches()
+      throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final OfflineNoteV2.AuditBundleV2 audit = audit(fixture);
+    final OfflineNoteV2.RedeemV2 redeem = redeem(fixture);
+    final OfflineNoteV2.RecursiveProofV2 badProof =
+        new OfflineNoteV2.RecursiveProofV2(
+            OfflineNoteV2.hash("wrong-public-inputs".getBytes(StandardCharsets.UTF_8)),
+            new OfflineNoteV2.ProofBox(
+                OfflineNoteV2.RECURSIVE_BACKEND,
+                "offline-v2-forged-proof".getBytes(StandardCharsets.UTF_8)));
+
+    assertThrows(
+        () -> OfflineNoteV2.redeemInstruction(redeem.replacingRecursiveProof(badProof)),
+        "forged redeem instruction should throw");
+    assertThrows(
+        () -> OfflineNoteV2.auditInstruction(audit.replacingRecursiveProof(badProof)),
+        "forged audit instruction should throw");
+  }
+
+  private static void offlineNoteV2InstructionDecodersReadExplorerEnvelopeBytes()
+      throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final OfflineNoteV2.IssueV2 issue = issue(fixture);
+    final OfflineNoteV2.AuditBundleV2 audit = audit(fixture);
+    final OfflineNoteV2.RedeemV2 redeem = redeem(fixture);
+    final byte[] issueWirePayload = wirePayloadBytes(OfflineNoteV2.issueInstruction(issue));
+    final byte[] auditWirePayload = wirePayloadBytes(OfflineNoteV2.auditInstruction(audit));
+    final byte[] redeemWirePayload = wirePayloadBytes(OfflineNoteV2.redeemInstruction(redeem));
+
+    assertEquals(
+        base64(issue.noritoEncoded()),
+        base64(
+            OfflineNoteV2.decodeIssueInstruction(
+                    rawInstructionPair(OfflineNoteV2.ISSUE_INSTRUCTION_SCHEMA, issueWirePayload))
+                .noritoEncoded()),
+        "decoded issue instruction");
+    assertEquals(
+        base64(issue.noritoEncoded()),
+        base64(
+            OfflineNoteV2.decodeIssueInstruction(
+                    rawInstructionPair(OfflineNoteV2.ISSUE_INSTRUCTION_SCHEMA, issueWirePayload, false))
+                .noritoEncoded()),
+        "decoded non-compact issue instruction");
+    assertEquals(
+        base64(issue.noritoEncoded()),
+        base64(OfflineNoteV2.decodeIssueInstruction(issueWirePayload).noritoEncoded()),
+        "decoded direct issue instruction payload");
+
+    final OfflineNoteV2.AuditBundleV2 decodedAudit =
+        OfflineNoteV2.decodeAuditInstruction(
+            rawInstructionPair(OfflineNoteV2.AUDIT_INSTRUCTION_SCHEMA, auditWirePayload));
+    decodedAudit.validateProofBinding();
+    assertEquals(
+        base64(audit.noritoEncoded()),
+        base64(decodedAudit.noritoEncoded()),
+        "decoded audit instruction");
+
+    final OfflineNoteV2.RedeemV2 decodedRedeem =
+        OfflineNoteV2.decodeRedeemInstruction(
+            rawInstructionPair(OfflineNoteV2.REDEEM_INSTRUCTION_SCHEMA, redeemWirePayload));
+    decodedRedeem.validateProofBinding();
+    assertEquals(
+        base64(redeem.noritoEncoded()),
+        base64(decodedRedeem.noritoEncoded()),
+        "decoded redeem instruction");
+  }
+
+  private static void offlineNoteV2InstructionDecodersReadLegacyAliasEnvelopeBytes()
+      throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final OfflineNoteV2.IssueV2 issue = issue(fixture);
+    final OfflineNoteV2.AuditBundleV2 audit = audit(fixture);
+    final OfflineNoteV2.RedeemV2 redeem = redeem(fixture);
+    final byte[] issueAliasWirePayload =
+        encodeInstructionWrapper(ISSUE_INSTRUCTION_ALIAS_SCHEMA, OfflineNoteV2.encodeIssue(issue));
+    final byte[] auditAliasWirePayload =
+        encodeInstructionWrapper(AUDIT_INSTRUCTION_ALIAS_SCHEMA, OfflineNoteV2.encodeAudit(audit));
+    final byte[] redeemAliasWirePayload =
+        encodeInstructionWrapper(REDEEM_INSTRUCTION_ALIAS_SCHEMA, OfflineNoteV2.encodeRedeem(redeem));
+
+    assertEquals(
+        base64(issue.noritoEncoded()),
+        base64(OfflineNoteV2.decodeIssueInstruction(issueAliasWirePayload).noritoEncoded()),
+        "decoded direct legacy alias issue instruction payload");
+    assertEquals(
+        base64(issue.noritoEncoded()),
+        base64(
+            OfflineNoteV2.decodeIssueInstruction(
+                    rawInstructionPair(ISSUE_INSTRUCTION_ALIAS_SCHEMA, issueAliasWirePayload))
+                .noritoEncoded()),
+        "decoded legacy alias issue instruction envelope");
+    assertEquals(
+        base64(audit.noritoEncoded()),
+        base64(
+            OfflineNoteV2.decodeAuditInstruction(
+                    rawInstructionPair(AUDIT_INSTRUCTION_ALIAS_SCHEMA, auditAliasWirePayload))
+                .noritoEncoded()),
+        "decoded legacy alias audit instruction envelope");
+    assertEquals(
+        base64(redeem.noritoEncoded()),
+        base64(
+            OfflineNoteV2.decodeRedeemInstruction(
+                    rawInstructionPair(REDEEM_INSTRUCTION_ALIAS_SCHEMA, redeemAliasWirePayload))
+                .noritoEncoded()),
+        "decoded legacy alias redeem instruction envelope");
+  }
+
+  private static void offlineNoteV2InstructionDecodersRejectWrongEnvelopeShapes()
+      throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final OfflineNoteV2.IssueV2 issue = issue(fixture);
+    final OfflineNoteV2.RedeemV2 redeem = redeem(fixture);
+    final byte[] issueWirePayload = wirePayloadBytes(OfflineNoteV2.issueInstruction(issue));
+    final byte[] redeemWirePayload = wirePayloadBytes(OfflineNoteV2.redeemInstruction(redeem));
+    final byte[] issuePair =
+        rawInstructionPair(OfflineNoteV2.ISSUE_INSTRUCTION_SCHEMA, issueWirePayload);
+
+    assertThrows(
+        () ->
+            OfflineNoteV2.decodeIssueInstruction(
+                rawInstructionPair(OfflineNoteV2.REDEEM_INSTRUCTION_SCHEMA, issueWirePayload)),
+        "wrong issue wire name should throw");
+    assertThrows(
+        () -> OfflineNoteV2.decodeRedeemInstruction(issuePair),
+        "wrong instruction model schema should throw");
+    assertThrows(
+        () -> OfflineNoteV2.decodeIssueInstruction(issue.noritoEncoded()),
+        "direct model frame should not decode as instruction wrapper");
+    assertThrows(
+        () -> OfflineNoteV2.decodeIssueInstruction(Arrays.copyOf(issuePair, issuePair.length - 1)),
+        "truncated instruction envelope should throw");
+    final byte[] corruptedWirePayload = Arrays.copyOf(issueWirePayload, issueWirePayload.length);
+    corruptedWirePayload[corruptedWirePayload.length - 1] ^= 0x01;
+    assertThrows(
+        () -> OfflineNoteV2.decodeIssueInstruction(corruptedWirePayload),
+        "checksum-corrupted instruction payload should throw");
+    assertThrows(
+        () ->
+            OfflineNoteV2.decodeAuditInstruction(
+                rawInstructionPair(OfflineNoteV2.AUDIT_INSTRUCTION_SCHEMA, redeemWirePayload)),
+        "wrong audit instruction model schema should throw");
   }
 
   private static void publicInputHashesMatchRustVectors() throws Exception {
@@ -592,6 +888,104 @@ public final class OfflineNoteV2Test {
         string(json, "amount"));
   }
 
+  private static void assertInstructionWrapper(
+      final String schema, final byte[] modelPayload, final InstructionBox instruction) {
+    assertEquals(schema, instruction.name(), "instruction wire name");
+    if (!(instruction.payload() instanceof InstructionBox.WirePayload wire)) {
+      throw new AssertionError("Offline Note V2 instruction must use a wire payload");
+    }
+    assertEquals(schema, wire.wireName(), "instruction payload wire name");
+    assertEquals(
+        base64(encodeInstructionWrapper(schema, modelPayload)),
+        base64(wire.payloadBytes()),
+        "instruction wrapper payload");
+    assertEquals(
+        base64(modelPayload),
+        base64(decodeInstructionWrapper(schema, wire.payloadBytes())),
+        "instruction wrapper model payload");
+  }
+
+  private static byte[] wirePayloadBytes(final InstructionBox instruction) {
+    if (!(instruction.payload() instanceof InstructionBox.WirePayload wire)) {
+      throw new AssertionError("Offline Note V2 instruction must use a wire payload");
+    }
+    return wire.payloadBytes();
+  }
+
+  private static byte[] rawInstructionPair(final String wireName, final byte[] wirePayload) {
+    return rawInstructionPair(wireName, wirePayload, true);
+  }
+
+  private static byte[] rawInstructionPair(
+      final String wireName, final byte[] wirePayload, final boolean compact) {
+    final NoritoEncoder encoder = new NoritoEncoder(compact ? NoritoHeader.COMPACT_LEN : 0);
+    writeInstructionField(encoder, child -> writeInstructionString(child, wireName));
+    writeInstructionField(encoder, child -> writeInstructionBytesVec(child, wirePayload));
+    return encoder.toByteArray();
+  }
+
+  private static void writeInstructionField(
+      final NoritoEncoder encoder, final InstructionFieldWriter writePayload) {
+    final NoritoEncoder child = encoder.childEncoder();
+    writePayload.write(child);
+    final byte[] payload = child.toByteArray();
+    encoder.writeLength(payload.length, compact(encoder));
+    encoder.writeBytes(payload);
+  }
+
+  private static void writeInstructionString(final NoritoEncoder encoder, final String value) {
+    final byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
+    encoder.writeLength(bytes.length, compact(encoder));
+    encoder.writeBytes(bytes);
+  }
+
+  private static void writeInstructionBytesVec(final NoritoEncoder encoder, final byte[] value) {
+    encoder.writeUInt(value.length, 64);
+    encoder.writeBytes(value);
+  }
+
+  private static byte[] encodeInstructionWrapper(
+      final String schema, final byte[] modelPayload) {
+    return NoritoCodec.encode(modelPayload, schema, INSTRUCTION_WRAPPER_PAYLOAD_ADAPTER, 0);
+  }
+
+  private static byte[] decodeInstructionWrapper(
+      final String schema, final byte[] wirePayload) {
+    return NoritoCodec.decode(wirePayload, INSTRUCTION_WRAPPER_PAYLOAD_ADAPTER, schema);
+  }
+
+  private static final TypeAdapter<byte[]> INSTRUCTION_WRAPPER_PAYLOAD_ADAPTER =
+      new TypeAdapter<>() {
+        @Override
+        public void encode(final NoritoEncoder encoder, final byte[] value) {
+          final NoritoEncoder child = encoder.childEncoder();
+          child.writeBytes(value);
+          final byte[] payload = child.toByteArray();
+          encoder.writeLength(payload.length, compact(encoder));
+          encoder.writeBytes(payload);
+        }
+
+        @Override
+        public byte[] decode(final NoritoDecoder decoder) {
+          final int length = (int) decoder.readLength(compact(decoder));
+          final NoritoDecoder child =
+              new NoritoDecoder(decoder.readBytes(length), decoder.flags(), decoder.flagsHint());
+          final byte[] payload = child.readBytes(child.remaining());
+          if (child.remaining() != 0) {
+            throw new IllegalArgumentException("trailing bytes in instruction wrapper payload");
+          }
+          return payload;
+        }
+      };
+
+  private static boolean compact(final NoritoEncoder encoder) {
+    return (encoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
+  }
+
+  private static boolean compact(final NoritoDecoder decoder) {
+    return (decoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
+  }
+
   @SuppressWarnings("unchecked")
   private static Map<String, Object> loadFixture() throws Exception {
     Path cursor = Paths.get("").toAbsolutePath();
@@ -749,6 +1143,11 @@ public final class OfflineNoteV2Test {
       return;
     }
     throw new AssertionError(message);
+  }
+
+  @FunctionalInterface
+  private interface InstructionFieldWriter {
+    void write(NoritoEncoder encoder);
   }
 
   @FunctionalInterface

@@ -92,6 +92,24 @@ public sealed class PrivacyProofResultArchive
         PrivacyNative.PrivacyVerifyProofResultSchemaByte);
 }
 
+public sealed class PrivacyProofRequestArchive
+{
+    private readonly byte[] noritoBytes;
+
+    public PrivacyProofRequestArchive(byte[] noritoBytes)
+    {
+        this.noritoBytes = PrivacyArchiveBytes.Copy(
+            noritoBytes,
+            nameof(noritoBytes),
+            PrivacyNative.PrivacyRequestSchemaByte);
+    }
+
+    public byte[] NoritoBytes => PrivacyArchiveBytes.Copy(
+        noritoBytes,
+        nameof(NoritoBytes),
+        PrivacyNative.PrivacyRequestSchemaByte);
+}
+
 public sealed class PrivacyCapabilities
 {
     private PrivacyCapabilities(
@@ -278,7 +296,7 @@ public sealed class PrivacyProductionGate
 
 public static class PrivacyNative
 {
-    public const uint RequiredBridgeAbiVersion = 6;
+    public const uint RequiredBridgeAbiVersion = 7;
     public const uint FfiVersionV1 = 1;
     public const string ProductionGateVersion = "privacy-production-gate-v1";
     public const uint StatusError = 1;
@@ -295,6 +313,10 @@ public static class PrivacyNative
     private const byte PrivacyNoritoFieldBitsetFlag = 0x20;
     private const byte PrivacyNoritoFieldBitsetRequiredFlags = 0x06;
     private const ulong PrivacyCrc64ReflectedPoly = 0xC96C_5795_D787_0F42UL;
+    private const int PrivacyRequestTextFieldMaxBytes = 1024;
+    private const int PrivacyRequestPublicInputsMaxBytes = 1024 * 1024;
+    private const int PrivacyRequestWitnessMaxBytes = PrivacyNativeArchiveMaxBytes / 2;
+    private const int PrivacyRequestProofMaxBytes = PrivacyNativeArchiveMaxBytes / 2;
     internal const byte PrivacyRequestSchemaByte = 0x52;
     internal const byte PrivacyCapabilitiesResultSchemaByte = 0x50;
     internal const byte PrivacyBuildProofResultSchemaByte = 0x42;
@@ -345,6 +367,65 @@ public static class PrivacyNative
             NativeCapabilities));
     }
 
+    public static PrivacyProofRequestArchive privacyProofRequestV1(
+        string algorithmId,
+        string entrypoint,
+        string vkRef,
+        ReadOnlySpan<byte> publicInputs)
+    {
+        return PrivacyProofRequestV1(
+            algorithmId,
+            entrypoint,
+            vkRef,
+            publicInputs,
+            ReadOnlySpan<byte>.Empty,
+            ReadOnlySpan<byte>.Empty);
+    }
+
+    public static PrivacyProofRequestArchive privacyProofRequestV1(
+        string algorithmId,
+        string entrypoint,
+        string vkRef,
+        ReadOnlySpan<byte> publicInputs,
+        ReadOnlySpan<byte> witness,
+        ReadOnlySpan<byte> proof)
+    {
+        return PrivacyProofRequestV1(algorithmId, entrypoint, vkRef, publicInputs, witness, proof);
+    }
+
+    public static PrivacyProofRequestArchive PrivacyProofRequestV1(
+        string algorithmId,
+        string entrypoint,
+        string vkRef,
+        ReadOnlySpan<byte> publicInputs)
+    {
+        return PrivacyProofRequestV1(
+            algorithmId,
+            entrypoint,
+            vkRef,
+            publicInputs,
+            ReadOnlySpan<byte>.Empty,
+            ReadOnlySpan<byte>.Empty);
+    }
+
+    public static PrivacyProofRequestArchive PrivacyProofRequestV1(
+        string algorithmId,
+        string entrypoint,
+        string vkRef,
+        ReadOnlySpan<byte> publicInputs,
+        ReadOnlySpan<byte> witness,
+        ReadOnlySpan<byte> proof)
+    {
+        return new PrivacyProofRequestArchive(CallProofRequest(
+            algorithmId,
+            entrypoint,
+            vkRef,
+            publicInputs,
+            witness,
+            proof,
+            NativeProofRequest));
+    }
+
     public static PrivacyProofResultArchive BuildProofV1(ReadOnlySpan<byte> requestArchive)
     {
         return new PrivacyProofResultArchive(CallProof(
@@ -377,6 +458,18 @@ public static class PrivacyNative
         return BuildProofV1(requestArchive);
     }
 
+    public static PrivacyProofResultArchive buildZkAceAuthorizationProofV1(
+        ReadOnlySpan<byte> requestArchive)
+    {
+        return BuildZkAceAuthorizationProofV1(requestArchive);
+    }
+
+    public static PrivacyProofResultArchive BuildZkAceAuthorizationProofV1(
+        ReadOnlySpan<byte> requestArchive)
+    {
+        return BuildProofV1(requestArchive);
+    }
+
     public static PrivacyProofResultArchive VerifyProofV1(ReadOnlySpan<byte> requestArchive)
     {
         return new PrivacyProofResultArchive(CallProof(
@@ -386,6 +479,22 @@ public static class PrivacyNative
     }
 
     internal delegate int NativeCapabilitiesCall(out IntPtr outPtr, out UIntPtr outLen);
+
+    internal delegate int NativeProofRequestCall(
+        byte[] algorithmIdPtr,
+        UIntPtr algorithmIdLen,
+        byte[] entrypointPtr,
+        UIntPtr entrypointLen,
+        byte[] vkRefPtr,
+        UIntPtr vkRefLen,
+        byte[] publicInputsPtr,
+        UIntPtr publicInputsLen,
+        byte[] witnessPtr,
+        UIntPtr witnessLen,
+        byte[] proofPtr,
+        UIntPtr proofLen,
+        out IntPtr outPtr,
+        out UIntPtr outLen);
 
     internal delegate int NativeProofCall(
         byte[] requestPtr,
@@ -417,6 +526,105 @@ public static class PrivacyNative
             throw new InvalidOperationException($"{symbol} failed.");
         }
         return ReadPrivacyOutput(symbol, code, outPtr, outLen, expectedSchemas);
+    }
+
+    internal static byte[] CallProofRequest(
+        string algorithmId,
+        string entrypoint,
+        string vkRef,
+        ReadOnlySpan<byte> publicInputs,
+        ReadOnlySpan<byte> witness,
+        ReadOnlySpan<byte> proof,
+        NativeProofRequestCall nativeCall,
+        bool requireAbi = true)
+    {
+        return CallProofRequest(
+            algorithmId,
+            entrypoint,
+            vkRef,
+            publicInputs,
+            witness,
+            proof,
+            nativeCall,
+            requireAbi,
+            NativeFree);
+    }
+
+    internal static byte[] CallProofRequest(
+        string algorithmId,
+        string entrypoint,
+        string vkRef,
+        ReadOnlySpan<byte> publicInputs,
+        ReadOnlySpan<byte> witness,
+        ReadOnlySpan<byte> proof,
+        NativeProofRequestCall nativeCall,
+        bool requireAbi,
+        Action<IntPtr> free)
+    {
+        var algorithmIdBytes = PrivacyRequestTextBytes(algorithmId, nameof(algorithmId));
+        var entrypointBytes = PrivacyRequestTextBytes(entrypoint, nameof(entrypoint));
+        var vkRefBytes = PrivacyRequestTextBytes(vkRef, nameof(vkRef));
+        var publicInputsBytes = PrivacyRequestComponentBytes(
+            publicInputs,
+            nameof(publicInputs),
+            PrivacyRequestPublicInputsMaxBytes,
+            allowEmpty: false);
+        var witnessBytes = PrivacyRequestComponentBytes(
+            witness,
+            nameof(witness),
+            PrivacyRequestWitnessMaxBytes,
+            allowEmpty: true);
+        var proofBytes = PrivacyRequestComponentBytes(
+            proof,
+            nameof(proof),
+            PrivacyRequestProofMaxBytes,
+            allowEmpty: true);
+        try
+        {
+            if (requireAbi)
+            {
+                RequireAbi();
+            }
+
+            const string symbol = "iroha_privacy_proof_request_v1";
+            var expectedSchemas = RequireKnownPrivacyResultSymbol(symbol);
+
+            int code;
+            IntPtr outPtr;
+            UIntPtr outLen;
+            try
+            {
+                code = nativeCall(
+                    algorithmIdBytes,
+                    (UIntPtr)algorithmIdBytes.Length,
+                    entrypointBytes,
+                    (UIntPtr)entrypointBytes.Length,
+                    vkRefBytes,
+                    (UIntPtr)vkRefBytes.Length,
+                    publicInputsBytes,
+                    (UIntPtr)publicInputsBytes.Length,
+                    witnessBytes,
+                    (UIntPtr)witnessBytes.Length,
+                    proofBytes,
+                    (UIntPtr)proofBytes.Length,
+                    out outPtr,
+                    out outLen);
+            }
+            catch (Exception)
+            {
+                throw new InvalidOperationException($"{symbol} failed.");
+            }
+            return ReadPrivacyOutput(symbol, code, outPtr, outLen, free, expectedSchemas);
+        }
+        finally
+        {
+            Array.Clear(algorithmIdBytes, 0, algorithmIdBytes.Length);
+            Array.Clear(entrypointBytes, 0, entrypointBytes.Length);
+            Array.Clear(vkRefBytes, 0, vkRefBytes.Length);
+            Array.Clear(publicInputsBytes, 0, publicInputsBytes.Length);
+            Array.Clear(witnessBytes, 0, witnessBytes.Length);
+            Array.Clear(proofBytes, 0, proofBytes.Length);
+        }
     }
 
     internal static byte[] CallProof(
@@ -736,11 +944,47 @@ public static class PrivacyNative
         return false;
     }
 
+    private static byte[] PrivacyRequestTextBytes(string value, string parameterName)
+    {
+        if (value is null)
+        {
+            throw new ArgumentNullException(parameterName);
+        }
+        var bytes = Encoding.UTF8.GetBytes(value);
+        if (bytes.Length > PrivacyRequestTextFieldMaxBytes)
+        {
+            throw new ArgumentException(
+                $"Privacy request text field must not exceed {PrivacyRequestTextFieldMaxBytes} bytes.",
+                parameterName);
+        }
+        return bytes;
+    }
+
+    private static byte[] PrivacyRequestComponentBytes(
+        ReadOnlySpan<byte> value,
+        string parameterName,
+        int maxBytes,
+        bool allowEmpty)
+    {
+        if (!allowEmpty && value.IsEmpty)
+        {
+            throw new ArgumentException("Privacy request component must not be empty.", parameterName);
+        }
+        if (value.Length > maxBytes)
+        {
+            throw new ArgumentException(
+                $"Privacy request component must not exceed {maxBytes} bytes.",
+                parameterName);
+        }
+        return value.ToArray();
+    }
+
     private static byte[] ExpectedPrivacyResultSchemas(string symbol)
     {
         return symbol switch
         {
             "iroha_privacy_capabilities_v1" => new[] { PrivacyCapabilitiesResultSchemaByte },
+            "iroha_privacy_proof_request_v1" => new[] { PrivacyRequestSchemaByte },
             "iroha_privacy_build_proof_v1" => new[] { PrivacyBuildProofResultSchemaByte },
             "iroha_privacy_verify_proof_v1" => new[] { PrivacyVerifyProofResultSchemaByte },
             _ => Array.Empty<byte>(),
@@ -848,6 +1092,7 @@ public static class PrivacyNative
         try
         {
             if (!Probe(NativeCapabilities, PrivacyCapabilitiesResultSchemaByte)
+                || !Probe(NativeProofRequest, PrivacyRequestSchemaByte)
                 || !Probe(NativeBuildProof, PrivacyBuildProofResultSchemaByte)
                 || !Probe(NativeVerifyProof, PrivacyVerifyProofResultSchemaByte))
             {
@@ -866,6 +1111,42 @@ public static class PrivacyNative
     {
         var code = nativeCall(out var outPtr, out var outLen);
         return ConsumeProbeResult(code, outPtr, outLen, expectedSchemaByte);
+    }
+
+    private static bool Probe(NativeProofRequestCall nativeCall, byte expectedSchemaByte)
+    {
+        var algorithmId = Encoding.UTF8.GetBytes("verange-transparent-range-v1");
+        var entrypoint = Encoding.UTF8.GetBytes("buildVeRangeProofV1");
+        var vkRef = Encoding.UTF8.GetBytes("bulletproofs:verange_transparent_range_v1");
+        var publicInputs = Encoding.UTF8.GetBytes("public-inputs");
+        var witness = Array.Empty<byte>();
+        var proof = Array.Empty<byte>();
+        try
+        {
+            var code = nativeCall(
+                algorithmId,
+                (UIntPtr)algorithmId.Length,
+                entrypoint,
+                (UIntPtr)entrypoint.Length,
+                vkRef,
+                (UIntPtr)vkRef.Length,
+                publicInputs,
+                (UIntPtr)publicInputs.Length,
+                witness,
+                UIntPtr.Zero,
+                proof,
+                UIntPtr.Zero,
+                out var outPtr,
+                out var outLen);
+            return ConsumeProbeResult(code, outPtr, outLen, expectedSchemaByte);
+        }
+        finally
+        {
+            Array.Clear(algorithmId, 0, algorithmId.Length);
+            Array.Clear(entrypoint, 0, entrypoint.Length);
+            Array.Clear(vkRef, 0, vkRef.Length);
+            Array.Clear(publicInputs, 0, publicInputs.Length);
+        }
     }
 
     private static bool Probe(NativeProofCall nativeCall, byte expectedSchemaByte)
@@ -945,6 +1226,23 @@ public static class PrivacyNative
 
     [DllImport(LibraryName, EntryPoint = "iroha_privacy_capabilities_v1", CallingConvention = CallingConvention.Cdecl)]
     private static extern int NativeCapabilities(out IntPtr outPtr, out UIntPtr outLen);
+
+    [DllImport(LibraryName, EntryPoint = "iroha_privacy_proof_request_v1", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int NativeProofRequest(
+        byte[] algorithmIdPtr,
+        UIntPtr algorithmIdLen,
+        byte[] entrypointPtr,
+        UIntPtr entrypointLen,
+        byte[] vkRefPtr,
+        UIntPtr vkRefLen,
+        byte[] publicInputsPtr,
+        UIntPtr publicInputsLen,
+        byte[] witnessPtr,
+        UIntPtr witnessLen,
+        byte[] proofPtr,
+        UIntPtr proofLen,
+        out IntPtr outPtr,
+        out UIntPtr outLen);
 
     [DllImport(LibraryName, EntryPoint = "iroha_privacy_build_proof_v1", CallingConvention = CallingConvention.Cdecl)]
     private static extern int NativeBuildProof(byte[] requestPtr, UIntPtr requestLen, out IntPtr outPtr, out UIntPtr outLen);

@@ -445,14 +445,6 @@ def _reject_nonfinite_json_constant(constant: str) -> None:
     raise NonFiniteJsonConstantError(constant)
 
 
-def _read_json_without_duplicate_keys(path: Path) -> Any:
-    return json.loads(
-        path.read_text(encoding="utf-8"),
-        object_pairs_hook=_reject_duplicate_json_object_pairs,
-        parse_constant=_reject_nonfinite_json_constant,
-    )
-
-
 def _read_release_json_text(
     path: Path,
     label: str,
@@ -3477,6 +3469,18 @@ def _read_summary_output_text(
         ]
 
 
+def _cleanup_summary_output(path: Path) -> list[dict[str, Any]]:
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return []
+    except OSError:
+        return [
+            _summary_out_blocker("--summary-out temporary file could not be removed")
+        ]
+    return []
+
+
 def write_summary(path: Path, summary: dict[str, Any]) -> list[dict[str, Any]]:
     """Write a readiness summary JSON file."""
 
@@ -3504,6 +3508,7 @@ def write_summary(path: Path, summary: dict[str, Any]) -> list[dict[str, Any]]:
             )
         ]
     tmp_path: Path | None = None
+    write_blockers: list[dict[str, Any]] = []
     try:
         with tempfile.NamedTemporaryFile(
             "w",
@@ -3519,33 +3524,32 @@ def write_summary(path: Path, summary: dict[str, Any]) -> list[dict[str, Any]]:
             os.fsync(handle.fileno())
         errors = validate_summary_output_path(path)
         if errors:
-            return errors
-        os.replace(tmp_path, path)
-        tmp_path = None
+            write_blockers.extend(errors)
+        else:
+            os.replace(tmp_path, path)
+            tmp_path = None
     except OSError:
-        return [
+        write_blockers.append(
             blocker(
                 SUMMARY_OUT_PATH_INVALID_CODE,
                 "--summary-out could not be written",
             )
-        ]
+        )
     finally:
         if tmp_path is not None:
-            try:
-                tmp_path.unlink(missing_ok=True)
-            except OSError:
-                pass
+            write_blockers.extend(_cleanup_summary_output(tmp_path))
+    if write_blockers:
+        return write_blockers
     try:
         parent_fd = os.open(path.parent, os.O_RDONLY)
     except OSError:
-        parent_fd = None
-    if parent_fd is not None:
-        try:
-            os.fsync(parent_fd)
-        except OSError:
-            pass
-        finally:
-            os.close(parent_fd)
+        return [_summary_out_blocker("--summary-out parent directory could not be synced")]
+    try:
+        os.fsync(parent_fd)
+    except OSError:
+        return [_summary_out_blocker("--summary-out parent directory could not be synced")]
+    finally:
+        os.close(parent_fd)
     errors = validate_summary_output_path(path)
     if errors:
         return errors

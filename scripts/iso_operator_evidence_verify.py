@@ -38,6 +38,7 @@ import subprocess
 import sys
 import threading
 import urllib.parse
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -83,6 +84,9 @@ SUPPORTED_RAIL_MESSAGE_TYPES = {
 MAX_TRUST_DER_BLOBS = 8
 MAX_TRUST_DER_BYTES = 1024 * 1024
 MAX_TRUST_DER_BASE64_CHARS = ((MAX_TRUST_DER_BYTES + 2) // 3) * 4
+TRUST_DER_KIND_CRL = "X.509 CRL"
+TRUST_DER_KIND_OCSP = "OCSPResponse"
+OID_OCSP_BASIC_RESPONSE_DER = b"\x2b\x06\x01\x05\x05\x07\x30\x01\x01"
 MAX_PROFILE_ID_CHARS = 128
 MAX_TRUST_POLICY_CHARS = 128
 MAX_TRUST_SOURCE_TEXT_CHARS = 256
@@ -93,6 +97,9 @@ MAX_RECEIPT_VERIFIER_OUTPUT_BYTES = 4 * 1024 * 1024
 MAX_HTTP_URL_CHARS = 2048
 MAX_LOCAL_PATH_CHARS = 4096
 MAX_CLEAN_STRING_CHARS = 4096
+ANCHOR_DIR = "anchors"
+INDEX_FILE = "messages.index.json"
+LATEST_ANCHOR_FILE = "latest.notary.json"
 DEFAULT_RECEIPT_VERIFIER_TIMEOUT_SECS = 300.0
 PLACEHOLDER_TRUST_SOURCE_MARKERS = (
     "dummy",
@@ -113,10 +120,37 @@ PLACEHOLDER_TRUST_SOURCE_HOSTS = {
 TEMPLATE_CANARY_ENDPOINT_HOSTS = {
     "operator-canary.bank",
 }
+REPOSITORY_CANARY_RUNBOOK_PARTS = (
+    "fixtures",
+    "iso20022",
+    "operator_canary",
+)
+REPOSITORY_TRUST_BUNDLE_PARTS = (
+    "fixtures",
+    "iso20022",
+    "trust_bundles",
+)
+REPOSITORY_XML_FIXTURE_PARTS = (
+    "fixtures",
+    "iso20022",
+)
 LOCAL_REBINDING_HOST_SUFFIXES = {"localtest.me", "lvh.me", "nip.io", "sslip.io", "vcap.me"}
 NAT64_WELL_KNOWN_PREFIX = ipaddress.ip_network("64:ff9b::/96")
 IPV4_COMPATIBLE_IPV6_PREFIX = ipaddress.ip_network("::/96")
 SCRIPT_DIR = Path(__file__).resolve().parent
+
+
+@dataclass(frozen=True)
+class DerElement:
+    """One parsed DER TLV element used for lightweight trust-material replay checks."""
+
+    tag: int
+    header_len: int
+    length: int
+    start: int
+    value_start: int
+    end: int
+    value: bytes
 
 EXPECTED_STAGE_SCRIPTS = {
     "rail": "iso_rail_gateway_adapter.py",
@@ -298,6 +332,9 @@ RECEIPT_ENTRY_KEYS = {
     "status_code",
     "response_body_sha256",
     "endpoint_requires_insecure_http",
+    "anchor_path",
+    "store_dir",
+    "index_path",
     "anchor_sha256",
     "index_sha256",
     "record_count",
@@ -305,13 +342,22 @@ RECEIPT_ENTRY_KEYS = {
     "payload_sha256",
     "profile",
     "rail_message_id",
+    "source_path",
 }
-NOTARY_RECEIPT_METADATA_KEYS = {"anchor_sha256", "index_sha256", "record_count"}
+NOTARY_RECEIPT_METADATA_KEYS = {
+    "anchor_path",
+    "store_dir",
+    "index_path",
+    "anchor_sha256",
+    "index_sha256",
+    "record_count",
+}
 RAIL_RECEIPT_METADATA_KEYS = {
     "message_type",
     "payload_sha256",
     "profile",
     "rail_message_id",
+    "source_path",
 }
 TRUST_SUMMARY_KEYS = {
     "version",
@@ -746,6 +792,7 @@ def _preflight_output_cli_paths(argv: list[str] | None, flags: set[str]) -> None
                 if not value or value.startswith("--"):
                     raise EvidenceError(f"{flag} requires a path value")
                 _reject_raw_output_path_smuggling(value, flag)
+                _reject_repository_artifact_path(value, flag)
                 index += 2
                 matched = True
                 break
@@ -755,6 +802,7 @@ def _preflight_output_cli_paths(argv: list[str] | None, flags: set[str]) -> None
                 if not value or value.startswith("--"):
                     raise EvidenceError(f"{flag} requires a path value")
                 _reject_raw_output_path_smuggling(value, flag)
+                _reject_repository_artifact_path(value, flag)
                 index += 1
                 matched = True
                 break
@@ -811,8 +859,20 @@ def _preflight_numeric_cli_values(
             index += 1
 
 
+def _reject_repository_artifact_path(path: str | Path, label: str) -> None:
+    if _receipt_path_is_repository_fixture(str(path)):
+        raise EvidenceError(
+            f"{label} must not point to checked-in ISO fixture artifacts"
+        )
+
+
+def _reject_repository_output_path(path: Path, label: str) -> None:
+    _reject_repository_artifact_path(path, label)
+
+
 def _write_text_output(path: Path, text: str) -> None:
     _reject_output_path_smuggling(path, "output path")
+    _reject_repository_output_path(path, "output path")
     _reject_symlinked_existing_ancestors(path.parent)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -1198,6 +1258,7 @@ def _verify_receipt_entry_metadata(
     receipt_kind: str,
     allow_legacy_colr007: bool,
     allow_default_profile: bool,
+    require_source_files: bool,
 ) -> None:
     if receipt_kind == "iso-audit-notary":
         _reject_forbidden_receipt_metadata(
@@ -1207,7 +1268,35 @@ def _verify_receipt_entry_metadata(
             receipt_kind,
         )
         _required_sha256(receipt_entry, "anchor_sha256", entry_label)
-        _required_sha256(receipt_entry, "index_sha256", entry_label)
+        index_sha256 = _required_sha256(receipt_entry, "index_sha256", entry_label)
+        anchor_path = _validate_notary_anchor_path(
+            _required_string(receipt_entry, "anchor_path", entry_label),
+            f"{entry_label}.anchor_path",
+            index_sha256,
+        )
+        if _receipt_path_is_repository_fixture(anchor_path):
+            raise EvidenceError(
+                f"{entry_label}.anchor_path must not point to checked-in ISO fixture artifacts"
+            )
+        store_dir = _validate_notary_store_dir(
+            receipt_entry,
+            entry_label,
+            require_source_files=require_source_files,
+        )
+        if store_dir is not None and _receipt_path_is_repository_fixture(store_dir):
+            raise EvidenceError(
+                f"{entry_label}.store_dir must not point to checked-in ISO fixture artifacts"
+            )
+        index_path = _validate_notary_index_path(
+            receipt_entry,
+            entry_label,
+            anchor_path,
+            require_source_files=require_source_files,
+        )
+        if index_path is not None and _receipt_path_is_repository_fixture(index_path):
+            raise EvidenceError(
+                f"{entry_label}.index_path must not point to checked-in ISO fixture artifacts"
+            )
         record_count = receipt_entry.get("record_count")
         if (
             isinstance(record_count, bool)
@@ -1240,6 +1329,14 @@ def _verify_receipt_entry_metadata(
         else:
             _required_profile_id(receipt_entry, "profile", entry_label)
         _nullable_rail_message_id(receipt_entry, "rail_message_id", entry_label)
+        source_path = _validate_xml_path(
+            _required_string(receipt_entry, "source_path", entry_label),
+            f"{entry_label}.source_path",
+        )
+        if _receipt_path_is_repository_fixture(source_path):
+            raise EvidenceError(
+                f"{entry_label}.source_path must not point to checked-in ISO XML fixtures"
+            )
     else:  # pragma: no cover - supported kinds are checked before this helper.
         raise EvidenceError(f"{entry_label}.receipt_kind is unsupported: {receipt_kind!r}")
 
@@ -1253,9 +1350,22 @@ def _receipt_entry_content_metadata(receipt_entry: dict[str, Any]) -> tuple[tupl
         "endpoint_requires_insecure_http",
     )
     if receipt_kind == "iso-audit-notary":
-        keys = ("anchor_sha256", "index_sha256", "record_count")
+        keys = (
+            "anchor_path",
+            "store_dir",
+            "index_path",
+            "anchor_sha256",
+            "index_sha256",
+            "record_count",
+        )
     elif receipt_kind == "iso-rail-gateway":
-        keys = ("message_type", "payload_sha256", "profile", "rail_message_id")
+        keys = (
+            "message_type",
+            "payload_sha256",
+            "profile",
+            "rail_message_id",
+            "source_path",
+        )
     else:  # pragma: no cover - supported kinds are checked before this helper.
         raise EvidenceError(f"unsupported receipt_kind {receipt_kind!r}")
     return tuple((key, receipt_entry.get(key)) for key in (*generic_keys, *keys))
@@ -1438,6 +1548,8 @@ def _required_canonical_base64_list(
     value: dict[str, Any],
     key: str,
     label: str,
+    *,
+    der_kind: str,
 ) -> list[str]:
     items = _required_clean_string_list(value, key, label, max_chars=None)
     if len(items) > MAX_TRUST_DER_BLOBS:
@@ -1464,6 +1576,7 @@ def _required_canonical_base64_list(
                 f"{MAX_TRUST_DER_BYTES} bytes"
             )
         _require_der_sequence(decoded, f"{label}.{key}[{offset}]")
+        _require_der_kind(decoded, f"{label}.{key}[{offset}]", der_kind)
         canonical = base64.b64encode(decoded).decode("ascii")
         if canonical != item:
             raise EvidenceError(f"{label}.{key}[{offset}] must be canonical padded base64")
@@ -1474,6 +1587,60 @@ def _required_canonical_base64_list(
         seen[canonical] = offset
         result.append(canonical)
     return result
+
+
+def _read_der_element(data: bytes, offset: int, label: str) -> DerElement:
+    if offset < 0 or offset >= len(data) or len(data) - offset < 2:
+        raise EvidenceError(f"{label} has truncated DER length")
+    tag = data[offset]
+    length_byte = data[offset + 1]
+    if length_byte < 0x80:
+        length = length_byte
+        header_len = 2
+    else:
+        length_octets = length_byte & 0x7F
+        if length_octets == 0 or length_octets > 4:
+            raise EvidenceError(f"{label} has invalid DER length")
+        if len(data) - offset < 2 + length_octets:
+            raise EvidenceError(f"{label} has truncated DER length")
+        length_bytes = data[offset + 2 : offset + 2 + length_octets]
+        if length_bytes[0] == 0:
+            raise EvidenceError(f"{label} has non-minimal DER length")
+        length = int.from_bytes(length_bytes, "big")
+        if length < 0x80:
+            raise EvidenceError(f"{label} has non-minimal DER length")
+        header_len = 2 + length_octets
+    end = offset + header_len + length
+    if end > len(data):
+        raise EvidenceError(f"{label} DER length does not consume the whole value")
+    return DerElement(
+        tag=tag,
+        header_len=header_len,
+        length=length,
+        start=offset,
+        value_start=offset + header_len,
+        end=end,
+        value=data[offset + header_len : end],
+    )
+
+
+def _der_children(element: DerElement, label: str) -> list[DerElement]:
+    children: list[DerElement] = []
+    offset = 0
+    while offset < len(element.value):
+        child = _read_der_element(element.value, offset, label)
+        children.append(child)
+        offset = child.end
+    return children
+
+
+def _root_der_children(value: bytes, label: str) -> list[DerElement]:
+    root = _read_der_element(value, 0, label)
+    if root.tag != 0x30:
+        raise EvidenceError(f"{label} must be a DER SEQUENCE")
+    if root.end != len(value):
+        raise EvidenceError(f"{label} DER length does not consume the whole value")
+    return _der_children(root, label)
 
 
 def _require_der_sequence(value: bytes, label: str) -> None:
@@ -1504,6 +1671,63 @@ def _require_der_sequence(value: bytes, label: str) -> None:
         raise EvidenceError(
             f"{label} DER length does not consume the whole value"
         )
+
+
+def _require_der_kind(value: bytes, label: str, kind: str) -> None:
+    if kind == TRUST_DER_KIND_CRL:
+        if not _looks_like_x509_crl(value, label):
+            raise EvidenceError(f"{label} must look like an X.509 CRL")
+        return
+    if kind == TRUST_DER_KIND_OCSP:
+        if not _looks_like_ocsp_response(value, label):
+            raise EvidenceError(f"{label} must look like an OCSPResponse")
+        return
+    raise EvidenceError(f"{label} has unsupported DER kind {kind}")
+
+
+def _looks_like_algorithm_identifier(element: DerElement, label: str) -> bool:
+    if element.tag != 0x30:
+        return False
+    children = _der_children(element, label)
+    return bool(children) and children[0].tag == 0x06
+
+
+def _looks_like_x509_crl(value: bytes, label: str) -> bool:
+    children = _root_der_children(value, label)
+    if len(children) != 3 or children[0].tag != 0x30 or children[2].tag != 0x03:
+        return False
+    if not _looks_like_algorithm_identifier(children[1], label):
+        return False
+    tbs_children = _der_children(children[0], label)
+    cursor = 1 if tbs_children and tbs_children[0].tag == 0x02 else 0
+    if len(tbs_children) < cursor + 3:
+        return False
+    this_update = tbs_children[cursor + 2]
+    return (
+        _looks_like_algorithm_identifier(tbs_children[cursor], label)
+        and tbs_children[cursor + 1].tag == 0x30
+        and this_update.tag in (0x17, 0x18)
+    )
+
+
+def _looks_like_ocsp_response(value: bytes, label: str) -> bool:
+    children = _root_der_children(value, label)
+    if not children or children[0].tag != 0x0A:
+        return False
+    if len(children) == 1:
+        return True
+    if len(children) != 2 or children[1].tag != 0xA0:
+        return False
+    response_bytes_children = _der_children(children[1], label)
+    if len(response_bytes_children) != 1 or response_bytes_children[0].tag != 0x30:
+        return False
+    wrapped = _der_children(response_bytes_children[0], label)
+    return (
+        len(wrapped) == 2
+        and wrapped[0].tag == 0x06
+        and wrapped[0].value == OID_OCSP_BASIC_RESPONSE_DER
+        and wrapped[1].tag == 0x04
+    )
 
 
 def _required_der_summary_entries(
@@ -1629,6 +1853,21 @@ def _validate_config_path(raw: str, label: str) -> str:
     _reject_path_smuggling(raw, label)
     if not raw.endswith(".json"):
         raise EvidenceError(f"{label} must point to a .json file")
+    if _canary_config_path_is_repository_template(raw):
+        raise EvidenceError(
+            f"{label} must not point to checked-in operator canary templates"
+        )
+    return raw
+
+
+def _validate_trust_bundle_path(raw: str, label: str) -> str:
+    _reject_path_smuggling(raw, label)
+    if not raw.endswith(".json"):
+        raise EvidenceError(f"{label} must point to a .json file")
+    if _trust_bundle_path_is_repository_template(raw):
+        raise EvidenceError(
+            f"{label} must not point to checked-in trust-bundle templates"
+        )
     return raw
 
 
@@ -1639,11 +1878,100 @@ def _validate_xml_path(raw: str, label: str) -> str:
     return raw
 
 
+def _validate_notary_anchor_path(raw: str, label: str, index_sha256: str) -> str:
+    _reject_path_smuggling(raw, label)
+    parts = raw.split("/")
+    leaf = parts[-1] if parts else ""
+    if leaf == LATEST_ANCHOR_FILE:
+        return raw
+    expected_leaf = f"{index_sha256}.notary.json"
+    if len(parts) >= 2 and parts[-2] == ANCHOR_DIR and leaf == expected_leaf:
+        return raw
+    raise EvidenceError(
+        f"{label} must be {LATEST_ANCHOR_FILE} or {ANCHOR_DIR}/<index_sha256>.notary.json"
+    )
+
+
+def _validate_notary_store_dir(
+    receipt_entry: dict[str, Any],
+    entry_label: str,
+    *,
+    require_source_files: bool,
+) -> str | None:
+    if "store_dir" not in receipt_entry or receipt_entry["store_dir"] is None:
+        if require_source_files:
+            raise EvidenceError(f"{entry_label}.store_dir must be recorded")
+        return None
+    raw = receipt_entry["store_dir"]
+    if not isinstance(raw, str) or not raw.strip():
+        raise EvidenceError(f"{entry_label}.store_dir must be a non-empty path")
+    return _validate_artifact_path(raw, f"{entry_label}.store_dir")
+
+
+def _expected_notary_index_path(anchor_path: str) -> str:
+    parts = anchor_path.split("/")
+    if parts[-1] == LATEST_ANCHOR_FILE:
+        export_parts = parts[:-1]
+    else:
+        export_parts = parts[:-2]
+    return "/".join([*export_parts, INDEX_FILE]) if export_parts else INDEX_FILE
+
+
+def _validate_notary_index_path(
+    receipt_entry: dict[str, Any],
+    entry_label: str,
+    anchor_path: str,
+    *,
+    require_source_files: bool,
+) -> str | None:
+    if "index_path" not in receipt_entry or receipt_entry["index_path"] is None:
+        if require_source_files:
+            raise EvidenceError(f"{entry_label}.index_path must be recorded")
+        return None
+    raw = receipt_entry["index_path"]
+    if not isinstance(raw, str) or not raw.strip():
+        raise EvidenceError(f"{entry_label}.index_path must be a non-empty path")
+    index_path = _validate_artifact_path(raw, f"{entry_label}.index_path")
+    if _receipt_path_is_repository_fixture(index_path):
+        raise EvidenceError(
+            f"{entry_label}.index_path must not point to checked-in ISO fixture artifacts"
+        )
+    if index_path != _expected_notary_index_path(anchor_path):
+        raise EvidenceError(
+            f"{entry_label}.index_path must be the {INDEX_FILE} peer of anchor_path"
+        )
+    return index_path
+
+
 def _validate_artifact_path(raw: str, label: str) -> str:
     if not raw.strip():
         raise EvidenceError(f"{label} must be a non-empty path")
     _reject_path_smuggling(raw, label)
     return raw
+
+
+def _path_contains_component_sequence(raw: str, components: tuple[str, ...]) -> bool:
+    parts = [part.casefold() for part in raw.split("/") if part]
+    target = [part.casefold() for part in components]
+    if len(parts) < len(target):
+        return False
+    last_start = len(parts) - len(target)
+    return any(
+        parts[offset : offset + len(target)] == target
+        for offset in range(last_start + 1)
+    )
+
+
+def _canary_config_path_is_repository_template(raw: str) -> bool:
+    return _path_contains_component_sequence(raw, REPOSITORY_CANARY_RUNBOOK_PARTS)
+
+
+def _trust_bundle_path_is_repository_template(raw: str) -> bool:
+    return _path_contains_component_sequence(raw, REPOSITORY_TRUST_BUNDLE_PARTS)
+
+
+def _receipt_path_is_repository_fixture(raw: str) -> bool:
+    return _path_contains_component_sequence(raw, REPOSITORY_XML_FIXTURE_PARTS)
 
 
 def _reject_path_smuggling(raw: str, label: str) -> None:
@@ -1849,6 +2177,7 @@ def _verify_receipt_verifier_summary(
             receipt_kind=entry_kind,
             allow_legacy_colr007=allow_legacy_colr007,
             allow_default_profile=allow_default_profile,
+            require_source_files=require_source_files,
         )
         receipt_entry_kinds.add(entry_kind)
         receipt_entries.append(dict(receipt_entry))
@@ -1984,6 +2313,53 @@ def _check_path_command_flags(stage_name: str, command: list[str], label: str) -
     for flag in sorted(STAGE_RECEIPT_PATH_FLAGS.get(stage_name, set())):
         for offset, value in _command_flag_values(command, flag, label):
             _validate_receipt_path(value, f"{label}.command[{offset}]")
+
+
+def _check_executed_command_repository_fixture_paths(
+    stage_name: str,
+    command: list[str],
+    label: str,
+) -> None:
+    if "--receipt-dir" in EXPECTED_STAGE_FLAGS.get(stage_name, set()):
+        for offset, value in _command_flag_values(command, "--receipt-dir", label):
+            if _receipt_path_is_repository_fixture(value):
+                raise EvidenceError(
+                    f"{label}.command[{offset}] must not point to checked-in "
+                    "ISO fixture artifacts"
+                )
+    for flag in sorted(STAGE_ARTIFACT_PATH_FLAGS.get(stage_name, set())):
+        if flag == "--receipt-dir":
+            continue
+        for offset, value in _command_flag_values(command, flag, label):
+            if _receipt_path_is_repository_fixture(value):
+                raise EvidenceError(
+                    f"{label}.command[{offset}] must not point to checked-in "
+                    "ISO fixture artifacts"
+                )
+    for flag in sorted(STAGE_XML_PATH_FLAGS.get(stage_name, set())):
+        for offset, value in _command_flag_values(command, flag, label):
+            if _receipt_path_is_repository_fixture(value):
+                raise EvidenceError(
+                    f"{label}.command[{offset}] must not point to checked-in "
+                    "ISO XML fixtures"
+                )
+    for flag in sorted(STAGE_RECEIPT_PATH_FLAGS.get(stage_name, set())):
+        for offset, value in _command_flag_values(command, flag, label):
+            if _receipt_path_is_repository_fixture(value):
+                raise EvidenceError(
+                    f"{label}.command[{offset}] must not point to checked-in "
+                    "ISO fixture artifacts"
+                )
+
+
+def _check_stage_command_repository_fixture_paths(
+    stage_name: str,
+    command: list[str],
+    label: str,
+) -> None:
+    if stage_name not in EXPECTED_STAGE_FLAGS:
+        raise EvidenceError(f"{label}.name has unsupported canary stage {stage_name!r}")
+    _check_executed_command_repository_fixture_paths(stage_name, command, label)
 
 
 def _check_required_command_flags(stage_name: str, command: list[str], label: str) -> None:
@@ -2430,6 +2806,7 @@ def _stage_summary(
             raise EvidenceError(f"{label}.receipt_dir must be recorded")
         _check_receipt_dir_binding(command, receipt_dir, label)
     _check_stage_command_flags(name, command, label)
+    _check_stage_command_repository_fixture_paths(name, command, label)
     if name == "verify":
         receipt_dirs, receipt_files = _check_verify_receipt_selectors(command, label)
         result = {
@@ -2517,6 +2894,7 @@ def _planned_stage_summary(
             raise EvidenceError(f"{label}.receipt_dir must be recorded")
         _check_receipt_dir_binding(command, receipt_dir, label)
     _check_stage_command_flags(name, command, label)
+    _check_stage_command_repository_fixture_paths(name, command, label)
     receipt_dirs: list[str] = []
     receipt_files: list[str] = []
     if name == "verify":
@@ -2741,6 +3119,10 @@ def _check_rail_receipt_policy_binding(
 def verify_canary_summary(path: Path, args: argparse.Namespace) -> dict[str, Any]:
     """Verify one archived canary summary and return compact evidence metadata."""
 
+    if _receipt_path_is_repository_fixture(str(path)):
+        raise EvidenceError(
+            f"{path} must not point to checked-in ISO fixture artifacts"
+        )
     summary = _require_object(_load_json(path), str(path))
     digest = _require_summary_digest(summary, str(path))
     _reject_unknown_keys(summary, CANARY_SUMMARY_KEYS, str(path))
@@ -3262,6 +3644,10 @@ def _check_trust_bundle(
     args: argparse.Namespace,
 ) -> dict[str, Any]:
     _reject_unknown_keys(bundle, TRUST_BUNDLE_KEYS, label)
+    bundle_path = _validate_trust_bundle_path(
+        _required_string(bundle, "path", label),
+        f"{label}.path",
+    )
     profile_id = _required_profile_id(bundle, "profile_id", label)
     rail = _required_rail(bundle, "rail", label)
     environment = _required_context_string(bundle, "environment", label)
@@ -3539,6 +3925,7 @@ def _check_trust_bundle(
         profile_overrides,
         "x509_crl_der_base64",
         f"{label}.profile_overrides",
+        der_kind=TRUST_DER_KIND_CRL,
     )
     if len(crl_der) != x509_crl_count:
         raise EvidenceError(f"{label}.profile_overrides CRL DER count does not match material")
@@ -3552,6 +3939,7 @@ def _check_trust_bundle(
         profile_overrides,
         "x509_ocsp_response_der_base64",
         f"{label}.profile_overrides",
+        der_kind=TRUST_DER_KIND_OCSP,
     )
     if len(ocsp_der) != x509_ocsp_response_count:
         raise EvidenceError(f"{label}.profile_overrides OCSP DER count does not match material")
@@ -3563,6 +3951,7 @@ def _check_trust_bundle(
     )
 
     return {
+        "path": bundle_path,
         "profile_id": profile_id,
         "rail": rail,
         "environment": environment,
@@ -3587,6 +3976,10 @@ def _check_trust_bundle(
 def verify_trust_summary(path: Path, args: argparse.Namespace) -> dict[str, Any]:
     """Verify one archived trust-bundle summary and return compact metadata."""
 
+    if _receipt_path_is_repository_fixture(str(path)):
+        raise EvidenceError(
+            f"{path} must not point to checked-in ISO fixture artifacts"
+        )
     summary = _require_object(_load_json(path), str(path))
     digest = _require_summary_digest(summary, str(path))
     _reject_unknown_keys(summary, TRUST_SUMMARY_KEYS, str(path))
@@ -3954,6 +4347,18 @@ def _reject_cross_canary_receipt_reuse(canaries: list[dict[str, Any]]) -> None:
 
     seen_paths: dict[str, tuple[int, int]] = {}
     seen_digests: dict[str, tuple[int, int]] = {}
+    source_material_checks: tuple[tuple[str, str], ...] = (
+        ("source_path", "source_path"),
+        ("payload_sha256", "payload_sha256"),
+        ("anchor_path", "anchor_path"),
+        ("anchor_sha256", "anchor_sha256"),
+        ("store_dir", "store_dir"),
+        ("index_path", "index_path"),
+        ("index_sha256", "index_sha256"),
+    )
+    seen_source_material: dict[str, dict[str, tuple[int, int]]] = {
+        field: {} for field, _label in source_material_checks
+    }
     for canary_offset, canary in enumerate(canaries):
         receipt_summary = canary.get("receipt_summary")
         if receipt_summary is None:
@@ -3979,6 +4384,24 @@ def _reject_cross_canary_receipt_reuse(canaries: list[dict[str, Any]]) -> None:
                     f"[{first_receipt}].receipt_sha256"
                 )
             seen_digests[receipt_sha256] = (canary_offset, receipt_offset)
+            for field, field_label in source_material_checks:
+                value = receipt.get(field)
+                if not isinstance(value, str):
+                    continue
+                seen_for_field = seen_source_material[field]
+                previous = seen_for_field.get(value)
+                if previous is None:
+                    seen_for_field[value] = (canary_offset, receipt_offset)
+                    continue
+                first_canary, first_receipt = previous
+                if first_canary == canary_offset:
+                    continue
+                raise EvidenceError(
+                    f"canary_summaries[{canary_offset}].receipt_summary.receipts"
+                    f"[{receipt_offset}].{field_label} duplicates "
+                    f"canary_summaries[{first_canary}].receipt_summary.receipts"
+                    f"[{first_receipt}].{field_label}"
+                )
 
 
 def _reject_cross_trust_profile_reuse(trusts: list[dict[str, Any]]) -> None:
@@ -4069,6 +4492,12 @@ def _reject_canary_rail_receipts_without_trust(
 
 
 def run(args: argparse.Namespace) -> int:
+    if args.summary_out is not None:
+        _reject_repository_output_path(args.summary_out, "output path")
+    for offset, receipt in enumerate(args.receipt):
+        _reject_repository_artifact_path(receipt, f"receipt[{offset}]")
+    for offset, receipt_dir in enumerate(args.receipt_dir):
+        _reject_repository_artifact_path(receipt_dir, f"receipt_dir[{offset}]")
     if not args.canary_summary:
         raise EvidenceError("provide at least one --canary-summary")
     if not args.trust_summary:

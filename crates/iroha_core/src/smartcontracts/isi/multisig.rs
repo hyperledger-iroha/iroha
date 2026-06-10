@@ -5414,6 +5414,11 @@ seiyaku TriggerDispatch {
             .expect("compile staged mint-like contract");
         let bytecode = IvmBytecode::from_compiled(program);
         let trigger_id: iroha_data_model::trigger::TriggerId = "staged_mint_like".parse().unwrap();
+        let mut trigger_metadata = Metadata::default();
+        trigger_metadata.insert(
+            Name::from_str("contract_entrypoint").expect("static metadata key"),
+            Json::new("run"),
+        );
         Register::trigger(Trigger::new(
             trigger_id.clone(),
             Action::new(
@@ -5423,7 +5428,8 @@ seiyaku TriggerDispatch {
                 ExecuteTriggerEventFilter::new()
                     .for_trigger(trigger_id.clone())
                     .under_authority(multisig_id.clone()),
-            ),
+            )
+            .with_metadata(trigger_metadata),
         ))
         .execute(&signer1_id, &mut state_transaction)
         .expect("register staged mint-like trigger");

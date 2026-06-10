@@ -454,6 +454,7 @@ pub(super) fn contiguous_frontier_vote_backed_fast_resend_window(
 struct RbcAvailabilityRescheduleSession {
     invalid: bool,
     delivered: bool,
+    complete_delivery: bool,
     total_chunks: u32,
     received_chunks: u32,
     ready_signatures: usize,
@@ -488,10 +489,7 @@ fn rbc_availability_unresolved_for_reschedule_decision(
         return false;
     }
     let ready_quorum = session.ready_signatures >= session.required_ready;
-    if session.delivered
-        && session.total_chunks != 0
-        && session.received_chunks == session.total_chunks
-    {
+    if session.complete_delivery {
         return !ready_quorum;
     }
     if session.total_chunks == 0 {
@@ -499,7 +497,10 @@ fn rbc_availability_unresolved_for_reschedule_decision(
     }
     let missing_chunks =
         session.total_chunks != 0 && session.received_chunks < session.total_chunks;
-    missing_chunks || !ready_quorum
+    let unverified_complete_chunks = session.delivered
+        && session.total_chunks != 0
+        && session.received_chunks == session.total_chunks;
+    missing_chunks || !ready_quorum || unverified_complete_chunks
 }
 
 fn vote_backed_frontier_reassembly_hard_cap_from_windows(
@@ -779,6 +780,7 @@ impl Actor {
             .map(|session| RbcAvailabilityRescheduleSession {
                 invalid: session.is_invalid(),
                 delivered: session.delivered,
+                complete_delivery: rbc_session_has_complete_delivery(session),
                 total_chunks: session.total_chunks(),
                 received_chunks: session.received_chunks(),
                 ready_signatures: session.ready_signatures.len(),
@@ -3965,8 +3967,23 @@ mod tests {
         Some(RbcAvailabilityRescheduleSession {
             invalid,
             delivered,
+            complete_delivery: delivered && total_chunks != 0 && received_chunks == total_chunks,
             total_chunks,
             received_chunks,
+            ready_signatures,
+            required_ready: 3,
+        })
+    }
+
+    fn rbc_availability_session_unverified_complete(
+        ready_signatures: usize,
+    ) -> Option<RbcAvailabilityRescheduleSession> {
+        Some(RbcAvailabilityRescheduleSession {
+            invalid: false,
+            delivered: true,
+            complete_delivery: false,
+            total_chunks: 4,
+            received_chunks: 4,
             ready_signatures,
             required_ready: 3,
         })
@@ -4095,6 +4112,16 @@ mod tests {
                 pending_entry: false,
                 session: rbc_availability_session(false, true, 4, 4, 3),
                 expected_unresolved: false,
+            },
+            Case {
+                name: "DeliveredCountCompleteUnverifiedReady",
+                da_enabled: true,
+                stall_age_ms: 0,
+                availability_timeout_ms: 100,
+                local_payload_available: false,
+                pending_entry: false,
+                session: rbc_availability_session_unverified_complete(3),
+                expected_unresolved: true,
             },
             Case {
                 name: "CompleteReady",

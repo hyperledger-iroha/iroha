@@ -35869,10 +35869,9 @@ mod tests {
         let mut stx = state_block.transaction();
         stx.zk.stark.enabled = true;
 
-        let wrong_circuit_id = "soracloud_fhe_input_admission_shadow_v1";
-        let vk_box = sample_fhe_input_admission_vk_box_for_circuit(wrong_circuit_id);
-        let vk_id =
-            register_fhe_input_admission_verifier_for_circuit(&mut stx, vk_box, wrong_circuit_id)?;
+        let vk_box = sample_fhe_input_admission_vk_box();
+        let (vk_id, _vk_commitment) =
+            install_fhe_input_admission_verifier_record(&mut stx, vk_box.clone());
         assert_eq!(
             vk_id,
             iroha_data_model::proof::VerifyingKeyId::new(
@@ -35880,6 +35879,11 @@ mod tests {
                 FHE_INPUT_ADMISSION_CIRCUIT_ID,
             )
         );
+        stx.world
+            .verifying_keys
+            .get_mut(&vk_id)
+            .expect("registered input-admission verifier")
+            .circuit_id = "soracloud_fhe_input_admission_shadow_v1".to_string();
 
         isi::DeploySoracloudService {
             bundle: bundle.clone(),
@@ -35897,13 +35901,14 @@ mod tests {
         let residual_bound =
             bfv_encrypted_zero_refresh_residual_multiple_bound(&ram_lfe_bfv_parameters_v1())
                 .expect("fresh input residual bound");
-        let admission_proof = sample_fhe_input_admission_proof(
+        let admission_proof = sample_verified_fhe_input_admission_proof(
             &service_name,
             &binding_name,
             state_key,
             &payload,
             governance_tx_hash,
             residual_bound,
+            &vk_box,
         );
 
         let err = iroha_data_model::isi::InstructionBox::from(isi::MutateSoracloudState {
@@ -35972,18 +35977,21 @@ mod tests {
 
         let vk_box = sample_fhe_input_admission_vk_box();
         let wrong_version = u32::from(SORACLOUD_FHE_INPUT_ADMISSION_PROOF_VERSION_V1) + 1;
-        let vk_id = register_fhe_input_admission_verifier_for_circuit_and_version(
-            &mut stx,
-            vk_box,
-            FHE_INPUT_ADMISSION_CIRCUIT_ID,
-            wrong_version,
-        )?;
+        let (vk_id, _vk_commitment) =
+            install_fhe_input_admission_verifier_record(&mut stx, vk_box.clone());
+        stx.world
+            .verifying_keys
+            .get_mut(&vk_id)
+            .expect("registered input-admission verifier")
+            .version = wrong_version;
         assert_eq!(
             stx.world
-                .verifying_keys_by_circuit
-                .get(&(FHE_INPUT_ADMISSION_CIRCUIT_ID.to_string(), wrong_version)),
-            Some(&vk_id),
-            "test setup must make the non-v1 verifier record active"
+                .verifying_keys
+                .get(&vk_id)
+                .expect("registered input-admission verifier")
+                .version,
+            wrong_version,
+            "test setup must drift the registered verifier record version"
         );
 
         isi::DeploySoracloudService {
@@ -36002,13 +36010,14 @@ mod tests {
         let residual_bound =
             bfv_encrypted_zero_refresh_residual_multiple_bound(&ram_lfe_bfv_parameters_v1())
                 .expect("fresh input residual bound");
-        let admission_proof = sample_fhe_input_admission_proof(
+        let admission_proof = sample_verified_fhe_input_admission_proof(
             &service_name,
             &binding_name,
             state_key,
             &payload,
             governance_tx_hash,
             residual_bound,
+            &vk_box,
         );
 
         let err = iroha_data_model::isi::InstructionBox::from(isi::MutateSoracloudState {

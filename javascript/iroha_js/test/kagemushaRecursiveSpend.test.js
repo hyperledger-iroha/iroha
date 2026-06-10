@@ -173,6 +173,14 @@ function kagemushaNoritoFrameWithPayload(schemaByte) {
   return frame;
 }
 
+function kagemushaNoritoFrameWithHeaderPadding(archive, padding) {
+  return Buffer.concat([
+    archive.subarray(0, 40),
+    Buffer.from(padding),
+    archive.subarray(40),
+  ]);
+}
+
 const TEST_CRC64_MASK = 0xffff_ffff_ffff_ffffn;
 const TEST_CRC64_REFLECTED_POLY = 0xc96c_5795_d787_0f42n;
 const TEST_CRC64_TABLE = (() => {
@@ -1461,6 +1469,63 @@ test("Kagemusha recursive spend compact projection verifier probes and delegates
         verifierRecordArchive,
         2,
       ]);
+      assert.equal(
+        kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection(
+          compactTokenArchive,
+          verifierRecordArchive,
+          2n,
+        ),
+        true,
+      );
+      assert.deepEqual(calls.at(-1), [
+        "verify-at-height",
+        compactTokenArchive,
+        verifierRecordArchive,
+        2n,
+      ]);
+      assert.equal(
+        kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection(
+          compactTokenArchive,
+          verifierRecordArchive,
+          0xffff_ffff_ffff_ffffn,
+        ),
+        true,
+      );
+      assert.deepEqual(calls.at(-1), [
+        "verify-at-height",
+        compactTokenArchive,
+        verifierRecordArchive,
+        0xffff_ffff_ffff_ffffn,
+      ]);
+      const callsBeforeInvalidHeights = calls.length;
+      const invalidBlockHeights = [
+        [true, /blockHeight must be a number or bigint/],
+        [false, /blockHeight must be a number or bigint/],
+        ["1", /blockHeight must be a number or bigint/],
+        [{ value: 1 }, /blockHeight must be a number or bigint/],
+        [1.5, /blockHeight must be an integer/],
+        [NaN, /blockHeight must be an integer/],
+        [Infinity, /blockHeight must be an integer/],
+        [-1, /blockHeight must be non-negative/],
+        [-1n, /blockHeight must be non-negative/],
+        [
+          Number.MAX_SAFE_INTEGER + 1,
+          /blockHeight number must be a safe integer; use bigint for larger u64 values/,
+        ],
+        [0x1_0000_0000_0000_0000n, /blockHeight must fit in u64/],
+      ];
+      for (const [badHeight, errorPattern] of invalidBlockHeights) {
+        assert.throws(
+          () =>
+            kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection(
+              compactTokenArchive,
+              verifierRecordArchive,
+              badHeight,
+            ),
+          errorPattern,
+        );
+        assert.equal(calls.length, callsBeforeInvalidHeights);
+      }
     },
   );
 
@@ -2855,19 +2920,48 @@ test("Kagemusha recursive spend helpers reject oversized native outputs", () => 
 });
 
 test("Kagemusha recursive spend helpers reject malformed Norito native outputs", () => {
-  const binding = completeRecursiveSpendBinding({
-    kagemushaRecursiveSpendRedeem(request) {
-      rejectMalformedProbe("redeem", request);
-      return Buffer.from([0x01]);
-    },
-  });
+  function assertRejectsMalformedNativeRedeemOutput(output) {
+    const binding = completeRecursiveSpendBinding({
+      kagemushaRecursiveSpendRedeem(request) {
+        rejectMalformedProbe("redeem", request);
+        return output;
+      },
+    });
 
-  withNativeBinding(binding, () => {
-    assert.throws(
-      () => kagemushaRecursiveSpendRedeem(kagemushaInputArchive(0x8d)),
-      /native kagemushaRecursiveSpendRedeem returned invalid Norito archive/,
-    );
-  });
+    withNativeBinding(binding, () => {
+      assert.throws(
+        () => kagemushaRecursiveSpendRedeem(kagemushaInputArchive(0x8d)),
+        /native kagemushaRecursiveSpendRedeem returned invalid Norito archive/,
+      );
+    });
+  }
+
+  assertRejectsMalformedNativeRedeemOutput(Buffer.from([0x01]));
+
+  const compressed = kagemushaNoritoFrameWithPayload(0x36);
+  compressed[22] = 1;
+  assertRejectsMalformedNativeRedeemOutput(compressed);
+
+  const unsupportedFlags = kagemushaNoritoFrameWithPayload(0x36);
+  unsupportedFlags[39] = 0x08;
+  assertRejectsMalformedNativeRedeemOutput(unsupportedFlags);
+
+  const invalidFieldBitset = kagemushaNoritoFrameWithPayload(0x36);
+  invalidFieldBitset[39] = 0x20;
+  assertRejectsMalformedNativeRedeemOutput(invalidFieldBitset);
+
+  assertRejectsMalformedNativeRedeemOutput(
+    kagemushaNoritoFrameWithHeaderPadding(
+      kagemushaNoritoFrameWithPayload(0x36),
+      Buffer.from([0x7f]),
+    ),
+  );
+  assertRejectsMalformedNativeRedeemOutput(
+    kagemushaNoritoFrameWithHeaderPadding(
+      kagemushaNoritoFrameWithPayload(0x36),
+      Buffer.alloc(65),
+    ),
+  );
 });
 
 test("Kagemusha recursive spend helpers reject empty-payload Norito native outputs", () => {

@@ -57,6 +57,10 @@ RESERVED_PLACEHOLDER_HOST_SUFFIXES = {
 TEMPLATE_CANARY_ENDPOINT_HOSTS = {
     "operator-canary.bank",
 }
+REPOSITORY_XML_FIXTURE_PARTS = (
+    "fixtures",
+    "iso20022",
+)
 NAT64_WELL_KNOWN_PREFIX = ipaddress.ip_network("64:ff9b::/96")
 IPV4_COMPATIBLE_IPV6_PREFIX = ipaddress.ip_network("::/96")
 RECEIPT_DIGEST_FIELD = "receipt_sha256"
@@ -693,6 +697,10 @@ def _preflight_numeric_cli_values(
 
 def _ensure_output_directory(path: Path, label: str) -> None:
     _reject_output_path_smuggling(path, label)
+    if _path_is_repository_iso_fixture(str(path)):
+        raise AdapterError(
+            f"{label} must not point to checked-in ISO fixture artifacts"
+        )
     _reject_symlinked_existing_ancestors(path)
     if path.exists() or path.is_symlink():
         mode = path.lstat().st_mode
@@ -722,6 +730,10 @@ def _ensure_output_file_target(path: Path) -> None:
 
 def _write_text_output(path: Path, text: str) -> None:
     _reject_output_path_smuggling(path, "output path")
+    if _path_is_repository_iso_fixture(str(path)):
+        raise AdapterError(
+            "output path must not point to checked-in ISO fixture artifacts"
+        )
     _reject_symlinked_existing_ancestors(path.parent)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -878,6 +890,10 @@ def verify_message_file(
     """Verify a gateway XML payload and its sidecar metadata."""
 
     _reject_raw_output_path_smuggling(str(xml_path), "message XML path")
+    if _path_is_repository_iso_fixture(str(xml_path)):
+        raise AdapterError(
+            f"{xml_path} must not point to checked-in ISO XML fixtures"
+        )
     _validate_path_argument(str(xml_path.name), f"{xml_path} filename")
     if xml_path.suffix.lower() != ".xml":
         raise AdapterError(f"{xml_path} must use a .xml suffix")
@@ -1023,6 +1039,22 @@ def _validate_path_argument(raw: str, label: str) -> None:
             raise AdapterError(f"{label} must not contain dot or parent segments")
 
 
+def _path_contains_component_sequence(raw: str, components: tuple[str, ...]) -> bool:
+    parts = [part.casefold() for part in raw.split("/") if part]
+    target = [part.casefold() for part in components]
+    if len(parts) < len(target):
+        return False
+    last_start = len(parts) - len(target)
+    return any(
+        parts[offset : offset + len(target)] == target
+        for offset in range(last_start + 1)
+    )
+
+
+def _path_is_repository_iso_fixture(raw: str) -> bool:
+    return _path_contains_component_sequence(raw, REPOSITORY_XML_FIXTURE_PARTS)
+
+
 def resolve_message_paths(inbox_dir: Path, message: str | None) -> list[Path]:
     """Resolve one explicit message or discover all messages under the inbox."""
 
@@ -1037,6 +1069,23 @@ def resolve_message_paths(inbox_dir: Path, message: str | None) -> list[Path]:
     if not resolved_parent.is_relative_to(inbox_root):
         raise AdapterError(f"--message path {message} must stay under --inbox-dir {inbox_root}")
     return [resolved_parent / message_path.name]
+
+
+def _normalise_message_argument(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, (str, os.PathLike)):
+        raw = os.fspath(value)
+        if raw == "":
+            raise AdapterError("message must be a non-empty path")
+        return raw
+    if isinstance(value, (list, tuple)):
+        if not value:
+            return None
+        if len(value) != 1:
+            raise AdapterError("provide at most one --message")
+        return _normalise_message_argument(value[0])
+    raise AdapterError("message must be a path")
 
 
 def _reject_url_control_chars(url: str, label: str) -> None:
@@ -1550,6 +1599,27 @@ def _reject_unused_local_overrides(
 
 
 def run(args: argparse.Namespace) -> int:
+    if args.inbox_dir is None:
+        raise AdapterError("provide --inbox-dir")
+    message = _normalise_message_argument(args.message)
+    _reject_output_path_smuggling(args.inbox_dir, "inbox_dir")
+    if message is not None:
+        _reject_raw_output_path_smuggling(message, "message")
+    if args.bearer_token_file is not None:
+        _reject_output_path_smuggling(args.bearer_token_file, "bearer_token_file")
+    receipt_dir_source = args.receipt_dir or args.inbox_dir / "receipts"
+    _reject_output_path_smuggling(receipt_dir_source, "receipt_dir")
+    receipt_dir = _absolute_path_without_resolving_leaf(
+        receipt_dir_source
+    )
+    if _path_is_repository_iso_fixture(str(receipt_dir)):
+        raise AdapterError(
+            "receipt_dir must not point to checked-in ISO fixture artifacts"
+        )
+    if _path_is_repository_iso_fixture(str(args.inbox_dir)):
+        raise AdapterError(
+            "inbox_dir must not point to checked-in ISO fixture artifacts"
+        )
     timeout_secs = _require_positive_finite_cli_number(args.timeout_secs, "--timeout-secs")
     response_limit_bytes = _require_positive_cli_int(
         args.response_limit_bytes, "--response-limit-bytes"
@@ -1560,11 +1630,8 @@ def run(args: argparse.Namespace) -> int:
     base_url = _validate_base_url(args.torii_base_url, args.allow_insecure_http)
     _ensure_input_directory(args.inbox_dir, "inbox_dir")
     inbox_dir = args.inbox_dir
-    receipt_dir = _absolute_path_without_resolving_leaf(
-        args.receipt_dir or inbox_dir / "receipts"
-    )
     bearer_token = _load_bearer_token(args.bearer_token_file)
-    paths = resolve_message_paths(inbox_dir, args.message)
+    paths = resolve_message_paths(inbox_dir, message)
     messages = [
         verify_message_file(
             path,

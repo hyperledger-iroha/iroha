@@ -5841,23 +5841,24 @@ impl Actor {
     fn pending_block_has_delivered_rbc(
         &self,
         block_hash: HashOf<BlockHeader>,
-        height: u64,
-        view: u64,
+        pending: &PendingBlock,
     ) -> bool {
-        let key = (block_hash, height, view);
+        let key = (block_hash, pending.height, pending.view);
         self.subsystems
             .da_rbc
             .rbc
             .sessions
             .get(&key)
-            .is_some_and(rbc_session_has_complete_delivery)
+            .is_some_and(|session| session.delivered_payload_matches(&pending.payload_hash))
             || self
                 .subsystems
                 .da_rbc
                 .rbc
                 .status_handle
                 .get(&key)
-                .is_some_and(|summary| rbc_status_summary_has_complete_delivery(&summary))
+                .is_some_and(|summary| {
+                    rbc_status_summary_has_delivered_payload(&summary, &pending.payload_hash)
+                })
     }
 
     fn pending_block_has_rbc_ready_quorum(
@@ -5927,7 +5928,7 @@ impl Actor {
         if self.pending_block_has_commit_votes(block_hash, pending.height, pending.view) {
             return Some("commit_votes");
         }
-        if self.pending_block_has_delivered_rbc(block_hash, pending.height, pending.view) {
+        if self.pending_block_has_delivered_rbc(block_hash, pending) {
             return Some("rbc_deliver");
         }
         if self.pending_block_has_rbc_ready_quorum(block_hash, pending.height, pending.view) {
@@ -9334,7 +9335,7 @@ impl Actor {
         }
         let block_height = block_header.height().get();
         let tip_height_u64 = u64::try_from(tip_height).unwrap_or(u64::MAX);
-        if session.delivered && block_height <= tip_height_u64 {
+        if rbc_session_has_complete_delivery(session) && block_height <= tip_height_u64 {
             return false;
         }
         let extends_tip = pending_extends_tip(
@@ -9425,7 +9426,7 @@ impl Actor {
         key: super::rbc_store::SessionKey,
         session: &RbcSession,
     ) -> bool {
-        session.delivered && key.1 <= self.committed_height_snapshot()
+        rbc_session_has_complete_delivery(session) && key.1 <= self.committed_height_snapshot()
     }
 
     fn allow_exact_frontier_recovered_rbc_chunk_repair(
@@ -15538,7 +15539,52 @@ impl Actor {
         if !matches!(consensus_mode, ConsensusMode::Permissioned) {
             return false;
         }
-        self.rbc_roster_for_session(key).is_empty()
+        if !self.rbc_roster_for_session(key).is_empty() {
+            return false;
+        }
+        let Some(roster_source) = self.rbc_session_roster_source(key) else {
+            return false;
+        };
+        if roster_source.is_authoritative() {
+            return false;
+        }
+        let Some(roster) = self.subsystems.da_rbc.rbc.session_rosters.get(&key) else {
+            return false;
+        };
+        if roster.is_empty() {
+            return false;
+        }
+
+        let fallback_roster = {
+            let world = self.state.world_view();
+            let commit_topology = self.state.commit_topology_snapshot();
+            let roster = self.active_topology_with_genesis_fallback_from_world(
+                &world,
+                commit_topology.as_slice(),
+                self.last_committed_height,
+                consensus_mode,
+            );
+            roster::canonicalize_roster_for_mode(roster, consensus_mode)
+        };
+        if fallback_roster.is_empty() {
+            return false;
+        }
+        let canonical_unverified =
+            roster::canonicalize_roster_for_mode(roster.clone(), consensus_mode);
+        if canonical_unverified != *roster {
+            return false;
+        }
+        if canonical_unverified != fallback_roster {
+            return false;
+        }
+
+        let fallback_required = Self::rbc_protocol_deliver_quorum(
+            &super::network_topology::Topology::new(fallback_roster),
+        );
+        let unverified_required = Self::rbc_protocol_deliver_quorum(
+            &super::network_topology::Topology::new(roster.clone()),
+        );
+        unverified_required >= fallback_required
     }
 
     fn ensure_rbc_session_roster(&mut self, key: super::rbc_store::SessionKey) -> Vec<PeerId> {
@@ -15625,7 +15671,9 @@ impl Actor {
             .sessions
             .get(&key)
             .is_some_and(|session| {
-                !session.sent_ready && !session.is_invalid() && !session.delivered
+                !session.sent_ready
+                    && !session.is_invalid()
+                    && !rbc_session_has_complete_delivery(session)
             });
         if retry_ready {
             if let Err(err) = self.maybe_emit_rbc_ready(key) {
@@ -15661,7 +15709,9 @@ impl Actor {
             .rbc
             .sessions
             .get(&key)
-            .is_some_and(|session| !session.delivered && !session.is_invalid());
+            .is_some_and(|session| {
+                !rbc_session_has_complete_delivery(session) && !session.is_invalid()
+            });
         if retry_deliver {
             if let Err(err) = self.maybe_emit_rbc_deliver(key) {
                 debug!(
@@ -26897,7 +26947,9 @@ impl Actor {
                     .sessions
                     .get(&key)
                     .is_some_and(|session| {
-                        !session.sent_ready && !session.is_invalid() && !session.delivered
+                        !session.sent_ready
+                            && !session.is_invalid()
+                            && !rbc_session_has_complete_delivery(session)
                     });
             if attempt_ready {
                 let was_sent = self
@@ -27326,7 +27378,7 @@ impl Actor {
         let Some(mut session) = self.subsystems.da_rbc.rbc.sessions.remove(&key) else {
             return Ok(());
         };
-        if session.delivered || session.is_invalid() {
+        if rbc_session_has_complete_delivery(&session) || session.is_invalid() {
             self.subsystems.da_rbc.rbc.ready_deferral.remove(&key);
             self.subsystems.da_rbc.rbc.deliver_deferral.remove(&key);
             self.subsystems.da_rbc.rbc.sessions.insert(key, session);
@@ -27354,7 +27406,7 @@ impl Actor {
                 return Ok(());
             };
             session = reloaded_session;
-            if session.delivered || session.is_invalid() {
+            if rbc_session_has_complete_delivery(&session) || session.is_invalid() {
                 self.subsystems.da_rbc.rbc.ready_deferral.remove(&key);
                 self.subsystems.da_rbc.rbc.deliver_deferral.remove(&key);
                 self.subsystems.da_rbc.rbc.sessions.insert(key, session);
@@ -28707,15 +28759,12 @@ impl Actor {
                         state_height,
                         tip_hash,
                     )
-                    && (self.pending_block_has_delivered_rbc(
-                        *block_hash,
-                        pending.height,
-                        pending.view,
-                    ) || self.pending_block_has_rbc_ready_quorum(
-                        *block_hash,
-                        pending.height,
-                        pending.view,
-                    ))
+                    && (self.pending_block_has_delivered_rbc(*block_hash, pending)
+                        || self.pending_block_has_rbc_ready_quorum(
+                            *block_hash,
+                            pending.height,
+                            pending.view,
+                        ))
             })
     }
 
@@ -45179,10 +45228,7 @@ impl RbcSession {
 }
 
 fn rbc_session_has_complete_delivery(session: &RbcSession) -> bool {
-    session.delivered
-        && !session.is_invalid()
-        && session.total_chunks() != 0
-        && session.received_chunks() == session.total_chunks()
+    session.delivered && session.has_complete_payload_bytes()
 }
 
 fn rbc_session_availability_incomplete(
@@ -45206,14 +45252,22 @@ fn rbc_session_availability_incomplete(
     }
     let missing_chunks =
         session.total_chunks() != 0 && session.received_chunks() < session.total_chunks();
-    missing_chunks || !ready_quorum
+    let unverified_complete_chunks = session.delivered
+        && session.total_chunks() != 0
+        && session.received_chunks() == session.total_chunks()
+        && !rbc_session_has_complete_delivery(session);
+    missing_chunks || !ready_quorum || unverified_complete_chunks
 }
 
-fn rbc_status_summary_has_complete_delivery(summary: &rbc_status::Summary) -> bool {
+fn rbc_status_summary_has_delivered_payload(
+    summary: &rbc_status::Summary,
+    payload_hash: &Hash,
+) -> bool {
     summary.delivered
         && !summary.invalid
         && summary.total_chunks != 0
         && summary.received_chunks == summary.total_chunks
+        && matches!(summary.payload_hash, Some(hash) if &hash == payload_hash)
 }
 
 /// Errors encountered while reconstructing persisted RBC payloads from disk.

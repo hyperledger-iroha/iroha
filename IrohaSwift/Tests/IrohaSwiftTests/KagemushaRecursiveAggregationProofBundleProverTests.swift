@@ -53,37 +53,43 @@ final class KagemushaRecursiveAggregationProofBundleProverTests: XCTestCase {
 
     func testRejectsMalformedInputArchivesBeforeBridgeCall() {
         let validArchive = validKagemushaNoritoArchive()
-        XCTAssertThrowsError(
-            try KagemushaRecursiveAggregationProofBundleProver
-                .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
-                    recordBundleArchive: Data([0x01, 0x02]),
-                    pallasOpenEnvelopesArchive: validArchive,
-                    bridgeAvailable: false
-                ) {
-                    XCTFail("native recursive aggregation body must not run for malformed record bundles")
-                    return nil
-                }
-        ) { error in
-            XCTAssertEqual(
-                error as? KagemushaRecursiveAggregationProofBundleProverError,
-                .invalidRecordBundleArchive
-            )
+        for (label, malformedArchive) in malformedKagemushaNoritoArchives(validArchive) {
+            XCTAssertThrowsError(
+                try KagemushaRecursiveAggregationProofBundleProver
+                    .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+                        recordBundleArchive: malformedArchive,
+                        pallasOpenEnvelopesArchive: validArchive,
+                        bridgeAvailable: false
+                    ) {
+                        XCTFail("native recursive aggregation body must not run for malformed record bundles")
+                        return nil
+                    },
+                "record bundle \(label) should be rejected"
+            ) { error in
+                XCTAssertEqual(
+                    error as? KagemushaRecursiveAggregationProofBundleProverError,
+                    .invalidRecordBundleArchive
+                )
+            }
         }
-        XCTAssertThrowsError(
-            try KagemushaRecursiveAggregationProofBundleProver
-                .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
-                    recordBundleArchive: validArchive,
-                    pallasOpenEnvelopesArchive: Data([0x01, 0x02]),
-                    bridgeAvailable: false
-                ) {
-                    XCTFail("native recursive aggregation body must not run for malformed Pallas openings")
-                    return nil
-                }
-        ) { error in
-            XCTAssertEqual(
-                error as? KagemushaRecursiveAggregationProofBundleProverError,
-                .invalidPallasOpenEnvelopesArchive
-            )
+        for (label, malformedArchive) in malformedKagemushaNoritoArchives(validArchive) {
+            XCTAssertThrowsError(
+                try KagemushaRecursiveAggregationProofBundleProver
+                    .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+                        recordBundleArchive: validArchive,
+                        pallasOpenEnvelopesArchive: malformedArchive,
+                        bridgeAvailable: false
+                    ) {
+                        XCTFail("native recursive aggregation body must not run for malformed Pallas openings")
+                        return nil
+                    },
+                "Pallas openings \(label) should be rejected"
+            ) { error in
+                XCTAssertEqual(
+                    error as? KagemushaRecursiveAggregationProofBundleProverError,
+                    .invalidPallasOpenEnvelopesArchive
+                )
+            }
         }
     }
 
@@ -170,21 +176,56 @@ final class KagemushaRecursiveAggregationProofBundleProverTests: XCTestCase {
 
     func testRejectsMalformedNativeOutput() {
         let validArchive = validKagemushaNoritoArchive()
-        XCTAssertThrowsError(
-            try KagemushaRecursiveAggregationProofBundleProver
-                .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
-                    recordBundleArchive: validArchive,
-                    pallasOpenEnvelopesArchive: validArchive,
-                    bridgeAvailable: true
-                ) {
-                    Data([0x01])
-                }
-        ) { error in
-            XCTAssertEqual(
-                error as? KagemushaRecursiveAggregationProofBundleProverError,
-                .invalidProofBundleArchive
-            )
+        for (label, nativeOutput) in malformedKagemushaNoritoArchives(validArchive) {
+            XCTAssertThrowsError(
+                try KagemushaRecursiveAggregationProofBundleProver
+                    .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+                        recordBundleArchive: validArchive,
+                        pallasOpenEnvelopesArchive: validArchive,
+                        bridgeAvailable: true
+                    ) {
+                        nativeOutput
+                    },
+                "native output \(label) should be rejected"
+            ) { error in
+                XCTAssertEqual(
+                    error as? KagemushaRecursiveAggregationProofBundleProverError,
+                    .invalidProofBundleArchive
+                )
+            }
         }
+    }
+
+    private func malformedKagemushaNoritoArchives(_ validArchive: Data) -> [(String, Data)] {
+        var compressed = validArchive
+        compressed[22] = 0x01
+        var unsupportedFlags = validArchive
+        unsupportedFlags[39] = NoritoHeader.varintOffsets
+        var invalidFieldBitset = validArchive
+        invalidFieldBitset[39] = NoritoHeader.fieldBitset
+        return [
+            ("truncated", Data([0x01])),
+            ("compressed", compressed),
+            ("unsupported flags", unsupportedFlags),
+            ("invalid field bitset", invalidFieldBitset),
+            (
+                "nonzero header padding",
+                kagemushaNoritoFrameWithHeaderPadding(validArchive, padding: Data([0x7f]))
+            ),
+            (
+                "excessive header padding",
+                kagemushaNoritoFrameWithHeaderPadding(
+                    validArchive,
+                    padding: Data(repeating: 0, count: 65)
+                )
+            ),
+        ]
+    }
+
+    private func kagemushaNoritoFrameWithHeaderPadding(_ archive: Data, padding: Data) -> Data {
+        var padded = archive
+        padded.insert(contentsOf: padding, at: NoritoHeader.encodedLength)
+        return padded
     }
 
     func testRejectsEmptyPayloadNativeOutput() {

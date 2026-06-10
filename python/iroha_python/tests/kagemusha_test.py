@@ -123,6 +123,12 @@ def _kagemusha_norito_frame_with_payload(schema_byte: int) -> bytes:
     return bytes(frame)
 
 
+def _kagemusha_norito_frame_with_header_padding(
+    archive: bytes, padding: bytes
+) -> bytes:
+    return bytes(archive[:40] + padding + archive[40:])
+
+
 _TEST_CRC64_MASK = 0xFFFF_FFFF_FFFF_FFFF
 _TEST_CRC64_REFLECTED_POLY = 0xC96C_5795_D787_0F42
 
@@ -320,6 +326,36 @@ def test_kagemusha_instruction_archive_transaction_helpers_reject_adversarial_in
             tampered,
         )
 
+    def assert_rejects_instruction_archive(mutated: bytearray) -> None:
+        with pytest.raises(
+            ValueError,
+            match="instruction_archive must be a valid Norito archive",
+        ):
+            kagemusha.kagemusha_instruction_archive_instruction(
+                kagemusha.KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_REDEEM_RECURSIVE,
+                mutated,
+            )
+
+    compressed = bytearray(archive)
+    compressed[22] = 1
+    assert_rejects_instruction_archive(compressed)
+
+    unsupported_flags = bytearray(archive)
+    unsupported_flags[39] = 0x08
+    assert_rejects_instruction_archive(unsupported_flags)
+
+    invalid_field_bitset = bytearray(archive)
+    invalid_field_bitset[39] = 0x20
+    assert_rejects_instruction_archive(invalid_field_bitset)
+
+    non_zero_padding = bytearray(archive)
+    non_zero_padding.insert(40, 0x7F)
+    assert_rejects_instruction_archive(non_zero_padding)
+
+    excessive_padding = bytearray(archive)
+    excessive_padding[40:40] = b"\x00" * 65
+    assert_rejects_instruction_archive(excessive_padding)
+
     keypair = _kagemusha_test_keypair()
     authority = keypair.default_account_id("wonderland")
     with pytest.raises(ValueError, match="redeem_request_archive must be a valid Norito archive"):
@@ -328,6 +364,16 @@ def test_kagemusha_instruction_archive_transaction_helpers_reject_adversarial_in
             authority,
             keypair.private_key,
             b"\x00",
+        )
+
+    bad_request_flags = bytearray(_shared_recursive_spend_abi7_archive("redeem_request"))
+    bad_request_flags[39] = 0x20
+    with pytest.raises(ValueError, match="redeem_request_archive must be a valid Norito archive"):
+        kagemusha.build_kagemusha_recursive_redeem_transaction(
+            "chain",
+            authority,
+            keypair.private_key,
+            bad_request_flags,
         )
 
 
@@ -1018,6 +1064,10 @@ def test_recursive_spend_compact_projection_verifier_probes_and_delegates(
     compact_token = _kagemusha_input_archive(0xE2)
     verifier_record = _kagemusha_input_archive(0xE3)
     verify_projection = getattr(kagemusha, RECURSIVE_SPEND_COMPACT_PROJECTION_VERIFY_METHOD)
+    verify_projection_at_height = getattr(
+        kagemusha,
+        RECURSIVE_SPEND_COMPACT_PROJECTION_VERIFY_AT_HEIGHT_METHOD,
+    )
 
     assert (
         kagemusha.is_kagemusha_recursive_spend_compact_payment_token_projection_verifier_available()
@@ -1067,6 +1117,11 @@ def test_recursive_spend_compact_projection_verifier_probes_and_delegates(
         "recursive_spend_compact_projection_verify_at_height",
         compact_token + b"|" + verifier_record + b"|2",
     )
+    assert verify_projection_at_height(compact_token, verifier_record, 3) is True
+    assert native.calls[-1] == (
+        "recursive_spend_compact_projection_verify_at_height",
+        compact_token + b"|" + verifier_record + b"|3",
+    )
 
     with pytest.raises(ValueError, match="compact_token_archive must not be empty"):
         verify_projection(b"", verifier_record)
@@ -1074,6 +1129,25 @@ def test_recursive_spend_compact_projection_verifier_probes_and_delegates(
         verify_projection(compact_token, b"\x01")
     with pytest.raises(ValueError, match="block_height must be non-negative"):
         verify_projection(compact_token, verifier_record, block_height=-1)
+    with pytest.raises(ValueError, match="block_height must be non-negative"):
+        verify_projection_at_height(compact_token, verifier_record, -1)
+    for bad_height in (True, False, 1.5, "1"):
+        with pytest.raises(TypeError, match="block_height must be an integer"):
+            verify_projection(
+                compact_token,
+                verifier_record,
+                block_height=bad_height,  # type: ignore[arg-type]
+            )
+        with pytest.raises(TypeError, match="block_height must be an integer"):
+            verify_projection_at_height(
+                compact_token,
+                verifier_record,
+                bad_height,  # type: ignore[arg-type]
+            )
+    with pytest.raises(ValueError, match="block_height must fit in u64"):
+        verify_projection(compact_token, verifier_record, block_height=1 << 64)
+    with pytest.raises(ValueError, match="block_height must fit in u64"):
+        verify_projection_at_height(compact_token, verifier_record, 1 << 64)
 
     def invalid_boolean(token: bytes, record: bytes) -> str:
         native._reject_probe("recursive spend compact projection verifier", token, record)
@@ -1579,6 +1653,8 @@ def test_recursive_kagemusha_key_artifact_helpers_are_package_root_exports() -> 
         as root_recursive_compact_verify,
         kagemusha_verify_recursive_spend_compact_payment_token_projection
         as root_recursive_spend_compact_projection_verify,
+        kagemusha_verify_recursive_spend_compact_payment_token_projection_at_height
+        as root_recursive_spend_compact_projection_verify_at_height,
         is_kagemusha_recursive_compact_payment_token_prover_available
         as root_is_recursive_compact_prover_available,
         is_kagemusha_recursive_compact_payment_token_verifier_available
@@ -1636,6 +1712,10 @@ def test_recursive_kagemusha_key_artifact_helpers_are_package_root_exports() -> 
         in iroha_python.__all__
     )
     assert (
+        "kagemusha_verify_recursive_spend_compact_payment_token_projection_at_height"
+        in iroha_python.__all__
+    )
+    assert (
         root_requires_key_artifacts_for_init
         is kagemusha.requires_kagemusha_recursive_spend_lineage_key_artifacts_for_init
     )
@@ -1687,6 +1767,10 @@ def test_recursive_kagemusha_key_artifact_helpers_are_package_root_exports() -> 
         root_recursive_spend_compact_projection_verify
         is kagemusha.kagemusha_verify_recursive_spend_compact_payment_token_projection
     )
+    assert (
+        root_recursive_spend_compact_projection_verify_at_height
+        is kagemusha.kagemusha_verify_recursive_spend_compact_payment_token_projection_at_height
+    )
     prover_signature = inspect.signature(root_recursive_compact_prover)
     assert list(prover_signature.parameters) == [
         "record_bundle_archive",
@@ -1705,6 +1789,18 @@ def test_recursive_kagemusha_key_artifact_helpers_are_package_root_exports() -> 
     assert all(
         parameter.default is inspect.Parameter.empty
         for parameter in verifier_signature.parameters.values()
+    )
+    projection_at_height_signature = inspect.signature(
+        root_recursive_spend_compact_projection_verify_at_height
+    )
+    assert list(projection_at_height_signature.parameters) == [
+        "compact_token_archive",
+        "verifier_record_archive",
+        "block_height",
+    ]
+    assert all(
+        parameter.default is inspect.Parameter.empty
+        for parameter in projection_at_height_signature.parameters.values()
     )
 
 
@@ -2848,32 +2944,60 @@ def test_recursive_kagemusha_helpers_reject_oversized_memoryview_native_outputs(
 def test_recursive_kagemusha_helpers_reject_malformed_native_outputs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    native = _Native()
+    def assert_rejects_malformed_native_outputs(output: bytes) -> None:
+        native = _Native()
 
-    def malformed_one(archive: bytes) -> bytes:
-        native._reject_probe("malformed one", archive)
-        return b"\x01"
+        def malformed_one(archive: bytes) -> bytes:
+            native._reject_probe("malformed one", archive)
+            return output
 
-    def malformed_two(first: bytes, second: bytes) -> bytes:
-        native._reject_probe("malformed two", first, second)
-        return b"\x01"
+        def malformed_two(first: bytes, second: bytes) -> bytes:
+            native._reject_probe("malformed two", first, second)
+            return output
 
-    native.kagemusha_prove_verified_compact_payment_token_with_records = malformed_one
-    setattr(native, RECURSIVE_AGGREGATION_METHOD, malformed_two)
-    native.kagemusha_recursive_spend_redeem = malformed_one
-    monkeypatch.setattr(kagemusha, "load_crypto_extension", lambda: native)
+        native.kagemusha_prove_verified_compact_payment_token_with_records = malformed_one
+        setattr(native, RECURSIVE_AGGREGATION_METHOD, malformed_two)
+        native.kagemusha_recursive_spend_redeem = malformed_one
+        monkeypatch.setattr(kagemusha, "load_crypto_extension", lambda: native)
 
-    with pytest.raises(RuntimeError, match="returned invalid Norito archive"):
-        kagemusha.kagemusha_prove_verified_compact_payment_token_with_records(
-            _kagemusha_input_archive(0xC6)
+        with pytest.raises(RuntimeError, match="returned invalid Norito archive"):
+            kagemusha.kagemusha_prove_verified_compact_payment_token_with_records(
+                _kagemusha_input_archive(0xC6)
+            )
+        with pytest.raises(RuntimeError, match="returned invalid Norito archive"):
+            getattr(kagemusha, RECURSIVE_AGGREGATION_METHOD)(
+                _kagemusha_input_archive(0xC7),
+                _kagemusha_input_archive(0xC8),
+            )
+        with pytest.raises(RuntimeError, match="returned invalid Norito archive"):
+            kagemusha.kagemusha_recursive_spend_redeem(
+                _kagemusha_input_archive(0x87)
+            )
+
+    assert_rejects_malformed_native_outputs(b"\x01")
+
+    compressed = bytearray(_kagemusha_norito_frame_with_payload(0x4B))
+    compressed[22] = 1
+    assert_rejects_malformed_native_outputs(bytes(compressed))
+
+    unsupported_flags = bytearray(_kagemusha_norito_frame_with_payload(0x4B))
+    unsupported_flags[39] = 0x08
+    assert_rejects_malformed_native_outputs(bytes(unsupported_flags))
+
+    invalid_field_bitset = bytearray(_kagemusha_norito_frame_with_payload(0x4B))
+    invalid_field_bitset[39] = 0x20
+    assert_rejects_malformed_native_outputs(bytes(invalid_field_bitset))
+
+    assert_rejects_malformed_native_outputs(
+        _kagemusha_norito_frame_with_header_padding(
+            _kagemusha_norito_frame_with_payload(0x4B), b"\x7f"
         )
-    with pytest.raises(RuntimeError, match="returned invalid Norito archive"):
-        getattr(kagemusha, RECURSIVE_AGGREGATION_METHOD)(
-            _kagemusha_input_archive(0xC7),
-            _kagemusha_input_archive(0xC8),
+    )
+    assert_rejects_malformed_native_outputs(
+        _kagemusha_norito_frame_with_header_padding(
+            _kagemusha_norito_frame_with_payload(0x4B), b"\x00" * 65
         )
-    with pytest.raises(RuntimeError, match="returned invalid Norito archive"):
-        kagemusha.kagemusha_recursive_spend_redeem(_kagemusha_input_archive(0x87))
+    )
 
 
 def test_recursive_kagemusha_helpers_reject_empty_payload_native_outputs(

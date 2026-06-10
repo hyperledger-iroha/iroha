@@ -69,6 +69,9 @@ def receipt_stdout(
                 "endpoint_requires_insecure_http": endpoint_requires_insecure_http,
                 **(
                     {
+                        "anchor_path": f"/ops/iso/notary/latest.notary.json",
+                        "store_dir": "/ops/iso/notary-store",
+                        "index_path": "/ops/iso/notary/messages.index.json",
                         "anchor_sha256": f"{offset + 101:064x}",
                         "index_sha256": f"{offset + 201:064x}",
                         "record_count": 1,
@@ -79,6 +82,7 @@ def receipt_stdout(
                         "payload_sha256": f"{offset + 301:064x}",
                         "profile": "swift-cbpr-plus",
                         "rail_message_id": f"rail-drop-{offset}",
+                        "source_path": f"/ops/iso/rail-inbox/rail-drop-{offset}.xml",
                     }
                 ),
             }
@@ -330,6 +334,33 @@ def refresh_profile_json_sha256(summary):
     return summary
 
 
+def alternate_crl_b64():
+    tbs = trust_test.seq(
+        trust_test.der_integer(1),
+        trust_test.ALG_ID,
+        trust_test.NAME,
+        trust_test.der_time(b"260605000000Z"),
+        trust_test.der_time(b"270605000000Z"),
+    )
+    return base64.b64encode(
+        trust_test.seq(tbs, trust_test.ALG_ID, trust_test.der_bit_string(b"\x05"))
+    ).decode("ascii")
+
+
+ALT_CRL_B64 = alternate_crl_b64()
+ALT_OCSP_B64 = base64.b64encode(
+    trust_test.seq(trust_test.tlv(0x0A, b"\x01"))
+).decode("ascii")
+
+
+def replace_profile_der(summary, override_key, summary_key, der_b64):
+    der = base64.b64decode(der_b64, validate=True)
+    summary["bundles"][0]["profile_overrides"][override_key][0] = der_b64
+    summary["bundles"][0][summary_key][0]["sha256"] = EVIDENCE.sha256_hex(der)
+    summary["bundles"][0][summary_key][0]["byte_len"] = len(der)
+    refresh_profile_json_sha256(summary)
+
+
 def write_https_receipt_dirs(root, *, legacy_colr007=False, default_profile=False):
     export_dir = root / "audit-export"
     export_dir.mkdir()
@@ -440,8 +471,18 @@ def receipt_entries_from_dirs(*receipt_dirs):
                 ),
             }
             if receipt["receipt_kind"] == "iso-audit-notary":
+                anchor = json.loads(Path(receipt["anchor_path"]).read_text(encoding="utf-8"))
+                anchor_path = Path(receipt["anchor_path"])
+                export_dir = (
+                    anchor_path.parent.parent
+                    if anchor_path.parent.name == audit_test.ADAPTER.ANCHOR_DIR
+                    else anchor_path.parent
+                )
                 entry.update(
                     {
+                        "anchor_path": receipt["anchor_path"],
+                        "store_dir": anchor["store_dir"],
+                        "index_path": str(export_dir / audit_test.ADAPTER.INDEX_FILE),
                         "anchor_sha256": receipt["anchor_sha256"],
                         "index_sha256": receipt["index_sha256"],
                         "record_count": receipt["record_count"],
@@ -454,6 +495,7 @@ def receipt_entries_from_dirs(*receipt_dirs):
                         "payload_sha256": receipt["payload_sha256"],
                         "profile": receipt["profile"],
                         "rail_message_id": receipt["rail_message_id"],
+                        "source_path": receipt["xml_path"],
                     }
                 )
             entries.append(entry)
@@ -635,6 +677,101 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 self.assertNotIn(raw_path, message)
                 self.assertNotIn(decoded_secret, message)
                 self.assertNotIn("evidence-path-leak", message)
+
+    def test_summary_output_rejects_repository_fixture_artifacts(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            output_path = root / "fixtures" / "iso20022" / "evidence.summary.json"
+
+            with self.assertRaisesRegex(
+                EVIDENCE.EvidenceError,
+                "output path must not point to checked-in ISO fixture artifacts",
+            ):
+                EVIDENCE._write_text_output(output_path, "{}\n")
+
+            self.assertFalse((root / "fixtures").exists())
+            with self.assertRaisesRegex(
+                EVIDENCE.EvidenceError,
+                "output path must not point to checked-in ISO fixture artifacts",
+            ):
+                EVIDENCE._reject_repository_output_path(
+                    Path("fixtures/iso20022/evidence.summary.json"),
+                    "output path",
+                )
+
+    def test_summary_output_rejects_repository_fixture_before_input_loading(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            output_path = root / "fixtures" / "iso20022" / "evidence.summary.json"
+
+            rc, stdout, stderr = run_evidence(
+                [
+                    "--canary-summary",
+                    str(root / "missing-canary.summary.json"),
+                    "--trust-summary",
+                    str(root / "missing-trust.summary.json"),
+                    "--summary-out",
+                    str(output_path),
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn(
+                "--summary-out must not point to checked-in ISO fixture artifacts",
+                stderr,
+            )
+            self.assertNotIn("does not exist", stderr)
+            self.assertFalse((root / "fixtures").exists())
+
+    def test_direct_receipt_selectors_reject_repository_fixture_artifacts(self):
+        cases = (
+            (
+                "--receipt",
+                Path("fixtures/iso20022/receipts/rail.receipt.json"),
+            ),
+            (
+                "--receipt-dir",
+                Path("fixtures/iso20022/receipts"),
+            ),
+        )
+        for flag, path in cases:
+            with self.subTest(flag=flag):
+                with self.assertRaisesRegex(
+                    EVIDENCE.EvidenceError,
+                    f"{flag} must not point to checked-in ISO fixture artifacts",
+                ):
+                    EVIDENCE._preflight_output_cli_paths([flag, str(path)], {flag})
+
+    def test_direct_receipt_selectors_reject_repository_fixture_before_input_loading(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            cases = (
+                (
+                    "--receipt",
+                    root / "fixtures" / "iso20022" / "receipts" / "rail.receipt.json",
+                ),
+                (
+                    "--receipt-dir",
+                    root / "fixtures" / "iso20022" / "receipts",
+                ),
+            )
+            for flag, path in cases:
+                with self.subTest(flag=flag):
+                    rc, stdout, stderr = run_evidence(
+                        [flag, str(path)],
+                        include_context=False,
+                        include_freshness=False,
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(
+                        f"{flag} must not point to checked-in ISO fixture artifacts",
+                        stderr,
+                    )
+                    self.assertNotIn("provide at least one --canary-summary", stderr)
+                    self.assertFalse((root / "fixtures").exists())
 
     def test_local_path_validators_reject_percent_encoded_smuggling(self):
         overlong_path = "out/" + ("a" * (EVIDENCE.MAX_LOCAL_PATH_CHARS + 1))
@@ -1097,6 +1234,20 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 len(summary["canary_summaries"][0]["receipt_summary"]["receipts"]),
                 2,
             )
+            rail_receipt = next(
+                receipt
+                for receipt in summary["canary_summaries"][0]["receipt_summary"]["receipts"]
+                if receipt["receipt_kind"] == "iso-rail-gateway"
+            )
+            notary_receipt = next(
+                receipt
+                for receipt in summary["canary_summaries"][0]["receipt_summary"]["receipts"]
+                if receipt["receipt_kind"] == "iso-audit-notary"
+            )
+            self.assertTrue(notary_receipt["anchor_path"].endswith("latest.notary.json"))
+            self.assertTrue(notary_receipt["store_dir"].endswith("store"))
+            self.assertTrue(notary_receipt["index_path"].endswith("messages.index.json"))
+            self.assertTrue(rail_receipt["source_path"].endswith("rail-status.xml"))
             self.assertEqual(summary["receipt_verification"]["verified_receipts"], 2)
             self.assertIn(
                 "summary_sha256",
@@ -1118,6 +1269,7 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 r"^[0-9a-f]{64}$",
             )
             trust_profile = summary["trust_summaries"][0]["profiles"][0]
+            self.assertTrue(trust_profile["path"].endswith("trust-bundle.json"))
             self.assertRegex(trust_profile["bundle_sha256"], r"^[0-9a-f]{64}$")
             self.assertEqual(
                 trust_profile["source"],
@@ -1967,6 +2119,105 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
 
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
+
+    def test_canary_config_path_rejects_checked_in_runbook_templates(self):
+        checked_in_runbook = (
+            REPO_ROOT
+            / "fixtures"
+            / "iso20022"
+            / "operator_canary"
+            / "swift_cbpr_plus.preprod.example.json"
+        )
+        cases = (
+            "fixtures/iso20022/operator_canary/swift_cbpr_plus.preprod.example.json",
+            str(checked_in_runbook),
+            "/ops/release/fixtures/iso20022/operator_canary/swift_cbpr_plus.preprod.example.json",
+        )
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            trust_path = write_trust_summary(root / "trust")
+            for offset, config_path in enumerate(cases):
+                with self.subTest(config_path=config_path):
+                    body = valid_canary_summary()
+                    body["config_path"] = config_path
+                    canary_path = write_json(
+                        root / f"template-config-{offset}.summary.json",
+                        digest_summary(body),
+                    )
+
+                    rc, _stdout, stderr = run_evidence(
+                        ["--canary-summary", str(canary_path), "--trust-summary", str(trust_path)]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn("checked-in operator canary templates", stderr)
+
+    def test_trust_bundle_path_rejects_checked_in_templates(self):
+        checked_in_bundle = (
+            REPO_ROOT
+            / "fixtures"
+            / "iso20022"
+            / "trust_bundles"
+            / "swift_cbpr_plus.preprod.example.json"
+        )
+        cases = (
+            "fixtures/iso20022/trust_bundles/swift_cbpr_plus.preprod.example.json",
+            str(checked_in_bundle),
+            "/ops/release/fixtures/iso20022/trust_bundles/swift_cbpr_plus.preprod.example.json",
+        )
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            canary_path = write_canary(root, valid_canary_summary())
+            for offset, bundle_path in enumerate(cases):
+                with self.subTest(bundle_path=bundle_path):
+                    trust_path = write_trust_summary(root / f"trust-template-{offset}")
+                    rewrite_trust_summary(
+                        trust_path,
+                        lambda summary, path=bundle_path: summary["bundles"][0].__setitem__(
+                            "path",
+                            path,
+                        ),
+                    )
+
+                    rc, _stdout, stderr = run_evidence(
+                        ["--canary-summary", str(canary_path), "--trust-summary", str(trust_path)]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn("checked-in trust-bundle templates", stderr)
+
+    def test_summary_input_paths_reject_checked_in_iso_fixture_artifacts(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            fixture_root = root / "fixtures" / "iso20022"
+            fixture_canary_dir = fixture_root / "operator_canary"
+            fixture_trust_dir = fixture_root / "trust_bundles"
+
+            valid_trust_path = write_trust_summary(root / "trust")
+            fixture_canary_path = fixture_canary_dir / "canary.summary.json"
+            rc, _stdout, stderr = run_evidence(
+                [
+                    "--canary-summary",
+                    str(fixture_canary_path),
+                    "--trust-summary",
+                    str(valid_trust_path),
+                ]
+            )
+            self.assertEqual(rc, 2)
+            self.assertIn("must not point to checked-in ISO fixture artifacts", stderr)
+
+            valid_canary_path = write_canary(root)
+            fixture_trust_path = fixture_trust_dir / "trust.summary.json"
+            rc, _stdout, stderr = run_evidence(
+                [
+                    "--canary-summary",
+                    str(valid_canary_path),
+                    "--trust-summary",
+                    str(fixture_trust_path),
+                ]
+            )
+            self.assertEqual(rc, 2)
+            self.assertIn("must not point to checked-in ISO fixture artifacts", stderr)
 
     def test_canary_and_trust_summaries_are_required(self):
         rc, _stdout, stderr = run_evidence([])
@@ -3136,17 +3387,161 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             self.assertEqual(rc, 2)
             self.assertIn("direct receipt archive verification does not include", stderr)
 
+    def test_canary_receipt_source_path_rejects_checked_in_iso_fixtures(self):
+        checked_in_fixture = REPO_ROOT / "fixtures" / "iso20022" / "pacs008_fixture.xml"
+        cases = (
+            "fixtures/iso20022/pacs008_fixture.xml",
+            str(checked_in_fixture),
+            "/ops/release/fixtures/iso20022/pacs008_fixture.xml",
+        )
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            trust_path = write_trust_summary(root / "trust")
+            for offset, source_path in enumerate(cases):
+                with self.subTest(source_path=source_path):
+                    body = valid_canary_summary()
+                    receipt_summary = json.loads(body["stages"][2]["stdout_preview"])
+                    receipt_summary["receipts"][1]["source_path"] = source_path
+                    body["stages"][2]["stdout_preview"] = (
+                        json.dumps(
+                            digest_receipt_summary(receipt_summary),
+                            sort_keys=True,
+                        )
+                        + "\n"
+                    )
+                    body.pop("summary_sha256")
+                    canary_path = write_canary(
+                        root,
+                        digest_summary(body),
+                    )
+
+                    rc, _stdout, stderr = run_evidence(
+                        [
+                            "--canary-summary",
+                            str(canary_path),
+                            "--trust-summary",
+                            str(trust_path),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn("checked-in ISO XML fixtures", stderr)
+
+    def test_canary_notary_receipt_anchor_path_is_required_and_digest_bound(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            trust_path = write_trust_summary(root / "trust")
+            cases = (
+                (
+                    "missing",
+                    lambda receipt: receipt.pop("anchor_path"),
+                    "anchor_path must be a non-empty string",
+                ),
+                (
+                    "wrong-digest-addressed",
+                    lambda receipt: receipt.__setitem__(
+                        "anchor_path",
+                        f"/ops/iso/notary/anchors/{'f' * 64}.notary.json",
+                    ),
+                    "anchor_path must be latest.notary.json or anchors/<index_sha256>.notary.json",
+                ),
+                (
+                    "wrong-leaf",
+                    lambda receipt: receipt.__setitem__(
+                        "anchor_path",
+                        "/ops/iso/notary/current.notary.json",
+                    ),
+                    "anchor_path must be latest.notary.json or anchors/<index_sha256>.notary.json",
+                ),
+                (
+                    "repository-fixture",
+                    lambda receipt: receipt.__setitem__(
+                        "anchor_path",
+                        "/ops/release/fixtures/iso20022/latest.notary.json",
+                    ),
+                    "anchor_path must not point to checked-in ISO fixture artifacts",
+                ),
+                (
+                    "missing-store-dir",
+                    lambda receipt: receipt.pop("store_dir"),
+                    "store_dir must be recorded",
+                ),
+                (
+                    "missing-index-path",
+                    lambda receipt: receipt.pop("index_path"),
+                    "index_path must be recorded",
+                ),
+                (
+                    "repository-store-dir",
+                    lambda receipt: receipt.__setitem__(
+                        "store_dir",
+                        "/ops/release/fixtures/iso20022/notary-store",
+                    ),
+                    "store_dir must not point to checked-in ISO fixture artifacts",
+                ),
+                (
+                    "repository-index-path",
+                    lambda receipt: receipt.__setitem__(
+                        "index_path",
+                        "/ops/release/fixtures/iso20022/notary/messages.index.json",
+                    ),
+                    "index_path must not point to checked-in ISO fixture artifacts",
+                ),
+                (
+                    "wrong-index-peer",
+                    lambda receipt: receipt.__setitem__(
+                        "index_path",
+                        "/ops/iso/notary/anchors/messages.index.json",
+                    ),
+                    "index_path must be the messages.index.json peer of anchor_path",
+                ),
+            )
+            for name, mutate, message in cases:
+                with self.subTest(name=name):
+                    body = valid_canary_summary()
+                    receipt_summary = json.loads(body["stages"][2]["stdout_preview"])
+                    mutate(receipt_summary["receipts"][0])
+                    body["stages"][2]["stdout_preview"] = (
+                        json.dumps(
+                            digest_receipt_summary(receipt_summary),
+                            sort_keys=True,
+                        )
+                        + "\n"
+                    )
+                    body.pop("summary_sha256")
+                    canary_path = write_canary(root, digest_summary(body))
+
+                    rc, _stdout, stderr = run_evidence(
+                        [
+                            "--canary-summary",
+                            str(canary_path),
+                            "--trust-summary",
+                            str(trust_path),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(message, stderr)
+
     def test_direct_receipt_archive_must_bind_canary_receipt_kinds(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
             notary_receipts, rail_receipts = write_https_receipt_dirs(root)
             entries = receipt_entries_from_dirs(notary_receipts, rail_receipts)
-            notary_metadata_keys = {"anchor_sha256", "index_sha256", "record_count"}
+            notary_metadata_keys = {
+                "anchor_path",
+                "store_dir",
+                "index_path",
+                "anchor_sha256",
+                "index_sha256",
+                "record_count",
+            }
             rail_metadata_keys = {
                 "message_type",
                 "payload_sha256",
                 "profile",
                 "rail_message_id",
+                "source_path",
             }
             notary_metadata = {key: entries[0][key] for key in notary_metadata_keys}
             rail_metadata = {key: entries[1][key] for key in rail_metadata_keys}
@@ -3225,6 +3620,11 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             entries = receipt_entries_from_dirs(notary_receipts, rail_receipts)
             entries[0]["status_code"] = 200
             entries[0]["response_body_sha256"] = "f" * 64
+            entries[0]["anchor_path"] = (
+                f"/ops/iso/other-notary/anchors/{entries[0]['index_sha256']}.notary.json"
+            )
+            entries[0]["store_dir"] = "/ops/iso/other-notary-store"
+            entries[0]["index_path"] = "/ops/iso/other-notary/messages.index.json"
             entries[0]["record_count"] = 2
             entries[1]["profile"] = "sepa-sct-inst"
             canary_path = write_canary(
@@ -3426,6 +3826,92 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             self.assertEqual(rc, 2)
             self.assertIn("receipt_summary.receipts[0].receipt_sha256 duplicates", stderr)
             self.assertNotIn(duplicate_digest, stderr)
+
+    def test_canary_source_material_cannot_be_reused_across_relabelled_summaries(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            notary_receipts, rail_receipts = write_https_receipt_dirs(root)
+            entries = receipt_entries_from_dirs(notary_receipts, rail_receipts)
+            canary_one = write_json(
+                root / "canary-one.summary.json",
+                valid_canary_summary(receipt_entries=entries),
+            )
+            entries_two = [dict(entry) for entry in entries]
+            for offset, entry in enumerate(entries_two):
+                entry["path"] = (
+                    f"/ops/iso/relabelled-canary/{entry['receipt_kind']}.{offset}.receipt.json"
+                )
+                entry["receipt_sha256"] = f"{offset + 8:064x}"
+            body_two = valid_canary_summary(receipt_entries=entries_two)
+            body_two["config_path"] = "/ops/iso/canary-two.json"
+            body_two.pop("summary_sha256")
+            canary_two = write_json(
+                root / "canary-two-source-replay.summary.json",
+                digest_summary(body_two),
+            )
+            trust_path = write_trust_summary(root / "trust")
+
+            rc, _stdout, stderr = run_evidence(
+                [
+                    "--canary-summary",
+                    str(canary_one),
+                    "--canary-summary",
+                    str(canary_two),
+                    "--trust-summary",
+                    str(trust_path),
+                    "--allow-canary-stage-receipts-only",
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("receipt_summary.receipts[0].anchor_path duplicates", stderr)
+            self.assertNotIn("latest.notary.json", stderr)
+            self.assertNotIn("rail-status.xml", stderr)
+
+    def test_cross_canary_source_material_replay_rejects_each_compact_field(self):
+        source_fields = (
+            "source_path",
+            "payload_sha256",
+            "anchor_path",
+            "anchor_sha256",
+            "store_dir",
+            "index_path",
+            "index_sha256",
+        )
+        for field in source_fields:
+            with self.subTest(field=field):
+                canaries = [
+                    {
+                        "receipt_summary": {
+                            "receipts": [
+                                {
+                                    "path": "/ops/iso/receipts/one.receipt.json",
+                                    "receipt_sha256": "1" * 64,
+                                    field: "replayed-source-material",
+                                }
+                            ],
+                        },
+                    },
+                    {
+                        "receipt_summary": {
+                            "receipts": [
+                                {
+                                    "path": "/ops/iso/receipts/two.receipt.json",
+                                    "receipt_sha256": "2" * 64,
+                                    field: "replayed-source-material",
+                                }
+                            ],
+                        },
+                    },
+                ]
+
+                with self.assertRaisesRegex(
+                    EVIDENCE.EvidenceError,
+                    rf"receipt_summary\.receipts\[0\]\.{field} duplicates",
+                ) as context:
+                    EVIDENCE._reject_cross_canary_receipt_reuse(canaries)
+
+                self.assertNotIn("replayed-source-material", str(context.exception))
 
     def test_receipt_summary_kind_list_must_be_unique(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -5052,6 +5538,26 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 ["--message", "--payment.xml"]
             )
             planned_message_dash.pop("summary_sha256")
+            planned_rail_fixture_inbox = plan_only_canary_summary()
+            planned_rail_fixture_inbox["planned_stages"][0]["command"][3] = (
+                "/ops/release/fixtures/iso20022/rail-inbox"
+            )
+            planned_rail_fixture_inbox.pop("summary_sha256")
+            planned_rail_fixture_message = plan_only_canary_summary()
+            planned_rail_fixture_message["planned_stages"][0]["command"].extend(
+                ["--message", "/ops/release/fixtures/iso20022/pacs002.xml"]
+            )
+            planned_rail_fixture_message.pop("summary_sha256")
+            planned_notary_fixture_export = plan_only_canary_summary()
+            planned_notary_fixture_export["planned_stages"][1]["command"][3] = (
+                "/ops/release/fixtures/iso20022/notary-export"
+            )
+            planned_notary_fixture_export.pop("summary_sha256")
+            planned_verify_fixture_receipt_dir = plan_only_canary_summary()
+            planned_verify_fixture_receipt_dir["planned_stages"][2]["command"][3] = (
+                "/ops/release/fixtures/iso20022/rail-receipts"
+            )
+            planned_verify_fixture_receipt_dir.pop("summary_sha256")
             cases = (
                 (
                     digest_summary(rail_inbox_traversal),
@@ -5087,6 +5593,26 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     digest_summary(planned_message_dash),
                     ["--allow-plan-only"],
                     "planned_stages[0].command has --message without a value",
+                ),
+                (
+                    digest_summary(planned_rail_fixture_inbox),
+                    ["--allow-plan-only"],
+                    "planned_stages[0].command[3] must not point to checked-in ISO fixture artifacts",
+                ),
+                (
+                    digest_summary(planned_rail_fixture_message),
+                    ["--allow-plan-only"],
+                    "planned_stages[0].command[11] must not point to checked-in ISO XML fixtures",
+                ),
+                (
+                    digest_summary(planned_notary_fixture_export),
+                    ["--allow-plan-only"],
+                    "planned_stages[1].command[3] must not point to checked-in ISO fixture artifacts",
+                ),
+                (
+                    digest_summary(planned_verify_fixture_receipt_dir),
+                    ["--allow-plan-only"],
+                    "planned_stages[2].command[3] must not point to checked-in ISO fixture artifacts",
                 ),
             )
             for body, extra_args, message in cases:
@@ -7111,6 +7637,93 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
 
+    def test_executed_canary_commands_reject_repository_fixture_paths(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            trust_path = write_trust_summary(root)
+            fixture_root = "/ops/fixtures/iso20022"
+            cases = (
+                (
+                    "rail-inbox",
+                    lambda body: body["stages"][0]["command"].__setitem__(
+                        3,
+                        f"{fixture_root}/rail-inbox",
+                    ),
+                    "stages[0].command[3] must not point to checked-in ISO fixture artifacts",
+                ),
+                (
+                    "rail-message",
+                    lambda body: body["stages"][0]["command"].extend(
+                        ["--message", f"{fixture_root}/rail-inbox/payment.xml"]
+                    ),
+                    "stages[0].command[11] must not point to checked-in ISO XML fixtures",
+                ),
+                (
+                    "rail-receipt-dir",
+                    lambda body: (
+                        body["stages"][0]["command"].__setitem__(
+                            7,
+                            f"{fixture_root}/rail-receipts",
+                        ),
+                        body["stages"][0].__setitem__(
+                            "receipt_dir",
+                            f"{fixture_root}/rail-receipts",
+                        ),
+                    ),
+                    "stages[0].command[7] must not point to checked-in ISO fixture artifacts",
+                ),
+                (
+                    "notary-export",
+                    lambda body: body["stages"][1]["command"].__setitem__(
+                        3,
+                        f"{fixture_root}/audit-export",
+                    ),
+                    "stages[1].command[3] must not point to checked-in ISO fixture artifacts",
+                ),
+                (
+                    "notary-receipt-dir",
+                    lambda body: (
+                        body["stages"][1]["command"].__setitem__(
+                            5,
+                            f"{fixture_root}/notary-receipts",
+                        ),
+                        body["stages"][1].__setitem__(
+                            "receipt_dir",
+                            f"{fixture_root}/notary-receipts",
+                        ),
+                    ),
+                    "stages[1].command[5] must not point to checked-in ISO fixture artifacts",
+                ),
+                (
+                    "verify-receipt-dir",
+                    lambda body: body["stages"][2]["command"].__setitem__(
+                        3,
+                        f"{fixture_root}/rail-receipts",
+                    ),
+                    "stages[2].command[3] must not point to checked-in ISO fixture artifacts",
+                ),
+                (
+                    "verify-receipt",
+                    lambda body: body["stages"][2]["command"].extend(
+                        ["--receipt", f"{fixture_root}/rail.receipt.json"]
+                    ),
+                    "stages[2].command[8] must not point to checked-in ISO fixture artifacts",
+                ),
+            )
+            for name, mutate, message in cases:
+                with self.subTest(name=name):
+                    body = valid_canary_summary()
+                    mutate(body)
+                    body.pop("summary_sha256")
+                    canary_path = write_canary(root, digest_summary(body))
+
+                    rc, _stdout, stderr = run_evidence(
+                        ["--canary-summary", str(canary_path), "--trust-summary", str(trust_path)]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(message, stderr)
+
     def test_canary_stage_timestamps_are_required_valid_and_inside_canary_window(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -8840,17 +9453,37 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     "must decode to no more than",
                 ),
                 (
+                    "crl-der-wrong-class",
+                    lambda summary: replace_profile_der(
+                        summary,
+                        "x509_crl_der_base64",
+                        "x509_crls",
+                        trust_test.CERT_ONE_B64,
+                    ),
+                    "must look like an X.509 CRL",
+                ),
+                (
+                    "ocsp-der-wrong-class",
+                    lambda summary: replace_profile_der(
+                        summary,
+                        "x509_ocsp_response_der_base64",
+                        "x509_ocsp_responses",
+                        trust_test.CERT_ONE_B64,
+                    ),
+                    "must look like an OCSPResponse",
+                ),
+                (
                     "crl-der-digest-drift",
                     lambda summary: summary["bundles"][0]["profile_overrides"][
                         "x509_crl_der_base64"
-                    ].__setitem__(0, base64.b64encode(b"\x30\x00").decode("ascii")),
+                    ].__setitem__(0, ALT_CRL_B64),
                     "not recorded in",
                 ),
                 (
                     "ocsp-der-digest-drift",
                     lambda summary: summary["bundles"][0]["profile_overrides"][
                         "x509_ocsp_response_der_base64"
-                    ].__setitem__(0, base64.b64encode(b"\x30\x00").decode("ascii")),
+                    ].__setitem__(0, ALT_OCSP_B64),
                     "not recorded in",
                 ),
                 (

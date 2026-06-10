@@ -173,6 +173,14 @@ final class KagemushaInstructionTransactionEncoderTests: XCTestCase {
             XCTAssertEqual(error as? KagemushaInstructionTransactionError, .invalidInstructionArchive)
         }
 
+        var invalidFieldBitsetArchive = Self.instructionArchive(type: .redeemRecursive, payload: Data([0x01]))
+        invalidFieldBitsetArchive[39] = NoritoHeader.fieldBitset
+        XCTAssertThrowsError(
+            try KagemushaInstructionTransactionEncoder.validateInstructionArchive(invalidFieldBitsetArchive)
+        ) { error in
+            XCTAssertEqual(error as? KagemushaInstructionTransactionError, .invalidInstructionArchive)
+        }
+
         var nonZeroPaddingArchive = Self.instructionArchive(type: .redeemRecursive, payload: Data([0x01]))
         nonZeroPaddingArchive.insert(0xff, at: NoritoHeader.encodedLength)
         XCTAssertThrowsError(
@@ -349,6 +357,22 @@ final class KagemushaInstructionTransactionEncoderTests: XCTestCase {
         unsupportedFlagsArchive[39] = NoritoHeader.varintOffsets
         XCTAssertThrowsError(
             try KagemushaRecursiveRedeemRequestArchive.validate(unsupportedFlagsArchive)
+        ) { error in
+            XCTAssertEqual(error as? KagemushaRecursiveRedeemRequestArchiveError, .invalidRequestArchive)
+        }
+
+        var invalidFieldBitsetArchive = validArchive
+        invalidFieldBitsetArchive[39] = NoritoHeader.fieldBitset
+        XCTAssertThrowsError(
+            try KagemushaRecursiveRedeemRequestArchive.validate(invalidFieldBitsetArchive)
+        ) { error in
+            XCTAssertEqual(error as? KagemushaRecursiveRedeemRequestArchiveError, .invalidRequestArchive)
+        }
+
+        var nonZeroPaddingArchive = validArchive
+        nonZeroPaddingArchive.insert(0xff, at: NoritoHeader.encodedLength)
+        XCTAssertThrowsError(
+            try KagemushaRecursiveRedeemRequestArchive.validate(nonZeroPaddingArchive)
         ) { error in
             XCTAssertEqual(error as? KagemushaRecursiveRedeemRequestArchiveError, .invalidRequestArchive)
         }

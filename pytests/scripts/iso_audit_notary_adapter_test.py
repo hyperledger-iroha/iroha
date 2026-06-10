@@ -1,3 +1,4 @@
+import argparse
 import contextlib
 import http.server
 import importlib.util
@@ -579,6 +580,52 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                 self.assertNotIn(decoded_secret, message)
                 self.assertNotIn("notary-path-leak", message)
 
+    def test_receipt_outputs_reject_repository_fixture_artifacts(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            receipt_dir = root / "fixtures" / "iso20022" / "notary-receipts"
+            receipt_path = root / "fixtures" / "iso20022" / "notary-receipt.json"
+
+            with self.assertRaisesRegex(
+                ADAPTER.AdapterError,
+                "receipt directory must not point to checked-in ISO fixture artifacts",
+            ):
+                ADAPTER._ensure_output_directory(receipt_dir, "receipt directory")
+
+            with self.assertRaisesRegex(
+                ADAPTER.AdapterError,
+                "output path must not point to checked-in ISO fixture artifacts",
+            ):
+                ADAPTER._write_text_output(receipt_path, "{}\n")
+
+            self.assertFalse((root / "fixtures").exists())
+
+    def test_receipt_dir_rejects_repository_fixture_before_export_loading(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            receipt_dir = root / "fixtures" / "iso20022" / "notary-receipts"
+
+            rc, stdout, stderr = run_main(
+                [
+                    "--export-dir",
+                    str(root / "missing-export"),
+                    "--endpoint",
+                    "http://127.0.0.1:1",
+                    "--allow-insecure-http",
+                    "--receipt-dir",
+                    str(receipt_dir),
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn(
+                "receipt_dir must not point to checked-in ISO fixture artifacts",
+                stderr,
+            )
+            self.assertNotIn("does not exist", stderr)
+            self.assertFalse((root / "fixtures").exists())
+
     def test_local_path_validators_reject_percent_encoded_smuggling(self):
         overlong_path = "out/" + ("a" * (ADAPTER.MAX_LOCAL_PATH_CHARS + 1))
         cases = (
@@ -893,6 +940,52 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
             self.assertEqual(stdout, "")
             self.assertEqual(requests, [])
             self.assertIn("record_count must be positive", stderr)
+
+    def test_checked_in_notary_fixture_paths_are_rejected_before_network_delivery(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            cases = (
+                (
+                    "anchor-path",
+                    root / "fixtures" / "iso20022" / "notary-export",
+                    root / "store",
+                    "export_dir must not point to checked-in ISO fixture artifacts",
+                ),
+                (
+                    "store-dir",
+                    root / "notary-export",
+                    root / "fixtures" / "iso20022" / "notary-store",
+                    "store_dir must not point to checked-in ISO fixture artifacts",
+                ),
+            )
+            for name, export_dir, store_dir, message in cases:
+                with self.subTest(name=name):
+                    receipt_dir = root / f"{name}-receipts"
+                    export_dir.mkdir(parents=True, exist_ok=True)
+                    write_export(
+                        export_dir,
+                        store_dir=store_dir,
+                        write_record_sources_flag=True,
+                    )
+                    with capture_server() as (endpoint, requests):
+                        rc, stdout, stderr = run_main(
+                            [
+                                "--export-dir",
+                                str(export_dir),
+                                "--endpoint",
+                                endpoint,
+                                "--allow-insecure-http",
+                                "--receipt-dir",
+                                str(receipt_dir),
+                            ]
+                        )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertEqual(requests, [])
+                    self.assertIn(message, stderr)
+                    self.assertFalse((export_dir / "receipts").exists())
+                    self.assertFalse(receipt_dir.exists())
 
     def test_available_persisted_record_sources_are_verified_before_network_delivery(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -1557,6 +1650,80 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                     self.assertIn(message, stderr)
                     if "secret-looking" in name:
                         self.assertNotIn("notary-secret", stderr)
+
+    def test_direct_run_paths_reject_smuggling_before_export_loading(self):
+        def args_for(root, **overrides):
+            values = {
+                "export_dir": root / "missing-export",
+                "endpoint": [],
+                "receipt_dir": root / "receipts",
+                "bearer_token_file": None,
+                "timeout_secs": 1.0,
+                "response_limit_bytes": 1024,
+                "allow_insecure_http": False,
+                "allow_missing_record_sources": False,
+                "all": False,
+                "dry_run": True,
+            }
+            values.update(overrides)
+            return argparse.Namespace(**values)
+
+        cases = (
+            (
+                "export whitespace",
+                lambda root: args_for(root, export_dir=root / "export dir"),
+                "export_dir must not contain whitespace",
+            ),
+            (
+                "export repository fixture",
+                lambda root: args_for(
+                    root,
+                    export_dir=root / "fixtures" / "iso20022" / "notary-export",
+                ),
+                "export_dir must not point to checked-in ISO fixture artifacts",
+            ),
+            (
+                "receipt parent",
+                lambda root: args_for(
+                    root,
+                    receipt_dir=root / "nested" / ".." / "receipts",
+                ),
+                "receipt_dir must not contain dot or parent segments",
+            ),
+            (
+                "receipt repository fixture",
+                lambda root: args_for(
+                    root,
+                    receipt_dir=root / "fixtures" / "iso20022" / "notary-receipts",
+                ),
+                "receipt_dir must not point to checked-in ISO fixture artifacts",
+            ),
+            (
+                "token secret",
+                lambda root: args_for(
+                    root,
+                    bearer_token_file=root / "token=notary-secret",
+                ),
+                "bearer_token_file must not contain secret-looking material",
+            ),
+        )
+        for name, make_args, message in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+
+                    with self.assertRaises(ADAPTER.AdapterError) as caught:
+                        ADAPTER.run(make_args(root))
+
+                    error = str(caught.exception)
+                    self.assertIn(message, error)
+                    self.assertNotIn("does not exist", error)
+                    self.assertNotIn("notary-secret", error)
+
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            with self.assertRaisesRegex(ADAPTER.AdapterError, "provide --export-dir"):
+                ADAPTER.run(args_for(root, export_dir=None))
 
     def test_numeric_cli_limits_reject_nonpositive_and_nonfinite_before_network_delivery(self):
         cases = (

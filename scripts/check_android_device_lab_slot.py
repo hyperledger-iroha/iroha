@@ -23,13 +23,17 @@ OPTIONAL_EVIDENCE_DIRS: tuple[str, ...] = ("evidence", "handoff", "wallet")
 REQUIRED_KAGEMUSHA_SLOT_ARTIFACT_PATHS: tuple[str, ...] = (
     "telemetry/telemetry.json",
     "telemetry/status.ndjson",
+    "attestation/harness-result.json",
     "attestation/result.json",
+    "attestation/report.json",
     "queue/pending_queue.json",
     "logs/runtime.log",
 )
 KAGEMUSHA_SIGNED_EVIDENCE_ARTIFACT_PATH = "evidence/signed-evidence.json"
 MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES = 16 * 1024 * 1024
+MAX_KAGEMUSHA_OFFLINE_WALLET_APK_BYTES = 64 * 1024 * 1024
 MAX_ANDROID_DEVICE_LAB_JSON_BYTES = 16 * 1024 * 1024
+KAGEMUSHA_OFFLINE_WALLET_APK_PATH = "evidence/offline-wallet-release.apk"
 MAX_ANDROID_DEVICE_LAB_SHA256_MANIFEST_BYTES = 1024 * 1024
 KAGEMUSHA_RUNTIME_LOG_COMPLETE_MARKER = "kagemusha device-lab run complete"
 KAGEMUSHA_RUNTIME_LOG_FAILURE_MARKERS: tuple[str, ...] = (
@@ -48,6 +52,12 @@ KAGEMUSHA_STATUS_FAILURE_VALUES = {
     "timeout",
     "timed_out",
 }
+
+
+def _slot_artifact_max_bytes(relative: str) -> int:
+    if relative == KAGEMUSHA_OFFLINE_WALLET_APK_PATH:
+        return MAX_KAGEMUSHA_OFFLINE_WALLET_APK_BYTES
+    return MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES
 DEVICE_LAB_ROOT_SUMMARY_LABEL = "<local-device-lab-root>"
 SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 SIGNED_AT_UTC_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
@@ -74,21 +84,40 @@ KAGEMUSHA_STANDARD_DEVICE_MINIMUM_OS: dict[str, str] = {
 RAW_TEST_COMMAND_REQUIRED_MARKERS: tuple[str, ...] = (
     ":client-android:assembleRelease",
     ":offline-wallet-android:assembleRelease",
-    "connectedAndroidTest",
-    "KagemushaRecursiveSpendProverTest",
-    "OfflineNoteTransferHandoff",
+    ":offline-wallet-android:connectedDebugAndroidTest",
+    ":offline-wallet-lab-app:assembleRelease",
+    ":offline-wallet-lab-app:installRelease",
+    ":offline-wallet-lab-app:installReleaseAndroidTest",
+    "adb shell am instrument",
+    "org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest",
+    "org.hyperledger.iroha.android.offline.OfflineNoteTransferHandoffTest",
+    "org.hyperledger.iroha.android.offline.KagemushaDeviceLabArtifactExportTest",
 )
-KAGEMUSHA_ANDROID_PRODUCTION_RAW_TEST_COMMAND = (
+KAGEMUSHA_ANDROID_PRODUCTION_RAW_HARNESS_COMMAND = (
     "ANDROID_HARNESS_MAINS="
     "org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest "
     "./gradlew :client-android:assembleRelease "
-    ":offline-wallet-android:assembleRelease connectedAndroidTest "
+    ":offline-wallet-android:assembleRelease "
+    ":offline-wallet-android:connectedDebugAndroidTest "
     "-Pandroid.testInstrumentationRunnerArguments.class="
     "org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest,"
     "org.hyperledger.iroha.android.offline.OfflineNoteTransferHandoffTest"
 )
+KAGEMUSHA_ANDROID_PRODUCTION_RAW_EXPORT_COMMAND = (
+    "./gradlew :offline-wallet-lab-app:assembleRelease "
+    ":offline-wallet-lab-app:installRelease "
+    ":offline-wallet-lab-app:installReleaseAndroidTest"
+)
+KAGEMUSHA_ANDROID_PRODUCTION_RAW_EXPORT_INSTRUMENT_COMMAND = (
+    "adb shell am instrument -w -e class "
+    "org.hyperledger.iroha.android.offline.KagemushaDeviceLabArtifactExportTest "
+    "org.hyperledger.iroha.sdk.offline.wallet.lab.test/"
+    "androidx.test.runner.AndroidJUnitRunner"
+)
 KAGEMUSHA_ANDROID_PRODUCTION_RAW_TEST_COMMANDS: tuple[str, ...] = (
-    KAGEMUSHA_ANDROID_PRODUCTION_RAW_TEST_COMMAND,
+    KAGEMUSHA_ANDROID_PRODUCTION_RAW_HARNESS_COMMAND,
+    KAGEMUSHA_ANDROID_PRODUCTION_RAW_EXPORT_COMMAND,
+    KAGEMUSHA_ANDROID_PRODUCTION_RAW_EXPORT_INSTRUMENT_COMMAND,
 )
 SIGNED_EVIDENCE_SCHEMA = "iroha.android.device_lab.kagemusha.signed_evidence.v1"
 D2D_PAYMENT_TRANSCRIPT_SCHEMA = "iroha.android.device_lab.kagemusha.d2d_payment.v1"
@@ -217,6 +246,44 @@ ATTESTATION_RESULT_FIELDS: frozenset[str] = frozenset(
         "keymint_security_level",
         "strongbox_attestation",
         "physical_device_attestation",
+    }
+)
+ATTESTATION_REPORT_SCHEMA = "iroha.android.device_lab.kagemusha.attestation_report.v1"
+ATTESTATION_REPORT_SLOT_BINDING_FIELDS: tuple[str, ...] = (
+    "slot_id",
+    "device_fingerprint",
+    "os_build_id",
+    "app_package_name",
+    "attestation_challenge_sha256",
+    "attestation_certificate_chain_path",
+    "attestation_certificate_chain_sha256",
+)
+ATTESTATION_REPORT_FIELDS: frozenset[str] = frozenset(
+    {
+        "schema",
+        *ATTESTATION_REPORT_SLOT_BINDING_FIELDS,
+        "verifier",
+        "verification",
+    }
+)
+ATTESTATION_REPORT_VERIFICATION_FIELDS: frozenset[str] = frozenset(
+    {
+        "status",
+        "strongbox_attestation",
+        "physical_device_attestation",
+        "keymint_security_level",
+        "attestation_security_level",
+        "keymaster_security_level",
+    }
+)
+ATTESTATION_HARNESS_RESULT_FIELDS: frozenset[str] = frozenset(
+    {
+        "alias",
+        "attestation_security_level",
+        "keymaster_security_level",
+        "strongbox_attestation",
+        "challenge_hex",
+        "chain_length",
     }
 )
 D2D_PAYMENT_TRANSCRIPT_SLOT_STRING_BINDINGS: tuple[str, ...] = (
@@ -930,6 +997,7 @@ def _read_validated_manifest_artifact_bytes(
     artifact_path: Path,
     expected_stat: os.stat_result,
     relative: str,
+    max_bytes: int = MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES,
 ) -> tuple[bytes | None, list[str]]:
     """Read a manifest artifact without trusting a stale path."""
 
@@ -962,20 +1030,20 @@ def _read_validated_manifest_artifact_bytes(
                 return None, [
                     f"sha256sum.txt references hardlinked artifact {display}"
                 ]
-            if open_stat.st_size > MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES:
+            if open_stat.st_size > max_bytes:
                 return None, [
                     "sha256sum.txt references artifact "
                     f"{display} must be no more than "
-                    f"{MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES} bytes"
+                    f"{max_bytes} bytes"
                 ]
             size = 0
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                 size += len(chunk)
-                if size > MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES:
+                if size > max_bytes:
                     return None, [
                         "sha256sum.txt references artifact "
                         f"{display} must be no more than "
-                        f"{MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES} bytes"
+                        f"{max_bytes} bytes"
                     ]
                 chunks.append(chunk)
             final_path_stat = artifact_path.lstat()
@@ -1010,6 +1078,7 @@ def _manifest_artifact_sha256(
         artifact_path,
         artifact_stat,
         relative,
+        _slot_artifact_max_bytes(relative),
     )
     if read_errors:
         return None, read_errors
@@ -1076,6 +1145,7 @@ def _read_validated_signed_evidence_artifact_bytes(
     artifact_path: Path,
     expected_stat: os.stat_result,
     relative: str,
+    max_bytes: int = MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES,
 ) -> tuple[bytes | None, list[str]]:
     """Read a signed-evidence digest artifact without trusting a stale path."""
 
@@ -1111,20 +1181,20 @@ def _read_validated_signed_evidence_artifact_bytes(
                 return None, [
                     f"signed evidence artifact digest references hardlinked artifact {display}"
                 ]
-            if open_stat.st_size > MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES:
+            if open_stat.st_size > max_bytes:
                 return None, [
                     "signed evidence artifact digest references artifact "
                     f"{display} must be no more than "
-                    f"{MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES} bytes"
+                    f"{max_bytes} bytes"
                 ]
             size = 0
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                 size += len(chunk)
-                if size > MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES:
+                if size > max_bytes:
                     return None, [
                         "signed evidence artifact digest references artifact "
                         f"{display} must be no more than "
-                        f"{MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES} bytes"
+                        f"{max_bytes} bytes"
                     ]
                 chunks.append(chunk)
             final_path_stat = artifact_path.lstat()
@@ -1159,6 +1229,7 @@ def _signed_evidence_artifact_sha256(
         artifact_path,
         artifact_stat,
         relative,
+        _slot_artifact_max_bytes(relative),
     )
     if read_errors:
         return None, read_errors
@@ -1216,6 +1287,7 @@ def _read_validated_metadata_artifact_bytes(
     label: str,
     relative: str,
     unreadable_error: str,
+    max_bytes: int = MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES,
 ) -> tuple[bytes | None, list[str]]:
     """Read an already validated metadata artifact without trusting a stale path."""
 
@@ -1240,18 +1312,18 @@ def _read_validated_metadata_artifact_bytes(
                 ]
             if open_stat.st_nlink > 1:
                 return None, [f"{label} references hardlinked artifact {display}"]
-            if open_stat.st_size > MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES:
+            if open_stat.st_size > max_bytes:
                 return None, [
                     f"{label} references artifact {display} must be no more than "
-                    f"{MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES} bytes"
+                    f"{max_bytes} bytes"
                 ]
             size = 0
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                 size += len(chunk)
-                if size > MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES:
+                if size > max_bytes:
                     return None, [
                         f"{label} references artifact {display} must be no more than "
-                        f"{MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES} bytes"
+                        f"{max_bytes} bytes"
                     ]
                 digest_chunks.append(chunk)
             final_path_stat = artifact_path.lstat()
@@ -1269,6 +1341,7 @@ def _metadata_artifact_bytes_and_sha256(
     relative: str,
     label: str,
     missing_error: str,
+    max_bytes: int = MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES,
 ) -> tuple[bytes | None, str | None, list[str]]:
     """Validate a slot.json-referenced artifact immediately before reading it."""
 
@@ -1287,6 +1360,7 @@ def _metadata_artifact_bytes_and_sha256(
         label,
         relative,
         f"{label} could not be read",
+        max_bytes,
     )
     if read_errors:
         return None, None, read_errors
@@ -1715,6 +1789,200 @@ def validate_attestation_result(
 
     for key in ATTESTATION_RESULT_SLOT_BINDING_FIELDS:
         _attestation_result_matches_slot_metadata(result, metadata, key, errors)
+
+
+def _attestation_report_string(
+    report: dict[str, Any],
+    key: str,
+    errors: list[str],
+) -> str | None:
+    value = report.get(key)
+    if not isinstance(value, str) or not value.strip():
+        errors.append(f"attestation/report.json {key} must be a non-empty string")
+        return None
+    if SECRET_RE.search(value):
+        errors.append(
+            f"attestation/report.json {key} must not contain secret-looking material"
+        )
+        return None
+    return value.strip()
+
+
+def _attestation_report_matches_slot_metadata(
+    report: dict[str, Any],
+    metadata: dict[str, Any],
+    key: str,
+    errors: list[str],
+) -> None:
+    expected = metadata.get(key)
+    actual = _attestation_report_string(report, key, errors)
+    if key.endswith("_sha256") and actual is not None and not SHA256_HEX_RE.fullmatch(actual):
+        errors.append(f"attestation/report.json {key} must be lowercase sha256 hex")
+    if isinstance(expected, str) and actual is not None and actual != expected.strip():
+        errors.append(f"attestation/report.json {key} must match slot.json {key}")
+
+
+def validate_attestation_report(
+    slot_path: Path,
+    metadata: dict[str, Any],
+    errors: list[str],
+) -> None:
+    """Validate the production StrongBox/KeyMint verifier report."""
+
+    if _reject_secret_slot_path(slot_path, errors):
+        return
+    report = _load_json(
+        slot_path / "attestation" / "report.json",
+        "attestation/report.json",
+        errors,
+    )
+    if report is None:
+        return
+
+    for field in sorted(set(report) - ATTESTATION_REPORT_FIELDS):
+        errors.append(
+            f"attestation/report.json contains unexpected field {_display_path(field)}"
+        )
+
+    if report.get("schema") != ATTESTATION_REPORT_SCHEMA:
+        errors.append(f"attestation/report.json schema must be {ATTESTATION_REPORT_SCHEMA}")
+
+    for key in ATTESTATION_REPORT_SLOT_BINDING_FIELDS:
+        _attestation_report_matches_slot_metadata(report, metadata, key, errors)
+
+    _attestation_report_string(report, "verifier", errors)
+    verification = report.get("verification")
+    if not isinstance(verification, dict):
+        errors.append("attestation/report.json verification must be an object")
+        return
+    for field in sorted(set(verification) - ATTESTATION_REPORT_VERIFICATION_FIELDS):
+        errors.append(
+            "attestation/report.json verification contains unexpected field "
+            f"{_display_path(field)}"
+        )
+    status = verification.get("status")
+    if not isinstance(status, str) or not status.strip():
+        errors.append("attestation/report.json verification.status must be a non-empty string")
+    elif status.strip().lower() not in {"ok", "passed"}:
+        errors.append("attestation/report.json verification.status must be ok or passed")
+    if verification.get("strongbox_attestation") is not True:
+        errors.append("attestation/report.json verification.strongbox_attestation must be true")
+    if verification.get("physical_device_attestation") is not True:
+        errors.append(
+            "attestation/report.json verification.physical_device_attestation must be true"
+        )
+
+    keymint_security_level = verification.get("keymint_security_level")
+    if not isinstance(keymint_security_level, str) or not keymint_security_level.strip():
+        errors.append(
+            "attestation/report.json verification.keymint_security_level must be a non-empty string"
+        )
+    elif keymint_security_level.strip().upper() not in STRONGBOX_LEVELS:
+        errors.append(
+            "attestation/report.json verification.keymint_security_level must be STRONGBOX"
+        )
+    for optional_level in ("attestation_security_level", "keymaster_security_level"):
+        value = verification.get(optional_level)
+        if value is None:
+            continue
+        if not isinstance(value, str) or not value.strip():
+            errors.append(
+                f"attestation/report.json verification.{optional_level} must be a non-empty string"
+            )
+        elif value.strip().upper() not in STRONGBOX_LEVELS:
+            errors.append(
+                f"attestation/report.json verification.{optional_level} must be STRONGBOX"
+            )
+
+
+def _attestation_harness_result_string(
+    result: dict[str, Any],
+    key: str,
+    errors: list[str],
+) -> str | None:
+    value = result.get(key)
+    if not isinstance(value, str) or not value.strip():
+        errors.append(f"attestation/harness-result.json {key} must be a non-empty string")
+        return None
+    if SECRET_RE.search(value):
+        errors.append(
+            f"attestation/harness-result.json {key} must not contain secret-looking material"
+        )
+        return None
+    return value.strip()
+
+
+def _certificate_chain_pem_count(payload: bytes) -> int:
+    return payload.count(b"-----BEGIN CERTIFICATE-----")
+
+
+def validate_attestation_harness_result(
+    slot_path: Path,
+    metadata: dict[str, Any],
+    errors: list[str],
+    *,
+    attestation_certificate_chain_bytes: bytes | None = None,
+) -> None:
+    """Validate the original StrongBox attestation harness result preserved in the slot."""
+
+    if _reject_secret_slot_path(slot_path, errors):
+        return
+    result = _load_json(
+        slot_path / "attestation" / "harness-result.json",
+        "attestation/harness-result.json",
+        errors,
+    )
+    if result is None:
+        return
+
+    for field in sorted(set(result) - ATTESTATION_HARNESS_RESULT_FIELDS):
+        errors.append(
+            "attestation/harness-result.json contains unexpected field "
+            f"{_display_path(field)}"
+        )
+
+    _attestation_harness_result_string(result, "alias", errors)
+    for key in ("attestation_security_level", "keymaster_security_level"):
+        level = _attestation_harness_result_string(result, key, errors)
+        if level is not None and level.upper() not in STRONGBOX_LEVELS:
+            errors.append(f"attestation/harness-result.json {key} must be STRONGBOX")
+
+    if result.get("strongbox_attestation") is not True:
+        errors.append("attestation/harness-result.json strongbox_attestation must be true")
+
+    challenge_hex = _attestation_harness_result_string(result, "challenge_hex", errors)
+    challenge: bytes | None = None
+    if challenge_hex is not None:
+        if len(challenge_hex) % 2 != 0:
+            errors.append("attestation/harness-result.json challenge_hex must be even-length hex")
+        else:
+            try:
+                challenge = bytes.fromhex(challenge_hex)
+            except ValueError:
+                errors.append("attestation/harness-result.json challenge_hex must be hex")
+    expected_challenge_digest = metadata.get("attestation_challenge_sha256")
+    if (
+        challenge is not None
+        and isinstance(expected_challenge_digest, str)
+        and SHA256_HEX_RE.fullmatch(expected_challenge_digest)
+        and hashlib.sha256(challenge).hexdigest() != expected_challenge_digest
+    ):
+        errors.append(
+            "attestation/harness-result.json challenge_hex digest must match slot.json attestation_challenge_sha256"
+        )
+
+    chain_length = result.get("chain_length")
+    if not isinstance(chain_length, int) or isinstance(chain_length, bool):
+        errors.append("attestation/harness-result.json chain_length must be an integer")
+    elif chain_length < 2:
+        errors.append("attestation/harness-result.json chain_length must be at least 2")
+    elif attestation_certificate_chain_bytes is not None:
+        certificate_count = _certificate_chain_pem_count(attestation_certificate_chain_bytes)
+        if certificate_count and chain_length != certificate_count:
+            errors.append(
+                "attestation/harness-result.json chain_length must match "
+                "attestation certificate-chain certificate count"
+            )
 
 
 def _d2d_transcript_string(
@@ -2836,6 +3104,7 @@ def validate_kagemusha_production_metadata(
     if metadata is None:
         return errors, details
 
+    attestation_certificate_chain_bytes: bytes | None = None
     validate_slot_metadata_fields(metadata, errors)
     if metadata.get("schema") != "iroha.android.device_lab.kagemusha.v1":
         errors.append("slot.json schema must be iroha.android.device_lab.kagemusha.v1")
@@ -2899,6 +3168,7 @@ def validate_kagemusha_production_metadata(
             if digest_errors:
                 errors.extend(digest_errors)
             elif chain_bytes is not None and actual_chain_digest is not None:
+                attestation_certificate_chain_bytes = chain_bytes
                 _validate_attestation_certificate_chain_artifact(
                     chain_relative,
                     chain_bytes,
@@ -2937,6 +3207,7 @@ def validate_kagemusha_production_metadata(
             apk_relative,
             "slot.json offline_wallet_apk_path",
             "slot.json offline_wallet_apk_path must point to an existing file",
+            _slot_artifact_max_bytes(apk_relative),
         )
         if digest_errors:
             errors.extend(digest_errors)
@@ -3014,6 +3285,13 @@ def validate_kagemusha_production_metadata(
     if security_level is not None and security_level.upper() not in STRONGBOX_LEVELS:
         errors.append("slot.json keymint_security_level must be STRONGBOX")
     validate_attestation_result(slot_path, metadata, errors)
+    validate_attestation_report(slot_path, metadata, errors)
+    validate_attestation_harness_result(
+        slot_path,
+        metadata,
+        errors,
+        attestation_certificate_chain_bytes=attestation_certificate_chain_bytes,
+    )
 
     digest = _require_non_empty_string(metadata, "signed_evidence_artifact_sha256", errors)
     if digest is not None and not SHA256_HEX_RE.fullmatch(digest):
@@ -3520,6 +3798,7 @@ def write_summary(path: Path, summary: dict) -> list[str]:
             f"{MAX_ANDROID_DEVICE_LAB_JSON_BYTES} bytes"
         ]
     tmp_path: Path | None = None
+    write_errors: list[str] = []
     try:
         with tempfile.NamedTemporaryFile(
             "w",
@@ -3535,31 +3814,30 @@ def write_summary(path: Path, summary: dict) -> list[str]:
             os.fsync(handle.fileno())
         errors = validate_summary_output_path(path, "--json-out")
         if errors:
-            return errors
-        os.replace(tmp_path, path)
-        tmp_path = None
+            write_errors.extend(errors)
+        else:
+            os.replace(tmp_path, path)
+            tmp_path = None
     except OSError:
-        return ["--json-out could not be written"]
+        write_errors.append("--json-out could not be written")
     finally:
         if tmp_path is not None:
-            try:
-                tmp_path.unlink()
-            except OSError:
-                pass
+            write_errors.extend(_cleanup_summary_output(tmp_path))
+    if write_errors:
+        return write_errors
     errors = validate_summary_output_path(path, "--json-out")
     if errors:
         return errors
     try:
         parent_fd = os.open(path.parent, os.O_RDONLY)
     except OSError:
-        parent_fd = None
-    if parent_fd is not None:
-        try:
-            os.fsync(parent_fd)
-        except OSError:
-            pass
-        finally:
-            os.close(parent_fd)
+        return ["--json-out parent directory could not be synced"]
+    try:
+        os.fsync(parent_fd)
+    except OSError:
+        return ["--json-out parent directory could not be synced"]
+    finally:
+        os.close(parent_fd)
     errors = validate_summary_output_path(path, "--json-out")
     if errors:
         return errors
@@ -3582,6 +3860,16 @@ def write_summary(path: Path, summary: dict) -> list[str]:
         return readback_errors
     if readback_text != summary_text:
         return ["--json-out write verification failed"]
+    return []
+
+
+def _cleanup_summary_output(path: Path) -> list[str]:
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return []
+    except OSError:
+        return ["--json-out temporary file could not be removed"]
     return []
 
 

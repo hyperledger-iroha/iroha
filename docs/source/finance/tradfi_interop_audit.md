@@ -258,9 +258,10 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
 - Added full Standards Editor XSD fixtures for `pacs.002.001.10`,
   `pacs.004.001.09`, `pacs.004.001.10`, `camt.056.001.08`, and
   `camt.056.001.09` to the offline MDR-derived schema set. The live-profile
-  fixture matrix now admits BAH status, return, and cancellation reports under the configured
-  version/business-service controls for the rails that allow those exact
-  versions.
+  fixture matrix now admits BAH status, return, and cancellation reports,
+  including profile-advertised `pacs.004.001.09` and `camt.056.001.09`
+  variants, under the configured version/business-service controls for the rails
+  that allow those exact versions.
 - Added `fixtures/iso20022/xsd/fixture_manifest.json` plus
   `scripts/iso_xsd_fixture_verify.py`, an offline manifest preflight that binds
   checked-in XSDs to checked-in XML fixtures, verifies schema target namespaces
@@ -533,6 +534,9 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   notation, or IPv6 transition addresses embedding non-global IPv4 addresses,
   accepts checked-in `operator-canary.bank` template endpoints only for
   `--plan-only` validation and rejects them before non-plan child execution,
+  rejects non-plan canary config, rail input/message/receipt-dir, notary
+  export/receipt-dir, and explicit verifier receipt paths under checked-in
+  `fixtures/iso20022/` artifacts before child execution,
   rejects duplicate endpoint lists and duplicate receipt inputs,
   requires list-valued notary and verify receipt-selector fields to be
   explicitly recorded as arrays under `--require-explicit-policy`,
@@ -546,7 +550,8 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   archives. Summary output paths are preflighted
   before subprocess stages, reject control characters, whitespace, leading-dash
   segments, backslashes, semicolon parameters, empty segments, dot/parent
-  traversal, symlinked existing ancestors, and hard-linked, symlink, or
+  traversal, checked-in `fixtures/iso20022/` artifact destinations, symlinked
+  existing ancestors, and hard-linked, symlink, or
   non-regular targets, and are written via exclusive same-directory
   owner-private temporary files with bounded digest-derived names that are
   descriptor-rechecked, fsynced, and atomically replaced where available.
@@ -619,10 +624,69 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   persisted records, nullable context/metadata/history fields, and rail sidecars
   are capped at 4096 characters with label-only diagnostics before mismatch,
   source replay, or sidecar validation can retain oversized operator evidence.
-  Canary runbook generic strings/lists and evidence replay clean strings/lists
-  share the same 4096-character label-only cap before runbook planning or
-  archive validation can preserve oversized metadata; embedded trust DER base64
-  keeps its separate decoded-size guard.
+  Direct trust-bundle generic strings/OID lists, XSD profile-catalog generic
+  strings/lists, canary runbook generic strings/lists, and evidence replay clean
+  strings/lists plus production-readiness compact clean strings/lists share the
+  same 4096-character label-only cap before trust preflight, XSD profile
+  validation, runbook planning, archive validation, or readiness replay can
+  preserve oversized metadata; embedded trust/profile DER base64 keeps its
+  separate decoded-size guard.
+  Direct canary runner, rail-gateway adapter, and audit-notary adapter
+  `run(args)` calls also mirror their CLI path-smuggling guards for
+  config/summary, inbox/message/receipt/token, and export/receipt/token paths
+  before config, inbox, export, or network loading.
+  Production-readiness replay also classifies summaries generated from the
+  checked-in `fixtures/iso20022/xsd/fixture_manifest.json` corpus as
+  `xsd.repository_fixture_manifest` blockers by default, and rejects XSD summary
+  input files under checked-in ISO fixture coordinates as
+  `xsd.repository_xsd_summary` blockers. Direct XSD `--profile-catalog` inputs
+  under checked-in `fixtures/iso20022/` artifacts now fail before manifest
+  loading, and archived `profile_catalog.path` values under those artifacts
+  replay as `xsd.repository_profile_catalog` blockers. Local
+  `--allow-reviewed-xsd-gaps`
+  diagnostic runs can only downgrade reviewed corpus warnings; an unreviewed
+  profile-catalog-only schema gap remains a production blocker and makes the
+  override unused.
+  Operator evidence verification rejects canary summaries whose `config_path`
+  still points at checked-in `fixtures/iso20022/operator_canary/` runbook
+  templates, and final readiness replays the compact path as an
+  `evidence.repository_canary_config` blocker if a forged aggregate summary
+  reintroduces it. The canary runner itself also rejects non-plan
+  config/stage/explicit verifier receipt paths under `fixtures/iso20022/`,
+  while keeping those templates available for `--plan-only` validation.
+  Evidence replay mirrors that rule for executed and planned canary child-command
+  `--inbox-dir`, `--message`, `--export-dir`, `--receipt-dir`, and `--receipt`
+  values so forged archived commands cannot reintroduce repository fixtures.
+  Direct receipt verification and its parent evidence gate also reject
+  `--receipt` and `--receipt-dir` selectors under checked-in
+  `fixtures/iso20022/` artifacts before receipt discovery, child verifier
+  launch, file loading, or digest-bound summary construction.
+  Raw evidence verification also rejects `--canary-summary` and
+  `--trust-summary` inputs under checked-in `fixtures/iso20022/` artifacts, and
+  final readiness blocks forged compact XSD/evidence/canary/trust summary paths
+  that point back to those artifacts.
+  Operator evidence verification also preserves trust-bundle source paths in
+  compact trust profiles and rejects checked-in
+  `fixtures/iso20022/trust_bundles/` template paths; final readiness replays
+  forged compact paths as `trust.repository_trust_bundle` blockers.
+  Rail receipt verification preserves the source XML path as compact
+  `source_path` evidence and rejects checked-in `fixtures/iso20022/*.xml`
+  fixture paths; evidence and final-readiness replay reject forged compact
+  receipt source paths that point back at repository XML fixtures, and the rail
+  gateway adapter rejects checked-in ISO XML fixture inputs before network
+  delivery or receipt output.
+  Notary receipt verification also preserves compact `anchor_path`,
+  `store_dir`, and `index_path` evidence, requires the anchor path to remain
+  either `latest.notary.json` or `anchors/<index_sha256>.notary.json`, requires
+  the index path to stay the `messages.index.json` peer of that anchor export,
+  and evidence/readiness replay includes all three values in direct archive
+  metadata matching so copied summaries cannot strip or drift the operator
+  notary preimage path, source store, or exported audit index while keeping
+  matching digests; raw receipts reject notary anchor/store paths under
+  checked-in `fixtures/iso20022/` artifacts, and compact replay rejects
+  anchor/store/index paths under those artifacts. The audit notary adapter
+  rejects checked-in notary anchor/store fixture inputs before network delivery
+  or receipt output.
   Canary runbooks,
   trust bundles, evidence/readiness summaries, XSD manifests, profile catalogs,
   schema files, XML fixtures, and receipt archive directories must reject
@@ -638,7 +702,20 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   normalization or file discovery, and the canary, XSD, evidence, and readiness
   summary gates also reject secret-looking key/value material in CLI summary
   input/output paths before those paths can be serialized into digest-bound
-  rollups.
+  rollups. Production-readiness direct `run(args)` calls now mirror the same
+  path-smuggling guard for XSD summaries, evidence summaries, and summary
+  outputs before input loading while preserving checked-in fixture summary
+  inputs as structured release blockers; direct XSD and trust verifier
+  `run(args)` calls do the same for manifest/profile-catalog, bundle,
+  profile-output, and summary-output paths before manifest or bundle loading.
+  Summary/profile outputs and rail/notary receipt output directories
+  also reject checked-in `fixtures/iso20022/` artifact destinations during
+  run-level preflight and again before creating parents or writing temporary
+  output files, so those destinations fail before input loading, child stages,
+  schema/trust validation, or network delivery. Live rail/notary adapter runs
+  also reject inbox/export roots under checked-in `fixtures/iso20022/`
+  artifacts before directory discovery, anchor parsing, XML fixture parsing,
+  child execution, or network delivery.
   Canary runbook artifact paths now apply the same narrow
   control-character plus key/value and identifier-style secret-material rejection
   before plan-only summaries or child command arguments are built, while
@@ -822,8 +899,9 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   identifier-style secret-looking path material, and secret-looking repository coordinates during preflight,
   and production readiness replays the same repository-coordinate rejection
   before emitting archived XSD summaries.
-  Archived profile-catalog paths get the same readiness recheck when production
-  readiness consumes archived XSD summaries.
+  Archived profile-catalog paths, including checked-in fixture coordinates, get
+  the same readiness recheck when production readiness consumes archived XSD
+  summaries.
 - Added `scripts/iso_operator_evidence_verify.py`, an offline production
   evidence gate for archived canary and trust-bundle summaries. It caps each
   input JSON file at 4 MiB before parsing, recomputes summary digests, requires
@@ -895,6 +973,7 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   top-level profile id, rail, and signature policy, rechecks override pin/OID
   and CRL/OCSP material counts against the verifier's material summary, binds
   CRL/OCSP override DER back to recorded summary digests and byte lengths,
+  replays the CRL-vs-OCSP material-class checks on the archived override DER,
   rejects malformed policy OIDs or non-canonical, oversized, or non-SEQUENCE
   CRL/OCSP base64, and fails closed on same-count trusted/revoked pin overlap
   attacks.
@@ -1210,7 +1289,7 @@ policy booleans, unique canonical lowercase profile IDs and bundle digests
 across archived trust summaries, known rail IDs, matching profile/rail/policy
 override identities, canonical
 OIDs, bounded canonical base64 DER SEQUENCE blobs, override material counts, and
-CRL/OCSP DER digests and byte lengths that agree with the trust-bundle verifier
+CRL/OCSP DER material-class checks plus digests and byte lengths that agree with the trust-bundle verifier
 summary; and scans
 archived commands/output for obvious secret leakage.
 Plan-only diagnostic archives must still record each planned stage's `dry_run`
@@ -1320,7 +1399,8 @@ budgets, rejects compact `profile_json_emittable` values that no longer match
 the archived source provenance and freshness budget, rejects compact summaries
 that report emitted profile JSON while not emittable, rejects compact
 canary/trust summary paths,
-canary config paths, and receipt paths with embedded whitespace, semicolon path
+canary config paths, receipt paths, and rail receipt `source_path` XML paths
+with embedded whitespace, semicolon path
   parameters, leading dashes, leading-dash path segments, empty segments, raw
   backslashes, or dot/parent traversal, rejects repeated XSD/evidence
 summary paths or copied summaries with the same `summary_sha256`, and rechecks
@@ -1333,13 +1413,17 @@ redistribution marker strength, canonical relative schema paths whose filenames 
 `message_def_id`, fixture paths that remain printable-ASCII relative
 forward-slash XML paths no longer than 2048 characters and without leading
 dashes, URI/drive prefixes, malformed or smuggled percent escapes, empty, dot,
-or non-leading parent segments,
+or non-leading parent segments, schema `target_namespace` binding to
+`message_def_id`, fixture schema-reference message-id and payload-root binding,
 schema-backed/missing-schema consistency, and schema-backed fixture XML
-schema-validation proof. It also rechecks profile-catalog source digests,
+schema-validation proof. It also rechecks archived schema/fixture XML
+identifier strings with the same printable-ASCII, secret-looking-material, and
+256-character caps as the direct XSD verifier, profile-catalog source digests,
 version coverage counts, canonical profile ids, ISO family message types,
 allowed directions, message-definition family binding, and missing-version
-entries, plus skipped family-version alias canonicality and profile catalog count
-consistency, rejects unknown XSD summary fields across strict flags,
+entries, plus skipped family-version alias canonicality and profile-catalog
+`profiles` count consistency against represented profile IDs, rejects unknown
+XSD summary fields across strict flags,
 schema/fixture/gap/profile-catalog entries,
 and the XSD preflight rejects unknown keys in source profile/message catalog
 entries plus present-null optional manifest/profile fields before such fields
@@ -1363,7 +1447,12 @@ whose direct archive carries receipt digests that no canary references, or whose
 canary entries relabel the archived receipt filename or kind, or drift from the
 archived successful status, response-body digest, endpoint-policy evidence, or kind-specific receipt
 metadata. Distinct canary summaries
-must not reuse compact receipt paths or receipt digests. That
+must not reuse compact receipt paths or receipt digests. The evidence gate also
+rejects rail/notary source paths or source digests replayed across distinct
+canary summaries inside one aggregate evidence summary, and final readiness
+aggregation blocks the same source-material replay across distinct evidence
+summaries even when the receipt paths and receipt digests have been relabelled.
+That
 archive verification summary must carry its own
 `summary_sha256`, production policy flags, and a `receipts[]` list binding each
 unique canonical `*.receipt.json` path to its unique `receipt_sha256` and one
@@ -1388,7 +1477,8 @@ accepts an archive, retained in the compact summary, and independently blocked
 by readiness if a replayed summary still carries synthetic DER, record-only
 policy, or insecure source-URL allowances. The rollup also rechecks compact trust-profile
 `bundle_sha256`, CRL/OCSP revocation booleans, material counts, revoked and
-certificate-policy counts, compact DER proof shape and count binding, and
+certificate-policy counts, compact DER proof shape, count binding, and
+cross-role digest reuse, and
 `verified_bundles` profile-count binding. Omitted compact trust-profile
 `source` keys remain malformed, while explicit `source: null` diagnostic replay
 is retained and reported as `trust.source_missing` instead of aborting the
@@ -1398,10 +1488,14 @@ lowercase `profile_json_sha256`; false values, missing or malformed profile JSON
 digests, duplicated compact trust-profile IDs, or duplicated bundle digests are
 production blockers, and `profile_json_emittable` is recomputed from the compact
 source evidence before the rollup is accepted. The rollup also binds canary
-rail evidence to trust material by requiring every `iso-rail-gateway` receipt
-profile exercised by a canary to have a matching compact trust profile for the
-same profile ID and environment; built-in rail-named profiles must also bind to
-the same rail in the trust profile. Evidence and readiness blockers for missing
+rail evidence to trust material by preserving each rail receipt `source_path`,
+blocking repository XML fixture sources, preserving notary receipt
+`anchor_path`, `store_dir`, and `index_path` values in direct archive matching,
+and requiring every `iso-rail-gateway` receipt profile exercised by a canary to
+have a matching compact trust profile for the same profile ID and environment;
+built-in rail-named profiles must also bind to the same rail in the trust
+profile.
+Evidence and readiness blockers for missing
 trust coverage identify the canary receipt index without printing the compact
 profile ID or canary environment label.
 The rollup requires at least one XSD summary and at least
@@ -1450,9 +1544,10 @@ local diagnostic audits of the current checked-in fixture corpus; production
 release evidence should omit them and must make the strict XSD, profile-catalog,
 and receipt-archive checks pass. The final readiness gate rejects those local
 overrides when they are unused, so `--allow-reviewed-xsd-gaps` must correspond
-to at least one reviewed XSD warning and `--allow-canary-stage-receipts-only`
-must correspond to an evidence summary with canary-stage-only receipt policy or
-missing direct receipt archive verification.
+to at least one reviewed XSD or repository-fixture warning, not just an
+unreviewed advertised profile-version gap, and
+`--allow-canary-stage-receipts-only` must correspond to an evidence summary with
+canary-stage-only receipt policy or missing direct receipt archive verification.
 
 ## Gap Register
 

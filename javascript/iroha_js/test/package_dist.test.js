@@ -215,6 +215,7 @@ import {
   PRIVACY_NATIVE_ARCHIVE_MAX_BYTES,
   isPrivacyNativeAvailable,
   privacyCapabilitiesV1,
+  privacyProofRequestV1,
   privacyBuildProofV1,
   privacyVerifyProofV1,
   getPrivacyCapabilities,
@@ -610,6 +611,10 @@ const PRIVACY_CAPABILITIES_ARCHIVE = privacyNoritoFrameWithPayload(0x50);
 const PRIVACY_BUILD_ARCHIVE = privacyNoritoFrameWithPayload(0x42);
 const PRIVACY_VERIFY_ARCHIVE = privacyNoritoFrameWithPayload(0x56);
 const PRIVACY_REQUEST_ARCHIVE = privacyNoritoFrameWithPayload(0x52);
+
+function privacyProofRequestNativeArchive() {
+  return Uint8Array.from(PRIVACY_REQUEST_ARCHIVE);
+}
 
 function malformedPrivacyNativeOutputArchives(schemaByte) {
   const archive = privacyNoritoFrameWithPayload(schemaByte);
@@ -2147,6 +2152,7 @@ test("package dist entrypoint exports privacy native archive helpers", () => {
     "PRIVACY_FFI_ERROR_INVALID_REQUEST",
     "isPrivacyNativeAvailable",
     "privacyCapabilitiesV1",
+    "privacyProofRequestV1",
     "privacyBuildProofV1",
     "privacyVerifyProofV1",
     "getPrivacyCapabilities",
@@ -2157,7 +2163,7 @@ test("package dist entrypoint exports privacy native archive helpers", () => {
     assert.ok(declarationExports.has(name), `missing declaration export ${name}`);
   }
   assert.equal(PRIVACY_FFI_VERSION_V1, 1);
-  assert.equal(PRIVACY_REQUIRED_BRIDGE_ABI_VERSION, 6);
+  assert.equal(PRIVACY_REQUIRED_BRIDGE_ABI_VERSION, 7);
   assert.equal(PRIVACY_FFI_STATUS_ERROR, 1);
   assert.equal(PRIVACY_FFI_ERROR_NULL_POINTER, 1);
   assert.equal(PRIVACY_FFI_ERROR_MALFORMED_NORITO, 2);
@@ -2167,6 +2173,7 @@ test("package dist entrypoint exports privacy native archive helpers", () => {
   assert.equal(typeof isPrivacyNativeAvailable(), "boolean");
   for (const helper of [
     privacyCapabilitiesV1,
+    privacyProofRequestV1,
     privacyBuildProofV1,
     privacyVerifyProofV1,
   ]) {
@@ -2531,6 +2538,7 @@ test("package dist privacy native availability rejects coerced ABI versions", ()
         privacyCapabilitiesV1() {
           return Uint8Array.from(PRIVACY_CAPABILITIES_ARCHIVE);
         },
+        privacyProofRequestV1: privacyProofRequestNativeArchive,
         privacyBuildProofV1() {
           return Uint8Array.from(PRIVACY_BUILD_ARCHIVE);
         },
@@ -2559,6 +2567,7 @@ test("package dist privacy native availability clears request copies after failu
     privacyCapabilitiesV1() {
       return Uint8Array.from(PRIVACY_CAPABILITIES_ARCHIVE);
     },
+    privacyProofRequestV1: privacyProofRequestNativeArchive,
     privacyBuildProofV1() {
       return Uint8Array.from(PRIVACY_BUILD_ARCHIVE);
     },
@@ -2610,6 +2619,7 @@ test("package dist privacy native availability probes reject unsafe raw output",
     privacyCapabilitiesV1() {
       return Uint8Array.from(PRIVACY_CAPABILITIES_ARCHIVE);
     },
+    privacyProofRequestV1: privacyProofRequestNativeArchive,
     privacyBuildProofV1() {
       return Uint8Array.from(PRIVACY_BUILD_ARCHIVE);
     },
@@ -2623,6 +2633,21 @@ test("package dist privacy native availability probes reject unsafe raw output",
       {
         privacyCapabilitiesV1() {
           return "json is not Norito";
+        },
+      },
+      {
+        privacyProofRequestV1() {
+          return "json is not Norito";
+        },
+      },
+      {
+        privacyProofRequestV1() {
+          return Buffer.from(PRIVACY_BUILD_ARCHIVE);
+        },
+      },
+      {
+        privacyProofRequestV1() {
+          return Buffer.from([0x52]);
         },
       },
       {
@@ -2692,7 +2717,17 @@ test("package dist privacy native availability probes reject unsafe raw output",
         },
       },
       {
+        privacyProofRequestV1() {
+          throw new Error("native request probe failed");
+        },
+      },
+      {
         privacyCapabilitiesV1() {
+          return Buffer.alloc(PRIVACY_NATIVE_ARCHIVE_MAX_BYTES + 1, 0x7f);
+        },
+      },
+      {
+        privacyProofRequestV1() {
           return Buffer.alloc(PRIVACY_NATIVE_ARCHIVE_MAX_BYTES + 1, 0x7f);
         },
       },
@@ -2711,6 +2746,13 @@ test("package dist privacy native availability probes reject unsafe raw output",
     for (const archive of malformedPrivacyNativeOutputArchives(0x50)) {
       overrides.push({
         privacyCapabilitiesV1() {
+          return Buffer.from(archive);
+        },
+      });
+    }
+    for (const archive of malformedPrivacyNativeOutputArchives(0x52)) {
+      overrides.push({
+        privacyProofRequestV1() {
           return Buffer.from(archive);
         },
       });
@@ -2752,6 +2794,7 @@ test("package dist privacy native wrappers reject wrong-operation result schemas
     privacyCapabilitiesV1() {
       return Uint8Array.from(PRIVACY_CAPABILITIES_ARCHIVE);
     },
+    privacyProofRequestV1: privacyProofRequestNativeArchive,
     privacyBuildProofV1() {
       return Uint8Array.from(PRIVACY_BUILD_ARCHIVE);
     },
@@ -2837,6 +2880,7 @@ test("package dist privacy native wrappers reject oversized output archives", ()
     privacyCapabilitiesV1() {
       return oversized;
     },
+    privacyProofRequestV1: privacyProofRequestNativeArchive,
     privacyBuildProofV1() {
       return oversized;
     },
@@ -2895,6 +2939,7 @@ test("package dist privacy native wrappers reject invalid Norito-framed output a
     privacyCapabilitiesV1() {
       return badMagic;
     },
+    privacyProofRequestV1: privacyProofRequestNativeArchive,
     privacyBuildProofV1() {
       return badVersion;
     },
@@ -2935,6 +2980,7 @@ test("package dist privacy native wrappers reject invalid Norito-framed output a
       privacyCapabilitiesV1() {
         return PRIVACY_CAPABILITIES_ARCHIVE;
       },
+      privacyProofRequestV1: privacyProofRequestNativeArchive,
       privacyBuildProofV1() {
         return invalidBuildOutput;
       },
@@ -2963,6 +3009,7 @@ test("package dist privacy native wrappers reject invalid Norito-framed output a
     privacyCapabilitiesV1() {
       return PRIVACY_CAPABILITIES_ARCHIVE;
     },
+    privacyProofRequestV1: privacyProofRequestNativeArchive,
     privacyBuildProofV1() {
       return badFieldBitsetFlags;
     },
@@ -2990,6 +3037,7 @@ test("package dist privacy native wrappers reject invalid Norito-framed output a
     privacyCapabilitiesV1() {
       return badPayload;
     },
+    privacyProofRequestV1: privacyProofRequestNativeArchive,
     privacyBuildProofV1() {
       return badFlags;
     },
@@ -3029,6 +3077,7 @@ test("package dist privacy native wrappers reject oversized request archives", (
     privacyCapabilitiesV1() {
       return Uint8Array.from(PRIVACY_CAPABILITIES_ARCHIVE);
     },
+    privacyProofRequestV1: privacyProofRequestNativeArchive,
     privacyBuildProofV1() {
       assert.fail("oversized build request must not reach native dispatch");
     },
@@ -3063,6 +3112,7 @@ test("package dist privacy native wrappers reject invalid request archives", () 
     privacyCapabilitiesV1() {
       return Uint8Array.from(PRIVACY_CAPABILITIES_ARCHIVE);
     },
+    privacyProofRequestV1: privacyProofRequestNativeArchive,
     privacyBuildProofV1() {
       assert.fail("invalid build request must not reach native dispatch");
     },
@@ -3102,6 +3152,7 @@ test("package dist privacy native wrappers accept complete field-bitset flags", 
     privacyCapabilitiesV1() {
       return Uint8Array.from(PRIVACY_CAPABILITIES_ARCHIVE);
     },
+    privacyProofRequestV1: privacyProofRequestNativeArchive,
     privacyBuildProofV1(request) {
       assert.deepEqual(Buffer.from(request), requestArchive);
       return buildArchive;
@@ -3140,6 +3191,7 @@ test("package dist privacy native wrappers sanitize native exceptions", () => {
     connectNoritoBridgeAbiVersion() {
       return PRIVACY_REQUIRED_BRIDGE_ABI_VERSION;
     },
+    privacyProofRequestV1: privacyProofRequestNativeArchive,
     privacyCapabilitiesV1: throwLeakingNativeError,
     privacyBuildProofV1: throwLeakingNativeError,
     privacyVerifyProofV1: throwLeakingNativeError,
@@ -3190,6 +3242,7 @@ test("package dist privacy native wrappers clear temporary request copies", () =
     privacyCapabilitiesV1() {
       return Uint8Array.from(PRIVACY_CAPABILITIES_ARCHIVE);
     },
+    privacyProofRequestV1: privacyProofRequestNativeArchive,
     privacyBuildProofV1(request) {
       buildRequest = request;
       assert.notEqual(request, requestArchive);
@@ -3244,6 +3297,7 @@ test("package dist privacy native wrappers respect sliced request archive views"
     privacyCapabilitiesV1() {
       return Uint8Array.from(PRIVACY_CAPABILITIES_ARCHIVE);
     },
+    privacyProofRequestV1: privacyProofRequestNativeArchive,
     privacyBuildProofV1(request) {
       buildRequest = request;
       assert.deepEqual(Buffer.from(request), PRIVACY_REQUEST_ARCHIVE);
@@ -3314,6 +3368,7 @@ test("package dist privacy native wrappers respect sliced native output archive 
         prefixLength + PRIVACY_CAPABILITIES_ARCHIVE.length,
       );
     },
+    privacyProofRequestV1: privacyProofRequestNativeArchive,
     privacyBuildProofV1() {
       return new DataView(
         buildBacking.buffer,
@@ -3368,6 +3423,7 @@ test("package dist privacy native wrappers defensively copy native output archiv
     privacyCapabilitiesV1() {
       return capabilitiesOutput;
     },
+    privacyProofRequestV1: privacyProofRequestNativeArchive,
     privacyBuildProofV1() {
       return buildOutput;
     },

@@ -79,6 +79,7 @@ KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1 = 1
 KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES = 8 * 1024 * 1024
 KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES = 128
 KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES = 64 * 1024 * 1024
+_KAGEMUSHA_U64_MAX = (1 << 64) - 1
 KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DOMAIN = (
     "iroha:kagemusha:v1:recursive-spend-transition-profile"
 )
@@ -198,6 +199,7 @@ __all__ = [
     _RECURSIVE_COMPACT_TOKEN_VERIFY_METHOD,
     _RECURSIVE_SPEND_COMPACT_TOKEN_FROM_BUNDLE_METHOD,
     _RECURSIVE_SPEND_COMPACT_TOKEN_PROJECTION_VERIFY_METHOD,
+    _RECURSIVE_SPEND_COMPACT_TOKEN_PROJECTION_VERIFY_AT_HEIGHT_METHOD,
     "kagemusha_recursive_spend_init",
     "kagemusha_recursive_spend_append",
     "kagemusha_recursive_spend_transition_profile_init",
@@ -1221,14 +1223,13 @@ def _verify_recursive_spend_compact_payment_token_projection(
     verifier_record = _archive_bytes_named(verifier_record_archive, "verifier_record_archive")
     _assert_kagemusha_norito_archive(compact_token, "compact_token_archive")
     _assert_kagemusha_norito_archive(verifier_record, "verifier_record_archive")
-    if block_height is not None and block_height < 0:
-        raise ValueError("block_height must be non-negative")
+    checked_block_height = _validate_kagemusha_block_height(block_height)
     if not is_kagemusha_recursive_spend_compact_payment_token_projection_verifier_available():
         raise RuntimeError(
             "recursive spend compact Kagemusha payment-token projection verifier "
             "requires native bridge ABI 7 with the compact projection verifier symbols"
         )
-    if block_height is None:
+    if checked_block_height is None:
         result = _native_method(_RECURSIVE_SPEND_COMPACT_TOKEN_PROJECTION_VERIFY_METHOD)(
             compact_token,
             verifier_record,
@@ -1239,13 +1240,37 @@ def _verify_recursive_spend_compact_payment_token_projection(
         )(
             compact_token,
             verifier_record,
-            block_height,
+            checked_block_height,
         )
     if not isinstance(result, bool):
         raise RuntimeError(
             f"{_RECURSIVE_SPEND_COMPACT_TOKEN_PROJECTION_VERIFY_METHOD} returned non-boolean result"
         )
     return result
+
+
+def _validate_kagemusha_block_height(block_height: int | None) -> int | None:
+    if block_height is None:
+        return None
+    if isinstance(block_height, bool) or not isinstance(block_height, int):
+        raise TypeError("block_height must be an integer")
+    if block_height < 0:
+        raise ValueError("block_height must be non-negative")
+    if block_height > _KAGEMUSHA_U64_MAX:
+        raise ValueError("block_height must fit in u64")
+    return block_height
+
+
+def _verify_recursive_spend_compact_payment_token_projection_at_height(
+    compact_token_archive: BytesLike,
+    verifier_record_archive: BytesLike,
+    block_height: int,
+) -> bool:
+    return _verify_recursive_spend_compact_payment_token_projection(
+        compact_token_archive,
+        verifier_record_archive,
+        block_height=block_height,
+    )
 
 
 def _call_native_archive_method(name: str, *archives: bytes) -> bytes:
@@ -1289,6 +1314,9 @@ globals()[_RECURSIVE_SPEND_COMPACT_TOKEN_FROM_BUNDLE_METHOD] = (
 )
 globals()[_RECURSIVE_SPEND_COMPACT_TOKEN_PROJECTION_VERIFY_METHOD] = (
     _verify_recursive_spend_compact_payment_token_projection
+)
+globals()[_RECURSIVE_SPEND_COMPACT_TOKEN_PROJECTION_VERIFY_AT_HEIGHT_METHOD] = (
+    _verify_recursive_spend_compact_payment_token_projection_at_height
 )
 
 

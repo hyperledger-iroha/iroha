@@ -901,6 +901,18 @@ const PRIVACY_TRANSPARENT_TRANSFER_BASELINE_WAIVED_GATE_KEYS: &[&str] = &[
 const PRIVACY_PRODUCTION_EVIDENCE_HASH_PREFIX: &str = "sha256:";
 const PRIVACY_PRODUCTION_LOCALNET_TARGET: &str = "localnet";
 const PRIVACY_PRODUCTION_LOCALNET_PEER_COUNT: u8 = 4;
+const PRIVACY_PRODUCTION_SDK_EXPORT_SURFACES: &[&str] = &[
+    "rust_core",
+    "ffi",
+    "python",
+    "javascript",
+    "java_android",
+    "kotlin",
+    "swift",
+    "csharp",
+];
+const PRIVACY_PRODUCTION_SDK_PARITY_ARTIFACT_KINDS: &[&str] =
+    &["types", "validation_rules", "error_codes", "golden_vectors"];
 
 const PRIVACY_REQUIRED_PRODUCTION_PLAN_ROWS: &[(&str, &str, &str)] = &[
     (
@@ -1387,6 +1399,19 @@ struct PrivacyProductionLocalnetEvidenceV1 {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+struct PrivacyProductionSdkExportV1 {
+    surface: &'static str,
+    entrypoints: Vec<&'static str>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PrivacyProductionSdkParityArtifactV1 {
+    kind: &'static str,
+    surface: &'static str,
+    artifact_hash: &'static str,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct PrivacyProductionEvidenceRowV1 {
     algorithm_id: &'static str,
     chain_id: &'static str,
@@ -1397,6 +1422,8 @@ struct PrivacyProductionEvidenceRowV1 {
     proof_family: &'static str,
     public_inputs_schema: Option<&'static str>,
     sdk_entrypoints: Vec<&'static str>,
+    sdk_exports: Vec<PrivacyProductionSdkExportV1>,
+    sdk_parity_artifacts: Vec<PrivacyProductionSdkParityArtifactV1>,
     required_state: Vec<&'static str>,
     fuzz_artifact_hash: &'static str,
     performance_artifact_hash: &'static str,
@@ -1779,6 +1806,67 @@ fn privacy_production_evidence_sdk_entrypoints_are_valid(
         })
 }
 
+fn privacy_production_evidence_sdk_exports_are_valid(
+    row: &PrivacyProductionEvidenceRowV1,
+    entry: &PrivacyAlgorithmEntry,
+) -> bool {
+    let expected_entrypoints = privacy_expected_production_sdk_entrypoints(entry);
+    row.sdk_exports.len() == PRIVACY_PRODUCTION_SDK_EXPORT_SURFACES.len()
+        && PRIVACY_PRODUCTION_SDK_EXPORT_SURFACES
+            .iter()
+            .enumerate()
+            .all(|(index, expected_surface)| {
+                let Some(export) = row.sdk_exports.get(index) else {
+                    return false;
+                };
+                export.surface == *expected_surface
+                    && privacy_text_field_is_portable_identifier(export.surface)
+                    && !privacy_evidence_text_has_non_production_marker(export.surface)
+                    && !privacy_exposed_label_claims_production_readiness(export.surface)
+                    && privacy_string_slice_matches_vec(&export.entrypoints, &expected_entrypoints)
+                    && !privacy_string_slice_has_duplicates(&export.entrypoints)
+                    && export.entrypoints.iter().all(|entrypoint| {
+                        privacy_sdk_entrypoint_is_portable(entrypoint)
+                            && !privacy_entrypoint_is_dev_fixture(entrypoint)
+                            && !privacy_entrypoint_is_local_verifier(entrypoint)
+                            && !privacy_exposed_label_claims_production_readiness(entrypoint)
+                    })
+            })
+}
+
+fn privacy_production_evidence_sdk_parity_artifacts_are_valid(
+    row: &PrivacyProductionEvidenceRowV1,
+) -> bool {
+    row.sdk_parity_artifacts.len()
+        == PRIVACY_PRODUCTION_SDK_PARITY_ARTIFACT_KINDS.len()
+            * PRIVACY_PRODUCTION_SDK_EXPORT_SURFACES.len()
+        && PRIVACY_PRODUCTION_SDK_PARITY_ARTIFACT_KINDS
+            .iter()
+            .enumerate()
+            .all(|(kind_index, expected_kind)| {
+                PRIVACY_PRODUCTION_SDK_EXPORT_SURFACES
+                    .iter()
+                    .enumerate()
+                    .all(|(surface_index, expected_surface)| {
+                        let artifact_index = kind_index
+                            * PRIVACY_PRODUCTION_SDK_EXPORT_SURFACES.len()
+                            + surface_index;
+                        let Some(artifact) = row.sdk_parity_artifacts.get(artifact_index) else {
+                            return false;
+                        };
+                        artifact.kind == *expected_kind
+                            && artifact.surface == *expected_surface
+                            && privacy_text_field_is_portable_identifier(artifact.kind)
+                            && privacy_text_field_is_portable_identifier(artifact.surface)
+                            && !privacy_evidence_text_has_non_production_marker(artifact.kind)
+                            && !privacy_evidence_text_has_non_production_marker(artifact.surface)
+                            && !privacy_exposed_label_claims_production_readiness(artifact.kind)
+                            && !privacy_exposed_label_claims_production_readiness(artifact.surface)
+                            && privacy_production_evidence_hash_is_valid(artifact.artifact_hash)
+                    })
+            })
+}
+
 fn privacy_production_evidence_required_state_is_valid(
     row: &PrivacyProductionEvidenceRowV1,
     entry: &PrivacyAlgorithmEntry,
@@ -1814,6 +1902,8 @@ fn privacy_production_evidence_row_is_valid(
         && row.proof_family == entry.proof_family
         && row.public_inputs_schema == privacy_expected_public_inputs_schema(entry)
         && privacy_production_evidence_sdk_entrypoints_are_valid(row, entry)
+        && privacy_production_evidence_sdk_exports_are_valid(row, entry)
+        && privacy_production_evidence_sdk_parity_artifacts_are_valid(row)
         && privacy_production_evidence_required_state_is_valid(row, entry)
         && privacy_production_evidence_hash_is_valid(row.fuzz_artifact_hash)
         && privacy_production_evidence_hash_is_valid(row.performance_artifact_hash)
@@ -2766,6 +2856,18 @@ fn privacy_failure_result(
     result
 }
 
+fn privacy_failure_result_without_vk_ref(
+    error_code: u32,
+    message: &str,
+    request: &PrivacyProofRequestV1,
+) -> PrivacyProofResultV1 {
+    let mut sanitized = request.clone();
+    sanitized.vk_ref.clear();
+    sanitized.witness.clear();
+    sanitized.proof.clear();
+    privacy_failure_result(error_code, message, Some(&sanitized))
+}
+
 fn privacy_failure_result_invariants_hold(result: &PrivacyProofResultV1) -> bool {
     result.version == PRIVACY_FFI_VERSION_V1
         && result.status == PRIVACY_FFI_STATUS_ERROR
@@ -2861,7 +2963,7 @@ fn privacy_result_for_request(
             return privacy_failure_result(
                 PRIVACY_FFI_ERROR_INVALID_REQUEST,
                 "privacy proof request must include non-empty algorithm_id and entrypoint",
-                None,
+                Some(&request),
             );
         }
 
@@ -2873,11 +2975,22 @@ fn privacy_result_for_request(
             );
         }
 
+        let known_entry = privacy_algorithm_entry(&request.algorithm_id);
+        if let Some(entry) = known_entry {
+            if privacy_entrypoint_planned(entry, &request.entrypoint) {
+                return privacy_failure_result_without_vk_ref(
+                    PRIVACY_FFI_ERROR_INVALID_REQUEST,
+                    "privacy proof request entrypoint is planned but not executable until the production gate passes",
+                    &request,
+                );
+            }
+        }
+
         if request.vk_ref.trim().is_empty() {
             return privacy_failure_result(
                 PRIVACY_FFI_ERROR_INVALID_REQUEST,
                 "privacy proof request must include non-empty vk_ref",
-                None,
+                Some(&request),
             );
         }
 
@@ -2889,21 +3002,13 @@ fn privacy_result_for_request(
             );
         }
 
-        let Some(entry) = privacy_algorithm_entry(&request.algorithm_id) else {
+        let Some(entry) = known_entry else {
             return privacy_failure_result(
                 PRIVACY_FFI_ERROR_UNSUPPORTED_ALGORITHM,
                 "unsupported privacy algorithm id",
                 Some(&request),
             );
         };
-
-        if privacy_entrypoint_planned(entry, &request.entrypoint) {
-            return privacy_failure_result(
-                PRIVACY_FFI_ERROR_INVALID_REQUEST,
-                "privacy proof request entrypoint is planned but not executable until the production gate passes",
-                Some(&request),
-            );
-        }
 
         if !privacy_entrypoint_supported(entry, &request.entrypoint) {
             return privacy_failure_result(
@@ -3144,6 +3249,72 @@ fn write_privacy_payload<T: norito::NoritoSerialize>(
     result
 }
 
+unsafe fn read_privacy_component_bytes(ptr_: *const c_uchar, len: c_ulong) -> Result<Vec<u8>, u32> {
+    let len = usize::try_from(len).map_err(|_| PRIVACY_FFI_ERROR_INVALID_REQUEST)?;
+    if len > PRIVACY_NATIVE_ARCHIVE_MAX_BYTES || len > isize::MAX as usize {
+        return Err(PRIVACY_FFI_ERROR_INVALID_REQUEST);
+    }
+    if len == 0 {
+        return Ok(Vec::new());
+    }
+    if ptr_.is_null() {
+        return Err(PRIVACY_FFI_ERROR_NULL_POINTER);
+    }
+    Ok(unsafe { slice::from_raw_parts(ptr_, len) }.to_vec())
+}
+
+unsafe fn read_privacy_text_component(ptr_: *const c_uchar, len: c_ulong) -> Result<String, u32> {
+    let mut bytes = unsafe { read_privacy_component_bytes(ptr_, len) }?;
+    if bytes.len() > PRIVACY_REQUEST_TEXT_FIELD_MAX_BYTES {
+        bytes.fill(0);
+        return Err(PRIVACY_FFI_ERROR_INVALID_REQUEST);
+    }
+    let text = match std::str::from_utf8(&bytes) {
+        Ok(text) => text.to_owned(),
+        Err(_) => {
+            bytes.fill(0);
+            return Err(PRIVACY_FFI_ERROR_INVALID_REQUEST);
+        }
+    };
+    bytes.fill(0);
+    Ok(text)
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe fn read_privacy_proof_request_components(
+    algorithm_id_ptr: *const c_uchar,
+    algorithm_id_len: c_ulong,
+    entrypoint_ptr: *const c_uchar,
+    entrypoint_len: c_ulong,
+    vk_ref_ptr: *const c_uchar,
+    vk_ref_len: c_ulong,
+    public_inputs_ptr: *const c_uchar,
+    public_inputs_len: c_ulong,
+    witness_ptr: *const c_uchar,
+    witness_len: c_ulong,
+    proof_ptr: *const c_uchar,
+    proof_len: c_ulong,
+) -> Result<PrivacyProofRequestV1, u32> {
+    let algorithm_id = unsafe { read_privacy_text_component(algorithm_id_ptr, algorithm_id_len) }?;
+    let entrypoint = unsafe { read_privacy_text_component(entrypoint_ptr, entrypoint_len) }?;
+    let vk_ref = unsafe { read_privacy_text_component(vk_ref_ptr, vk_ref_len) }?;
+    let public_inputs =
+        unsafe { read_privacy_component_bytes(public_inputs_ptr, public_inputs_len) }?;
+    if public_inputs.is_empty() {
+        return Err(PRIVACY_FFI_ERROR_INVALID_REQUEST);
+    }
+    let witness = unsafe { read_privacy_component_bytes(witness_ptr, witness_len) }?;
+    let proof = unsafe { read_privacy_component_bytes(proof_ptr, proof_len) }?;
+    Ok(PrivacyProofRequestV1 {
+        algorithm_id,
+        entrypoint,
+        vk_ref,
+        public_inputs,
+        witness,
+        proof,
+    })
+}
+
 unsafe fn read_privacy_request(
     request_ptr: *const c_uchar,
     request_len: c_ulong,
@@ -3194,6 +3365,52 @@ unsafe fn iroha_privacy_process_request_v1(
         &result,
         privacy_result_schema_byte(operation),
     )
+}
+
+#[allow(clippy::too_many_arguments)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn iroha_privacy_proof_request_v1(
+    algorithm_id_ptr: *const c_uchar,
+    algorithm_id_len: c_ulong,
+    entrypoint_ptr: *const c_uchar,
+    entrypoint_len: c_ulong,
+    vk_ref_ptr: *const c_uchar,
+    vk_ref_len: c_ulong,
+    public_inputs_ptr: *const c_uchar,
+    public_inputs_len: c_ulong,
+    witness_ptr: *const c_uchar,
+    witness_len: c_ulong,
+    proof_ptr: *const c_uchar,
+    proof_len: c_ulong,
+    out_ptr: *mut *mut c_uchar,
+    out_len: *mut c_ulong,
+) -> c_int {
+    clear_privacy_output(out_ptr, out_len);
+    if out_ptr.is_null() || out_len.is_null() {
+        return ERR_NULL_PTR;
+    }
+    let mut request = match unsafe {
+        read_privacy_proof_request_components(
+            algorithm_id_ptr,
+            algorithm_id_len,
+            entrypoint_ptr,
+            entrypoint_len,
+            vk_ref_ptr,
+            vk_ref_len,
+            public_inputs_ptr,
+            public_inputs_len,
+            witness_ptr,
+            witness_len,
+            proof_ptr,
+            proof_len,
+        )
+    } {
+        Ok(request) => request,
+        Err(code) => return code as c_int,
+    };
+    let result = write_privacy_payload(out_ptr, out_len, &request, PRIVACY_REQUEST_SCHEMA_BYTE);
+    privacy_clear_request_byte_fields(&mut request);
+    result
 }
 
 #[unsafe(no_mangle)]
@@ -10321,6 +10538,14 @@ mod offline_note_prover_tests {
             valid, 0,
             "height-aware malformed projection verifier calls must clear stale valid flags"
         );
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_compact_projection_jni_height_uses_raw_u64_bits() {
+        assert_eq!(java_jlong_to_u64_bits(0), 0);
+        assert_eq!(java_jlong_to_u64_bits(i64::MAX), 0x7fff_ffff_ffff_ffff);
+        assert_eq!(java_jlong_to_u64_bits(i64::MIN), 0x8000_0000_0000_0000);
+        assert_eq!(java_jlong_to_u64_bits(-1), u64::MAX);
     }
 
     #[test]
@@ -20900,6 +21125,16 @@ fn java_native_kagemusha_recursive_spend_compact_payment_token_from_bundle(
     target_os = "macos",
     target_os = "windows"
 ))]
+fn java_jlong_to_u64_bits(value: jni::sys::jlong) -> u64 {
+    value as u64
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 fn java_native_kagemusha_verify_recursive_spend_compact_payment_token_projection(
     env: &mut jni::JNIEnv<'_>,
     compact_token_archive: jni::objects::JByteArray<'_>,
@@ -20914,11 +21149,7 @@ fn java_native_kagemusha_verify_recursive_spend_compact_payment_token_projection
         let verifier_record_bytes =
             read_java_byte_array(env, &verifier_record_archive, "verifierRecordArchive")
                 .ok_or_else(|| "invalid Kagemusha verifier record archive bytes".to_owned())?;
-        let height = match block_height {
-            Some(value) if value < 0 => return Err("blockHeight must be non-negative".to_owned()),
-            Some(value) => Some(value as u64),
-            None => None,
-        };
+        let height = block_height.map(java_jlong_to_u64_bits);
         let valid = java_kagemusha_verify_recursive_spend_compact_payment_token_projection(
             &token_bytes,
             &verifier_record_bytes,
@@ -21146,6 +21377,42 @@ fn java_privacy_result_archive(
     target_os = "macos",
     target_os = "windows"
 ))]
+fn java_privacy_text_component(bytes: &mut [u8], context: &str) -> Result<String, String> {
+    if bytes.len() > PRIVACY_REQUEST_TEXT_FIELD_MAX_BYTES {
+        bytes.fill(0);
+        return Err(format!("{context} exceeds maximum length"));
+    }
+    let text = match std::str::from_utf8(bytes) {
+        Ok(text) => text.to_owned(),
+        Err(_) => {
+            bytes.fill(0);
+            return Err(format!("{context} must be UTF-8"));
+        }
+    };
+    bytes.fill(0);
+    Ok(text)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_privacy_request_archive(request: &PrivacyProofRequestV1) -> Result<Vec<u8>, String> {
+    java_privacy_public_archive(
+        request,
+        PRIVACY_REQUEST_SCHEMA_BYTE,
+        "privacy proof request",
+    )
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 fn java_native_privacy_capabilities(env: &mut jni::JNIEnv<'_>) -> jni::sys::jbyteArray {
     let result = (|| -> Result<jni::sys::jbyteArray, String> {
         let mut archive = java_privacy_capabilities_archive()?;
@@ -21182,6 +21449,67 @@ fn java_native_privacy_result_archive(
             .ok_or_else(|| format!("invalid privacy {context} request bytes"))?;
         let archive_result = java_privacy_result_archive(&request_bytes, operation);
         request_bytes.fill(0);
+        let mut archive = archive_result?;
+        let array_result = env
+            .byte_array_from_slice(&archive)
+            .map_err(|err| err.to_string());
+        archive.fill(0);
+        let array = array_result?;
+        Ok(array.into_raw())
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(env, message);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_native_privacy_request_archive(
+    env: &mut jni::JNIEnv<'_>,
+    algorithm_id: jni::objects::JByteArray<'_>,
+    entrypoint: jni::objects::JByteArray<'_>,
+    vk_ref: jni::objects::JByteArray<'_>,
+    public_inputs: jni::objects::JByteArray<'_>,
+    witness: jni::objects::JByteArray<'_>,
+    proof: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    let result = (|| -> Result<jni::sys::jbyteArray, String> {
+        let mut algorithm_id_bytes = read_java_byte_array(env, &algorithm_id, "algorithmId")
+            .ok_or_else(|| "invalid privacy proof request algorithmId bytes".to_owned())?;
+        let mut entrypoint_bytes = read_java_byte_array(env, &entrypoint, "entrypoint")
+            .ok_or_else(|| "invalid privacy proof request entrypoint bytes".to_owned())?;
+        let mut vk_ref_bytes = read_java_byte_array(env, &vk_ref, "vkRef")
+            .ok_or_else(|| "invalid privacy proof request vkRef bytes".to_owned())?;
+        let algorithm_id = java_privacy_text_component(&mut algorithm_id_bytes, "algorithmId")?;
+        let entrypoint = java_privacy_text_component(&mut entrypoint_bytes, "entrypoint")?;
+        let vk_ref = java_privacy_text_component(&mut vk_ref_bytes, "vkRef")?;
+        let public_inputs = read_java_byte_array(env, &public_inputs, "publicInputs")
+            .ok_or_else(|| "invalid privacy proof request publicInputs bytes".to_owned())?;
+        if public_inputs.is_empty() {
+            return Err("publicInputs must not be empty".to_owned());
+        }
+        let witness = read_java_byte_array(env, &witness, "witness")
+            .ok_or_else(|| "invalid privacy proof request witness bytes".to_owned())?;
+        let proof = read_java_byte_array(env, &proof, "proof")
+            .ok_or_else(|| "invalid privacy proof request proof bytes".to_owned())?;
+        let mut request = PrivacyProofRequestV1 {
+            algorithm_id,
+            entrypoint,
+            vk_ref,
+            public_inputs,
+            witness,
+            proof,
+        };
+        let archive_result = java_privacy_request_archive(&request);
+        privacy_clear_request_byte_fields(&mut request);
         let mut archive = archive_result?;
         let array_result = env
             .byte_array_from_slice(&archive)
@@ -21379,6 +21707,35 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNati
 ))]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeProofRequest(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    algorithm_id: jni::objects::JByteArray<'_>,
+    entrypoint: jni::objects::JByteArray<'_>,
+    vk_ref: jni::objects::JByteArray<'_>,
+    public_inputs: jni::objects::JByteArray<'_>,
+    witness: jni::objects::JByteArray<'_>,
+    proof: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_privacy_request_archive(
+        &mut env,
+        algorithm_id,
+        entrypoint,
+        vk_ref,
+        public_inputs,
+        witness,
+        proof,
+    )
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeBuildProof(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
@@ -21441,6 +21798,35 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_privacy_Privacy
     _class: jni::objects::JClass<'_>,
 ) -> jni::sys::jbyteArray {
     java_native_privacy_capabilities(&mut env)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeProofRequest(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    algorithm_id: jni::objects::JByteArray<'_>,
+    entrypoint: jni::objects::JByteArray<'_>,
+    vk_ref: jni::objects::JByteArray<'_>,
+    public_inputs: jni::objects::JByteArray<'_>,
+    witness: jni::objects::JByteArray<'_>,
+    proof: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_privacy_request_archive(
+        &mut env,
+        algorithm_id,
+        entrypoint,
+        vk_ref,
+        public_inputs,
+        witness,
+        proof,
+    )
 }
 
 #[cfg(any(
@@ -23951,6 +24337,7 @@ mod tests {
         T: norito::NoritoSerialize,
     {
         if [
+            PRIVACY_REQUEST_SCHEMA_BYTE,
             PRIVACY_CAPABILITIES_RESULT_SCHEMA_BYTE,
             PRIVACY_BUILD_PROOF_RESULT_SCHEMA_BYTE,
             PRIVACY_VERIFY_PROOF_RESULT_SCHEMA_BYTE,
@@ -25301,14 +25688,15 @@ mod tests {
 
     #[test]
     fn privacy_request_rejects_empty_required_text_fields_without_reflection() {
-        let marker = b"required-text-field-never-echo";
         for field in ["algorithm_id", "entrypoint", "vk_ref"] {
             let mut request = privacy_request(
                 "confidential-transfer-v2",
                 "buildConfidentialTransferProofV2",
                 Vec::new(),
             );
-            request.public_inputs = marker.to_vec();
+            request.public_inputs = b"public".to_vec();
+            let witness = b"required-text-field-witness-never-echo";
+            request.witness = witness.to_vec();
             match field {
                 "algorithm_id" => request.algorithm_id.clear(),
                 "entrypoint" => request.entrypoint.clear(),
@@ -25322,9 +25710,34 @@ mod tests {
                 _ => "non-empty algorithm_id and entrypoint",
             };
 
-            assert_unreflected_invalid_privacy_request_result(&result, message_fragment, field);
+            assert_eq!(result.version, PRIVACY_FFI_VERSION_V1, "{field}");
+            assert_eq!(result.status, PRIVACY_FFI_STATUS_ERROR, "{field}");
+            assert_eq!(
+                result.error_code, PRIVACY_FFI_ERROR_INVALID_REQUEST,
+                "{field}"
+            );
+            assert!(result.message.contains(message_fragment), "{field}");
+            assert_eq!(result.public_inputs, b"public", "{field}");
+            assert!(result.proof.is_empty(), "{field}");
+            assert!(!result.verified, "{field}");
+            if field == "algorithm_id" {
+                assert!(result.algorithm_id.is_empty(), "{field}");
+            } else {
+                assert_eq!(result.algorithm_id, "confidential-transfer-v2", "{field}");
+            }
+            if field == "entrypoint" {
+                assert!(result.entrypoint.is_empty(), "{field}");
+            } else {
+                assert_eq!(
+                    result.entrypoint, "buildConfidentialTransferProofV2",
+                    "{field}"
+                );
+            }
+            if field == "vk_ref" {
+                assert!(result.vk_ref.is_empty(), "{field}");
+            }
             let encoded = norito::to_bytes(&result).expect("encode privacy result");
-            assert_subslice_absent(&encoded, marker, "empty required field failure result");
+            assert_subslice_absent(&encoded, witness, "empty required field failure result");
         }
     }
 
@@ -25512,7 +25925,33 @@ mod tests {
             .collect()
     }
 
+    fn privacy_test_sdk_exports(entrypoints: &[&'static str]) -> Vec<PrivacyProductionSdkExportV1> {
+        PRIVACY_PRODUCTION_SDK_EXPORT_SURFACES
+            .iter()
+            .map(|surface| PrivacyProductionSdkExportV1 {
+                surface: *surface,
+                entrypoints: entrypoints.to_vec(),
+            })
+            .collect()
+    }
+
+    fn privacy_test_sdk_parity_artifacts() -> Vec<PrivacyProductionSdkParityArtifactV1> {
+        PRIVACY_PRODUCTION_SDK_PARITY_ARTIFACT_KINDS
+            .iter()
+            .flat_map(|kind| {
+                PRIVACY_PRODUCTION_SDK_EXPORT_SURFACES
+                    .iter()
+                    .map(move |surface| PrivacyProductionSdkParityArtifactV1 {
+                        kind: *kind,
+                        surface: *surface,
+                        artifact_hash: PRIVACY_TEST_PRODUCTION_HASH,
+                    })
+            })
+            .collect()
+    }
+
     fn privacy_test_evidence_row(entry: &PrivacyAlgorithmEntry) -> PrivacyProductionEvidenceRowV1 {
+        let sdk_entrypoints = privacy_test_production_entrypoints(entry);
         PrivacyProductionEvidenceRowV1 {
             algorithm_id: entry.id,
             chain_id: PRIVACY_TEST_PRODUCTION_CHAIN_ID,
@@ -25522,7 +25961,9 @@ mod tests {
             verifier_key_id: privacy_expected_verifier_key_id(entry),
             proof_family: entry.proof_family,
             public_inputs_schema: privacy_expected_public_inputs_schema(entry),
-            sdk_entrypoints: privacy_test_production_entrypoints(entry),
+            sdk_entrypoints: sdk_entrypoints.clone(),
+            sdk_exports: privacy_test_sdk_exports(&sdk_entrypoints),
+            sdk_parity_artifacts: privacy_test_sdk_parity_artifacts(),
             required_state: privacy_expected_required_state(entry).to_vec(),
             fuzz_artifact_hash: PRIVACY_TEST_PRODUCTION_HASH,
             performance_artifact_hash: PRIVACY_TEST_PRODUCTION_HASH,
@@ -25693,6 +26134,79 @@ mod tests {
     }
 
     #[test]
+    fn privacy_proof_request_v1_encodes_norito_request_archive() {
+        let algorithm_id = b"verange-transparent-range-v1";
+        let entrypoint = b"buildVeRangeProofV1";
+        let vk_ref = b"bulletproofs:verange_transparent_range_v1";
+        let public_inputs = b"public-inputs";
+        let witness = b"secret-witness";
+        let proof = b"candidate-proof";
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+
+        let rc = unsafe {
+            iroha_privacy_proof_request_v1(
+                algorithm_id.as_ptr(),
+                algorithm_id.len() as c_ulong,
+                entrypoint.as_ptr(),
+                entrypoint.len() as c_ulong,
+                vk_ref.as_ptr(),
+                vk_ref.len() as c_ulong,
+                public_inputs.as_ptr(),
+                public_inputs.len() as c_ulong,
+                witness.as_ptr(),
+                witness.len() as c_ulong,
+                proof.as_ptr(),
+                proof.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        assert_eq!(rc, 0);
+        let request: PrivacyProofRequestV1 = take_privacy_output(out_ptr, out_len);
+
+        assert_eq!(request.algorithm_id, "verange-transparent-range-v1");
+        assert_eq!(request.entrypoint, "buildVeRangeProofV1");
+        assert_eq!(request.vk_ref, "bulletproofs:verange_transparent_range_v1");
+        assert_eq!(request.public_inputs, public_inputs);
+        assert_eq!(request.witness, witness);
+        assert_eq!(request.proof, proof);
+    }
+
+    #[test]
+    fn privacy_proof_request_v1_rejects_invalid_components_without_output() {
+        let algorithm_id = b"verange-transparent-range-v1";
+        let entrypoint = b"buildVeRangeProofV1";
+        let vk_ref = b"bulletproofs:verange_transparent_range_v1";
+        let witness = b"secret-witness";
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+
+        let rc = unsafe {
+            iroha_privacy_proof_request_v1(
+                algorithm_id.as_ptr(),
+                algorithm_id.len() as c_ulong,
+                entrypoint.as_ptr(),
+                entrypoint.len() as c_ulong,
+                vk_ref.as_ptr(),
+                vk_ref.len() as c_ulong,
+                ptr::null(),
+                0,
+                witness.as_ptr(),
+                witness.len() as c_ulong,
+                ptr::null(),
+                0,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+
+        assert_eq!(rc, PRIVACY_FFI_ERROR_INVALID_REQUEST as c_int);
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+    }
+
+    #[test]
     fn privacy_capabilities_accept_exact_internal_evidence_for_all_rows() {
         let evidence = PRIVACY_ALGORITHM_ENTRIES
             .iter()
@@ -25804,6 +26318,28 @@ mod tests {
         });
         assert_zk_ace_evidence_rejected("local verifier entrypoint", |row| {
             row.sdk_entrypoints.push("verifyZkAceProofLocally");
+        });
+        assert_zk_ace_evidence_rejected("missing SDK export surface", |row| {
+            row.sdk_exports.pop();
+        });
+        assert_zk_ace_evidence_rejected("mismatched SDK export entrypoint", |row| {
+            row.sdk_exports[3]
+                .entrypoints
+                .push("buildShadowZkAceProductionProof");
+        });
+        assert_zk_ace_evidence_rejected("dev fixture SDK export", |row| {
+            row.sdk_exports[2]
+                .entrypoints
+                .push("buildZkAceDevProofFixture");
+        });
+        assert_zk_ace_evidence_rejected("missing SDK parity artifact", |row| {
+            row.sdk_parity_artifacts.pop();
+        });
+        assert_zk_ace_evidence_rejected("wrong SDK parity artifact kind", |row| {
+            row.sdk_parity_artifacts[0].kind = "fixture_vectors";
+        });
+        assert_zk_ace_evidence_rejected("bad SDK parity artifact hash", |row| {
+            row.sdk_parity_artifacts[0].artifact_hash = "sha256:not-a-hex-digest";
         });
         assert_zk_ace_evidence_rejected("three-peer localnet downgrade", |row| {
             row.localnet_acceptance.peer_count = 3;
@@ -26670,9 +27206,10 @@ mod tests {
         assert_eq!(result.error_code, PRIVACY_FFI_ERROR_INVALID_REQUEST);
         assert!(result.algorithm_id.is_empty());
         assert!(result.entrypoint.is_empty());
-        assert!(result.vk_ref.is_empty());
-        assert!(result.public_inputs.is_empty());
+        assert_eq!(result.vk_ref, "unknown:vk_unknown");
+        assert_eq!(result.public_inputs, b"public-inputs");
         assert!(result.proof.is_empty());
+        assert!(!result.message.contains("secret"));
     }
 
     #[test]
@@ -26936,10 +27473,10 @@ mod tests {
 
         assert_eq!(result.error_code, PRIVACY_FFI_ERROR_INVALID_REQUEST);
         assert!(result.message.contains("vk_ref"));
-        assert!(result.algorithm_id.is_empty());
-        assert!(result.entrypoint.is_empty());
+        assert_eq!(result.algorithm_id, "confidential-transfer-v2");
+        assert_eq!(result.entrypoint, "buildConfidentialTransferProofV2");
         assert!(result.vk_ref.is_empty());
-        assert!(result.public_inputs.is_empty());
+        assert!(!result.public_inputs.is_empty());
         assert!(result.proof.is_empty());
     }
 
@@ -27062,7 +27599,23 @@ mod tests {
 
             let result = privacy_result_for_request(request, PrivacyProofOperationV1::Build);
 
-            assert_unreflected_invalid_privacy_request_result(&result, "backend:name", case);
+            if case == "planned-entrypoint" {
+                assert_eq!(result.version, PRIVACY_FFI_VERSION_V1, "{case}");
+                assert_eq!(result.status, PRIVACY_FFI_STATUS_ERROR, "{case}");
+                assert_eq!(
+                    result.error_code, PRIVACY_FFI_ERROR_INVALID_REQUEST,
+                    "{case}"
+                );
+                assert!(result.message.contains("planned"), "{case}");
+                assert!(result.message.contains("not executable"), "{case}");
+                assert_eq!(result.algorithm_id, algorithm_id, "{case}");
+                assert_eq!(result.entrypoint, entrypoint, "{case}");
+                assert!(result.vk_ref.is_empty(), "{case}");
+                assert!(result.proof.is_empty(), "{case}");
+                assert!(!result.verified, "{case}");
+            } else {
+                assert_unreflected_invalid_privacy_request_result(&result, "backend:name", case);
+            }
             let encoded = norito::to_bytes(&result).expect("encode privacy result");
             assert_subslice_absent(
                 &encoded,

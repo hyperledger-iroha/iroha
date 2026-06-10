@@ -5903,6 +5903,7 @@ pub async fn handle_v1_sumeragi_rbc_sessions() -> Result<impl IntoResponse> {
                 json_entry("received_chunks", s.received_chunks),
                 json_entry("ready_count", s.ready_count),
                 json_entry("delivered", s.delivered),
+                json_entry("complete_delivery", rbc_status_summary_has_complete_delivery(&s)),
                 json_entry(
                     "payload_hash",
                     s.payload_hash.map(|h| hex::encode(h.as_ref())),
