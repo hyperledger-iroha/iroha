@@ -26,6 +26,7 @@ LookupCases == {
   "other_height",
   "delivered_complete_match",
   "delivered_incomplete_match",
+  "delivered_overcount_match",
   "delivered_invalid_match",
   "delivered_missing_payload",
   "delivered_wrong_payload",
@@ -33,6 +34,7 @@ LookupCases == {
   "wrong_view_complete",
   "complete_invalid",
   "complete_incomplete",
+  "complete_overcount",
   "two_views_one_delivered",
   "two_views_none_delivered"
 }
@@ -59,6 +61,8 @@ SpecIsDelivered(c) ==
 ActualIsDelivered(c) ==
   CASE Bug = "is_delivered_accepts_incomplete"
        /\ c = "delivered_incomplete_match" -> TRUE
+    [] Bug = "is_delivered_accepts_overcount"
+       /\ c = "delivered_overcount_match" -> TRUE
     [] Bug = "is_delivered_accepts_invalid"
        /\ c = "delivered_invalid_match" -> TRUE
     [] Bug = "is_delivered_checks_payload"
@@ -73,6 +77,8 @@ SpecDeliveredPayloadMatches(c) ==
 ActualDeliveredPayloadMatches(c) ==
   CASE Bug = "delivered_accepts_incomplete"
        /\ c = "delivered_incomplete_match" -> TRUE
+    [] Bug = "delivered_accepts_overcount"
+       /\ c = "delivered_overcount_match" -> TRUE
     [] Bug = "delivered_accepts_invalid"
        /\ c = "delivered_invalid_match" -> TRUE
     [] Bug = "delivered_accepts_missing_payload"
@@ -95,6 +101,8 @@ ActualCompletePayloadMatches(c) ==
        /\ c = "complete_invalid" -> TRUE
     [] Bug = "complete_accepts_incomplete"
        /\ c = "complete_incomplete" -> TRUE
+    [] Bug = "complete_accepts_overcount"
+       /\ c \in {"delivered_overcount_match", "complete_overcount"} -> TRUE
     [] Bug = "complete_accepts_wrong_payload"
        /\ c = "delivered_wrong_payload" -> TRUE
     [] OTHER -> SpecCompletePayloadMatches(c)
@@ -141,10 +149,12 @@ TypeInvariant ==
   /\ Bug \in {
        "none",
        "is_delivered_accepts_incomplete",
+       "is_delivered_accepts_overcount",
        "is_delivered_accepts_invalid",
        "is_delivered_checks_payload",
        "is_delivered_ignores_other_view",
        "delivered_accepts_incomplete",
+       "delivered_accepts_overcount",
        "delivered_accepts_invalid",
        "delivered_accepts_missing_payload",
        "delivered_accepts_wrong_payload",
@@ -153,6 +163,7 @@ TypeInvariant ==
        "complete_accepts_wrong_view",
        "complete_accepts_invalid",
        "complete_accepts_incomplete",
+       "complete_accepts_overcount",
        "complete_accepts_wrong_payload",
        "stale_zero_ttl_expires",
        "stale_boundary_expires",
@@ -181,6 +192,10 @@ BugIsDeliveredAcceptsIncomplete ==
   ActualIsDelivered("delivered_incomplete_match") =
     SpecIsDelivered("delivered_incomplete_match")
 
+BugIsDeliveredAcceptsOvercount ==
+  ActualIsDelivered("delivered_overcount_match") =
+    SpecIsDelivered("delivered_overcount_match")
+
 BugIsDeliveredAcceptsInvalid ==
   ActualIsDelivered("delivered_invalid_match") =
     SpecIsDelivered("delivered_invalid_match")
@@ -196,6 +211,10 @@ BugIsDeliveredIgnoresOtherView ==
 BugDeliveredAcceptsIncomplete ==
   ActualDeliveredPayloadMatches("delivered_incomplete_match") =
     SpecDeliveredPayloadMatches("delivered_incomplete_match")
+
+BugDeliveredAcceptsOvercount ==
+  ActualDeliveredPayloadMatches("delivered_overcount_match") =
+    SpecDeliveredPayloadMatches("delivered_overcount_match")
 
 BugDeliveredAcceptsInvalid ==
   ActualDeliveredPayloadMatches("delivered_invalid_match") =
@@ -228,6 +247,12 @@ BugCompleteAcceptsInvalid ==
 BugCompleteAcceptsIncomplete ==
   ActualCompletePayloadMatches("complete_incomplete") =
     SpecCompletePayloadMatches("complete_incomplete")
+
+BugCompleteAcceptsOvercount ==
+  /\ ActualCompletePayloadMatches("complete_overcount") =
+       SpecCompletePayloadMatches("complete_overcount")
+  /\ ActualCompletePayloadMatches("delivered_overcount_match") =
+       SpecCompletePayloadMatches("delivered_overcount_match")
 
 BugCompleteAcceptsWrongPayload ==
   ActualCompletePayloadMatches("delivered_wrong_payload") =

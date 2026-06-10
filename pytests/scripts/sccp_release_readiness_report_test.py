@@ -2188,6 +2188,53 @@ def test_release_readiness_report_guards_bsc_inbound_adversarial_gate_inventory(
     )
 
 
+def test_release_readiness_report_guards_tron_inbound_adversarial_gate_inventory(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must pin TRON inbound adversarial guards."""
+
+    report = load_report_module()
+    assert report._tron_inbound_adversarial_gate_inventory_errors() == []
+
+    sparse_runtime = tmp_path / "lib.rs"
+    sparse_runtime.write_text(
+        "fn tron_transaction_info_mpt_value_binds_successful_sccp_log() {}\n",
+        encoding="utf-8",
+    )
+    errors = report._tron_inbound_adversarial_gate_inventory_errors(
+        (
+            (
+                sparse_runtime,
+                (
+                    "fn tron_transaction_info_mpt_value_binds_successful_sccp_log()",
+                    "TRON transaction-info receipts must not contain duplicate matching SCCP logs",
+                    "TRON production receipt admission must reject duplicate matching SCCP logs",
+                ),
+            ),
+        )
+    )
+
+    assert any(
+        "TRON mainnet inbound adversarial source inventory" in error
+        and str(sparse_runtime) in error
+        and (
+            "missing marker: TRON transaction-info receipts must not contain "
+            "duplicate matching SCCP logs"
+        )
+        in error
+        for error in errors
+    )
+    assert any(
+        "TRON mainnet inbound adversarial source inventory" in error
+        and (
+            "missing marker: TRON production receipt admission must reject "
+            "duplicate matching SCCP logs"
+        )
+        in error
+        for error in errors
+    )
+
+
 def test_release_readiness_report_guards_bsc_route_config_canonical_manifest_gate_inventory(
     tmp_path: Path,
 ) -> None:
@@ -3411,6 +3458,97 @@ def test_release_readiness_report_guards_ethereum_source_bridge_config_gate_inve
     )
 
 
+def source_marker_inventory_with_one_marker_removed(
+    tmp_path: Path,
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...],
+    index: int,
+) -> tuple[tuple[tuple[Path, tuple[str, ...]], ...], Path, str]:
+    """Return a one-entry inventory fixture with one detectable marker removed."""
+
+    original_path, required_markers = inventory[index]
+    for removed_marker in required_markers:
+        remaining_markers = tuple(
+            marker for marker in required_markers if marker != removed_marker
+        )
+        if removed_marker not in "\n".join(remaining_markers):
+            break
+    else:
+        raise AssertionError(f"{original_path} has no uniquely removable marker")
+
+    sparse_source = tmp_path / f"source-inventory-{index}-{Path(original_path).name}"
+    sparse_source.write_text("\n".join(remaining_markers), encoding="utf-8")
+    return ((sparse_source, required_markers),), sparse_source, removed_marker
+
+
+def test_release_readiness_report_guards_sccp_source_material_template_rejection_gate_inventory(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must pin source-material template rejection."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    assert (
+        report._sccp_source_material_template_rejection_gate_inventory_errors()
+        == []
+    )
+
+    for index, _entry in enumerate(
+        verifier.SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS
+    ):
+        (
+            sparse_inventory,
+            sparse_source,
+            removed_marker,
+        ) = source_marker_inventory_with_one_marker_removed(
+            tmp_path,
+            verifier.SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS,
+            index,
+        )
+        errors = report._sccp_source_material_template_rejection_gate_inventory_errors(
+            sparse_inventory
+        )
+
+        assert any(
+            "SCCP source-material template rejection source inventory" in error
+            and str(sparse_source) in error
+            and f"missing marker: {removed_marker}" in error
+            for error in errors
+        )
+
+
+def test_release_readiness_report_guards_sccp_source_material_role_validation_gate_inventory(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must pin source-material role validation."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    assert report._sccp_source_material_role_validation_gate_inventory_errors() == []
+
+    for index, _entry in enumerate(
+        verifier.SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS
+    ):
+        (
+            sparse_inventory,
+            sparse_source,
+            removed_marker,
+        ) = source_marker_inventory_with_one_marker_removed(
+            tmp_path,
+            verifier.SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS,
+            index,
+        )
+        errors = report._sccp_source_material_role_validation_gate_inventory_errors(
+            sparse_inventory
+        )
+
+        assert any(
+            "SCCP source-material role validation source inventory" in error
+            and str(sparse_source) in error
+            and f"missing marker: {removed_marker}" in error
+            for error in errors
+        )
+
+
 def test_release_readiness_report_guards_ethereum_evm_source_adapter_deployment_gate_inventory(
     tmp_path: Path,
 ) -> None:
@@ -3984,29 +4122,28 @@ def test_release_readiness_report_guards_retired_network_surface_gate_inventory(
     verifier = load_verify_helpers()
     assert report._sccp_retired_network_surface_gate_inventory_errors() == []
 
-    required_markers = verifier.SCCP_RETIRED_NETWORK_SURFACE_GUARD_MARKERS[0][1]
-    removed_marker = "def test_generic_no_support_note_stays_in_launch_scope_files"
-    guard = tmp_path / "sccp_retired_network_surface_test.py"
-    guard.write_text(
-        "\n".join(marker for marker in required_markers if marker != removed_marker),
-        encoding="utf-8",
-    )
-
-    errors = report._sccp_retired_network_surface_gate_inventory_errors(
+    for index, _entry in enumerate(
+        verifier.SCCP_RETIRED_NETWORK_SURFACE_GUARD_MARKERS
+    ):
         (
-            (
-                guard,
-                required_markers,
-            ),
+            sparse_inventory,
+            sparse_source,
+            removed_marker,
+        ) = source_marker_inventory_with_one_marker_removed(
+            tmp_path,
+            verifier.SCCP_RETIRED_NETWORK_SURFACE_GUARD_MARKERS,
+            index,
         )
-    )
+        errors = report._sccp_retired_network_surface_gate_inventory_errors(
+            sparse_inventory
+        )
 
-    assert any(
-        "SCCP retired network-surface guard source inventory" in error
-        and str(guard) in error
-        and removed_marker in error
-        for error in errors
-    )
+        assert any(
+            "SCCP retired network-surface guard source inventory" in error
+            and str(sparse_source) in error
+            and f"missing marker: {removed_marker}" in error
+            for error in errors
+        )
 
 
 def test_release_readiness_report_guards_sccp_proof_request_bundle_gate_inventory(
@@ -6190,6 +6327,46 @@ def test_release_readiness_report_blocks_missing_bsc_inbound_adversarial_gate(
     }
 
 
+def test_release_readiness_report_blocks_missing_tron_inbound_adversarial_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Production readiness must fail when TRON inbound adversarial guards drift."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    report = load_report_module()
+    blocker = (
+        "TRON mainnet inbound adversarial source inventory "
+        "crates/iroha_sccp/src/lib.rs missing marker: "
+        "TRON transaction-info receipts must not contain duplicate matching SCCP logs"
+    )
+    monkeypatch.setattr(
+        report,
+        "_tron_inbound_adversarial_gate_inventory_errors",
+        lambda: [blocker],
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    assert readiness["production_ready"] is False
+    assert blocker in readiness["blockers"]
+    assert readiness["source_inventory"]["tron_inbound_adversarial_gate"] == {
+        "validation_status": "blocked",
+        "validation_blockers": [blocker],
+    }
+    assert readiness["source_inventory"]["ethereum_native_receipt_finality_gate"] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+
 def test_release_readiness_report_blocks_missing_bsc_route_config_canonical_manifest_gate(
     tmp_path: Path,
     monkeypatch,
@@ -7215,6 +7392,86 @@ def test_release_readiness_report_blocks_missing_ethereum_source_bridge_config_g
     assert readiness["source_inventory"][
         "ethereum_evm_source_adapter_deployment_gate"
     ] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+
+def test_release_readiness_report_blocks_missing_sccp_source_material_template_rejection_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Production readiness must fail when source-template rejection guards drift."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    report = load_report_module()
+    blocker = (
+        "SCCP source-material template rejection source inventory "
+        "sccp_eth_source_bridge_evidence.py missing marker: "
+        "template-derived {label} is not deployable"
+    )
+    monkeypatch.setattr(
+        report,
+        "_sccp_source_material_template_rejection_gate_inventory_errors",
+        lambda: [blocker],
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    assert readiness["production_ready"] is False
+    assert blocker in readiness["blockers"]
+    assert readiness["source_inventory"]["source_material_template_rejection_gate"] == {
+        "validation_status": "blocked",
+        "validation_blockers": [blocker],
+    }
+    assert readiness["source_inventory"]["ethereum_source_bridge_config_gate"] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+
+def test_release_readiness_report_blocks_missing_sccp_source_material_role_validation_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Production readiness must fail when source role-validation guards drift."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    report = load_report_module()
+    blocker = (
+        "SCCP source-material role validation source inventory "
+        "sccp_eth_source_bridge_evidence.py missing marker: "
+        "def _require_source_role_hash_separation("
+    )
+    monkeypatch.setattr(
+        report,
+        "_sccp_source_material_role_validation_gate_inventory_errors",
+        lambda: [blocker],
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    assert readiness["production_ready"] is False
+    assert blocker in readiness["blockers"]
+    assert readiness["source_inventory"]["source_material_role_validation_gate"] == {
+        "validation_status": "blocked",
+        "validation_blockers": [blocker],
+    }
+    assert readiness["source_inventory"]["source_material_template_rejection_gate"] == {
         "validation_status": "passed",
         "validation_blockers": [],
     }

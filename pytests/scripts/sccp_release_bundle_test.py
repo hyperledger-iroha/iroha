@@ -360,12 +360,22 @@ def minimal_release_bundle_report(*, production_ready: bool = True) -> dict[str,
             "production_ready": production_ready,
             "phases": {},
             "evidence_artifacts": {},
+            "require_phase_evidence": True,
+            "blockers": [],
         },
         "cryptographic_evidence": [],
         "user_prover_submission_surfaces": [],
         "native_evm_prover_bundle": {},
         "source_inventory": {},
-        "evidence": {"lanes": []},
+        "evidence": {
+            "production_ready": production_ready,
+            "required_domains": [1, 2, 3, 4, 5],
+            "supported_launch_domains": [1, 2, 3, 4, 5],
+            "unsupported_launch_domains": [],
+            "lanes": [],
+            "blockers": [] if production_ready else ["blocked"],
+            "release_checklist": {"ready": production_ready, "items": []},
+        },
     }
 
 
@@ -661,12 +671,34 @@ def test_release_bundle_verifier_guards_launch_scope_constant_inventory(
     )
 
 
-def test_release_bundle_verifier_guards_retired_network_surface_inventory() -> None:
+def test_release_bundle_verifier_guards_retired_network_surface_inventory(
+    tmp_path: Path,
+) -> None:
     """The strict verifier must pin the retired network-surface scan guard."""
 
     verifier = load_verify_helpers()
 
     assert verifier._sccp_retired_network_surface_guard_inventory_errors() == []
+
+    for index, _entry in enumerate(
+        verifier.SCCP_RETIRED_NETWORK_SURFACE_GUARD_MARKERS
+    ):
+        (
+            sparse_inventory,
+            removed_marker,
+        ) = source_marker_inventory_with_one_marker_removed(
+            tmp_path,
+            verifier.SCCP_RETIRED_NETWORK_SURFACE_GUARD_MARKERS,
+            index,
+        )
+        errors = verifier._sccp_retired_network_surface_guard_inventory_errors(
+            sparse_inventory
+        )
+        assert any(
+            "SCCP retired network-surface guard source inventory" in error
+            and f"missing marker: {removed_marker}" in error
+            for error in errors
+        )
 
 
 def test_release_bundle_verifier_reports_sparse_retired_network_surface_inventory() -> None:
@@ -1252,6 +1284,74 @@ def test_release_bundle_verifier_guards_all_lanes_release_checklist_exact_boolea
         and f"missing marker: {removed_sdk_marker}" in error
         for error in errors
     )
+
+
+def test_release_bundle_verifier_guards_all_lanes_route_canary_sdk_role_inventory(
+    tmp_path: Path,
+) -> None:
+    """Published bundle verification must pin SDK route-canary role separation."""
+
+    verifier = load_verify_helpers()
+    inventory_by_path = dict(verifier.ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS)
+    sdk_marker_cases = (
+        ("python/iroha_torii_client/sccp.py", "TRON route canary governed hashes"),
+        (
+            "python/iroha_torii_client/tests/sccp_test.py",
+            'match="TON route canary governed hashes"',
+        ),
+        ("javascript/iroha_js/src/sccp.js", "TON route canary governed hashes"),
+        ("javascript/iroha_js/dist/sccp.js", "Solana route canary governed hashes"),
+        (
+            "javascript/iroha_js/test/sccpSolanaProver.test.js",
+            "/TRON route canary governed hashes/",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/SccpTronProver.swift",
+            "routeAllowlistGovernedHashes",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/SccpSolanaProverTests.swift",
+            'invalidPublicInputs("routeCanaryGovernedHashes")',
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/TronSccpProver.kt",
+            "TRON route allowlist governed hashes",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/TonSccpProverTest.kt",
+            "TON route canary governed hashes",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/TronSccpProver.java",
+            "TRON route allowlist governed hashes",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/SolanaSccpProverTests.java",
+            "Solana route canary governed hashes",
+        ),
+    )
+
+    for index, (source_path, removed_marker) in enumerate(sdk_marker_cases):
+        required_markers = inventory_by_path[source_path]
+        assert removed_marker in required_markers
+        sparse_source = tmp_path / f"route_canary_sdk_{index}.txt"
+        sparse_source.write_text(
+            "\n".join(
+                marker for marker in required_markers if marker != removed_marker
+            ),
+            encoding="utf-8",
+        )
+
+        errors = verifier._all_lanes_release_checklist_exact_boolean_inventory_errors(
+            ((sparse_source, required_markers),)
+        )
+
+        assert any(
+            "SCCP all-lanes release-checklist exact-boolean source inventory" in error
+            and str(sparse_source) in error
+            and f"missing marker: {removed_marker}" in error
+            for error in errors
+        ), source_path
 
 
 def test_release_bundle_verifier_guards_active_launch_checklist_schema_inventory(
@@ -3012,6 +3112,96 @@ def test_release_bundle_rejects_missing_copied_report_inputs_before_render(
     assert not (output_dir / "sccp-release-readiness.md").exists()
 
 
+def test_release_bundle_rejects_malformed_copied_input_provenance_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """The bundle-local copied input provenance must keep canonical layout."""
+
+    bundle = load_bundle_module()
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    def artifact(path: str) -> dict[str, object]:
+        return {"path": path, "bytes": 1, "sha256": "0" * 64}
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["inputs"] = [
+                    "evidence/00-complete.toml",
+                    "evidence/00-complete.toml",
+                    "../operator/complete.toml",
+                    "",
+                    "evidence/renamed.toml",
+                ]
+                report["input_artifacts"] = [
+                    artifact("evidence/00-complete.toml"),
+                    artifact("evidence/00-complete.toml"),
+                    artifact("evidence/02-other.toml"),
+                ]
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("malformed copied input provenance was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError(
+            "malformed copied input provenance reached Markdown rendering"
+        )
+
+    captured = capsys.readouterr()
+    assert "malformed SCCP release readiness report" in captured.err
+    assert (
+        "bundled report.inputs contains duplicate path: evidence/00-complete.toml"
+        in captured.err
+    )
+    assert (
+        "bundled report.inputs path escapes bundle: ../operator/complete.toml"
+        in captured.err
+    )
+    assert "bundled report.inputs item must be a non-empty string" in captured.err
+    assert (
+        "bundled report.inputs path must use copied evidence layout "
+        "evidence/04-*.toml: evidence/renamed.toml"
+    ) in captured.err
+    assert (
+        "bundled report.input_artifacts contains duplicate path: "
+        "evidence/00-complete.toml"
+    ) in captured.err
+    assert (
+        "bundled report.inputs do not match copied input_artifacts"
+        in captured.err
+    )
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
 def test_release_bundle_rejects_unknown_copied_report_root_before_render(
     tmp_path: Path,
     monkeypatch,
@@ -3063,6 +3253,105 @@ def test_release_bundle_rejects_unknown_copied_report_root_before_render(
     assert "malformed SCCP release readiness report" in captured.err
     assert (
         "bundled report contains unknown field: operator_attestation"
+    ) in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_malformed_copied_artifacts_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """The bundle-local artifact rows must keep canonical public shape."""
+
+    bundle = load_bundle_module()
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["input_artifacts"] = [
+                    {
+                        "path": " evidence/00-complete|operator.toml ",
+                        "bytes": True,
+                        "sha256": "A" * 64,
+                        "operator_attestation": "reviewed outside evidence",
+                    }
+                ]
+                corridor = report["corridor"]
+                assert isinstance(corridor, dict)
+                corridor["evidence_artifacts"] = {
+                    "contract-smoke": {
+                        "path": "corridor/%252e%252e/contract-smoke.log",
+                        "bytes": -1,
+                        "sha256": ["not-a-canonical-hash"],
+                    }
+                }
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("malformed copied artifacts were rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("malformed copied artifacts reached Markdown rendering")
+
+    captured = capsys.readouterr()
+    assert "malformed SCCP release readiness report" in captured.err
+    assert (
+        "bundled report.input_artifacts[0] contains unknown field: "
+        "operator_attestation"
+    ) in captured.err
+    assert (
+        "bundled report.input_artifacts[0] path must not contain surrounding "
+        "whitespace"
+    ) in captured.err
+    assert (
+        "bundled report.input_artifacts[0] path contains Markdown-unsafe character"
+    ) in captured.err
+    assert "bundled report.input_artifacts[0] bytes must be a non-negative integer" in (
+        captured.err
+    )
+    assert (
+        "bundled report.input_artifacts[0] sha256 must be a canonical SHA-256 "
+        "hex string"
+    ) in captured.err
+    assert (
+        "bundled report.corridor.evidence_artifacts['contract-smoke'] path "
+        "contains percent-encoded traversal segment"
+    ) in captured.err
+    assert (
+        "bundled report.corridor.evidence_artifacts['contract-smoke'] bytes "
+        "must be a non-negative integer"
+    ) in captured.err
+    assert (
+        "bundled report.corridor.evidence_artifacts['contract-smoke'] sha256 "
+        "must be a canonical SHA-256 hex string"
     ) in captured.err
     assert fake_report_module.calls == 2
     assert not (output_dir / "sccp-release-readiness.md").exists()
@@ -3140,8 +3429,3915 @@ def test_release_bundle_rejects_unknown_copied_checklist_fields_before_render(
         "operator_attestation"
     ) in captured.err
     assert (
-        "bundled report.release_checklist.items[0] contains unknown field: "
+        "bundled report.release_checklist.items['all_required_lane_records'] "
+        "contains unknown field: operator_attestation"
+    ) in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_malformed_copied_checklist_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """The bundle-local release checklist must keep canonical booleans and blockers."""
+
+    bundle = load_bundle_module()
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["release_checklist"] = {
+                    "ready": "true",
+                    "items": [
+                        {
+                            "id": "all_required_lane_records",
+                            "title": " All required lane records ",
+                            "ready": False,
+                            "blockers": [
+                                "missing record",
+                                " duplicate blocker ",
+                                "missing record",
+                            ],
+                        },
+                        {
+                            "id": "all_required_lane_records",
+                            "title": "All required lane records",
+                            "ready": True,
+                            "blockers": [],
+                        },
+                        {
+                            "id": "bad id",
+                            "title": "",
+                            "ready": "true",
+                            "blockers": "operator says ready",
+                        },
+                    ],
+                }
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("malformed checklist was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("malformed checklist reached Markdown rendering")
+
+    captured = capsys.readouterr()
+    assert "malformed SCCP release readiness report" in captured.err
+    assert "bundled report.release_checklist ready must be true" in captured.err
+    assert (
+        "bundled report.release_checklist.items['all_required_lane_records'] "
+        "title must be a non-empty string with no surrounding whitespace"
+    ) in captured.err
+    assert (
+        "bundled report.release_checklist.items['all_required_lane_records'] "
+        "ready must be true"
+    ) in captured.err
+    assert (
+        "bundled report.release_checklist.items['all_required_lane_records'] "
+        "blockers must be a list of non-empty strings with no surrounding whitespace"
+    ) in captured.err
+    assert (
+        "bundled report.release_checklist.items['all_required_lane_records'] "
+        "blockers must not contain duplicate strings"
+    ) in captured.err
+    assert (
+        "bundled report.release_checklist.items['all_required_lane_records'] "
+        "blockers must be empty"
+    ) in captured.err
+    assert (
+        "bundled report.release_checklist contains duplicate item id: "
+        "all_required_lane_records"
+    ) in captured.err
+    assert "bundled report.release_checklist.items[2] id contains whitespace" in (
+        captured.err
+    )
+    assert (
+        "bundled report.release_checklist.items[2] title must be a non-empty "
+        "string with no surrounding whitespace"
+    ) in captured.err
+    assert "bundled report.release_checklist.items[2] ready must be true" in (
+        captured.err
+    )
+    assert (
+        "bundled report.release_checklist.items[2] blockers must be a list of "
+        "non-empty strings"
+    ) in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_copied_checklist_binding_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Copied release checklists must match verifier-owned evidence derivation."""
+
+    bundle = load_bundle_module()
+    real_report_module = load_report_module()
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    write_phase_artifacts(tmp_path)
+    output_dir = tmp_path / "bundle"
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return real_report_module._corridor_phases()
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = real_report_module._build_report(*args, **kwargs)
+            if self.calls == 2:
+                checklist = dict(report["release_checklist"])
+                checklist["items"] = [
+                    dict(item)
+                    for item in checklist["items"]
+                    if isinstance(item, dict)
+                ]
+                checklist["items"][0]["title"] = "Forged release gate"
+                report["release_checklist"] = checklist
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("copied release checklist drift was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                "--phase-evidence-dir",
+                str(tmp_path / "phase-artifacts"),
+                "--native-evm-prover-bundle",
+                str(native_bundle),
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("copied release checklist drift reached Markdown rendering")
+
+    captured = capsys.readouterr()
+    assert "malformed SCCP release readiness report" in captured.err
+    assert (
+        "bundled report.release_checklist does not match embedded evidence"
+        in captured.err
+    )
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_malformed_copied_corridor_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """The bundle-local corridor section must keep canonical public shape."""
+
+    bundle = load_bundle_module()
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                corridor = report["corridor"]
+                assert isinstance(corridor, dict)
+                corridor["operator_attestation"] = "reviewed outside evidence"
+                corridor["require_phase_evidence"] = "true"
+                corridor["blockers"] = [" padded blocker ", "duplicate", "duplicate"]
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("malformed corridor was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("malformed corridor reached Markdown rendering")
+
+    captured = capsys.readouterr()
+    assert "malformed SCCP release readiness report" in captured.err
+    assert (
+        "bundled report.corridor contains unknown field: operator_attestation"
+    ) in captured.err
+    assert (
+        "bundled report.corridor require_phase_evidence must be true or false"
+    ) in captured.err
+    assert (
+        "bundled report.corridor blockers must be a list of non-empty strings "
+        "with no surrounding whitespace"
+    ) in captured.err
+    assert (
+        "bundled report.corridor blockers must not contain duplicate strings"
+        in captured.err
+    )
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_copied_corridor_not_ready_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Copied corridor readiness must stay passed before public rendering."""
+
+    bundle = load_bundle_module()
+    real_report_module = load_report_module()
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    write_phase_artifacts(tmp_path)
+    output_dir = tmp_path / "bundle"
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return real_report_module._corridor_phases()
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = real_report_module._build_report(*args, **kwargs)
+            if self.calls == 2:
+                corridor = dict(report["corridor"])
+                corridor["production_ready"] = False
+                corridor["require_phase_evidence"] = False
+                report["corridor"] = corridor
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("not-ready copied corridor was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                "--phase-evidence-dir",
+                str(tmp_path / "phase-artifacts"),
+                "--native-evm-prover-bundle",
+                str(native_bundle),
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("not-ready copied corridor reached Markdown rendering")
+
+    captured = capsys.readouterr()
+    assert "malformed SCCP release readiness report" in captured.err
+    assert "bundled report production corridor is not ready" in captured.err
+    assert "bundled report does not require hashed phase evidence" in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_copied_phase_transcript_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Copied phase logs must satisfy transcript semantics before rendering."""
+
+    bundle = load_bundle_module()
+    real_report_module = load_report_module()
+    verifier = load_verify_helpers()
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    write_phase_artifacts(tmp_path)
+    phase = "contract-smoke"
+    output_dir = tmp_path / "bundle"
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return real_report_module._corridor_phases()
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = real_report_module._build_report(*args, **kwargs)
+            if self.calls == 2:
+                copied_phase_log = output_dir / "corridor" / f"{phase}.log"
+                assert copied_phase_log.exists()
+                copied_phase_log.write_text(
+                    "\n".join(
+                        (
+                            verifier.CORRIDOR_DRY_RUN_SENTINEL,
+                            f"==> SCCP production corridor: {phase}",
+                            "SCCP production corridor completed.",
+                            "",
+                        )
+                    ),
+                    encoding="utf-8",
+                )
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("copied dry-run phase transcript was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                "--phase-evidence-dir",
+                str(tmp_path / "phase-artifacts"),
+                "--native-evm-prover-bundle",
+                str(native_bundle),
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("copied dry-run phase transcript reached rendering")
+
+    captured = capsys.readouterr()
+    assert "malformed SCCP release readiness report" in captured.err
+    assert (
+        f"readiness report phase {phase} evidence artifact is a dry-run transcript"
+        in captured.err
+    )
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_copied_artifact_hash_drift_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Copied public artifact rows must match copied files before rendering."""
+
+    bundle = load_bundle_module()
+    real_report_module = load_report_module()
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    write_phase_artifacts(tmp_path)
+    phase = "contract-smoke"
+    output_dir = tmp_path / "bundle"
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return real_report_module._corridor_phases()
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = real_report_module._build_report(*args, **kwargs)
+            if self.calls == 2:
+                input_artifacts = report["input_artifacts"]
+                assert isinstance(input_artifacts, list)
+                first_input = dict(input_artifacts[0])
+                first_input["sha256"] = "0" * 64
+                input_artifacts[0] = first_input
+                corridor = report["corridor"]
+                assert isinstance(corridor, dict)
+                phase_artifacts = corridor["evidence_artifacts"]
+                assert isinstance(phase_artifacts, dict)
+                phase_artifact = dict(phase_artifacts[phase])
+                phase_artifact["sha256"] = "0" * 64
+                phase_artifacts[phase] = phase_artifact
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("copied artifact hash drift was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                "--phase-evidence-dir",
+                str(tmp_path / "phase-artifacts"),
+                "--native-evm-prover-bundle",
+                str(native_bundle),
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("copied artifact hash drift reached Markdown rendering")
+
+    captured = capsys.readouterr()
+    assert "malformed SCCP release readiness report" in captured.err
+    assert (
+        "bundled report.input_artifacts[0] artifact sha256 mismatch for "
+        "evidence/00-complete.toml"
+    ) in captured.err
+    assert (
+        f"bundled report.corridor.evidence_artifacts['{phase}'] artifact "
+        f"sha256 mismatch for corridor/{phase}.log"
+    ) in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_markdown_drift_before_write(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """The readiness Markdown must match verifier-owned canonical rendering."""
+
+    bundle = load_bundle_module()
+    real_report_module = load_report_module()
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    write_phase_artifacts(tmp_path)
+    output_dir = tmp_path / "bundle"
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return real_report_module._corridor_phases()
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            return real_report_module._build_report(*args, **kwargs)
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            canonical = real_report_module._render_markdown(*args, **kwargs)
+            return canonical.replace(
+                "Status: READY\n",
+                "Status: READY\n\nTampered reviewer-facing report text.\n",
+            )
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                "--phase-evidence-dir",
+                str(tmp_path / "phase-artifacts"),
+                "--native-evm-prover-bundle",
+                str(native_bundle),
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("drifted readiness Markdown was written")
+
+    captured = capsys.readouterr()
+    assert "malformed SCCP release readiness report" in captured.err
+    assert "readiness report Markdown does not match readiness report JSON" in (
+        captured.err
+    )
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_summary_drift_before_write(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """The generated summary JSON must match the copied report evidence."""
+
+    bundle = load_bundle_module()
+    real_summary = bundle._all_lanes_summary
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    write_phase_artifacts(tmp_path)
+    output_dir = tmp_path / "bundle"
+
+    def drifted_summary(paths):
+        summary = real_summary(paths)
+        summary = dict(summary)
+        summary["production_ready"] = False
+        summary["blockers"] = ["forged summary blocker"]
+        return summary
+
+    monkeypatch.setattr(bundle, "_all_lanes_summary", drifted_summary)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                "--phase-evidence-dir",
+                str(tmp_path / "phase-artifacts"),
+                "--native-evm-prover-bundle",
+                str(native_bundle),
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("drifted all-lanes summary was written")
+
+    captured = capsys.readouterr()
+    assert "malformed SCCP release readiness report" in captured.err
+    assert "bundled summary does not match bundled report evidence" in captured.err
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+    assert not (output_dir / "sccp-all-lanes-summary.json").exists()
+
+
+def test_release_bundle_rejects_release_notes_drift_before_write(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """The release-notes attachment must match verifier-owned canonical rendering."""
+
+    bundle = load_bundle_module()
+    real_attachment = bundle._release_notes_attachment
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    write_phase_artifacts(tmp_path)
+    output_dir = tmp_path / "bundle"
+
+    def drifted_attachment(report, artifacts):
+        return real_attachment(report, artifacts) + "\nUnreviewed release-manager note.\n"
+
+    monkeypatch.setattr(bundle, "_release_notes_attachment", drifted_attachment)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                "--phase-evidence-dir",
+                str(tmp_path / "phase-artifacts"),
+                "--native-evm-prover-bundle",
+                str(native_bundle),
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("drifted release-notes attachment was written")
+
+    captured = capsys.readouterr()
+    assert "malformed SCCP release readiness report" in captured.err
+    assert "release notes attachment does not match manifest and report" in (
+        captured.err
+    )
+    assert not (output_dir / "sccp-release-notes-attachment.md").exists()
+
+
+def test_release_bundle_rejects_manifest_drift_before_write(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """The release manifest must satisfy verifier-owned invariants before write."""
+
+    bundle = load_bundle_module()
+    real_manifest = bundle._release_bundle_manifest
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    write_phase_artifacts(tmp_path)
+    output_dir = tmp_path / "bundle"
+
+    def drifted_manifest(output_dir_arg, report, artifact_paths):
+        manifest = real_manifest(output_dir_arg, report, artifact_paths)
+        manifest["release_checklist_ready"] = False
+        artifacts = manifest["artifacts"]
+        assert isinstance(artifacts, list)
+        artifacts[0], artifacts[1] = artifacts[1], artifacts[0]
+        return manifest
+
+    monkeypatch.setattr(bundle, "_release_bundle_manifest", drifted_manifest)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                "--phase-evidence-dir",
+                str(tmp_path / "phase-artifacts"),
+                "--native-evm-prover-bundle",
+                str(native_bundle),
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("drifted release manifest was written")
+
+    captured = capsys.readouterr()
+    assert "malformed SCCP release readiness report" in captured.err
+    assert "manifest release_checklist_ready is not true" in captured.err
+    assert (
+        "manifest release_checklist_ready does not match readiness report "
+        "release_checklist"
+    ) in captured.err
+    assert (
+        "manifest artifact order does not match canonical release bundle order"
+        in captured.err
+    )
+    assert not (output_dir / "manifest.json").exists()
+
+
+def test_release_bundle_rejects_malformed_copied_corridor_phase_map_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Copied corridor phase maps must be classified before rendering."""
+
+    bundle = load_bundle_module()
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+    confusable_phase = "jav\u0430-sdk"
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                artifact = {
+                    "path": "evidence/corridor-phase.log",
+                    "bytes": 32,
+                    "sha256": "a" * 64,
+                }
+                malformed_phases = {
+                    " js-sdk ": "passed",
+                    "swift\nsdk": "passed",
+                    "kotlin sdk": "passed",
+                    "java|android": "passed",
+                    confusable_phase: "passed",
+                    "kotlin_sdk": "passed",
+                    "-dotnet": "passed",
+                    "portal-review": "passed",
+                }
+                corridor = report["corridor"]
+                assert isinstance(corridor, dict)
+                corridor["phases"] = {
+                    **malformed_phases,
+                    "js-sdk": "skipped",
+                    "swift-sdk": "blocked",
+                }
+                corridor["evidence_artifacts"] = {
+                    phase: dict(artifact) for phase in malformed_phases
+                }
+                corridor["evidence_artifacts"]["js-sdk"] = dict(artifact)
+                corridor["evidence_artifacts"]["swift-sdk"] = dict(artifact)
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("malformed corridor phase map was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("malformed corridor phase map reached rendering")
+
+    captured = capsys.readouterr()
+    assert "malformed SCCP release readiness report" in captured.err
+    for label in (
+        "bundled report.corridor.phases",
+        "bundled report.corridor.evidence_artifacts",
+    ):
+        assert f"{label} contains phase with surrounding whitespace" in captured.err
+        assert f"{label} contains phase with control character" in captured.err
+        assert f"{label} contains phase with whitespace" in captured.err
+        assert f"{label} contains phase with Markdown-unsafe character" in (
+            captured.err
+        )
+        assert f"{label} contains phase with non-ASCII character" in captured.err
+        assert f"{label} contains malformed phase" in captured.err
+    assert (
+        "bundled report.corridor has unknown phase status: portal-review"
+        in captured.err
+    )
+    assert (
+        "bundled report.corridor has evidence artifact for unknown phase: "
+        "portal-review"
+    ) in captured.err
+    assert (
+        "bundled report.corridor phase js-sdk status must be passed or blocked"
+        in captured.err
+    )
+    assert (
+        "bundled report.corridor phase swift-sdk is not passed: 'blocked'"
+        in captured.err
+    )
+    assert confusable_phase not in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_unknown_copied_crypto_evidence_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """The bundle-local crypto evidence rows must not carry extra claims."""
+
+    bundle = load_bundle_module()
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                crypto_row = {
+                    field: "" for field in bundle.CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS
+                }
+                crypto_row["operator_attestation"] = "reviewed outside evidence"
+                report["cryptographic_evidence"] = [crypto_row]
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("crypto evidence with unknown field was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError(
+            "crypto evidence with unknown field reached Markdown rendering"
+        )
+
+    captured = capsys.readouterr()
+    assert "malformed SCCP release readiness report" in captured.err
+    assert (
+        "bundled report.cryptographic_evidence[0] contains unknown field: "
         "operator_attestation"
+    ) in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_malformed_copied_crypto_evidence_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Copied crypto evidence rows must keep canonical public scalar shape."""
+
+    bundle = load_bundle_module()
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+    confusable_audit_key = "aud\u0456t_note"
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                crypto_row = {
+                    field: None for field in bundle.CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS
+                }
+                crypto_row.update(
+                    {
+                        "domain": "1",
+                        "chain": " eth ",
+                        "evm_source_rpc_chain_id": 1,
+                        "evm_source_block_tag": True,
+                        "evm_destination_rpc_chain_id": False,
+                        "evm_destination_block_tag": 1,
+                        "source_verifier_material_hash": "0X" + "11" * 32,
+                        "source_adapter_engine_deployment_hash": "0x" + "22" * 31,
+                        "destination_binding_hash": True,
+                        "source_adapter_gate_hash": "0x" + "zz" * 32,
+                        "route_allowlist_hash": "0x" + "33" * 33,
+                        "route_canary_evidence_hash": "0x" + "44" * 32,
+                        "route_canary_evidence_source": " route-canary ",
+                        "route_canary_evidence_bound": "true",
+                        "route_canary_transaction_hash": "0X" + "55" * 32,
+                        "route_canary_receipt_block_number": 0,
+                        "route_canary_receipt_block_hash": True,
+                        "route_canary_receipt_block_finalized": "true",
+                        "route_canary_block_receipts_root": "0x" + "66" * 31,
+                        "route_canary_message_id": "0x" + "gg" * 32,
+                        "route_canary_block_number": True,
+                        "route_canary_block_timestamp": -1,
+                        "source_adapter_gate_required": "false",
+                        "source_adapter_gate_audit_hashes": {
+                            " audit_note ": "0x" + "77" * 32,
+                            "audit\nnote": "0x" + "88" * 32,
+                            "audit note": "0x" + "99" * 32,
+                            "audit|note": "0x" + "aa" * 32,
+                            confusable_audit_key: "0x" + "bb" * 32,
+                            "operator_override": "0X" + "cc" * 32,
+                        },
+                    }
+                )
+                report["cryptographic_evidence"] = [crypto_row]
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("malformed crypto evidence was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("malformed crypto evidence reached Markdown rendering")
+
+    captured = capsys.readouterr()
+    label = "bundled report.cryptographic_evidence[0]"
+    audit_label = f"{label} source_adapter_gate_audit_hashes"
+    assert "malformed SCCP release readiness report" in captured.err
+    assert f"{label} domain must be an integer" in captured.err
+    assert (
+        f"{label} chain must be a non-empty string with no surrounding whitespace"
+        in captured.err
+    )
+    assert f"{label} evm_source_rpc_chain_id must be a string" in captured.err
+    assert f"{label} evm_source_block_tag must be a string" in captured.err
+    assert f"{label} evm_destination_rpc_chain_id must be a string" in captured.err
+    assert f"{label} evm_destination_block_tag must be a string" in captured.err
+    assert (
+        f"{label} route_canary_evidence_source must be a non-empty string "
+        "with no surrounding whitespace, empty, or null"
+    ) in captured.err
+    assert f"{label} route_canary_evidence_bound must be true or false" in (
+        captured.err
+    )
+    assert f"{label} source_adapter_gate_required must be true or false" in (
+        captured.err
+    )
+    assert (
+        f"{label} route_canary_receipt_block_finalized must be true, false, or null"
+        in captured.err
+    )
+    for field in (
+        "source_verifier_material_hash",
+        "source_adapter_engine_deployment_hash",
+        "destination_binding_hash",
+        "source_adapter_gate_hash",
+        "route_allowlist_hash",
+        "route_canary_transaction_hash",
+        "route_canary_receipt_block_hash",
+        "route_canary_block_receipts_root",
+        "route_canary_message_id",
+    ):
+        assert (
+            f"{label} {field} must be empty, null, or a canonical bytes32 hex string"
+            in captured.err
+        )
+    assert (
+        f"{label} route_canary_receipt_block_number must be null or a positive integer"
+        in captured.err
+    )
+    assert f"{label} route_canary_block_number must be null or a positive integer" in (
+        captured.err
+    )
+    assert (
+        f"{label} route_canary_block_timestamp must be null or a non-negative integer"
+        in captured.err
+    )
+    assert f"{audit_label} contains audit field name with surrounding whitespace" in (
+        captured.err
+    )
+    assert f"{audit_label} contains audit field name with control character" in (
+        captured.err
+    )
+    assert f"{audit_label} contains audit field name with whitespace" in captured.err
+    assert f"{audit_label} contains audit field name with Markdown-unsafe character" in (
+        captured.err
+    )
+    assert f"{audit_label} contains audit field name with non-ASCII character" in (
+        captured.err
+    )
+    assert (
+        f"{audit_label} operator_override must be a canonical bytes32 hex string"
+        in captured.err
+    )
+    assert confusable_audit_key not in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_copied_crypto_evidence_lane_binding_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Copied crypto rows must stay bound to embedded all-lanes evidence."""
+
+    bundle = load_bundle_module()
+    readiness = load_report_module()
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    source_material_hash = fixed_hex32(0xD1)
+    source_deployment_hash = fixed_hex32(0xD2)
+    destination_hash = fixed_hex32(0xA1)
+    route_hash = fixed_hex32(0xB1)
+    route_canary_hash = fixed_hex32(0xC1)
+    transaction_hash = fixed_hex32(0xC2)
+    receipt_block_hash = fixed_hex32(0xC3)
+    receipts_root = fixed_hex32(0xC4)
+    message_id = fixed_hex32(0xC5)
+
+    lane = {
+        "domain": readiness.ACTIVE_LAUNCH_DOMAIN,
+        "chain": readiness.ACTIVE_LAUNCH_CHAIN,
+        "records": {
+            "source_verifier_material": True,
+            "source_adapter_deployment": True,
+            "destination_rollout": True,
+            "route_allowlist": True,
+        },
+        "production_ready": True,
+        "source_record_hashes": {
+            "source_verifier_material_hash": source_material_hash,
+            "source_adapter_engine_deployment_hash": source_deployment_hash,
+        },
+        "source_adapter_gate": {
+            "required": False,
+            "ready": True,
+            "gate_hash": "",
+            "audit_hashes": {},
+            "blockers": [],
+        },
+        "evm_live_metadata": {
+            "required": True,
+            "ready": True,
+            "source_rpc_chain_id": "1",
+            "source_block_tag": "finalized",
+            "destination_rpc_chain_id": "1",
+            "destination_block_tag": "finalized",
+        },
+        "destination_binding": {
+            "destination_binding_hash": destination_hash,
+            "destination_binding_key": "sccp:eth:destination:ethereum-mainnet:v1",
+            "expected_destination_binding_hash": destination_hash,
+            "expected_destination_binding_hash_matches": True,
+            "recomputed": True,
+            "destination_bridge_address": "",
+            "destination_network_id": "",
+        },
+        "route_allowlist": {
+            "route_allowlist_hash": route_hash,
+            "expected_route_allowlist_hash": route_hash,
+            "expected_route_allowlist_hash_matches": True,
+            "route_canary": {
+                "status": "passed",
+                "evidence_hash": route_canary_hash,
+                "evidence_source": "evm_message_proof_accepted_transaction",
+                "route_allowlist_hash": route_hash,
+                "destination_binding_hash": destination_hash,
+                "evidence_bound": True,
+                "transaction_hash": transaction_hash,
+                "log_index": 0,
+                "receipt_block_number": 1,
+                "receipt_block_hash": receipt_block_hash,
+                "block_receipts_root": receipts_root,
+                "call_data_sha256": fixed_hex32(0xC6),
+                "message_id": message_id,
+                "payload_hash": fixed_hex32(0xC7),
+                "target_domain": readiness.ACTIVE_LAUNCH_DOMAIN,
+                "statement_hash": fixed_hex32(0xC8),
+                "commitment_root": fixed_hex32(0xC9),
+                "finality_height": fixed_hex32(0xCA),
+                "finality_block_hash": fixed_hex32(0xCB),
+                "proof_version": 1,
+                "proof_source_domain": 0,
+                "message_proof_used": True,
+                "receipt_block_finalized": True,
+            },
+        },
+        "blockers": [],
+    }
+    crypto_row = {
+        "domain": 2,
+        "chain": "bsc",
+        "evm_source_rpc_chain_id": "1",
+        "evm_source_block_tag": "finalized",
+        "evm_destination_rpc_chain_id": "1",
+        "evm_destination_block_tag": "finalized",
+        "source_verifier_material_hash": fixed_hex32(0xE1),
+        "source_adapter_engine_deployment_hash": source_deployment_hash,
+        "destination_binding_hash": destination_hash,
+        "source_adapter_gate_hash": fixed_hex32(0xE2),
+        "source_adapter_gate_required": True,
+        "source_adapter_gate_audit_hashes": {"operator_override": fixed_hex32(0xE3)},
+        "route_allowlist_hash": route_hash,
+        "route_canary_evidence_hash": fixed_hex32(0xE4),
+        "route_canary_evidence_source": "operator_attestation",
+        "route_canary_evidence_bound": True,
+        "route_canary_transaction_hash": transaction_hash,
+        "route_canary_receipt_block_number": 2,
+        "route_canary_receipt_block_hash": receipt_block_hash,
+        "route_canary_receipt_block_finalized": False,
+        "route_canary_block_receipts_root": receipts_root,
+        "route_canary_message_id": fixed_hex32(0xE5),
+        "route_canary_block_number": None,
+        "route_canary_block_timestamp": None,
+    }
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["cryptographic_evidence"] = [crypto_row]
+                report["evidence"] = {
+                    "production_ready": True,
+                    "required_domains": [1, 2, 3, 4, 5],
+                    "supported_launch_domains": [1, 2, 3, 4, 5],
+                    "unsupported_launch_domains": [],
+                    "lanes": [lane],
+                    "blockers": [],
+                    "release_checklist": {"ready": True, "items": []},
+                }
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("crypto evidence lane-binding drift was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("crypto evidence lane-binding drift reached rendering")
+
+    captured = capsys.readouterr()
+    row_label = "bundled report.cryptographic_evidence[0]"
+    lane_label = "bundled report.evidence.lanes[0]"
+    assert "malformed SCCP release readiness report" in captured.err
+    for field, lane_field in (
+        ("domain", "domain"),
+        ("chain", "chain"),
+        ("source_verifier_material_hash", "source_record_hashes.source_verifier_material_hash"),
+        ("source_adapter_gate_hash", "source_adapter_gate.gate_hash"),
+        ("source_adapter_gate_required", "source_adapter_gate.required"),
+        ("source_adapter_gate_audit_hashes", "source_adapter_gate.audit_hashes"),
+        ("route_canary_evidence_hash", "route_allowlist.route_canary.evidence_hash"),
+        ("route_canary_evidence_source", "route_allowlist.route_canary.evidence_source"),
+        ("route_canary_receipt_block_number", "route_allowlist.route_canary.receipt_block_number"),
+        ("route_canary_receipt_block_finalized", "route_allowlist.route_canary.receipt_block_finalized"),
+        ("route_canary_message_id", "route_allowlist.route_canary.message_id"),
+    ):
+        separator = " " if field in {"domain", "chain"} else "."
+        assert f"{row_label} {field} must match {lane_label}{separator}{lane_field}" in (
+            captured.err
+        )
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_unknown_copied_submission_surface_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """The bundle-local submission rows must not carry extra release claims."""
+
+    bundle = load_bundle_module()
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                surface = {
+                    "lanes": "eth,bsc",
+                    "proof_backend": "evm-groth16-bn254-v1",
+                    "sdk_helper_symbols": ["buildBridgeProofSubmission"],
+                    "sdk_helper_symbols_by_sdk": {
+                        "js-sdk": ["buildBridgeProofSubmission"]
+                    },
+                    "sdk_helpers": "buildBridgeProofSubmission",
+                    "on_chain_submission": "Torii bridge proof endpoint",
+                    "required_phases": ["js-sdk"],
+                    "validation_status": "blocked",
+                    "validation_blockers": ["js-sdk is missing"],
+                    "operator_attestation": "reviewed outside evidence",
+                }
+                report["user_prover_submission_surfaces"] = [surface]
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("submission surface with unknown field was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError(
+            "submission surface with unknown field reached Markdown rendering"
+        )
+
+    captured = capsys.readouterr()
+    assert "malformed SCCP release readiness report" in captured.err
+    assert (
+        "bundled report.user_prover_submission_surfaces[0] "
+        "contains unknown field: operator_attestation"
+    ) in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_malformed_copied_submission_surface_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Copied user-prover submission rows must keep canonical public shape."""
+
+    bundle = load_bundle_module()
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+    confusable_sdk = "javas\u0441ript-sdk"
+    confusable_phase = "javas\u0441ript-sdk"
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                surface = {
+                    "lanes": " eth,bsc ",
+                    "proof_backend": "",
+                    "sdk_helper_symbols": [
+                        "buildBridgeProofSubmission",
+                        " buildBridgeProofSubmission ",
+                    ],
+                    "sdk_helper_symbols_by_sdk": {
+                        " js-sdk ": ["forgedUiProver"],
+                        "swift\nsdk": ["forgedUiProver"],
+                        "kotlin sdk": ["forgedUiProver"],
+                        "java|android": ["forgedUiProver"],
+                        confusable_sdk: ["forgedUiProver"],
+                        "kotlin_sdk": ["forgedUiProver"],
+                        "-dotnet": ["forgedUiProver"],
+                        "unknown-sdk": ["forgedUiProver"],
+                        "js-sdk": [
+                            "buildBridgeProofSubmission",
+                            " buildBridgeProofSubmission ",
+                        ],
+                        "python-sdk": ["buildPythonProof", "buildPythonProof"],
+                        "swift-sdk": "buildSwiftProof",
+                    },
+                    "sdk_helpers": "forgedUiProver",
+                    "on_chain_submission": 1,
+                    "required_phases": [
+                        "js-sdk",
+                        " js-sdk ",
+                        "swift\nsdk",
+                        "kotlin sdk",
+                        "java|android",
+                        confusable_phase,
+                        "kotlin_sdk",
+                        "-dotnet",
+                        "portal-review",
+                        "js-sdk",
+                    ],
+                    "validation_status": "reviewed",
+                    "validation_blockers": [" padded blocker "],
+                }
+                report["user_prover_submission_surfaces"] = [surface]
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("malformed submission surface was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("malformed submission surface reached rendering")
+
+    captured = capsys.readouterr()
+    label = "bundled report.user_prover_submission_surfaces[0]"
+    sdk_label = f"{label} sdk_helper_symbols_by_sdk"
+    phases_label = f"{label} required_phases"
+    list_error = (
+        "must be a list of non-empty strings with no surrounding whitespace"
+    )
+    assert "malformed SCCP release readiness report" in captured.err
+    assert f"{label} lanes must be a non-empty string" in captured.err
+    assert f"{label} proof_backend must be a non-empty string" in captured.err
+    assert f"{label} sdk_helpers must match sdk_helper_symbols" in captured.err
+    assert f"{label} on_chain_submission must be a non-empty string" in captured.err
+    assert f"{label} sdk_helper_symbols {list_error}" in captured.err
+    assert f"{sdk_label} contains SDK key with surrounding whitespace" in captured.err
+    assert f"{sdk_label} contains SDK key with control character" in captured.err
+    assert f"{sdk_label} contains SDK key with whitespace" in captured.err
+    assert f"{sdk_label} contains SDK key with Markdown-unsafe character" in (
+        captured.err
+    )
+    assert f"{sdk_label} contains SDK key with non-ASCII character" in captured.err
+    assert f"{sdk_label} contains malformed SDK key" in captured.err
+    assert f"{sdk_label} contains unknown SDK: unknown-sdk" in captured.err
+    assert f"{sdk_label}[js-sdk] {list_error}" in captured.err
+    assert f"{sdk_label}[python-sdk] contains duplicate symbols" in captured.err
+    assert f"{sdk_label}[swift-sdk] must be a list of non-empty strings" in (
+        captured.err
+    )
+    assert f"{phases_label} {list_error}" in captured.err
+    assert f"{phases_label} contains phase with surrounding whitespace" in (
+        captured.err
+    )
+    assert f"{phases_label} contains phase with control character" in captured.err
+    assert f"{phases_label} contains phase with whitespace" in captured.err
+    assert f"{phases_label} contains phase with Markdown-unsafe character" in (
+        captured.err
+    )
+    assert f"{phases_label} contains phase with non-ASCII character" in captured.err
+    assert f"{phases_label} contains malformed phase" in captured.err
+    assert f"{phases_label} contains duplicate phases" in captured.err
+    assert f"{phases_label} contains unknown phase: portal-review" in captured.err
+    assert f"{label} validation_status must be passed or blocked" in captured.err
+    assert f"{label} validation_blockers {list_error}" in captured.err
+    assert confusable_sdk not in captured.err
+    assert confusable_phase not in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_blocked_copied_submission_surface_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Copied submission rows cannot publish blocked validation status."""
+
+    bundle = load_bundle_module()
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                surface = {
+                    "lanes": "eth,bsc",
+                    "proof_backend": "evm-groth16-bn254-v1",
+                    "sdk_helper_symbols": ["buildEvmSccpProofRequest"],
+                    "sdk_helper_symbols_by_sdk": {
+                        "js-sdk": ["buildEvmSccpProofRequest"],
+                    },
+                    "sdk_helpers": "buildEvmSccpProofRequest",
+                    "on_chain_submission": "Torii bridge proof endpoint",
+                    "required_phases": ["js-sdk"],
+                    "validation_status": "blocked",
+                    "validation_blockers": ["js-sdk corridor log missing"],
+                }
+                report["user_prover_submission_surfaces"] = [surface]
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("blocked submission surface was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--allow-not-ready",
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("blocked submission surface reached rendering")
+
+    captured = capsys.readouterr()
+    label = "bundled report.user_prover_submission_surfaces[0]"
+    assert "malformed SCCP release readiness report" in captured.err
+    assert f"{label} validation_status must be passed" in captured.err
+    assert f"{label} validation_blockers must be empty" in captured.err
+    assert "js-sdk corridor log missing" not in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_malformed_copied_native_evm_summary_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """The bundle-local native EVM prover summary must not add public claims."""
+
+    bundle = load_bundle_module()
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["native_evm_prover_bundle"] = {
+                    "required": "true",
+                    "validation_status": "passed",
+                    "validation_blockers": [
+                        "stale blocker",
+                        " padded blocker ",
+                        "stale blocker",
+                    ],
+                    "sdk_artifacts": [
+                        {
+                            "sdk": "js-sdk",
+                            "implementation": "native-js",
+                            "operator_attestation": "reviewed outside evidence",
+                        }
+                    ],
+                    "operator_attestation": "reviewed outside evidence",
+                }
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("malformed native EVM summary was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("malformed native EVM summary reached Markdown rendering")
+
+    captured = capsys.readouterr()
+    assert "malformed SCCP release readiness report" in captured.err
+    assert (
+        "bundled report.native_evm_prover_bundle contains unknown field: "
+        "operator_attestation"
+    ) in captured.err
+    assert "bundled report.native_evm_prover_bundle required must be true" in captured.err
+    assert (
+        "bundled report.native_evm_prover_bundle validation_blockers must be a "
+        "list of non-empty strings with no surrounding whitespace"
+    ) in captured.err
+    assert (
+        "bundled report.native_evm_prover_bundle validation_blockers must not "
+        "contain duplicate strings"
+    ) in captured.err
+    assert (
+        "bundled report.native_evm_prover_bundle validation_blockers must be "
+        "empty when validation_status is passed"
+    ) in captured.err
+    assert (
+        "bundled report.native_evm_prover_bundle.sdk_artifacts[0] contains "
+        "unknown field: operator_attestation"
+    ) in captured.err
+    assert (
+        "bundled report.native_evm_prover_bundle.sdk_artifacts[0] missing field: "
+        "implementation_hash"
+    ) in captured.err
+    assert (
+        "bundled report.native_evm_prover_bundle.sdk_artifacts[0] missing field: "
+        "implementation_artifact"
+    ) in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_blocked_copied_native_evm_summary_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Copied native prover summaries cannot publish blocked validation status."""
+
+    bundle = load_bundle_module()
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["native_evm_prover_bundle"] = {
+                    "required": True,
+                    "validation_status": "blocked",
+                    "validation_blockers": ["native prover manifest missing"],
+                }
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("blocked native EVM summary was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--allow-not-ready",
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("blocked native EVM summary reached rendering")
+
+    captured = capsys.readouterr()
+    label = "bundled report.native_evm_prover_bundle"
+    assert "malformed SCCP release readiness report" in captured.err
+    assert f"{label} validation_status must be passed" in captured.err
+    assert f"{label} validation_blockers must be empty" in captured.err
+    assert "native prover manifest missing" not in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_malformed_copied_native_evm_artifacts_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Copied native EVM prover summary rows must keep artifact/hash bindings."""
+
+    bundle = load_bundle_module()
+    readiness = load_report_module()
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    def artifact(path: str, seed: int, **extra: object) -> dict[str, object]:
+        row: dict[str, object] = {
+            "path": path,
+            "bytes": 32,
+            "sha256": f"{seed:02x}" * 32,
+        }
+        row.update(extra)
+        return row
+
+    malformed_native_summary: dict[str, object] = {
+        "required": True,
+        "schema": readiness.NATIVE_EVM_PROVER_BUNDLE_SCHEMA,
+        "artifact": artifact("native/manifest.json", 0x10),
+        "bundle_id": readiness.NATIVE_EVM_PROVER_BUNDLE_ID,
+        "lanes": readiness.ACTIVE_LAUNCH_CHAIN,
+        "proof_backend": "evm-groth16-bn254-v1",
+        "proof_artifact": {
+            "path": "native/proof.bin",
+            "bytes": -1,
+            "sha256": "not-a-sha256",
+            " operator_attestation": "reviewed outside evidence",
+        },
+        "proof_artifact_hash": "0x" + "00" * 32,
+        "proving_key": artifact("native/proving-key.bin", 0x20),
+        "proving_key_hash": "0x" + "21" * 32,
+        "verifier_key": "native/verifier-key.bin",
+        "verifier_key_hash": "0x" + "22" * 32,
+        "destination_binding_hash": "0x" + "00" * 32,
+        "audit_hashes": {
+            "circuit_security_audit": "0x" + "21" * 32,
+            "native_implementation_audit": "0x" + "31" * 32,
+            "reproducible_build_attestation": "0x" + "31" * 32,
+            "native_prover_self_test": "0x" + "32" * 32,
+            "bad audit": "0x" + "33" * 32,
+            "operator_attestation": "0x" + "34" * 32,
+        },
+        "cross_sdk_fixture_parity_artifact": artifact("native/parity.json", 0x40),
+        "native_prover_self_test_artifact": artifact("native/self-test.json", 0x41),
+        "sdk_artifacts": [
+            {
+                "sdk": " javascript ",
+                "implementation": "pure-typescript",
+                "implementation_hash": "0x" + "50" * 32,
+                "implementation_artifact": artifact(
+                    "native/javascript.bin",
+                    0x51,
+                    operator_attestation="reviewed outside evidence",
+                ),
+            },
+            {
+                "sdk": "swift",
+                "implementation": "native-rust",
+                "implementation_hash": "not-a-hex32",
+                "implementation_artifact": artifact("native/swift.bin", 0x52),
+            },
+            {
+                "sdk": "kotlin",
+                "implementation": "native-kotlin",
+                "implementation_hash": "0x" + "53" * 32,
+                "implementation_artifact": artifact(
+                    "native/proving-key.bin",
+                    0x53,
+                ),
+            },
+        ],
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["native_evm_prover_bundle"] = malformed_native_summary
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("malformed native EVM artifacts were rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("malformed native EVM artifacts reached Markdown rendering")
+
+    captured = capsys.readouterr()
+    label = "bundled report.native_evm_prover_bundle"
+    assert "malformed SCCP release readiness report" in captured.err
+    assert (
+        f"{label}.proof_artifact contains unknown field name with surrounding "
+        "whitespace"
+    ) in captured.err
+    assert f"{label}.proof_artifact bytes must be a non-negative integer" in captured.err
+    assert (
+        f"{label}.proof_artifact sha256 must be a canonical SHA-256 hex string"
+        in captured.err
+    )
+    assert (
+        f"{label} proof_artifact_hash must be a canonical non-zero 32-byte hex value"
+        in captured.err
+    )
+    assert f"{label} proving_key sha256 must match proving_key_hash" in captured.err
+    assert f"{label}.verifier_key must be an object" in captured.err
+    assert (
+        f"{label} destination_binding_hash must be a canonical non-zero 32-byte "
+        "hex value"
+    ) in captured.err
+    assert (
+        f"{label}.audit_hashes contains audit field name with whitespace"
+        in captured.err
+    )
+    assert (
+        f"{label}.audit_hashes contains unexpected audit field: operator_attestation"
+        in captured.err
+    )
+    assert (
+        f"{label}.audit_hashes missing field: cross_sdk_fixture_parity"
+        in captured.err
+    )
+    assert (
+        f"{label}.audit_hashes.reproducible_build_attestation must not duplicate "
+        "audit_hashes.native_implementation_audit"
+    ) in captured.err
+    assert (
+        f"{label}.audit_hashes.circuit_security_audit must not reuse "
+        "proving_key_hash"
+    ) in captured.err
+    assert (
+        f"{label} native_prover_self_test_artifact sha256 must match "
+        "audit_hashes.native_prover_self_test"
+    ) in captured.err
+    assert (
+        f"{label}.sdk_artifacts[0] sdk must not contain surrounding whitespace"
+        in captured.err
+    )
+    assert (
+        f"{label}.sdk_artifacts[0].implementation_artifact contains unknown "
+        "field: operator_attestation"
+    ) in captured.err
+    assert f"{label}.sdk_artifacts[1] implementation must be native-swift" in (
+        captured.err
+    )
+    assert (
+        f"{label}.sdk_artifacts[1] implementation_hash must be a canonical "
+        "non-zero 32-byte hex value"
+    ) in captured.err
+    assert (
+        f"{label}.sdk_artifacts[1].implementation_artifact sha256 must match "
+        "implementation_hash"
+    ) in captured.err
+    assert f"{label}.sdk_artifacts missing sdk: dotnet" in captured.err
+    assert f"{label}.sdk_artifacts missing sdk: java-android" in captured.err
+    assert (
+        f"{label} sdk_artifacts[2].implementation_artifact path must not reuse "
+        "proving_key: native/proving-key.bin"
+    ) in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_copied_native_evm_summary_binding_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Copied native prover summaries must match the bundled manifest bytes."""
+
+    bundle = load_bundle_module()
+    real_report_module = load_report_module()
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    write_phase_artifacts(tmp_path)
+    output_dir = tmp_path / "bundle"
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return real_report_module._corridor_phases()
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = real_report_module._build_report(*args, **kwargs)
+            if self.calls == 2:
+                native_summary = dict(report["native_evm_prover_bundle"])
+                native_summary["destination_binding_hash"] = "0x" + "f4" * 32
+                report["native_evm_prover_bundle"] = native_summary
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("native EVM summary drift was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                "--phase-evidence-dir",
+                str(tmp_path / "phase-artifacts"),
+                "--native-evm-prover-bundle",
+                str(native_bundle),
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("native EVM summary drift reached Markdown rendering")
+
+    captured = capsys.readouterr()
+    assert "malformed SCCP release readiness report" in captured.err
+    assert (
+        "bundled report.native_evm_prover_bundle does not match bundled native "
+        "prover manifest"
+    ) in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_malformed_copied_evidence_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """The bundle-local embedded all-lanes evidence must keep public shape."""
+
+    bundle = load_bundle_module()
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["evidence"] = {
+                    "production_ready": "true",
+                    "required_domains": [1, "2", 1],
+                    "supported_launch_domains": [1, 2, 3, 4, 5],
+                    "unsupported_launch_domains": [],
+                    "lanes": [
+                        {
+                            "domain": "1",
+                            "chain": " eth ",
+                            "records": {
+                                "source_verifier_material": "true",
+                                "destination_rollout": True,
+                                "route_allowlist": False,
+                                "operator_attestation": True,
+                            },
+                            "production_ready": "true",
+                            "source_record_hashes": [],
+                            "source_adapter_gate": "ready",
+                            "evm_live_metadata": None,
+                            "destination_binding": [],
+                            "route_allowlist": "ready",
+                            "blockers": [
+                                " duplicate blocker ",
+                                "missing record",
+                                "missing record",
+                            ],
+                            "operator_attestation": "reviewed outside evidence",
+                        }
+                    ],
+                    "blockers": [
+                        " stale blocker ",
+                        "active lane failed",
+                        "active lane failed",
+                    ],
+                    "release_checklist": {"ready": "false", "items": []},
+                    "operator_attestation": "reviewed outside evidence",
+                }
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("malformed embedded evidence was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("malformed embedded evidence reached Markdown rendering")
+
+    captured = capsys.readouterr()
+    assert "malformed SCCP release readiness report" in captured.err
+    assert (
+        "bundled report.evidence contains unknown field: operator_attestation"
+    ) in captured.err
+    assert "bundled report.evidence production_ready must be true or false" in captured.err
+    assert (
+        "bundled report.evidence required_domains must be a list of integers"
+    ) in captured.err
+    assert (
+        "bundled report.evidence required_domains must not contain duplicate integers"
+    ) in captured.err
+    assert (
+        "bundled report.evidence blockers must be a list of non-empty strings "
+        "with no surrounding whitespace"
+    ) in captured.err
+    assert (
+        "bundled report.evidence blockers must not contain duplicate strings"
+    ) in captured.err
+    assert (
+        "bundled report.evidence.release_checklist ready must be true or false"
+    ) in captured.err
+    assert (
+        "bundled report.evidence.lanes[0] contains unknown field: "
+        "operator_attestation"
+    ) in captured.err
+    assert "bundled report.evidence.lanes[0] domain must be an integer" in captured.err
+    assert (
+        "bundled report.evidence.lanes[0] chain must be a non-empty string "
+        "with no surrounding whitespace"
+    ) in captured.err
+    assert (
+        "bundled report.evidence.lanes[0] production_ready must be true or false"
+    ) in captured.err
+    assert (
+        "bundled report.evidence.lanes[0] blockers must not contain duplicate strings"
+    ) in captured.err
+    assert (
+        "bundled report.evidence.lanes[0].records contains unknown field: "
+        "operator_attestation"
+    ) in captured.err
+    assert (
+        "bundled report.evidence.lanes[0].records missing field: "
+        "source_adapter_deployment"
+    ) in captured.err
+    assert (
+        "bundled report.evidence.lanes[0].records source_verifier_material "
+        "must be true or false"
+    ) in captured.err
+    assert (
+        "bundled report.evidence.lanes[0].source_record_hashes must be an object"
+    ) in captured.err
+    assert (
+        "bundled report.evidence.lanes[0].source_adapter_gate must be an object"
+    ) in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_malformed_copied_evidence_nested_maps_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Nested copied all-lanes maps must keep canonical public shape."""
+
+    bundle = load_bundle_module()
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+    confusable_field = "operat\u043er_attestation"
+    confusable_audit = "aud\u0456t_attestation"
+    zero_hash = "0x" + "00" * 32
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["evidence"] = {
+                    "production_ready": False,
+                    "required_domains": [1, 2, 3, 4, 5],
+                    "supported_launch_domains": [1, 2, 3, 4, 5],
+                    "unsupported_launch_domains": [],
+                    "lanes": [
+                        {
+                            "domain": 3,
+                            "chain": "sol",
+                            "records": {
+                                "source_verifier_material": True,
+                                "source_adapter_deployment": True,
+                                "destination_rollout": True,
+                                "route_allowlist": True,
+                            },
+                            "production_ready": False,
+                            "source_record_hashes": {
+                                "source_verifier_material_hash": "0X" + "11" * 32,
+                                "source_adapter_engine_deployment_hash": (
+                                    "0x" + "22" * 31
+                                ),
+                                " operator_attestation ": "reviewed elsewhere",
+                                confusable_field: "reviewed elsewhere",
+                            },
+                            "source_adapter_gate": {
+                                "required": True,
+                                "ready": "true",
+                                "gate_hash": zero_hash,
+                                "audit_hashes": {
+                                    " audit_attestation ": "0x" + "33" * 32,
+                                    "audit\nattestation": "0x" + "44" * 32,
+                                    "audit attestation": "0x" + "55" * 32,
+                                    "audit|attestation": "0x" + "66" * 32,
+                                    confusable_audit: "0x" + "77" * 32,
+                                    "operator_attestation": "0X" + "88" * 32,
+                                },
+                                "blockers": [" padded gate blocker "],
+                            },
+                            "evm_live_metadata": {
+                                "required": False,
+                                "ready": "true",
+                                "source_rpc_chain_id": " 1 ",
+                                "source_block_tag": 1,
+                                "destination_rpc_chain_id": "",
+                                "destination_block_tag": "",
+                            },
+                            "destination_binding": {
+                                "destination_binding_hash": "0X" + "99" * 32,
+                                "destination_binding_key": " key ",
+                                "expected_destination_binding_hash": zero_hash,
+                                "expected_destination_binding_hash_matches": "true",
+                                "recomputed": "true",
+                                "destination_bridge_address": " bridge ",
+                                "destination_network_id": 1,
+                            },
+                            "route_allowlist": {
+                                "route_allowlist_hash": "0X" + "aa" * 32,
+                                "expected_route_allowlist_hash": "0x" + "bb" * 31,
+                                "expected_route_allowlist_hash_matches": "true",
+                                "route_canary": {
+                                    "status": " passed ",
+                                    "evidence_hash": "0X" + "cc" * 32,
+                                    "evidence_source": (
+                                        " solana_live_programdata_snapshot "
+                                    ),
+                                    "route_allowlist_hash": zero_hash,
+                                    "destination_binding_hash": True,
+                                    "evidence_bound": "true",
+                                    "solana_programdata_address": "",
+                                    "solana_programdata_slot": "slot",
+                                    " operator_attestation ": "reviewed elsewhere",
+                                    "operator|attestation": "reviewed elsewhere",
+                                    confusable_field: "reviewed elsewhere",
+                                },
+                            },
+                            "blockers": ["nested evidence remains blocked"],
+                        }
+                    ],
+                    "blockers": ["nested evidence remains blocked"],
+                    "release_checklist": {"ready": False, "items": []},
+                }
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("malformed nested embedded evidence was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("malformed nested embedded evidence reached rendering")
+
+    captured = capsys.readouterr()
+    lane_label = "bundled report.evidence.lanes[0]"
+    audit_label = f"{lane_label}.source_adapter_gate audit_hashes"
+    canary_label = f"{lane_label}.route_allowlist.route_canary"
+    assert "malformed SCCP release readiness report" in captured.err
+    assert (
+        f"{lane_label}.source_record_hashes contains unknown field name with "
+        "surrounding whitespace"
+    ) in captured.err
+    assert (
+        f"{lane_label}.source_record_hashes contains unknown field name with "
+        "non-ASCII character"
+    ) in captured.err
+    assert (
+        f"{lane_label}.source_record_hashes source_verifier_material_hash must "
+        "be empty, null, or a non-zero canonical bytes32 hex string"
+    ) in captured.err
+    assert f"{lane_label}.source_adapter_gate ready must be true or false" in (
+        captured.err
+    )
+    assert (
+        f"{audit_label} contains audit field name with surrounding whitespace"
+        in captured.err
+    )
+    assert f"{audit_label} contains audit field name with control character" in (
+        captured.err
+    )
+    assert f"{audit_label} contains audit field name with whitespace" in captured.err
+    assert f"{audit_label} contains audit field name with Markdown-unsafe character" in (
+        captured.err
+    )
+    assert f"{audit_label} contains audit field name with non-ASCII character" in (
+        captured.err
+    )
+    assert (
+        f"{audit_label} operator_attestation must be a non-zero canonical "
+        "bytes32 hex string"
+    ) in captured.err
+    assert f"{lane_label}.evm_live_metadata ready must be true or false" in (
+        captured.err
+    )
+    assert (
+        f"{lane_label}.destination_binding destination_binding_hash must be empty, "
+        "null, or a non-zero canonical bytes32 hex string"
+    ) in captured.err
+    assert (
+        f"{lane_label}.route_allowlist expected_route_allowlist_hash_matches "
+        "must be true or false"
+    ) in captured.err
+    assert (
+        f"{canary_label} contains unknown field name with surrounding whitespace"
+        in captured.err
+    )
+    assert (
+        f"{canary_label} contains unknown field name with Markdown-unsafe character"
+        in captured.err
+    )
+    assert f"{canary_label} contains unknown field name with non-ASCII character" in (
+        captured.err
+    )
+    assert (
+        f"{canary_label} evidence_hash must be empty, null, or a non-zero "
+        "canonical bytes32 hex string"
+    ) in captured.err
+    assert (
+        f"{canary_label} status must be a non-empty string with no surrounding "
+        "whitespace"
+    ) in captured.err
+    assert f"{canary_label} evidence_bound must be true or false" in captured.err
+    assert confusable_field not in captured.err
+    assert confusable_audit not in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_copied_evidence_summary_binding_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Copied embedded evidence must match the copied TOML evidence inputs."""
+
+    bundle = load_bundle_module()
+    real_report_module = load_report_module()
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    write_phase_artifacts(tmp_path)
+    output_dir = tmp_path / "bundle"
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return real_report_module._corridor_phases()
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = real_report_module._build_report(*args, **kwargs)
+            if self.calls == 2:
+                evidence_summary = dict(report["evidence"])
+                evidence_summary["unsupported_launch_domains"] = [99]
+                report["evidence"] = evidence_summary
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("copied evidence summary drift was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                "--phase-evidence-dir",
+                str(tmp_path / "phase-artifacts"),
+                "--native-evm-prover-bundle",
+                str(native_bundle),
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("copied evidence summary drift reached Markdown rendering")
+
+    captured = capsys.readouterr()
+    assert "malformed SCCP release readiness report" in captured.err
+    assert "bundled report.evidence does not match copied evidence inputs" in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_copied_evidence_expected_hash_drift_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Copied active-lane evidence must keep expected hash pins true."""
+
+    bundle = load_bundle_module()
+    readiness = load_report_module()
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    destination_hash = fixed_hex32(0xA1)
+    route_hash = fixed_hex32(0xB1)
+
+    route_canary = {
+        "status": "passed",
+        "evidence_hash": fixed_hex32(0xC0),
+        "evidence_source": "eth_live_route_canary_receipt",
+        "route_allowlist_hash": route_hash,
+        "destination_binding_hash": destination_hash,
+        "evidence_bound": True,
+        "transaction_hash": fixed_hex32(0xC1),
+        "log_index": 0,
+        "receipt_block_number": 1,
+        "receipt_block_hash": fixed_hex32(0xC2),
+        "block_receipts_root": fixed_hex32(0xC3),
+        "call_data_sha256": fixed_hex32(0xC4),
+        "message_id": fixed_hex32(0xC5),
+        "payload_hash": fixed_hex32(0xC6),
+        "target_domain": 0,
+        "statement_hash": fixed_hex32(0xC7),
+        "commitment_root": fixed_hex32(0xC8),
+        "finality_height": fixed_hex32(0xC9),
+        "finality_block_hash": fixed_hex32(0xCA),
+        "proof_version": 1,
+        "proof_source_domain": readiness.ACTIVE_LAUNCH_DOMAIN,
+        "message_proof_used": False,
+        "receipt_block_finalized": True,
+    }
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["evidence"] = {
+                    "production_ready": False,
+                    "required_domains": [1, 2, 3, 4, 5],
+                    "supported_launch_domains": [1, 2, 3, 4, 5],
+                    "unsupported_launch_domains": [],
+                    "lanes": [
+                        {
+                            "domain": readiness.ACTIVE_LAUNCH_DOMAIN,
+                            "chain": readiness.ACTIVE_LAUNCH_CHAIN,
+                            "records": {
+                                "source_verifier_material": True,
+                                "source_adapter_deployment": True,
+                                "destination_rollout": True,
+                                "route_allowlist": True,
+                            },
+                            "production_ready": False,
+                            "source_record_hashes": {
+                                "source_verifier_material_hash": fixed_hex32(0xD1),
+                                "source_adapter_engine_deployment_hash": fixed_hex32(
+                                    0xD2
+                                ),
+                            },
+                            "source_adapter_gate": {
+                                "required": False,
+                                "ready": True,
+                                "gate_hash": "",
+                                "audit_hashes": {},
+                                "blockers": [],
+                            },
+                            "evm_live_metadata": {
+                                "required": True,
+                                "ready": True,
+                                "source_rpc_chain_id": "1",
+                                "source_block_tag": "finalized",
+                                "destination_rpc_chain_id": "1",
+                                "destination_block_tag": "finalized",
+                            },
+                            "destination_binding": {
+                                "destination_binding_hash": destination_hash,
+                                "destination_binding_key": (
+                                    "sccp:eth:destination:ethereum-mainnet:v1"
+                                ),
+                                "expected_destination_binding_hash": fixed_hex32(
+                                    0xA2
+                                ),
+                                "expected_destination_binding_hash_matches": False,
+                                "recomputed": False,
+                                "destination_bridge_address": "",
+                                "destination_network_id": "",
+                            },
+                            "route_allowlist": {
+                                "route_allowlist_hash": route_hash,
+                                "expected_route_allowlist_hash": fixed_hex32(0xB2),
+                                "expected_route_allowlist_hash_matches": False,
+                                "route_canary": route_canary,
+                            },
+                            "blockers": ["expected hash drift"],
+                        }
+                    ],
+                    "blockers": ["expected hash drift"],
+                    "release_checklist": {"ready": False, "items": []},
+                }
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("expected-hash drift was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("expected-hash drift reached Markdown rendering")
+
+    captured = capsys.readouterr()
+    lane_label = "bundled report.evidence.lanes[0]"
+    assert "malformed SCCP release readiness report" in captured.err
+    assert (
+        f"{lane_label}.destination_binding expected_destination_binding_hash "
+        "must match destination_binding_hash"
+    ) in captured.err
+    assert (
+        f"{lane_label}.destination_binding "
+        "expected_destination_binding_hash_matches must be true"
+    ) in captured.err
+    assert f"{lane_label}.destination_binding recomputed must be true" in (
+        captured.err
+    )
+    assert (
+        f"{lane_label}.route_allowlist expected_route_allowlist_hash must match "
+        "route_allowlist_hash"
+    ) in captured.err
+    assert (
+        f"{lane_label}.route_allowlist expected_route_allowlist_hash_matches "
+        "must be true"
+    ) in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_copied_evidence_evm_live_metadata_drift_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Copied active-lane EVM live metadata must stay canonical."""
+
+    bundle = load_bundle_module()
+    readiness = load_report_module()
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    source_material_hash = fixed_hex32(0xD1)
+    source_deployment_hash = fixed_hex32(0xD2)
+    destination_hash = fixed_hex32(0xA1)
+    route_hash = fixed_hex32(0xB1)
+
+    route_canary = {
+        "status": "passed",
+        "evidence_hash": fixed_hex32(0xC0),
+        "evidence_source": "evm_message_proof_accepted_transaction",
+        "route_allowlist_hash": route_hash,
+        "destination_binding_hash": destination_hash,
+        "evidence_bound": True,
+        "transaction_hash": fixed_hex32(0xC1),
+        "log_index": 0,
+        "receipt_block_number": 1,
+        "receipt_block_hash": fixed_hex32(0xC2),
+        "block_receipts_root": fixed_hex32(0xC3),
+        "call_data_sha256": fixed_hex32(0xC4),
+        "message_id": fixed_hex32(0xC5),
+        "payload_hash": fixed_hex32(0xC6),
+        "target_domain": readiness.ACTIVE_LAUNCH_DOMAIN,
+        "statement_hash": fixed_hex32(0xC7),
+        "commitment_root": fixed_hex32(0xC8),
+        "finality_height": fixed_hex32(0xC9),
+        "finality_block_hash": fixed_hex32(0xCA),
+        "proof_version": 1,
+        "proof_source_domain": 0,
+        "message_proof_used": True,
+        "receipt_block_finalized": True,
+    }
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["evidence"] = {
+                    "production_ready": False,
+                    "required_domains": [1, 2, 3, 4, 5],
+                    "supported_launch_domains": [1, 2, 3, 4, 5],
+                    "unsupported_launch_domains": [],
+                    "lanes": [
+                        {
+                            "domain": readiness.ACTIVE_LAUNCH_DOMAIN,
+                            "chain": readiness.ACTIVE_LAUNCH_CHAIN,
+                            "records": {
+                                "source_verifier_material": True,
+                                "source_adapter_deployment": True,
+                                "destination_rollout": True,
+                                "route_allowlist": True,
+                            },
+                            "production_ready": False,
+                            "source_record_hashes": {
+                                "source_verifier_material_hash": source_material_hash,
+                                "source_adapter_engine_deployment_hash": (
+                                    source_deployment_hash
+                                ),
+                            },
+                            "source_adapter_gate": {
+                                "required": False,
+                                "ready": True,
+                                "gate_hash": "",
+                                "audit_hashes": {},
+                                "blockers": [],
+                            },
+                            "evm_live_metadata": {
+                                "required": False,
+                                "ready": False,
+                                "source_rpc_chain_id": "0x1",
+                                "source_block_tag": "latest",
+                                "destination_rpc_chain_id": "01",
+                                "destination_block_tag": "safe",
+                            },
+                            "destination_binding": {
+                                "destination_binding_hash": destination_hash,
+                                "destination_binding_key": (
+                                    "sccp:eth:destination:ethereum-mainnet:v1"
+                                ),
+                                "expected_destination_binding_hash": destination_hash,
+                                "expected_destination_binding_hash_matches": True,
+                                "recomputed": True,
+                                "destination_bridge_address": "",
+                                "destination_network_id": "",
+                            },
+                            "route_allowlist": {
+                                "route_allowlist_hash": route_hash,
+                                "expected_route_allowlist_hash": route_hash,
+                                "expected_route_allowlist_hash_matches": True,
+                                "route_canary": route_canary,
+                            },
+                            "blockers": ["EVM live metadata drift"],
+                        }
+                    ],
+                    "blockers": ["EVM live metadata drift"],
+                    "release_checklist": {"ready": False, "items": []},
+                }
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("EVM live metadata drift was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("EVM live metadata drift reached Markdown rendering")
+
+    captured = capsys.readouterr()
+    lane_label = "bundled report.evidence.lanes[0].evm_live_metadata"
+    assert "malformed SCCP release readiness report" in captured.err
+    assert f"{lane_label} required must be true" in captured.err
+    assert f"{lane_label} ready must be true" in captured.err
+    assert (
+        f"{lane_label} source_rpc_chain_id must be canonical chain id 1"
+        in captured.err
+    )
+    assert (
+        f"{lane_label} destination_rpc_chain_id must be canonical chain id 1"
+        in captured.err
+    )
+    assert (
+        f"{lane_label} source_block_tag must be finalized for Ethereum mainnet"
+        in captured.err
+    )
+    assert (
+        f"{lane_label} destination_block_tag must be finalized for Ethereum mainnet"
+        in captured.err
+    )
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_copied_evidence_source_gate_drift_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Copied production-ready source gates must keep audit-hash coherence."""
+
+    bundle = load_bundle_module()
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    destination_hash = fixed_hex32(0xA3)
+    route_hash = fixed_hex32(0xB3)
+    gate_hash = fixed_hex32(0xE1)
+    audit_hashes = {
+        "solana_tower_replay_verifier_hash": fixed_hex32(0xE2),
+        "solana_full_accountsdb_lattice_verifier_hash": fixed_hex32(0xE3),
+        "solana_bank_fork_choice_verifier_hash": fixed_hex32(0xE4),
+        "solana_full_light_client_gate_hash": fixed_hex32(0xE5),
+        "operator_override": fixed_hex32(0xE6),
+    }
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["evidence"] = {
+                    "production_ready": False,
+                    "required_domains": [1, 2, 3, 4, 5],
+                    "supported_launch_domains": [1, 2, 3, 4, 5],
+                    "unsupported_launch_domains": [],
+                    "lanes": [
+                        {
+                            "domain": 3,
+                            "chain": "sol",
+                            "records": {
+                                "source_verifier_material": True,
+                                "source_adapter_deployment": True,
+                                "destination_rollout": True,
+                                "route_allowlist": True,
+                            },
+                            "production_ready": True,
+                            "source_record_hashes": {
+                                "source_verifier_material_hash": fixed_hex32(0xD3),
+                                "source_adapter_engine_deployment_hash": fixed_hex32(
+                                    0xD4
+                                ),
+                            },
+                            "source_adapter_gate": {
+                                "required": True,
+                                "ready": True,
+                                "gate_hash": gate_hash,
+                                "audit_hashes": audit_hashes,
+                                "blockers": ["stale source gate blocker"],
+                            },
+                            "evm_live_metadata": {
+                                "required": False,
+                                "ready": True,
+                                "source_rpc_chain_id": "",
+                                "source_block_tag": "",
+                                "destination_rpc_chain_id": "",
+                                "destination_block_tag": "",
+                            },
+                            "destination_binding": {
+                                "destination_binding_hash": destination_hash,
+                                "destination_binding_key": (
+                                    "sccp:sol:destination:solana-mainnet-beta:v1"
+                                ),
+                                "expected_destination_binding_hash": destination_hash,
+                                "expected_destination_binding_hash_matches": True,
+                                "recomputed": True,
+                                "destination_bridge_address": "",
+                                "destination_network_id": "",
+                            },
+                            "route_allowlist": {
+                                "route_allowlist_hash": route_hash,
+                                "expected_route_allowlist_hash": route_hash,
+                                "expected_route_allowlist_hash_matches": True,
+                                "route_canary": {
+                                    "status": "passed",
+                                    "evidence_hash": fixed_hex32(0xC3),
+                                    "evidence_source": (
+                                        "solana_live_programdata_snapshot"
+                                    ),
+                                    "route_allowlist_hash": route_hash,
+                                    "destination_binding_hash": destination_hash,
+                                    "evidence_bound": True,
+                                    "solana_programdata_address": (
+                                        "29d2S7vB453rNYFdR5Ycwt7y9haRT5fwVwL9zTmBhfV2"
+                                    ),
+                                    "solana_programdata_slot": 1,
+                                },
+                            },
+                            "blockers": ["source gate audit drift"],
+                        }
+                    ],
+                    "blockers": ["source gate audit drift"],
+                    "release_checklist": {"ready": False, "items": []},
+                }
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("source gate drift was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("source gate drift reached Markdown rendering")
+
+    captured = capsys.readouterr()
+    gate_label = "bundled report.evidence.lanes[0].source_adapter_gate"
+    assert "malformed SCCP release readiness report" in captured.err
+    assert f"{gate_label} blockers must be empty when ready" in captured.err
+    assert (
+        f"{gate_label} audit_hashes contains unexpected field: operator_override"
+        in captured.err
+    )
+    assert f"{gate_label} gate_hash must match one audit_hashes value" in (
+        captured.err
+    )
+    assert (
+        f"{gate_label} gate_hash must match "
+        "audit_hashes.solana_full_light_client_gate_hash"
+    ) in captured.err
+    assert f"{gate_label} blockers must be empty when gate is required" in (
+        captured.err
+    )
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_copied_evidence_route_canary_drift_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Copied active route canaries must keep common semantic bindings."""
+
+    bundle = load_bundle_module()
+    readiness = load_report_module()
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    destination_hash = fixed_hex32(0xA4)
+    route_hash = fixed_hex32(0xB4)
+
+    route_canary = {
+        "status": "blocked",
+        "evidence_hash": fixed_hex32(0xC0),
+        "evidence_source": "operator_review_note",
+        "route_allowlist_hash": fixed_hex32(0xC1),
+        "destination_binding_hash": fixed_hex32(0xC2),
+        "evidence_bound": False,
+        "transaction_hash": fixed_hex32(0xC3),
+        "log_index": 0,
+        "receipt_block_number": 1,
+        "receipt_block_hash": fixed_hex32(0xC4),
+        "block_receipts_root": fixed_hex32(0xC5),
+        "call_data_sha256": fixed_hex32(0xC6),
+        "message_id": fixed_hex32(0xC7),
+        "payload_hash": fixed_hex32(0xC8),
+        "target_domain": readiness.ACTIVE_LAUNCH_DOMAIN,
+        "statement_hash": fixed_hex32(0xC9),
+        "commitment_root": fixed_hex32(0xCA),
+        "finality_height": fixed_hex32(0xCB),
+        "finality_block_hash": fixed_hex32(0xCC),
+        "proof_version": 1,
+        "proof_source_domain": 0,
+        "message_proof_used": True,
+        "receipt_block_finalized": True,
+    }
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["evidence"] = {
+                    "production_ready": False,
+                    "required_domains": [1, 2, 3, 4, 5],
+                    "supported_launch_domains": [1, 2, 3, 4, 5],
+                    "unsupported_launch_domains": [],
+                    "lanes": [
+                        {
+                            "domain": readiness.ACTIVE_LAUNCH_DOMAIN,
+                            "chain": readiness.ACTIVE_LAUNCH_CHAIN,
+                            "records": {
+                                "source_verifier_material": True,
+                                "source_adapter_deployment": True,
+                                "destination_rollout": True,
+                                "route_allowlist": True,
+                            },
+                            "production_ready": False,
+                            "source_record_hashes": {
+                                "source_verifier_material_hash": fixed_hex32(0xD5),
+                                "source_adapter_engine_deployment_hash": fixed_hex32(
+                                    0xD6
+                                ),
+                            },
+                            "source_adapter_gate": {
+                                "required": False,
+                                "ready": True,
+                                "gate_hash": "",
+                                "audit_hashes": {},
+                                "blockers": [],
+                            },
+                            "evm_live_metadata": {
+                                "required": True,
+                                "ready": True,
+                                "source_rpc_chain_id": "1",
+                                "source_block_tag": "finalized",
+                                "destination_rpc_chain_id": "1",
+                                "destination_block_tag": "finalized",
+                            },
+                            "destination_binding": {
+                                "destination_binding_hash": destination_hash,
+                                "destination_binding_key": (
+                                    "sccp:eth:destination:ethereum-mainnet:v1"
+                                ),
+                                "expected_destination_binding_hash": destination_hash,
+                                "expected_destination_binding_hash_matches": True,
+                                "recomputed": True,
+                                "destination_bridge_address": "",
+                                "destination_network_id": "",
+                            },
+                            "route_allowlist": {
+                                "route_allowlist_hash": route_hash,
+                                "expected_route_allowlist_hash": route_hash,
+                                "expected_route_allowlist_hash_matches": True,
+                                "route_canary": route_canary,
+                            },
+                            "blockers": ["route canary drift"],
+                        }
+                    ],
+                    "blockers": ["route canary drift"],
+                    "release_checklist": {"ready": False, "items": []},
+                }
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("route canary drift was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("route canary drift reached Markdown rendering")
+
+    captured = capsys.readouterr()
+    canary_label = "bundled report.evidence.lanes[0].route_allowlist.route_canary"
+    assert "malformed SCCP release readiness report" in captured.err
+    assert f"{canary_label} status must be passed" in captured.err
+    assert (
+        f"{canary_label} evidence_source must be "
+        "evm_message_proof_accepted_transaction"
+    ) in captured.err
+    assert f"{canary_label} evidence_bound must be true" in captured.err
+    assert (
+        f"{canary_label} route_allowlist_hash must match lane route_allowlist_hash"
+        in captured.err
+    )
+    assert (
+        f"{canary_label} destination_binding_hash must match lane "
+        "destination_binding_hash"
+    ) in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_copied_evidence_route_canary_evidence_hash_replay_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Copied route-canary evidence hashes must not replay governed roles."""
+
+    bundle = load_bundle_module()
+    readiness = load_report_module()
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    shared_evidence_hash = fixed_hex32(0xB7)
+
+    def evm_lane(
+        *,
+        domain: int,
+        chain: str,
+        chain_id: str,
+        destination_hash: str,
+        route_hash: str,
+        evidence_hash: str,
+        seed: int,
+    ) -> dict[str, object]:
+        return {
+            "domain": domain,
+            "chain": chain,
+            "records": {
+                "source_verifier_material": True,
+                "source_adapter_deployment": True,
+                "destination_rollout": True,
+                "route_allowlist": True,
+            },
+            "production_ready": domain != readiness.ACTIVE_LAUNCH_DOMAIN,
+            "source_record_hashes": {
+                "source_verifier_material_hash": fixed_hex32(seed),
+                "source_adapter_engine_deployment_hash": fixed_hex32(seed + 1),
+            },
+            "source_adapter_gate": {
+                "required": False,
+                "ready": True,
+                "gate_hash": "",
+                "audit_hashes": {},
+                "blockers": [],
+            },
+            "evm_live_metadata": {
+                "required": True,
+                "ready": True,
+                "source_rpc_chain_id": chain_id,
+                "source_block_tag": "finalized" if domain == 1 else "latest",
+                "destination_rpc_chain_id": chain_id,
+                "destination_block_tag": "finalized" if domain == 1 else "latest",
+            },
+            "destination_binding": {
+                "destination_binding_hash": destination_hash,
+                "destination_binding_key": f"sccp:{chain}:destination:v1",
+                "expected_destination_binding_hash": destination_hash,
+                "expected_destination_binding_hash_matches": True,
+                "recomputed": True,
+                "destination_bridge_address": "",
+                "destination_network_id": "",
+            },
+            "route_allowlist": {
+                "route_allowlist_hash": route_hash,
+                "expected_route_allowlist_hash": route_hash,
+                "expected_route_allowlist_hash_matches": True,
+                "route_canary": {
+                    "status": "passed",
+                    "evidence_hash": evidence_hash,
+                    "evidence_source": "evm_message_proof_accepted_transaction",
+                    "route_allowlist_hash": route_hash,
+                    "destination_binding_hash": destination_hash,
+                    "evidence_bound": True,
+                    "transaction_hash": fixed_hex32(seed + 2),
+                    "log_index": 0,
+                    "receipt_block_number": 1,
+                    "receipt_block_hash": fixed_hex32(seed + 3),
+                    "block_receipts_root": fixed_hex32(seed + 4),
+                    "call_data_sha256": fixed_hex32(seed + 5),
+                    "message_id": fixed_hex32(seed + 6),
+                    "payload_hash": fixed_hex32(seed + 7),
+                    "target_domain": domain,
+                    "statement_hash": fixed_hex32(seed + 8),
+                    "commitment_root": fixed_hex32(seed + 9),
+                    "finality_height": fixed_hex32(seed + 10),
+                    "finality_block_hash": fixed_hex32(seed + 11),
+                    "proof_version": 1,
+                    "proof_source_domain": 0,
+                    "message_proof_used": True,
+                    "receipt_block_finalized": True,
+                },
+            },
+            "blockers": [],
+        }
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["evidence"] = {
+                    "production_ready": False,
+                    "required_domains": [1, 2, 3, 4, 5],
+                    "supported_launch_domains": [1, 2, 3, 4, 5],
+                    "unsupported_launch_domains": [],
+                    "lanes": [
+                        evm_lane(
+                            domain=readiness.ACTIVE_LAUNCH_DOMAIN,
+                            chain=readiness.ACTIVE_LAUNCH_CHAIN,
+                            chain_id="1",
+                            destination_hash=fixed_hex32(0xA8),
+                            route_hash=shared_evidence_hash,
+                            evidence_hash=shared_evidence_hash,
+                            seed=0xD0,
+                        ),
+                        evm_lane(
+                            domain=2,
+                            chain="bsc",
+                            chain_id="56",
+                            destination_hash=fixed_hex32(0xA9),
+                            route_hash=fixed_hex32(0xBA),
+                            evidence_hash=shared_evidence_hash,
+                            seed=0xE0,
+                        ),
+                    ],
+                    "blockers": ["route canary evidence hash replay"],
+                    "release_checklist": {"ready": False, "items": []},
+                }
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("route canary evidence hash replay was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError(
+            "route canary evidence hash replay reached Markdown rendering"
+        )
+
+    captured = capsys.readouterr()
+    first_canary = "bundled report.evidence.lanes[0].route_allowlist.route_canary"
+    second_canary = "bundled report.evidence.lanes[1].route_allowlist.route_canary"
+    assert "malformed SCCP release readiness report" in captured.err
+    assert (
+        f"{first_canary} hash role evidence_hash must not reuse "
+        "route_allowlist_hash"
+    ) in captured.err
+    assert (
+        f"{second_canary} evidence_hash must be distinct from "
+        f"{first_canary} evidence_hash"
+    ) in captured.err
+    assert (
+        f"{second_canary} evidence_hash must not reuse route_allowlist_hash "
+        "from bundled report.evidence.lanes[0]"
+    ) in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_copied_evidence_evm_route_canary_transcript_drift_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Copied EVM route canaries must keep transcript and proof metadata."""
+
+    bundle = load_bundle_module()
+    readiness = load_report_module()
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    destination_hash = fixed_hex32(0xA5)
+    route_hash = fixed_hex32(0xB5)
+    transaction_hash = fixed_hex32(0xC1)
+    call_data_hash = fixed_hex32(0xC2)
+
+    route_canary = {
+        "status": "passed",
+        "evidence_hash": fixed_hex32(0xC0),
+        "evidence_source": "evm_message_proof_accepted_transaction",
+        "route_allowlist_hash": route_hash,
+        "destination_binding_hash": destination_hash,
+        "evidence_bound": True,
+        "transaction_hash": transaction_hash,
+        "log_index": -1,
+        "receipt_block_number": 0,
+        "receipt_block_hash": transaction_hash,
+        "block_receipts_root": transaction_hash,
+        "call_data_sha256": call_data_hash,
+        "message_id": route_hash,
+        "payload_hash": call_data_hash,
+        "target_domain": 2,
+        "statement_hash": fixed_hex32(0xC3),
+        "commitment_root": fixed_hex32(0xC4),
+        "finality_height": transaction_hash,
+        "finality_block_hash": "0x" + "00" * 32,
+        "proof_version": 2,
+        "proof_source_domain": readiness.ACTIVE_LAUNCH_DOMAIN,
+        "message_proof_used": False,
+        "receipt_block_finalized": False,
+    }
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["evidence"] = {
+                    "production_ready": False,
+                    "required_domains": [1, 2, 3, 4, 5],
+                    "supported_launch_domains": [1, 2, 3, 4, 5],
+                    "unsupported_launch_domains": [],
+                    "lanes": [
+                        {
+                            "domain": readiness.ACTIVE_LAUNCH_DOMAIN,
+                            "chain": readiness.ACTIVE_LAUNCH_CHAIN,
+                            "records": {
+                                "source_verifier_material": True,
+                                "source_adapter_deployment": True,
+                                "destination_rollout": True,
+                                "route_allowlist": True,
+                            },
+                            "production_ready": False,
+                            "source_record_hashes": {
+                                "source_verifier_material_hash": fixed_hex32(0xD7),
+                                "source_adapter_engine_deployment_hash": fixed_hex32(
+                                    0xD8
+                                ),
+                            },
+                            "source_adapter_gate": {
+                                "required": False,
+                                "ready": True,
+                                "gate_hash": "",
+                                "audit_hashes": {},
+                                "blockers": [],
+                            },
+                            "evm_live_metadata": {
+                                "required": True,
+                                "ready": True,
+                                "source_rpc_chain_id": "1",
+                                "source_block_tag": "finalized",
+                                "destination_rpc_chain_id": "1",
+                                "destination_block_tag": "finalized",
+                            },
+                            "destination_binding": {
+                                "destination_binding_hash": destination_hash,
+                                "destination_binding_key": (
+                                    "sccp:eth:destination:ethereum-mainnet:v1"
+                                ),
+                                "expected_destination_binding_hash": destination_hash,
+                                "expected_destination_binding_hash_matches": True,
+                                "recomputed": True,
+                                "destination_bridge_address": "",
+                                "destination_network_id": "",
+                            },
+                            "route_allowlist": {
+                                "route_allowlist_hash": route_hash,
+                                "expected_route_allowlist_hash": route_hash,
+                                "expected_route_allowlist_hash_matches": True,
+                                "route_canary": route_canary,
+                            },
+                            "blockers": ["EVM route canary transcript drift"],
+                        }
+                    ],
+                    "blockers": ["EVM route canary transcript drift"],
+                    "release_checklist": {"ready": False, "items": []},
+                }
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("EVM route canary transcript drift was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError(
+            "EVM route canary transcript drift reached Markdown rendering"
+        )
+
+    captured = capsys.readouterr()
+    canary_label = "bundled report.evidence.lanes[0].route_allowlist.route_canary"
+    assert "malformed SCCP release readiness report" in captured.err
+    assert (
+        f"{canary_label} finality_block_hash must be a non-zero canonical "
+        "bytes32 hex string"
+    ) in captured.err
+    assert f"{canary_label} transcript hash receipt_block_hash must not reuse " in (
+        captured.err
+    )
+    assert f"{canary_label} transcript hash payload_hash must not reuse " in (
+        captured.err
+    )
+    assert f"{canary_label} hash role message_id must not reuse route_allowlist_hash" in (
+        captured.err
+    )
+    assert f"{canary_label} log_index must be a u32 integer" in captured.err
+    assert (
+        f"{canary_label} receipt_block_number must be a positive integer"
+        in captured.err
+    )
+    assert f"{canary_label} target_domain must be the lane domain" in captured.err
+    assert f"{canary_label} proof_version must be 1" in captured.err
+    assert f"{canary_label} proof_source_domain must be SORA" in captured.err
+    assert f"{canary_label} message_proof_used must be true" in captured.err
+    assert f"{canary_label} receipt_block_finalized must be true" in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_copied_evidence_tron_route_canary_transcript_drift_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Copied TRON route canaries must keep transcript and signer metadata."""
+
+    bundle = load_bundle_module()
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    source_material_hash = fixed_hex32(0xD9)
+    source_deployment_hash = fixed_hex32(0xDA)
+    destination_hash = fixed_hex32(0xA6)
+    route_hash = fixed_hex32(0xB6)
+    gate_hash = fixed_hex32(0xE8)
+    transaction_id = fixed_hex32(0xC1)
+    finality_block_hash = fixed_hex32(0xC2)
+    owner_address = "0x41" + "11" * 20
+    recovered_address = "0x41" + "22" * 20
+
+    route_canary = {
+        "status": "passed",
+        "evidence_hash": fixed_hex32(0xC0),
+        "evidence_source": "tron_message_proof_accepted_transaction",
+        "route_allowlist_hash": route_hash,
+        "destination_binding_hash": destination_hash,
+        "evidence_bound": True,
+        "transaction_id": transaction_id,
+        "transaction_owner_address": owner_address,
+        "block_number": 0,
+        "block_timestamp": -1,
+        "log_index": -1,
+        "message_id": source_deployment_hash,
+        "call_data_sha256": fixed_hex32(0xC3),
+        "payload_hash": fixed_hex32(0xC4),
+        "target_domain": 1,
+        "statement_hash": fixed_hex32(0xC5),
+        "commitment_root": fixed_hex32(0xC6),
+        "finality_height": transaction_id,
+        "finality_block_hash": finality_block_hash,
+        "proof_version": 2,
+        "proof_source_domain": 5,
+        "message_proof_used": False,
+        "raw_data_owner_matches_transaction": False,
+        "signature_sha256": finality_block_hash,
+        "signature_recovered_address": recovered_address,
+        "signature_recovers_to_owner": False,
+    }
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["evidence"] = {
+                    "production_ready": False,
+                    "required_domains": [1, 2, 3, 4, 5],
+                    "supported_launch_domains": [1, 2, 3, 4, 5],
+                    "unsupported_launch_domains": [],
+                    "lanes": [
+                        {
+                            "domain": 5,
+                            "chain": "tron",
+                            "records": {
+                                "source_verifier_material": True,
+                                "source_adapter_deployment": True,
+                                "destination_rollout": True,
+                                "route_allowlist": True,
+                            },
+                            "production_ready": True,
+                            "source_record_hashes": {
+                                "source_verifier_material_hash": source_material_hash,
+                                "source_adapter_engine_deployment_hash": (
+                                    source_deployment_hash
+                                ),
+                            },
+                            "source_adapter_gate": {
+                                "required": True,
+                                "ready": True,
+                                "gate_hash": gate_hash,
+                                "audit_hashes": {
+                                    "tron_dpos_source_gate_hash": gate_hash,
+                                },
+                                "blockers": [],
+                            },
+                            "evm_live_metadata": {
+                                "required": False,
+                                "ready": True,
+                                "source_rpc_chain_id": "",
+                                "source_block_tag": "",
+                                "destination_rpc_chain_id": "",
+                                "destination_block_tag": "",
+                            },
+                            "destination_binding": {
+                                "destination_binding_hash": destination_hash,
+                                "destination_binding_key": (
+                                    "sccp:tron:destination:tron-mainnet:v1"
+                                ),
+                                "expected_destination_binding_hash": destination_hash,
+                                "expected_destination_binding_hash_matches": True,
+                                "recomputed": True,
+                                "destination_bridge_address": "",
+                                "destination_network_id": fixed_hex32(0xA7),
+                            },
+                            "route_allowlist": {
+                                "route_allowlist_hash": route_hash,
+                                "expected_route_allowlist_hash": route_hash,
+                                "expected_route_allowlist_hash_matches": True,
+                                "route_canary": route_canary,
+                            },
+                            "blockers": [],
+                        }
+                    ],
+                    "blockers": ["TRON route canary transcript drift"],
+                    "release_checklist": {"ready": False, "items": []},
+                }
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("TRON route canary transcript drift was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError(
+            "TRON route canary transcript drift reached Markdown rendering"
+        )
+
+    captured = capsys.readouterr()
+    canary_label = "bundled report.evidence.lanes[0].route_allowlist.route_canary"
+    assert "malformed SCCP release readiness report" in captured.err
+    assert (
+        f"{canary_label} signature_recovered_address must match "
+        "transaction_owner_address"
+    ) in captured.err
+    assert (
+        f"{canary_label} transcript hash finality_height must not reuse "
+        "transaction_id"
+    ) in captured.err
+    assert (
+        f"{canary_label} transcript hash signature_sha256 must not reuse "
+        "finality_block_hash"
+    ) in captured.err
+    assert (
+        f"{canary_label} hash role message_id must not reuse "
+        "source_adapter_engine_deployment_hash"
+    ) in captured.err
+    assert f"{canary_label} block_number must be a positive integer" in captured.err
+    assert f"{canary_label} block_timestamp must be a non-negative integer" in (
+        captured.err
+    )
+    assert f"{canary_label} log_index must be a u32 integer" in captured.err
+    assert f"{canary_label} target_domain must be TRON" in captured.err
+    assert f"{canary_label} proof_version must be 1" in captured.err
+    assert f"{canary_label} proof_source_domain must be SORA" in captured.err
+    assert f"{canary_label} message_proof_used must be true" in captured.err
+    assert (
+        f"{canary_label} raw_data_owner_matches_transaction must be true"
+        in captured.err
+    )
+    assert f"{canary_label} signature_recovers_to_owner must be true" in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_copied_evidence_solana_ton_route_canary_drift_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Copied Solana and TON route canaries must keep live snapshot bindings."""
+
+    bundle = load_bundle_module()
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    sol_destination_hash = fixed_hex32(0xA7)
+    sol_route_hash = fixed_hex32(0xB7)
+    sol_gate_hash = fixed_hex32(0xE7)
+    ton_destination_hash = fixed_hex32(0xA8)
+    ton_route_hash = fixed_hex32(0xB8)
+    ton_gate_hash = fixed_hex32(0xE8)
+
+    solana_lane = {
+        "domain": 3,
+        "chain": "sol",
+        "records": {
+            "source_verifier_material": True,
+            "source_adapter_deployment": True,
+            "destination_rollout": True,
+            "route_allowlist": True,
+        },
+        "production_ready": True,
+        "source_record_hashes": {
+            "source_verifier_material_hash": fixed_hex32(0xD7),
+            "source_adapter_engine_deployment_hash": fixed_hex32(0xD8),
+        },
+        "source_adapter_gate": {
+            "required": True,
+            "ready": True,
+            "gate_hash": sol_gate_hash,
+            "audit_hashes": {
+                "solana_tower_replay_verifier_hash": fixed_hex32(0xE9),
+                "solana_full_accountsdb_lattice_verifier_hash": fixed_hex32(0xEA),
+                "solana_bank_fork_choice_verifier_hash": fixed_hex32(0xEB),
+                "solana_full_light_client_gate_hash": sol_gate_hash,
+            },
+            "blockers": [],
+        },
+        "evm_live_metadata": {
+            "required": False,
+            "ready": True,
+            "source_rpc_chain_id": "",
+            "source_block_tag": "",
+            "destination_rpc_chain_id": "",
+            "destination_block_tag": "",
+        },
+        "destination_binding": {
+            "destination_binding_hash": sol_destination_hash,
+            "destination_binding_key": "sccp:sol:destination:solana-mainnet-beta:v1",
+            "expected_destination_binding_hash": sol_destination_hash,
+            "expected_destination_binding_hash_matches": True,
+            "recomputed": True,
+            "destination_bridge_address": "",
+            "destination_network_id": "",
+        },
+        "route_allowlist": {
+            "route_allowlist_hash": sol_route_hash,
+            "expected_route_allowlist_hash": sol_route_hash,
+            "expected_route_allowlist_hash_matches": True,
+            "route_canary": {
+                "status": "passed",
+                "evidence_hash": fixed_hex32(0xC7),
+                "evidence_source": "solana_live_programdata_snapshot",
+                "route_allowlist_hash": sol_route_hash,
+                "destination_binding_hash": sol_destination_hash,
+                "evidence_bound": True,
+                "solana_programdata_address": "1" * 32,
+                "solana_programdata_slot": "01",
+            },
+        },
+        "blockers": [],
+    }
+    ton_lane = {
+        "domain": 4,
+        "chain": "ton",
+        "records": {
+            "source_verifier_material": True,
+            "source_adapter_deployment": True,
+            "destination_rollout": True,
+            "route_allowlist": True,
+        },
+        "production_ready": True,
+        "source_record_hashes": {
+            "source_verifier_material_hash": fixed_hex32(0xD9),
+            "source_adapter_engine_deployment_hash": fixed_hex32(0xDA),
+        },
+        "source_adapter_gate": {
+            "required": True,
+            "ready": True,
+            "gate_hash": ton_gate_hash,
+            "audit_hashes": {
+                "ton_masterchain_config_verifier_hash": fixed_hex32(0xEC),
+                "ton_validator_set_transition_verifier_hash": fixed_hex32(0xED),
+                "ton_shard_accounts_dictionary_verifier_hash": fixed_hex32(0xEE),
+                "ton_full_light_client_gate_hash": ton_gate_hash,
+            },
+            "blockers": [],
+        },
+        "evm_live_metadata": {
+            "required": False,
+            "ready": True,
+            "source_rpc_chain_id": "",
+            "source_block_tag": "",
+            "destination_rpc_chain_id": "",
+            "destination_block_tag": "",
+        },
+        "destination_binding": {
+            "destination_binding_hash": ton_destination_hash,
+            "destination_binding_key": "sccp:ton:destination:ton-mainnet:v1",
+            "expected_destination_binding_hash": ton_destination_hash,
+            "expected_destination_binding_hash_matches": True,
+            "recomputed": True,
+            "destination_bridge_address": "",
+            "destination_network_id": "",
+        },
+        "route_allowlist": {
+            "route_allowlist_hash": ton_route_hash,
+            "expected_route_allowlist_hash": ton_route_hash,
+            "expected_route_allowlist_hash_matches": True,
+            "route_canary": {
+                "status": "passed",
+                "evidence_hash": fixed_hex32(0xC8),
+                "evidence_source": "ton_live_account_snapshot",
+                "route_allowlist_hash": ton_route_hash,
+                "destination_binding_hash": ton_destination_hash,
+                "evidence_bound": True,
+                "ton_account_state_hash": ton_destination_hash,
+                "ton_last_transaction_hash": "0x" + "00" * 32,
+                "ton_last_transaction_lt": "01",
+            },
+        },
+        "blockers": [],
+    }
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["evidence"] = {
+                    "production_ready": False,
+                    "required_domains": [1, 2, 3, 4, 5],
+                    "supported_launch_domains": [1, 2, 3, 4, 5],
+                    "unsupported_launch_domains": [],
+                    "lanes": [solana_lane, ton_lane],
+                    "blockers": ["Solana/TON route canary drift"],
+                    "release_checklist": {"ready": False, "items": []},
+                }
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("Solana/TON route canary drift was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("Solana/TON route canary drift reached Markdown rendering")
+
+    captured = capsys.readouterr()
+    sol_label = "bundled report.evidence.lanes[0].route_allowlist.route_canary"
+    ton_label = "bundled report.evidence.lanes[1].route_allowlist.route_canary"
+    assert "malformed SCCP release readiness report" in captured.err
+    assert (
+        f"{sol_label} solana_programdata_address must be a non-zero canonical "
+        "base58 Solana address"
+    ) in captured.err
+    assert (
+        f"{sol_label} solana_programdata_slot must be a canonical positive "
+        "decimal string"
+    ) in captured.err
+    assert (
+        f"{ton_label} ton_last_transaction_hash must be a non-zero canonical "
+        "bytes32 hex string"
+    ) in captured.err
+    assert (
+        f"{ton_label} ton_last_transaction_lt must be a canonical positive "
+        "decimal string"
+    ) in captured.err
+    assert (
+        f"{ton_label} hash role ton_account_state_hash must not reuse "
+        "destination_binding_hash"
+    ) in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_copied_submission_surface_binding_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Copied submission rows must match verifier-owned corridor-derived rows."""
+
+    bundle = load_bundle_module()
+    verifier = load_verify_helpers()
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+    phase_status = {phase: "passed" for phase in PHASES}
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["corridor"] = {
+                    "production_ready": True,
+                    "phases": dict(phase_status),
+                    "evidence_artifacts": {},
+                    "require_phase_evidence": False,
+                    "blockers": [],
+                }
+                surfaces = verifier._expected_submission_surfaces(report)
+                evm_surface = next(
+                    surface for surface in surfaces if surface["lanes"] == "eth,bsc"
+                )
+                sol_surface = next(
+                    surface for surface in surfaces if surface["lanes"] == "sol"
+                )
+                missing_helper = "buildSolanaSccpFullLightClientAuditProofRequests"
+                sol_surface["sdk_helper_symbols"] = [
+                    helper
+                    for helper in sol_surface["sdk_helper_symbols"]
+                    if helper != missing_helper
+                ]
+                sol_surface["sdk_helpers"] = ", ".join(sol_surface["sdk_helper_symbols"])
+                sol_surface["sdk_helper_symbols_by_sdk"]["js-sdk"] = [
+                    helper
+                    for helper in sol_surface["sdk_helper_symbols_by_sdk"]["js-sdk"]
+                    if helper != missing_helper
+                ]
+                evm_surface["lanes"] = "sol"
+                evm_surface["proof_backend"] = "evm-groth16-bn254-v1"
+                sol_surface["validation_status"] = "blocked"
+                sol_surface["validation_blockers"] = ["operator override"]
+                report["user_prover_submission_surfaces"] = surfaces
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("submission surface binding drift was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("submission surface binding drift reached rendering")
+
+    captured = capsys.readouterr()
+    label = "bundled report.user_prover_submission_surfaces"
+    assert "malformed SCCP release readiness report" in captured.err
+    assert f"{label} contains duplicate lanes row: sol" in captured.err
+    assert f"{label} missing required lanes row: eth,bsc" in captured.err
+    assert (
+        f"{label} lanes sol sdk_helper_symbols missing required helper: "
+        "buildSolanaSccpFullLightClientAuditProofRequests"
+    ) in captured.err
+    assert (
+        f"{label} lanes sol sdk_helper_symbols_by_sdk[js-sdk] missing required "
+        "helper: buildSolanaSccpFullLightClientAuditProofRequests"
+    ) in captured.err
+    assert f"{label} must match copied corridor phases" in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_malformed_copied_source_inventory_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """The bundle-local source inventory must keep canonical gate rows."""
+
+    bundle = load_bundle_module()
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["source_inventory"] = {
+                    "release_public_json_root_schema_gate": {
+                        "validation_status": "blocked",
+                        "validation_blockers": [
+                            "missing marker",
+                            " duplicate marker ",
+                            "missing marker",
+                        ],
+                        "operator_attestation": "reviewed outside evidence",
+                    },
+                    "operator attestation": {
+                        "validation_status": "passed",
+                        "validation_blockers": [],
+                    },
+                    "operator_attestation_gate": {
+                        "validation_status": "done",
+                        "validation_blockers": [],
+                    },
+                }
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("malformed source inventory was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("malformed source inventory reached Markdown rendering")
+
+    captured = capsys.readouterr()
+    assert "malformed SCCP release readiness report" in captured.err
+    assert (
+        "bundled report.source_inventory contains unknown gate name with whitespace"
+    ) in captured.err
+    assert (
+        "bundled report.source_inventory contains unknown gate: "
+        "operator_attestation_gate"
+    ) in captured.err
+    assert (
+        "bundled report.source_inventory['operator_attestation_gate'] "
+        "validation_status must be passed or blocked"
+    ) in captured.err
+    assert (
+        "bundled report.source_inventory['release_public_json_root_schema_gate'] "
+        "contains unknown field: operator_attestation"
+    ) in captured.err
+    assert (
+        "bundled report.source_inventory['release_public_json_root_schema_gate'] "
+        "validation_status must be passed"
+    ) in captured.err
+    assert (
+        "bundled report.source_inventory['release_public_json_root_schema_gate'] "
+        "validation_blockers must be a list of non-empty strings "
+        "with no surrounding whitespace"
+    ) in captured.err
+    assert (
+        "bundled report.source_inventory['release_public_json_root_schema_gate'] "
+        "validation_blockers must not contain duplicate strings"
+    ) in captured.err
+    assert (
+        "bundled report.source_inventory['release_public_json_root_schema_gate'] "
+        "validation_blockers must be empty"
     ) in captured.err
     assert fake_report_module.calls == 2
     assert not (output_dir / "sccp-release-readiness.md").exists()
@@ -10069,6 +14265,37 @@ def test_release_bundle_verifier_rejects_missing_bsc_inbound_adversarial_invento
     assert (
         "readiness report source_inventory missing required gate: "
         "bsc_inbound_adversarial_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_tron_inbound_adversarial_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep the TRON inbound adversarial gate."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("tron_inbound_adversarial_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "tron_inbound_adversarial_gate"
     ) in verified.stdout
 
 
@@ -20938,6 +25165,95 @@ def test_release_bundle_verifier_guards_sccp_proof_request_bundle_gate_inventory
     )
 
 
+def test_release_bundle_verifier_guards_sccp_proof_request_native_sdk_inventory(
+    tmp_path: Path,
+) -> None:
+    """Published bundle verification must pin native SDK proof-request gates."""
+
+    verifier = load_verify_helpers()
+    inventory_by_path = dict(verifier.SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS)
+    native_marker_cases = (
+        (
+            "IrohaSwift/Sources/IrohaSwift/SccpEvmProver.swift",
+            'throw EvmSccpProverError.invalidPublicInputs("bundleBytes.sourceDomain")',
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/SccpTronProver.swift",
+            'throw TronSccpProverError.invalidPublicInputs("bundleBytes.sourceDomain")',
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/SccpTonProver.swift",
+            'throw TonSccpProverError.invalidField("sourceProofBytes")',
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/SccpSolanaProverTests.swift",
+            "func testSccpProofRequestsRejectAllZeroSourceProofBytes",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/SccpMessageProofBundles.kt",
+            "sourceProofBytes required for non-SORA source bundle",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/EvmSccpProver.kt",
+            "bundleBytes.sourceDomain must match sourceDomain",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/TronSccpProver.kt",
+            "bundleBytes.sourceDomain must match sourceDomain",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/EvmSccpProverTest.kt",
+            "proofResult.copy(sourceProofBytes = byteArrayOf(9, 11))",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/TronSccpProverTest.kt",
+            "proofResult.copy(sourceProofBytes = byteArrayOf(9, 11))",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/SccpMessageProofBundles.java",
+            "sourceProofBytes required for non-SORA source bundle",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/EvmSccpProver.java",
+            "bundleBytes.sourceDomain must match sourceDomain",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/TronSccpProver.java",
+            "bundleBytes.sourceDomain must match sourceDomain",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/EvmSccpProverTests.java",
+            "evmResultWithSourceProofBytes(proofResult, new byte[] {9, 11})",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/TronSccpProverTests.java",
+            "tronResultWithSourceProofBytes(proofResult, new byte[] {9, 11})",
+        ),
+    )
+
+    for index, (source_path, removed_marker) in enumerate(native_marker_cases):
+        required_markers = inventory_by_path[source_path]
+        assert removed_marker in required_markers
+        sparse_source = tmp_path / f"proof_request_native_sdk_{index}.txt"
+        sparse_source.write_text(
+            "\n".join(
+                marker for marker in required_markers if marker != removed_marker
+            ),
+            encoding="utf-8",
+        )
+
+        errors = verifier._sccp_proof_request_bundle_gate_inventory_errors(
+            ((sparse_source, required_markers),)
+        )
+
+        assert any(
+            "SCCP proof-request bundle/source-proof gate source inventory" in error
+            and str(sparse_source) in error
+            and f"missing marker: {removed_marker}" in error
+            for error in errors
+        ), source_path
+
+
 def test_release_bundle_verifier_guards_sccp_phase_evidence_source_inventory(
     tmp_path: Path,
 ) -> None:
@@ -24504,6 +28820,155 @@ def test_release_bundle_verifier_guards_ethereum_source_bridge_config_tests(
         "Ethereum mainnet source-bridge config source inventory" in error
         and "missing marker: source_bridge_network_id must be Ethereum mainnet chain id 1"
         in error
+        for error in verified["errors"]
+    )
+
+
+def source_marker_inventory_with_one_marker_removed(
+    tmp_path: Path,
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...],
+    index: int,
+) -> tuple[tuple[Path, tuple[str, ...]], str]:
+    """Return a one-entry inventory fixture with one uniquely detectable marker removed."""
+
+    original_path, required_markers = inventory[index]
+    for removed_marker in required_markers:
+        remaining_markers = tuple(
+            marker for marker in required_markers if marker != removed_marker
+        )
+        if removed_marker not in "\n".join(remaining_markers):
+            break
+    else:
+        raise AssertionError(f"{original_path} has no uniquely removable marker")
+
+    sparse_source = tmp_path / f"source-inventory-{index}-{Path(original_path).name}"
+    sparse_source.write_text("\n".join(remaining_markers), encoding="utf-8")
+    return ((sparse_source, required_markers),), removed_marker
+
+
+def test_release_bundle_verifier_guards_sccp_source_material_template_rejection_inventory(
+    tmp_path: Path,
+) -> None:
+    """Published bundle verification must keep source-template rejection guards."""
+
+    verifier = load_verify_helpers()
+    assert verifier._sccp_source_material_template_rejection_inventory_errors() == []
+
+    for index, _entry in enumerate(verifier.SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS):
+        sparse_inventory, removed_marker = source_marker_inventory_with_one_marker_removed(
+            tmp_path,
+            verifier.SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS,
+            index,
+        )
+        errors = verifier._sccp_source_material_template_rejection_inventory_errors(
+            sparse_inventory
+        )
+        assert any(
+            "SCCP source-material template rejection source inventory" in error
+            and f"missing marker: {removed_marker}" in error
+            for error in errors
+        )
+
+    sparse_inventory, removed_marker = source_marker_inventory_with_one_marker_removed(
+        tmp_path,
+        verifier.SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS,
+        0,
+    )
+    verifier.SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS = sparse_inventory
+
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    output_dir = build_ready_bundle(bundle_dir)
+    verified = verifier.verify_bundle(output_dir)
+
+    assert verified["verified"] is False
+    assert any(
+        "SCCP source-material template rejection source inventory" in error
+        and f"missing marker: {removed_marker}" in error
+        for error in verified["errors"]
+    )
+
+
+def test_release_bundle_verifier_guards_sccp_source_material_role_validation_inventory(
+    tmp_path: Path,
+) -> None:
+    """Published bundle verification must keep source-material role guards."""
+
+    verifier = load_verify_helpers()
+    assert verifier._sccp_source_material_role_validation_inventory_errors() == []
+
+    for index, _entry in enumerate(verifier.SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS):
+        sparse_inventory, removed_marker = source_marker_inventory_with_one_marker_removed(
+            tmp_path,
+            verifier.SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS,
+            index,
+        )
+        errors = verifier._sccp_source_material_role_validation_inventory_errors(
+            sparse_inventory
+        )
+        assert any(
+            "SCCP source-material role validation source inventory" in error
+            and f"missing marker: {removed_marker}" in error
+            for error in errors
+        )
+
+    sparse_inventory, removed_marker = source_marker_inventory_with_one_marker_removed(
+        tmp_path,
+        verifier.SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS,
+        0,
+    )
+    verifier.SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = sparse_inventory
+
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    output_dir = build_ready_bundle(bundle_dir)
+    verified = verifier.verify_bundle(output_dir)
+
+    assert verified["verified"] is False
+    assert any(
+        "SCCP source-material role validation source inventory" in error
+        and f"missing marker: {removed_marker}" in error
+        for error in verified["errors"]
+    )
+
+
+def test_release_bundle_verifier_guards_tron_inbound_adversarial_inventory(
+    tmp_path: Path,
+) -> None:
+    """Published bundle verification must keep TRON inbound adversarial guards."""
+
+    verifier = load_verify_helpers()
+    assert verifier._tron_inbound_adversarial_inventory_errors() == []
+
+    for index, _entry in enumerate(verifier.TRON_INBOUND_ADVERSARIAL_MARKERS):
+        sparse_inventory, removed_marker = source_marker_inventory_with_one_marker_removed(
+            tmp_path,
+            verifier.TRON_INBOUND_ADVERSARIAL_MARKERS,
+            index,
+        )
+        errors = verifier._tron_inbound_adversarial_inventory_errors(sparse_inventory)
+        assert any(
+            "TRON mainnet inbound adversarial source inventory" in error
+            and f"missing marker: {removed_marker}" in error
+            for error in errors
+        )
+
+    sparse_inventory, removed_marker = source_marker_inventory_with_one_marker_removed(
+        tmp_path,
+        verifier.TRON_INBOUND_ADVERSARIAL_MARKERS,
+        0,
+    )
+    verifier.TRON_INBOUND_ADVERSARIAL_MARKERS = sparse_inventory
+
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    output_dir = build_ready_bundle(bundle_dir)
+    verified = verifier.verify_bundle(output_dir)
+
+    assert verified["verified"] is False
+    assert any(
+        "TRON mainnet inbound adversarial source inventory" in error
+        and f"missing marker: {removed_marker}" in error
         for error in verified["errors"]
     )
 

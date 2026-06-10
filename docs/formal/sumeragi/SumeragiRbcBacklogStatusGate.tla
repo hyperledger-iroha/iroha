@@ -6,8 +6,9 @@ A bounded abstract model for RBC backlog summaries and published status.
 
 This slice pins the observable helper contracts around:
 - `rbc_backlog_summary()` and `proposal_rbc_backlog_summary()`, which count
-  only active, non-invalid, non-authoritative RBC sessions plus the appropriate
-  pending RBC stashes;
+  only active, non-invalid RBC sessions without complete authoritative progress,
+  treating malformed chunk counters as trusted missing pressure even when local
+  authoritative payloads exist, plus the appropriate pending RBC stashes;
 - `rbc_backlog_exceeds_pacemaker_soft_limits(...)`, which uses strict `>`
   thresholds after requiring a real backlog; and
 - `update_rbc_backlog_snapshot(...)`, which publishes undelivered-session
@@ -29,6 +30,9 @@ SummaryDaDisabled == "summary_da_disabled"
 SummaryInactive == "summary_inactive"
 SummaryInvalid == "summary_invalid"
 SummaryAuthoritative == "summary_authoritative"
+SummaryOvercountedChunks == "summary_overcounted_chunks"
+SummaryZeroTotalChunks == "summary_zero_total_chunks"
+SummaryAuthoritativeMalformed == "summary_authoritative_malformed"
 SummaryNoPayloadNoMissing == "summary_no_payload_no_missing"
 SummaryMissingChunks == "summary_missing_chunks"
 SummaryDeliveredBacklog == "summary_delivered_backlog"
@@ -42,6 +46,9 @@ SummaryCases == {
   SummaryInactive,
   SummaryInvalid,
   SummaryAuthoritative,
+  SummaryOvercountedChunks,
+  SummaryZeroTotalChunks,
+  SummaryAuthoritativeMalformed,
   SummaryNoPayloadNoMissing,
   SummaryMissingChunks,
   SummaryDeliveredBacklog,
@@ -53,12 +60,16 @@ SummaryCases == {
 
 ProposalSessionBlocking == "proposal_session_blocking"
 ProposalSessionInactive == "proposal_session_inactive"
+ProposalOvercountedChunks == "proposal_overcounted_chunks"
+ProposalAuthoritativeMalformed == "proposal_authoritative_malformed"
 ProposalPendingBlocking == "proposal_pending_blocking"
 ProposalPendingTipOnly == "proposal_pending_tip_only"
 
 ProposalCases == {
   ProposalSessionBlocking,
   ProposalSessionInactive,
+  ProposalOvercountedChunks,
+  ProposalAuthoritativeMalformed,
   ProposalPendingBlocking,
   ProposalPendingTipOnly
 }
@@ -79,6 +90,8 @@ SoftLimitCases == {
 
 SnapshotEmpty == "snapshot_empty"
 SnapshotUndeliveredMissing == "snapshot_undelivered_missing"
+SnapshotOvercountedMissing == "snapshot_overcounted_missing"
+SnapshotZeroTotalMissing == "snapshot_zero_total_missing"
 SnapshotDeliveredMissing == "snapshot_delivered_missing"
 SnapshotTwoUndelivered == "snapshot_two_undelivered"
 SnapshotPendingStash == "snapshot_pending_stash"
@@ -86,6 +99,8 @@ SnapshotPendingStash == "snapshot_pending_stash"
 SnapshotCases == {
   SnapshotEmpty,
   SnapshotUndeliveredMissing,
+  SnapshotOvercountedMissing,
+  SnapshotZeroTotalMissing,
   SnapshotDeliveredMissing,
   SnapshotTwoUndelivered,
   SnapshotPendingStash
@@ -95,6 +110,9 @@ SpecSummarySessions(c) ==
   CASE c \in {
          SummaryNoPayloadNoMissing,
          SummaryMissingChunks,
+         SummaryOvercountedChunks,
+         SummaryZeroTotalChunks,
+         SummaryAuthoritativeMalformed,
          SummaryDeliveredBacklog,
          SummaryPendingTip,
          SummaryPendingNext
@@ -104,6 +122,8 @@ SpecSummarySessions(c) ==
 
 SpecSummaryMissing(c) ==
   CASE c \in {SummaryMissingChunks, SummaryMixedSessionPending} -> 3
+    [] c \in {SummaryOvercountedChunks, SummaryAuthoritativeMalformed} -> 4
+    [] c = SummaryZeroTotalChunks -> 1
     [] OTHER -> 0
 
 SpecSummaryHasBacklog(c) ==
@@ -118,6 +138,8 @@ ImplementationSummarySessions(c) ==
        /\ c = SummaryInvalid -> 1
     [] Bug = "summary_authoritative_counts"
        /\ c = SummaryAuthoritative -> 1
+    [] Bug = "summary_authoritative_malformed_ignored"
+       /\ c = SummaryAuthoritativeMalformed -> 0
     [] Bug = "summary_pending_tip_ignored"
        /\ c = SummaryPendingTip -> 0
     [] Bug = "summary_pending_next_ignored"
@@ -135,17 +157,27 @@ ImplementationSummaryMissing(c) ==
        /\ c \in {SummaryMissingChunks, SummaryMixedSessionPending} -> 0
     [] Bug = "summary_missing_uses_received"
        /\ c = SummaryMissingChunks -> 1
+    [] Bug = "summary_malformed_uses_saturating_zero"
+       /\ c \in {SummaryOvercountedChunks, SummaryZeroTotalChunks} -> 0
+    [] Bug = "summary_authoritative_malformed_ignored"
+       /\ c = SummaryAuthoritativeMalformed -> 0
     [] OTHER -> SpecSummaryMissing(c)
 
 ImplementationSummaryHasBacklog(c) ==
   ImplementationSummarySessions(c) > 0 \/ ImplementationSummaryMissing(c) > 0
 
 SpecProposalSessions(c) ==
-  CASE c \in {ProposalSessionBlocking, ProposalPendingBlocking} -> 1
+  CASE c \in {
+         ProposalSessionBlocking,
+         ProposalOvercountedChunks,
+         ProposalAuthoritativeMalformed,
+         ProposalPendingBlocking
+       } -> 1
     [] OTHER -> 0
 
 SpecProposalMissing(c) ==
   CASE c = ProposalSessionBlocking -> 3
+    [] c \in {ProposalOvercountedChunks, ProposalAuthoritativeMalformed} -> 4
     [] OTHER -> 0
 
 ImplementationProposalSessions(c) ==
@@ -155,11 +187,17 @@ ImplementationProposalSessions(c) ==
        /\ c = ProposalPendingBlocking -> 0
     [] Bug = "proposal_inactive_counts"
        /\ c = ProposalSessionInactive -> 1
+    [] Bug = "proposal_authoritative_malformed_ignored"
+       /\ c = ProposalAuthoritativeMalformed -> 0
     [] OTHER -> SpecProposalSessions(c)
 
 ImplementationProposalMissing(c) ==
   CASE Bug = "proposal_session_ignores_missing"
        /\ c = ProposalSessionBlocking -> 0
+    [] Bug = "proposal_malformed_uses_saturating_zero"
+       /\ c = ProposalOvercountedChunks -> 0
+    [] Bug = "proposal_authoritative_malformed_ignored"
+       /\ c = ProposalAuthoritativeMalformed -> 0
     [] OTHER -> SpecProposalMissing(c)
 
 SoftSessions(c) ==
@@ -200,16 +238,24 @@ ImplementationSoftExceeded(c) ==
 
 SpecSnapshotTotalMissing(c) ==
   CASE c = SnapshotUndeliveredMissing -> 3
+    [] c = SnapshotOvercountedMissing -> 4
+    [] c = SnapshotZeroTotalMissing -> 1
     [] c = SnapshotTwoUndelivered -> 5
     [] OTHER -> 0
 
 SpecSnapshotMaxMissing(c) ==
   CASE c = SnapshotUndeliveredMissing -> 3
+    [] c = SnapshotOvercountedMissing -> 4
+    [] c = SnapshotZeroTotalMissing -> 1
     [] c = SnapshotTwoUndelivered -> 3
     [] OTHER -> 0
 
 SpecSnapshotPendingSessions(c) ==
-  CASE c = SnapshotUndeliveredMissing -> 1
+  CASE c \in {
+         SnapshotUndeliveredMissing,
+         SnapshotOvercountedMissing,
+         SnapshotZeroTotalMissing
+       } -> 1
     [] c = SnapshotTwoUndelivered -> 2
     [] OTHER -> 0
 
@@ -242,6 +288,8 @@ ImplementationSnapshotTotalMissing(c) ==
        /\ c = SnapshotDeliveredMissing -> 3
     [] Bug = "snapshot_ignores_undelivered"
        /\ c = SnapshotUndeliveredMissing -> 0
+    [] Bug = "snapshot_malformed_uses_saturating_zero"
+       /\ c \in {SnapshotOvercountedMissing, SnapshotZeroTotalMissing} -> 0
     [] OTHER -> SpecSnapshotTotalMissing(c)
 
 ImplementationSnapshotMaxMissing(c) ==
@@ -251,6 +299,8 @@ ImplementationSnapshotMaxMissing(c) ==
        /\ c = SnapshotUndeliveredMissing -> 0
     [] Bug = "snapshot_max_uses_total"
        /\ c = SnapshotTwoUndelivered -> 5
+    [] Bug = "snapshot_malformed_uses_saturating_zero"
+       /\ c \in {SnapshotOvercountedMissing, SnapshotZeroTotalMissing} -> 0
     [] OTHER -> SpecSnapshotMaxMissing(c)
 
 ImplementationSnapshotPendingSessions(c) ==
@@ -300,6 +350,8 @@ Bugs == {
   "summary_authoritative_counts",
   "summary_missing_chunks_ignored",
   "summary_missing_uses_received",
+  "summary_malformed_uses_saturating_zero",
+  "summary_authoritative_malformed_ignored",
   "summary_pending_tip_ignored",
   "summary_pending_next_ignored",
   "summary_pending_future_counts",
@@ -308,6 +360,8 @@ Bugs == {
   "proposal_pending_tip_counts",
   "proposal_blocking_pending_ignored",
   "proposal_session_ignores_missing",
+  "proposal_malformed_uses_saturating_zero",
+  "proposal_authoritative_malformed_ignored",
   "proposal_inactive_counts",
   "soft_exact_session_triggers",
   "soft_exact_missing_triggers",
@@ -316,6 +370,7 @@ Bugs == {
   "snapshot_counts_delivered_as_pending",
   "snapshot_ignores_undelivered",
   "snapshot_max_uses_total",
+  "snapshot_malformed_uses_saturating_zero",
   "snapshot_pending_stash_ignored",
   "snapshot_caps_zeroed",
   "snapshot_pending_stash_as_session"
@@ -332,16 +387,16 @@ TypeInvariant ==
   /\ checked = 0
   /\ \A c \in SummaryCases:
        /\ SpecSummarySessions(c) \in 0..2
-       /\ SpecSummaryMissing(c) \in 0..3
+       /\ SpecSummaryMissing(c) \in 0..4
        /\ SpecSummaryHasBacklog(c) \in BOOLEAN
        /\ ImplementationSummarySessions(c) \in 0..2
-       /\ ImplementationSummaryMissing(c) \in 0..3
+       /\ ImplementationSummaryMissing(c) \in 0..4
        /\ ImplementationSummaryHasBacklog(c) \in BOOLEAN
   /\ \A c \in ProposalCases:
        /\ SpecProposalSessions(c) \in 0..1
-       /\ SpecProposalMissing(c) \in 0..3
+       /\ SpecProposalMissing(c) \in 0..4
        /\ ImplementationProposalSessions(c) \in 0..1
-       /\ ImplementationProposalMissing(c) \in 0..3
+       /\ ImplementationProposalMissing(c) \in 0..4
   /\ \A c \in SoftLimitCases:
        /\ SpecSoftExceeded(c) \in BOOLEAN
        /\ ImplementationSoftExceeded(c) \in BOOLEAN

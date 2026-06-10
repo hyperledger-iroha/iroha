@@ -9,8 +9,9 @@ This slice captures `RbcSession::delivered_payload_bytes(...)` and
 is gated on delivered and complete sessions, known payload layouts use the
 layout size without summing chunks, legacy layouts sum stored chunks with
 saturation, fallback bytes are used only for delivered unrecorded sessions whose
-local bytes are unavailable, and successful telemetry extraction records the
-session exactly once.
+local bytes are unavailable and whose chunk shape/hash evidence is still
+repairable, and successful telemetry extraction records the session exactly
+once.
 ***************************************************************************)
 
 CONSTANT
@@ -32,8 +33,13 @@ BytesUnknownMissingSlot == "bytes_unknown_missing_slot"
 BytesUnknownSaturates == "bytes_unknown_saturates"
 TakeAlreadyRecorded == "take_already_recorded"
 TakeNotDeliveredWithFallback == "take_not_delivered_with_fallback"
+TakeInvalidWithFallback == "take_invalid_with_fallback"
+TakeMissingHashWithFallback == "take_missing_hash_with_fallback"
 TakeIncompleteNoFallback == "take_incomplete_no_fallback"
 TakeIncompleteWithFallback == "take_incomplete_with_fallback"
+TakeZeroTotalWithFallback == "take_zero_total_with_fallback"
+TakeOvercountWithFallback == "take_overcount_with_fallback"
+TakeCompleteMismatchWithFallback == "take_complete_mismatch_with_fallback"
 TakeCompleteComputed == "take_complete_computed"
 TakeCompleteWithFallbackPrefersComputed ==
   "take_complete_with_fallback_prefers_computed"
@@ -50,8 +56,13 @@ Cases == {
   BytesUnknownSaturates,
   TakeAlreadyRecorded,
   TakeNotDeliveredWithFallback,
+  TakeInvalidWithFallback,
+  TakeMissingHashWithFallback,
   TakeIncompleteNoFallback,
   TakeIncompleteWithFallback,
+  TakeZeroTotalWithFallback,
+  TakeOvercountWithFallback,
+  TakeCompleteMismatchWithFallback,
   TakeCompleteComputed,
   TakeCompleteWithFallbackPrefersComputed,
   TakeMissingSlotWithFallback,
@@ -80,8 +91,12 @@ TelemetrySomeSaturated == 18
 RecordedSet == 19
 RecordedUnchanged == 20
 RecordedAlreadyBlocks == 21
+InvalidRequired == 22
+PayloadHashRequired == 23
+InvalidShapeRejectsFallback == 24
+VerifiedPayloadRequired == 25
 
-ActionUniverse == 1..21
+ActionUniverse == 1..25
 
 SpecActions(c) ==
   CASE c = BytesNotDelivered ->
@@ -100,10 +115,20 @@ SpecActions(c) ==
       {TelemetryNone, RecordedAlreadyBlocks, RecordedUnchanged}
     [] c = TakeNotDeliveredWithFallback ->
       {TelemetryNone, DeliveredRequired, FallbackIgnored, RecordedUnchanged}
+    [] c = TakeInvalidWithFallback ->
+      {TelemetryNone, InvalidRequired, FallbackIgnored, RecordedUnchanged}
+    [] c = TakeMissingHashWithFallback ->
+      {TelemetryNone, PayloadHashRequired, FallbackIgnored, RecordedUnchanged}
     [] c = TakeIncompleteNoFallback ->
       {TelemetryNone, CompleteRequired, RecordedUnchanged}
     [] c = TakeIncompleteWithFallback ->
       {TelemetrySomeFallback, BytesFromFallback, FallbackUsed, RecordedSet}
+    [] c \in {TakeZeroTotalWithFallback, TakeOvercountWithFallback} ->
+      {TelemetryNone, InvalidShapeRejectsFallback, FallbackIgnored,
+       RecordedUnchanged}
+    [] c = TakeCompleteMismatchWithFallback ->
+      {TelemetryNone, VerifiedPayloadRequired, FallbackIgnored,
+       RecordedUnchanged}
     [] c = TakeCompleteComputed ->
       {TelemetrySomeSum, BytesFromChunkSum, ChunksSummed, RecordedSet}
     [] c = TakeCompleteWithFallbackPrefersComputed ->
@@ -144,6 +169,15 @@ ImplementationActions(c) ==
       (spec \ {TelemetryNone, DeliveredRequired, FallbackIgnored,
                RecordedUnchanged}) \cup
         {TelemetrySomeFallback, BytesFromFallback, FallbackUsed, RecordedSet}
+    [] Bug = "take_invalid_uses_fallback" /\ c = TakeInvalidWithFallback ->
+      (spec \ {TelemetryNone, InvalidRequired, FallbackIgnored,
+               RecordedUnchanged}) \cup
+        {TelemetrySomeFallback, BytesFromFallback, FallbackUsed, RecordedSet}
+    [] Bug = "take_missing_hash_uses_fallback" /\
+       c = TakeMissingHashWithFallback ->
+      (spec \ {TelemetryNone, PayloadHashRequired, FallbackIgnored,
+               RecordedUnchanged}) \cup
+        {TelemetrySomeFallback, BytesFromFallback, FallbackUsed, RecordedSet}
     [] Bug = "take_none_sets_recorded" /\
        c \in {TakeIncompleteNoFallback, TakeDeliveredNoBytesNoFallback} ->
       (spec \ {RecordedUnchanged}) \cup {RecordedSet}
@@ -155,6 +189,19 @@ ImplementationActions(c) ==
     [] Bug = "fallback_does_not_set_recorded" /\
        c \in {TakeIncompleteWithFallback, TakeMissingSlotWithFallback} ->
       (spec \ {RecordedSet}) \cup {RecordedUnchanged}
+    [] Bug = "zero_total_uses_fallback" /\ c = TakeZeroTotalWithFallback ->
+      (spec \ {TelemetryNone, InvalidShapeRejectsFallback, FallbackIgnored,
+               RecordedUnchanged}) \cup
+        {TelemetrySomeFallback, BytesFromFallback, FallbackUsed, RecordedSet}
+    [] Bug = "overcount_uses_fallback" /\ c = TakeOvercountWithFallback ->
+      (spec \ {TelemetryNone, InvalidShapeRejectsFallback, FallbackIgnored,
+               RecordedUnchanged}) \cup
+        {TelemetrySomeFallback, BytesFromFallback, FallbackUsed, RecordedSet}
+    [] Bug = "mismatch_uses_fallback" /\
+       c = TakeCompleteMismatchWithFallback ->
+      (spec \ {TelemetryNone, VerifiedPayloadRequired, FallbackIgnored,
+               RecordedUnchanged}) \cup
+        {TelemetrySomeFallback, BytesFromFallback, FallbackUsed, RecordedSet}
     [] Bug = "computed_uses_fallback" /\
        c = TakeCompleteWithFallbackPrefersComputed ->
       (spec \ {TelemetrySomeSum, BytesFromChunkSum, ChunksSummed,
@@ -187,9 +234,14 @@ Bugs == {
   "chunk_sum_not_saturating",
   "take_recorded_reports_again",
   "take_not_delivered_uses_fallback",
+  "take_invalid_uses_fallback",
+  "take_missing_hash_uses_fallback",
   "take_none_sets_recorded",
   "fallback_ignored_for_incomplete",
   "fallback_does_not_set_recorded",
+  "zero_total_uses_fallback",
+  "overcount_uses_fallback",
+  "mismatch_uses_fallback",
   "computed_uses_fallback",
   "computed_does_not_set_recorded",
   "missing_slot_ignores_fallback",
@@ -237,8 +289,35 @@ TelemetryExtractionRecordsOnlySuccessfulReports ==
   /\ FallbackIgnored \in ImplementationActions(TakeNotDeliveredWithFallback)
   /\ RecordedUnchanged \in
        ImplementationActions(TakeNotDeliveredWithFallback)
+  /\ TelemetryNone \in ImplementationActions(TakeInvalidWithFallback)
+  /\ InvalidRequired \in ImplementationActions(TakeInvalidWithFallback)
+  /\ FallbackIgnored \in ImplementationActions(TakeInvalidWithFallback)
+  /\ RecordedUnchanged \in ImplementationActions(TakeInvalidWithFallback)
+  /\ TelemetryNone \in ImplementationActions(TakeMissingHashWithFallback)
+  /\ PayloadHashRequired \in ImplementationActions(TakeMissingHashWithFallback)
+  /\ FallbackIgnored \in ImplementationActions(TakeMissingHashWithFallback)
+  /\ RecordedUnchanged \in
+       ImplementationActions(TakeMissingHashWithFallback)
   /\ TelemetryNone \in ImplementationActions(TakeIncompleteNoFallback)
   /\ RecordedUnchanged \in ImplementationActions(TakeIncompleteNoFallback)
+  /\ TelemetryNone \in ImplementationActions(TakeZeroTotalWithFallback)
+  /\ InvalidShapeRejectsFallback \in
+       ImplementationActions(TakeZeroTotalWithFallback)
+  /\ FallbackIgnored \in ImplementationActions(TakeZeroTotalWithFallback)
+  /\ RecordedUnchanged \in ImplementationActions(TakeZeroTotalWithFallback)
+  /\ TelemetryNone \in ImplementationActions(TakeOvercountWithFallback)
+  /\ InvalidShapeRejectsFallback \in
+       ImplementationActions(TakeOvercountWithFallback)
+  /\ FallbackIgnored \in ImplementationActions(TakeOvercountWithFallback)
+  /\ RecordedUnchanged \in ImplementationActions(TakeOvercountWithFallback)
+  /\ TelemetryNone \in
+       ImplementationActions(TakeCompleteMismatchWithFallback)
+  /\ VerifiedPayloadRequired \in
+       ImplementationActions(TakeCompleteMismatchWithFallback)
+  /\ FallbackIgnored \in
+       ImplementationActions(TakeCompleteMismatchWithFallback)
+  /\ RecordedUnchanged \in
+       ImplementationActions(TakeCompleteMismatchWithFallback)
   /\ TelemetryNone \in ImplementationActions(TakeDeliveredNoBytesNoFallback)
   /\ RecordedUnchanged \in
        ImplementationActions(TakeDeliveredNoBytesNoFallback)

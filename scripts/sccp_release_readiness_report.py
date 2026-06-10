@@ -733,6 +733,27 @@ def _bsc_inbound_adversarial_gate_inventory_errors(
         ]
 
 
+def _tron_inbound_adversarial_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return source-inventory errors for TRON inbound adversarial guards."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(
+            verifier,
+            "_tron_inbound_adversarial_inventory_errors",
+        )
+        if inventory is None:
+            return list(helper())
+        return list(helper(inventory))
+    except Exception as exc:  # pragma: no cover - exercised through blocker text.
+        return [
+            "TRON mainnet inbound adversarial source inventory "
+            f"cannot run release-bundle verifier helper: {exc}"
+        ]
+
+
 def _bsc_route_config_canonical_manifest_gate_inventory_errors(
     inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
 ) -> list[str]:
@@ -1306,6 +1327,48 @@ def _ethereum_source_bridge_config_gate_inventory_errors(
     except Exception as exc:  # pragma: no cover - exercised through blocker text.
         return [
             "Ethereum mainnet source-bridge config source inventory "
+            f"cannot run release-bundle verifier helper: {exc}"
+        ]
+
+
+def _sccp_source_material_template_rejection_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return source-inventory errors for template-derived source material guards."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(
+            verifier,
+            "_sccp_source_material_template_rejection_inventory_errors",
+        )
+        if inventory is None:
+            return list(helper())
+        return list(helper(inventory))
+    except Exception as exc:  # pragma: no cover - exercised through blocker text.
+        return [
+            "SCCP source-material template rejection source inventory "
+            f"cannot run release-bundle verifier helper: {exc}"
+        ]
+
+
+def _sccp_source_material_role_validation_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return source-inventory errors for source-material role validation guards."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(
+            verifier,
+            "_sccp_source_material_role_validation_inventory_errors",
+        )
+        if inventory is None:
+            return list(helper())
+        return list(helper(inventory))
+    except Exception as exc:  # pragma: no cover - exercised through blocker text.
+        return [
+            "SCCP source-material role validation source inventory "
             f"cannot run release-bundle verifier helper: {exc}"
         ]
 
@@ -5023,6 +5086,9 @@ def _build_report(
     bsc_inbound_adversarial_gate_blockers = (
         _bsc_inbound_adversarial_gate_inventory_errors()
     )
+    tron_inbound_adversarial_gate_blockers = (
+        _tron_inbound_adversarial_gate_inventory_errors()
+    )
     bsc_route_config_canonical_manifest_gate_blockers = (
         _bsc_route_config_canonical_manifest_gate_inventory_errors()
     )
@@ -5106,6 +5172,12 @@ def _build_report(
     )
     ethereum_source_bridge_config_gate_blockers = (
         _ethereum_source_bridge_config_gate_inventory_errors()
+    )
+    source_material_template_rejection_gate_blockers = (
+        _sccp_source_material_template_rejection_gate_inventory_errors()
+    )
+    source_material_role_validation_gate_blockers = (
+        _sccp_source_material_role_validation_gate_inventory_errors()
     )
     ethereum_evm_source_adapter_deployment_gate_blockers = (
         _ethereum_evm_source_adapter_deployment_gate_inventory_errors()
@@ -5193,6 +5265,12 @@ def _build_report(
                 "passed" if not bsc_inbound_adversarial_gate_blockers else "blocked"
             ),
             "validation_blockers": bsc_inbound_adversarial_gate_blockers,
+        },
+        "tron_inbound_adversarial_gate": {
+            "validation_status": (
+                "passed" if not tron_inbound_adversarial_gate_blockers else "blocked"
+            ),
+            "validation_blockers": tron_inbound_adversarial_gate_blockers,
         },
         "bsc_route_config_canonical_manifest_gate": {
             "validation_status": (
@@ -5413,6 +5491,22 @@ def _build_report(
                 "passed" if not ethereum_source_bridge_config_gate_blockers else "blocked"
             ),
             "validation_blockers": ethereum_source_bridge_config_gate_blockers,
+        },
+        "source_material_template_rejection_gate": {
+            "validation_status": (
+                "passed"
+                if not source_material_template_rejection_gate_blockers
+                else "blocked"
+            ),
+            "validation_blockers": source_material_template_rejection_gate_blockers,
+        },
+        "source_material_role_validation_gate": {
+            "validation_status": (
+                "passed"
+                if not source_material_role_validation_gate_blockers
+                else "blocked"
+            ),
+            "validation_blockers": source_material_role_validation_gate_blockers,
         },
         "ethereum_evm_source_adapter_deployment_gate": {
             "validation_status": (
@@ -5692,6 +5786,7 @@ def _build_report(
         and not ethereum_data_collection_no_proxy_gate_blockers
         and not ethereum_inbound_adversarial_gate_blockers
         and not bsc_inbound_adversarial_gate_blockers
+        and not tron_inbound_adversarial_gate_blockers
         and not bsc_route_config_canonical_manifest_gate_blockers
         and not tron_route_config_canonical_manifest_gate_blockers
         and not tron_runtime_route_manifest_gate_blockers
@@ -5719,6 +5814,8 @@ def _build_report(
         and not ethereum_beacon_rest_execution_payload_binding_gate_blockers
         and not ethereum_sync_committee_roster_gate_blockers
         and not ethereum_source_bridge_config_gate_blockers
+        and not source_material_template_rejection_gate_blockers
+        and not source_material_role_validation_gate_blockers
         and not ethereum_evm_source_adapter_deployment_gate_blockers
         and not contract_smoke_eth_mainnet_network_id_gate_blockers
         and not contract_smoke_evm_production_surface_gate_blockers
@@ -5765,6 +5862,7 @@ def _build_report(
     blockers.extend(ethereum_data_collection_no_proxy_gate_blockers)
     blockers.extend(ethereum_inbound_adversarial_gate_blockers)
     blockers.extend(bsc_inbound_adversarial_gate_blockers)
+    blockers.extend(tron_inbound_adversarial_gate_blockers)
     blockers.extend(bsc_route_config_canonical_manifest_gate_blockers)
     blockers.extend(tron_route_config_canonical_manifest_gate_blockers)
     blockers.extend(tron_runtime_route_manifest_gate_blockers)
@@ -5792,6 +5890,8 @@ def _build_report(
     blockers.extend(ethereum_beacon_rest_execution_payload_binding_gate_blockers)
     blockers.extend(ethereum_sync_committee_roster_gate_blockers)
     blockers.extend(ethereum_source_bridge_config_gate_blockers)
+    blockers.extend(source_material_template_rejection_gate_blockers)
+    blockers.extend(source_material_role_validation_gate_blockers)
     blockers.extend(ethereum_evm_source_adapter_deployment_gate_blockers)
     blockers.extend(contract_smoke_eth_mainnet_network_id_gate_blockers)
     blockers.extend(contract_smoke_evm_production_surface_gate_blockers)
@@ -6323,6 +6423,7 @@ def _render_markdown(report: dict[str, Any], *, max_blockers_per_lane: int) -> s
             "- SCCP Ethereum no-proxy data-collection source inventory must pin app-owned execution/Beacon provider reads and reject Torii proxy or embedded HTTP-client fallbacks across public SDKs.",
             "- SCCP Ethereum inbound adversarial source inventory must pin public SDK regressions for failed receipts, source-event drift, hash-only proof bypasses, immutable evidence snapshots, oversized proof bytes, finality mismatches, sync-committee quorum checks, and wrong-domain receipt transcripts before inbound source proofs can be accepted.",
             "- SCCP BSC inbound adversarial source inventory must pin public SDK regressions for hash-only proof bypasses, receipt-proof metadata binding, source-event digest drift, malformed source logs, and missing source-event validation before BSC inbound source proofs can be accepted.",
+            "- SCCP TRON inbound adversarial source inventory must pin runtime duplicate source-event log rejection before TRON transaction-info receipts can satisfy inbound source-proof admission.",
             "- SCCP BSC route-config canonical-manifest source inventory must pin canonical JSON string, lowercase bytes32, lowercase EVM address, and network metadata rejection before governed TAIRA XOR overlays can satisfy production readiness.",
             "- SCCP TRON route-config canonical-manifest source inventory must pin canonical JSON string, lowercase bytes32, canonical Base58 address, and network metadata rejection before governed TAIRA XOR overlays can satisfy production readiness.",
             "- SCCP TRON runtime route-manifest source inventory must pin the TRON runtime route-manifest parser, mainnet metadata checks, dynamic destination-binding recomputation, and post-deploy anchor rejection before runtime config evidence can satisfy production readiness.",
@@ -6357,6 +6458,8 @@ def _render_markdown(report: dict[str, Any], *, max_blockers_per_lane: int) -> s
             "- SCCP Ethereum sync-committee roster source inventory must pin exact 512-authority mainnet rosters, unit validator weights, 342-participant quorum fixtures, and 81,925-byte next-sync-committee payload vectors across public SDKs before local finality evidence can be accepted.",
             "- SCCP Ethereum source-bridge config source inventory must pin bridge-address/network/code-hash config hashing and negative config-drift tests.",
             "- SCCP Ethereum EVM source-adapter deployment source inventory must pin the active deployment gate, source-bridge network/config binding, and negative drift tests.",
+            "- SCCP source-material template rejection source inventory must pin ETH, BSC, Solana, TON, and TRON evidence-script guards and negative tests that reject built-in template verifier hashes before source material can satisfy production readiness.",
+            "- SCCP source-material role validation source inventory must pin ETH, BSC, Solana, TON, and TRON zero-hash, role-reuse, canonical adapter-verifier, and full-light-client audit role-separation guards before source material can satisfy production readiness.",
             "- SCCP EVM contract smoke Ethereum mainnet network-id source inventory must pin ETH chain-id vectors, BSC rejection vectors, and accepted-event network-id assertions.",
             "- SCCP EVM contract smoke production-surface source inventory must pin verifier-code/key, destination-binding, domain-overflow, proof-shape, cross-deployment, and replay rejection smoke coverage.",
             "- SCCP Ethereum core range/finality binding source inventory must pin finality-height range binding in Core and negative outer-range replay tests.",

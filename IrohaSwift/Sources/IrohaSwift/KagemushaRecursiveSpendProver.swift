@@ -490,17 +490,15 @@ public enum KagemushaRecursiveSpendProver {
     }
 
     private static func decodeNoritoByteVec(_ payload: Data) throws -> Data {
-        guard let length = readUInt64LE(payload, at: 0),
-              length <= UInt64(Int.max)
-        else {
+        guard let length = readUInt64LE(payload, at: 0) else {
             throw KagemushaRecursiveSpendProverError.invalidLineageKeyArtifact("lineage_proving_key_archive")
         }
-        let end = 8 + Int(length)
-        guard end == payload.count else {
+        let available = payload.count - 8
+        guard length == UInt64(available) else {
             throw KagemushaRecursiveSpendProverError.invalidLineageKeyArtifact("lineage_proving_key_archive")
         }
         let startIndex = payload.index(payload.startIndex, offsetBy: 8)
-        let endIndex = payload.index(payload.startIndex, offsetBy: end)
+        let endIndex = payload.index(payload.startIndex, offsetBy: payload.count)
         return Data(payload[startIndex..<endIndex])
     }
 

@@ -194,7 +194,7 @@ async fn sumeragi_rbc_delivered_endpoint_requires_complete_chunk_evidence() {
 }
 
 #[tokio::test]
-async fn sumeragi_rbc_delivered_endpoint_rejects_invalid_and_zero_chunk_evidence() {
+async fn sumeragi_rbc_delivered_endpoint_rejects_invalid_zero_and_overcount_chunk_evidence() {
     use std::time::SystemTime;
 
     use axum::{Router, routing::get};
@@ -253,6 +253,29 @@ async fn sumeragi_rbc_delivered_endpoint_rejects_invalid_and_zero_chunk_evidence
         },
         SystemTime::now(),
     );
+    let overcount_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([6u8; 32]));
+    handle.update(
+        rbc_status::Summary {
+            block_hash: overcount_hash,
+            height: 14,
+            view: 6,
+            total_chunks: 2,
+            encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
+            data_shards: 0,
+            parity_shards: 0,
+            received_chunks: 3,
+            ready_count: 5,
+            delivered: true,
+            payload_hash: None,
+            recovered_from_disk: false,
+            invalid: false,
+            reconstructed_stripes: 0,
+            reconstructable_stripes: 0,
+            lane_backlog: Vec::new(),
+            dataspace_backlog: Vec::new(),
+        },
+        SystemTime::now(),
+    );
 
     let app = Router::new().route(
         "/v1/sumeragi/rbc/delivered/{height}/{view}",
@@ -287,6 +310,7 @@ async fn sumeragi_rbc_delivered_endpoint_rejects_invalid_and_zero_chunk_evidence
     assert_eq!(v["total_chunks"].as_u64().unwrap(), 2);
 
     let resp = app
+        .clone()
         .oneshot(
             axum::http::Request::builder()
                 .uri("/v1/sumeragi/rbc/delivered/13/5")
@@ -309,4 +333,28 @@ async fn sumeragi_rbc_delivered_endpoint_rejects_invalid_and_zero_chunk_evidence
     );
     assert_eq!(v["received_chunks"].as_u64().unwrap(), 0);
     assert_eq!(v["total_chunks"].as_u64().unwrap(), 0);
+
+    let resp = app
+        .oneshot(
+            axum::http::Request::builder()
+                .uri("/v1/sumeragi/rbc/delivered/14/6")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), axum::http::StatusCode::OK);
+    let body = http_body_util::BodyExt::collect(resp.into_body())
+        .await
+        .unwrap()
+        .to_bytes();
+    let v: norito::json::Value =
+        norito::json::from_str(&String::from_utf8(body.to_vec()).unwrap()).unwrap();
+    assert!(v["present"].as_bool().unwrap());
+    assert!(
+        !v["delivered"].as_bool().unwrap(),
+        "over-counted summaries must not satisfy delivered endpoint evidence"
+    );
+    assert_eq!(v["received_chunks"].as_u64().unwrap(), 3);
+    assert_eq!(v["total_chunks"].as_u64().unwrap(), 2);
 }

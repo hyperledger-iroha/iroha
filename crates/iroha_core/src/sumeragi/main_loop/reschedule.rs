@@ -492,7 +492,7 @@ fn rbc_availability_unresolved_for_reschedule_decision(
     if session.complete_delivery {
         return !ready_quorum;
     }
-    if session.total_chunks == 0 {
+    if session.total_chunks == 0 || session.received_chunks > session.total_chunks {
         return true;
     }
     let missing_chunks =

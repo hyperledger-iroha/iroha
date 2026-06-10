@@ -383,6 +383,41 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
                 lineageProvingKeyArchive: hugeCanonicalCompactLengthArchive
             )
         }
+        var overflowingProvingKeyByteVec = Data()
+        Self.appendUInt64LE(UInt64(Int.max), to: &overflowingProvingKeyByteVec)
+        var overflowingProvingKeyByteVecPayload = Data()
+        overflowingProvingKeyByteVecPayload.append(Self.noritoField(
+            Data([1, 0]),
+            flags: NoritoHeader.compactLen
+        ))
+        overflowingProvingKeyByteVecPayload.append(Self.noritoField(
+            Self.noritoString(
+                KagemushaRecursiveSpendProver.recursiveSpendLineageOneHopProofCircuitIdV1,
+                flags: NoritoHeader.compactLen
+            ),
+            flags: NoritoHeader.compactLen
+        ))
+        overflowingProvingKeyByteVecPayload.append(Self.noritoField(
+            Self.verifierKeyCommitment(verifierKey: initVerifierKey),
+            flags: NoritoHeader.compactLen
+        ))
+        overflowingProvingKeyByteVecPayload.append(Self.noritoField(
+            overflowingProvingKeyByteVec,
+            flags: NoritoHeader.compactLen
+        ))
+        let overflowingProvingKeyByteVecArchive = Self.noritoFrameFromSchemaHash(
+            Self.kagemushaLineageProvingKeyArchiveSchemaHash,
+            payload: overflowingProvingKeyByteVecPayload,
+            flags: NoritoHeader.compactLen
+        )
+        try assertInvalidLineageKeyArtifact("lineage_proving_key_archive") {
+            _ = try KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
+                verifierOpeningLen: 2,
+                lineageVerifierKeyBackend: KagemushaRecursiveSpendProver.recursiveAggregationProofBackend,
+                lineageVerifierKey: initVerifierKey,
+                lineageProvingKeyArchive: overflowingProvingKeyByteVecArchive
+            )
+        }
         var overlongCircuitString = Self.noritoOverlongCompactLength(circuitIdBytes.count)
         overlongCircuitString.append(circuitIdBytes)
         var overlongCircuitStringPayload = Data()

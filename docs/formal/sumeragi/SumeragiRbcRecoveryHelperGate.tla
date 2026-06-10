@@ -37,7 +37,8 @@ PayloadCases == {
   "incomplete_undelivered_match",
   "missing_payload_complete",
   "missing_payload_incomplete",
-  "zero_chunk_complete_match"
+  "zero_chunk_complete_match",
+  "overcount_complete_match"
 }
 
 SpecCommitted(c) ==
@@ -81,15 +82,17 @@ ActualNeedsPayload(c) ==
        /\ c = "missing_payload_complete" -> FALSE
     [] Bug = "needs_zero_chunk_skips"
        /\ c = "zero_chunk_complete_match" -> FALSE
+    [] Bug = "needs_overcount_skips"
+       /\ c = "overcount_complete_match" -> FALSE
     [] OTHER -> SpecNeedsPayload(c)
 
 Init ==
   checked = 0
 
 Next ==
-  \/ /\ checked < 14
+  \/ /\ checked < 15
      /\ checked' = checked + 1
-  \/ /\ checked = 14
+  \/ /\ checked = 15
      /\ checked' = checked
 
 TypeInvariant ==
@@ -108,9 +111,10 @@ TypeInvariant ==
        "needs_wrong_payload_skips",
        "needs_incomplete_match_skips",
        "needs_missing_payload_skips",
-       "needs_zero_chunk_skips"
+       "needs_zero_chunk_skips",
+       "needs_overcount_skips"
      }
-  /\ checked \in 0..14
+  /\ checked \in 0..15
 
 RbcRecoveryHelperMatchesSpec ==
   /\ \A c \in CommittedCases:
@@ -149,6 +153,7 @@ PayloadFetchAnchors ==
   /\ ActualNeedsPayload("missing_payload_complete")
   /\ ActualNeedsPayload("missing_payload_incomplete")
   /\ ActualNeedsPayload("zero_chunk_complete_match")
+  /\ ActualNeedsPayload("overcount_complete_match")
 
 RecoveryHelperSafetyAnchors ==
   /\ AllCommittedMatches
@@ -208,5 +213,9 @@ BugNeedsMissingPayloadSkips ==
 BugNeedsZeroChunkFetches ==
   ActualNeedsPayload("zero_chunk_complete_match") =
     SpecNeedsPayload("zero_chunk_complete_match")
+
+BugNeedsOvercountFetches ==
+  ActualNeedsPayload("overcount_complete_match") =
+    SpecNeedsPayload("overcount_complete_match")
 
 ====

@@ -61,6 +61,8 @@ InvalidSession == "invalid_session"
 HydrationReloadMissing == "hydration_reload_missing"
 HydrationReloadDelivered == "hydration_reload_delivered"
 HydrationReloadInvalid == "hydration_reload_invalid"
+HydrationZeroTotalDeliver == "hydration_zero_total_deliver"
+HydrationOvercountDeliver == "hydration_overcount_deliver"
 RosterMissing == "roster_missing"
 UnverifiedNoEvidence == "unverified_no_evidence"
 UnverifiedWithEvidence == "unverified_with_evidence"
@@ -86,6 +88,8 @@ Cases == {
   HydrationReloadMissing,
   HydrationReloadDelivered,
   HydrationReloadInvalid,
+  HydrationZeroTotalDeliver,
+  HydrationOvercountDeliver,
   RosterMissing,
   UnverifiedNoEvidence,
   UnverifiedWithEvidence,
@@ -201,6 +205,8 @@ SpecDecision(c) ==
   CASE c \in {Retired, NoSession, HydrationReloadMissing} -> NoopResult
     [] c \in {AlreadyDelivered, InvalidSession, HydrationReloadDelivered,
         HydrationReloadInvalid} -> TerminalResult
+    [] c \in {HydrationZeroTotalDeliver, HydrationOvercountDeliver} ->
+         DeliverResult(FALSE, FALSE, FALSE)
     [] c = RosterMissing -> RosterMissingResult
     [] c = UnverifiedNoEvidence -> UnverifiedResult(FALSE, FALSE)
     [] c = UnverifiedWithEvidence -> UnverifiedResult(TRUE, TRUE)
@@ -236,6 +242,16 @@ ActualDecision(c) ==
        /\ c = HydrationReloadDelivered ->
          [SpecDecision(c) EXCEPT !.ready_deferral_removed = FALSE,
           !.deliver_deferral_removed = FALSE]
+    [] Bug = "hydration_zero_total_defers"
+       /\ c = HydrationZeroTotalDeliver -> DeferReadyResult
+    [] Bug = "hydration_overcount_defers"
+       /\ c = HydrationOvercountDeliver -> DeferReadyResult
+    [] Bug = "hydration_zero_total_skips_broadcast"
+       /\ c = HydrationZeroTotalDeliver ->
+         [SpecDecision(c) EXCEPT !.broadcast_deliver = FALSE]
+    [] Bug = "hydration_overcount_skips_broadcast"
+       /\ c = HydrationOvercountDeliver ->
+         [SpecDecision(c) EXCEPT !.broadcast_deliver = FALSE]
     [] Bug = "roster_missing_delivers"
        /\ c = RosterMissing -> DeliverResult(FALSE, FALSE, FALSE)
     [] Bug = "unverified_delivers"
@@ -315,6 +331,10 @@ BugSet == {
   "terminal_drops_session",
   "hydration_missing_reinserts",
   "hydration_terminal_keeps_deferrals",
+  "hydration_zero_total_defers",
+  "hydration_overcount_defers",
+  "hydration_zero_total_skips_broadcast",
+  "hydration_overcount_skips_broadcast",
   "roster_missing_delivers",
   "unverified_delivers",
   "unverified_skips_payload_rebroadcast",
@@ -391,6 +411,10 @@ GateStable ==
   /\ ActualDecision(ChunkRootMismatch).root_invalidated
   /\ ActualDecision(ChunkRootMismatch).deliver_deferral_removed
   /\ ActualDecision(RootAdoptedDeliver).expected_root_set
+  /\ ActualDecision(HydrationZeroTotalDeliver).action = Deliver
+  /\ ActualDecision(HydrationZeroTotalDeliver).broadcast_deliver
+  /\ ActualDecision(HydrationOvercountDeliver).action = Deliver
+  /\ ActualDecision(HydrationOvercountDeliver).broadcast_deliver
   /\ ActualDecision(ReadyBelowQuorum).action = DeferReady
   /\ ActualDecision(LocalBypassDeliver).action = Deliver
   /\ ActualDecision(LocalBypassNoReadyBlocked).action = DeferReady
