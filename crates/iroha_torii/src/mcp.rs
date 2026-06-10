@@ -10071,7 +10071,9 @@ fn iroha_sumeragi_rbc_sessions_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.rbc.sessions".to_owned(),
         effect: manual_tool_effect_from_name("iroha.sumeragi.rbc.sessions"),
-        description: "List Sumeragi RBC sessions (`/v1/sumeragi/rbc/sessions`).".to_owned(),
+        description:
+            "List Sumeragi RBC sessions with raw DELIVER and complete-delivery status (`/v1/sumeragi/rbc/sessions`)."
+                .to_owned(),
         method: Method::GET,
         path_template: "/v1/sumeragi/rbc/sessions".to_owned(),
         input_schema: norito::json!({
@@ -10247,7 +10249,7 @@ fn iroha_sumeragi_rbc_delivered_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.rbc.delivered".to_owned(),
         effect: manual_tool_effect_from_name("iroha.sumeragi.rbc.delivered"),
-        description: "Fetch RBC delivered status (`/v1/sumeragi/rbc/delivered/{height}/{view}`; `height`/`block_height` and `view` shortcuts supported).".to_owned(),
+        description: "Fetch complete-delivery RBC status (`/v1/sumeragi/rbc/delivered/{height}/{view}`; `delivered=true` requires non-invalid positive complete chunks; `height`/`block_height` and `view` shortcuts supported).".to_owned(),
         method: Method::GET,
         path_template: "/v1/sumeragi/rbc/delivered/{height}/{view}".to_owned(),
         input_schema: norito::json!({
@@ -14849,6 +14851,18 @@ mod tests {
             assert_eq!(tool.effect, ToolEffect::Read, "{}", tool.name);
             assert!(is_tool_allowed_by_policy(&cfg, &tool), "{}", tool.name);
         }
+
+        let sessions = iroha_sumeragi_rbc_sessions_tool();
+        assert_eq!(sessions.effect, ToolEffect::Read);
+        assert!(is_tool_allowed_by_policy(&cfg, &sessions));
+        assert!(sessions.description.contains("raw DELIVER"));
+        assert!(sessions.description.contains("complete-delivery"));
+
+        let delivered = iroha_sumeragi_rbc_delivered_tool();
+        assert_eq!(delivered.effect, ToolEffect::Read);
+        assert!(is_tool_allowed_by_policy(&cfg, &delivered));
+        assert!(delivered.description.contains("complete-delivery"));
+        assert!(delivered.description.contains("non-invalid"));
 
         let submit = iroha_sumeragi_evidence_submit_tool();
         assert_eq!(submit.effect, ToolEffect::Operator);

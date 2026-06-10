@@ -614,7 +614,16 @@ private func normalizeTronRouteCanaryEvidence(
         input.sourceAdapterEngineDeploymentHash,
         field: "sourceAdapterEngineDeploymentHash"
     )
-    let expectedRouteAllowlistHash = tronRouteAllowlistHash(
+    try requireTronHashRolesDistinct(
+        field: "routeCanaryGovernedHashes",
+        [
+            ("routeAllowlistHash", routeAllowlistHash),
+            ("destinationBindingHash", destinationBindingHash),
+            ("sourceVerifierMaterialHash", sourceVerifierMaterialHash),
+            ("sourceAdapterEngineDeploymentHash", sourceAdapterEngineDeploymentHash),
+        ]
+    )
+    let expectedRouteAllowlistHash = try tronRouteAllowlistHash(
         sourceVerifierMaterialHash: sourceVerifierMaterialHash,
         sourceAdapterEngineDeploymentHash: sourceAdapterEngineDeploymentHash,
         destinationBindingHash: destinationBindingHash
@@ -768,6 +777,9 @@ public func buildTronSccpProofRequest(_ input: TronSccpProofRequestInput) throws
     guard input.backend == sccpTronGroth16Bn254ProofBackendV1 else {
         throw TronSccpProverError.invalidPublicInputs("backend")
     }
+    guard input.sourceDomain == sccpDomainSora else {
+        throw TronSccpProverError.invalidPublicInputs("sourceDomain")
+    }
     guard !input.bundleBytes.isEmpty else {
         throw TronSccpProverError.invalidPublicInputs("bundleBytes")
     }
@@ -776,6 +788,29 @@ public func buildTronSccpProofRequest(_ input: TronSccpProofRequestInput) throws
     }
     let sourceProofBytes = try requireTronOptionalSourceProofBytes(input.sourceProofBytes, field: "sourceProofBytes")
     let publicInputsBytes = try canonicalTronSccpPublicInputsBytes(input.publicInputs)
+    let bundleSummary: SccpMessageProofBundleSummary
+    do {
+        bundleSummary = try requireSccpProofRequestBundleMatchesPublicInputs(
+            targetDomain: input.publicInputs.targetDomain,
+            messageId: try tronNormalizeHex32(input.publicInputs.messageId, field: "publicInputs.messageId"),
+            payloadHash: try tronNormalizeHex32(input.publicInputs.payloadHash, field: "publicInputs.payloadHash"),
+            commitmentRoot: try tronNormalizeHex32(
+                input.publicInputs.commitmentRoot,
+                field: "publicInputs.commitmentRoot"
+            ),
+            bundleBytes: input.bundleBytes,
+            sourceProofBytes: sourceProofBytes
+        )
+    } catch SccpMessageProofBundleError.missingSourceProof {
+        throw TronSccpProverError.invalidPublicInputs("sourceProofBytes")
+    } catch SccpMessageProofBundleError.mismatch {
+        throw TronSccpProverError.invalidPublicInputs("bundleBytes")
+    } catch SccpMessageProofBundleError.invalid(let field) {
+        throw TronSccpProverError.invalidPublicInputs(field)
+    }
+    guard bundleSummary.sourceDomain == input.sourceDomain else {
+        throw TronSccpProverError.invalidPublicInputs("bundleBytes.sourceDomain")
+    }
     let proofContext = try normalizeTronSccpProofContext(
         statementHash: input.statementHash,
         destinationBindingHash: input.destinationBindingHash
@@ -1312,7 +1347,15 @@ private func tronRouteAllowlistHash(
     sourceVerifierMaterialHash: Data,
     sourceAdapterEngineDeploymentHash: Data,
     destinationBindingHash: Data
-) -> Data {
+) throws -> Data {
+    try requireTronHashRolesDistinct(
+        field: "routeAllowlistGovernedHashes",
+        [
+            ("sourceVerifierMaterialHash", sourceVerifierMaterialHash),
+            ("sourceAdapterEngineDeploymentHash", sourceAdapterEngineDeploymentHash),
+            ("destinationBindingHash", destinationBindingHash),
+        ]
+    )
     var out = Data()
     out.append(1)
     tronAppendU32Le(sccpDomainTron, to: &out)
@@ -1355,6 +1398,19 @@ private func requireTronRouteCanaryHashesDistinct(_ fields: [String: Data]) thro
             throw TronSccpProverError.invalidPublicInputs("\(field):\(previous)")
         }
         seen[bytes] = field
+    }
+}
+
+private func requireTronHashRolesDistinct(
+    field: String,
+    _ fields: [(String, Data)]
+) throws {
+    var seen: [Data: String] = [:]
+    for (label, bytes) in fields {
+        if seen[bytes] != nil {
+            throw TronSccpProverError.invalidPublicInputs(field)
+        }
+        seen[bytes] = label
     }
 }
 

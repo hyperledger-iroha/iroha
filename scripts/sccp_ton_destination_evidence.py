@@ -261,6 +261,21 @@ def _require_fixed_bytes(
     return raw
 
 
+def _require_distinct_hash_roles(
+    fields: tuple[tuple[str, bytes], ...],
+    *,
+    label: str,
+) -> None:
+    seen: dict[bytes, str] = {}
+    for field, raw in fields:
+        if not any(raw):
+            continue
+        previous_field = seen.get(raw)
+        if previous_field is not None:
+            raise ValueError(f"{label} must be distinct: {field} matches {previous_field}")
+        seen[raw] = field
+
+
 def _require_ton_raw_address(value: str, *, label: str) -> str:
     try:
         return normalize_ton_raw_address(value, label=label)
@@ -848,6 +863,17 @@ def ton_route_allowlist_hash(
         label="destination_binding_hash",
         byte_length=32,
     )
+    _require_distinct_hash_roles(
+        (
+            ("source_verifier_material_hash", source_verifier_material_hash),
+            (
+                "source_adapter_engine_deployment_hash",
+                source_adapter_engine_deployment_hash,
+            ),
+            ("destination_binding_hash", destination_binding_hash),
+        ),
+        label="TON route allowlist evidence hashes",
+    )
     payload = bytearray()
     _push_u8(payload, 1)
     _push_u32(payload, SCCP_DOMAIN_TON)
@@ -895,6 +921,18 @@ def ton_route_canary_evidence_hash(
         source_adapter_engine_deployment_hash,
         label="source_adapter_engine_deployment_hash",
         byte_length=32,
+    )
+    _require_distinct_hash_roles(
+        (
+            ("route_allowlist_hash", route_allowlist_hash),
+            ("destination_binding_hash", destination_binding_hash),
+            ("source_verifier_material_hash", source_verifier_material_hash),
+            (
+                "source_adapter_engine_deployment_hash",
+                source_adapter_engine_deployment_hash,
+            ),
+        ),
+        label="TON route canary governed hashes",
     )
     verifier_contract_address = normalize_ton_raw_address(
         verifier_contract_address,

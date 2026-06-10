@@ -402,6 +402,9 @@ public final class EvmSccpProver {
     if (!GROTH16_BN254_PROOF_BACKEND_V1.equals(input.backend())) {
       throw new IllegalArgumentException("backend must be evm-groth16-bn254-v1");
     }
+    if (input.sourceDomain() != DOMAIN_SORA) {
+      throw new IllegalArgumentException("sourceDomain must be SORA");
+    }
     final byte[] bundleBytes = Arrays.copyOf(input.bundleBytes(), input.bundleBytes().length);
     final byte[] sourceProofBytes =
         requireOptionalSourceProofBytes(input.sourceProofBytes(), "sourceProofBytes");
@@ -409,6 +412,17 @@ public final class EvmSccpProver {
       throw new IllegalArgumentException("bundleBytes must not be empty");
     }
     final byte[] publicInputsBytes = canonicalPublicInputsBytes(input.publicInputs());
+    final SccpMessageProofBundles.BundleSummary bundleSummary =
+        SccpMessageProofBundles.requireMatchesPublicInputs(
+            input.publicInputs().targetDomain(),
+            normalizeHex32(input.publicInputs().messageId(), "publicInputs.messageId"),
+            normalizeHex32(input.publicInputs().payloadHash(), "publicInputs.payloadHash"),
+            normalizeHex32(input.publicInputs().commitmentRoot(), "publicInputs.commitmentRoot"),
+            bundleBytes,
+            sourceProofBytes);
+    if (bundleSummary.sourceDomain != input.sourceDomain()) {
+      throw new IllegalArgumentException("bundleBytes.sourceDomain must match sourceDomain");
+    }
     final ProofContext proofContext =
         normalizeProofContext(input.statementHash(), input.destinationBindingHash());
     final Groth16ProverArtifacts proverArtifacts =

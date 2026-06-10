@@ -11,8 +11,10 @@ import json
 import re
 import shlex
 import sys
+import unicodedata
 from pathlib import Path, PurePosixPath
 from typing import Any
+from urllib.parse import unquote
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -89,11 +91,22 @@ PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS: dict[str, tuple[str, ...]] = {
         "FullyQualifiedName~SccpEthereumMainnetTests\\|FullyQualifiedName~SccpBscMainnetTests",
     ),
     "contract-smoke": (
+        "scripts/sccp_bsc_taira_xor_deploy.test.mjs",
+        "scripts/sccp_tron_taira_xor_deploy.test.mjs",
+        "scripts/sccp_taira_xor_contract.test.mjs",
         "--check contracts/evm/sccp/test/sccp_message_bridge_smoke.js",
         "bash scripts/sccp_evm_contract_smoke.sh",
     ),
-    "core-admission": ("cargo test -p iroha_core --test bridge_proofs -- --nocapture",),
+    "core-admission": (
+        "cargo test -p iroha_core --test iroha_core_group_01 bridge_proofs:: -- --nocapture",
+    ),
 }
+CONTRACT_SMOKE_NODE_SUCCESS_FRAGMENTS = (
+    "fail 0",
+    "BSC route-config requires explicit post-deploy evidence for production-ready manifests",
+    "route manifest draft binds deployment evidence, verifier material, and TAIRA burn-record contract",
+    "TAIRA XOR SCCP burn-record contract compiles as IVM ZK proved artifact",
+)
 PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS: dict[str, tuple[str, ...]] = {
     "rust-sccp": ("test result: ok",),
     "evidence-scripts": (" passed in ",),
@@ -110,9 +123,85 @@ PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS: dict[str, tuple[str, ...]] = {
     "kotlin-sdk": ("version \"21", "BUILD SUCCESSFUL"),
     "java-android": ("version \"21", "BUILD SUCCESSFUL"),
     "dotnet-sdk": ("Passed!",),
-    "contract-smoke": ("sccp_message_bridge_smoke: ok",),
+    "contract-smoke": (
+        *CONTRACT_SMOKE_NODE_SUCCESS_FRAGMENTS,
+        "sccp_message_bridge_smoke: ok",
+    ),
     "core-admission": ("test result: ok",),
 }
+PHASE_TRANSCRIPT_FORBIDDEN_OUTPUT_PATTERNS: dict[str, tuple[re.Pattern[str], ...]] = {
+    "rust-sccp": (
+        re.compile(r"\btest result:\s+FAILED\b", re.IGNORECASE),
+        re.compile(r"\b[1-9]\d*\s+failed\b", re.IGNORECASE),
+    ),
+    "evidence-scripts": (
+        re.compile(r"\b[1-9]\d*\s+failed\b", re.IGNORECASE),
+        re.compile(r"\b[1-9]\d*\s+errors?\b", re.IGNORECASE),
+    ),
+    "js-sdk": (re.compile(r"\bfail\s+[1-9]\d*\b", re.IGNORECASE),),
+    "python-sdk": (
+        re.compile(r"\b[1-9]\d*\s+failed\b", re.IGNORECASE),
+        re.compile(r"\b[1-9]\d*\s+errors?\b", re.IGNORECASE),
+    ),
+    "swift-sdk": (re.compile(r"\b[1-9]\d*\s+failures?\b", re.IGNORECASE),),
+    "kotlin-sdk": (re.compile(r"\bBUILD FAILED\b", re.IGNORECASE),),
+    "java-android": (re.compile(r"\bBUILD FAILED\b", re.IGNORECASE),),
+    "dotnet-sdk": (
+        re.compile(r"\bFailed!\b", re.IGNORECASE),
+        re.compile(r"\bFailed:\s*[1-9]\d*\b", re.IGNORECASE),
+    ),
+    "contract-smoke": (re.compile(r"\bfail\s+[1-9]\d*\b", re.IGNORECASE),),
+    "core-admission": (
+        re.compile(r"\btest result:\s+FAILED\b", re.IGNORECASE),
+        re.compile(r"\b[1-9]\d*\s+failed\b", re.IGNORECASE),
+    ),
+}
+PYTEST_OPTIONS_WITH_VALUES = frozenset(
+    (
+        "-k",
+        "-m",
+        "-o",
+        "--basetemp",
+        "--confcutdir",
+        "--deselect",
+        "--ignore",
+        "--ignore-glob",
+        "--junitxml",
+        "--log-file",
+        "--rootdir",
+    )
+)
+NODE_TEST_OPTIONS_WITH_VALUES = frozenset(
+    (
+        "--conditions",
+        "--experimental-loader",
+        "--import",
+        "--loader",
+        "--require",
+        "--test-name-pattern",
+        "--test-reporter",
+        "--test-reporter-destination",
+        "--test-shard",
+    )
+)
+ANSI_ESCAPE_PATTERN = re.compile(
+    r"\x1b(?:"
+    r"\[[0-?]*[ -/]*[@-~]"
+    r"|\][^\x07]*(?:\x07|\x1b\\)"
+    r"|[PX^_][^\x1b]*(?:\x1b\\)"
+    r"|[@-Z\\-_]"
+    r")"
+)
+ASCII_CONTROL_CHARACTER_PATTERN = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+SUCCESS_OUTPUT_NEGATION_PATTERN = re.compile(
+    r"\b(?:not|missing|without|no|never|failed|expected|omitted)\b",
+    re.IGNORECASE,
+)
+SUCCESS_OUTPUT_DIAGNOSTIC_PREFIX_PATTERN = re.compile(
+    r"\b(?:contains?|diagnostic|found|line|marker|output|reported|saw|seen|success|text)\b",
+    re.IGNORECASE,
+)
+SHELL_XTRACE_COMMAND_PATTERN = re.compile(r"^\s*\++\s+")
 SCCP_DOMAIN_SORA = 0
 SCCP_DOMAIN_ETH = 1
 SCCP_DOMAIN_BSC = 2
@@ -1111,7 +1200,8 @@ ETHEREUM_OUTBOUND_PRECALLBACK_SDK_TEST_MARKERS = (
             "submittedTxs[3].from",
             "assert.notDeepStrictEqual(",
             "Array.from(callbackPublicInputsBytes),",
-            "assert.deepEqual(Array.from(proofResult.bundleBytes), [1, 2, 3]);",
+            "Array.from(proofResult.bundleBytes),",
+            "Array.from(input.bundleBytes),",
             'proofArtifactHash: hex32("91")',
             "proofArtifactHash and provingKeyHash must be supplied together",
             "proofArtifactHash and provingKeyHash must match request",
@@ -3603,10 +3693,13 @@ SCCP_RETIRED_NETWORK_SURFACE_GUARD_MARKERS = (
             "def test_retired_network_surface_scan_covers_expected_files",
             "def test_retired_network_surface_scan_covers_pipeline_translations",
             "def test_generic_no_support_note_stays_in_launch_scope_files",
+            "def test_specific_no_support_note_stays_in_launch_scope_files",
             "def test_active_tree_excludes_retired_network_surface_tokens",
             "BANNED_PATTERNS",
             "SCCP_GENERIC_UNSUPPORTED_SCOPE_NOTE_FILES",
             "SCCP_GENERIC_UNSUPPORTED_SCOPE_NOTE",
+            "SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE_FILES",
+            "SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE",
             '_literal("sub", "strate")',
             '_literal("pol", "kadot")',
             '_literal("ku", "sama")',
@@ -3986,6 +4079,229 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
         ),
     ),
     (
+        "crates/iroha_sccp/src/lib.rs",
+        (
+            "fn route_allowlist_lane_canary_builder_rejects_source_record_hash_replay",
+            "lane-aware canary builder must reject route allowlist/destination binding hash role reuse",
+            "lane-aware canary builder must reject route allowlist/source material hash role reuse",
+            "lane-aware canary builder must reject route allowlist/source deployment hash role reuse",
+            "lane-aware canary builder must reject destination binding/source material hash role reuse",
+            "lane-aware canary builder must reject destination binding/source deployment hash role reuse",
+            "EVM route canary evidence must reject route allowlist/destination binding hash role reuse",
+            "TRON route canary evidence must reject route allowlist/destination binding hash role reuse",
+            "Solana route canary evidence must reject route allowlist/destination binding hash role reuse",
+            "Solana route canary evidence must reject route allowlist/source material hash role reuse",
+            "Solana route canary evidence must reject route allowlist/source deployment hash role reuse",
+            "Solana route canary evidence must reject destination binding/source material hash role reuse",
+            "Solana route canary evidence must reject destination binding/source deployment hash role reuse",
+            "TON route canary evidence must reject route allowlist/destination binding hash role reuse",
+            "TON route canary evidence must reject route allowlist/source material hash role reuse",
+            "TON route canary evidence must reject route allowlist/source deployment hash role reuse",
+            "TON route canary evidence must reject destination binding/source material hash role reuse",
+            "TON route canary evidence must reject destination binding/source deployment hash role reuse",
+        ),
+    ),
+    (
+        "scripts/sccp_evm_destination_evidence.py",
+        (
+            "EVM route allowlist evidence hashes",
+            "EVM route canary governed hashes",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_evm_destination_evidence_test.py",
+        (
+            "EVM route allowlist accepted replayed governed hash role",
+            "EVM route canary accepted route/destination hash role reuse",
+        ),
+    ),
+    (
+        "scripts/sccp_solana_destination_evidence.py",
+        (
+            "Solana route allowlist evidence hashes",
+            "Solana route canary governed hashes",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_solana_destination_evidence_test.py",
+        (
+            "Solana route allowlist accepted replayed hash role",
+            "Solana route canary accepted governed hash replay",
+        ),
+    ),
+    (
+        "scripts/sccp_ton_destination_evidence.py",
+        (
+            "TON route allowlist evidence hashes",
+            "TON route canary governed hashes",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_ton_destination_evidence_test.py",
+        (
+            "TON route allowlist accepted replayed hash role",
+            "TON route canary accepted governed replay",
+        ),
+    ),
+    (
+        "scripts/sccp_tron_source_bridge_evidence.py",
+        (
+            "TRON route allowlist evidence hashes",
+            "TRON route canary governed hashes",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_tron_source_bridge_evidence_test.py",
+        (
+            "TRON route allowlist accepted replayed hash role",
+            "route canary transaction hash accepted invalid",
+        ),
+    ),
+    (
+        "python/iroha_torii_client/sccp.py",
+        (
+            "Solana route canary governed hashes",
+            "TON route canary governed hashes",
+            "TRON route canary governed hashes",
+            "TRON route allowlist governed hashes",
+        ),
+    ),
+    (
+        "python/iroha_torii_client/tests/sccp_test.py",
+        (
+            'match="Solana route canary governed hashes"',
+            'match="TON route canary governed hashes"',
+            'match="TRON route canary governed hashes"',
+        ),
+    ),
+    (
+        "javascript/iroha_js/src/sccp.js",
+        (
+            "Solana route canary governed hashes",
+            "TON route canary governed hashes",
+            "TRON route canary governed hashes",
+            "TRON route allowlist governed hashes",
+        ),
+    ),
+    (
+        "javascript/iroha_js/dist/sccp.js",
+        (
+            "Solana route canary governed hashes",
+            "TON route canary governed hashes",
+            "TRON route canary governed hashes",
+            "TRON route allowlist governed hashes",
+        ),
+    ),
+    (
+        "javascript/iroha_js/test/sccpSolanaProver.test.js",
+        (
+            "/Solana route canary governed hashes/",
+            "/TON route canary governed hashes/",
+            "/TRON route canary governed hashes/",
+        ),
+    ),
+    (
+        "IrohaSwift/Sources/IrohaSwift/SccpSolanaProver.swift",
+        (
+            "routeCanaryGovernedHashes",
+        ),
+    ),
+    (
+        "IrohaSwift/Sources/IrohaSwift/SccpTonProver.swift",
+        (
+            "routeCanaryGovernedHashes",
+        ),
+    ),
+    (
+        "IrohaSwift/Sources/IrohaSwift/SccpTronProver.swift",
+        (
+            "routeCanaryGovernedHashes",
+            "routeAllowlistGovernedHashes",
+        ),
+    ),
+    (
+        "IrohaSwift/Tests/IrohaSwiftTests/SccpSolanaProverTests.swift",
+        (
+            "invalidString(\"routeCanaryGovernedHashes\")",
+            "invalidField(\"routeCanaryGovernedHashes\")",
+            "invalidPublicInputs(\"routeCanaryGovernedHashes\")",
+        ),
+    ),
+    (
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/SolanaSccpProver.kt",
+        (
+            "Solana route canary governed hashes",
+        ),
+    ),
+    (
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/TonSccpProver.kt",
+        (
+            "TON route canary governed hashes",
+        ),
+    ),
+    (
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/TronSccpProver.kt",
+        (
+            "TRON route canary governed hashes",
+            "TRON route allowlist governed hashes",
+        ),
+    ),
+    (
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/SolanaSccpProverTest.kt",
+        (
+            "Solana route canary governed hashes",
+        ),
+    ),
+    (
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/TonSccpProverTest.kt",
+        (
+            "TON route canary governed hashes",
+        ),
+    ),
+    (
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/TronSccpProverTest.kt",
+        (
+            "TRON route canary governed hashes",
+        ),
+    ),
+    (
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/SolanaSccpProver.java",
+        (
+            "Solana route canary governed hashes",
+        ),
+    ),
+    (
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/TonSccpProver.java",
+        (
+            "TON route canary governed hashes",
+        ),
+    ),
+    (
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/TronSccpProver.java",
+        (
+            "TRON route canary governed hashes",
+            "TRON route allowlist governed hashes",
+        ),
+    ),
+    (
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/SolanaSccpProverTests.java",
+        (
+            "Solana route canary governed hashes",
+        ),
+    ),
+    (
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/TonSccpProverTests.java",
+        (
+            "TON route canary governed hashes",
+        ),
+    ),
+    (
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/TronSccpProverTests.java",
+        (
+            "TRON route canary governed hashes",
+        ),
+    ),
+    (
         "scripts/sccp_release_readiness_report.py",
         (
             "def _all_lanes_release_checklist_exact_boolean_gate_inventory_errors(",
@@ -4035,7 +4351,18 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "readiness report release_checklist is not ready",
             "readiness report release_checklist does not match embedded evidence",
             "all-lanes summary active {ACTIVE_LAUNCH_DISPLAY} release checklist is not ready",
+            "release_checklist contains unknown field name with non-ASCII character",
             "def _active_launch_checklist_schema_inventory_errors(",
+        ),
+    ),
+    (
+        "scripts/sccp_release_bundle.py",
+        (
+            "RELEASE_CHECKLIST_FIELDS",
+            "RELEASE_CHECKLIST_ITEM_FIELDS",
+            "_unknown_report_field_errors(",
+            "f\"{label}.release_checklist\"",
+            "f\"{label}.release_checklist.items[{index}]\"",
         ),
     ),
     (
@@ -4062,6 +4389,8 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "def test_release_bundle_verifier_recomputes_active_checklist_rejects_malformed_canary_source",
             "def test_release_bundle_verifier_classifies_malformed_active_lane_blockers",
             "def test_release_bundle_verifier_rejects_release_checklist_field_type_drift",
+            "def test_release_bundle_verifier_rejects_release_checklist_malformed_unknown_fields",
+            "def test_release_bundle_rejects_unknown_copied_checklist_fields_before_render",
             "def test_release_bundle_verifier_rejects_malformed_active_launch_blockers",
         ),
     ),
@@ -4287,26 +4616,44 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
         "javascript/iroha_js/src/sccp.js",
         (
             "const requireSccpProofRequestBundleMatchesPublicInputs = (",
+            "normalizeEvmGroth16ProofRequest",
+            "normalizeTronGroth16ProofRequest",
             "summary.sourceDomain !== SCCP_DOMAIN_SORA",
             "toBytes(sourceProofBytes, \"sourceProofBytes\").length === 0",
             "sourceProofBytes required for non-SORA source bundle",
+            "bundleBytes.sourceDomain must match sourceDomain",
         ),
     ),
     (
         "javascript/iroha_js/dist/sccp.js",
         (
             "const requireSccpProofRequestBundleMatchesPublicInputs = (",
+            "normalizeEvmGroth16ProofRequest",
+            "normalizeTronGroth16ProofRequest",
             "summary.sourceDomain !== SCCP_DOMAIN_SORA",
             "toBytes(sourceProofBytes, \"sourceProofBytes\").length === 0",
             "sourceProofBytes required for non-SORA source bundle",
+            "bundleBytes.sourceDomain must match sourceDomain",
         ),
     ),
     (
         "javascript/iroha_js/test/sccpSolanaProver.test.js",
         (
             "rejects TON proof requests with non-canonical or mismatched SCCP bundle bytes",
+            "rejects EVM-family and TRON proof requests with non-canonical SCCP bundles",
             "sourceProofBytes required for non-SORA source bundle",
             "rejects non-empty all-zero source proof bytes in SCCP proof requests",
+            "bundleBytes must match publicInputs",
+            "bundleBytes\\.sourceDomain must match sourceDomain",
+        ),
+    ),
+    (
+        "javascript/iroha_js/test/package_dist.test.js",
+        (
+            "sampleEvmFamilyProofBundleFixture",
+            "package dist entrypoint exports SCCP TRON Groth16 helpers",
+            "package dist entrypoint exports SCCP EVM-family Groth16 helpers",
+            "canonicalSccpMessageProofBundleBytes",
         ),
     ),
     (
@@ -4316,6 +4663,9 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             'summary["source_domain"] != SCCP_DOMAIN_SORA',
             "len(source_proof_bytes) == 0",
             "sourceProofBytes required for non-SORA source bundle",
+            "def build_evm_sccp_proof_request",
+            "def build_tron_sccp_proof_request",
+            "bundleBytes.sourceDomain must match sourceDomain",
         ),
     ),
     (
@@ -4324,6 +4674,17 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "def test_ton_sccp_proof_request_rejects_noncanonical_or_mismatched_bundle_bytes",
             "sourceProofBytes required for non-SORA source bundle",
             "def test_sccp_proof_requests_reject_all_zero_source_proof_bytes",
+            "def test_groth16_proof_result_wrappers_reject_all_zero_bundle_bytes",
+            "def test_evm_and_tron_groth16_proof_requests_reject_noncanonical_or_mismatched_bundle_bytes",
+            "sample_evm_bundle_fixture",
+            "sample_tron_bundle_fixture",
+            "groth16_proof_bytes_for_request",
+            r"bundleBytes\.version must be 1",
+            "bundleBytes must match publicInputs",
+            r"bundleBytes\.sourceDomain must match sourceDomain",
+            'match="bundleBytes must not be all zero"',
+            "wrap_evm_sccp_proof_result",
+            "wrap_tron_sccp_proof_result",
         ),
     ),
     (
@@ -4359,6 +4720,31 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
         ),
     ),
     (
+        "IrohaSwift/Sources/IrohaSwift/SccpMessageProofBundle.swift",
+        (
+            "func requireSccpProofRequestBundleMatchesPublicInputs",
+            "func decodeSccpMessageProofBundleSummary",
+            "summary.sourceDomain == sccpDomainSora || !sourceProofBytes.isEmpty",
+            "SccpMessageProofBundleError.missingSourceProof",
+        ),
+    ),
+    (
+        "IrohaSwift/Sources/IrohaSwift/SccpEvmProver.swift",
+        (
+            "requireSccpProofRequestBundleMatchesPublicInputs",
+            "throw EvmSccpProverError.invalidPublicInputs(\"sourceDomain\")",
+            "throw EvmSccpProverError.invalidPublicInputs(\"bundleBytes.sourceDomain\")",
+        ),
+    ),
+    (
+        "IrohaSwift/Sources/IrohaSwift/SccpTronProver.swift",
+        (
+            "requireSccpProofRequestBundleMatchesPublicInputs",
+            "throw TronSccpProverError.invalidPublicInputs(\"sourceDomain\")",
+            "throw TronSccpProverError.invalidPublicInputs(\"bundleBytes.sourceDomain\")",
+        ),
+    ),
+    (
         "IrohaSwift/Sources/IrohaSwift/SccpTonProver.swift",
         (
             "func requireTonSccpProofRequestBundleMatchesPublicInputs",
@@ -4371,9 +4757,99 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
         "IrohaSwift/Tests/IrohaSwiftTests/SccpSolanaProverTests.swift",
         (
             "func testTonProofRequestRejectsNoncanonicalOrMismatchedBundleBytes",
+            "sampleEvmBundleFixture",
+            "sampleTronBundleFixture",
+            "sampleEvmGroth16ProofBytes",
+            "sampleTronGroth16ProofBytes",
             "strippedSourceProofResult",
             "func testTonProofRequestHashMatchesCrossSdkVector",
             "func testSccpProofRequestsRejectAllZeroSourceProofBytes",
+        ),
+    ),
+    (
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/SccpMessageProofBundles.kt",
+        (
+            "internal object SccpMessageProofBundles",
+            "internal fun requireMatchesPublicInputs",
+            "summary.sourceDomain == SccpSourceProofs.DOMAIN_SORA || sourceProofBytes.isNotEmpty()",
+            "sourceProofBytes required for non-SORA source bundle",
+        ),
+    ),
+    (
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/EvmSccpProver.kt",
+        (
+            "SccpMessageProofBundles.requireMatchesPublicInputs",
+            "require(input.sourceDomain == DOMAIN_SORA) { \"sourceDomain must be SORA\" }",
+            "bundleBytes.sourceDomain must match sourceDomain",
+        ),
+    ),
+    (
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/TronSccpProver.kt",
+        (
+            "SccpMessageProofBundles.requireMatchesPublicInputs",
+            "require(input.sourceDomain == DOMAIN_SORA) { \"sourceDomain must be SORA\" }",
+            "bundleBytes.sourceDomain must match sourceDomain",
+        ),
+    ),
+    (
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/EvmSccpProverTest.kt",
+        (
+            "sampleBundleFixture",
+            "publicInputs: EvmSccpPublicInputsInput = samplePublicInputs()",
+            "hexWord(publicInputs.messageId.removePrefix(\"0x\"))",
+            "proofResult.copy(sourceProofBytes = byteArrayOf(9, 11))",
+        ),
+    ),
+    (
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/TronSccpProverTest.kt",
+        (
+            "sampleBundleFixture",
+            "publicInputs: TronSccpPublicInputsInput = samplePublicInputs()",
+            "hexWord(publicInputs.messageId.removePrefix(\"0x\"))",
+            "proofResult.copy(sourceProofBytes = byteArrayOf(9, 11))",
+        ),
+    ),
+    (
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/SccpMessageProofBundles.java",
+        (
+            "final class SccpMessageProofBundles",
+            "static BundleSummary requireMatchesPublicInputs",
+            "summary.sourceDomain != SourceSccpProofs.DOMAIN_SORA && sourceProofBytes.length == 0",
+            "sourceProofBytes required for non-SORA source bundle",
+        ),
+    ),
+    (
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/EvmSccpProver.java",
+        (
+            "SccpMessageProofBundles.requireMatchesPublicInputs",
+            "throw new IllegalArgumentException(\"sourceDomain must be SORA\")",
+            "bundleBytes.sourceDomain must match sourceDomain",
+        ),
+    ),
+    (
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/EvmSccpProverTests.java",
+        (
+            "sampleBundleFixture",
+            "sampleGroth16ProofBytes(request.publicInputs())",
+            "hexWord(stripHex(publicInputs.messageId()))",
+            "evmResultWithSourceProofBytes(proofResult, new byte[] {9, 11})",
+        ),
+    ),
+    (
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/TronSccpProverTests.java",
+        (
+            "sampleBundleFixture",
+            "sampleGroth16ProofWords(samplePublicInputs(), TronSccpProver.DOMAIN_SORA)",
+            "hexWord(stripHex(publicInputs.messageId()))",
+            "tronResultWithSourceProofBytes(proofResult, new byte[] {9, 11})",
+        ),
+    ),
+    (
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/TronSccpProver.java",
+        (
+            "SccpMessageProofBundles.requireMatchesPublicInputs",
+            "throw new IllegalArgumentException(\"sourceDomain must be SORA\")",
+            "bundleBytes.sourceDomain must match sourceDomain",
         ),
     ),
     (
@@ -4514,21 +4990,33 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "SCCP native no-WASM/no-remote source inventory",
             "class DuplicateJsonKeyError",
             "object_pairs_hook=_reject_duplicate_json_keys",
-            "native EVM Groth16 prover bundle JSON contains duplicate key",
+            "JSON contains duplicate key:",
+            "def _native_evm_prover_field_name_blocker(",
+            "field name with control character",
+            "field name with non-ASCII character",
+            "def _native_evm_prover_duplicate_json_key_blocker(",
+            "JSON contains duplicate key with control character",
             "def _native_evm_prover_forbidden_payload_blockers(",
             "_native_evm_prover_forbidden_payload_blockers(artifact_path, label)",
-            "audit_hashes contains unexpected field",
+            "native EVM Groth16 prover bundle audit_hashes",
             "audit_hashes missing field",
             "def _native_evm_prover_parity_fixture_status(",
             "def _native_evm_prover_self_test_status(",
+            "def _native_evm_prover_sdk_results_by_sdk(",
             "def _native_evm_prover_fixture_hash_role_blockers(",
             "sha256 must match audit_hashes.cross_sdk_fixture_parity",
             "sha256 must match audit_hashes.native_prover_self_test",
             "native_prover_self_test_artifact",
             "public_signal_words must contain 9 words",
             "sdk_results must be a non-empty object",
+            "sdk_results sdk key must not contain surrounding whitespace",
+            "def _native_evm_prover_sdk_result_key_blocker(",
+            "sdk_results sdk key contains control character",
+            "sdk_results sdk key must be printable ASCII",
+            "sdk_results sdk key must not contain whitespace",
+            "sdk_results sdk key must be a lowercase SDK id",
             "sdk_results.{sdk}",
-            "contains unknown field",
+            "contains {field_kind} field name with surrounding whitespace",
             "missing field",
             "must match {key}",
             "must match public_signal_words",
@@ -4537,6 +5025,11 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "native_sdk_artifacts[",
             "native_sdk_artifacts contains duplicate sdk",
             "native_sdk_artifacts contains unknown sdk",
+            "def _native_evm_prover_sdk_artifact_key_blocker(",
+            ".sdk contains control character",
+            ".sdk must be printable ASCII",
+            ".sdk must not contain whitespace",
+            ".sdk must be a lowercase SDK id",
             "sdk.strip() != sdk",
             ".sdk must not contain surrounding whitespace",
             "implementation must be",
@@ -4545,6 +5038,7 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "def _native_evm_prover_hash_role_blockers(",
             "def _native_evm_prover_path_role_blockers(",
             "path must not contain URI schemes or drive prefixes",
+            "path contains percent-encoded traversal segment",
             "path contains forbidden prover dependency marker",
             "path must not reuse",
             "must not be empty",
@@ -4562,9 +5056,10 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "NATIVE_EVM_PROVER_FORBIDDEN_PATH_MARKERS = (",
             "class DuplicateJsonKeyError",
             "object_pairs_hook=_reject_duplicate_json_keys",
-            "native EVM Groth16 prover bundle JSON contains duplicate key",
+            "JSON contains duplicate key:",
             "def _native_evm_prover_payload_sources(",
             "path must not contain URI schemes or drive prefixes",
+            "path contains percent-encoded traversal segment",
             "path contains forbidden prover dependency marker",
             "path must not reuse",
             "cross_sdk_fixture_parity_artifact",
@@ -4643,14 +5138,18 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "def test_release_readiness_report_blocks_duplicate_native_evm_prover_json_keys",
             "def test_release_readiness_report_blocks_duplicate_native_evm_prover_nested_json_keys",
             "def test_release_readiness_report_blocks_duplicate_native_evm_prover_sdk_artifact_keys",
+            "def test_release_readiness_report_blocks_native_evm_prover_malformed_duplicate_json_keys",
             "def test_release_readiness_report_blocks_native_evm_prover_unknown_root_and_audit_fields",
+            "def test_release_readiness_report_blocks_native_evm_prover_malformed_unknown_field_names",
             "def test_release_readiness_report_blocks_empty_native_evm_prover_payload",
             "def test_release_readiness_report_blocks_tiny_native_evm_prover_payload",
             "def test_release_readiness_report_blocks_reused_native_evm_prover_role_hash",
             "def test_release_readiness_report_blocks_noncanonical_native_evm_prover_hash",
             "def test_release_readiness_report_blocks_duplicate_native_evm_prover_sdk_artifacts",
             "def test_release_readiness_report_blocks_malformed_native_evm_prover_sdk_artifacts",
+            "def test_release_readiness_report_blocks_native_evm_prover_sdk_artifact_malformed_unknown_field_names",
             "def test_release_readiness_report_blocks_padded_native_evm_prover_sdk_artifacts",
+            "def test_release_readiness_report_blocks_malformed_native_evm_prover_sdk_artifact_ids",
             "native_sdk_artifacts[0].sdk must not contain surrounding whitespace",
             "def test_release_readiness_report_blocks_native_evm_prover_sdk_artifact_value_drift",
             "def test_release_readiness_report_blocks_native_evm_prover_sdk_implementation_artifact_drift",
@@ -4658,19 +5157,25 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "def test_release_readiness_report_blocks_missing_native_evm_parity_fixture",
             "def test_release_readiness_report_blocks_tampered_native_evm_parity_fixture_hash",
             "def test_release_readiness_report_blocks_native_evm_parity_fixture_sdk_drift",
+            "def test_release_readiness_report_blocks_native_evm_parity_fixture_malformed_duplicate_keys",
+            "def test_release_readiness_report_blocks_native_evm_parity_fixture_malformed_unknown_field_names",
             "def test_release_readiness_report_blocks_native_evm_fixture_missing_sdk_results",
             "def test_release_readiness_report_blocks_native_evm_fixture_malformed_sdk_results",
             "def test_release_readiness_report_blocks_native_evm_fixture_malformed_sdk_result_rows",
             "def test_release_readiness_report_blocks_native_evm_fixture_sdk_result_missing_fields",
             "def test_release_readiness_report_blocks_native_evm_fixture_sdk_result_value_drift",
             "def test_release_readiness_report_blocks_native_evm_fixture_unknown_sdk_results",
+            "def test_release_readiness_report_blocks_native_evm_fixture_padded_sdk_results",
+            "def test_release_readiness_report_blocks_native_evm_fixture_malformed_sdk_result_keys",
             "def test_release_readiness_report_blocks_native_evm_fixture_public_signal_shape",
             "def test_release_readiness_report_blocks_native_evm_parity_fixture_role_reuse",
             "def test_release_readiness_report_blocks_native_evm_self_test_role_reuse",
             "def test_release_readiness_report_blocks_native_evm_prover_forbidden_payload_marker",
             "def test_release_readiness_report_blocks_native_evm_prover_uri_scheme_path",
+            "def test_release_readiness_report_blocks_native_evm_prover_percent_encoded_path",
             "def test_release_readiness_report_blocks_native_evm_prover_forbidden_path_marker",
             "ipfs:proof-artifact.bin",
+            "%252e%252e/proof.bin",
             "artifacts/eth-mainnet/proof.wasm",
             "def test_release_readiness_report_blocks_duplicate_native_evm_parity_fixture_keys",
             "def test_release_readiness_report_blocks_duplicate_native_evm_parity_fixture_sdk_result_keys",
@@ -4701,6 +5206,10 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "native EVM Groth16 prover bundle JSON contains duplicate key: circuit_security_audit",
             "def test_release_bundle_rejects_duplicate_native_evm_prover_sdk_artifact_keys",
             "native EVM Groth16 prover bundle JSON contains duplicate key: implementation_hash",
+            "def test_release_bundle_verifier_rejects_native_evm_fixture_padded_sdk_results",
+            "sdk_results sdk key must not contain surrounding whitespace",
+            "def test_release_bundle_verifier_rejects_native_evm_fixture_malformed_sdk_result_keys",
+            "sdk_results sdk key must be printable ASCII",
         ),
     ),
     (
@@ -4777,9 +5286,12 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "def test_release_bundle_rejects_tiny_native_evm_prover_payload",
             "def test_release_bundle_rejects_native_evm_prover_forbidden_payload_marker",
             "def test_release_bundle_verifier_rejects_native_evm_prover_unknown_root_and_audit_fields",
+            "def test_release_bundle_verifier_rejects_native_evm_prover_malformed_unknown_field_names",
+            "def test_release_bundle_rejects_native_evm_prover_malformed_duplicate_json_keys",
             "def test_release_bundle_verifier_rejects_duplicate_native_evm_prover_nested_json_keys",
             "def test_release_bundle_verifier_rejects_duplicate_native_evm_prover_sdk_artifact_keys",
             "def test_release_bundle_rejects_native_evm_prover_uri_scheme_path_before_copy",
+            "def test_release_bundle_rejects_native_evm_prover_percent_encoded_path_before_copy",
             "def test_release_bundle_rejects_native_evm_prover_forbidden_path_marker_before_copy",
             "def test_release_bundle_verifier_rejects_empty_native_evm_prover_payload",
             "def test_release_bundle_verifier_rejects_tiny_native_evm_prover_payload",
@@ -4787,13 +5299,17 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "def test_release_bundle_verifier_rejects_noncanonical_native_evm_prover_hash",
             "def test_release_bundle_verifier_rejects_duplicate_native_evm_prover_sdk_artifacts",
             "def test_release_bundle_verifier_rejects_malformed_native_evm_prover_sdk_artifacts",
+            "def test_release_bundle_verifier_rejects_native_evm_prover_sdk_artifact_malformed_unknown_field_names",
             "def test_release_bundle_verifier_rejects_padded_native_evm_prover_sdk_artifacts",
+            "def test_release_bundle_verifier_rejects_malformed_native_evm_prover_sdk_artifact_ids",
             "def test_release_bundle_verifier_rejects_native_evm_prover_sdk_artifact_value_drift",
             "def test_release_bundle_verifier_rejects_native_evm_prover_sdk_implementation_artifact_drift",
             "def test_release_bundle_verifier_rejects_reused_native_evm_prover_audit_hash",
             "def test_release_bundle_verifier_rejects_missing_native_evm_parity_fixture",
             "def test_release_bundle_verifier_rejects_tampered_native_evm_parity_fixture_hash",
             "def test_release_bundle_verifier_rejects_native_evm_parity_fixture_sdk_drift",
+            "def test_release_bundle_verifier_rejects_native_evm_parity_fixture_malformed_duplicate_keys",
+            "def test_release_bundle_verifier_rejects_native_evm_self_test_malformed_unknown_field_names",
             "def test_release_bundle_verifier_rejects_native_evm_fixture_missing_sdk_results",
             "def test_release_bundle_verifier_rejects_native_evm_fixture_malformed_sdk_results",
             "def test_release_bundle_verifier_rejects_native_evm_fixture_malformed_sdk_result_rows",
@@ -4805,6 +5321,7 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "def test_release_bundle_verifier_rejects_native_evm_self_test_role_reuse",
             "def test_release_bundle_verifier_rejects_native_evm_prover_forbidden_payload_marker",
             "def test_release_bundle_verifier_rejects_native_evm_prover_uri_scheme_path",
+            "def test_release_bundle_verifier_rejects_native_evm_prover_percent_encoded_path",
             "def test_release_bundle_verifier_rejects_native_evm_prover_forbidden_path_marker",
             "def test_release_bundle_verifier_rejects_duplicate_native_evm_parity_fixture_keys",
             "def test_release_bundle_verifier_rejects_duplicate_native_evm_parity_fixture_sdk_result_keys",
@@ -4868,30 +5385,162 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
             '"release_corridor_phase_transcript_gate"',
             "SCCP release corridor phase-transcript source inventory",
             "def _phase_transcript_block(",
+            "def _known_corridor_phase_marker_lines(",
+            "def _unknown_corridor_phase_marker_lines(",
+            "def _transcript_has_multiple_known_phase_markers(",
+            "def _transcript_has_nonempty_line_before_first_phase_marker(",
+            "if lines[index] in known_markers:",
+            "def _phase_marker_count(",
             "def _transcript_has_full_corridor_completion(",
+            "marker_positions != sorted(marker_positions)",
+            "first_phase_command_position = min(phase_command_positions)",
+            "position > first_phase_command_position",
+            "for fragment in PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[phase]:",
+            "for fragment in PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS.get(phase, ()):",
+            "line == CORRIDOR_COMPLETION_SENTINEL",
             "def _phase_command_lines(",
+            "def _phase_effective_command_tokens(",
+            "PYTEST_OPTIONS_WITH_VALUES",
+            "NODE_TEST_OPTIONS_WITH_VALUES",
+            "def _command_option_values(",
+            "def _command_has_option_value(",
+            "def _command_positional_tokens(",
+            "def _pytest_command_positionals(",
+            "def _pytest_expected_positionals_for_phase(",
+            "tuple(pytest_positionals) != expected_positionals",
+            "def _node_expected_test_files_for_phase(",
+            "def _node_test_command_files(",
+            "def _node_check_command_matches(",
+            "def _dotnet_sdk_command_matches(",
+            "def _phase_prefix_env_assignments(",
+            "def _android_harness_mains_classes(",
+            "def _gradle_test_selector_matches(",
+            "def _gradle_test_command_selectors(",
+            "actual_harness_classes = _android_harness_mains_classes(command)",
+            "tuple(tokens) == tuple(shlex.split(fragment))",
+            "_command_token_basename(tokens[0]) == fragment_tokens[0]",
+            "shlex.split(command, comments=True)",
+            'tokens.index("&&") == 2',
+            "def _effective_command_equals(",
             "def _phase_command_matches_required_fragment(",
+            "def _phase_block_command_fragment_line_indices(",
+            "def _phase_block_output_fragment_line_indices(",
+            "SUCCESS_OUTPUT_NEGATION_PATTERN",
+            "SUCCESS_OUTPUT_DIAGNOSTIC_PREFIX_PATTERN",
+            "SHELL_XTRACE_COMMAND_PATTERN",
+            "def _phase_output_line_has_success_fragment(",
+            "def _line_is_shell_xtrace_command(",
+            "SHELL_XTRACE_COMMAND_PATTERN.match(normalized_line)",
+            "def _phase_block_has_exact_output_line(",
+            "def _phase_block_has_completion_after_required_evidence(",
+            "first_command_position = min(command_positions_before_completion)",
+            "first_command_position < position < completion_position",
+            "def _phase_block_has_traced_command_after_completion(",
+            "def _transcript_has_traced_command_after_completion(",
+            "def _phase_block_has_nonempty_line_after_completion(",
+            "def _transcript_has_nonempty_line_after_completion(",
+            "PHASE_TRANSCRIPT_FORBIDDEN_OUTPUT_PATTERNS",
+            "import unicodedata",
+            "ANSI_ESCAPE_PATTERN",
+            "ASCII_CONTROL_CHARACTER_PATTERN",
+            "def _phase_output_failure_scan_line(",
+            'unicodedata.category(character) != "Cf"',
+            "def _phase_block_forbidden_output_marker(",
             "def _phase_transcript_errors(",
             "evidence artifact is a dry-run transcript",
+            "evidence artifact contains unknown corridor phase marker",
+            "contains non-empty output before first phase marker",
             "evidence artifact is missing the phase marker",
+            "evidence artifact has duplicate phase marker",
+            "evidence artifact contains incomplete multi-phase corridor transcript",
             "evidence artifact is missing the phase-block completion sentinel",
+            "completion sentinel precedes required phase evidence",
+            "contains traced command after completion sentinel",
+            "contains non-empty output after completion sentinel",
             "evidence artifact is missing expected phase-block command:",
             "evidence artifact is missing expected phase-block success marker:",
+            "evidence artifact contains forbidden phase-block",
         ),
     ),
     (
         "scripts/sccp_verify_release_bundle.py",
         (
             "def _phase_transcript_block(",
+            "def _known_corridor_phase_marker_lines(",
+            "def _unknown_corridor_phase_marker_lines(",
+            "def _transcript_has_multiple_known_phase_markers(",
+            "def _transcript_has_nonempty_line_before_first_phase_marker(",
+            "if lines[index] in known_markers:",
+            "def _phase_marker_count(",
             "def _transcript_has_full_corridor_completion(",
+            "marker_positions != sorted(marker_positions)",
+            "first_phase_command_position = min(phase_command_positions)",
+            "position > first_phase_command_position",
+            "for fragment in PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[phase]:",
+            "for fragment in PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS.get(phase, ()):",
+            "line == CORRIDOR_COMPLETION_SENTINEL",
             "not line.lstrip().startswith(\"+ \")",
+            "def _phase_effective_command_tokens(",
+            "PYTEST_OPTIONS_WITH_VALUES",
+            "NODE_TEST_OPTIONS_WITH_VALUES",
+            "def _command_option_values(",
+            "def _command_has_option_value(",
+            "def _command_positional_tokens(",
+            "def _pytest_command_positionals(",
+            "def _pytest_expected_positionals_for_phase(",
+            "tuple(pytest_positionals) != expected_positionals",
+            "def _node_expected_test_files_for_phase(",
+            "def _node_test_command_files(",
+            "def _node_check_command_matches(",
+            "def _dotnet_sdk_command_matches(",
+            "def _phase_prefix_env_assignments(",
+            "def _android_harness_mains_classes(",
+            "def _gradle_test_selector_matches(",
+            "def _gradle_test_command_selectors(",
+            "actual_harness_classes = _android_harness_mains_classes(command)",
+            "tuple(tokens) == tuple(shlex.split(fragment))",
+            "_command_token_basename(tokens[0]) == fragment_tokens[0]",
+            "shlex.split(command, comments=True)",
+            'tokens.index("&&") == 2',
+            "def _effective_command_equals(",
             "def _phase_command_matches_required_fragment(",
+            "def _phase_block_command_fragment_line_indices(",
+            "def _phase_block_output_fragment_line_indices(",
+            "SUCCESS_OUTPUT_NEGATION_PATTERN",
+            "SUCCESS_OUTPUT_DIAGNOSTIC_PREFIX_PATTERN",
+            "SHELL_XTRACE_COMMAND_PATTERN",
+            "def _phase_output_line_has_success_fragment(",
+            "def _line_is_shell_xtrace_command(",
+            "SHELL_XTRACE_COMMAND_PATTERN.match(normalized_line)",
+            "def _phase_block_has_exact_output_line(",
+            "def _phase_block_has_completion_after_required_evidence(",
+            "first_command_position = min(command_positions_before_completion)",
+            "first_command_position < position < completion_position",
+            "def _phase_block_has_traced_command_after_completion(",
+            "def _transcript_has_traced_command_after_completion(",
+            "def _phase_block_has_nonempty_line_after_completion(",
+            "def _transcript_has_nonempty_line_after_completion(",
+            "PHASE_TRANSCRIPT_FORBIDDEN_OUTPUT_PATTERNS",
+            "import unicodedata",
+            "ANSI_ESCAPE_PATTERN",
+            "ASCII_CONTROL_CHARACTER_PATTERN",
+            "def _phase_output_failure_scan_line(",
+            'unicodedata.category(character) != "Cf"',
+            "def _phase_block_forbidden_output_marker(",
             "def _phase_transcript_errors(",
             "readiness report phase {phase} evidence artifact is a dry-run transcript",
+            "evidence artifact contains unknown corridor phase marker",
+            "contains non-empty output before first phase marker",
             "readiness report phase {phase} evidence artifact is missing the phase marker",
+            "evidence artifact has duplicate phase marker",
+            "evidence artifact contains incomplete multi-phase corridor transcript",
             "evidence artifact is missing the phase-block completion sentinel",
+            "completion sentinel precedes required phase evidence",
+            "contains traced command after completion sentinel",
+            "contains non-empty output after completion sentinel",
             "evidence artifact is missing expected phase-block command:",
             "evidence artifact is missing expected phase-block success marker:",
+            "evidence artifact contains forbidden phase-block",
             "errors.extend(",
             "_phase_transcript_errors(",
         ),
@@ -4902,12 +5551,45 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
             "test_release_readiness_report_guards_release_corridor_phase_transcript_gate_inventory",
             "test_release_readiness_report_blocks_missing_release_corridor_phase_transcript_gate",
             "test_release_readiness_report_rejects_forged_phase_log",
+            "test_release_readiness_report_rejects_output_before_phase_marker",
             "test_release_readiness_report_rejects_prefix_alias_phase_marker",
+            "test_release_readiness_report_rejects_duplicate_phase_marker",
             "test_release_readiness_report_rejects_phase_log_without_expected_command",
             "test_release_readiness_report_rejects_phase_log_without_phase_completion",
             "test_release_readiness_report_rejects_command_line_only_completion_marker",
+            "test_release_readiness_report_rejects_nonexact_completion_marker",
+            "test_release_readiness_report_rejects_success_marker_before_phase_command",
             "test_release_readiness_report_rejects_command_line_only_success_marker",
+            "test_release_readiness_report_rejects_xtrace_success_marker",
+            "test_release_readiness_report_rejects_obfuscated_xtrace_success_marker",
+            "test_release_readiness_report_rejects_negated_success_marker",
+            "test_release_readiness_report_rejects_diagnostic_success_marker",
+            "test_release_readiness_report_rejects_phase_failure_output_marker",
+            "test_release_readiness_report_rejects_ansi_obfuscated_failure_output",
+            "test_release_readiness_report_rejects_unicode_format_obfuscated_failure_output",
+            "test_release_readiness_report_rejects_marker_only_full_corridor_completion",
+            "test_release_readiness_report_rejects_full_corridor_success_before_command",
             "test_release_readiness_report_rejects_output_only_phase_command_fragment",
+            "test_release_readiness_phase_command_matchers_reject_bare_fragments",
+            "test_release_readiness_phase_command_matchers_reject_comment_fragments",
+            "test_release_readiness_phase_command_matchers_reject_inert_option_values",
+            "test_release_readiness_phase_command_matchers_reject_narrow_kotlin_selector",
+            "test_release_readiness_phase_command_matchers_reject_extra_suffix_arguments",
+            "test_release_readiness_report_rejects_bare_phase_command_fragment",
+            "test_release_readiness_report_rejects_short_circuited_phase_command_fragment",
+            "test_release_readiness_report_rejects_comment_only_phase_command_fragment",
+            "test_release_readiness_report_rejects_inert_option_phase_command_fragment",
+            "test_release_readiness_report_rejects_narrow_kotlin_phase_command_fragment",
+            "test_release_readiness_report_rejects_gradle_dry_run_phase_command_fragment",
+            "test_release_readiness_report_rejects_pytest_suffix_phase_command_fragment",
+            "test_release_readiness_report_rejects_pytest_extra_positional_phase_command_fragment",
+            "test_release_readiness_report_rejects_node_extra_positional_phase_command_fragment",
+            "test_release_readiness_report_rejects_dotnet_suffix_phase_command_fragment",
+            "test_release_readiness_report_rejects_prefix_android_harness_phase_command_fragment",
+            "test_release_readiness_report_rejects_inert_swift_phase_command_fragment",
+            "test_release_readiness_report_rejects_suffix_argument_phase_command_fragment",
+            "test_release_readiness_report_rejects_inert_dotnet_project_phase_command_fragment",
+            "test_release_readiness_report_rejects_inert_contract_smoke_test_fragment",
         ),
     ),
     (
@@ -4916,14 +5598,47 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
             "test_release_bundle_verifier_guards_release_corridor_phase_transcript_inventory",
             "test_release_bundle_verifier_rejects_missing_release_corridor_phase_transcript_inventory_gate",
             "test_release_bundle_verifier_rejects_forged_phase_log",
+            "test_release_bundle_verifier_rejects_output_before_phase_marker",
             "test_release_bundle_verifier_rejects_prefix_alias_phase_marker",
+            "test_release_bundle_verifier_rejects_duplicate_phase_marker",
             "test_release_bundle_verifier_rejects_phase_log_without_expected_command",
             "test_release_bundle_verifier_rejects_phase_command_outside_claimed_block",
             "test_release_bundle_verifier_rejects_phase_log_without_success_marker",
             "test_release_bundle_verifier_rejects_completion_outside_claimed_phase_block",
+            "test_release_bundle_verifier_rejects_success_marker_before_phase_command",
             "test_release_bundle_verifier_rejects_command_line_only_success_marker",
+            "test_release_bundle_verifier_rejects_xtrace_success_marker",
+            "test_release_bundle_verifier_rejects_obfuscated_xtrace_success_marker",
             "test_release_bundle_verifier_rejects_command_line_only_completion_marker",
+            "test_release_bundle_verifier_rejects_nonexact_completion_marker",
+            "test_release_bundle_verifier_rejects_negated_success_marker",
+            "test_release_bundle_verifier_rejects_diagnostic_success_marker",
+            "test_release_bundle_verifier_rejects_phase_failure_output_marker",
+            "test_release_bundle_verifier_rejects_ansi_obfuscated_failure_output",
+            "test_release_bundle_verifier_rejects_unicode_format_obfuscated_failure_output",
+            "test_release_bundle_verifier_rejects_marker_only_full_corridor_completion",
+            "test_release_bundle_verifier_rejects_full_corridor_success_before_command",
             "test_release_bundle_verifier_phase_transcript_inventory_is_independent",
+            "test_release_bundle_phase_command_matchers_reject_bare_fragments",
+            "test_release_bundle_phase_command_matchers_reject_comment_fragments",
+            "test_release_bundle_phase_command_matchers_reject_inert_option_values",
+            "test_release_bundle_phase_command_matchers_reject_narrow_kotlin_selector",
+            "test_release_bundle_phase_command_matchers_reject_extra_suffix_arguments",
+            "test_release_bundle_verifier_rejects_bare_phase_command_fragment",
+            "test_release_bundle_verifier_rejects_short_circuited_phase_command_fragment",
+            "test_release_bundle_verifier_rejects_comment_only_phase_command_fragment",
+            "test_release_bundle_verifier_rejects_inert_option_phase_command_fragment",
+            "test_release_bundle_verifier_rejects_narrow_kotlin_phase_command_fragment",
+            "test_release_bundle_verifier_rejects_gradle_dry_run_phase_command_fragment",
+            "test_release_bundle_verifier_rejects_pytest_suffix_phase_command_fragment",
+            "test_release_bundle_verifier_rejects_pytest_extra_positional_phase_command_fragment",
+            "test_release_bundle_verifier_rejects_node_extra_positional_phase_command_fragment",
+            "test_release_bundle_verifier_rejects_dotnet_suffix_phase_command_fragment",
+            "test_release_bundle_verifier_rejects_prefix_android_harness_phase_command_fragment",
+            "test_release_bundle_verifier_rejects_inert_swift_phase_command_fragment",
+            "test_release_bundle_verifier_rejects_suffix_argument_phase_command_fragment",
+            "test_release_bundle_verifier_rejects_inert_dotnet_project_phase_command_fragment",
+            "test_release_bundle_verifier_rejects_inert_contract_smoke_test_fragment",
         ),
     ),
 )
@@ -4948,6 +5663,9 @@ SCCP_RELEASE_BUNDLE_SOURCE_COPY_MARKERS = (
             "stat.S_ISLNK",
             "_reject_symlink_sources(protected_paths)",
             "_reject_symlink_sources([source for _, source in native_payload_sources])",
+            "def _reject_duplicate_evidence_inputs(",
+            "release bundle evidence input path is duplicated",
+            "_reject_duplicate_evidence_inputs(args.toml)",
         ),
     ),
     (
@@ -4955,6 +5673,8 @@ SCCP_RELEASE_BUNDLE_SOURCE_COPY_MARKERS = (
         (
             "test_release_bundle_verifier_guards_sccp_release_bundle_source_copy_inventory",
             "test_release_bundle_verifier_rejects_missing_release_bundle_source_copy_inventory_gate",
+            "test_release_bundle_rejects_duplicate_evidence_input_before_copy",
+            "test_release_bundle_rejects_canonical_duplicate_evidence_input_before_copy",
             "test_release_bundle_rejects_symlinked_evidence_input_before_copy",
             "test_release_bundle_rejects_symlinked_evidence_ancestor_before_copy",
             "test_release_bundle_rejects_control_character_evidence_input_before_copy",
@@ -4992,11 +5712,28 @@ SCCP_RELEASE_NATIVE_PROVER_BUNDLE_SCHEMA_MARKERS = (
             "native EVM Groth16 prover bundle remote_prover_required must be false",
             "native EVM Groth16 prover bundle destination_binding_hash must match",
             "def _expected_native_evm_prover_bundle_status(",
-            "native EVM Groth16 prover bundle JSON contains duplicate key:",
+            "JSON contains duplicate key:",
+            "def _native_evm_prover_field_name_blocker(",
+            "field name with control character",
+            "field name with non-ASCII character",
+            "def _native_evm_prover_duplicate_json_key_blocker(",
+            "JSON contains duplicate key with control character",
             "def _native_evm_prover_bundle_summary_schema_errors(",
             "readiness report native_evm_prover_bundle",
             "cross_sdk_fixture_parity_artifact sha256 must match",
             "native_prover_self_test_artifact sha256 must match",
+            "def _native_evm_prover_sdk_artifact_key_blocker(",
+            "def _native_evm_prover_summary_sdk_artifact_key_blocker(",
+            ".sdk must be printable ASCII",
+            ".sdk must not contain whitespace",
+            ".sdk must be a lowercase SDK id",
+            "def _native_evm_prover_sdk_results_by_sdk(",
+            "def _native_evm_prover_sdk_result_key_blocker(",
+            "sdk_results sdk key must not contain surrounding whitespace",
+            "sdk_results sdk key contains control character",
+            "sdk_results sdk key must be printable ASCII",
+            "sdk_results sdk key must not contain whitespace",
+            "sdk_results sdk key must be a lowercase SDK id",
             "validation_status must be passed",
             "validation_blockers must be empty",
             "readiness report native_evm_prover_bundle is not an object",
@@ -5020,11 +5757,22 @@ SCCP_RELEASE_NATIVE_PROVER_BUNDLE_SCHEMA_MARKERS = (
             "test_release_bundle_verifier_rejects_missing_release_native_prover_bundle_schema_inventory_gate",
             "test_release_bundle_verifier_rejects_native_evm_prover_unknown_root_and_audit_fields",
             "test_release_bundle_verifier_rejects_duplicate_native_evm_prover_nested_json_keys",
+            "test_release_bundle_rejects_native_evm_prover_malformed_duplicate_json_keys",
             "test_release_bundle_verifier_rejects_native_evm_prover_sdk_artifact_value_drift",
             "test_release_bundle_verifier_rejects_native_evm_prover_sdk_implementation_artifact_drift",
             "test_release_bundle_verifier_rejects_missing_native_evm_parity_fixture",
             "test_release_bundle_verifier_rejects_tampered_native_evm_parity_fixture_hash",
             "test_release_bundle_verifier_rejects_native_evm_parity_fixture_sdk_drift",
+            "test_release_bundle_verifier_rejects_native_evm_parity_fixture_malformed_duplicate_keys",
+            "test_release_bundle_verifier_rejects_native_evm_self_test_malformed_unknown_field_names",
+            "test_release_bundle_verifier_rejects_native_evm_prover_report_malformed_field_names",
+            "test_release_bundle_verifier_rejects_native_evm_prover_report_artifact_malformed_field_names",
+            "test_release_bundle_verifier_rejects_native_evm_prover_sdk_artifact_malformed_unknown_field_names",
+            "test_release_bundle_verifier_rejects_malformed_native_evm_prover_sdk_artifact_ids",
+            "test_release_bundle_verifier_rejects_native_evm_prover_report_malformed_sdk_artifact_ids",
+            "test_release_bundle_verifier_rejects_native_evm_prover_malformed_unknown_field_names",
+            "test_release_bundle_verifier_rejects_native_evm_fixture_padded_sdk_results",
+            "test_release_bundle_verifier_rejects_native_evm_fixture_malformed_sdk_result_keys",
             "test_release_bundle_verifier_rejects_native_evm_self_test_role_reuse",
         ),
     ),
@@ -5034,11 +5782,16 @@ SCCP_RELEASE_NATIVE_PROVER_BUNDLE_SCHEMA_MARKERS = (
             "test_release_readiness_report_guards_release_native_prover_bundle_schema_gate_inventory",
             "test_release_readiness_report_blocks_missing_release_native_prover_bundle_schema_gate",
             "test_release_readiness_report_blocks_native_evm_prover_unknown_root_and_audit_fields",
+            "test_release_readiness_report_blocks_native_evm_prover_malformed_unknown_field_names",
+            "test_release_readiness_report_blocks_native_evm_prover_malformed_duplicate_json_keys",
+            "test_release_readiness_report_blocks_native_evm_prover_sdk_artifact_malformed_unknown_field_names",
             "test_release_readiness_report_blocks_native_evm_prover_sdk_artifact_value_drift",
             "test_release_readiness_report_blocks_native_evm_prover_sdk_implementation_artifact_drift",
             "test_release_readiness_report_blocks_missing_native_evm_parity_fixture",
             "test_release_readiness_report_blocks_tampered_native_evm_parity_fixture_hash",
             "test_release_readiness_report_blocks_native_evm_parity_fixture_sdk_drift",
+            "test_release_readiness_report_blocks_native_evm_parity_fixture_malformed_duplicate_keys",
+            "test_release_readiness_report_blocks_native_evm_parity_fixture_malformed_unknown_field_names",
             "test_release_readiness_report_blocks_native_evm_self_test_role_reuse",
         ),
     ),
@@ -5097,10 +5850,13 @@ SCCP_RELEASE_ARTIFACT_PATH_TEXT_MARKERS = (
         (
             "MARKDOWN_UNSAFE_PATH_CHARACTERS",
             "def _path_markdown_unsafe_character(",
+            "def _path_percent_encoded_traversal(",
             "release artifact path contains Markdown-unsafe character",
+            "release artifact path contains percent-encoded traversal segment",
             "release artifact path must not contain surrounding whitespace",
             "release bundle copied filename contains Markdown-unsafe character",
             "path contains Markdown-unsafe character",
+            "path contains percent-encoded traversal segment",
             "path must not contain surrounding whitespace",
         ),
     ),
@@ -5109,8 +5865,11 @@ SCCP_RELEASE_ARTIFACT_PATH_TEXT_MARKERS = (
         (
             "MARKDOWN_UNSAFE_PATH_CHARACTERS",
             "def _path_markdown_unsafe_character(",
+            "def _path_percent_encoded_traversal(",
             "release artifact path contains Markdown-unsafe character",
+            "release artifact path contains percent-encoded traversal segment",
             "path contains Markdown-unsafe character",
+            "path contains percent-encoded traversal segment",
             "path must not contain surrounding whitespace",
         ),
     ),
@@ -5119,10 +5878,14 @@ SCCP_RELEASE_ARTIFACT_PATH_TEXT_MARKERS = (
         (
             "MARKDOWN_UNSAFE_PATH_CHARACTERS",
             "def _path_markdown_unsafe_character(",
+            "def _path_percent_encoded_traversal(",
             "manifest artifact path contains Markdown-unsafe character",
+            "manifest artifact path contains percent-encoded traversal segment",
             "readiness report inputs path contains Markdown-unsafe character",
+            "readiness report inputs path contains percent-encoded traversal segment",
             "readiness report inputs path must not contain surrounding whitespace",
             "artifact path contains Markdown-unsafe character",
+            "artifact path contains percent-encoded traversal segment",
             "artifact path must not contain surrounding whitespace",
             "bundle contains entry path with Markdown-unsafe character",
         ),
@@ -5137,10 +5900,13 @@ SCCP_RELEASE_ARTIFACT_PATH_TEXT_MARKERS = (
             "test_release_bundle_rejects_markdown_unsafe_native_evm_payload_before_copy",
             "test_release_bundle_rejects_markdown_unsafe_artifact_paths",
             "test_release_bundle_rejects_padded_artifact_paths",
+            "test_release_bundle_rejects_percent_encoded_artifact_traversal_paths",
             "test_release_bundle_verifier_rejects_markdown_unsafe_manifest_paths",
             "test_release_bundle_verifier_rejects_padded_manifest_paths",
+            "test_release_bundle_verifier_rejects_percent_encoded_manifest_path_escape",
             "test_release_bundle_verifier_rejects_markdown_unsafe_report_paths",
             "test_release_bundle_verifier_rejects_padded_report_paths",
+            "test_release_bundle_verifier_rejects_percent_encoded_report_paths",
             "test_release_bundle_verifier_rejects_padded_native_evm_prover_payload_paths",
             "test_release_bundle_verifier_rejects_markdown_unsafe_filesystem_entries",
         ),
@@ -5152,6 +5918,7 @@ SCCP_RELEASE_ARTIFACT_PATH_TEXT_MARKERS = (
             "test_release_readiness_report_blocks_missing_sccp_release_artifact_path_text_gate",
             "test_release_readiness_rejects_markdown_unsafe_artifact_paths",
             "test_release_readiness_rejects_padded_artifact_paths",
+            "test_release_readiness_rejects_percent_encoded_artifact_traversal_paths",
             "test_release_readiness_rejects_markdown_unsafe_native_evm_payload_paths",
             "test_release_readiness_rejects_padded_native_evm_payload_paths",
         ),
@@ -5185,10 +5952,19 @@ SCCP_RELEASE_INPUT_PROVENANCE_SCHEMA_MARKERS = (
         ),
     ),
     (
+        "scripts/sccp_release_bundle.py",
+        (
+            "def _release_report_bundle_errors(",
+            '"inputs"',
+            'f"{label}.inputs"',
+        ),
+    ),
+    (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
             "test_release_bundle_verifier_guards_release_input_provenance_schema_inventory",
             "test_release_bundle_verifier_rejects_missing_release_input_provenance_schema_inventory_gate",
+            "test_release_bundle_rejects_missing_copied_report_inputs_before_render",
             "test_release_bundle_verifier_rejects_input_path_drift",
             "test_release_bundle_verifier_rejects_input_provenance_schema_drift",
             "test_release_bundle_verifier_rejects_report_artifact_path_drift",
@@ -5211,14 +5987,18 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
             "class DuplicateJsonKeyError",
             "def _reject_duplicate_json_keys(",
             "object_pairs_hook=_reject_duplicate_json_keys",
+            "def _public_json_duplicate_key_blocker(",
             "def _canonical_json_file_errors(",
             "JSON is not canonical release-bundle serialization",
             "manifest JSON is not UTF-8 text",
             "manifest JSON contains duplicate key",
             "_canonical_json_file_errors(\"manifest\", manifest_path, manifest)",
+            '"manifest",',
+            '"unknown top-level",',
             "readiness report JSON contains duplicate key",
             "readiness report JSON is not UTF-8 text",
             "_canonical_json_file_errors(\"readiness report\", report_path, report)",
+            '"readiness report",',
             "all-lanes summary JSON contains duplicate key",
             "all-lanes summary JSON is not UTF-8 text",
             "_canonical_json_file_errors(\"all-lanes summary\", summary_path, summary)",
@@ -5233,13 +6013,25 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
         ),
     ),
     (
+        "scripts/sccp_release_bundle.py",
+        (
+            "READINESS_REPORT_ROOT_FIELDS",
+            "def _unknown_report_field_errors(",
+            "contains unknown field",
+            "_unknown_report_field_errors(payload, label, READINESS_REPORT_ROOT_FIELDS)",
+        ),
+    ),
+    (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
             "test_release_bundle_verifier_guards_release_public_json_root_schema_inventory",
             "test_release_bundle_verifier_rejects_missing_release_public_json_root_schema_inventory_gate",
+            "test_release_bundle_rejects_unknown_copied_report_root_before_render",
             "test_release_bundle_verifier_rejects_noncanonical_json_serialization",
             "test_release_bundle_verifier_rejects_duplicate_json_keys",
             "test_release_bundle_verifier_rejects_report_summary_duplicate_json_keys",
+            "test_release_bundle_verifier_rejects_malformed_public_json_duplicate_keys",
+            "test_release_bundle_verifier_rejects_malformed_root_json_fields",
             "test_release_bundle_verifier_rejects_non_utf8_manifest_json",
             "test_release_bundle_verifier_rejects_non_utf8_report_summary_json",
         ),
@@ -5304,6 +6096,10 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
             "readiness report cryptographic_evidence does not match embedded lane evidence",
             "readiness report cryptographic evidence row has unbound route canary",
             "must match embedded lane",
+            "def _cryptographic_evidence_row_unknown_field_blocker(",
+            "def _source_adapter_gate_audit_key_blocker(",
+            "source_adapter_gate_audit_hashes contains audit field name",
+            "if _source_adapter_gate_audit_key_blocker(audit_key) is not None:",
         ),
     ),
     (
@@ -5325,6 +6121,9 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
             "test_release_bundle_verifier_rejects_crypto_evidence_field_binding_drift",
             "test_release_bundle_verifier_rejects_crypto_evidence_lane_binding_drift",
             "test_release_bundle_verifier_rejects_crypto_evidence_inventory_drift",
+            "test_release_bundle_verifier_rejects_crypto_evidence_malformed_source_adapter_gate_audit_keys",
+            "test_release_bundle_verifier_suppresses_crypto_evidence_malformed_markdown_leaks",
+            "test_release_bundle_verifier_rejects_crypto_evidence_malformed_unknown_fields",
         ),
     ),
     (
@@ -5347,6 +6146,11 @@ SCCP_RELEASE_PUBLIC_SUBMISSION_SURFACE_BINDING_MARKERS = (
             "_submission_surface_inventory_errors(surfaces)",
             "_expected_submission_surfaces(report)",
             "readiness report user_prover_submission_surfaces does not match corridor phases",
+            "def _submission_surface_sdk_key_blocker(",
+            "sdk_helper_symbols_by_sdk contains SDK key with",
+            "def _submission_surface_required_phase_blocker(",
+            "required_phases contains phase with",
+            "contains unknown field name with non-ASCII character",
         ),
     ),
     (
@@ -5370,6 +6174,9 @@ SCCP_RELEASE_PUBLIC_SUBMISSION_SURFACE_BINDING_MARKERS = (
             "test_release_bundle_verifier_rejects_submission_surface_unknown_lanes",
             "test_release_bundle_verifier_rejects_submission_surface_backend_mismatch",
             "test_release_bundle_verifier_rejects_missing_required_submission_surface_helper",
+            "test_release_bundle_verifier_rejects_submission_surface_malformed_sdk_helper_map_keys",
+            "test_release_bundle_verifier_rejects_submission_surface_malformed_required_phases",
+            "test_release_bundle_verifier_rejects_submission_surface_malformed_unknown_fields",
         ),
     ),
     (
@@ -5462,6 +6269,9 @@ SCCP_RELEASE_MANIFEST_ARTIFACT_SET_ORDER_MARKERS = (
             "def _manifest_artifact_paths_in_order(",
             "def _expected_manifest_artifact_order(",
             "manifest artifact order does not match canonical",
+            "def _artifact_errors(",
+            "f\"manifest artifact {artifact_path}\"",
+            "f\"{label} artifact {artifact_path}\"",
         ),
     ),
     (
@@ -5485,6 +6295,7 @@ SCCP_RELEASE_MANIFEST_ARTIFACT_SET_ORDER_MARKERS = (
             "def test_release_bundle_verifier_rejects_extra_manifested_artifact",
             "def test_release_bundle_verifier_rejects_unknown_phase_artifact_reference",
             "def test_release_bundle_verifier_rejects_manifest_artifact_order_drift",
+            "def test_release_bundle_verifier_rejects_malformed_artifact_fields",
         ),
     ),
     (
@@ -5528,10 +6339,21 @@ SCCP_RELEASE_PUBLIC_BLOCKER_LIST_SCHEMA_MARKERS = (
         ),
     ),
     (
+        "scripts/sccp_release_bundle.py",
+        (
+            "def _string_list_field_errors(",
+            "with no surrounding whitespace",
+            "must not contain duplicate strings",
+            '_string_list_field_errors(label, payload, "blockers", allow_empty=True)',
+            "blockers must be empty when production_ready is true",
+        ),
+    ),
+    (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
             "def test_release_bundle_verifier_guards_release_public_blocker_list_schema_inventory",
             "def test_release_bundle_verifier_rejects_missing_release_public_blocker_list_schema_inventory_gate",
+            "def test_release_bundle_allow_not_ready_rejects_noncanonical_root_blockers",
             "def test_release_bundle_verifier_rejects_all_lanes_list_scalar_type_drift",
             "def test_release_bundle_verifier_rejects_padded_public_blocker_strings",
             "def test_release_bundle_verifier_rejects_duplicate_public_blocker_strings",
@@ -5564,6 +6386,10 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def _submission_surface_row_schema_errors(",
             'for field in ("lanes", "proof_backend", "sdk_helpers", "on_chain_submission"):',
             "sdk_helper_symbols_by_sdk[{sdk}] must be a list of ",
+            "def _exact_object_key_errors(",
+            '_native_evm_prover_field_name_blocker(label, key, "unknown")',
+            "def _all_lanes_audit_hash_key_blocker(",
+            "audit_hashes contains audit field name with",
             "def _all_lanes_lane_schema_errors(",
             "chain must be a non-empty string",
             '"destination_binding_key"',
@@ -5571,9 +6397,15 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             'for field in ("status", "evidence_source"):',
             "status must be passed",
             "evidence_source must be {expected_source}",
+            "RELEASE_CHECKLIST_ITEM_IDS",
+            "def _release_checklist_item_id_malformed_blocker(",
+            "def _release_checklist_item_id_blocker(",
             "def _release_checklist_schema_errors(",
-            '_non_empty_string_field_errors(item_label, item, "id")',
+            "_release_checklist_item_id_blocker(item_id_label, item_id)",
             '_non_empty_string_field_errors(item_label, item, "title")',
+            "def _corridor_phase_key_blocker(",
+            '"readiness report corridor phases"',
+            '"readiness report corridor evidence_artifacts"',
         ),
     ),
     (
@@ -5591,10 +6423,14 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def test_release_bundle_verifier_rejects_missing_release_public_scalar_text_schema_inventory_gate",
             "def test_release_bundle_verifier_rejects_padded_public_scalar_strings",
             "def test_release_bundle_verifier_rejects_release_checklist_field_type_drift",
+            "def test_release_bundle_verifier_rejects_release_checklist_malformed_item_ids",
             "def test_release_bundle_verifier_rejects_all_lanes_list_scalar_type_drift",
+            "def test_release_bundle_verifier_rejects_all_lanes_malformed_unknown_fields",
             "def test_release_bundle_verifier_rejects_all_lanes_destination_binding_field_shape",
             "def test_release_bundle_verifier_rejects_all_lanes_route_canary_field_drift",
             "def test_release_bundle_verifier_rejects_submission_surface_field_type_drift",
+            "def test_release_bundle_verifier_rejects_corridor_malformed_unknown_fields",
+            "def test_release_bundle_verifier_rejects_corridor_malformed_phase_keys",
         ),
     ),
     (
@@ -5684,6 +6520,11 @@ SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS = (
             "readiness report Markdown missing section",
             "def _readiness_markdown_string_list_cell_presence_errors(",
             "def _readiness_markdown_string_list_items_presence_errors(",
+            "def _readiness_markdown_report_artifact_path(",
+            "_release_checklist_item_id_malformed_blocker(",
+            "if _source_inventory_gate_key_blocker(gate) is not None:",
+            "if type(domain) is not int:",
+            "if _source_adapter_gate_audit_key_blocker(audit_key) is not None:",
             "readiness report Markdown does not match readiness report JSON",
             "SCCP readiness Markdown invariants source inventory",
         ),
@@ -5697,6 +6538,10 @@ SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS = (
             "def test_release_bundle_verifier_markdown_invariants_require_public_sections",
             "def test_release_bundle_verifier_markdown_invariants_require_blocker_text",
             "def test_release_bundle_verifier_markdown_invariants_require_invalid_blocker_markers",
+            "def test_release_bundle_verifier_rejects_release_checklist_malformed_item_ids",
+            "def test_release_bundle_verifier_suppresses_malformed_source_inventory_gate_markdown_leaks",
+            "def test_release_bundle_verifier_suppresses_malformed_report_artifact_path_markdown_leaks",
+            "def test_release_bundle_verifier_suppresses_crypto_evidence_malformed_markdown_leaks",
             "def test_release_bundle_verifier_guards_readiness_markdown_invariants_inventory",
             "def test_release_bundle_verifier_rejects_missing_readiness_markdown_invariants_inventory_gate",
         ),
@@ -6446,6 +7291,14 @@ USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK = {
 }
 RELEASE_CHECKLIST_KEYS = {"ready", "items"}
 RELEASE_CHECKLIST_ITEM_KEYS = {"id", "title", "ready", "blockers"}
+RELEASE_CHECKLIST_ITEM_IDS = {
+    "all_required_lane_records",
+    "governed_deployment_evidence",
+    "route_allowlist_binding",
+    "live_route_canary_evidence",
+    "native_evm_groth16_prover_bundle",
+    "no_unresolved_blockers",
+}
 CORRIDOR_KEYS = {
     "production_ready",
     "phases",
@@ -6660,6 +7513,29 @@ def _path_markdown_unsafe_character(path: str) -> str | None:
     return None
 
 
+def _path_percent_encoded_traversal(path: str) -> str | None:
+    decoded = path
+    seen = {decoded}
+    for _ in range(32):
+        if "%" not in decoded:
+            return None
+        decoded = unquote(decoded)
+        if decoded in seen:
+            return None
+        seen.add(decoded)
+        decoded_path = PurePosixPath(decoded)
+        if (
+            decoded_path.is_absolute()
+            or ".." in decoded_path.parts
+            or "\\" in decoded
+            or decoded != decoded_path.as_posix()
+        ):
+            return repr(path)
+    if "%" in decoded:
+        return repr(path)
+    return None
+
+
 def _canonical_json_text(payload: Any) -> str:
     return json.dumps(payload, indent=2, sort_keys=True) + "\n"
 
@@ -6698,6 +7574,12 @@ def _artifact(path: Path) -> dict[str, Any]:
         raise ValueError(
             "release artifact path contains Markdown-unsafe character "
             f"{markdown_unsafe_character}: {artifact_path!r}"
+        )
+    percent_traversal = _path_percent_encoded_traversal(artifact_path)
+    if percent_traversal is not None:
+        raise ValueError(
+            "release artifact path contains percent-encoded traversal segment: "
+            f"{percent_traversal}"
         )
     payload = path.read_bytes()
     return {
@@ -6750,6 +7632,12 @@ def _canonical_artifact_path(artifact: dict[str, Any]) -> tuple[str | None, list
             "manifest artifact path contains Markdown-unsafe character "
             f"{markdown_unsafe_character}: {artifact_path!r}"
         ]
+    percent_traversal = _path_percent_encoded_traversal(artifact_path)
+    if percent_traversal is not None:
+        return None, [
+            "manifest artifact path contains percent-encoded traversal segment: "
+            f"{percent_traversal}"
+        ]
     if "\\" in artifact_path:
         return None, [f"manifest artifact path is not canonical: {artifact_path}"]
     path = PurePosixPath(artifact_path)
@@ -6780,6 +7668,12 @@ def _canonical_report_input_path_errors(value: Any) -> list[str]:
             "readiness report inputs path contains Markdown-unsafe character "
             f"{markdown_unsafe_character}: {value!r}"
         ]
+    percent_traversal = _path_percent_encoded_traversal(value)
+    if percent_traversal is not None:
+        return [
+            "readiness report inputs path contains percent-encoded traversal segment: "
+            f"{percent_traversal}"
+        ]
     if "\\" in value:
         return [f"readiness report inputs path is not canonical: {value}"]
     path = PurePosixPath(value)
@@ -6807,6 +7701,12 @@ def _canonical_report_artifact_path_errors(label: str, value: str) -> list[str]:
         return [
             f"{label} artifact path contains Markdown-unsafe character "
             f"{markdown_unsafe_character}: {value!r}"
+        ]
+    percent_traversal = _path_percent_encoded_traversal(value)
+    if percent_traversal is not None:
+        return [
+            f"{label} artifact path contains percent-encoded traversal segment: "
+            f"{percent_traversal}"
         ]
     if "\\" in value:
         return [f"{label} artifact path is not canonical: {value}"]
@@ -6844,12 +7744,22 @@ def _expected_phase_artifact_path(phase: str) -> str:
 def _artifact_errors(bundle_dir: Path, artifact: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     artifact_path, path_errors = _canonical_artifact_path(artifact)
-    for key in sorted(set(artifact) - ARTIFACT_KEYS):
+    for key in sorted(set(artifact) - ARTIFACT_KEYS, key=str):
         if artifact_path is None:
-            errors.append(f"manifest artifact contains unknown field: {key}")
+            errors.append(
+                _native_evm_prover_field_name_blocker(
+                    "manifest artifact",
+                    key,
+                    "unknown",
+                )
+            )
         else:
             errors.append(
-                f"manifest artifact {artifact_path} contains unknown field: {key}"
+                _native_evm_prover_field_name_blocker(
+                    f"manifest artifact {artifact_path}",
+                    key,
+                    "unknown",
+                )
             )
     if path_errors:
         return [*errors, *path_errors]
@@ -6979,9 +7889,13 @@ def _check_report_artifact(
     if not isinstance(artifact_path, str) or not artifact_path:
         errors.append(f"{label} artifact has no path")
         return
-    for key in sorted(set(artifact) - ARTIFACT_KEYS):
+    for key in sorted(set(artifact) - ARTIFACT_KEYS, key=str):
         errors.append(
-            f"{label} artifact {artifact_path} contains unknown field: {key}"
+            _native_evm_prover_field_name_blocker(
+                f"{label} artifact {artifact_path}",
+                key,
+                "unknown",
+            )
         )
     expected_bytes = artifact.get("bytes")
     if type(expected_bytes) is not int or expected_bytes < 0:
@@ -7039,12 +7953,27 @@ def _phase_transcript_errors(
         errors.append(
             f"readiness report phase {phase} evidence artifact is a dry-run transcript"
         )
+    if _unknown_corridor_phase_marker_lines(transcript):
+        errors.append(
+            "readiness report phase "
+            f"{phase} evidence artifact contains unknown corridor phase marker"
+        )
+    if _transcript_has_nonempty_line_before_first_phase_marker(transcript):
+        errors.append(
+            "readiness report phase "
+            f"{phase} evidence artifact contains non-empty output before "
+            "first phase marker"
+        )
     if phase_block is None:
         errors.append(
             f"readiness report phase {phase} evidence artifact is missing the phase marker"
         )
+    elif _phase_marker_count(phase, transcript) > 1:
+        errors.append(
+            f"readiness report phase {phase} evidence artifact has duplicate phase marker"
+        )
     elif (
-        not _phase_block_has_output_fragment(
+        not _phase_block_has_exact_output_line(
             phase_block, CORRIDOR_COMPLETION_SENTINEL
         )
         and not _transcript_has_full_corridor_completion(transcript)
@@ -7052,6 +7981,46 @@ def _phase_transcript_errors(
         errors.append(
             "readiness report phase "
             f"{phase} evidence artifact is missing the phase-block completion sentinel"
+        )
+    elif (
+        _phase_block_has_exact_output_line(phase_block, CORRIDOR_COMPLETION_SENTINEL)
+        and not _phase_block_has_completion_after_required_evidence(
+            phase, phase_block
+        )
+        and not _transcript_has_full_corridor_completion(transcript)
+    ):
+        errors.append(
+            "readiness report phase "
+            f"{phase} evidence artifact completion sentinel precedes required "
+            "phase evidence"
+        )
+    if (
+        phase_block is not None
+        and _phase_block_has_traced_command_after_completion(phase_block)
+    ):
+        errors.append(
+            "readiness report phase "
+            f"{phase} evidence artifact contains traced command after "
+            "completion sentinel"
+        )
+    if (
+        phase_block is not None
+        and _phase_block_has_nonempty_line_after_completion(phase_block)
+    ):
+        errors.append(
+            "readiness report phase "
+            f"{phase} evidence artifact contains non-empty output after "
+            "completion sentinel"
+        )
+    if (
+        phase_block is not None
+        and _transcript_has_multiple_known_phase_markers(transcript)
+        and not _transcript_has_full_corridor_completion(transcript)
+    ):
+        errors.append(
+            "readiness report phase "
+            f"{phase} evidence artifact contains incomplete multi-phase "
+            "corridor transcript"
         )
     required_fragments = PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS.get(phase)
     if required_fragments is None:
@@ -7081,6 +8050,14 @@ def _phase_transcript_errors(
                     f"{phase} evidence artifact is missing expected "
                     f"phase-block success marker: {fragment}"
                 )
+    if phase_block is not None:
+        forbidden_marker = _phase_block_forbidden_output_marker(phase, phase_block)
+        if forbidden_marker is not None:
+            errors.append(
+                "readiness report phase "
+                f"{phase} evidence artifact contains forbidden phase-block "
+                f"failure marker: {forbidden_marker}"
+            )
     return errors
 
 
@@ -8138,6 +9115,7 @@ def _active_launch_checklist_schema_inventory_errors(
 
 def _phase_transcript_block(phase: str, transcript: str) -> str | None:
     marker = f"{CORRIDOR_PHASE_MARKER_PREFIX}{phase}"
+    known_markers = _known_corridor_phase_marker_lines()
     lines = transcript.splitlines()
     start: int | None = None
     for index, line in enumerate(lines):
@@ -8148,29 +9126,127 @@ def _phase_transcript_block(phase: str, transcript: str) -> str | None:
         return None
     end = len(lines)
     for index in range(start + 1, len(lines)):
-        if lines[index].startswith(CORRIDOR_PHASE_MARKER_PREFIX):
+        if lines[index] in known_markers:
             end = index
             break
     return "\n".join(lines[start:end])
 
 
+def _known_corridor_phase_marker_lines() -> set[str]:
+    return {f"{CORRIDOR_PHASE_MARKER_PREFIX}{phase}" for phase in CORRIDOR_PHASES}
+
+
+def _unknown_corridor_phase_marker_lines(transcript: str) -> list[str]:
+    known_markers = _known_corridor_phase_marker_lines()
+    return [
+        line
+        for line in transcript.splitlines()
+        if line.startswith(CORRIDOR_PHASE_MARKER_PREFIX) and line not in known_markers
+    ]
+
+
+def _transcript_has_multiple_known_phase_markers(transcript: str) -> bool:
+    known_markers = _known_corridor_phase_marker_lines()
+    markers = {
+        line
+        for line in transcript.splitlines()
+        if line in known_markers
+    }
+    return len(markers) > 1
+
+
+def _transcript_has_nonempty_line_before_first_phase_marker(transcript: str) -> bool:
+    known_markers = _known_corridor_phase_marker_lines()
+    lines = transcript.splitlines()
+    for first_marker_index, line in enumerate(lines):
+        if line in known_markers:
+            return any(
+                bool(prefix_line.strip())
+                for prefix_line in lines[:first_marker_index]
+            )
+    return False
+
+
+def _phase_marker_count(phase: str, transcript: str) -> int:
+    marker = f"{CORRIDOR_PHASE_MARKER_PREFIX}{phase}"
+    return sum(1 for line in transcript.splitlines() if line == marker)
+
+
 def _transcript_has_full_corridor_completion(transcript: str) -> bool:
     lines = transcript.splitlines()
+    if _transcript_has_nonempty_line_before_first_phase_marker(transcript):
+        return False
     marker_positions: list[int] = []
+    command_positions_by_fragment: list[list[int]] = []
+    success_positions_by_fragment: list[list[int]] = []
     for phase in CORRIDOR_PHASES:
         marker = f"{CORRIDOR_PHASE_MARKER_PREFIX}{phase}"
         try:
             marker_positions.append(lines.index(marker))
         except ValueError:
             return False
+        if _phase_marker_count(phase, transcript) != 1:
+            return False
+        phase_block = _phase_transcript_block(phase, transcript)
+        if phase_block is None:
+            return False
+        phase_command_positions: list[int] = []
+        for fragment in PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[phase]:
+            command_positions = _phase_block_command_fragment_line_indices(
+                phase, phase_block, fragment
+            )
+            if not command_positions:
+                return False
+            phase_command_positions.extend(command_positions)
+            block_offset = marker_positions[-1]
+            command_positions_by_fragment.append(
+                [block_offset + position for position in command_positions]
+            )
+        if not phase_command_positions:
+            return False
+        first_phase_command_position = min(phase_command_positions)
+        for fragment in PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS.get(phase, ()):
+            success_positions = _phase_block_output_fragment_line_indices(
+                phase_block, fragment
+            )
+            if not success_positions:
+                return False
+            if not any(
+                position > first_phase_command_position
+                for position in success_positions
+            ):
+                return False
+            block_offset = marker_positions[-1]
+            success_positions_by_fragment.append(
+                [block_offset + position for position in success_positions]
+            )
+        if _phase_block_forbidden_output_marker(phase, phase_block) is not None:
+            return False
+    if marker_positions != sorted(marker_positions):
+        return False
     completion_positions = [
         index
         for index, line in enumerate(lines)
-        if CORRIDOR_COMPLETION_SENTINEL in line
+        if line == CORRIDOR_COMPLETION_SENTINEL
         and not line.lstrip().startswith("+ ")
     ]
-    return bool(completion_positions) and max(completion_positions) > max(
-        marker_positions
+    if not completion_positions:
+        return False
+    completion_position = max(completion_positions)
+    if _transcript_has_nonempty_line_after_completion(transcript):
+        return False
+    if _transcript_has_traced_command_after_completion(transcript):
+        return False
+    return (
+        completion_position > max(marker_positions)
+        and all(
+            any(position < completion_position for position in positions)
+            for positions in command_positions_by_fragment
+        )
+        and all(
+            any(position < completion_position for position in positions)
+            for positions in success_positions_by_fragment
+        )
     )
 
 
@@ -8182,6 +9258,16 @@ def _phase_command_lines(phase_block: str) -> list[str]:
     ]
 
 
+def _line_is_shell_xtrace_command(line: str) -> bool:
+    if SHELL_XTRACE_COMMAND_PATTERN.match(line) is not None:
+        return True
+    normalized_line = _phase_output_failure_scan_line(line)
+    return (
+        normalized_line != line
+        and SHELL_XTRACE_COMMAND_PATTERN.match(normalized_line) is not None
+    )
+
+
 def _phase_command_tokens(command: str) -> list[str]:
     command = command.strip()
     if command.startswith("+ "):
@@ -8189,7 +9275,7 @@ def _phase_command_tokens(command: str) -> list[str]:
     try:
         return [
             normalized
-            for token in shlex.split(command)
+            for token in shlex.split(command, comments=True)
             if (normalized := token.strip("()"))
         ]
     except ValueError:
@@ -8205,9 +9291,93 @@ def _command_token_is_env_assignment(token: str) -> bool:
     return bool(separator and name and name.replace("_", "").isalnum())
 
 
+def _command_option_values(tokens: list[str], option: str) -> list[str]:
+    values: list[str] = []
+    index = 0
+    option_prefix = f"{option}="
+    while index < len(tokens):
+        token = tokens[index]
+        if token == option:
+            if index + 1 < len(tokens):
+                values.append(tokens[index + 1])
+            index += 2
+            continue
+        if token.startswith(option_prefix):
+            values.append(token[len(option_prefix) :])
+        index += 1
+    return values
+
+
+def _command_has_option_value(tokens: list[str], option: str, expected: str) -> bool:
+    return expected in _command_option_values(tokens, option)
+
+
+def _command_positional_tokens(
+    tokens: list[str],
+    start_index: int = 0,
+    options_with_values: frozenset[str] = frozenset(),
+) -> list[str]:
+    positionals: list[str] = []
+    skip_next = False
+    end_of_options = False
+    for token in tokens[start_index:]:
+        if skip_next:
+            skip_next = False
+            continue
+        if not end_of_options and token == "--":
+            end_of_options = True
+            continue
+        if not end_of_options:
+            if token in options_with_values:
+                skip_next = True
+                continue
+            if any(token.startswith(f"{option}=") for option in options_with_values):
+                continue
+            if token.startswith("-"):
+                continue
+        positionals.append(token)
+    return positionals
+
+
+def _phase_prefix_env_assignments(command: str) -> list[str]:
+    tokens = _phase_command_tokens(command)
+    if (
+        "&&" in tokens
+        and tokens.index("&&") == 2
+        and tokens[:1] == ["cd"]
+        and bool(tokens[1])
+        and not tokens[1].startswith("-")
+    ):
+        tokens = tokens[tokens.index("&&") + 1 :]
+    if tokens[:1] == ["env"]:
+        tokens = tokens[1:]
+    assignments: list[str] = []
+    while tokens and _command_token_is_env_assignment(tokens[0]):
+        assignments.append(tokens[0])
+        tokens = tokens[1:]
+    return assignments
+
+
+def _android_harness_mains_classes(command: str) -> list[str]:
+    harness_value: str | None = None
+    for assignment in _phase_prefix_env_assignments(command):
+        name, separator, value = assignment.partition("=")
+        if separator and name == "ANDROID_HARNESS_MAINS":
+            harness_value = value
+    if harness_value is None:
+        return []
+    return [item for item in harness_value.split(",") if item]
+
+
 def _phase_effective_command_tokens(command: str) -> list[str]:
     tokens = _phase_command_tokens(command)
-    if "&&" in tokens:
+    if (
+        "&&" in tokens
+        and tokens.index("&&") == 2
+        and tokens[:1] == ["cd"]
+        and bool(tokens[1])
+        and not tokens[1].startswith("-")
+    ):
         tokens = tokens[tokens.index("&&") + 1 :]
     if tokens[:1] == ["env"]:
         tokens = tokens[1:]
@@ -8221,14 +9391,134 @@ def _effective_command_starts_with(command: str, sequence: tuple[str, ...]) -> b
     return tuple(tokens[: len(sequence)]) == sequence
 
 
+def _effective_command_equals(command: str, sequence: tuple[str, ...]) -> bool:
+    return tuple(_phase_effective_command_tokens(command)) == sequence
+
+
 def _rust_sccp_command_has_fragment(command: str, _fragment: str) -> bool:
-    return _effective_command_starts_with(
+    return _effective_command_equals(
         command,
         ("cargo", "test", "-p", "iroha_sccp", "--", "--nocapture"),
     )
 
 
-def _evidence_pytest_command_has_fragment(command: str, fragment: str) -> bool:
+def _pytest_fragment_positionals(fragment: str) -> list[str]:
+    tokens = shlex.split(fragment)
+    if "-q" not in tokens:
+        return []
+    return _command_positional_tokens(
+        tokens,
+        tokens.index("-q") + 1,
+        PYTEST_OPTIONS_WITH_VALUES,
+    )
+
+
+def _pytest_command_positionals(tokens: list[str], module_index: int) -> list[str]:
+    if (
+        module_index != 1
+        or len(tokens) <= module_index + 3
+        or tokens[module_index : module_index + 3] != ["-m", "pytest", "-q"]
+    ):
+        return []
+    positionals = tokens[module_index + 3 :]
+    if any(token.startswith("-") for token in positionals):
+        return []
+    return positionals
+
+
+def _pytest_expected_positionals_for_phase(phase: str) -> tuple[str, ...]:
+    positionals: list[str] = []
+    for fragment in PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS.get(phase, ()):
+        if fragment.startswith("-m pytest"):
+            positionals.extend(_pytest_fragment_positionals(fragment))
+        elif fragment.startswith(("pytests/", "python/")):
+            positionals.append(fragment)
+    return tuple(positionals)
+
+
+def _append_unique(items: list[str], value: str) -> None:
+    if value not in items:
+        items.append(value)
+
+
+def _node_expected_test_files_for_phase(phase: str) -> tuple[str, ...]:
+    test_files: list[str] = []
+    for fragment in PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS.get(phase, ()):
+        if fragment.startswith("--test "):
+            for item in shlex.split(fragment)[1:]:
+                _append_unique(test_files, item)
+        elif fragment.endswith((".test.js", ".test.mjs")):
+            _append_unique(test_files, fragment)
+    return tuple(test_files)
+
+
+def _node_test_command_files(tokens: list[str]) -> tuple[str, ...]:
+    if len(tokens) < 3 or _command_token_basename(tokens[0]) != "node":
+        return ()
+    if tokens[1] != "--test":
+        return ()
+    test_files = tokens[2:]
+    if any(token.startswith("-") for token in test_files):
+        return ()
+    return tuple(test_files)
+
+
+def _node_check_command_matches(tokens: list[str], expected_path: str) -> bool:
+    return (
+        len(tokens) == 3
+        and _command_token_basename(tokens[0]) == "node"
+        and tokens[1] == "--check"
+        and tokens[2] == expected_path
+    )
+
+
+def _dotnet_sdk_command_matches(tokens: list[str]) -> bool:
+    if len(tokens) != 6 or _command_token_basename(tokens[0]) != "dotnet":
+        return False
+    project_fragment, filter_fragment = PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[
+        "dotnet-sdk"
+    ]
+    project_tokens = shlex.split(project_fragment)
+    expected_project = project_tokens[2] if len(project_tokens) > 2 else ""
+    return (
+        tokens[1] == "test"
+        and tokens[2] == expected_project
+        and tokens[3] == "--filter"
+        and tokens[4].replace("\\|", "|") == filter_fragment.replace("\\|", "|")
+        and tokens[5] == "--nologo"
+    )
+
+
+def _gradle_test_selector_matches(expected: str, actual: str) -> bool:
+    if expected.endswith("."):
+        return actual in (expected, f"{expected}*")
+    return actual == expected
+
+
+def _gradle_test_command_selectors(tokens: list[str], task: str) -> list[str]:
+    if (
+        len(tokens) < 5
+        or not tokens
+        or _command_token_basename(tokens[0]) != "gradlew"
+        or tokens[1] != task
+        or tokens[2] != "--console=plain"
+    ):
+        return []
+    selectors: list[str] = []
+    index = 3
+    while index < len(tokens):
+        if tokens[index] != "--tests" or index + 1 >= len(tokens):
+            return []
+        selectors.append(tokens[index + 1])
+        index += 2
+    return selectors
+
+
+def _evidence_pytest_command_has_fragment(
+    phase: str,
+    command: str,
+    fragment: str,
+) -> bool:
     tokens = _phase_effective_command_tokens(command)
     if not tokens or not _command_token_basename(tokens[0]).startswith("python"):
         return False
@@ -8242,22 +9532,33 @@ def _evidence_pytest_command_has_fragment(command: str, fragment: str) -> bool:
     )
     if module_index is None or "-q" not in tokens[module_index + 2 :]:
         return False
+    pytest_positionals = _pytest_command_positionals(tokens, module_index)
+    if not pytest_positionals:
+        return False
+    expected_positionals = _pytest_expected_positionals_for_phase(phase)
+    if tuple(pytest_positionals) != expected_positionals:
+        return False
     if fragment.startswith("pytests/"):
-        return fragment in tokens
+        return fragment in pytest_positionals
     if fragment.startswith("python/"):
-        return fragment in tokens
+        return fragment in pytest_positionals
     if fragment.startswith("-m pytest"):
-        return all(part in tokens for part in shlex.split(fragment))
+        expected_positionals = _pytest_fragment_positionals(fragment)
+        return bool(expected_positionals) and all(
+            item in pytest_positionals for item in expected_positionals
+        )
     return fragment in command
 
 
 def _js_sdk_command_has_fragment(command: str, fragment: str) -> bool:
     tokens = _phase_effective_command_tokens(command)
-    if not tokens or _command_token_basename(tokens[0]) != "node" or "--test" not in tokens:
+    expected_files = _node_expected_test_files_for_phase("js-sdk")
+    test_files = _node_test_command_files(tokens)
+    if test_files != expected_files:
         return False
     if fragment.startswith("--test "):
-        return all(part in tokens for part in shlex.split(fragment))
-    return fragment in tokens
+        return all(part in test_files for part in shlex.split(fragment)[1:])
+    return fragment in test_files
 
 
 def _swift_sdk_command_has_fragment(command: str, fragment: str) -> bool:
@@ -8265,80 +9566,122 @@ def _swift_sdk_command_has_fragment(command: str, fragment: str) -> bool:
         return False
     tokens = _phase_effective_command_tokens(command)
     if fragment.startswith("swift test "):
-        return all(part in tokens for part in shlex.split(fragment))
-    return fragment in tokens
+        return tuple(tokens) == tuple(shlex.split(fragment))
+    return tuple(tokens) == (
+        "swift",
+        "test",
+        "--filter",
+        fragment,
+        "--disable-swift-testing",
+    )
 
 
 def _kotlin_sdk_command_has_fragment(command: str, fragment: str) -> bool:
     tokens = _phase_effective_command_tokens(command)
     if fragment == "java -version":
-        return tuple(tokens[:2]) == ("java", "-version")
-    if not tokens or _command_token_basename(tokens[0]) != "gradlew":
+        return tuple(tokens) == ("java", "-version")
+    test_selectors = _gradle_test_command_selectors(tokens, ":core-jvm:test")
+    if not test_selectors:
         return False
     if fragment.startswith("./gradlew "):
-        return (
-            ":core-jvm:test" in tokens
-            and "--tests" in tokens
-            and any(token.startswith("org.hyperledger.iroha.sdk.sccp.") for token in tokens)
+        fragment_tokens = shlex.split(fragment)
+        expected_tests = _command_option_values(fragment_tokens, "--tests")
+        return all(
+            any(
+                _gradle_test_selector_matches(expected, actual)
+                for actual in test_selectors
+            )
+            for expected in expected_tests
         )
     if fragment.startswith("org.hyperledger.iroha.sdk.sccp."):
-        return fragment in tokens
-    return (
-        ":core-jvm:test" in tokens
-        and "--tests" in tokens
-        and any(token.startswith("org.hyperledger.iroha.sdk.sccp.") for token in tokens)
+        return fragment in test_selectors
+    return any(
+        _gradle_test_selector_matches("org.hyperledger.iroha.sdk.sccp.", token)
+        for token in test_selectors
     )
 
 
 def _java_android_command_has_fragment(command: str, fragment: str) -> bool:
     tokens = _phase_effective_command_tokens(command)
     if fragment == "java -version":
-        return tuple(tokens[:2]) == ("java", "-version")
-    if not tokens or _command_token_basename(tokens[0]) != "gradlew" or ":core:test" not in tokens:
+        return tuple(tokens) == ("java", "-version")
+    test_selectors = _gradle_test_command_selectors(tokens, ":core:test")
+    if not test_selectors:
         return False
-    all_tokens = _phase_command_tokens(command)
+    actual_harness_classes = _android_harness_mains_classes(command)
     if fragment.startswith("ANDROID_HARNESS_MAINS="):
-        return any(token.startswith(fragment) for token in all_tokens)
+        expected_harness_classes = [
+            item for item in fragment.partition("=")[2].split(",") if item
+        ]
+        return bool(expected_harness_classes) and all(
+            item in actual_harness_classes for item in expected_harness_classes
+        ) and "org.hyperledger.iroha.android.GradleHarnessTests" in test_selectors
     if (
         fragment.startswith("org.hyperledger.iroha.android.sccp.")
         and fragment.endswith("Tests")
     ):
-        return any(
-            token.startswith("ANDROID_HARNESS_MAINS=") and fragment in token
-            for token in all_tokens
+        return (
+            fragment in actual_harness_classes
+            and "org.hyperledger.iroha.android.GradleHarnessTests" in test_selectors
+        )
+    fragment_tokens = shlex.split(fragment)
+    expected_tests = _command_option_values(fragment_tokens, "--tests")
+    if expected_tests:
+        return (
+            all(part in tokens for part in fragment_tokens if part not in expected_tests)
+            and all(
+                expected in test_selectors
+                for expected in expected_tests
+            )
         )
     return all(part in tokens for part in shlex.split(fragment))
 
 
 def _dotnet_sdk_command_has_fragment(command: str, fragment: str) -> bool:
     tokens = _phase_effective_command_tokens(command)
-    if not tokens or _command_token_basename(tokens[0]) != "dotnet":
+    if not _dotnet_sdk_command_matches(tokens):
         return False
     if fragment.startswith("FullyQualifiedName"):
-        normalized_fragment = fragment.replace("\\|", "|")
-        return "--filter" in tokens and any(
-            token.replace("\\|", "|") == normalized_fragment for token in tokens
-        )
+        return tokens[4].replace("\\|", "|") == fragment.replace("\\|", "|")
     if fragment.startswith("dotnet test "):
-        return all(part in tokens for part in shlex.split(fragment)[1:])
+        fragment_tokens = shlex.split(fragment)
+        return (
+            _command_token_basename(tokens[0]) == fragment_tokens[0]
+            and tuple(tokens[1 : len(fragment_tokens)]) == tuple(fragment_tokens[1:])
+        )
     return all(part in tokens for part in shlex.split(fragment))
 
 
 def _contract_smoke_command_has_fragment(command: str, fragment: str) -> bool:
     tokens = _phase_effective_command_tokens(command)
+    if fragment.endswith(".test.mjs"):
+        test_files = _node_test_command_files(tokens)
+        return test_files == _node_expected_test_files_for_phase(
+            "contract-smoke"
+        ) and fragment in test_files
     if fragment.startswith("--check "):
-        return (
-            bool(tokens)
-            and _command_token_basename(tokens[0]) == "node"
-            and all(part in tokens for part in shlex.split(fragment))
-        )
-    return _effective_command_starts_with(command, ("bash", "scripts/sccp_evm_contract_smoke.sh"))
+        expected_path = shlex.split(fragment)[1]
+        return _node_check_command_matches(tokens, expected_path)
+    return _effective_command_equals(
+        command,
+        ("bash", "scripts/sccp_evm_contract_smoke.sh"),
+    )
 
 
 def _core_admission_command_has_fragment(command: str, _fragment: str) -> bool:
-    return _effective_command_starts_with(
+    return _effective_command_equals(
         command,
-        ("cargo", "test", "-p", "iroha_core", "--test", "bridge_proofs", "--", "--nocapture"),
+        (
+            "cargo",
+            "test",
+            "-p",
+            "iroha_core",
+            "--test",
+            "iroha_core_group_01",
+            "bridge_proofs::",
+            "--",
+            "--nocapture",
+        ),
     )
 
 
@@ -8347,18 +9690,16 @@ def _phase_command_matches_required_fragment(
     command: str,
     fragment: str,
 ) -> bool:
-    if command == f"+ {fragment}":
-        return True
     if fragment not in command:
         return False
     if phase == "evidence-scripts":
-        return _evidence_pytest_command_has_fragment(command, fragment)
+        return _evidence_pytest_command_has_fragment(phase, command, fragment)
     if phase == "rust-sccp":
         return _rust_sccp_command_has_fragment(command, fragment)
     if phase == "js-sdk":
         return _js_sdk_command_has_fragment(command, fragment)
     if phase == "python-sdk":
-        return _evidence_pytest_command_has_fragment(command, fragment)
+        return _evidence_pytest_command_has_fragment(phase, command, fragment)
     if phase == "swift-sdk":
         return _swift_sdk_command_has_fragment(command, fragment)
     if phase == "kotlin-sdk":
@@ -8379,18 +9720,200 @@ def _phase_block_has_command_fragment(
     phase_block: str,
     fragment: str,
 ) -> bool:
-    return any(
-        _phase_command_matches_required_fragment(phase, command, fragment)
-        for command in _phase_command_lines(phase_block)
-    )
+    return bool(_phase_block_command_fragment_line_indices(phase, phase_block, fragment))
 
 
 def _phase_block_has_output_fragment(phase_block: str, fragment: str) -> bool:
+    return bool(_phase_block_output_fragment_line_indices(phase_block, fragment))
+
+
+def _phase_block_command_fragment_line_indices(
+    phase: str,
+    phase_block: str,
+    fragment: str,
+) -> list[int]:
+    return [
+        index
+        for index, line in enumerate(phase_block.splitlines())
+        if line.lstrip().startswith("+ ")
+        and _phase_command_matches_required_fragment(phase, line.strip(), fragment)
+    ]
+
+
+def _phase_block_output_fragment_line_indices(
+    phase_block: str,
+    fragment: str,
+) -> list[int]:
+    return [
+        index
+        for index, line in enumerate(phase_block.splitlines())
+        if _phase_output_line_has_success_fragment(line, fragment)
+    ]
+
+
+def _phase_output_line_has_success_fragment(line: str, fragment: str) -> bool:
+    if _line_is_shell_xtrace_command(line):
+        return False
+    normalized_line = _phase_output_failure_scan_line(line)
+    scan_lines = (line,) if normalized_line == line else (line, normalized_line)
+    for scan_line in scan_lines:
+        position = scan_line.find(fragment)
+        if position < 0:
+            continue
+        prefix = scan_line[:position]
+        if SUCCESS_OUTPUT_NEGATION_PATTERN.search(
+            prefix
+        ) or SUCCESS_OUTPUT_DIAGNOSTIC_PREFIX_PATTERN.search(prefix):
+            continue
+        return True
+    return False
+
+
+def _phase_block_has_exact_output_line(phase_block: str, expected: str) -> bool:
     return any(
-        fragment in line
+        line == expected
         for line in phase_block.splitlines()
-        if not line.lstrip().startswith("+ ")
+        if not _line_is_shell_xtrace_command(line)
     )
+
+
+def _phase_block_has_completion_after_required_evidence(
+    phase: str,
+    phase_block: str,
+) -> bool:
+    completion_positions = [
+        index
+        for index, line in enumerate(phase_block.splitlines())
+        if line == CORRIDOR_COMPLETION_SENTINEL
+        and not line.lstrip().startswith("+ ")
+    ]
+    if not completion_positions:
+        return False
+
+    command_positions_by_fragment = [
+        _phase_block_command_fragment_line_indices(phase, phase_block, fragment)
+        for fragment in PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS.get(phase, ())
+    ]
+    success_positions_by_fragment = [
+        _phase_block_output_fragment_line_indices(phase_block, fragment)
+        for fragment in PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS.get(phase, ())
+    ]
+    for completion_position in completion_positions:
+        command_positions_before_completion: list[int] = []
+        for positions in command_positions_by_fragment:
+            positions_before_completion = [
+                position for position in positions if position < completion_position
+            ]
+            if not positions_before_completion:
+                break
+            command_positions_before_completion.extend(positions_before_completion)
+        else:
+            if not command_positions_before_completion:
+                continue
+            first_command_position = min(command_positions_before_completion)
+            if all(
+                any(
+                    first_command_position < position < completion_position
+                    for position in positions
+                )
+                for positions in success_positions_by_fragment
+            ):
+                return True
+    return False
+
+
+def _phase_block_has_traced_command_after_completion(phase_block: str) -> bool:
+    lines = phase_block.splitlines()
+    completion_positions = [
+        index
+        for index, line in enumerate(lines)
+        if line == CORRIDOR_COMPLETION_SENTINEL
+        and not line.lstrip().startswith("+ ")
+    ]
+    if not completion_positions:
+        return False
+    first_completion = min(completion_positions)
+    return any(
+        index > first_completion and _line_is_shell_xtrace_command(line)
+        for index, line in enumerate(lines)
+    )
+
+
+def _phase_block_has_nonempty_line_after_completion(phase_block: str) -> bool:
+    lines = phase_block.splitlines()
+    completion_positions = [
+        index
+        for index, line in enumerate(lines)
+        if line == CORRIDOR_COMPLETION_SENTINEL
+        and not line.lstrip().startswith("+ ")
+    ]
+    if not completion_positions:
+        return False
+    first_completion = min(completion_positions)
+    return any(
+        index > first_completion and bool(line.strip())
+        for index, line in enumerate(lines)
+    )
+
+
+def _transcript_has_traced_command_after_completion(transcript: str) -> bool:
+    lines = transcript.splitlines()
+    completion_positions = [
+        index
+        for index, line in enumerate(lines)
+        if line == CORRIDOR_COMPLETION_SENTINEL
+        and not line.lstrip().startswith("+ ")
+    ]
+    if not completion_positions:
+        return False
+    first_completion = min(completion_positions)
+    return any(
+        index > first_completion and _line_is_shell_xtrace_command(line)
+        for index, line in enumerate(lines)
+    )
+
+
+def _transcript_has_nonempty_line_after_completion(transcript: str) -> bool:
+    lines = transcript.splitlines()
+    completion_positions = [
+        index
+        for index, line in enumerate(lines)
+        if line == CORRIDOR_COMPLETION_SENTINEL
+        and not line.lstrip().startswith("+ ")
+    ]
+    if not completion_positions:
+        return False
+    first_completion = min(completion_positions)
+    return any(
+        index > first_completion and bool(line.strip())
+        for index, line in enumerate(lines)
+    )
+
+
+def _phase_output_failure_scan_line(line: str) -> str:
+    """Return output text normalized for failure-marker scanning."""
+
+    stripped_line = ASCII_CONTROL_CHARACTER_PATTERN.sub(
+        "",
+        ANSI_ESCAPE_PATTERN.sub("", line),
+    )
+    return "".join(
+        character
+        for character in stripped_line
+        if unicodedata.category(character) != "Cf"
+    )
+
+
+def _phase_block_forbidden_output_marker(phase: str, phase_block: str) -> str | None:
+    for line in phase_block.splitlines():
+        if _line_is_shell_xtrace_command(line):
+            continue
+        normalized_line = _phase_output_failure_scan_line(line)
+        scan_lines = (line,) if normalized_line == line else (line, normalized_line)
+        for pattern in PHASE_TRANSCRIPT_FORBIDDEN_OUTPUT_PATTERNS.get(phase, ()):
+            if any(pattern.search(scan_line) for scan_line in scan_lines):
+                return pattern.pattern
+    return None
 
 
 def _expected_cryptographic_evidence(evidence: dict[str, Any]) -> list[dict[str, Any]]:
@@ -8882,6 +10405,12 @@ def _native_evm_manifest_relative_path(
             f"{prefix} path contains Markdown-unsafe character "
             f"{markdown_unsafe_character}: {value!r}"
         ]
+    percent_traversal = _path_percent_encoded_traversal(value)
+    if percent_traversal is not None:
+        return None, [
+            f"{prefix} path contains percent-encoded traversal segment: "
+            f"{percent_traversal}"
+        ]
     if ":" in value:
         return None, [
             f"{prefix} path must not contain URI schemes or drive prefixes"
@@ -9006,16 +10535,16 @@ def _native_evm_prover_bundle_artifact_summary(
             blockers.append(f"{label} must be an object")
             continue
         for key in sorted(set(artifact) - NATIVE_EVM_PROVER_SDK_ARTIFACT_KEYS):
-            blockers.append(f"{label} contains unknown field: {key}")
+            blockers.append(
+                _native_evm_prover_field_name_blocker(label, key, "unknown")
+            )
         for key in sorted(NATIVE_EVM_PROVER_SDK_ARTIFACT_KEYS - set(artifact)):
             blockers.append(f"{label} missing field: {key}")
         sdk = artifact.get("sdk")
         implementation = artifact.get("implementation")
-        if not isinstance(sdk, str) or not sdk:
-            blockers.append(f"{label}.sdk must be a non-empty string")
-            continue
-        if sdk.strip() != sdk:
-            blockers.append(f"{label}.sdk must not contain surrounding whitespace")
+        sdk_key_blocker = _native_evm_prover_sdk_artifact_key_blocker(label, sdk)
+        if sdk_key_blocker is not None:
+            blockers.append(sdk_key_blocker)
             continue
         if sdk in by_sdk:
             blockers.append(f"native_sdk_artifacts contains duplicate sdk: {sdk}")
@@ -9058,6 +10587,306 @@ def _native_evm_prover_bundle_artifact_summary(
         blockers.append(f"native_sdk_artifacts missing sdk: {sdk}")
 
     return sorted(rows, key=lambda row: row["sdk"]), blockers
+
+
+def _native_evm_prover_sdk_artifact_key_blocker(
+    label: str,
+    sdk: Any,
+) -> str | None:
+    if not isinstance(sdk, str) or not sdk:
+        return f"{label}.sdk must be a non-empty string"
+    if _path_control_character(sdk) is not None:
+        return f"{label}.sdk contains control character"
+    if not sdk.isascii():
+        return f"{label}.sdk must be printable ASCII"
+    if sdk.strip() != sdk:
+        return f"{label}.sdk must not contain surrounding whitespace"
+    if any(character.isspace() for character in sdk):
+        return f"{label}.sdk must not contain whitespace"
+    allowed = set("abcdefghijklmnopqrstuvwxyz0123456789-")
+    if (
+        any(character not in allowed for character in sdk)
+        or sdk.startswith("-")
+        or sdk.endswith("-")
+    ):
+        return f"{label}.sdk must be a lowercase SDK id"
+    return None
+
+
+def _native_evm_prover_summary_sdk_artifact_key_blocker(
+    label: str,
+    sdk: Any,
+) -> str | None:
+    blocker = _native_evm_prover_sdk_artifact_key_blocker(label, sdk)
+    if blocker is None:
+        return None
+    prefix = f"{label}.sdk "
+    if blocker.startswith(prefix):
+        return f"{label} sdk {blocker[len(prefix):]}"
+    return blocker
+
+
+def _native_evm_prover_sdk_results_by_sdk(
+    prefix: str,
+    sdk_results: Any,
+) -> tuple[dict[str, Any], list[str]]:
+    if not isinstance(sdk_results, dict) or not sdk_results:
+        return {}, [f"{prefix} sdk_results must be a non-empty object"]
+
+    blockers: list[str] = []
+    canonical_results: dict[str, Any] = {}
+    for sdk, result in sorted(sdk_results.items()):
+        sdk_key_blocker = _native_evm_prover_sdk_result_key_blocker(prefix, sdk)
+        if sdk_key_blocker is not None:
+            blockers.append(sdk_key_blocker)
+            continue
+        canonical_results[sdk] = result
+
+    for sdk in sorted(
+        set(canonical_results) - set(NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS)
+    ):
+        blockers.append(f"{prefix} sdk_results contains unknown sdk: {sdk}")
+    for sdk in sorted(
+        set(NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS) - set(canonical_results)
+    ):
+        blockers.append(f"{prefix} sdk_results missing sdk: {sdk}")
+    return canonical_results, blockers
+
+
+def _native_evm_prover_sdk_result_key_blocker(
+    prefix: str,
+    sdk: Any,
+) -> str | None:
+    if not isinstance(sdk, str) or not sdk:
+        return f"{prefix} sdk_results contains malformed sdk key"
+    if _path_control_character(sdk) is not None:
+        return f"{prefix} sdk_results sdk key contains control character"
+    if not sdk.isascii():
+        return f"{prefix} sdk_results sdk key must be printable ASCII"
+    if sdk.strip() != sdk:
+        return (
+            f"{prefix} sdk_results sdk key must not contain surrounding whitespace: "
+            f"{sdk!r}"
+        )
+    if any(character.isspace() for character in sdk):
+        return f"{prefix} sdk_results sdk key must not contain whitespace"
+    allowed = set("abcdefghijklmnopqrstuvwxyz0123456789-")
+    if (
+        any(character not in allowed for character in sdk)
+        or sdk.startswith("-")
+        or sdk.endswith("-")
+    ):
+        return f"{prefix} sdk_results sdk key must be a lowercase SDK id"
+    return None
+
+
+def _native_evm_prover_field_name_blocker(
+    label: str,
+    key: Any,
+    field_kind: str,
+) -> str:
+    if not isinstance(key, str) or not key:
+        return f"{label} contains malformed {field_kind} field name"
+    if _path_control_character(key) is not None:
+        return f"{label} contains {field_kind} field name with control character"
+    if not key.isascii():
+        return f"{label} contains {field_kind} field name with non-ASCII character"
+    if key.strip() != key:
+        return f"{label} contains {field_kind} field name with surrounding whitespace"
+    if any(character.isspace() for character in key):
+        return f"{label} contains {field_kind} field name with whitespace"
+    if _path_markdown_unsafe_character(key) is not None:
+        return (
+            f"{label} contains {field_kind} field name with Markdown-unsafe "
+            "character"
+        )
+    return f"{label} contains {field_kind} field: {key}"
+
+
+def _native_evm_prover_duplicate_json_key_blocker(label: str, key: Any) -> str:
+    if not isinstance(key, str) or not key:
+        return f"{label} JSON contains malformed duplicate key"
+    if _path_control_character(key) is not None:
+        return f"{label} JSON contains duplicate key with control character"
+    if not key.isascii():
+        return f"{label} JSON contains duplicate key with non-ASCII character"
+    if key.strip() != key:
+        return f"{label} JSON contains duplicate key with surrounding whitespace"
+    if any(character.isspace() for character in key):
+        return f"{label} JSON contains duplicate key with whitespace"
+    if _path_markdown_unsafe_character(key) is not None:
+        return f"{label} JSON contains duplicate key with Markdown-unsafe character"
+    return f"{label} JSON contains duplicate key: {key}"
+
+
+def _public_json_duplicate_key_blocker(label: str, key: Any) -> str:
+    return _native_evm_prover_duplicate_json_key_blocker(label, key)
+
+
+def _source_adapter_gate_audit_key_blocker(key: Any) -> str | None:
+    label = (
+        "readiness report cryptographic evidence row "
+        "source_adapter_gate_audit_hashes"
+    )
+    if not isinstance(key, str) or not key:
+        return f"{label} contains an empty key"
+    blocker = _native_evm_prover_field_name_blocker(label, key, "audit")
+    if blocker == f"{label} contains audit field: {key}":
+        return None
+    return blocker
+
+
+def _cryptographic_evidence_row_unknown_field_blocker(key: Any) -> str:
+    return _native_evm_prover_field_name_blocker(
+        "readiness report cryptographic evidence row",
+        key,
+        "unknown",
+    )
+
+
+def _submission_surface_sdk_key_blocker(sdk: Any) -> str | None:
+    label = (
+        "readiness report user prover submission surface row "
+        "sdk_helper_symbols_by_sdk"
+    )
+    if not isinstance(sdk, str) or not sdk:
+        return f"{label} contains malformed SDK key"
+    if _path_control_character(sdk) is not None:
+        return f"{label} contains SDK key with control character"
+    if not sdk.isascii():
+        return f"{label} contains SDK key with non-ASCII character"
+    if sdk.strip() != sdk:
+        return f"{label} contains SDK key with surrounding whitespace"
+    if any(character.isspace() for character in sdk):
+        return f"{label} contains SDK key with whitespace"
+    if _path_markdown_unsafe_character(sdk) is not None:
+        return f"{label} contains SDK key with Markdown-unsafe character"
+    allowed = set("abcdefghijklmnopqrstuvwxyz0123456789-")
+    if (
+        any(character not in allowed for character in sdk)
+        or sdk.startswith("-")
+        or sdk.endswith("-")
+    ):
+        return f"{label} contains malformed SDK key"
+    return None
+
+
+def _submission_surface_required_phase_blocker(phase: Any) -> str | None:
+    label = "readiness report user prover submission surface row required_phases"
+    if not isinstance(phase, str) or not phase:
+        return f"{label} contains malformed phase"
+    if _path_control_character(phase) is not None:
+        return f"{label} contains phase with control character"
+    if not phase.isascii():
+        return f"{label} contains phase with non-ASCII character"
+    if phase.strip() != phase:
+        return f"{label} contains phase with surrounding whitespace"
+    if any(character.isspace() for character in phase):
+        return f"{label} contains phase with whitespace"
+    if _path_markdown_unsafe_character(phase) is not None:
+        return f"{label} contains phase with Markdown-unsafe character"
+    allowed = set("abcdefghijklmnopqrstuvwxyz0123456789-")
+    if (
+        any(character not in allowed for character in phase)
+        or phase.startswith("-")
+        or phase.endswith("-")
+    ):
+        return f"{label} contains malformed phase"
+    return None
+
+
+def _corridor_phase_key_blocker(label: str, phase: Any) -> str | None:
+    if not isinstance(phase, str) or not phase:
+        return f"{label} contains malformed phase"
+    if _path_control_character(phase) is not None:
+        return f"{label} contains phase with control character"
+    if not phase.isascii():
+        return f"{label} contains phase with non-ASCII character"
+    if phase.strip() != phase:
+        return f"{label} contains phase with surrounding whitespace"
+    if any(character.isspace() for character in phase):
+        return f"{label} contains phase with whitespace"
+    if _path_markdown_unsafe_character(phase) is not None:
+        return f"{label} contains phase with Markdown-unsafe character"
+    allowed = set("abcdefghijklmnopqrstuvwxyz0123456789-")
+    if (
+        any(character not in allowed for character in phase)
+        or phase.startswith("-")
+        or phase.endswith("-")
+    ):
+        return f"{label} contains malformed phase"
+    return None
+
+
+def _source_inventory_gate_key_blocker(gate: Any) -> str | None:
+    label = "readiness report source_inventory"
+    if not isinstance(gate, str) or not gate:
+        return f"{label} contains malformed unknown gate name"
+    if _path_control_character(gate) is not None:
+        return f"{label} contains unknown gate name with control character"
+    if not gate.isascii():
+        return f"{label} contains unknown gate name with non-ASCII character"
+    if gate.strip() != gate:
+        return f"{label} contains unknown gate name with surrounding whitespace"
+    if any(character.isspace() for character in gate):
+        return f"{label} contains unknown gate name with whitespace"
+    if _path_markdown_unsafe_character(gate) is not None:
+        return f"{label} contains unknown gate name with Markdown-unsafe character"
+    return None
+
+
+def _release_checklist_item_id_malformed_blocker(label: str, item_id: Any) -> str | None:
+    if not isinstance(item_id, str) or not item_id:
+        return f"{label} id must be a non-empty string"
+    if _path_control_character(item_id) is not None:
+        return f"{label} id contains control character"
+    if not item_id.isascii():
+        return f"{label} id contains non-ASCII character"
+    if item_id.strip() != item_id:
+        return f"{label} id contains surrounding whitespace"
+    if any(character.isspace() for character in item_id):
+        return f"{label} id contains whitespace"
+    if _path_markdown_unsafe_character(item_id) is not None:
+        return f"{label} id contains Markdown-unsafe character"
+    allowed = set("abcdefghijklmnopqrstuvwxyz0123456789_")
+    if (
+        any(character not in allowed for character in item_id)
+        or item_id.startswith("_")
+        or item_id.endswith("_")
+    ):
+        return f"{label} id is malformed"
+    return None
+
+
+def _release_checklist_item_id_blocker(label: str, item_id: Any) -> str | None:
+    malformed_blocker = _release_checklist_item_id_malformed_blocker(label, item_id)
+    if malformed_blocker is not None:
+        return malformed_blocker
+    if item_id not in RELEASE_CHECKLIST_ITEM_IDS:
+        return f"{label} has unknown id: {item_id}"
+    return None
+
+
+def _all_lanes_audit_hash_key_blocker(label: str, key: Any) -> str | None:
+    if not isinstance(key, str) or not key:
+        return f"{label} audit_hashes contains malformed audit field name"
+    if _path_control_character(key) is not None:
+        return f"{label} audit_hashes contains audit field name with control character"
+    if not key.isascii():
+        return f"{label} audit_hashes contains audit field name with non-ASCII character"
+    if key.strip() != key:
+        return (
+            f"{label} audit_hashes contains audit field name with surrounding "
+            "whitespace"
+        )
+    if any(character.isspace() for character in key):
+        return f"{label} audit_hashes contains audit field name with whitespace"
+    if _path_markdown_unsafe_character(key) is not None:
+        return (
+            f"{label} audit_hashes contains audit field name with Markdown-unsafe "
+            "character"
+        )
+    return None
 
 
 def _native_evm_prover_parity_fixture_status(
@@ -9116,7 +10945,7 @@ def _native_evm_prover_parity_fixture_status(
     try:
         fixture = _load_json(artifact_path)
     except DuplicateJsonKeyError as exc:
-        blockers.append(f"{prefix} JSON contains duplicate key: {exc.key}")
+        blockers.append(_native_evm_prover_duplicate_json_key_blocker(prefix, exc.key))
         fixture = {}
     except json.JSONDecodeError as exc:
         blockers.append(f"{prefix} is not valid JSON: {exc}")
@@ -9133,7 +10962,9 @@ def _native_evm_prover_parity_fixture_status(
         fixture = {}
 
     for key in sorted(set(fixture) - NATIVE_EVM_PROVER_PARITY_FIXTURE_REQUIRED_KEYS):
-        blockers.append(f"{prefix} contains unknown field: {key}")
+        blockers.append(
+            _native_evm_prover_field_name_blocker(prefix, key, "unknown")
+        )
     for key in sorted(NATIVE_EVM_PROVER_PARITY_FIXTURE_REQUIRED_KEYS - set(fixture)):
         blockers.append(f"{prefix} missing field: {key}")
 
@@ -9181,45 +11012,46 @@ def _native_evm_prover_parity_fixture_status(
                 )
 
     sdk_results = fixture.get("sdk_results")
-    if not isinstance(sdk_results, dict) or not sdk_results:
-        blockers.append(f"{prefix} sdk_results must be a non-empty object")
-        sdk_results = {}
-    else:
-        for sdk in sorted(set(sdk_results) - set(NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS)):
-            blockers.append(f"{prefix} sdk_results contains unknown sdk: {sdk}")
-        for sdk in sorted(set(NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS) - set(sdk_results)):
-            blockers.append(f"{prefix} sdk_results missing sdk: {sdk}")
-        for sdk, result in sorted(sdk_results.items()):
-            result_label = f"{label} sdk_results.{sdk}"
-            if not isinstance(result, dict):
-                blockers.append(
-                    f"native EVM Groth16 prover bundle {result_label} must be an object"
+    sdk_results, sdk_result_blockers = _native_evm_prover_sdk_results_by_sdk(
+        prefix,
+        sdk_results,
+    )
+    blockers.extend(sdk_result_blockers)
+    for sdk, result in sorted(sdk_results.items()):
+        result_label = f"{label} sdk_results.{sdk}"
+        if not isinstance(result, dict):
+            blockers.append(
+                f"native EVM Groth16 prover bundle {result_label} must be an object"
+            )
+            continue
+        for key in sorted(set(result) - NATIVE_EVM_PROVER_PARITY_SDK_RESULT_KEYS):
+            blockers.append(
+                _native_evm_prover_field_name_blocker(
+                    f"native EVM Groth16 prover bundle {result_label}",
+                    key,
+                    "unknown",
                 )
-                continue
-            for key in sorted(set(result) - NATIVE_EVM_PROVER_PARITY_SDK_RESULT_KEYS):
+            )
+        for key in sorted(NATIVE_EVM_PROVER_PARITY_SDK_RESULT_KEYS - set(result)):
+            blockers.append(
+                f"native EVM Groth16 prover bundle {result_label} missing field: {key}"
+            )
+        for key in (
+            "receipt_proof_hash",
+            "source_proof_hash",
+            "destination_binding_hash",
+            "calldata_hash",
+            "torii_submit_payload_hash",
+        ):
+            if key in result and result.get(key) != fixture.get(key):
                 blockers.append(
-                    f"native EVM Groth16 prover bundle {result_label} contains unknown field: {key}"
+                    f"native EVM Groth16 prover bundle {result_label}.{key} must match {key}"
                 )
-            for key in sorted(NATIVE_EVM_PROVER_PARITY_SDK_RESULT_KEYS - set(result)):
-                blockers.append(
-                    f"native EVM Groth16 prover bundle {result_label} missing field: {key}"
-                )
-            for key in (
-                "receipt_proof_hash",
-                "source_proof_hash",
-                "destination_binding_hash",
-                "calldata_hash",
-                "torii_submit_payload_hash",
-            ):
-                if key in result and result.get(key) != fixture.get(key):
-                    blockers.append(
-                        f"native EVM Groth16 prover bundle {result_label}.{key} must match {key}"
-                    )
-            if result.get("public_signal_words") != public_signal_words:
-                blockers.append(
-                    f"native EVM Groth16 prover bundle {result_label}.public_signal_words "
-                    "must match public_signal_words"
-                )
+        if result.get("public_signal_words") != public_signal_words:
+            blockers.append(
+                f"native EVM Groth16 prover bundle {result_label}.public_signal_words "
+                "must match public_signal_words"
+            )
 
     blockers.extend(
         _native_evm_prover_forbidden_payload_blockers(artifact_path, label)
@@ -9283,7 +11115,7 @@ def _native_evm_prover_self_test_status(
     try:
         fixture = _load_json(artifact_path)
     except DuplicateJsonKeyError as exc:
-        blockers.append(f"{prefix} JSON contains duplicate key: {exc.key}")
+        blockers.append(_native_evm_prover_duplicate_json_key_blocker(prefix, exc.key))
         fixture = {}
     except json.JSONDecodeError as exc:
         blockers.append(f"{prefix} is not valid JSON: {exc}")
@@ -9300,7 +11132,9 @@ def _native_evm_prover_self_test_status(
         fixture = {}
 
     for key in sorted(set(fixture) - NATIVE_EVM_PROVER_SELF_TEST_REQUIRED_KEYS):
-        blockers.append(f"{prefix} contains unknown field: {key}")
+        blockers.append(
+            _native_evm_prover_field_name_blocker(prefix, key, "unknown")
+        )
     for key in sorted(NATIVE_EVM_PROVER_SELF_TEST_REQUIRED_KEYS - set(fixture)):
         blockers.append(f"{prefix} missing field: {key}")
 
@@ -9350,46 +11184,47 @@ def _native_evm_prover_self_test_status(
                 )
 
     sdk_results = fixture.get("sdk_results")
-    if not isinstance(sdk_results, dict) or not sdk_results:
-        blockers.append(f"{prefix} sdk_results must be a non-empty object")
-        sdk_results = {}
-    else:
-        for sdk in sorted(set(sdk_results) - set(NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS)):
-            blockers.append(f"{prefix} sdk_results contains unknown sdk: {sdk}")
-        for sdk in sorted(set(NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS) - set(sdk_results)):
-            blockers.append(f"{prefix} sdk_results missing sdk: {sdk}")
-        for sdk, result in sorted(sdk_results.items()):
-            result_label = f"{label} sdk_results.{sdk}"
-            if not isinstance(result, dict):
-                blockers.append(
-                    f"native EVM Groth16 prover bundle {result_label} must be an object"
+    sdk_results, sdk_result_blockers = _native_evm_prover_sdk_results_by_sdk(
+        prefix,
+        sdk_results,
+    )
+    blockers.extend(sdk_result_blockers)
+    for sdk, result in sorted(sdk_results.items()):
+        result_label = f"{label} sdk_results.{sdk}"
+        if not isinstance(result, dict):
+            blockers.append(
+                f"native EVM Groth16 prover bundle {result_label} must be an object"
+            )
+            continue
+        for key in sorted(set(result) - NATIVE_EVM_PROVER_SELF_TEST_SDK_RESULT_KEYS):
+            blockers.append(
+                _native_evm_prover_field_name_blocker(
+                    f"native EVM Groth16 prover bundle {result_label}",
+                    key,
+                    "unknown",
                 )
-                continue
-            for key in sorted(set(result) - NATIVE_EVM_PROVER_SELF_TEST_SDK_RESULT_KEYS):
+            )
+        for key in sorted(NATIVE_EVM_PROVER_SELF_TEST_SDK_RESULT_KEYS - set(result)):
+            blockers.append(
+                f"native EVM Groth16 prover bundle {result_label} missing field: {key}"
+            )
+        for key in (
+            "request_hash",
+            "witness_hash",
+            "source_proof_hash",
+            "proof_hash",
+            "calldata_hash",
+            "torii_submit_payload_hash",
+        ):
+            if key in result and result.get(key) != fixture.get(key):
                 blockers.append(
-                    f"native EVM Groth16 prover bundle {result_label} contains unknown field: {key}"
+                    f"native EVM Groth16 prover bundle {result_label}.{key} must match {key}"
                 )
-            for key in sorted(NATIVE_EVM_PROVER_SELF_TEST_SDK_RESULT_KEYS - set(result)):
-                blockers.append(
-                    f"native EVM Groth16 prover bundle {result_label} missing field: {key}"
-                )
-            for key in (
-                "request_hash",
-                "witness_hash",
-                "source_proof_hash",
-                "proof_hash",
-                "calldata_hash",
-                "torii_submit_payload_hash",
-            ):
-                if key in result and result.get(key) != fixture.get(key):
-                    blockers.append(
-                        f"native EVM Groth16 prover bundle {result_label}.{key} must match {key}"
-                    )
-            if result.get("public_signal_words") != public_signal_words:
-                blockers.append(
-                    f"native EVM Groth16 prover bundle {result_label}.public_signal_words "
-                    "must match public_signal_words"
-                )
+        if result.get("public_signal_words") != public_signal_words:
+            blockers.append(
+                f"native EVM Groth16 prover bundle {result_label}.public_signal_words "
+                "must match public_signal_words"
+            )
 
     blockers.extend(
         _native_evm_prover_forbidden_payload_blockers(artifact_path, label)
@@ -9556,7 +11391,13 @@ def _native_evm_prover_bundle_status_from_payload(
         payload = {}
 
     for key in sorted(set(payload) - NATIVE_EVM_PROVER_BUNDLE_REQUIRED_KEYS):
-        blockers.append(f"native EVM Groth16 prover bundle contains unknown field: {key}")
+        blockers.append(
+            _native_evm_prover_field_name_blocker(
+                "native EVM Groth16 prover bundle",
+                key,
+                "unknown",
+            )
+        )
     for key in sorted(NATIVE_EVM_PROVER_BUNDLE_REQUIRED_KEYS - set(payload)):
         blockers.append(f"native EVM Groth16 prover bundle missing field: {key}")
 
@@ -9613,14 +11454,22 @@ def _native_evm_prover_bundle_status_from_payload(
     else:
         for key in sorted(set(audit_hashes) - set(NATIVE_EVM_PROVER_REQUIRED_AUDIT_HASHES)):
             blockers.append(
-                "native EVM Groth16 prover bundle "
-                f"audit_hashes contains unexpected field: {key}"
+                _native_evm_prover_field_name_blocker(
+                    "native EVM Groth16 prover bundle audit_hashes",
+                    key,
+                    "unexpected",
+                )
             )
         for key in sorted(set(NATIVE_EVM_PROVER_REQUIRED_AUDIT_HASHES) - set(audit_hashes)):
             blockers.append(
                 "native EVM Groth16 prover bundle "
                 f"audit_hashes missing field: {key}"
             )
+        semantic_audit_hashes = {
+            key: audit_hashes[key]
+            for key in NATIVE_EVM_PROVER_REQUIRED_AUDIT_HASHES
+            if key in audit_hashes
+        }
         reserved_audit_hash_roles = {
             "proof_artifact_hash": payload.get("proof_artifact_hash"),
             "proving_key_hash": payload.get("proving_key_hash"),
@@ -9635,7 +11484,7 @@ def _native_evm_prover_bundle_status_from_payload(
                         f"native_sdk_artifacts[{sdk_index}].implementation_hash"
                     ] = sdk_artifact.get("implementation_hash")
         seen_audit_hashes: dict[str, str] = {}
-        for key, audit_hash in sorted(audit_hashes.items()):
+        for key, audit_hash in sorted(semantic_audit_hashes.items()):
             if not _is_nonzero_hex32(audit_hash):
                 blockers.append(
                     "native EVM Groth16 prover bundle "
@@ -9720,7 +11569,16 @@ def _native_evm_prover_bundle_status_from_payload(
         "verifier_key": verifier_key,
         "verifier_key_hash": payload.get("verifier_key_hash", ""),
         "destination_binding_hash": payload.get("destination_binding_hash", ""),
-        "audit_hashes": dict(sorted(audit_hashes.items())),
+        "audit_hashes": dict(
+            sorted(
+                (
+                    key,
+                    audit_hashes[key],
+                )
+                for key in NATIVE_EVM_PROVER_REQUIRED_AUDIT_HASHES
+                if key in audit_hashes
+            )
+        ),
         "cross_sdk_fixture_parity_artifact": parity_artifact,
         "native_prover_self_test_artifact": self_test_artifact,
         "sdk_artifacts": sdk_artifacts,
@@ -9759,8 +11617,10 @@ def _expected_native_evm_prover_bundle_status(
     except DuplicateJsonKeyError as exc:
         payload = {}
         blockers.append(
-            "native EVM Groth16 prover bundle JSON contains duplicate key: "
-            f"{exc.key}"
+            _native_evm_prover_duplicate_json_key_blocker(
+                "native EVM Groth16 prover bundle",
+                exc.key,
+            )
         )
     except UnicodeDecodeError as exc:
         payload = {}
@@ -9784,7 +11644,9 @@ def _native_evm_prover_bundle_summary_schema_errors(status: dict[str, Any]) -> l
     label = "readiness report native_evm_prover_bundle"
     errors: list[str] = []
     for key in sorted(set(status) - NATIVE_EVM_PROVER_BUNDLE_SUMMARY_KEYS):
-        errors.append(f"{label} contains unknown field: {key}")
+        errors.append(
+            _native_evm_prover_field_name_blocker(label, key, "unknown")
+        )
     for key in sorted(NATIVE_EVM_PROVER_BUNDLE_SUMMARY_KEYS - set(status)):
         errors.append(f"{label} missing field: {key}")
     if status.get("required") is not True:
@@ -9823,7 +11685,13 @@ def _native_evm_prover_bundle_summary_schema_errors(status: dict[str, Any]) -> l
         errors.append(f"{label} artifact must be an object")
     else:
         for key in sorted(set(artifact) - ARTIFACT_KEYS):
-            errors.append(f"{label} artifact contains unknown field: {key}")
+            errors.append(
+                _native_evm_prover_field_name_blocker(
+                    f"{label} artifact",
+                    key,
+                    "unknown",
+                )
+            )
         path_errors = _canonical_artifact_path(artifact)[1]
         errors.extend(f"{label} artifact {error}" for error in path_errors)
     for artifact_field, hash_field in (
@@ -9836,7 +11704,13 @@ def _native_evm_prover_bundle_summary_schema_errors(status: dict[str, Any]) -> l
             errors.append(f"{label} {artifact_field} must be an object")
             continue
         for key in sorted(set(artifact) - ARTIFACT_KEYS):
-            errors.append(f"{label} {artifact_field} contains unknown field: {key}")
+            errors.append(
+                _native_evm_prover_field_name_blocker(
+                    f"{label} {artifact_field}",
+                    key,
+                    "unknown",
+                )
+            )
         path_errors = _canonical_artifact_path(artifact)[1]
         errors.extend(f"{label} {artifact_field} {error}" for error in path_errors)
         artifact_hash = artifact.get("sha256")
@@ -9853,7 +11727,11 @@ def _native_evm_prover_bundle_summary_schema_errors(status: dict[str, Any]) -> l
     else:
         for key in sorted(set(parity_artifact) - ARTIFACT_KEYS):
             errors.append(
-                f"{label} cross_sdk_fixture_parity_artifact contains unknown field: {key}"
+                _native_evm_prover_field_name_blocker(
+                    f"{label} cross_sdk_fixture_parity_artifact",
+                    key,
+                    "unknown",
+                )
             )
         path_errors = _canonical_artifact_path(parity_artifact)[1]
         errors.extend(
@@ -9866,7 +11744,11 @@ def _native_evm_prover_bundle_summary_schema_errors(status: dict[str, Any]) -> l
     else:
         for key in sorted(set(self_test_artifact) - ARTIFACT_KEYS):
             errors.append(
-                f"{label} native_prover_self_test_artifact contains unknown field: {key}"
+                _native_evm_prover_field_name_blocker(
+                    f"{label} native_prover_self_test_artifact",
+                    key,
+                    "unknown",
+                )
             )
         path_errors = _canonical_artifact_path(self_test_artifact)[1]
         errors.extend(
@@ -9878,9 +11760,20 @@ def _native_evm_prover_bundle_summary_schema_errors(status: dict[str, Any]) -> l
         errors.append(f"{label} audit_hashes must be a non-empty object")
     else:
         for key in sorted(set(audit_hashes) - set(NATIVE_EVM_PROVER_REQUIRED_AUDIT_HASHES)):
-            errors.append(f"{label} audit_hashes contains unexpected field: {key}")
+            errors.append(
+                _native_evm_prover_field_name_blocker(
+                    f"{label} audit_hashes",
+                    key,
+                    "unexpected",
+                )
+            )
         for key in sorted(set(NATIVE_EVM_PROVER_REQUIRED_AUDIT_HASHES) - set(audit_hashes)):
             errors.append(f"{label} audit_hashes missing field: {key}")
+        semantic_audit_hashes = {
+            key: audit_hashes[key]
+            for key in NATIVE_EVM_PROVER_REQUIRED_AUDIT_HASHES
+            if key in audit_hashes
+        }
         reserved_audit_hash_roles = {
             "proof_artifact_hash": status.get("proof_artifact_hash"),
             "proving_key_hash": status.get("proving_key_hash"),
@@ -9893,7 +11786,7 @@ def _native_evm_prover_bundle_summary_schema_errors(status: dict[str, Any]) -> l
                     f"sdk_artifacts[{index}].implementation_hash"
                 ] = row.get("implementation_hash")
         seen_audit_hashes: dict[str, str] = {}
-        for key, value in sorted(audit_hashes.items()):
+        for key, value in sorted(semantic_audit_hashes.items()):
             if not _is_nonzero_hex32(value):
                 errors.append(
                     f"{label} audit_hashes.{key} must be a canonical non-zero 32-byte hex value"
@@ -9911,7 +11804,7 @@ def _native_evm_prover_bundle_summary_schema_errors(status: dict[str, Any]) -> l
                     errors.append(f"{label} audit_hashes.{key} must not reuse {role}")
         if isinstance(parity_artifact, dict):
             artifact_hash = parity_artifact.get("sha256")
-            parity_hash = audit_hashes.get("cross_sdk_fixture_parity")
+            parity_hash = semantic_audit_hashes.get("cross_sdk_fixture_parity")
             if (
                 _is_canonical_sha256_text(artifact_hash)
                 and isinstance(parity_hash, str)
@@ -9923,7 +11816,7 @@ def _native_evm_prover_bundle_summary_schema_errors(status: dict[str, Any]) -> l
                 )
         if isinstance(self_test_artifact, dict):
             artifact_hash = self_test_artifact.get("sha256")
-            self_test_hash = audit_hashes.get("native_prover_self_test")
+            self_test_hash = semantic_audit_hashes.get("native_prover_self_test")
             if (
                 _is_canonical_sha256_text(artifact_hash)
                 and isinstance(self_test_hash, str)
@@ -9944,15 +11837,18 @@ def _native_evm_prover_bundle_summary_schema_errors(status: dict[str, Any]) -> l
                 errors.append(f"{row_label} must be an object")
                 continue
             for key in sorted(set(row) - NATIVE_EVM_PROVER_SDK_ARTIFACT_SUMMARY_KEYS):
-                errors.append(f"{row_label} contains unknown field: {key}")
+                errors.append(
+                    _native_evm_prover_field_name_blocker(row_label, key, "unknown")
+                )
             for key in sorted(NATIVE_EVM_PROVER_SDK_ARTIFACT_SUMMARY_KEYS - set(row)):
                 errors.append(f"{row_label} missing field: {key}")
             sdk = row.get("sdk")
-            if not isinstance(sdk, str) or not sdk:
-                errors.append(f"{row_label} sdk must be a non-empty string")
-                continue
-            if sdk.strip() != sdk:
-                errors.append(f"{row_label} sdk must not contain surrounding whitespace")
+            sdk_key_blocker = _native_evm_prover_summary_sdk_artifact_key_blocker(
+                row_label,
+                sdk,
+            )
+            if sdk_key_blocker is not None:
+                errors.append(sdk_key_blocker)
                 continue
             if sdk in seen_sdks:
                 errors.append(f"{label} sdk_artifacts contains duplicate sdk: {sdk}")
@@ -9974,7 +11870,11 @@ def _native_evm_prover_bundle_summary_schema_errors(status: dict[str, Any]) -> l
             else:
                 for key in sorted(set(implementation_artifact) - ARTIFACT_KEYS):
                     errors.append(
-                        f"{row_label} implementation_artifact contains unknown field: {key}"
+                        _native_evm_prover_field_name_blocker(
+                            f"{row_label} implementation_artifact",
+                            key,
+                            "unknown",
+                        )
                     )
                 path_errors = _canonical_artifact_path(implementation_artifact)[1]
                 errors.extend(
@@ -10247,6 +12147,14 @@ def _render_readiness_markdown(
     lines.append("| Phase | Status | Evidence Artifact | Evidence SHA-256 |")
     lines.append("| --- | --- | --- | --- |")
     for phase, phase_status in report["corridor"]["phases"].items():
+        if (
+            _corridor_phase_key_blocker(
+                "readiness report corridor phases",
+                phase,
+            )
+            is not None
+        ):
+            continue
         artifact = report["corridor"]["evidence_artifacts"].get(phase)
         artifact_path = f"`{artifact['path']}`" if artifact else "-"
         artifact_hash = f"`{artifact['sha256']}`" if artifact else "-"
@@ -10552,11 +12460,11 @@ def _render_readiness_markdown(
             "- SCCP all-lanes release-checklist exact-boolean source inventory must pin exact checklist-item aggregation, record-presence gates, CLI production-ready exits, source-adapter gate hash/audit replay rejection, and route-canary hash replay rejection before all-lanes evidence can satisfy production readiness.",
             "- SCCP active-launch checklist schema source inventory must pin the active launch checklist ready value, malformed lane metadata, and verifier recomputation before production readiness can pass.",
             "- SCCP release manifest readiness-flags source inventory must pin exact boolean manifest generation, verifier boolean rejection, manifest/report equality checks, and all-lanes readiness recomputation before published bundle readiness can pass.",
-            "- SCCP release manifest artifact-set/order source inventory must pin required artifact paths, manifest-root exclusion, unmanifested artifact/directory rejection, report-referenced artifact closure, and canonical attachment order before published bundle readiness can pass.",
+            "- SCCP release manifest artifact-set/order source inventory must pin required artifact paths, manifest-root exclusion, unmanifested artifact/directory rejection, report-referenced artifact closure, malformed public artifact field-name classification, and canonical attachment order before published bundle readiness can pass.",
             "- SCCP release public blocker-list schema source inventory must pin canonical non-empty blocker strings, no surrounding whitespace, duplicate rejection, ready-surface empty-blocker checks, and invalid-marker rendering before published bundle readiness can pass.",
-            "- SCCP release public scalar-text schema source inventory must pin canonical non-empty scalar text for release-checklist ids/titles, cryptographic-evidence chain/source labels, user-prover submission rows, all-lanes chain labels, destination-binding keys, and route-canary status/source fields before published bundle readiness can pass.",
+            "- SCCP release public scalar-text schema source inventory must pin canonical non-empty scalar text, fixed release-checklist item-id classification, and public object-key classification for release-checklist titles, corridor phase keys, cryptographic-evidence chain/source labels, user-prover submission rows, all-lanes chain labels, all-lanes unknown object/audit keys, destination-binding keys, and route-canary status/source fields before published bundle readiness can pass.",
             "- SCCP release-notes attachment invariants source inventory must pin canonical title/status rendering, manifest handoff, artifact table hashes, blocker visibility, and canonical attachment drift rejection before public bundle readiness can pass.",
-            "- SCCP readiness Markdown invariants source inventory must pin verifier-owned public Markdown sections, checklist and source-inventory blocker visibility, invalid-marker rendering, and canonical Markdown drift rejection before public bundle readiness can pass.",
+            "- SCCP readiness Markdown invariants source inventory must pin verifier-owned public Markdown sections, checklist and source-inventory blocker visibility, invalid-marker rendering, malformed source-inventory gate-name, report-artifact path, and cryptographic-evidence row-domain/audit-key suppression, and canonical Markdown drift rejection before public bundle readiness can pass.",
             "- SCCP Ethereum outbound pre-callback source inventory must pin public SDK regressions that reject foreign-lane outbound requests, forged destination bindings, missing or partial proof-artifact hashes, zero proof-artifact hashes, and callback-visible proof material before outbound prover callbacks can run.",
             "- SCCP Ethereum outbound provider-validation source inventory must pin public SDK and facade guards that validate app-supplied Ethereum mainnet execution providers before outbound submitter callbacks can run.",
             "- SCCP Ethereum local-admission source inventory must pin public SDK regressions that reject mutated proof bytes, all-zero proof/public-input/bundle/envelope bytes, empty envelopes, zero statement/source-material/source-adapter hashes, and stale proof-family metadata before local admission payloads can be submitted.",
@@ -10589,14 +12497,14 @@ def _render_readiness_markdown(
             "- SCCP release native-prover bundle schema source inventory must pin native EVM Groth16 manifest schema, readiness summary schema, artifact hash/path binding, and bundled-manifest drift rejection before published bundle readiness can pass.",
             "- SCCP proof-request bundle/source-proof source inventory must pin canonical bundle-byte and non-SORA source-proof rejection gates across Rust, JavaScript, Python, Swift, Kotlin/JVM, and Java Android.",
             "- SCCP phase-evidence source inventory must pin duplicate assignment and directory override rejection across readiness-report and release-bundle CLIs before corridor phase evidence can satisfy production readiness.",
-            "- SCCP release corridor phase-transcript source inventory must pin exact phase markers, observed completion/success output, traced command fragments, dry-run rejection, and forged-block rejection before corridor logs can satisfy public bundle readiness.",
+            "- SCCP release corridor phase-transcript source inventory must pin exact phase markers, phase-local ordered non-negated/non-diagnostic shell-xtrace-free completion/success output after required commands in per-phase and full-corridor logs, phase-specific traced command shapes with exact pytest positional inputs, option-bound selectors, exact Gradle test command parsing, broad Kotlin package-suite selectors, exact Swift filter commands, exact Android harness class membership, exact Node test/check command files, exact .NET project/filter/nologo commands, exact no-suffix cargo/bash/java commands, and without bare-fragment shortcuts or shell-comment-hidden fragments, restricted cd wrappers, dry-run rejection, failure-marker scans, and forged-block rejection before corridor logs can satisfy public bundle readiness.",
             "- SCCP release bundle source-copy source inventory must pin symlink and control-character rejection for evidence inputs, phase evidence, native EVM prover manifests, and native prover payload sources before bundle copy can run.",
             "- SCCP release bundle output-path source inventory must pin symlink and control-character rejection for output directories before bundle generation can create or overwrite release artifacts.",
             "- SCCP release artifact path text source inventory must pin Markdown-unsafe character rejection for manifest artifact paths, readiness inputs, native prover payload paths, copied bundle filenames, and bundle filesystem entries before release notes can render artifact tables.",
             "- SCCP release input-provenance schema source inventory must pin canonical copied evidence input paths, unique input/input-artifact provenance, copied `evidence/NN-*.toml` layout, and recomputation from copied TOML before published bundle readiness can pass.",
-            "- SCCP release public JSON-root schema source inventory must pin canonical manifest/readiness/all-lanes JSON serialization, duplicate-key rejection, and non-UTF-8 fail-closed diagnostics before published bundle readiness can pass.",
+            "- SCCP release public JSON-root schema source inventory must pin canonical manifest/readiness/all-lanes JSON serialization, duplicate-key rejection with malformed-key classification, non-UTF-8 fail-closed diagnostics, and malformed manifest/readiness root-field classification before published bundle readiness can pass.",
             "- SCCP release public Markdown text schema source inventory must pin UTF-8 readiness/release-note Markdown loading and canonical text drift rejection before published bundle readiness can pass.",
-            "- SCCP release public cryptographic-evidence binding source inventory must pin production-domain inventory, lane-field binding, canonical row recomputation, and active route-canary binding rejection before published bundle readiness can pass.",
+            "- SCCP release public cryptographic-evidence binding source inventory must pin production-domain inventory, row-key and audit-key classification, lane-field binding, canonical row recomputation, Markdown row-domain/audit-key suppression, and active route-canary binding rejection before published bundle readiness can pass.",
             "- SCCP release public submission-surface binding source inventory must pin lane/backend inventory, per-SDK helper inventory, verifier-owned surface recomputation, and corridor-phase binding before published bundle readiness can pass.",
             "- SCCP retired network-surface source inventory must pin the launch-scope no-support note and active-tree scan so retired runtime-network integrations cannot re-enter release evidence silently.",
             "- SCCP unready transparent-proof source inventory must pin the diagnostic `allow_unready` toggle as config-owned, reject environment override paths, and reject production-ready BSC/TRON route configs that force the unready toggle back on.",
@@ -10619,7 +12527,12 @@ def _expected_readiness_markdown(report: dict[str, Any]) -> str:
                 for phase in CORRIDOR_PHASES
                 if phase in values
             }
-            for phase in sorted(set(values) - set(ordered)):
+            for phase in sorted(set(values) - set(ordered), key=str):
+                if _corridor_phase_key_blocker(
+                    f"readiness report corridor {field}",
+                    phase,
+                ):
+                    continue
                 ordered[phase] = values[phase]
             corridor[field] = ordered
     return _render_readiness_markdown(ordered_report, max_blockers_per_lane=4)
@@ -10848,6 +12761,20 @@ def _readiness_markdown_string_list_items_presence_errors(
     return errors
 
 
+def _readiness_markdown_report_artifact_path(
+    label: str,
+    artifact: Any,
+) -> str | None:
+    if not isinstance(artifact, dict):
+        return None
+    artifact_path = artifact.get("path")
+    if not isinstance(artifact_path, str) or not artifact_path:
+        return None
+    if _canonical_report_artifact_path_errors(label, artifact_path):
+        return None
+    return artifact_path
+
+
 def _readiness_markdown_invariant_errors(
     report: dict[str, Any],
     markdown: str,
@@ -10874,7 +12801,12 @@ def _readiness_markdown_invariant_errors(
         for artifact in input_artifacts:
             if not isinstance(artifact, dict):
                 continue
-            artifact_path = artifact.get("path")
+            artifact_path = _readiness_markdown_report_artifact_path(
+                "readiness report input",
+                artifact,
+            )
+            if artifact_path is None:
+                continue
             errors.extend(
                 _markdown_missing_value_errors(
                     "Evidence Inputs",
@@ -10898,6 +12830,14 @@ def _readiness_markdown_invariant_errors(
         phases = corridor.get("phases")
         if isinstance(phases, dict):
             for phase, phase_status in phases.items():
+                if (
+                    _corridor_phase_key_blocker(
+                        "readiness report corridor phases",
+                        phase,
+                    )
+                    is not None
+                ):
+                    continue
                 errors.extend(
                     _markdown_missing_value_errors(
                         "Production Corridor",
@@ -10917,13 +12857,27 @@ def _readiness_markdown_invariant_errors(
         phase_artifacts = corridor.get("evidence_artifacts")
         if isinstance(phase_artifacts, dict):
             for phase, artifact in phase_artifacts.items():
+                if (
+                    _corridor_phase_key_blocker(
+                        "readiness report corridor evidence_artifacts",
+                        phase,
+                    )
+                    is not None
+                ):
+                    continue
                 if not isinstance(artifact, dict):
+                    continue
+                artifact_path = _readiness_markdown_report_artifact_path(
+                    f"readiness report phase {phase}",
+                    artifact,
+                )
+                if artifact_path is None:
                     continue
                 errors.extend(
                     _markdown_missing_value_errors(
                         "Production Corridor",
                         corridor_section,
-                        artifact.get("path"),
+                        artifact_path,
                         f"evidence artifact path for phase {phase}",
                     )
                 )
@@ -10945,6 +12899,14 @@ def _readiness_markdown_invariant_errors(
                 if not isinstance(item, dict):
                     continue
                 item_id = item.get("id")
+                if (
+                    _release_checklist_item_id_malformed_blocker(
+                        "readiness report release_checklist item",
+                        item_id,
+                    )
+                    is not None
+                ):
+                    continue
                 errors.extend(
                     _markdown_missing_value_errors(
                         "Release Checklist",
@@ -10980,6 +12942,8 @@ def _readiness_markdown_invariant_errors(
             if not isinstance(row, dict):
                 continue
             domain = row.get("domain")
+            if type(domain) is not int:
+                continue
             chain = row.get("chain")
             errors.extend(
                 _markdown_missing_value_errors(
@@ -11023,6 +12987,8 @@ def _readiness_markdown_invariant_errors(
             gate_audits = row.get("source_adapter_gate_audit_hashes")
             if isinstance(gate_audits, dict):
                 for audit_key, audit_hash in gate_audits.items():
+                    if _source_adapter_gate_audit_key_blocker(audit_key) is not None:
+                        continue
                     errors.extend(
                         _markdown_missing_value_errors(
                             "Cryptographic Evidence",
@@ -11072,6 +13038,8 @@ def _readiness_markdown_invariant_errors(
             helper_sets = surface.get("sdk_helper_symbols_by_sdk")
             if isinstance(helper_sets, dict):
                 for sdk, helpers in helper_sets.items():
+                    if _submission_surface_sdk_key_blocker(sdk) is not None:
+                        continue
                     errors.extend(
                         _markdown_missing_value_errors(
                             "User Prover Submission Surfaces",
@@ -11094,6 +13062,8 @@ def _readiness_markdown_invariant_errors(
             required_phases = surface.get("required_phases")
             if isinstance(required_phases, list):
                 for phase in required_phases:
+                    if _submission_surface_required_phase_blocker(phase) is not None:
+                        continue
                     errors.extend(
                         _markdown_missing_value_errors(
                             "User Prover Submission Surfaces",
@@ -11131,6 +13101,8 @@ def _readiness_markdown_invariant_errors(
     source_inventory = report.get("source_inventory")
     if isinstance(source_inventory, dict):
         for gate, inventory in sorted(source_inventory.items()):
+            if _source_inventory_gate_key_blocker(gate) is not None:
+                continue
             if not isinstance(inventory, dict):
                 continue
             errors.extend(
@@ -11336,7 +13308,14 @@ def _corridor_phase_errors(corridor: dict[str, Any]) -> list[str]:
         phase_artifacts = {}
 
     expected_set = set(CORRIDOR_PHASES)
-    for phase in sorted(set(phases) - expected_set):
+    for phase in sorted(set(phases) - expected_set, key=str):
+        blocker = _corridor_phase_key_blocker(
+            "readiness report corridor phases",
+            phase,
+        )
+        if blocker is not None:
+            errors.append(blocker)
+            continue
         errors.append(f"readiness report corridor has unknown phase status: {phase}")
     for phase in CORRIDOR_PHASES:
         if phase not in phases:
@@ -11690,6 +13669,7 @@ def _cryptographic_evidence_row_schema_errors(
             "source_adapter_gate_audit_hashes must be an object"
         )
         audit_hashes = {}
+    semantic_audit_hashes: dict[str, Any] = {}
     if row.get("domain") != ACTIVE_LAUNCH_DOMAIN:
         return errors
     for field in (
@@ -11810,12 +13790,11 @@ def _cryptographic_evidence_row_schema_errors(
     )
     if isinstance(audit_hashes, dict):
         for field, value in sorted(audit_hashes.items()):
-            if not isinstance(field, str) or not field:
-                errors.append(
-                    "readiness report cryptographic evidence row "
-                    "source_adapter_gate_audit_hashes contains an empty key"
-                )
+            key_blocker = _source_adapter_gate_audit_key_blocker(field)
+            if key_blocker is not None:
+                errors.append(key_blocker)
                 continue
+            semantic_audit_hashes[field] = value
             errors.extend(
                 _nonzero_fixed_hex_field_errors(
                     "readiness report cryptographic evidence row "
@@ -11837,13 +13816,13 @@ def _cryptographic_evidence_row_schema_errors(
                 "source_adapter_gate_required must be false for this domain"
             )
         elif isinstance(audit_hashes, dict):
-            for key in sorted(set(audit_hashes) - expected_audit_keys):
+            for key in sorted(set(semantic_audit_hashes) - expected_audit_keys):
                 errors.append(
                     "readiness report cryptographic evidence row "
                     "source_adapter_gate_audit_hashes contains unexpected "
                     f"field: {key}"
                 )
-            for key in sorted(expected_audit_keys - set(audit_hashes)):
+            for key in sorted(expected_audit_keys - set(semantic_audit_hashes)):
                 errors.append(
                     "readiness report cryptographic evidence row "
                     f"source_adapter_gate_audit_hashes missing field: {key}"
@@ -11853,7 +13832,7 @@ def _cryptographic_evidence_row_schema_errors(
                 "readiness report cryptographic evidence row "
                 "source_adapter_gate_hash must not be empty when required"
             )
-        if not audit_hashes:
+        if not semantic_audit_hashes:
             errors.append(
                 "readiness report cryptographic evidence row "
                 "source_adapter_gate_audit_hashes must not be empty when required"
@@ -11861,8 +13840,8 @@ def _cryptographic_evidence_row_schema_errors(
         if (
             _is_canonical_fixed_hex_text(gate_hash, byte_length=32)
             and isinstance(audit_hashes, dict)
-            and audit_hashes
-            and gate_hash not in set(audit_hashes.values())
+            and semantic_audit_hashes
+            and gate_hash not in set(semantic_audit_hashes.values())
         ):
             errors.append(
                 "readiness report cryptographic evidence row "
@@ -11873,7 +13852,7 @@ def _cryptographic_evidence_row_schema_errors(
             row.get("domain")
         )
         expected_gate_hash = (
-            audit_hashes.get(expected_gate_key)
+            semantic_audit_hashes.get(expected_gate_key)
             if expected_gate_key is not None and isinstance(audit_hashes, dict)
             else None
         )
@@ -12173,13 +14152,20 @@ def _submission_surface_row_schema_errors(row: dict[str, Any]) -> list[str]:
             if sdk in expected_helpers_by_sdk
         ) or USER_PROVER_SDK_PHASES
         expected_sdks = set(expected_sdk_order)
-        for sdk in sorted(set(helper_sets) - expected_sdks):
+        semantic_helper_sets: dict[str, Any] = {}
+        for sdk, helpers in sorted(helper_sets.items(), key=lambda item: str(item[0])):
+            sdk_key_blocker = _submission_surface_sdk_key_blocker(sdk)
+            if sdk_key_blocker is not None:
+                errors.append(sdk_key_blocker)
+                continue
+            semantic_helper_sets[sdk] = helpers
+        for sdk in sorted(set(semantic_helper_sets) - expected_sdks):
             errors.append(
                 "readiness report user prover submission surface row "
                 f"sdk_helper_symbols_by_sdk contains unknown SDK: {sdk}"
             )
         for sdk in expected_sdk_order:
-            helpers = helper_sets.get(sdk)
+            helpers = semantic_helper_sets.get(sdk)
             if not isinstance(helpers, list) or not helpers:
                 errors.append(
                     "readiness report user prover submission surface row "
@@ -12216,7 +14202,7 @@ def _submission_surface_row_schema_errors(row: dict[str, Any]) -> list[str]:
                         f"sdk_helper_symbols_by_sdk[{sdk}] missing UI-owned "
                         f"hook marker: {marker}"
                     )
-        js_helpers = helper_sets.get("js-sdk")
+        js_helpers = semantic_helper_sets.get("js-sdk")
         if (
             isinstance(js_helpers, list)
             and isinstance(helper_symbols, list)
@@ -12233,20 +14219,27 @@ def _submission_surface_row_schema_errors(row: dict[str, Any]) -> list[str]:
     if isinstance(required_phases, list) and all(
         isinstance(item, str) and item for item in required_phases
     ):
-        if len(required_phases) != len(set(required_phases)):
+        semantic_required_phases: list[str] = []
+        for phase in required_phases:
+            phase_blocker = _submission_surface_required_phase_blocker(phase)
+            if phase_blocker is not None:
+                errors.append(phase_blocker)
+                continue
+            semantic_required_phases.append(phase)
+        if len(semantic_required_phases) != len(set(semantic_required_phases)):
             errors.append(
                 "readiness report user prover submission surface row "
                 "required_phases contains duplicate phases"
             )
         for phase in sorted(
-            set(required_phases) - set(USER_PROVER_KNOWN_REQUIRED_PHASES)
+            set(semantic_required_phases) - set(USER_PROVER_KNOWN_REQUIRED_PHASES)
         ):
             errors.append(
                 "readiness report user prover submission surface row "
                 f"required_phases contains unknown phase: {phase}"
             )
         for phase in USER_PROVER_REQUIRED_PHASES:
-            if phase not in required_phases:
+            if phase not in semantic_required_phases:
                 errors.append(
                     "readiness report user prover submission surface row "
                     f"required_phases missing required phase: {phase}"
@@ -12254,7 +14247,7 @@ def _submission_surface_row_schema_errors(row: dict[str, Any]) -> list[str]:
         proof_backend = row.get("proof_backend")
         if (
             proof_backend in USER_PROVER_CONTRACT_SMOKE_BACKENDS
-            and "contract-smoke" not in required_phases
+            and "contract-smoke" not in semantic_required_phases
         ):
             errors.append(
                 "readiness report user prover submission surface row "
@@ -12351,15 +14344,30 @@ def _source_inventory_schema_errors(source_inventory: Any) -> list[str]:
     if not isinstance(source_inventory, dict):
         return [f"{label} is not an object"]
     for gate in sorted(set(source_inventory) - SOURCE_INVENTORY_REQUIRED_GATES):
-        errors.append(f"{label} contains unknown gate: {gate}")
+        gate_key_blocker = _source_inventory_gate_key_blocker(gate)
+        if gate_key_blocker is not None:
+            errors.append(gate_key_blocker)
+        else:
+            errors.append(f"{label} contains unknown gate: {gate}")
     for gate in sorted(SOURCE_INVENTORY_REQUIRED_GATES - set(source_inventory)):
         errors.append(f"{label} missing required gate: {gate}")
     for gate, status in sorted(source_inventory.items()):
+        if gate not in SOURCE_INVENTORY_REQUIRED_GATES:
+            continue
         gate_label = f"{label}.{gate}"
         if not isinstance(status, dict):
             errors.append(f"{gate_label} must be an object")
             continue
-        errors.extend(_exact_object_key_errors(gate_label, status, SOURCE_INVENTORY_KEYS))
+        for key in sorted(set(status) - SOURCE_INVENTORY_KEYS):
+            errors.append(
+                _native_evm_prover_field_name_blocker(
+                    gate_label,
+                    key,
+                    "unknown",
+                )
+            )
+        for key in sorted(SOURCE_INVENTORY_KEYS - set(status)):
+            errors.append(f"{gate_label} missing field: {key}")
         validation_status = status.get("validation_status")
         if validation_status not in {"passed", "blocked"}:
             errors.append(f"{gate_label} validation_status must be passed or blocked")
@@ -12385,8 +14393,10 @@ def _exact_object_key_errors(
     allowed_keys: set[str],
 ) -> list[str]:
     errors: list[str] = []
-    for key in sorted(set(payload) - allowed_keys):
-        errors.append(f"{label} contains unknown field: {key}")
+    for key in sorted(set(payload) - allowed_keys, key=str):
+        errors.append(
+            _native_evm_prover_field_name_blocker(label, key, "unknown")
+        )
     for key in sorted(allowed_keys - set(payload)):
         errors.append(f"{label} missing field: {key}")
     return errors
@@ -12505,12 +14515,17 @@ def _source_adapter_gate_coherence_errors(
         else None
     )
     if isinstance(audit_hashes, dict):
-        for key in sorted(set(audit_hashes) - expected_audit_keys):
+        semantic_audit_hashes = {
+            key: value
+            for key, value in audit_hashes.items()
+            if _all_lanes_audit_hash_key_blocker(label, key) is None
+        }
+        for key in sorted(set(semantic_audit_hashes) - expected_audit_keys):
             errors.append(f"{label} audit_hashes contains unexpected field: {key}")
-        for key in sorted(expected_audit_keys - set(audit_hashes)):
+        for key in sorted(expected_audit_keys - set(semantic_audit_hashes)):
             errors.append(f"{label} audit_hashes missing field: {key}")
         expected_gate_hash = (
-            audit_hashes.get(expected_gate_key)
+            semantic_audit_hashes.get(expected_gate_key)
             if expected_gate_key is not None
             else None
         )
@@ -12558,7 +14573,7 @@ def _source_adapter_gate_coherence_errors(
                 )
         role_fields.extend(
             (f"audit_hashes.{field}", value)
-            for field, value in sorted(audit_hashes.items())
+            for field, value in sorted(semantic_audit_hashes.items())
         )
         errors.extend(
             _distinct_nonzero_hex_field_errors(
@@ -13312,8 +15327,14 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
             errors.append(f"{label} lane {index} is not an object")
             continue
         lane_label = _all_lanes_lane_label(label, index, lane)
-        for key in sorted(set(lane) - ALL_LANES_LANE_KEYS):
-            errors.append(f"{lane_label} contains unknown field: {key}")
+        for key in sorted(set(lane) - ALL_LANES_LANE_KEYS, key=str):
+            errors.append(
+                _native_evm_prover_field_name_blocker(
+                    lane_label,
+                    key,
+                    "unknown",
+                )
+            )
         for key in sorted(ALL_LANES_LANE_KEYS - set(lane)):
             errors.append(f"{lane_label} missing field: {key}")
         if "domain" in lane and type(lane.get("domain")) is not int:
@@ -13433,12 +15454,15 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
             ):
                 errors.append(f"{source_gate_label} audit_hashes is not an object")
             elif isinstance(audit_hashes, dict):
-                for field, value in sorted(audit_hashes.items()):
-                    if not isinstance(field, str) or not field:
-                        errors.append(
-                            f"{source_gate_label} audit_hashes contains an empty key"
-                        )
-                    elif not _is_canonical_fixed_hex_text(value, byte_length=32) or (
+                for field, value in sorted(audit_hashes.items(), key=lambda item: str(item[0])):
+                    field_blocker = _all_lanes_audit_hash_key_blocker(
+                        source_gate_label,
+                        field,
+                    )
+                    if field_blocker is not None:
+                        errors.append(field_blocker)
+                        continue
+                    if not _is_canonical_fixed_hex_text(value, byte_length=32) or (
                         isinstance(value, str) and all(char == "0" for char in value[2:])
                     ):
                         errors.append(
@@ -13578,9 +15602,16 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
         if isinstance(destination_binding, dict):
             destination_label = f"{lane_label} destination_binding"
             for key in sorted(
-                set(destination_binding) - ALL_LANES_DESTINATION_BINDING_KEYS
+                set(destination_binding) - ALL_LANES_DESTINATION_BINDING_KEYS,
+                key=str,
             ):
-                errors.append(f"{destination_label} contains unknown field: {key}")
+                errors.append(
+                    _native_evm_prover_field_name_blocker(
+                        destination_label,
+                        key,
+                        "unknown",
+                    )
+                )
             for key in sorted(
                 ALL_LANES_DESTINATION_BINDING_REQUIRED_KEYS
                 - set(destination_binding)
@@ -13750,8 +15781,10 @@ def _all_lanes_summary_schema_errors(
     summary: dict[str, Any],
 ) -> list[str]:
     errors: list[str] = []
-    for key in sorted(set(summary) - ALL_LANES_SUMMARY_KEYS):
-        errors.append(f"{label} contains unknown field: {key}")
+    for key in sorted(set(summary) - ALL_LANES_SUMMARY_KEYS, key=str):
+        errors.append(
+            _native_evm_prover_field_name_blocker(label, key, "unknown")
+        )
     for key in sorted(ALL_LANES_SUMMARY_KEYS - set(summary)):
         errors.append(f"{label} missing field: {key}")
     errors.extend(_boolean_field_errors(label, summary, "production_ready"))
@@ -13866,7 +15899,13 @@ def _release_checklist_schema_errors(
 ) -> list[str]:
     errors: list[str] = []
     for key in sorted(set(checklist) - RELEASE_CHECKLIST_KEYS):
-        errors.append(f"{label} release_checklist contains unknown field: {key}")
+        errors.append(
+            _native_evm_prover_field_name_blocker(
+                f"{label} release_checklist",
+                key,
+                "unknown",
+            )
+        )
     for key in sorted(RELEASE_CHECKLIST_KEYS - set(checklist)):
         errors.append(f"{label} release_checklist missing field: {key}")
     if require_ready:
@@ -13883,17 +15922,32 @@ def _release_checklist_schema_errors(
             errors.append(f"{label} release_checklist item is not an object")
             continue
         item_id = item.get("id")
+        item_id_label = f"{label} release_checklist item"
+        item_id_malformed_blocker = _release_checklist_item_id_malformed_blocker(
+            item_id_label,
+            item_id,
+        )
         item_label = (
             f"{label} release_checklist item {item_id}"
-            if isinstance(item_id, str) and item_id
+            if item_id_malformed_blocker is None and isinstance(item_id, str) and item_id
             else f"{label} release_checklist item"
         )
+        item_id_blocker = item_id_malformed_blocker
+        if item_id_blocker is None:
+            item_id_blocker = _release_checklist_item_id_blocker(item_id_label, item_id)
+        if item_id_blocker is not None:
+            errors.append(item_id_blocker)
         for key in sorted(set(item) - RELEASE_CHECKLIST_ITEM_KEYS):
-            errors.append(f"{item_label} contains unknown field: {key}")
+            errors.append(
+                _native_evm_prover_field_name_blocker(
+                    item_label,
+                    key,
+                    "unknown",
+                )
+            )
         for key in sorted(RELEASE_CHECKLIST_ITEM_KEYS - set(item)):
             errors.append(f"{item_label} missing field: {key}")
-        errors.extend(_non_empty_string_field_errors(item_label, item, "id"))
-        if isinstance(item_id, str) and item_id:
+        if item_id_blocker is None:
             if item_id in seen_item_ids:
                 errors.append(
                     f"{label} release_checklist contains duplicate item id: "
@@ -13918,7 +15972,13 @@ def _release_checklist_schema_errors(
 def _corridor_schema_errors(corridor: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     for key in sorted(set(corridor) - CORRIDOR_KEYS):
-        errors.append(f"readiness report corridor contains unknown field: {key}")
+        errors.append(
+            _native_evm_prover_field_name_blocker(
+                "readiness report corridor",
+                key,
+                "unknown",
+            )
+        )
     for key in sorted(CORRIDOR_KEYS - set(corridor)):
         errors.append(f"readiness report corridor missing field: {key}")
     if type(corridor.get("production_ready")) is not bool:
@@ -14095,6 +16155,15 @@ def _referenced_report_artifact_paths(report: dict[str, Any]) -> set[str]:
     if not isinstance(phases, dict):
         return paths
     for phase, status in phases.items():
+        if (
+            phase not in CORRIDOR_PHASES
+            or _corridor_phase_key_blocker(
+                "readiness report corridor phases",
+                phase,
+            )
+            is not None
+        ):
+            continue
         if status != "passed":
             continue
         artifact = phase_artifacts.get(phase)
@@ -14163,7 +16232,7 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
     except DuplicateJsonKeyError as exc:
         return {
             "verified": False,
-            "errors": [f"manifest JSON contains duplicate key: {exc.key}"],
+            "errors": [_public_json_duplicate_key_blocker("manifest", exc.key)],
             "artifacts": [],
             "manifest_sha256": manifest_sha256,
         }
@@ -14176,8 +16245,14 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
         }
     errors.extend(_canonical_json_file_errors("manifest", manifest_path, manifest))
 
-    for key in sorted(set(manifest) - MANIFEST_KEYS):
-        errors.append(f"manifest contains unknown top-level field: {key}")
+    for key in sorted(set(manifest) - MANIFEST_KEYS, key=str):
+        errors.append(
+            _native_evm_prover_field_name_blocker(
+                "manifest",
+                key,
+                "unknown top-level",
+            )
+        )
     for key in sorted(MANIFEST_KEYS - set(manifest)):
         errors.append(f"manifest missing top-level field: {key}")
     if manifest.get("schema") != SCHEMA:
@@ -14220,7 +16295,7 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
         report = _load_json(report_path)
     except DuplicateJsonKeyError as exc:
         report = {}
-        errors.append(f"readiness report JSON contains duplicate key: {exc.key}")
+        errors.append(_public_json_duplicate_key_blocker("readiness report", exc.key))
     except UnicodeDecodeError as exc:
         report = {}
         errors.append(f"readiness report JSON is not UTF-8 text: {exc}")
@@ -14234,9 +16309,13 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
         errors.extend(
             _canonical_json_file_errors("readiness report", report_path, report)
         )
-    for key in sorted(set(report) - READINESS_REPORT_KEYS):
+    for key in sorted(set(report) - READINESS_REPORT_KEYS, key=str):
         errors.append(
-            f"readiness report contains unknown top-level field: {key}"
+            _native_evm_prover_field_name_blocker(
+                "readiness report",
+                key,
+                "unknown top-level",
+            )
         )
     if report:
         for key in sorted(READINESS_REPORT_KEYS - set(report)):
@@ -14245,7 +16324,7 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
         summary = _load_json(summary_path)
     except DuplicateJsonKeyError as exc:
         summary = {}
-        errors.append(f"all-lanes summary JSON contains duplicate key: {exc.key}")
+        errors.append(_public_json_duplicate_key_blocker("all-lanes summary", exc.key))
     except UnicodeDecodeError as exc:
         summary = {}
         errors.append(f"all-lanes summary JSON is not UTF-8 text: {exc}")
@@ -14560,12 +16639,34 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
             phase_artifacts = {}
         phases = corridor.get("phases", {})
         if isinstance(phases, dict):
-            for phase in sorted(set(phase_artifacts) - set(phases)):
+            for phase in sorted(set(phase_artifacts), key=str):
+                blocker = _corridor_phase_key_blocker(
+                    "readiness report corridor evidence_artifacts",
+                    phase,
+                )
+                if blocker is not None:
+                    errors.append(blocker)
+            for phase in sorted(set(phase_artifacts) - set(CORRIDOR_PHASES), key=str):
+                blocker = _corridor_phase_key_blocker(
+                    "readiness report corridor evidence_artifacts",
+                    phase,
+                )
+                if blocker is not None:
+                    continue
                 errors.append(
                     "readiness report corridor has evidence artifact for "
                     f"unknown phase: {phase}"
                 )
             for phase, status in phases.items():
+                if (
+                    phase not in CORRIDOR_PHASES
+                    or _corridor_phase_key_blocker(
+                        "readiness report corridor phases",
+                        phase,
+                    )
+                    is not None
+                ):
+                    continue
                 if status != "passed":
                     continue
                 _check_report_artifact(
@@ -14610,8 +16711,11 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
                     continue
                 for key in sorted(set(row) - USER_PROVER_SUBMISSION_SURFACE_KEYS):
                     errors.append(
-                        "readiness report user prover submission surface row "
-                        f"contains unknown field: {key}"
+                        _native_evm_prover_field_name_blocker(
+                            "readiness report user prover submission surface row",
+                            key,
+                            "unknown",
+                        )
                     )
                 for key in sorted(USER_PROVER_SUBMISSION_SURFACE_KEYS - set(row)):
                     errors.append(
@@ -14644,10 +16748,9 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
                 if not isinstance(row, dict):
                     errors.append("readiness report cryptographic evidence row is not an object")
                     continue
-                for key in sorted(set(row) - CRYPTOGRAPHIC_EVIDENCE_KEYS):
+                for key in sorted(set(row) - CRYPTOGRAPHIC_EVIDENCE_KEYS, key=str):
                     errors.append(
-                        "readiness report cryptographic evidence row contains "
-                        f"unknown field: {key}"
+                        _cryptographic_evidence_row_unknown_field_blocker(key)
                     )
                 domain = row.get("domain")
                 lane = lane_by_domain.get(domain)

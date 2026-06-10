@@ -7,6 +7,8 @@ import {
   SCCP_DOMAIN_BSC,
   SCCP_DOMAIN_ETH,
   SCCP_DOMAIN_SORA,
+  SCCP_CODEC_EVM_HEX,
+  SCCP_CODEC_TEXT_UTF8,
   SCCP_ETH_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
   SCCP_ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
   SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1,
@@ -21,8 +23,12 @@ import {
   SCCP_NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1,
   SCCP_NATIVE_EVM_PROVER_BUNDLE_SCHEMA_V1,
   SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES,
+  SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1,
+  SCCP_TAIRA_XOR_ASSET_KEY_V1,
   buildEvmReceiptTrieProofFromReceipts,
   buildEthereumMainnetSccpLocalAdmissionSubmission,
+  canonicalSccpMessageProofBundleBytes,
+  canonicalSccpPayloadEnvelopeBytes,
   canonicalEvmReceiptRlp,
   canonicalEvmSccpReceiptProofBytes,
   ethereumMainnetSccpDestinationBinding,
@@ -38,6 +44,9 @@ import {
   validateEthereumMainnetNativeEvmProverSelfTestFixture,
   verifyEthereumMainnetNativeEvmProverArtifacts,
   verifyEthereumMainnetNativeEvmProverArtifactsFromBundle,
+  sccpMerkleRootFromCommitment,
+  sccpPayloadHash,
+  sccpTransferMessageId,
   wrapEvmSccpProofResult,
 } from "../src/sccp.js";
 
@@ -110,14 +119,65 @@ const fullReceipt = (index, overrides = {}) => ({
 
 const sampleBlockReceipts = () => [fullReceipt(0), fullReceipt(1)];
 
-const samplePublicInputs = {
-  messageId: hex32("11"),
-  payloadHash: hex32("22"),
-  targetDomain: SCCP_DOMAIN_ETH,
-  commitmentRoot: hex32("33"),
-  finalityHeight: "42",
-  finalityBlockHash: hex32("55"),
+const buildSampleOutboundBundleFixture = ({
+  targetDomain = SCCP_DOMAIN_ETH,
+  nonce = 1n,
+} = {}) => {
+  const transferPayload = {
+    version: 1,
+    source_domain: SCCP_DOMAIN_SORA,
+    dest_domain: targetDomain,
+    nonce,
+    asset_home_domain: SCCP_DOMAIN_SORA,
+    asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+    asset_id: SCCP_TAIRA_XOR_ASSET_KEY_V1,
+    amount: 1000n,
+    sender_codec: SCCP_CODEC_TEXT_UTF8,
+    sender: "alice@sora",
+    recipient_codec: SCCP_CODEC_EVM_HEX,
+    recipient: `0x${"11".repeat(20)}`,
+    route_id_codec: SCCP_CODEC_TEXT_UTF8,
+    route_id:
+      targetDomain === SCCP_DOMAIN_BSC
+        ? SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1
+        : "sccp-eth-mainnet-xor-route-v1",
+  };
+  const payloadEnvelope = { kind: "Transfer", value: transferPayload };
+  const payloadBytes = canonicalSccpPayloadEnvelopeBytes(payloadEnvelope);
+  const messageId = sccpTransferMessageId(transferPayload);
+  const payloadHash = sccpPayloadHash(payloadBytes);
+  const commitment = {
+    version: 1,
+    kind: "Transfer",
+    target_domain: targetDomain,
+    message_id: messageId,
+    payload_hash: payloadHash,
+  };
+  const commitmentRoot = sccpMerkleRootFromCommitment(commitment, {
+    steps: [],
+  });
+  const bundle = {
+    version: 1,
+    commitment_root: commitmentRoot,
+    commitment,
+    merkle_proof: { steps: [] },
+    payload: payloadEnvelope,
+    finality_proof: "0x010203",
+  };
+  return {
+    publicInputs: {
+      messageId,
+      payloadHash,
+      targetDomain,
+      commitmentRoot,
+      finalityHeight: "42",
+      finalityBlockHash: hex32("55"),
+    },
+    bundleBytes: canonicalSccpMessageProofBundleBytes(bundle),
+  };
 };
+const sampleOutboundFixture = buildSampleOutboundBundleFixture();
+const samplePublicInputs = sampleOutboundFixture.publicInputs;
 
 const sampleDestinationBindingInput = (overrides = {}) => ({
   verifierAddress: `0x${"11".repeat(20)}`,
@@ -127,15 +187,24 @@ const sampleDestinationBindingInput = (overrides = {}) => ({
   ...overrides,
 });
 
-const sampleOutboundInput = (targetDomain = SCCP_DOMAIN_ETH, destinationBindingOverrides = {}) => ({
-  publicInputs: { ...samplePublicInputs, targetDomain },
-  bundleBytes: [1, 2, 3],
-  destinationBinding: ethereumMainnetSccpDestinationBinding(
-    sampleDestinationBindingInput(destinationBindingOverrides),
-  ),
-  sourceDomain: SCCP_DOMAIN_SORA,
-  statementHash: hex32("66"),
-});
+const sampleOutboundInput = (
+  targetDomain = SCCP_DOMAIN_ETH,
+  destinationBindingOverrides = {},
+) => {
+  const fixture =
+    targetDomain === SCCP_DOMAIN_ETH
+      ? sampleOutboundFixture
+      : buildSampleOutboundBundleFixture({ targetDomain });
+  return {
+    publicInputs: { ...fixture.publicInputs },
+    bundleBytes: fixture.bundleBytes,
+    destinationBinding: ethereumMainnetSccpDestinationBinding(
+      sampleDestinationBindingInput(destinationBindingOverrides),
+    ),
+    sourceDomain: SCCP_DOMAIN_SORA,
+    statementHash: hex32("66"),
+  };
+};
 
 const sampleNativeEvmProverBundle = (destinationBindingHash, overrides = {}) => {
   const proofArtifactHash = hex32("91");
@@ -357,13 +426,13 @@ const BN254_G2_GENERATOR_WORDS = [
   abiWord(0x090689d0585ff075ec9e99ad690c3395bc4b313370b38ef355acdadcd122975bn),
 ];
 
-const groth16ProofBytes = () => {
+const groth16ProofBytes = (publicInputs = samplePublicInputs) => {
   const out = new Uint8Array(SCCP_GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1);
   const words = [
     abiWord(1),
-    Uint8Array.from({ length: 32 }, () => 0x11),
+    Uint8Array.from(Buffer.from(publicInputs.messageId.slice(2), "hex")),
     abiWord(SCCP_DOMAIN_SORA),
-    Uint8Array.from({ length: 32 }, () => 0x33),
+    Uint8Array.from(Buffer.from(publicInputs.commitmentRoot.slice(2), "hex")),
     abiWord(1),
     abiWord(2),
     ...BN254_G2_GENERATOR_WORDS,
@@ -376,8 +445,12 @@ const groth16ProofBytes = () => {
 
 const GROTH16_PROOF_BYTES = groth16ProofBytes();
 
-const groth16ProofBytesWithWord = (index, word) => {
-  const out = new Uint8Array(GROTH16_PROOF_BYTES);
+const groth16ProofBytesWithWord = (
+  index,
+  word,
+  publicInputs = samplePublicInputs,
+) => {
+  const out = groth16ProofBytes(publicInputs);
   out.set(word, index * 32);
   return out;
 };
@@ -3411,7 +3484,7 @@ test("Ethereum outbound prover callback must not see BSC requests", async () => 
     outboundProver: {
       async prove(request) {
         outboundProverCalled = true;
-        return wrapEvmSccpProofResult(GROTH16_PROOF_BYTES, request);
+        return wrapEvmSccpProofResult(groth16ProofBytes(request.publicInputs), request);
       },
     },
   });
@@ -3469,7 +3542,10 @@ test("EthereumMainnetSccp calldata requires a wrapped Ethereum mainnet proof res
   const input = { ...sampleOutboundInput(), destinationBinding };
   const sdk = new EthereumMainnetSccp({ nativeProverArtifacts });
   const request = sdk.buildOutboundProofRequest(input);
-  const proofResult = wrapEvmSccpProofResult(GROTH16_PROOF_BYTES, request);
+  const proofResult = wrapEvmSccpProofResult(
+    groth16ProofBytes(request.publicInputs),
+    request,
+  );
   const submission = sdk.buildEthereumCalldata({ proofResult });
 
   assert.equal(submission.targetDomain, SCCP_DOMAIN_ETH);
@@ -3483,7 +3559,7 @@ test("EthereumMainnetSccp calldata requires a wrapped Ethereum mainnet proof res
     () =>
       sdk.buildEthereumCalldata({
         publicInputs: samplePublicInputs,
-        proofBytes: GROTH16_PROOF_BYTES,
+        proofBytes: groth16ProofBytes(samplePublicInputs),
         sourceDomain: SCCP_DOMAIN_SORA,
         statementHash: request.statementHash,
         destinationBindingHash: request.destinationBindingHash,
@@ -3551,11 +3627,19 @@ test("EthereumMainnetSccp binds custom outbound proof results to the requested p
   };
   const referenceSdk = new EthereumMainnetSccp({ nativeProverArtifacts });
   const expectedRequest = referenceSdk.buildOutboundProofRequest(input);
+  const wrongFixture = buildSampleOutboundBundleFixture({ nonce: 2n });
   const wrongRequest = referenceSdk.buildOutboundProofRequest({
     ...input,
-    bundleBytes: [9, 8, 7],
+    publicInputs: wrongFixture.publicInputs,
+    bundleBytes: wrongFixture.bundleBytes,
   });
-  const wrongProofResult = wrapEvmSccpProofResult(GROTH16_PROOF_BYTES, wrongRequest);
+  const wrongProofResult = {
+    ...wrapEvmSccpProofResult(
+      groth16ProofBytes(expectedRequest.publicInputs),
+      expectedRequest,
+    ),
+    requestHash: wrongRequest.requestHash,
+  };
   let seenRequest;
   const rejectingSdk = new EthereumMainnetSccp({
     nativeProverArtifacts,
@@ -3600,17 +3684,23 @@ test("EthereumMainnetSccp binds custom outbound proof results to the requested p
         );
         const callbackBundleBytes = request.bundleBytes;
         callbackBundleBytes[0] ^= 0x7f;
-        assert.deepEqual(Array.from(request.bundleBytes), [1, 2, 3]);
+        assert.deepEqual(
+          Array.from(request.bundleBytes),
+          Array.from(input.bundleBytes),
+        );
         const callbackSourceProofBytes = request.sourceProofBytes;
         assert.deepEqual(Array.from(callbackSourceProofBytes), []);
-        return wrapEvmSccpProofResult(GROTH16_PROOF_BYTES, request);
+        return wrapEvmSccpProofResult(groth16ProofBytes(request.publicInputs), request);
       },
     },
   });
   const proofResult = await acceptingSdk.proveOutboundToEthereum(input);
   assert.equal(acceptedRequest.requestHash, expectedRequest.requestHash);
   assert.equal(proofResult.requestHash, expectedRequest.requestHash);
-  assert.deepEqual(Array.from(proofResult.bundleBytes), [1, 2, 3]);
+  assert.deepEqual(
+    Array.from(proofResult.bundleBytes),
+    Array.from(input.bundleBytes),
+  );
   assert.deepEqual(proofResult.publicSignalWords, expectedRequest.publicSignalWords);
 
   const plainSdk = new EthereumMainnetSccp();
@@ -3639,7 +3729,10 @@ test("EthereumMainnetSccp binds custom outbound proof results to the requested p
   assert.equal(artifactRequest.proofArtifactHash, hex32("91"));
   assert.equal(artifactRequest.provingKeyHash, hex32("92"));
   assert.notEqual(artifactRequest.requestHash, expectedRequest.requestHash);
-  const artifactResult = wrapEvmSccpProofResult(GROTH16_PROOF_BYTES, artifactRequest);
+  const artifactResult = wrapEvmSccpProofResult(
+    groth16ProofBytes(artifactRequest.publicInputs),
+    artifactRequest,
+  );
   assert.equal(artifactResult.proofArtifactHash, hex32("91"));
   assert.equal(artifactResult.provingKeyHash, hex32("92"));
 
@@ -3651,7 +3744,7 @@ test("EthereumMainnetSccp binds custom outbound proof results to the requested p
     outboundProver: {
       async prove() {
         return {
-          proofBytes: GROTH16_PROOF_BYTES,
+          proofBytes: groth16ProofBytes(input.publicInputs),
           proofArtifactHash: hex32("93"),
           provingKeyHash: hex32("92"),
         };
@@ -4032,7 +4125,7 @@ test("EthereumMainnetSccp verifies native prover artifact bytes against manifest
     outboundProver: {
       async prove(request) {
         factoryBoundRequest = request;
-        return wrapEvmSccpProofResult(GROTH16_PROOF_BYTES, request);
+        return wrapEvmSccpProofResult(groth16ProofBytes(request.publicInputs), request);
       },
     },
   });
@@ -4143,7 +4236,7 @@ test("EthereumMainnetSccp verifies native prover artifact bytes against manifest
     outboundProver: {
       async prove(request) {
         artifactBoundRequest = request;
-        return wrapEvmSccpProofResult(GROTH16_PROOF_BYTES, request);
+        return wrapEvmSccpProofResult(groth16ProofBytes(request.publicInputs), request);
       },
     },
   });
@@ -4159,7 +4252,7 @@ test("EthereumMainnetSccp verifies native prover artifact bytes against manifest
     outboundProver: {
       async prove(request) {
         missingSelfTestProverCalled = true;
-        return wrapEvmSccpProofResult(GROTH16_PROOF_BYTES, request);
+        return wrapEvmSccpProofResult(groth16ProofBytes(request.publicInputs), request);
       },
     },
   });
@@ -4179,7 +4272,7 @@ test("EthereumMainnetSccp verifies native prover artifact bytes against manifest
     outboundProver: {
       async prove(request) {
         tamperedSelfTestProverCalled = true;
-        return wrapEvmSccpProofResult(GROTH16_PROOF_BYTES, request);
+        return wrapEvmSccpProofResult(groth16ProofBytes(request.publicInputs), request);
       },
     },
   });
@@ -4643,7 +4736,10 @@ test("EthereumMainnetSccp outbound provider path derives target from wrapped pro
     ...sampleOutboundInput(),
     destinationBinding,
   });
-  const proofResult = wrapEvmSccpProofResult(GROTH16_PROOF_BYTES, request);
+  const proofResult = wrapEvmSccpProofResult(
+    groth16ProofBytes(request.publicInputs),
+    request,
+  );
 
   assert.equal(await sdk.submitOutboundToEthereum({ proofResult }), "0xeth1");
   assert.equal(submittedTxs[0].to, request.destinationBinding.bridgeAddress);

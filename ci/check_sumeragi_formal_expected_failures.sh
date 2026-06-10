@@ -879,7 +879,8 @@ bash scripts/formal/sumeragi_apalache.sh commit-inflight-status-bug-json-queue-d
 bash scripts/formal/sumeragi_apalache.sh commit-inflight-status-bug-typed-core-mismatch
 bash scripts/formal/sumeragi_apalache.sh commit-inflight-status-bug-typed-timeout-mismatch
 bash scripts/formal/sumeragi_apalache.sh commit-inflight-status-bug-typed-queue-depth-mismatch
-bash scripts/formal/sumeragi_apalache.sh rbc-status-lookup-bug-is-delivered-requires-complete
+bash scripts/formal/sumeragi_apalache.sh rbc-status-lookup-bug-is-delivered-accepts-incomplete
+bash scripts/formal/sumeragi_apalache.sh rbc-status-lookup-bug-is-delivered-accepts-invalid
 bash scripts/formal/sumeragi_apalache.sh rbc-status-lookup-bug-is-delivered-checks-payload
 bash scripts/formal/sumeragi_apalache.sh rbc-status-lookup-bug-is-delivered-ignores-other-view
 bash scripts/formal/sumeragi_apalache.sh rbc-status-lookup-bug-delivered-accepts-incomplete

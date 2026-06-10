@@ -501,6 +501,20 @@ public final class SolanaSccpProver {
     final byte[] sourceAdapterEngineDeploymentHash =
         nonZeroHex32Bytes(
             input.sourceAdapterEngineDeploymentHash(), "sourceAdapterEngineDeploymentHash");
+    requireHashRolesDistinct(
+        "Solana route canary governed hashes",
+        new String[] {
+          "routeAllowlistHash",
+          "destinationBindingHash",
+          "sourceVerifierMaterialHash",
+          "sourceAdapterEngineDeploymentHash"
+        },
+        new byte[][] {
+          routeAllowlistHash,
+          destinationBindingHash,
+          sourceVerifierMaterialHash,
+          sourceAdapterEngineDeploymentHash
+        });
     final RouteCanaryProgramDataEvidence evidence = normalizeRouteCanaryProgramDataEvidence(input);
     final ByteArrayOutputStream out = new ByteArrayOutputStream();
     out.write(1);
@@ -6130,6 +6144,18 @@ public final class SolanaSccpProver {
       throw new IllegalArgumentException(field + " must not be zero");
     }
     return bytes;
+  }
+
+  private static void requireHashRolesDistinct(
+      final String context, final String[] labels, final byte[][] values) {
+    for (int index = 0; index < values.length; index++) {
+      for (int previous = 0; previous < index; previous++) {
+        if (Arrays.equals(values[index], values[previous])) {
+          throw new IllegalArgumentException(
+              context + " must be distinct: " + labels[index] + " matches " + labels[previous]);
+        }
+      }
+    }
   }
 
   private static byte[] solanaHash32Bytes(final String value, final String field) {

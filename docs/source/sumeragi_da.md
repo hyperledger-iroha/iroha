@@ -43,13 +43,80 @@ or an RBC `READY` quorum without the payload fetch it deterministically from the
 commit-certificate signers for a bounded number of attempts, then fall back to the full commit
 topology.
 
+RBC `DELIVER` evidence is only terminal for local availability after the node
+also has verified complete payload bytes for the session: all chunks are present
+and the reconstructed payload matches the advertised hash. Delivered sessions
+that are still missing chunks, or whose counted-complete chunks do not verify,
+remain visible in backlog counters, keep chunk repair eligible, and wake the
+commit pipeline when repair completes the local payload. Accepted `READY`
+evidence against an incomplete delivered session is also treated as repair
+progress and may wake the commit pipeline; only verified complete delivered
+sessions suppress duplicate late `READY` progress or clear local `DELIVER`
+deferral bookkeeping as terminal. Inbound duplicate `DELIVER` handling follows
+the same rule: duplicate delivery frames for partial raw-delivered sessions may
+still record valid bundled READY signatures, drive READY/repair bookkeeping,
+and must not clear deferral state early.
+
+Pending-block validation priority uses the same exact-payload boundary. A live
+RBC session or retained RBC status summary may elevate validation as
+`rbc_deliver` only when it is delivered, non-invalid, complete, and bound to the
+pending block's payload hash. Complete retained summaries without a payload hash,
+or with a hash for a different payload, remain diagnostic evidence and do not
+advance validation scheduling.
+
+When a cached RBC roster is later promoted to an authoritative derived roster,
+the retry path also uses verified completion: partial raw-delivered sessions can
+retry local `READY`/`DELIVER` repair after promotion, while verified complete
+deliveries skip duplicate retries.
+
+Permissioned future-height sessions may retain an INIT-carried roster while the
+derived roster is unavailable, but local READY/DELIVER signing and inbound
+READY/DELIVER acceptance only use that unverified roster if it exactly matches
+the canonical current active topology and the cached roster source is recorded
+as non-authoritative INIT evidence. Source-less or already-derived cached
+rosters are not eligible for this escape hatch. Tiny self-consistent, foreign,
+same-quorum subset, duplicate, or otherwise non-canonical INIT rosters are
+stashed for recovery instead of reducing or reshaping the RBC certificate set.
+INIT-carried unverified rosters are not cached as vote rosters; only
+authoritative derived rosters can seed that cache for later vote validation.
+
+The periodic RBC repair loop follows the same boundary when re-attempting local
+`READY`: raw-delivered sessions with incomplete or unverified chunks still emit
+local READY after a roster becomes authoritative, instead of waiting for the raw
+DELIVER marker to become useful on its own.
+
+Reschedule availability gates use the same verified complete-delivery boundary,
+so a `delivered=true` session with a READY quorum but mismatched complete bytes
+remains availability-unresolved until repair verifies the advertised payload or
+the configured availability timeout releases the gate.
+
+Committed-block RBC cleanup also waits for verified complete delivery before
+draining runtime session state. A raw delivered marker with missing or
+mismatched chunks remains retained after commit so local repair and persisted
+status can converge; only exact delivered payload evidence is settled cleanup
+state. The same rule applies to committed-tip repair scheduling: retained
+raw-delivered sessions at the current tip remain repair-active, while verified
+complete delivered sessions are idle.
+
+Invalid RBC sessions remain available through detailed status surfaces, but they
+do not contribute to operator backlog counters or lane/dataspace backlog gauges;
+invalid evidence is terminal for repair pressure and should be diagnosed through
+the invalid/mismatch counters instead of treated as live missing-chunk work.
+
 ## Metrics captured
 
 - Payload size (bytes) and derived throughput (MiB/s) when RBC marks the
   payload as delivered.
 - RBC session snapshot (`total_chunks`, `received_chunks`, `ready_count`,
-  `view`, `block_hash`, `recovered`, `lane_backlog`, `dataspace_backlog`) fetched from
-  `/v1/sumeragi/rbc/sessions`.
+  `view`, `block_hash`, raw `delivered`, derived `complete_delivery`,
+  `recovered`, `invalid`, `lane_backlog`, `dataspace_backlog`) fetched from
+  `/v1/sumeragi/rbc/sessions`. `complete_delivery` is false for invalid,
+  zero-chunk, and chunk-incomplete summaries even when raw `delivered` is true.
+- Per-height/view delivered probe from
+  `/v1/sumeragi/rbc/delivered/{height}/{view}`. Its `delivered=true` result
+  requires a non-invalid, positive, count-complete chunk summary; invalid,
+  zero-chunk, or chunk-incomplete summaries remain visible with
+  `present=true` and `delivered=false`.
 - Prometheus counters per peer: `sumeragi_rbc_payload_bytes_delivered_total`,
   `sumeragi_rbc_deliver_broadcasts_total`, and
   `sumeragi_rbc_ready_broadcasts_total` obtained from `/metrics`.
@@ -172,7 +239,7 @@ dashboards can track historical compliance with these budgets.
 ## Adversarial scenarios
 
 The `integration_tests/tests/sumeragi_adversarial.rs` suite exercises the RBC
-debug knobs added for chaos testing:
+debug knobs added for chaos testing across eleven four-peer scenarios:
 
 - `sumeragi_adversarial_chunk_drop` enables
   `sumeragi.debug.rbc.drop_every_nth_chunk = 2` to verify that commits halt when
@@ -193,6 +260,33 @@ debug knobs added for chaos testing:
   enables `drop_every_nth_chunk` to confirm collectors stall, then restarts the
   network without the knob to ensure commits resume once honest behaviour is
   restored.
+- `sumeragi_adversarial_validator_selective_drop` enables
+  `sumeragi.debug.rbc.drop_validator_mask` to withhold chunks for a selected
+  validator and then checks that the cluster either stalls with explicit
+  missing/incomplete RBC telemetry or recovers through commit-quorum-visible
+  payload progress.
+- `sumeragi_adversarial_chunk_equivocation_marks_invalid` combines
+  `sumeragi.debug.rbc.equivocate_chunk_mask` with
+  `sumeragi.debug.rbc.equivocate_validator_mask` so a targeted validator sees a
+  conflicting shard. The test requires invalidation or mismatch telemetry when
+  the corruption stalls progress, and bounded commit-quorum convergence when
+  honest payload recovery heals it.
+- `sumeragi_adversarial_conflicting_ready_marks_invalid` restarts a targeted
+  peer with `sumeragi.debug.rbc.conflicting_ready_mask` and requires conflicting
+  READY evidence to surface as invalid sessions, invalid READY counters,
+  retained non-delivered RBC state, or bounded recovery.
+- `sumeragi_adversarial_locked_qc_gate_rejects_conflicting_proposal` uses
+  duplicate INIT emission around a locked-QC proposal conflict to verify the
+  lock gate rejects conflicting block creation while preserving observable RBC
+  duplicate-session or drop evidence.
+- `sumeragi_adversarial_partial_chunk_withholding_stalls_delivery` enables
+  `sumeragi.debug.rbc.partial_chunk_mask` to send truncated chunk material and
+  verifies that delivery stalls with retained/missing RBC telemetry unless
+  commit-quorum recovery supplies the exact payload.
+- `sumeragi_adversarial_all_chunks_corrupted_abort` applies
+  `equivocate_chunk_mask` to all validators through `equivocate_validator_mask`
+  and requires corrupted-shard abort or mismatch evidence without allowing
+  unbounded height divergence.
 
 All scenarios accept `SUMERAGI_ADVERSARIAL_ARTIFACT_DIR` to persist the emitted
 JSON summaries, mirroring the large-payload harness described above.

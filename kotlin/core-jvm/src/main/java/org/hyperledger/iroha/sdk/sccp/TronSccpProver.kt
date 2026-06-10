@@ -130,6 +130,15 @@ object SccpTron {
             input.sourceAdapterEngineDeploymentHash,
             "sourceAdapterEngineDeploymentHash",
         )
+        requireHashRolesDistinct(
+            "TRON route canary governed hashes",
+            listOf(
+                "routeAllowlistHash" to routeAllowlistHash,
+                "destinationBindingHash" to destinationBindingHash,
+                "sourceVerifierMaterialHash" to sourceVerifierMaterialHash,
+                "sourceAdapterEngineDeploymentHash" to sourceAdapterEngineDeploymentHash,
+            ),
+        )
         val expectedRouteAllowlistHash = routeAllowlistHashBytes(
             sourceVerifierMaterialHash = sourceVerifierMaterialHash,
             sourceAdapterEngineDeploymentHash = sourceAdapterEngineDeploymentHash,
@@ -256,6 +265,7 @@ object SccpTron {
         require(input.backend == GROTH16_BN254_PROOF_BACKEND_V1) {
             "backend must be tron-groth16-bn254-v1"
         }
+        require(input.sourceDomain == DOMAIN_SORA) { "sourceDomain must be SORA" }
         val publicInputsBytes = canonicalPublicInputsBytes(input.publicInputs)
         val proofContext = normalizeProofContext(input.statementHash, input.destinationBindingHash)
         val publicSignalWords = groth16Bn254PublicSignalWords(
@@ -267,6 +277,17 @@ object SccpTron {
         val bundleBytes = input.bundleBytes.copyOf()
         require(bundleBytes.isNotEmpty()) { "bundleBytes must not be empty" }
         val sourceProofBytes = requireOptionalSourceProofBytes(input.sourceProofBytes, "sourceProofBytes")
+        val bundleSummary = SccpMessageProofBundles.requireMatchesPublicInputs(
+            targetDomain = input.publicInputs.targetDomain,
+            messageId = normalizeHex32(input.publicInputs.messageId, "publicInputs.messageId"),
+            payloadHash = normalizeHex32(input.publicInputs.payloadHash, "publicInputs.payloadHash"),
+            commitmentRoot = normalizeHex32(input.publicInputs.commitmentRoot, "publicInputs.commitmentRoot"),
+            bundleBytes = bundleBytes,
+            sourceProofBytes = sourceProofBytes,
+        )
+        require(bundleSummary.sourceDomain == input.sourceDomain) {
+            "bundleBytes.sourceDomain must match sourceDomain"
+        }
         val preimage = ByteArrayOutputStream()
         preimage.write(publicInputsBytes)
         writeU32Le(preimage, bundleBytes.size)
@@ -990,6 +1011,14 @@ object SccpTron {
         sourceAdapterEngineDeploymentHash: ByteArray,
         destinationBindingHash: ByteArray,
     ): ByteArray {
+        requireHashRolesDistinct(
+            "TRON route allowlist governed hashes",
+            listOf(
+                "sourceVerifierMaterialHash" to sourceVerifierMaterialHash,
+                "sourceAdapterEngineDeploymentHash" to sourceAdapterEngineDeploymentHash,
+                "destinationBindingHash" to destinationBindingHash,
+            ),
+        )
         val out = ByteArrayOutputStream()
         out.write(1)
         writeU32Le(out, DOMAIN_TRON)
@@ -1033,6 +1062,16 @@ object SccpTron {
             require(previous == null) {
                 "TRON route canary transcript hashes must be distinct: $field matches $previous"
             }
+            seen[encoded] = field
+        }
+    }
+
+    private fun requireHashRolesDistinct(context: String, fields: List<Pair<String, ByteArray>>) {
+        val seen = mutableMapOf<String, String>()
+        for ((field, bytes) in fields) {
+            val encoded = hexLower(bytes)
+            val previous = seen[encoded]
+            require(previous == null) { "$context must be distinct: $field matches $previous" }
             seen[encoded] = field
         }
     }

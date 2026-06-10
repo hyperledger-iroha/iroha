@@ -120,7 +120,7 @@ pub const SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_GAS_SCHEDULE_ID_V1: &str =
 pub const SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_VERSION_V1: u16 = 1;
 /// Public-input schema for Soracloud BFV full-bootstrap material proofs.
 pub const SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_PUBLIC_INPUTS_SCHEMA_V1: &[u8] =
-    br#"{"schema":"soracloud_fhe_full_bootstrap_material_v1","public_inputs":["statement_hash"],"statement_layout":"full_bootstrap_material_proof_statement_digest(version,field_count,params,public_key,evaluation_key_digest,bootstrap_key_id,bootstrap_key_mode,max_refresh_rounds,full_bootstrap_material_digest)","preflight":["bootstrap_key.public_key_digest matches public_key"]}"#;
+    br#"{"schema":"soracloud_fhe_full_bootstrap_material_v1","public_inputs":["statement_hash"],"statement_layout":"full_bootstrap_material_proof_statement_digest(version,field_count,params,public_key,evaluation_key_digest,bootstrap_key_id,bootstrap_key_mode,max_refresh_rounds,full_bootstrap_material_digest)","preflight":["bootstrap_key.public_key_digest matches public_key"],"material_proof_input":{"proof_input_material_version":1,"proof_input_material_field_count":6,"proof_input_material_digest_domain":"iroha.crypto.fhe.bfv.full_bootstrap_material_proof_input_material_digest.v1","hashes_proof_input_material":true,"requires_full_bootstrap_material":true,"binds_public_key":true,"binds_governed_evaluation_keys":true,"binds_concrete_artifact_bundle":true,"binds_statement_hash":true}}"#;
 /// Canonical STARK/FRI circuit id for Soracloud BFV full-bootstrap material proofs.
 pub const SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1: &str =
     "soracloud_fhe_full_bootstrap_material_v1";
@@ -131,7 +131,7 @@ pub const SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_GAS_SCHEDULE_ID_V1: &str =
 pub const SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_VERSION_V1: u16 = 1;
 /// Public-input schema for Soracloud BFV full-bootstrap execution proofs.
 pub const SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUTS_SCHEMA_V1: &[u8] =
-    br#"{"schema":"soracloud_fhe_full_bootstrap_execution_v1","public_inputs":["statement_hash"],"statement_layout":"full_bootstrap_execution_proof_statement_digest(version,field_count,params,public_key,bootstrap_key,full_bootstrap_material_digest,artifact_bundle_digest,(slot_index,input_ciphertext,output_ciphertext,bound_mode,input_bound,output_bound,execution_witness_digest))","preflight":["bootstrap_key.public_key_digest matches public_key"],"execution_witness_layout":{"digest_domain":"iroha.crypto.fhe.bfv.full_bootstrap_execution_witness_digest.v1","material_version":1,"material_field_count":14,"trace_field_count":7,"trace_bounds_field_count":6,"binds_trace":true,"binds_trace_bounds":true},"arithmetic_trace_profile":{"version":1,"field_count":34,"material_version":1,"material_field_count":8,"row_width":34,"private_row_count":64,"private_row_kind":1,"public_row_kind":0,"forbids_unmasked_private_row_openings":true},"release_prover_input":{"proof_input_material_version":1,"proof_input_material_field_count":5,"prover_input_material_version":1,"prover_input_material_field_count":7,"binds_arithmetic_trace_material_digest":true,"binds_generated_proof_key_pair":true,"binds_release_prover_verifier_key":true}}"#;
+    br#"{"schema":"soracloud_fhe_full_bootstrap_execution_v1","public_inputs":["statement_hash"],"statement_layout":"full_bootstrap_execution_proof_statement_digest(version,field_count,params,public_key,bootstrap_key,full_bootstrap_material_digest,artifact_bundle_digest,(slot_index,input_ciphertext,output_ciphertext,bound_mode,input_bound,output_bound,execution_witness_digest))","preflight":["bootstrap_key.public_key_digest matches public_key"],"execution_witness_layout":{"digest_domain":"iroha.crypto.fhe.bfv.full_bootstrap_execution_witness_digest.v1","material_version":1,"material_field_count":14,"trace_field_count":7,"trace_bounds_field_count":6,"binds_trace":true,"binds_trace_bounds":true},"arithmetic_trace_profile":{"version":1,"field_count":34,"material_version":1,"material_field_count":8,"row_width":34,"private_row_count":64,"private_row_kind":1,"public_row_kind":0,"forbids_unmasked_private_row_openings":true,"forbids_duplicate_openings":true},"arithmetic_air_contract":{"version":1,"field_count":27,"binds_constraint_system_digest":true,"enforces_goldilocks_field_canonicality":true,"enforces_row_kind_partition":true,"enforces_active_rows_match_witness_material":true,"enforces_full_bootstrap_arithmetic_constraints":true,"enforces_public_padding_rows":true,"enforces_statement_hash_nonzero":true,"enforces_trace_output_matches_claim":true,"enforces_trace_bound_matches_claim":true,"enforces_no_unmasked_private_row_openings":true,"enforces_duplicate_free_openings":true,"binds_composition_challenges_to_trace_material_digest":true},"artifact_bundle":{"artifact_digest_count":9,"binds_arithmetic_air_constraint_system_artifact":true,"validates_arithmetic_air_constraint_system_material":true},"release_prover_input":{"proof_input_material_version":1,"proof_input_material_field_count":5,"proof_input_material_digest_domain":"iroha.crypto.fhe.bfv.full_bootstrap_execution_proof_input_material_digest.v1","hashes_proof_input_material":true,"prover_input_material_version":1,"prover_input_material_field_count":11,"air_evaluation_material_version":1,"air_evaluation_material_field_count":8,"binds_release_prover_arithmetic_air_constraint_system_digest":true,"binds_release_prover_arithmetic_air_constraint_system_artifact_digest":true,"binds_release_prover_arithmetic_air_evaluation_material_digest":true,"binds_arithmetic_air_evaluation_trace_material_digest":true,"requires_zero_arithmetic_air_composition_values":true,"binds_arithmetic_trace_material_digest":true,"binds_trace_proof_input_consistency":true,"binds_generated_proof_key_pair":true,"binds_release_prover_verifier_key":true},"release_audit_evidence":{"version":1,"field_count":22,"digest_domain":"iroha.crypto.fhe.bfv.full_bootstrap_release_audit_evidence_digest.v1","proof_profile_field_count":24,"key_evidence_field_count":9,"binds_artifact_bundle_digest":true,"binds_evaluator_artifact_set_digest":true,"binds_generated_proof_key_pair":true,"binds_native_payload_digests":true,"binds_native_circuit_fingerprint":true},"release_audit_signoff":{"version":1,"field_count":4,"payload_version":1,"payload_field_count":14,"reviewer_id_max_bytes":128,"binds_release_audit_evidence_digest":true,"binds_external_audit_report_digest":true,"binds_evidence_archive_digest":true,"requires_reviewer_signature":true},"release_audit_record":{"version":1,"field_count":4,"digest_domain":"iroha.crypto.fhe.bfv.full_bootstrap_release_audit_record_digest.v1","packages_release_audit_evidence":true,"packages_release_audit_signoff":true,"validates_record_against_governed_artifacts":true},"release_audit_package":{"version":1,"field_count":6,"digest_domain":"iroha.crypto.fhe.bfv.full_bootstrap_release_audit_package_digest.v1","audit_report_max_bytes":16777216,"audit_archive_max_bytes":134217728,"packages_release_audit_record":true,"validates_external_audit_report_bytes":true,"validates_evidence_archive_bytes":true,"validates_package_against_governed_artifacts":true}}"#;
 /// Canonical STARK/FRI circuit id for Soracloud BFV full-bootstrap execution proofs.
 pub const SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1: &str =
     BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1;
@@ -3629,8 +3629,9 @@ impl BfvEvaluationKeyRefreshTranscriptV1 {
     ///
     /// Runtime admission recomputes this statement from signed key material
     /// before accepting policy-bound full-bootstrap material proofs. The
-    /// audited proof-producing backend and release verifier artifacts remain a
-    /// separate rollout concern.
+    /// crypto layer now derives deterministic release audit evidence for
+    /// generated artifact bundles; independent proof-producing backend audit
+    /// and release verification remain rollout concerns.
     ///
     /// # Errors
     /// Returns [`SoracloudManifestError`] when public-key shape,
@@ -10034,6 +10035,7 @@ impl SoraModelHostViolationEvidenceRecordV1 {
     /// # Errors
     /// Returns [`SoracloudManifestError`] when the version, sequence, timestamps, or
     /// strike/penalty fields are inconsistent.
+    #[allow(clippy::too_many_lines)]
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
         if self.schema_version != SORA_MODEL_HOST_VIOLATION_EVIDENCE_RECORD_VERSION_V1 {
             return Err(SoracloudManifestError::UnsupportedVersion {
@@ -14684,12 +14686,15 @@ mod tests {
             BfvFullBootstrapAccumulatorV1, BfvFullBootstrapCircuitArtifactRoleV1,
             BfvFullBootstrapLinearTransformDiagonalV1, BfvFullBootstrapLinearTransformV1,
             BfvFullBootstrapSampleExtractionV1,
+            bfv_full_bootstrap_arithmetic_air_constraint_system_material_v1,
             bfv_full_bootstrap_blind_rotation_key_for_packed_left_rotation_v1,
+            bfv_full_bootstrap_evaluator_artifact_set_digest_v1,
             bfv_full_bootstrap_proof_key_material_commitment_from_artifact_v1,
             bfv_full_bootstrap_proof_key_pair_commitment_from_artifacts_v1,
             bfv_full_bootstrap_proof_key_pair_from_key_material_v1,
             bfv_full_bootstrap_proof_public_input_schema_v1,
             encode_bfv_full_bootstrap_accumulator_artifact_v1,
+            encode_bfv_full_bootstrap_arithmetic_air_constraint_system_artifact_v1,
             encode_bfv_full_bootstrap_blind_rotation_artifact_v1,
             encode_bfv_full_bootstrap_linear_transform_artifact_v1,
             encode_bfv_full_bootstrap_native_stark_fri_prover_key_material_v1,
@@ -15638,6 +15643,35 @@ mod tests {
             )
             .expect("encode sample full-bootstrap proof public-input schema artifact");
         let proof_public_input_schema_digest = Hash::new(&proof_public_input_schema);
+        let arithmetic_air_constraint_system =
+            encode_bfv_full_bootstrap_arithmetic_air_constraint_system_artifact_v1(
+                &params,
+                1,
+                &bfv_full_bootstrap_arithmetic_air_constraint_system_material_v1(),
+            )
+            .expect("encode sample full-bootstrap arithmetic AIR constraint-system artifact");
+        let coefficient_to_slot_key =
+            linear_transform_artifact(BfvFullBootstrapCircuitArtifactRoleV1::CoefficientToSlotKey);
+        let slot_to_coefficient_key =
+            linear_transform_artifact(BfvFullBootstrapCircuitArtifactRoleV1::SlotToCoefficientKey);
+        let blind_rotation_key_artifact =
+            encode_bfv_full_bootstrap_blind_rotation_artifact_v1(&params, 1, &blind_rotation_key)
+                .expect("encode sample full-bootstrap blind-rotation artifact");
+        let sample_extraction_key =
+            encode_bfv_full_bootstrap_sample_extraction_artifact_v1(&params, 1, sample_extraction)
+                .expect("encode sample full-bootstrap sample-extraction artifact");
+        let evaluator_artifact_set_digest = bfv_full_bootstrap_evaluator_artifact_set_digest_v1(
+            &params,
+            1,
+            &coefficient_to_slot_key,
+            &slot_to_coefficient_key,
+            &blind_rotation_key_artifact,
+            &sample_extraction_key,
+            &accumulator_artifact,
+            &proof_public_input_schema,
+            &arithmetic_air_constraint_system,
+        )
+        .expect("derive sample full-bootstrap evaluator artifact-set digest");
         let prover_key_material =
             encode_bfv_full_bootstrap_native_stark_fri_prover_key_material_v1(
                 SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
@@ -15652,6 +15686,7 @@ mod tests {
             &params,
             1,
             proof_public_input_schema_digest,
+            evaluator_artifact_set_digest,
             &prover_key_material,
             &verifier_key_material,
         )
@@ -15671,26 +15706,13 @@ mod tests {
         )
         .expect("encode sample full-bootstrap verifier-key artifact");
         BfvFullBootstrapCircuitArtifactBundleV1 {
-            coefficient_to_slot_key: linear_transform_artifact(
-                BfvFullBootstrapCircuitArtifactRoleV1::CoefficientToSlotKey,
-            ),
-            slot_to_coefficient_key: linear_transform_artifact(
-                BfvFullBootstrapCircuitArtifactRoleV1::SlotToCoefficientKey,
-            ),
-            blind_rotation_key: encode_bfv_full_bootstrap_blind_rotation_artifact_v1(
-                &params,
-                1,
-                &blind_rotation_key,
-            )
-            .expect("encode sample full-bootstrap blind-rotation artifact"),
-            sample_extraction_key: encode_bfv_full_bootstrap_sample_extraction_artifact_v1(
-                &params,
-                1,
-                sample_extraction,
-            )
-            .expect("encode sample full-bootstrap sample-extraction artifact"),
+            coefficient_to_slot_key,
+            slot_to_coefficient_key,
+            blind_rotation_key: blind_rotation_key_artifact,
+            sample_extraction_key,
             accumulator: accumulator_artifact,
             proof_public_input_schema,
+            arithmetic_air_constraint_system,
             prover_key,
             verifier_key,
         }
@@ -15811,14 +15833,14 @@ mod tests {
         );
         assert_eq!(
             hex::encode(soracloud_fhe_full_bootstrap_material_proof_public_inputs_schema_hash_v1()),
-            "e0c273e68e8166f653e2875421834d5db62a5d6ce3a6e860e9c20b239de243ed",
+            "09415966a6aae9aaeba4370bad3dfd9ca5b2e632060991a7c8faecbf31c9b4cb",
             "full-bootstrap material proof public-input schema hash drifted"
         );
         assert_eq!(
             hex::encode(
                 soracloud_fhe_full_bootstrap_execution_proof_public_inputs_schema_hash_v1()
             ),
-            "10fb9c617f3eaaf6a66125160cf628c42fd92bc943c773bbbbc35ba102b6302b",
+            "1b8353e0c9f2385c0504f3de05ee0f94cd62519297034464a12d10cba1ee8f9d",
             "full-bootstrap execution proof public-input schema hash drifted"
         );
     }
@@ -15829,6 +15851,10 @@ mod tests {
             SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
         )
         .expect("full-bootstrap material schema is valid UTF-8");
+        let proof_input_material_digest_domain = std::str::from_utf8(
+            iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_MATERIAL_PROOF_INPUT_MATERIAL_DIGEST_DOMAIN,
+        )
+        .expect("material proof input digest domain is valid UTF-8");
         assert!(
             schema.contains("full_bootstrap_material_proof_statement_digest(version,field_count,"),
             "public schema must advertise the self-describing material statement header"
@@ -15836,6 +15862,27 @@ mod tests {
         assert!(
             schema.contains("full_bootstrap_material_digest"),
             "public schema must advertise the governed material digest"
+        );
+        for expected in [
+            "\"material_proof_input\"",
+            "\"proof_input_material_version\":1",
+            "\"proof_input_material_field_count\":6",
+            "\"proof_input_material_digest_domain\"",
+            "\"hashes_proof_input_material\":true",
+            "\"requires_full_bootstrap_material\":true",
+            "\"binds_public_key\":true",
+            "\"binds_governed_evaluation_keys\":true",
+            "\"binds_concrete_artifact_bundle\":true",
+            "\"binds_statement_hash\":true",
+        ] {
+            assert!(
+                schema.contains(expected),
+                "public schema must advertise material proof input contract `{expected}`"
+            );
+        }
+        assert!(
+            schema.contains(proof_input_material_digest_domain),
+            "public schema must advertise the material proof input digest domain"
         );
     }
 
@@ -15845,6 +15892,10 @@ mod tests {
             SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
         )
         .expect("full-bootstrap execution schema is valid UTF-8");
+        let proof_input_material_digest_domain = std::str::from_utf8(
+            iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_INPUT_MATERIAL_DIGEST_DOMAIN,
+        )
+        .expect("execution proof input digest domain is valid UTF-8");
         assert!(
             schema.contains("execution_witness_digest"),
             "public schema must advertise the execution witness digest bound by the typed claim"
@@ -15878,17 +15929,86 @@ mod tests {
             "\"private_row_kind\":1",
             "\"public_row_kind\":0",
             "\"forbids_unmasked_private_row_openings\":true",
+            "\"forbids_duplicate_openings\":true",
+            "\"arithmetic_air_contract\"",
+            "\"arithmetic_air_contract\":{\"version\":1,\"field_count\":27",
+            "\"binds_constraint_system_digest\":true",
+            "\"enforces_goldilocks_field_canonicality\":true",
+            "\"enforces_row_kind_partition\":true",
+            "\"enforces_active_rows_match_witness_material\":true",
+            "\"enforces_full_bootstrap_arithmetic_constraints\":true",
+            "\"enforces_public_padding_rows\":true",
+            "\"enforces_statement_hash_nonzero\":true",
+            "\"enforces_trace_output_matches_claim\":true",
+            "\"enforces_trace_bound_matches_claim\":true",
+            "\"enforces_no_unmasked_private_row_openings\":true",
+            "\"enforces_duplicate_free_openings\":true",
+            "\"binds_composition_challenges_to_trace_material_digest\":true",
+            "\"artifact_bundle\"",
+            "\"artifact_digest_count\":9",
+            "\"binds_arithmetic_air_constraint_system_artifact\":true",
+            "\"validates_arithmetic_air_constraint_system_material\":true",
             "\"release_prover_input\"",
-            "\"prover_input_material_field_count\":7",
+            "\"proof_input_material_version\":1",
+            "\"proof_input_material_field_count\":5",
+            "\"proof_input_material_digest_domain\"",
+            "\"hashes_proof_input_material\":true",
+            "\"prover_input_material_version\":1",
+            "\"prover_input_material_field_count\":11",
+            "\"air_evaluation_material_version\":1",
+            "\"air_evaluation_material_field_count\":8",
+            "\"binds_release_prover_arithmetic_air_constraint_system_digest\":true",
+            "\"binds_release_prover_arithmetic_air_constraint_system_artifact_digest\":true",
+            "\"binds_release_prover_arithmetic_air_evaluation_material_digest\":true",
+            "\"binds_arithmetic_air_evaluation_trace_material_digest\":true",
+            "\"requires_zero_arithmetic_air_composition_values\":true",
             "\"binds_arithmetic_trace_material_digest\":true",
+            "\"binds_trace_proof_input_consistency\":true",
             "\"binds_generated_proof_key_pair\":true",
             "\"binds_release_prover_verifier_key\":true",
+            "\"release_audit_evidence\"",
+            "\"release_audit_evidence\":{\"version\":1,\"field_count\":22",
+            "full_bootstrap_release_audit_evidence_digest.v1",
+            "\"proof_profile_field_count\":24",
+            "\"key_evidence_field_count\":9",
+            "\"binds_artifact_bundle_digest\":true",
+            "\"binds_evaluator_artifact_set_digest\":true",
+            "\"binds_native_payload_digests\":true",
+            "\"binds_native_circuit_fingerprint\":true",
+            "\"release_audit_signoff\"",
+            "\"release_audit_signoff\":{\"version\":1,\"field_count\":4",
+            "\"payload_version\":1",
+            "\"payload_field_count\":14",
+            "\"reviewer_id_max_bytes\":128",
+            "\"binds_release_audit_evidence_digest\":true",
+            "\"binds_external_audit_report_digest\":true",
+            "\"binds_evidence_archive_digest\":true",
+            "\"requires_reviewer_signature\":true",
+            "\"release_audit_record\"",
+            "\"release_audit_record\":{\"version\":1,\"field_count\":4",
+            "full_bootstrap_release_audit_record_digest.v1",
+            "\"packages_release_audit_evidence\":true",
+            "\"packages_release_audit_signoff\":true",
+            "\"validates_record_against_governed_artifacts\":true",
+            "\"release_audit_package\"",
+            "\"release_audit_package\":{\"version\":1,\"field_count\":6",
+            "full_bootstrap_release_audit_package_digest.v1",
+            "\"audit_report_max_bytes\":16777216",
+            "\"audit_archive_max_bytes\":134217728",
+            "\"packages_release_audit_record\":true",
+            "\"validates_external_audit_report_bytes\":true",
+            "\"validates_evidence_archive_bytes\":true",
+            "\"validates_package_against_governed_artifacts\":true",
         ] {
             assert!(
                 schema.contains(required),
                 "public schema must advertise release-prover trace/key term {required}"
             );
         }
+        assert!(
+            schema.contains(proof_input_material_digest_domain),
+            "public schema must advertise the execution proof input digest domain"
+        );
         assert!(
             !schema.contains("output_bound))"),
             "public schema must not advertise the pre-witness execution claim layout"
@@ -19325,6 +19445,9 @@ mod tests {
             sample_extraction_key_digest: Hash::new(&artifacts.sample_extraction_key),
             accumulator_digest: Hash::new(&artifacts.accumulator),
             proof_public_input_schema_digest: Hash::new(&artifacts.proof_public_input_schema),
+            arithmetic_air_constraint_system_artifact_digest: Hash::new(
+                &artifacts.arithmetic_air_constraint_system,
+            ),
             proof_key_pair_commitment,
             prover_key_digest: Hash::new(&artifacts.prover_key),
             prover_key_material_commitment,

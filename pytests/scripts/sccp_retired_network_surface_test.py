@@ -122,6 +122,12 @@ SCCP_GENERIC_UNSUPPORTED_SCOPE_NOTE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 
+SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE_FILES = SCCP_GENERIC_UNSUPPORTED_SCOPE_NOTE_FILES
+
+SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE = (
+    "SCCP will not support Sub&#115;trate/Pol&#107;adot networks for now."
+)
+
 def _is_scanned_file(path: Path) -> bool:
     if not path.is_file() or path.is_symlink():
         return False
@@ -232,6 +238,14 @@ def test_generic_no_support_note_stays_in_launch_scope_files() -> None:
         text = (REPO_ROOT / relative).read_text(encoding="utf-8")
         assert SCCP_GENERIC_UNSUPPORTED_SCOPE_NOTE.search(text), (
             f"missing generic unsupported scope note in {relative}"
+        )
+
+
+def test_specific_no_support_note_stays_in_launch_scope_files() -> None:
+    for relative in SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE_FILES:
+        text = (REPO_ROOT / relative).read_text(encoding="utf-8")
+        assert SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE in text, (
+            f"missing specific unsupported scope note in {relative}"
         )
 
 

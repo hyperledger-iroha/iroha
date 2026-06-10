@@ -51,18 +51,18 @@ StaleCases == {
 SpecIsDelivered(c) ==
   c \in {
     "delivered_complete_match",
-    "delivered_incomplete_match",
-    "delivered_invalid_match",
     "delivered_missing_payload",
     "delivered_wrong_payload",
     "two_views_one_delivered"
   }
 
 ActualIsDelivered(c) ==
-  CASE Bug = "is_delivered_requires_complete"
-       /\ c = "delivered_incomplete_match" -> FALSE
+  CASE Bug = "is_delivered_accepts_incomplete"
+       /\ c = "delivered_incomplete_match" -> TRUE
+    [] Bug = "is_delivered_accepts_invalid"
+       /\ c = "delivered_invalid_match" -> TRUE
     [] Bug = "is_delivered_checks_payload"
-       /\ c = "delivered_wrong_payload" -> FALSE
+       /\ c \in {"delivered_missing_payload", "delivered_wrong_payload"} -> FALSE
     [] Bug = "is_delivered_ignores_other_view"
        /\ c = "two_views_one_delivered" -> FALSE
     [] OTHER -> SpecIsDelivered(c)
@@ -140,7 +140,8 @@ Next ==
 TypeInvariant ==
   /\ Bug \in {
        "none",
-       "is_delivered_requires_complete",
+       "is_delivered_accepts_incomplete",
+       "is_delivered_accepts_invalid",
        "is_delivered_checks_payload",
        "is_delivered_ignores_other_view",
        "delivered_accepts_incomplete",
@@ -176,9 +177,13 @@ RbcStatusLookupMatchesSpec ==
 SafetyFast ==
   RbcStatusLookupMatchesSpec
 
-BugIsDeliveredRequiresComplete ==
+BugIsDeliveredAcceptsIncomplete ==
   ActualIsDelivered("delivered_incomplete_match") =
     SpecIsDelivered("delivered_incomplete_match")
+
+BugIsDeliveredAcceptsInvalid ==
+  ActualIsDelivered("delivered_invalid_match") =
+    SpecIsDelivered("delivered_invalid_match")
 
 BugIsDeliveredChecksPayload ==
   ActualIsDelivered("delivered_wrong_payload") =

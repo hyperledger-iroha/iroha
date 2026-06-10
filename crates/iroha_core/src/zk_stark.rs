@@ -845,6 +845,161 @@ mod tests {
     }
 
     #[test]
+    fn explicit_composition_air_envelope_binds_caller_rows_to_fri_queries() {
+        let params = StarkFriParamsV1 {
+            version: 1,
+            n_log2: 4,
+            blowup_log2: 2,
+            fold_arity: 2,
+            queries: 2,
+            merkle_arity: 2,
+            hash_fn: STARK_HASH_SHA256_V1,
+            domain_tag: "iroha:test:zero-composition-air".to_owned(),
+        };
+        let domain = 1_usize << usize::from(params.n_log2);
+        let rows = (0..domain)
+            .map(|index| {
+                vec![
+                    u64::try_from(index).expect("index fits u64"),
+                    u64::try_from(index * 3 + 1).expect("sample value fits u64"),
+                    7,
+                ]
+            })
+            .collect::<Vec<_>>();
+        let composition_values = vec![0; domain];
+        let public_digest = [0x55; 32];
+        let circuit_id = "stark/fri/custom-zero-air:test";
+        let bytes = prove_stark_fri_air_envelope_from_rows_and_composition_values_bytes(
+            params.clone(),
+            "IROHA-TEST-ZERO-COMPOSITION-AIR".to_owned(),
+            circuit_id.to_owned(),
+            public_digest,
+            rows.clone(),
+            composition_values.clone(),
+        )
+        .expect("zero-composition AIR envelope");
+        assert!(
+            verify_stark_fri_air_envelope_from_rows_and_composition_values(
+                &bytes,
+                circuit_id,
+                &public_digest,
+                &rows,
+                &composition_values,
+            )
+        );
+        assert!(!verify_stark_fri_envelope(&bytes));
+
+        let mut drifted_rows = rows.clone();
+        drifted_rows[0][0] ^= 1;
+        assert!(
+            !verify_stark_fri_air_envelope_from_rows_and_composition_values(
+                &bytes,
+                circuit_id,
+                &public_digest,
+                &drifted_rows,
+                &composition_values,
+            )
+        );
+        let mut drifted_composition_values = composition_values.clone();
+        drifted_composition_values[0] = 1;
+        assert!(
+            !verify_stark_fri_air_envelope_from_rows_and_composition_values(
+                &bytes,
+                circuit_id,
+                &public_digest,
+                &rows,
+                &drifted_composition_values,
+            )
+        );
+        assert!(
+            !verify_stark_fri_air_envelope_from_rows_and_composition_values(
+                &bytes,
+                "stark/fri/custom-zero-air:other",
+                &public_digest,
+                &rows,
+                &composition_values,
+            )
+        );
+        let wrong_public_digest = [0x56; 32];
+        assert!(
+            !verify_stark_fri_air_envelope_from_rows_and_composition_values(
+                &bytes,
+                circuit_id,
+                &wrong_public_digest,
+                &rows,
+                &composition_values,
+            )
+        );
+
+        let envelope: StarkVerifyEnvelopeV1 =
+            norito::decode_from_bytes(&bytes).expect("decode zero-composition AIR envelope");
+        let air = envelope.proof.air.as_ref().expect("AIR section");
+        assert_eq!(air.trace_width, 3);
+        assert_eq!(air.public_digest, public_digest);
+        assert_eq!(air.openings.len(), usize::from(params.queries));
+        assert_eq!(
+            envelope.proof.commits.roots.first(),
+            Some(&air.composition_root)
+        );
+        let extra_query_roots = [air.trace_root, air.composition_root, air.public_digest];
+        let indices = validate_stark_fri_query_shape_and_indices_v1(
+            &envelope.params,
+            &envelope.transcript_label,
+            &envelope.proof.commits.roots,
+            &extra_query_roots,
+            &envelope.proof.queries,
+        )
+        .expect("query shape replays");
+        for (opening_number, (opening, index)) in
+            air.openings.iter().zip(indices.iter().copied()).enumerate()
+        {
+            assert_eq!(usize::try_from(opening.index).ok(), Some(index));
+            assert_eq!(opening.row, rows[index]);
+            assert_eq!(opening.next_row, rows[(index + 1) % domain]);
+            assert_eq!(opening.composition_value, 0);
+            validate_stark_air_opening_commitment_roots_v1(&params, air, opening)
+                .expect("opening binds to trace and composition roots");
+            validate_stark_air_opening_first_fri_value_v1(
+                opening,
+                index,
+                envelope.proof.queries[opening_number]
+                    .first()
+                    .expect("query chain carries first decommitment"),
+            )
+            .expect("opening binds to first FRI layer");
+        }
+
+        let mut tampered = envelope;
+        let tampered_air = tampered.proof.air.as_mut().expect("AIR section");
+        tampered_air.openings[0].row[0] ^= 1;
+        let tampered_opening = tampered_air.openings[0].clone();
+        assert_eq!(
+            validate_stark_air_opening_commitment_roots_v1(
+                &params,
+                tampered_air,
+                &tampered_opening
+            )
+            .expect_err("tampered caller row must not match trace root"),
+            "row Merkle root mismatch"
+        );
+
+        let mut noncanonical_composition = vec![0; domain];
+        noncanonical_composition[0] = MOD_P_U64;
+        assert_eq!(
+            prove_stark_fri_air_envelope_from_rows_and_composition_values_bytes(
+                params,
+                "IROHA-TEST-ZERO-COMPOSITION-AIR".to_owned(),
+                "stark/fri/custom-zero-air:test".to_owned(),
+                public_digest,
+                rows,
+                noncanonical_composition,
+            )
+            .expect_err("non-canonical composition values must be rejected"),
+            "STARK AIR composition contains non-canonical field element"
+        );
+    }
+
+    #[test]
     fn synthesized_envelope_rejects_unsupported_fold_arity() {
         let params = StarkFriParamsV1 {
             version: 1,
@@ -1423,27 +1578,31 @@ fn merkle_verify_hash(
     &acc == root
 }
 
-/// Compute the native STARK AIR trace-row leaf hash used by v1 commitments.
-#[cfg(test)]
-pub(crate) fn stark_air_trace_leaf_hash_v1(
+/// Build a v1 STARK Merkle root from canonical field values.
+pub(crate) fn stark_merkle_root_from_field_values_v1(
     params: &StarkFriParamsV1,
-    row: &[u64],
+    values: &[u64],
 ) -> Option<[u8; 32]> {
-    stark_air_trace_leaf_hash(params, row)
+    let values = values
+        .iter()
+        .copied()
+        .map(Fq::from_canonical_u64)
+        .collect::<Option<Vec<_>>>()?;
+    let levels = merkle_levels_from_values(params, &values)?;
+    merkle_root_from_levels(&levels)
 }
 
-/// Build a v1 STARK Merkle root and path from already-hashed leaves.
-#[cfg(test)]
-pub(crate) fn stark_merkle_root_and_path_from_hashes_v1(
+/// Build a v1 STARK AIR trace Merkle root from row-major trace values.
+pub(crate) fn stark_air_trace_root_from_rows_v1(
     params: &StarkFriParamsV1,
-    leaves: Vec<[u8; 32]>,
-    index: usize,
-) -> Option<([u8; 32], MerklePath)> {
-    let levels = merkle_levels_from_hashes(params, leaves)?;
-    Some((
-        merkle_root_from_levels(&levels)?,
-        merkle_path_from_levels(index, &levels)?,
-    ))
+    rows: &[Vec<u64>],
+) -> Option<[u8; 32]> {
+    let trace_leaves = rows
+        .iter()
+        .map(|row| stark_air_trace_leaf_hash(params, row))
+        .collect::<Option<Vec<_>>>()?;
+    let levels = merkle_levels_from_hashes(params, trace_leaves)?;
+    merkle_root_from_levels(&levels)
 }
 
 /// Build a v1 STARK Merkle root and path from canonical field values.
@@ -1698,11 +1857,20 @@ const ZK_ACE_AIR_WITNESS_LIMBS: usize = 15;
 const ZK_ACE_AIR_MAX_BLINDING_ATTEMPTS: u64 = 256;
 
 #[derive(Clone, Copy)]
+struct StarkAirExplicitVerificationContext<'a> {
+    circuit_id: &'a str,
+    public_digest: &'a [u8; 32],
+    rows: &'a [Vec<u64>],
+    composition_values: &'a [u64],
+}
+
+#[derive(Clone, Copy)]
 enum StarkAirVerificationContext<'a> {
     Binding,
     ZkAce {
         public_inputs: &'a iroha_data_model::zk::ZkAcePublicInputsV1,
     },
+    Explicit(&'a StarkAirExplicitVerificationContext<'a>),
 }
 
 impl StarkAirVerificationContext<'_> {
@@ -1710,6 +1878,7 @@ impl StarkAirVerificationContext<'_> {
         match self {
             Self::Binding => stark_air_trace_width(),
             Self::ZkAce { .. } => zk_ace_air_trace_width(),
+            Self::Explicit(explicit) => explicit.rows.first().map(Vec::len).unwrap_or(usize::MAX),
         }
     }
 }
@@ -2029,6 +2198,63 @@ fn stark_air_composition_value_for_context(
             )?;
             Some(current.add(Fq::from_canonical_u64(17)?.mul(next)))
         }
+        StarkAirVerificationContext::Explicit(explicit) => {
+            if domain_size == 0
+                || *public_digest != *explicit.public_digest
+                || explicit.rows.len() != domain_size
+                || explicit.composition_values.len() != domain_size
+                || index >= domain_size
+            {
+                return None;
+            }
+            if row != explicit.rows.get(index)?
+                || next_row != explicit.rows.get((index + 1) % domain_size)?
+            {
+                return None;
+            }
+            Fq::from_canonical_u64(*explicit.composition_values.get(index)?)
+        }
+    }
+}
+
+fn stark_air_context_matches_statement(
+    params: &StarkFriParamsV1,
+    air: &StarkAirProofV1,
+    total_domain: usize,
+    context: StarkAirVerificationContext<'_>,
+) -> bool {
+    match context {
+        StarkAirVerificationContext::Binding | StarkAirVerificationContext::ZkAce { .. } => true,
+        StarkAirVerificationContext::Explicit(explicit) => {
+            if air.circuit_id != explicit.circuit_id
+                || air.public_digest != *explicit.public_digest
+                || explicit.rows.len() != total_domain
+                || explicit.composition_values.len() != total_domain
+            {
+                return false;
+            }
+            let Some(trace_width) = explicit.rows.first().map(Vec::len) else {
+                return false;
+            };
+            if trace_width == 0 || trace_width != usize::from(air.trace_width) {
+                return false;
+            }
+            if explicit.rows.iter().any(|row| row.len() != trace_width) {
+                return false;
+            }
+            let Some(trace_root) = stark_air_trace_root_from_rows_v1(params, explicit.rows) else {
+                return false;
+            };
+            if air.trace_root != trace_root {
+                return false;
+            }
+            let Some(composition_root) =
+                stark_merkle_root_from_field_values_v1(params, explicit.composition_values)
+            else {
+                return false;
+            };
+            air.composition_root == composition_root
+        }
     }
 }
 
@@ -2313,12 +2539,45 @@ pub fn stark_air_public_digest_from_composition(
     Ok(h.finalize().into())
 }
 
-/// Build a deterministic V1 STARK/FRI envelope with an explicit verifier-owned AIR section.
-pub fn prove_stark_fri_air_envelope_bytes(
+/// Build a V1 STARK/FRI AIR envelope from caller-validated rows and composition values.
+///
+/// Domain-specific AIR callers remain responsible for proving that the supplied rows and
+/// composition evaluations are the result of their arithmetic constraint system. This helper commits
+/// those already-evaluated vectors and emits transcript-derived AIR openings bound to the same FRI
+/// query roots replayed by the verifier.
+pub(crate) fn prove_stark_fri_air_envelope_from_rows_and_composition_values_bytes(
     params: StarkFriParamsV1,
     transcript_label: String,
     circuit_id: String,
     public_digest: [u8; 32],
+    rows: Vec<Vec<u64>>,
+    composition_values: Vec<u64>,
+) -> Result<Vec<u8>, String> {
+    let composition_values = composition_values
+        .into_iter()
+        .map(|value| {
+            Fq::from_canonical_u64(value).ok_or_else(|| {
+                "STARK AIR composition contains non-canonical field element".to_owned()
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    prove_stark_fri_air_envelope_from_rows_and_composition_values_fq_bytes(
+        params,
+        transcript_label,
+        circuit_id,
+        public_digest,
+        rows,
+        composition_values,
+    )
+}
+
+fn prove_stark_fri_air_envelope_from_rows_and_composition_values_fq_bytes(
+    params: StarkFriParamsV1,
+    transcript_label: String,
+    circuit_id: String,
+    public_digest: [u8; 32],
+    rows: Vec<Vec<u64>>,
+    composition_values: Vec<Fq>,
 ) -> Result<Vec<u8>, String> {
     if circuit_id.is_empty() || circuit_id.len() > MAX_TRANSCRIPT_LABEL_LEN {
         return Err("invalid STARK AIR circuit_id".to_owned());
@@ -2327,13 +2586,34 @@ pub fn prove_stark_fri_air_envelope_bytes(
     let domain = 1usize
         .checked_shl(u32::from(params.n_log2))
         .ok_or_else(|| "STARK domain size overflow".to_owned())?;
+    if rows.len() != domain {
+        return Err("STARK AIR row count does not match domain size".to_owned());
+    }
+    if composition_values.len() != domain {
+        return Err("STARK AIR composition count does not match domain size".to_owned());
+    }
+    let trace_width = rows
+        .first()
+        .map(Vec::len)
+        .ok_or_else(|| "STARK AIR rows must not be empty".to_owned())?;
+    if trace_width == 0 || trace_width > MAX_AIR_WIDTH {
+        return Err("invalid STARK AIR trace width".to_owned());
+    }
+    let trace_width = u16::try_from(trace_width)
+        .map_err(|_| "STARK AIR trace width does not fit u16".to_owned())?;
+    for row in &rows {
+        if row.len() != usize::from(trace_width) {
+            return Err("STARK AIR rows must have uniform width".to_owned());
+        }
+        if row
+            .iter()
+            .copied()
+            .any(|value| Fq::from_canonical_u64(value).is_none())
+        {
+            return Err("STARK AIR row contains non-canonical field element".to_owned());
+        }
+    }
 
-    let rows = (0..domain)
-        .map(|index| {
-            stark_air_row(index, &public_digest)
-                .ok_or_else(|| "failed to build STARK AIR row".to_owned())
-        })
-        .collect::<Result<Vec<_>, _>>()?;
     let trace_leaves = rows
         .iter()
         .map(|row| {
@@ -2346,18 +2626,6 @@ pub fn prove_stark_fri_air_envelope_bytes(
     let trace_root = merkle_root_from_levels(&trace_levels)
         .ok_or_else(|| "failed to derive STARK AIR trace root".to_owned())?;
 
-    let composition_values = (0..domain)
-        .map(|index| {
-            stark_air_composition_value(
-                index,
-                domain,
-                &public_digest,
-                &rows[index],
-                &rows[(index + 1) % domain],
-            )
-            .ok_or_else(|| "failed to evaluate STARK AIR composition".to_owned())
-        })
-        .collect::<Result<Vec<_>, _>>()?;
     let composition_levels = merkle_levels_from_values(&params, &composition_values)
         .ok_or_else(|| "failed to build STARK AIR composition commitment".to_owned())?;
     let composition_root = merkle_root_from_levels(&composition_levels)
@@ -2367,26 +2635,23 @@ pub fn prove_stark_fri_air_envelope_bytes(
     let mut envelope = synthesize_stark_fri_envelope_from_values(
         params,
         transcript_label,
-        composition_values,
+        composition_values.clone(),
         &extra_query_roots,
     )?;
     if envelope.proof.commits.roots.first().copied() != Some(composition_root) {
         return Err("STARK AIR composition root does not match FRI base root".to_owned());
     }
 
-    let query_roots = stark_air_query_roots(&envelope.proof.commits.roots, None)
-        .into_iter()
-        .chain(extra_query_roots)
-        .collect::<Vec<_>>();
+    let query_indices = validate_stark_fri_query_shape_and_indices_v1(
+        &envelope.params,
+        &envelope.transcript_label,
+        &envelope.proof.commits.roots,
+        &extra_query_roots,
+        &envelope.proof.queries,
+    )
+    .map_err(|err| format!("STARK AIR FRI query shape failed validation: {err}"))?;
     let mut openings = Vec::with_capacity(envelope.proof.queries.len());
-    for qi in 0..envelope.proof.queries.len() {
-        let index = derive_query_index(
-            &envelope.transcript_label,
-            &envelope.params,
-            &query_roots,
-            qi,
-        )
-        .ok_or_else(|| "failed to derive STARK AIR query index".to_owned())?;
+    for index in query_indices {
         let next_index = (index + 1) % domain;
         let row_path = merkle_path_from_levels(index, &trace_levels)
             .ok_or_else(|| "failed to open STARK AIR row".to_owned())?;
@@ -2394,14 +2659,10 @@ pub fn prove_stark_fri_air_envelope_bytes(
             .ok_or_else(|| "failed to open next STARK AIR row".to_owned())?;
         let composition_path = merkle_path_from_levels(index, &composition_levels)
             .ok_or_else(|| "failed to open STARK AIR composition".to_owned())?;
-        let composition_value = stark_air_composition_value(
-            index,
-            domain,
-            &public_digest,
-            &rows[index],
-            &rows[next_index],
-        )
-        .ok_or_else(|| "failed to evaluate opened STARK AIR composition".to_owned())?;
+        let composition_value = composition_values
+            .get(index)
+            .copied()
+            .ok_or_else(|| "STARK AIR composition index is out of range".to_owned())?;
         openings.push(StarkAirOpeningV1 {
             index: u32::try_from(index)
                 .map_err(|_| "STARK AIR query index does not fit u32".to_owned())?,
@@ -2419,11 +2680,79 @@ pub fn prove_stark_fri_air_envelope_bytes(
         public_digest,
         trace_root,
         composition_root,
-        trace_width: u16::try_from(stark_air_trace_width())
-            .map_err(|_| "STARK AIR trace width does not fit u16".to_owned())?,
+        trace_width,
         openings,
     });
     norito::to_bytes(&envelope).map_err(|err| format!("failed to encode STARK envelope: {err}"))
+}
+
+/// Build a deterministic V1 STARK/FRI envelope with an explicit verifier-owned AIR section.
+pub fn prove_stark_fri_air_envelope_bytes(
+    params: StarkFriParamsV1,
+    transcript_label: String,
+    circuit_id: String,
+    public_digest: [u8; 32],
+) -> Result<Vec<u8>, String> {
+    validate_stark_prover_params(&params, &transcript_label)?;
+    let domain = 1usize
+        .checked_shl(u32::from(params.n_log2))
+        .ok_or_else(|| "STARK domain size overflow".to_owned())?;
+
+    let rows = (0..domain)
+        .map(|index| {
+            stark_air_row(index, &public_digest)
+                .ok_or_else(|| "failed to build STARK AIR row".to_owned())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let composition_values = (0..domain)
+        .map(|index| {
+            stark_air_composition_value(
+                index,
+                domain,
+                &public_digest,
+                &rows[index],
+                &rows[(index + 1) % domain],
+            )
+            .ok_or_else(|| "failed to evaluate STARK AIR composition".to_owned())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    prove_stark_fri_air_envelope_from_rows_and_composition_values_bytes(
+        params,
+        transcript_label,
+        circuit_id,
+        public_digest,
+        rows,
+        composition_values
+            .into_iter()
+            .map(|value| value.0)
+            .collect::<Vec<_>>(),
+    )
+}
+
+/// Build a V1 STARK/FRI AIR envelope from caller-validated rows and zero composition values.
+///
+/// This helper only constructs commitments and transcript-derived openings. Domain-specific AIR
+/// callers remain responsible for proving that the supplied rows satisfy their arithmetic
+/// constraints; this function records the already-zero composition vector used by those constraints.
+pub fn prove_stark_fri_zero_composition_air_envelope_bytes(
+    params: StarkFriParamsV1,
+    transcript_label: String,
+    circuit_id: String,
+    public_digest: [u8; 32],
+    rows: Vec<Vec<u64>>,
+) -> Result<Vec<u8>, String> {
+    let domain = 1usize
+        .checked_shl(u32::from(params.n_log2))
+        .ok_or_else(|| "STARK domain size overflow".to_owned())?;
+    let composition_values = vec![Fq::zero(); domain];
+    prove_stark_fri_air_envelope_from_rows_and_composition_values_fq_bytes(
+        params,
+        transcript_label,
+        circuit_id,
+        public_digest,
+        rows,
+        composition_values,
+    )
 }
 
 /// Build a deterministic V1 STARK/FRI envelope for the ZK-ACE authorization AIR.
@@ -2723,7 +3052,10 @@ fn verify_stark_air_opening(
     } else {
         first_decommit.y1
     };
-    opened_fri_value == opening.composition_value
+    if opened_fri_value != opening.composition_value {
+        return false;
+    }
+    true
 }
 
 /// Verify a STARK FRI envelope under `zk-stark` with caller-provided limits.
@@ -2741,6 +3073,47 @@ pub fn verify_stark_fri_zk_ace_envelope_with_limits(
         bytes,
         limits,
         StarkAirVerificationContext::ZkAce { public_inputs },
+    )
+}
+
+/// Verify a STARK FRI AIR envelope against caller-provided trace rows and composition values.
+#[cfg(test)]
+pub(crate) fn verify_stark_fri_air_envelope_from_rows_and_composition_values(
+    bytes: &[u8],
+    circuit_id: &str,
+    public_digest: &[u8; 32],
+    rows: &[Vec<u64>],
+    composition_values: &[u64],
+) -> bool {
+    verify_stark_fri_air_envelope_from_rows_and_composition_values_with_limits(
+        bytes,
+        &StarkVerifierLimits::default(),
+        circuit_id,
+        public_digest,
+        rows,
+        composition_values,
+    )
+}
+
+/// Verify a STARK FRI AIR envelope against caller-provided trace rows and composition values.
+pub(crate) fn verify_stark_fri_air_envelope_from_rows_and_composition_values_with_limits(
+    bytes: &[u8],
+    limits: &StarkVerifierLimits,
+    circuit_id: &str,
+    public_digest: &[u8; 32],
+    rows: &[Vec<u64>],
+    composition_values: &[u64],
+) -> bool {
+    let explicit = StarkAirExplicitVerificationContext {
+        circuit_id,
+        public_digest,
+        rows,
+        composition_values,
+    };
+    verify_stark_fri_envelope_with_context(
+        bytes,
+        limits,
+        StarkAirVerificationContext::Explicit(&explicit),
     )
 }
 
@@ -2789,11 +3162,14 @@ fn verify_stark_fri_envelope_with_context(
     {
         return false;
     }
-    let query_roots = stark_air_query_roots(roots, Some(air));
-    let total_domain = 1usize << env.params.n_log2;
-    if total_domain == 0 {
+    let total_domain = match 1usize.checked_shl(u32::from(env.params.n_log2)) {
+        Some(value) if value != 0 => value,
+        _ => return false,
+    };
+    if !stark_air_context_matches_statement(&env.params, air, total_domain, context) {
         return false;
     }
+    let query_roots = stark_air_query_roots(roots, Some(air));
     let fold_arity = env.params.fold_arity as usize;
 
     for (qi, chain) in env.proof.queries.iter().enumerate() {

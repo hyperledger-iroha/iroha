@@ -423,6 +423,21 @@ def _require_fixed_bytes(
     return raw
 
 
+def _require_distinct_hash_roles(
+    fields: tuple[tuple[str, bytes], ...],
+    *,
+    label: str,
+) -> None:
+    seen: dict[bytes, str] = {}
+    for field, raw in fields:
+        if not any(raw):
+            continue
+        previous_field = seen.get(raw)
+        if previous_field is not None:
+            raise ValueError(f"{label} must be distinct: {field} matches {previous_field}")
+        seen[raw] = field
+
+
 def tron_source_bridge_config_hash(
     *,
     bridge_address: bytes,
@@ -671,6 +686,17 @@ def tron_route_allowlist_hash(
         destination_binding_hash,
         label="destination_binding_hash",
         byte_length=32,
+    )
+    _require_distinct_hash_roles(
+        (
+            ("source_verifier_material_hash", source_verifier_material_hash),
+            (
+                "source_adapter_engine_deployment_hash",
+                source_adapter_engine_deployment_hash,
+            ),
+            ("destination_binding_hash", destination_binding_hash),
+        ),
+        label="TRON route allowlist evidence hashes",
     )
     payload = bytearray()
     _push_u8(payload, 1)
@@ -1635,6 +1661,13 @@ def _route_canary_transaction_evidence_hash(
         label="destination_binding_hash",
         byte_length=32,
     )
+    _require_distinct_hash_roles(
+        (
+            ("route_allowlist_hash", route_allowlist_hash),
+            ("destination_binding_hash", destination_binding_hash),
+        ),
+        label="TRON route canary governed hashes",
+    )
     expected_destination_binding_hash = _destination_binding_hash_from_args(args)
     if destination_binding_hash != expected_destination_binding_hash:
         raise ValueError(
@@ -1854,6 +1887,18 @@ def _route_canary_evidence_hash(
         source_adapter_engine_deployment_hash,
         label="source_adapter_engine_deployment_hash",
         byte_length=32,
+    )
+    _require_distinct_hash_roles(
+        (
+            ("route_allowlist_hash", route_allowlist_hash),
+            ("destination_binding_hash", destination_binding_hash),
+            ("source_verifier_material_hash", source_verifier_material_hash),
+            (
+                "source_adapter_engine_deployment_hash",
+                source_adapter_engine_deployment_hash,
+            ),
+        ),
+        label="TRON route canary governed hashes",
     )
     expected_route_allowlist_hash = tron_route_allowlist_hash(
         source_verifier_material_hash=source_verifier_material_hash,

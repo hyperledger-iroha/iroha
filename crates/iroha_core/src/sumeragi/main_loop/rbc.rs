@@ -1169,17 +1169,51 @@ pub(super) fn rbc_deliver_signature_valid(
 pub(super) fn should_process_commit_after_ready(
     recorded_ready: bool,
     clear_pending: bool,
-    delivered_before: bool,
+    complete_delivery_before: bool,
     deliver_emitted: bool,
     ready_quorum_reached: bool,
 ) -> bool {
     clear_pending
         || ready_quorum_reached
-        || ((recorded_ready || deliver_emitted) && !delivered_before)
+        || ((recorded_ready || deliver_emitted) && !complete_delivery_before)
 }
 
 pub(super) fn should_process_commit_after_deliver(first_deliver: bool) -> bool {
     first_deliver
+}
+
+impl Actor {
+    fn note_rbc_ready_dependency_progress(&mut self, key: SessionKey, now: Instant) {
+        self.touch_pending_progress(key.0, key.1, key.2, now);
+        let _ = self.note_missing_block_request_dependency_progress(key.0, key.1, key.2, now, true);
+    }
+
+    fn request_commit_pipeline_after_rbc_ready_progress(&mut self, key: SessionKey) {
+        self.drive_vnext_availability_ready_for_block(key.0, key.1, key.2);
+        let queue_depths = super::status::worker_queue_depth_snapshot();
+        let consensus_queue_backlog = queue_depths.vote_rx > 0
+            || queue_depths.block_payload_rx > 0
+            || queue_depths.rbc_chunk_rx > 0
+            || queue_depths.block_rx > 0;
+        if consensus_queue_backlog {
+            debug!(
+                height = key.1,
+                view = key.2,
+                vote_rx_depth = queue_depths.vote_rx,
+                block_payload_rx_depth = queue_depths.block_payload_rx,
+                rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
+                block_rx_depth = queue_depths.block_rx,
+                "consensus queue backlog detected while handling RBC READY"
+            );
+        }
+        self.request_commit_pipeline_for_round(
+            key.1,
+            key.2,
+            super::status::RoundPhaseTrace::WaitDa,
+            super::status::RoundEventCauseTrace::BlockAvailable,
+            None,
+        );
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -4148,7 +4182,9 @@ impl Actor {
                 }
             }
         }
-        self.cache_vote_roster(init.block_hash, init.height, init.view, roster.clone());
+        if roster_source.is_authoritative() {
+            self.cache_vote_roster(init.block_hash, init.height, init.view, roster.clone());
+        }
         self.record_rbc_session_roster(key, roster, roster_source);
         let frontier_height = self.committed_height_snapshot().saturating_add(1);
         let near_frontier = key.1 <= frontier_height.saturating_add(1);
@@ -4634,13 +4670,13 @@ impl Actor {
                 .is_some_and(|session| {
                     self.rbc_session_has_authoritative_payload_for_progress(key, session)
                 });
-        let delivered_before = self
+        let complete_delivery_before = self
             .subsystems
             .da_rbc
             .rbc
             .sessions
             .get(&key)
-            .is_some_and(|session| session.delivered);
+            .is_some_and(rbc_session_has_complete_delivery);
         let mut chunk_digest_mismatch = false;
         let (ready_sent_before, became_complete, accepted_chunk, reconstructed_before) =
             if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get_mut(&key) {
@@ -4802,7 +4838,7 @@ impl Actor {
                 self.publish_rbc_backlog_snapshot();
                 return Ok(());
             };
-        if accepted_chunk && !delivered_before && !authoritative_before {
+        if accepted_chunk && !complete_delivery_before && !authoritative_before {
             let now = Instant::now();
             self.touch_pending_progress(chunk_block, chunk_height, chunk_view, now);
             let _ = self.note_missing_block_request_dependency_progress(
@@ -4922,7 +4958,8 @@ impl Actor {
             .map_or(ready_sent_before, |session| session.sent_ready);
         let ready_emitted = !ready_sent_before && ready_sent_after;
         let authoritative_transition = !authoritative_before && authoritative_after;
-        if !delivered_before && (authoritative_transition || (authoritative_after && ready_emitted))
+        if !complete_delivery_before
+            && (authoritative_transition || (authoritative_after && ready_emitted))
         {
             self.drive_vnext_availability_ready_for_block(key.0, key.1, key.2);
             self.recover_block_from_rbc_session(key);
@@ -4933,7 +4970,10 @@ impl Actor {
                 super::status::RoundEventCauseTrace::BlockAvailable,
                 None,
             );
-        } else if !delivered_before && !authoritative_after && (became_complete || ready_emitted) {
+        } else if !complete_delivery_before
+            && !authoritative_after
+            && (became_complete || ready_emitted)
+        {
             self.request_commit_pipeline_for_round(
                 key.1,
                 key.2,
@@ -5566,6 +5606,13 @@ impl Actor {
         if self.subsystems.da_rbc.rbc.pending.contains_key(&key) {
             self.flush_pending_rbc(key)?;
         }
+        let complete_delivery_before = self
+            .subsystems
+            .da_rbc
+            .rbc
+            .sessions
+            .get(&key)
+            .is_some_and(rbc_session_has_complete_delivery);
         let delivered_before = self
             .subsystems
             .da_rbc
@@ -5582,16 +5629,9 @@ impl Actor {
             .get(&key)
             .is_some_and(|session| session.delivered);
         let deliver_emitted = !delivered_before && delivered_after;
-        if recorded_ready && !clear_pending && !delivered_before {
+        if recorded_ready && !clear_pending && !complete_delivery_before {
             let now = Instant::now();
-            self.touch_pending_progress(ready.block_hash, ready.height, ready.view, now);
-            let _ = self.note_missing_block_request_dependency_progress(
-                ready.block_hash,
-                ready.height,
-                ready.view,
-                now,
-                true,
-            );
+            self.note_rbc_ready_dependency_progress(key, now);
         }
         let telemetry_ref = self.telemetry_handle();
         self.publish_rbc_backlog_snapshot();
@@ -5655,48 +5695,18 @@ impl Actor {
         let ready_quorum_reached = recorded_ready
             && ready_count_before < deliver_quorum
             && ready_count_after >= deliver_quorum;
-        if recorded_ready && ready_quorum_reached && !clear_pending && delivered_before {
+        if recorded_ready && ready_quorum_reached && !clear_pending && complete_delivery_before {
             let now = Instant::now();
-            self.touch_pending_progress(ready.block_hash, ready.height, ready.view, now);
-            let _ = self.note_missing_block_request_dependency_progress(
-                ready.block_hash,
-                ready.height,
-                ready.view,
-                now,
-                true,
-            );
+            self.note_rbc_ready_dependency_progress(key, now);
         }
         if should_process_commit_after_ready(
             recorded_ready,
             clear_pending,
-            delivered_before,
+            complete_delivery_before,
             deliver_emitted,
             ready_quorum_reached,
         ) {
-            self.drive_vnext_availability_ready_for_block(key.0, key.1, key.2);
-            let queue_depths = super::status::worker_queue_depth_snapshot();
-            let consensus_queue_backlog = queue_depths.vote_rx > 0
-                || queue_depths.block_payload_rx > 0
-                || queue_depths.rbc_chunk_rx > 0
-                || queue_depths.block_rx > 0;
-            if consensus_queue_backlog {
-                debug!(
-                    height = key.1,
-                    view = key.2,
-                    vote_rx_depth = queue_depths.vote_rx,
-                    block_payload_rx_depth = queue_depths.block_payload_rx,
-                    rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
-                    block_rx_depth = queue_depths.block_rx,
-                    "consensus queue backlog detected while handling RBC READY"
-                );
-            }
-            self.request_commit_pipeline_for_round(
-                key.1,
-                key.2,
-                super::status::RoundPhaseTrace::WaitDa,
-                super::status::RoundEventCauseTrace::BlockAvailable,
-                None,
-            );
+            self.request_commit_pipeline_after_rbc_ready_progress(key);
         }
         Ok(())
     }
@@ -6217,7 +6227,7 @@ impl Actor {
             .ok()
             .and_then(|idx| signature_topology.as_ref().get(idx));
         if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key) {
-            if session.delivered
+            if rbc_session_has_complete_delivery(session)
                 && session.deliver_sender == Some(deliver.sender)
                 && session
                     .deliver_signature
@@ -6392,11 +6402,22 @@ impl Actor {
                 self.rbc_session_authoritative_payload_bytes_for_telemetry(key, session)
             });
         let allow_missing_chunks = local_authoritative_payload;
+        let complete_delivery_before_bundled_ready = self
+            .subsystems
+            .da_rbc
+            .rbc
+            .sessions
+            .get(&key)
+            .is_some_and(rbc_session_has_complete_delivery);
+        let ready_count_before;
+        let ready_count_after;
+        let mut recorded_ready_from_bundle = false;
+        let mut ready_conflict_detected = false;
         let (
             ignored,
             first_deliver,
             delivered_bytes,
-            invalidate,
+            mut invalidate,
             chunk_root_mismatch,
             defer_reason,
             defer_kind,
@@ -6408,13 +6429,20 @@ impl Actor {
                 .sessions
                 .get_mut(&key)
                 .expect("session presence checked before validation");
+            ready_count_before = session.ready_signatures.len();
             if session.expected_chunk_root.is_none() {
                 if let Some(root) = inferred_chunk_root {
                     session.expected_chunk_root = Some(root);
                 }
             }
+            let was_valid = !session.is_invalid();
             for (sender, signature) in ready_to_record {
-                session.record_ready_with_roster_hash(sender, signature, deliver.roster_hash);
+                recorded_ready_from_bundle |=
+                    session.record_ready_with_roster_hash(sender, signature, deliver.roster_hash);
+            }
+            ready_count_after = session.ready_signatures.len();
+            if was_valid && session.is_invalid() {
+                ready_conflict_detected = true;
             }
             let _ = session
                 .sync_progress_observations(authoritative_known_payload, Some(deliver_quorum));
@@ -6430,6 +6458,30 @@ impl Actor {
                 allow_missing_chunks,
             )
         };
+        if ready_conflict_detected {
+            invalidate = true;
+            warn!(
+                height = key.1,
+                view = key.2,
+                sender = deliver.sender,
+                "RBC READY conflict detected inside DELIVER bundle; marking session invalid"
+            );
+        }
+        let ready_quorum_reached_from_bundle = recorded_ready_from_bundle
+            && ready_count_before < deliver_quorum
+            && ready_count_after >= deliver_quorum;
+        let bundled_ready_should_refresh_progress = !first_deliver
+            && recorded_ready_from_bundle
+            && !invalidate
+            && (!complete_delivery_before_bundled_ready || ready_quorum_reached_from_bundle);
+        let should_process_commit_after_bundled_ready = !first_deliver
+            && should_process_commit_after_ready(
+                recorded_ready_from_bundle,
+                invalidate,
+                complete_delivery_before_bundled_ready,
+                false,
+                ready_quorum_reached_from_bundle,
+            );
         if chunk_root_mismatch {
             self.record_consensus_message_handling(
                 super::status::ConsensusMessageKind::RbcDeliver,
@@ -6514,13 +6566,21 @@ impl Actor {
                 );
             }
             self.maybe_emit_rbc_ready(key)?;
+            if bundled_ready_should_refresh_progress {
+                self.note_rbc_ready_dependency_progress(key, now);
+            }
+            if should_process_commit_after_bundled_ready {
+                self.request_commit_pipeline_after_rbc_ready_progress(key);
+            }
             if self
                 .subsystems
                 .da_rbc
                 .rbc
                 .sessions
                 .get(&key)
-                .is_none_or(|session| session.delivered || session.is_invalid())
+                .is_none_or(|session| {
+                    rbc_session_has_complete_delivery(session) || session.is_invalid()
+                })
             {
                 self.subsystems.da_rbc.rbc.ready_deferral.remove(&key);
                 self.subsystems.da_rbc.rbc.deliver_deferral.remove(&key);
@@ -6632,7 +6692,9 @@ impl Actor {
                 .rbc
                 .sessions
                 .get(&key)
-                .is_some_and(|session| !session.delivered && !session.is_invalid());
+                .is_some_and(|session| {
+                    !rbc_session_has_complete_delivery(session) && !session.is_invalid()
+                });
             if !should_stash_deferred_deliver {
                 self.subsystems.da_rbc.rbc.ready_deferral.remove(&key);
                 self.subsystems.da_rbc.rbc.deliver_deferral.remove(&key);
@@ -6731,6 +6793,12 @@ impl Actor {
         if invalidate {
             self.clear_pending_rbc(&key);
         }
+        if bundled_ready_should_refresh_progress {
+            self.note_rbc_ready_dependency_progress(key, now);
+        }
+        if should_process_commit_after_bundled_ready {
+            self.request_commit_pipeline_after_rbc_ready_progress(key);
+        }
         if first_deliver && let Some(bytes) = delivered_bytes {
             self.record_rbc_payload_bytes_metric_for_active_session(key, bytes);
         }
@@ -6744,7 +6812,9 @@ impl Actor {
             .rbc
             .sessions
             .get(&key)
-            .is_some_and(|session| session.delivered || session.is_invalid())
+            .is_some_and(|session| {
+                rbc_session_has_complete_delivery(session) || session.is_invalid()
+            })
         {
             self.subsystems.da_rbc.rbc.ready_deferral.remove(&key);
             self.subsystems.da_rbc.rbc.deliver_deferral.remove(&key);
@@ -7633,6 +7703,9 @@ impl Actor {
         let mut dataspace_backlog: BTreeMap<(u32, u64), status::DataspaceRbcSnapshot> =
             BTreeMap::new();
         for session in sessions.values() {
+            if session.is_invalid() {
+                continue;
+            }
             let missing = u64::from(
                 session
                     .total_chunks()

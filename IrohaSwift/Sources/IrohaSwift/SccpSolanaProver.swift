@@ -1345,6 +1345,15 @@ public func canonicalSolanaSccpRouteCanaryEvidenceBytes(
         input.sourceAdapterEngineDeploymentHash,
         field: "sourceAdapterEngineDeploymentHash"
     )
+    try requireSolanaHashRolesDistinct(
+        field: "routeCanaryGovernedHashes",
+        [
+            ("routeAllowlistHash", routeAllowlistHash),
+            ("destinationBindingHash", destinationBindingHash),
+            ("sourceVerifierMaterialHash", sourceVerifierMaterialHash),
+            ("sourceAdapterEngineDeploymentHash", sourceAdapterEngineDeploymentHash),
+        ]
+    )
     let evidence = try normalizeSolanaRouteCanaryProgramDataEvidence(input)
 
     var out = Data()
@@ -5754,6 +5763,19 @@ private func nonZeroHex32Bytes(_ value: String, field: String) throws -> Data {
         throw SolanaSccpProverError.invalidHex32(field)
     }
     return bytes
+}
+
+private func requireSolanaHashRolesDistinct(
+    field: String,
+    _ fields: [(String, Data)]
+) throws {
+    var seen: [Data: String] = [:]
+    for (label, bytes) in fields {
+        if seen[bytes] != nil {
+            throw SolanaSccpProverError.invalidString(field)
+        }
+        seen[bytes] = label
+    }
 }
 
 private func solanaUpgradeableProgramAccountData(programdataAddress: Data) -> Data {

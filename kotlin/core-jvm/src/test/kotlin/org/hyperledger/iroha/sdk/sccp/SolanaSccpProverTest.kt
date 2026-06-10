@@ -59,6 +59,19 @@ class SolanaSccpProverTest {
                 "expectedDestinationBindingHash must match canonical Solana destination binding",
             ) == true,
         )
+        listOf(
+            evidence.copy(routeAllowlistHash = evidence.destinationBindingHash),
+            evidence.copy(routeAllowlistHash = evidence.sourceVerifierMaterialHash),
+            evidence.copy(routeAllowlistHash = evidence.sourceAdapterEngineDeploymentHash),
+            evidence.copy(sourceVerifierMaterialHash = evidence.destinationBindingHash),
+            evidence.copy(sourceAdapterEngineDeploymentHash = evidence.destinationBindingHash),
+            evidence.copy(sourceAdapterEngineDeploymentHash = evidence.sourceVerifierMaterialHash),
+        ).forEach { replay ->
+            val failure = assertFailsWith<IllegalArgumentException> {
+                SccpSolana.routeCanaryEvidenceHash(replay)
+            }
+            assertTrue(failure.message?.contains("Solana route canary governed hashes") == true)
+        }
     }
 
     private fun sampleSolanaStakeStateV2StakeAccount(): ByteArray {
