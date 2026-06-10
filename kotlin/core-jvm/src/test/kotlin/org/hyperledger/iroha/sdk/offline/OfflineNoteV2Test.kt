@@ -9,6 +9,20 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import org.hyperledger.iroha.sdk.client.JsonParser
+import org.hyperledger.iroha.sdk.core.model.InstructionBox
+import org.hyperledger.iroha.sdk.core.model.WirePayload
+import org.hyperledger.iroha.sdk.norito.NoritoCodec
+import org.hyperledger.iroha.sdk.norito.NoritoDecoder
+import org.hyperledger.iroha.sdk.norito.NoritoEncoder
+import org.hyperledger.iroha.sdk.norito.NoritoHeader
+import org.hyperledger.iroha.sdk.norito.TypeAdapter
+
+private const val ISSUE_INSTRUCTION_ALIAS_SCHEMA =
+    "iroha_data_model::isi::offline::IssueOfflineNoteV2"
+private const val REDEEM_INSTRUCTION_ALIAS_SCHEMA =
+    "iroha_data_model::isi::offline::RedeemOfflineNoteV2"
+private const val AUDIT_INSTRUCTION_ALIAS_SCHEMA =
+    "iroha_data_model::isi::offline::AuditOfflineNoteV2"
 
 class OfflineNoteV2Test {
     @Test
@@ -29,6 +43,266 @@ class OfflineNoteV2Test {
         assertEquals(string(obj(chain, "issue"), "norito_base64"), base64(issue(fixture).noritoEncoded()))
         assertEquals(string(obj(chain, "audit"), "norito_base64"), base64(audit(fixture).noritoEncoded()))
         assertEquals(string(obj(chain, "redeem"), "norito_base64"), base64(redeem(fixture).noritoEncoded()))
+    }
+
+    @Test
+    fun offlineNoteV2DecodersRoundTripRustNoritoVectors() {
+        val fixture = loadFixture()
+        val chain = obj(fixture, "chain_vectors")
+        val sender = certificate(obj(obj(fixture, "payment_token"), "sender_key_certificate"))
+        val issue = issue(fixture)
+        val audit = audit(fixture)
+        val redeem = redeem(fixture)
+
+        val certificatePayloadBytes = sender.signingPayload().noritoEncoded()
+        val certificateBytes = sender.noritoEncoded()
+        val issuedClaimBytes = issue.issuedClaim().noritoEncoded()
+        val auditOutputClaimBytes = OfflineNoteV2.encodeAuditOutputClaim(audit.outputClaims[0])
+        val recursiveProofBytes = OfflineNoteV2.encodeRecursiveProof(audit.recursiveProof)
+        val redeemPublicInputsBytes = redeem.publicInputs().noritoEncoded()
+        val auditPublicInputsBytes = audit.publicInputs().noritoEncoded()
+        val issueBytes = base64Bytes(string(obj(chain, "issue"), "norito_base64"))
+        val auditBytes = base64Bytes(string(obj(chain, "audit"), "norito_base64"))
+        val redeemBytes = base64Bytes(string(obj(chain, "redeem"), "norito_base64"))
+
+        assertEquals(
+            base64(certificatePayloadBytes),
+            base64(OfflineNoteV2.decodeCertificatePayload(certificatePayloadBytes).noritoEncoded()),
+        )
+        assertEquals(base64(certificateBytes), base64(OfflineNoteV2.decodeCertificate(certificateBytes).noritoEncoded()))
+        assertEquals(base64(issuedClaimBytes), base64(OfflineNoteV2.decodeIssuedClaim(issuedClaimBytes).noritoEncoded()))
+        assertEquals(
+            base64(auditOutputClaimBytes),
+            base64(OfflineNoteV2.encodeAuditOutputClaim(OfflineNoteV2.decodeAuditOutputClaim(auditOutputClaimBytes))),
+        )
+        assertEquals(
+            base64(recursiveProofBytes),
+            base64(OfflineNoteV2.encodeRecursiveProof(OfflineNoteV2.decodeRecursiveProof(recursiveProofBytes))),
+        )
+        assertEquals(
+            base64(redeemPublicInputsBytes),
+            base64(OfflineNoteV2.decodeRedeemPublicInputs(redeemPublicInputsBytes).noritoEncoded()),
+        )
+        assertEquals(
+            base64(auditPublicInputsBytes),
+            base64(OfflineNoteV2.decodeAuditPublicInputs(auditPublicInputsBytes).noritoEncoded()),
+        )
+        assertEquals(base64(issueBytes), base64(OfflineNoteV2.decodeIssue(issueBytes).noritoEncoded()))
+
+        val decodedAudit = OfflineNoteV2.decodeAudit(auditBytes)
+        decodedAudit.validateProofBinding()
+        assertEquals(base64(auditBytes), base64(decodedAudit.noritoEncoded()))
+
+        val decodedRedeem = OfflineNoteV2.decodeRedeem(redeemBytes)
+        decodedRedeem.validateProofBinding()
+        assertEquals(base64(redeemBytes), base64(decodedRedeem.noritoEncoded()))
+    }
+
+    @Test
+    fun offlineNoteV2DecodersRejectMalformedPayloads() {
+        val fixture = loadFixture()
+        val chain = obj(fixture, "chain_vectors")
+        val issueBytes = base64Bytes(string(obj(chain, "issue"), "norito_base64"))
+        val sender = certificate(obj(obj(fixture, "payment_token"), "sender_key_certificate"))
+        val certificatePayloadBytes = sender.signingPayload().noritoEncoded()
+
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2.decodeIssue(issueBytes.copyOf(issueBytes.size - 1))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2.decodeRedeem(issueBytes)
+        }
+        val corruptedIssue = issueBytes.copyOf()
+        corruptedIssue[corruptedIssue.lastIndex] = (corruptedIssue.last().toInt() xor 0x01).toByte()
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2.decodeIssue(corruptedIssue)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2.decodeCertificate(certificatePayloadBytes)
+        }
+    }
+
+    @Test
+    fun offlineNoteV2InstructionWrappersProduceSchemaBoundPayloads() {
+        val fixture = loadFixture()
+        val issue = issue(fixture)
+        val audit = audit(fixture)
+        val redeem = redeem(fixture)
+
+        assertEquals(
+            "iroha_data_model::isi::offline::IssueOfflineNote",
+            OfflineNoteV2.ISSUE_INSTRUCTION_SCHEMA,
+            "canonical issue instruction wire name",
+        )
+        assertEquals(
+            "iroha_data_model::isi::offline::RedeemOfflineNote",
+            OfflineNoteV2.REDEEM_INSTRUCTION_SCHEMA,
+            "canonical redeem instruction wire name",
+        )
+        assertEquals(
+            "iroha_data_model::isi::offline::AuditOfflineNote",
+            OfflineNoteV2.AUDIT_INSTRUCTION_SCHEMA,
+            "canonical audit instruction wire name",
+        )
+        assertTrue(!OfflineNoteV2.ISSUE_INSTRUCTION_SCHEMA.endsWith("V2"))
+        assertTrue(!OfflineNoteV2.REDEEM_INSTRUCTION_SCHEMA.endsWith("V2"))
+        assertTrue(!OfflineNoteV2.AUDIT_INSTRUCTION_SCHEMA.endsWith("V2"))
+
+        assertInstructionWrapper(
+            schema = OfflineNoteV2.ISSUE_INSTRUCTION_SCHEMA,
+            modelPayload = OfflineNoteV2.encodeIssue(issue),
+            instruction = OfflineNoteV2.issueInstruction(issue),
+        )
+        assertInstructionWrapper(
+            schema = OfflineNoteV2.AUDIT_INSTRUCTION_SCHEMA,
+            modelPayload = OfflineNoteV2.encodeAudit(audit),
+            instruction = OfflineNoteV2.auditInstruction(audit),
+        )
+        assertInstructionWrapper(
+            schema = OfflineNoteV2.REDEEM_INSTRUCTION_SCHEMA,
+            modelPayload = OfflineNoteV2.encodeRedeem(redeem),
+            instruction = OfflineNoteV2.redeemInstruction(redeem),
+        )
+    }
+
+    @Test
+    fun offlineNoteV2InstructionWrappersRejectProofMismatches() {
+        val fixture = loadFixture()
+        val audit = audit(fixture)
+        val redeem = redeem(fixture)
+        val badProof = OfflineNoteV2.RecursiveProofV2(
+            publicInputsHash = OfflineNoteV2.hash("wrong-public-inputs".toByteArray()),
+            proof = OfflineNoteV2.ProofBox(
+                OfflineNoteV2.RECURSIVE_BACKEND,
+                "offline-v2-forged-proof".toByteArray()
+            )
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2.redeemInstruction(redeem.replacingRecursiveProof(badProof))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2.auditInstruction(audit.replacingRecursiveProof(badProof))
+        }
+    }
+
+    @Test
+    fun offlineNoteV2InstructionDecodersReadExplorerEnvelopeBytes() {
+        val fixture = loadFixture()
+        val issue = issue(fixture)
+        val audit = audit(fixture)
+        val redeem = redeem(fixture)
+        val issueWirePayload = wirePayloadBytes(OfflineNoteV2.issueInstruction(issue))
+        val auditWirePayload = wirePayloadBytes(OfflineNoteV2.auditInstruction(audit))
+        val redeemWirePayload = wirePayloadBytes(OfflineNoteV2.redeemInstruction(redeem))
+
+        assertEquals(
+            base64(issue.noritoEncoded()),
+            base64(OfflineNoteV2.decodeIssueInstruction(
+                rawInstructionPair(OfflineNoteV2.ISSUE_INSTRUCTION_SCHEMA, issueWirePayload),
+            ).noritoEncoded()),
+        )
+        assertEquals(
+            base64(issue.noritoEncoded()),
+            base64(OfflineNoteV2.decodeIssueInstruction(
+                rawInstructionPair(OfflineNoteV2.ISSUE_INSTRUCTION_SCHEMA, issueWirePayload, compact = false),
+            ).noritoEncoded()),
+        )
+        assertEquals(
+            base64(issue.noritoEncoded()),
+            base64(OfflineNoteV2.decodeIssueInstruction(issueWirePayload).noritoEncoded()),
+        )
+
+        val decodedAudit = OfflineNoteV2.decodeAuditInstruction(
+            rawInstructionPair(OfflineNoteV2.AUDIT_INSTRUCTION_SCHEMA, auditWirePayload),
+        )
+        decodedAudit.validateProofBinding()
+        assertEquals(base64(audit.noritoEncoded()), base64(decodedAudit.noritoEncoded()))
+
+        val decodedRedeem = OfflineNoteV2.decodeRedeemInstruction(
+            rawInstructionPair(OfflineNoteV2.REDEEM_INSTRUCTION_SCHEMA, redeemWirePayload),
+        )
+        decodedRedeem.validateProofBinding()
+        assertEquals(base64(redeem.noritoEncoded()), base64(decodedRedeem.noritoEncoded()))
+    }
+
+    @Test
+    fun offlineNoteV2InstructionDecodersReadLegacyAliasEnvelopeBytes() {
+        val fixture = loadFixture()
+        val issue = issue(fixture)
+        val audit = audit(fixture)
+        val redeem = redeem(fixture)
+        val issueAliasWirePayload = encodeInstructionWrapper(
+            ISSUE_INSTRUCTION_ALIAS_SCHEMA,
+            OfflineNoteV2.encodeIssue(issue),
+        )
+        val auditAliasWirePayload = encodeInstructionWrapper(
+            AUDIT_INSTRUCTION_ALIAS_SCHEMA,
+            OfflineNoteV2.encodeAudit(audit),
+        )
+        val redeemAliasWirePayload = encodeInstructionWrapper(
+            REDEEM_INSTRUCTION_ALIAS_SCHEMA,
+            OfflineNoteV2.encodeRedeem(redeem),
+        )
+
+        assertEquals(
+            base64(issue.noritoEncoded()),
+            base64(OfflineNoteV2.decodeIssueInstruction(issueAliasWirePayload).noritoEncoded()),
+        )
+        assertEquals(
+            base64(issue.noritoEncoded()),
+            base64(OfflineNoteV2.decodeIssueInstruction(
+                rawInstructionPair(ISSUE_INSTRUCTION_ALIAS_SCHEMA, issueAliasWirePayload),
+            ).noritoEncoded()),
+        )
+        assertEquals(
+            base64(audit.noritoEncoded()),
+            base64(OfflineNoteV2.decodeAuditInstruction(
+                rawInstructionPair(AUDIT_INSTRUCTION_ALIAS_SCHEMA, auditAliasWirePayload),
+            ).noritoEncoded()),
+        )
+        assertEquals(
+            base64(redeem.noritoEncoded()),
+            base64(OfflineNoteV2.decodeRedeemInstruction(
+                rawInstructionPair(REDEEM_INSTRUCTION_ALIAS_SCHEMA, redeemAliasWirePayload),
+            ).noritoEncoded()),
+        )
+    }
+
+    @Test
+    fun offlineNoteV2InstructionDecodersRejectWrongEnvelopeShapes() {
+        val fixture = loadFixture()
+        val issue = issue(fixture)
+        val redeem = redeem(fixture)
+        val issueWirePayload = wirePayloadBytes(OfflineNoteV2.issueInstruction(issue))
+        val redeemWirePayload = wirePayloadBytes(OfflineNoteV2.redeemInstruction(redeem))
+        val issuePair = rawInstructionPair(OfflineNoteV2.ISSUE_INSTRUCTION_SCHEMA, issueWirePayload)
+
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2.decodeIssueInstruction(
+                rawInstructionPair(OfflineNoteV2.REDEEM_INSTRUCTION_SCHEMA, issueWirePayload),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2.decodeRedeemInstruction(issuePair)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2.decodeIssueInstruction(issue.noritoEncoded())
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2.decodeIssueInstruction(issuePair.copyOf(issuePair.size - 1))
+        }
+        val corruptedWirePayload = issueWirePayload.copyOf()
+        corruptedWirePayload[corruptedWirePayload.lastIndex] =
+            (corruptedWirePayload.last().toInt() xor 0x01).toByte()
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2.decodeIssueInstruction(corruptedWirePayload)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2.decodeAuditInstruction(
+                rawInstructionPair(OfflineNoteV2.AUDIT_INSTRUCTION_SCHEMA, redeemWirePayload),
+            )
+        }
     }
 
     @Test
@@ -552,6 +826,87 @@ class OfflineNoteV2Test {
             assetId = "${string(json, "asset_definition_id")}#${string(json, "account_id")}",
             amount = string(json, "amount"),
         )
+
+    private fun assertInstructionWrapper(
+        schema: String,
+        modelPayload: ByteArray,
+        instruction: InstructionBox,
+    ) {
+        assertEquals(schema, instruction.name)
+        val payload = instruction.payload as? WirePayload
+            ?: error("Offline Note V2 instruction must use a wire payload")
+        assertEquals(schema, payload.wireName)
+        assertEquals(
+            base64(encodeInstructionWrapper(schema, modelPayload)),
+            base64(payload.payloadBytes),
+        )
+        assertEquals(
+            base64(modelPayload),
+            base64(decodeInstructionWrapper(schema, payload.payloadBytes)),
+        )
+    }
+
+    private fun wirePayloadBytes(instruction: InstructionBox): ByteArray =
+        (instruction.payload as WirePayload).payloadBytes
+
+    private fun rawInstructionPair(wireName: String, wirePayload: ByteArray, compact: Boolean = true): ByteArray {
+        val flags = if (compact) NoritoHeader.COMPACT_LEN else 0
+        val encoder = NoritoEncoder(flags)
+        writeInstructionField(encoder) { writeInstructionString(it, wireName) }
+        writeInstructionField(encoder) { writeInstructionBytesVec(it, wirePayload) }
+        return encoder.toByteArray()
+    }
+
+    private fun writeInstructionField(encoder: NoritoEncoder, writePayload: (NoritoEncoder) -> Unit) {
+        val child = encoder.childEncoder()
+        writePayload(child)
+        val payload = child.toByteArray()
+        encoder.writeLength(payload.size.toLong(), compact(encoder))
+        encoder.writeBytes(payload)
+    }
+
+    private fun writeInstructionString(encoder: NoritoEncoder, value: String) {
+        val bytes = value.toByteArray(Charsets.UTF_8)
+        encoder.writeLength(bytes.size.toLong(), compact(encoder))
+        encoder.writeBytes(bytes)
+    }
+
+    private fun writeInstructionBytesVec(encoder: NoritoEncoder, value: ByteArray) {
+        encoder.writeUInt(value.size.toLong(), 64)
+        encoder.writeBytes(value)
+    }
+
+    private fun encodeInstructionWrapper(schema: String, modelPayload: ByteArray): ByteArray =
+        NoritoCodec.encode(modelPayload, schema, InstructionWrapperPayloadAdapter, 0)
+
+    private fun decodeInstructionWrapper(schema: String, wirePayload: ByteArray): ByteArray =
+        NoritoCodec.decode(wirePayload, InstructionWrapperPayloadAdapter, schema)
+
+    private object InstructionWrapperPayloadAdapter : TypeAdapter<ByteArray> {
+        override fun encode(encoder: NoritoEncoder, value: ByteArray) {
+            val child = encoder.childEncoder()
+            child.writeBytes(value)
+            val payload = child.toByteArray()
+            encoder.writeLength(payload.size.toLong(), compact(encoder))
+            encoder.writeBytes(payload)
+        }
+
+        override fun decode(decoder: NoritoDecoder): ByteArray {
+            val length = decoder.readLength(compact(decoder)).toInt()
+            val child = NoritoDecoder(decoder.readBytes(length), decoder.flags, decoder.flagsHint)
+            val payload = child.readBytes(child.remaining())
+            require(child.remaining() == 0) { "trailing bytes in instruction wrapper payload" }
+            return payload
+        }
+    }
+
+    private companion object {
+        fun compact(encoder: NoritoEncoder): Boolean =
+            (encoder.flags and NoritoHeader.COMPACT_LEN) != 0
+
+        fun compact(decoder: NoritoDecoder): Boolean =
+            (decoder.flags and NoritoHeader.COMPACT_LEN) != 0
+    }
 
     private fun loadFixture(): Map<String, Any?> {
         val path = Paths.get("..", "..", "fixtures", "offline", "interop_contract_v2.json")

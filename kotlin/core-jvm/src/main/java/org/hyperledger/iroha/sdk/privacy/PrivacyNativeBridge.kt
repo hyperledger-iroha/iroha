@@ -5,7 +5,7 @@ import java.util.Collections
 /** Raw Norito V1 privacy proof bridge backed by `connect_norito_bridge`. */
 class PrivacyNativeBridge private constructor() {
     companion object {
-        const val REQUIRED_BRIDGE_ABI_VERSION: Int = 6
+        const val REQUIRED_BRIDGE_ABI_VERSION: Int = 7
         const val PRIVACY_FFI_VERSION_V1: Int = 1
         const val PRODUCTION_GATE_VERSION: String = "privacy-production-gate-v1"
         const val STATUS_ERROR: Int = 1
@@ -21,6 +21,10 @@ class PrivacyNativeBridge private constructor() {
         private const val PRIVACY_NORITO_SUPPORTED_FLAGS_MASK: Int = 0x27
         private const val PRIVACY_NORITO_FIELD_BITSET_FLAG: Int = 0x20
         private const val PRIVACY_NORITO_FIELD_BITSET_REQUIRED_FLAGS: Int = 0x06
+        private const val PRIVACY_REQUEST_TEXT_FIELD_MAX_BYTES: Int = 1024
+        private const val PRIVACY_REQUEST_PUBLIC_INPUTS_MAX_BYTES: Int = 1024 * 1024
+        private const val PRIVACY_REQUEST_WITNESS_MAX_BYTES: Int = PRIVACY_NATIVE_ARCHIVE_MAX_BYTES / 2
+        private const val PRIVACY_REQUEST_PROOF_MAX_BYTES: Int = PRIVACY_NATIVE_ARCHIVE_MAX_BYTES / 2
         private const val PRIVACY_SCHEMA_REQUEST: Int = 0x52
         private const val PRIVACY_SCHEMA_CAPABILITIES_RESULT: Int = 0x50
         private const val PRIVACY_SCHEMA_BUILD_PROOF_RESULT: Int = 0x42
@@ -55,6 +59,63 @@ class PrivacyNativeBridge private constructor() {
         }
 
         @JvmStatic
+        @JvmOverloads
+        fun privacyProofRequestV1(
+            algorithmId: String?,
+            entrypoint: String?,
+            vkRef: String?,
+            publicInputs: ByteArray?,
+            witness: ByteArray? = ByteArray(0),
+            proof: ByteArray? = ByteArray(0),
+        ): ByteArray {
+            val algorithmIdBytes = privacyRequestTextBytes(algorithmId, "algorithmId")
+            val entrypointBytes = privacyRequestTextBytes(entrypoint, "entrypoint")
+            val vkRefBytes = privacyRequestTextBytes(vkRef, "vkRef")
+            val publicInputsBytes = privacyRequestComponentBytes(
+                publicInputs,
+                "publicInputs",
+                PRIVACY_REQUEST_PUBLIC_INPUTS_MAX_BYTES,
+                allowEmpty = false,
+            )
+            val witnessBytes = privacyRequestComponentBytes(
+                witness,
+                "witness",
+                PRIVACY_REQUEST_WITNESS_MAX_BYTES,
+                allowEmpty = true,
+            )
+            val proofBytes = privacyRequestComponentBytes(
+                proof,
+                "proof",
+                PRIVACY_REQUEST_PROOF_MAX_BYTES,
+                allowEmpty = true,
+            )
+            try {
+                check(nativeAvailable) { "$LIBRARY_NAME is not available in this runtime" }
+                return requireNativeOutput(
+                    invokeNativeOutput("privacy proof request") {
+                        nativeProofRequest(
+                            algorithmIdBytes,
+                            entrypointBytes,
+                            vkRefBytes,
+                            publicInputsBytes,
+                            witnessBytes,
+                            proofBytes,
+                        )
+                    },
+                    "privacy proof request",
+                    PRIVACY_SCHEMA_REQUEST,
+                )
+            } finally {
+                algorithmIdBytes.fill(0)
+                entrypointBytes.fill(0)
+                vkRefBytes.fill(0)
+                publicInputsBytes.fill(0)
+                witnessBytes.fill(0)
+                proofBytes.fill(0)
+            }
+        }
+
+        @JvmStatic
         fun buildProof(requestArchive: ByteArray?): ByteArray =
             call("build proof", requestArchive, ::nativeBuildProof)
 
@@ -64,6 +125,10 @@ class PrivacyNativeBridge private constructor() {
 
         @JvmStatic
         fun buildConfidentialUnshieldProofV3(requestArchive: ByteArray?): ByteArray =
+            buildProof(requestArchive)
+
+        @JvmStatic
+        fun buildZkAceAuthorizationProofV1(requestArchive: ByteArray?): ByteArray =
             buildProof(requestArchive)
 
         @JvmStatic
@@ -163,6 +228,7 @@ class PrivacyNativeBridge private constructor() {
             available = returnsOutputProbe(PRIVACY_SCHEMA_CAPABILITIES_RESULT) {
                 nativeCapabilities()
             } && available
+            available = proofRequestOutputProbe() && available
             available = returnsOutputProbe(PRIVACY_SCHEMA_BUILD_PROOF_RESULT) {
                 nativeBuildProof(privacyNativeAvailabilityProbeArchive())
             } && available
@@ -170,6 +236,30 @@ class PrivacyNativeBridge private constructor() {
                 nativeVerifyProof(privacyNativeAvailabilityProbeArchive())
             } && available
             return available
+        }
+
+        private fun proofRequestOutputProbe(): Boolean {
+            val algorithmId = "verange-transparent-range-v1".toByteArray(Charsets.UTF_8)
+            val entrypoint = "buildVeRangeProofV1".toByteArray(Charsets.UTF_8)
+            val vkRef = "bulletproofs:verange_transparent_range_v1".toByteArray(Charsets.UTF_8)
+            val publicInputs = "public-inputs".toByteArray(Charsets.UTF_8)
+            return try {
+                returnsOutputProbe(PRIVACY_SCHEMA_REQUEST) {
+                    nativeProofRequest(
+                        algorithmId,
+                        entrypoint,
+                        vkRef,
+                        publicInputs,
+                        ByteArray(0),
+                        ByteArray(0),
+                    )
+                }
+            } finally {
+                algorithmId.fill(0)
+                entrypoint.fill(0)
+                vkRef.fill(0)
+                publicInputs.fill(0)
+            }
         }
 
         internal fun privacyNativeAvailabilityProbeArchive(): ByteArray =
@@ -256,10 +346,32 @@ class PrivacyNativeBridge private constructor() {
         private fun expectedPrivacyResultSchema(label: String): Int? =
             when (label) {
                 "privacy capabilities" -> PRIVACY_SCHEMA_CAPABILITIES_RESULT
+                "privacy proof request" -> PRIVACY_SCHEMA_REQUEST
                 "privacy build proof" -> PRIVACY_SCHEMA_BUILD_PROOF_RESULT
                 "privacy verify proof" -> PRIVACY_SCHEMA_VERIFY_PROOF_RESULT
                 else -> null
             }
+
+        private fun privacyRequestTextBytes(value: String?, name: String): ByteArray {
+            require(value != null) { "$name must not be null" }
+            val bytes = value.toByteArray(Charsets.UTF_8)
+            require(bytes.size <= PRIVACY_REQUEST_TEXT_FIELD_MAX_BYTES) {
+                "$name must not exceed $PRIVACY_REQUEST_TEXT_FIELD_MAX_BYTES bytes"
+            }
+            return bytes
+        }
+
+        private fun privacyRequestComponentBytes(
+            value: ByteArray?,
+            name: String,
+            maxBytes: Int,
+            allowEmpty: Boolean,
+        ): ByteArray {
+            require(value != null) { "$name must not be null" }
+            require(allowEmpty || value.isNotEmpty()) { "$name must not be empty" }
+            require(value.size <= maxBytes) { "$name must not exceed $maxBytes bytes" }
+            return value.copyOf()
+        }
 
         internal fun hasPrivacyNoritoSchema(output: ByteArray, expectedSchemaByte: Int): Boolean {
             val expected = expectedSchemaByte
@@ -346,6 +458,16 @@ class PrivacyNativeBridge private constructor() {
 
         @JvmStatic
         private external fun nativeCapabilities(): ByteArray?
+
+        @JvmStatic
+        private external fun nativeProofRequest(
+            algorithmId: ByteArray,
+            entrypoint: ByteArray,
+            vkRef: ByteArray,
+            publicInputs: ByteArray,
+            witness: ByteArray,
+            proof: ByteArray,
+        ): ByteArray?
 
         @JvmStatic
         private external fun nativeBuildProof(requestArchive: ByteArray): ByteArray?

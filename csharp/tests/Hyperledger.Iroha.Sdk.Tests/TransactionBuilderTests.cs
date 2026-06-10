@@ -419,6 +419,43 @@ public sealed class TransactionBuilderTests
             TransactionInstruction.KagemushaInstructionArchive(
                 KagemushaInstructionType.RedeemRecursive,
                 KagemushaArchive(KagemushaInstructionType.Transfer, new byte[] { 1, 2, 3 })));
+
+        var compressed = KagemushaArchive(KagemushaInstructionType.RedeemRecursive, new byte[] { 1, 2, 3 });
+        compressed[22] = 1;
+        Assert.Throws<ArgumentException>(() =>
+            TransactionInstruction.KagemushaInstructionArchive(
+                KagemushaInstructionType.RedeemRecursive,
+                compressed));
+
+        var unsupportedFlags = KagemushaArchive(KagemushaInstructionType.RedeemRecursive, new byte[] { 1, 2, 3 });
+        unsupportedFlags[39] = 0x08;
+        Assert.Throws<ArgumentException>(() =>
+            TransactionInstruction.KagemushaInstructionArchive(
+                KagemushaInstructionType.RedeemRecursive,
+                unsupportedFlags));
+
+        var invalidFieldBitset = KagemushaArchive(KagemushaInstructionType.RedeemRecursive, new byte[] { 1, 2, 3 });
+        invalidFieldBitset[39] = 0x20;
+        Assert.Throws<ArgumentException>(() =>
+            TransactionInstruction.KagemushaInstructionArchive(
+                KagemushaInstructionType.RedeemRecursive,
+                invalidFieldBitset));
+
+        var nonZeroPadding = WithHeaderPadding(
+            KagemushaArchive(KagemushaInstructionType.RedeemRecursive, new byte[] { 1, 2, 3 }),
+            new byte[] { 0x7f });
+        Assert.Throws<ArgumentException>(() =>
+            TransactionInstruction.KagemushaInstructionArchive(
+                KagemushaInstructionType.RedeemRecursive,
+                nonZeroPadding));
+
+        var excessivePadding = WithHeaderPadding(
+            KagemushaArchive(KagemushaInstructionType.RedeemRecursive, new byte[] { 1, 2, 3 }),
+            new byte[65]);
+        Assert.Throws<ArgumentException>(() =>
+            TransactionInstruction.KagemushaInstructionArchive(
+                KagemushaInstructionType.RedeemRecursive,
+                excessivePadding));
     }
 
     [Fact]
@@ -688,6 +725,20 @@ public sealed class TransactionBuilderTests
         byte flags = 0)
     {
         return NoritoCodec.Encode(instructionType.WireName(), payload, flags);
+    }
+
+    private static byte[] WithHeaderPadding(byte[] archive, byte[] padding)
+    {
+        var padded = new byte[archive.Length + padding.Length];
+        Array.Copy(archive, 0, padded, 0, NoritoHeader.EncodedLength);
+        Array.Copy(padding, 0, padded, NoritoHeader.EncodedLength, padding.Length);
+        Array.Copy(
+            archive,
+            NoritoHeader.EncodedLength,
+            padded,
+            NoritoHeader.EncodedLength + padding.Length,
+            archive.Length - NoritoHeader.EncodedLength);
+        return padded;
     }
 
     private static byte[] SharedRecursiveSpendAbi7Archive(string archiveName)

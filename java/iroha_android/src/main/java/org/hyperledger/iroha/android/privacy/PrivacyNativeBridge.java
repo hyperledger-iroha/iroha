@@ -1,12 +1,13 @@
 package org.hyperledger.iroha.android.privacy;
 
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
 /** Raw Norito V1 privacy proof bridge backed by {@code connect_norito_bridge}. */
 public final class PrivacyNativeBridge {
-  public static final int REQUIRED_BRIDGE_ABI_VERSION = 6;
+  public static final int REQUIRED_BRIDGE_ABI_VERSION = 7;
   public static final int PRIVACY_FFI_VERSION_V1 = 1;
   public static final String PRODUCTION_GATE_VERSION = "privacy-production-gate-v1";
   public static final int STATUS_ERROR = 1;
@@ -22,6 +23,10 @@ public final class PrivacyNativeBridge {
   private static final int PRIVACY_NORITO_SUPPORTED_FLAGS_MASK = 0x27;
   private static final int PRIVACY_NORITO_FIELD_BITSET_FLAG = 0x20;
   private static final int PRIVACY_NORITO_FIELD_BITSET_REQUIRED_FLAGS = 0x06;
+  private static final int PRIVACY_REQUEST_TEXT_FIELD_MAX_BYTES = 1024;
+  private static final int PRIVACY_REQUEST_PUBLIC_INPUTS_MAX_BYTES = 1024 * 1024;
+  private static final int PRIVACY_REQUEST_WITNESS_MAX_BYTES = PRIVACY_NATIVE_ARCHIVE_MAX_BYTES / 2;
+  private static final int PRIVACY_REQUEST_PROOF_MAX_BYTES = PRIVACY_NATIVE_ARCHIVE_MAX_BYTES / 2;
   private static final int PRIVACY_SCHEMA_REQUEST = 0x52;
   private static final int PRIVACY_SCHEMA_CAPABILITIES_RESULT = 0x50;
   private static final int PRIVACY_SCHEMA_BUILD_PROOF_RESULT = 0x42;
@@ -91,6 +96,62 @@ public final class PrivacyNativeBridge {
         PRIVACY_SCHEMA_CAPABILITIES_RESULT);
   }
 
+  public static byte[] privacyProofRequestV1(
+      final String algorithmId,
+      final String entrypoint,
+      final String vkRef,
+      final byte[] publicInputs) {
+    return privacyProofRequestV1(
+        algorithmId,
+        entrypoint,
+        vkRef,
+        publicInputs,
+        new byte[0],
+        new byte[0]);
+  }
+
+  public static byte[] privacyProofRequestV1(
+      final String algorithmId,
+      final String entrypoint,
+      final String vkRef,
+      final byte[] publicInputs,
+      final byte[] witness,
+      final byte[] proof) {
+    final byte[] algorithmIdBytes = privacyRequestTextBytes(algorithmId, "algorithmId");
+    final byte[] entrypointBytes = privacyRequestTextBytes(entrypoint, "entrypoint");
+    final byte[] vkRefBytes = privacyRequestTextBytes(vkRef, "vkRef");
+    final byte[] publicInputBytes =
+        privacyRequestComponentBytes(
+            publicInputs, "publicInputs", PRIVACY_REQUEST_PUBLIC_INPUTS_MAX_BYTES, false);
+    final byte[] witnessBytes =
+        privacyRequestComponentBytes(witness, "witness", PRIVACY_REQUEST_WITNESS_MAX_BYTES, true);
+    final byte[] proofBytes =
+        privacyRequestComponentBytes(proof, "proof", PRIVACY_REQUEST_PROOF_MAX_BYTES, true);
+    try {
+      requireNative();
+      return requireNativeOutput(
+          invokeNativeOutput(
+              "privacy proof request",
+              () ->
+                  nativeProofRequest(
+                      algorithmIdBytes,
+                      entrypointBytes,
+                      vkRefBytes,
+                      publicInputBytes,
+                      witnessBytes,
+                      proofBytes)),
+          "privacy proof request",
+          PRIVACY_SCHEMA_REQUEST);
+    } finally {
+      Arrays.fill(algorithmIdBytes, (byte) 0);
+      Arrays.fill(entrypointBytes, (byte) 0);
+      Arrays.fill(vkRefBytes, (byte) 0);
+      Arrays.fill(publicInputBytes, (byte) 0);
+      Arrays.fill(witnessBytes, (byte) 0);
+      Arrays.fill(proofBytes, (byte) 0);
+    }
+  }
+
   public static byte[] buildProof(final byte[] requestArchive) {
     return call("build proof", requestArchive, PrivacyNativeBridge::nativeBuildProof);
   }
@@ -100,6 +161,10 @@ public final class PrivacyNativeBridge {
   }
 
   public static byte[] buildConfidentialUnshieldProofV3(final byte[] requestArchive) {
+    return buildProof(requestArchive);
+  }
+
+  public static byte[] buildZkAceAuthorizationProofV1(final byte[] requestArchive) {
     return buildProof(requestArchive);
   }
 
@@ -221,6 +286,7 @@ public final class PrivacyNativeBridge {
     available &= returnsOutputProbe(
         PRIVACY_SCHEMA_CAPABILITIES_RESULT,
         PrivacyNativeBridge::nativeCapabilities);
+    available &= proofRequestOutputProbe();
     available &= returnsOutputProbe(
         PRIVACY_SCHEMA_BUILD_PROOF_RESULT,
         () -> nativeBuildProof(privacyNativeAvailabilityProbeArchive()));
@@ -228,6 +294,30 @@ public final class PrivacyNativeBridge {
         PRIVACY_SCHEMA_VERIFY_PROOF_RESULT,
         () -> nativeVerifyProof(privacyNativeAvailabilityProbeArchive()));
     return available;
+  }
+
+  private static boolean proofRequestOutputProbe() {
+    final byte[] algorithmId = "verange-transparent-range-v1".getBytes(StandardCharsets.UTF_8);
+    final byte[] entrypoint = "buildVeRangeProofV1".getBytes(StandardCharsets.UTF_8);
+    final byte[] vkRef =
+        "bulletproofs:verange_transparent_range_v1".getBytes(StandardCharsets.UTF_8);
+    final byte[] publicInputs = "public-inputs".getBytes(StandardCharsets.UTF_8);
+    try {
+      return returnsOutputProbe(
+          PRIVACY_SCHEMA_REQUEST,
+          () -> nativeProofRequest(
+              algorithmId,
+              entrypoint,
+              vkRef,
+              publicInputs,
+              new byte[0],
+              new byte[0]));
+    } finally {
+      Arrays.fill(algorithmId, (byte) 0);
+      Arrays.fill(entrypoint, (byte) 0);
+      Arrays.fill(vkRef, (byte) 0);
+      Arrays.fill(publicInputs, (byte) 0);
+    }
   }
 
   static byte[] privacyNativeAvailabilityProbeArchive() {
@@ -316,6 +406,9 @@ public final class PrivacyNativeBridge {
     if ("privacy capabilities".equals(label)) {
       return PRIVACY_SCHEMA_CAPABILITIES_RESULT;
     }
+    if ("privacy proof request".equals(label)) {
+      return PRIVACY_SCHEMA_REQUEST;
+    }
     if ("privacy build proof".equals(label)) {
       return PRIVACY_SCHEMA_BUILD_PROOF_RESULT;
     }
@@ -323,6 +416,32 @@ public final class PrivacyNativeBridge {
       return PRIVACY_SCHEMA_VERIFY_PROOF_RESULT;
     }
     return -1;
+  }
+
+  private static byte[] privacyRequestTextBytes(final String value, final String name) {
+    if (value == null) {
+      throw new IllegalArgumentException(name + " must not be null");
+    }
+    final byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
+    if (bytes.length > PRIVACY_REQUEST_TEXT_FIELD_MAX_BYTES) {
+      throw new IllegalArgumentException(
+          name + " must not exceed " + PRIVACY_REQUEST_TEXT_FIELD_MAX_BYTES + " bytes");
+    }
+    return bytes;
+  }
+
+  private static byte[] privacyRequestComponentBytes(
+      final byte[] value, final String name, final int maxBytes, final boolean allowEmpty) {
+    if (value == null) {
+      throw new IllegalArgumentException(name + " must not be null");
+    }
+    if (!allowEmpty && value.length == 0) {
+      throw new IllegalArgumentException(name + " must not be empty");
+    }
+    if (value.length > maxBytes) {
+      throw new IllegalArgumentException(name + " must not exceed " + maxBytes + " bytes");
+    }
+    return Arrays.copyOf(value, value.length);
   }
 
   static boolean hasPrivacyNoritoSchema(
@@ -567,6 +686,14 @@ public final class PrivacyNativeBridge {
   private static native int nativeBridgeAbiVersion();
 
   private static native byte[] nativeCapabilities();
+
+  private static native byte[] nativeProofRequest(
+      byte[] algorithmId,
+      byte[] entrypoint,
+      byte[] vkRef,
+      byte[] publicInputs,
+      byte[] witness,
+      byte[] proof);
 
   private static native byte[] nativeBuildProof(byte[] requestArchive);
 

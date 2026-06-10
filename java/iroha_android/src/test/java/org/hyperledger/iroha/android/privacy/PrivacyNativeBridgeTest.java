@@ -11,6 +11,7 @@ public final class PrivacyNativeBridgeTest {
     exposesStableFailClosedErrorCodes();
     reportsFailClosedPrivacyCapabilities();
     rejectsEmptyRequestsBeforeNativeDispatch();
+    rejectsInvalidProofRequestComponentsBeforeNativeDispatch();
     nativeAvailabilityProbeArchiveIsStableAndDefensive();
     nativeProbeRequiresAbiAndAllPrivacySymbols();
     rejectsNullAndEmptyNativeOutputs();
@@ -29,7 +30,7 @@ public final class PrivacyNativeBridgeTest {
   }
 
   private static void exposesStableFailClosedErrorCodes() {
-    assert PrivacyNativeBridge.REQUIRED_BRIDGE_ABI_VERSION == 6;
+    assert PrivacyNativeBridge.REQUIRED_BRIDGE_ABI_VERSION == 7;
     assert PrivacyNativeBridge.PRIVACY_FFI_VERSION_V1 == 1;
     assert PrivacyNativeBridge.STATUS_ERROR == 1;
     assert PrivacyNativeBridge.ERROR_NULL_POINTER == 1;
@@ -168,6 +169,7 @@ public final class PrivacyNativeBridgeTest {
       PrivacyNativeBridge::buildProof,
       PrivacyNativeBridge::buildConfidentialTransferProofV2,
       PrivacyNativeBridge::buildConfidentialUnshieldProofV3,
+      PrivacyNativeBridge::buildZkAceAuthorizationProofV1,
       PrivacyNativeBridge::verifyProof
     };
     for (final PrivacyNativeBridge.NativeCall helper : helpers) {
@@ -179,6 +181,29 @@ public final class PrivacyNativeBridgeTest {
       assertThrows(() -> helper.run(oversized));
       assertThrows(() -> helper.run(privacyNoritoFrame(0x52)));
     }
+  }
+
+  private static void rejectsInvalidProofRequestComponentsBeforeNativeDispatch() {
+    assertThrows(
+        () -> PrivacyNativeBridge.privacyProofRequestV1(
+            null,
+            "buildVeRangeProofV1",
+            "bulletproofs:verange_transparent_range_v1",
+            "public-inputs".getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+    assertThrows(
+        () -> PrivacyNativeBridge.privacyProofRequestV1(
+            "verange-transparent-range-v1",
+            "buildVeRangeProofV1",
+            "bulletproofs:verange_transparent_range_v1",
+            new byte[0]));
+    assertThrows(
+        () -> PrivacyNativeBridge.privacyProofRequestV1(
+            "verange-transparent-range-v1",
+            "buildVeRangeProofV1",
+            "bulletproofs:verange_transparent_range_v1",
+            "public-inputs".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+            new byte[PrivacyNativeBridge.PRIVACY_NATIVE_ARCHIVE_MAX_BYTES / 2 + 1],
+            new byte[0]));
   }
 
   private static void nativeAvailabilityProbeArchiveIsStableAndDefensive() {
@@ -256,38 +281,38 @@ public final class PrivacyNativeBridgeTest {
           throw new LinkageError("bad linked bridge");
         });
 
-    assert PrivacyNativeBridge.detectNativeAvailability(() -> {}, () -> 6, () -> true);
-    assert !PrivacyNativeBridge.detectNativeAvailability(() -> {}, () -> 5, () -> true);
-    assert !PrivacyNativeBridge.detectNativeAvailability(() -> {}, () -> 6, () -> false);
+    assert PrivacyNativeBridge.detectNativeAvailability(() -> {}, () -> 7, () -> true);
+    assert !PrivacyNativeBridge.detectNativeAvailability(() -> {}, () -> 6, () -> true);
+    assert !PrivacyNativeBridge.detectNativeAvailability(() -> {}, () -> 7, () -> false);
     assert !PrivacyNativeBridge.detectNativeAvailability(
         () -> {
           throw new UnsatisfiedLinkError("missing bridge");
         },
-        () -> 6,
+        () -> 7,
         () -> true);
     assert !PrivacyNativeBridge.detectNativeAvailability(
         () -> {
           throw new IllegalArgumentException("bad library name");
         },
-        () -> 6,
+        () -> 7,
         () -> true);
     assert !PrivacyNativeBridge.detectNativeAvailability(
         () -> {
           throw new SecurityException("blocked library");
         },
-        () -> 6,
+        () -> 7,
         () -> true);
     assert !PrivacyNativeBridge.detectNativeAvailability(
         () -> {
           throw new RuntimeException("unexpected library failure");
         },
-        () -> 6,
+        () -> 7,
         () -> true);
     assert !PrivacyNativeBridge.detectNativeAvailability(
         () -> {
           throw new LinkageError("bad linked bridge");
         },
-        () -> 6,
+        () -> 7,
         () -> true);
     assert !PrivacyNativeBridge.detectNativeAvailability(
         () -> {},
@@ -321,31 +346,31 @@ public final class PrivacyNativeBridgeTest {
         () -> true);
     assert !PrivacyNativeBridge.detectNativeAvailability(
         () -> {},
-        () -> 6,
+        () -> 7,
         () -> {
           throw new UnsatisfiedLinkError("missing privacy symbol");
         });
     assert !PrivacyNativeBridge.detectNativeAvailability(
         () -> {},
-        () -> 6,
+        () -> 7,
         () -> {
           throw new IllegalArgumentException("bad privacy probe");
         });
     assert !PrivacyNativeBridge.detectNativeAvailability(
         () -> {},
-        () -> 6,
+        () -> 7,
         () -> {
           throw new SecurityException("blocked privacy probe");
         });
     assert !PrivacyNativeBridge.detectNativeAvailability(
         () -> {},
-        () -> 6,
+        () -> 7,
         () -> {
           throw new RuntimeException("unexpected privacy probe");
         });
     assert !PrivacyNativeBridge.detectNativeAvailability(
         () -> {},
-        () -> 6,
+        () -> 7,
         () -> {
           throw new LinkageError("bad privacy bridge");
         });

@@ -40,6 +40,42 @@ assert COMPACT_KEY_HELPER_SPEC and COMPACT_KEY_HELPER_SPEC.loader  # pragma: no 
 compact_key_helper = importlib.util.module_from_spec(COMPACT_KEY_HELPER_SPEC)
 COMPACT_KEY_HELPER_SPEC.loader.exec_module(compact_key_helper)  # type: ignore[misc]
 
+COMPACT_KEY_FINALIZER_PATH = SCRIPT_DIR / "kagemusha_finalize_recursive_compact_key_staged_run.py"
+COMPACT_KEY_FINALIZER_SPEC = importlib.util.spec_from_file_location(
+    "kagemusha_finalize_recursive_compact_key_staged_run",
+    COMPACT_KEY_FINALIZER_PATH,
+)
+assert COMPACT_KEY_FINALIZER_SPEC and COMPACT_KEY_FINALIZER_SPEC.loader  # pragma: no cover
+compact_key_finalizer = importlib.util.module_from_spec(COMPACT_KEY_FINALIZER_SPEC)
+COMPACT_KEY_FINALIZER_SPEC.loader.exec_module(compact_key_finalizer)  # type: ignore[misc]
+
+COMPACT_KEY_STAGED_RUNNER_PATH = SCRIPT_DIR / "kagemusha_run_recursive_compact_keygen_staged.py"
+COMPACT_KEY_STAGED_RUNNER_SPEC = importlib.util.spec_from_file_location(
+    "kagemusha_run_recursive_compact_keygen_staged",
+    COMPACT_KEY_STAGED_RUNNER_PATH,
+)
+assert COMPACT_KEY_STAGED_RUNNER_SPEC and COMPACT_KEY_STAGED_RUNNER_SPEC.loader  # pragma: no cover
+compact_key_staged_runner = importlib.util.module_from_spec(COMPACT_KEY_STAGED_RUNNER_SPEC)
+COMPACT_KEY_STAGED_RUNNER_SPEC.loader.exec_module(compact_key_staged_runner)  # type: ignore[misc]
+
+LINEAGE_FINALIZER_PATH = SCRIPT_DIR / "kagemusha_finalize_lineage_proof_staged_run.py"
+LINEAGE_FINALIZER_SPEC = importlib.util.spec_from_file_location(
+    "kagemusha_finalize_lineage_proof_staged_run",
+    LINEAGE_FINALIZER_PATH,
+)
+assert LINEAGE_FINALIZER_SPEC and LINEAGE_FINALIZER_SPEC.loader  # pragma: no cover
+lineage_finalizer = importlib.util.module_from_spec(LINEAGE_FINALIZER_SPEC)
+LINEAGE_FINALIZER_SPEC.loader.exec_module(lineage_finalizer)  # type: ignore[misc]
+
+LINEAGE_STAGED_RUNNER_PATH = SCRIPT_DIR / "kagemusha_run_lineage_proof_staged.py"
+LINEAGE_STAGED_RUNNER_SPEC = importlib.util.spec_from_file_location(
+    "kagemusha_run_lineage_proof_staged",
+    LINEAGE_STAGED_RUNNER_PATH,
+)
+assert LINEAGE_STAGED_RUNNER_SPEC and LINEAGE_STAGED_RUNNER_SPEC.loader  # pragma: no cover
+lineage_staged_runner = importlib.util.module_from_spec(LINEAGE_STAGED_RUNNER_SPEC)
+LINEAGE_STAGED_RUNNER_SPEC.loader.exec_module(lineage_staged_runner)  # type: ignore[misc]
+
 RELEASE_BUNDLE_HELPER_PATH = SCRIPT_DIR / "kagemusha_release_bundle.py"
 RELEASE_BUNDLE_HELPER_SPEC = importlib.util.spec_from_file_location(
     "kagemusha_release_bundle",
@@ -124,17 +160,229 @@ def create_lineage_artifact_files(root: Path) -> None:
         path.write_bytes(f"lineage artifact {artifact}\n".encode("utf-8"))
 
 
-def create_compact_key_artifact_files(root: Path) -> None:
+def create_lineage_artifact_files_for_profile(root: Path, profile: str) -> None:
+    if profile == "init":
+        artifacts = readiness.LINEAGE_PROOF_REQUIRED_ARTIFACTS[:4]
+    elif profile == "append":
+        artifacts = readiness.LINEAGE_PROOF_REQUIRED_ARTIFACTS[4:]
+    else:
+        raise AssertionError(f"unexpected lineage profile {profile}")
+    for artifact in artifacts:
+        path = root / artifact
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(f"generated {profile} lineage artifact {artifact}\n".encode("utf-8"))
+
+
+def write_lineage_staged_run_report(
+    root: Path,
+    *,
+    exit_code: int = 0,
+    command: str | None = None,
+    elapsed_seconds: float = 14400.0,
+    key_log_size_overrides: dict[str, int] | None = None,
+    proof_log_size_bytes: int | None = None,
+) -> Path:
+    proof_log = root / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS["record_archive_proof"]
+    if proof_log_size_bytes is None:
+        proof_log_size_bytes = proof_log.stat().st_size
+    key_logs: dict[str, dict[str, object]] = {}
+    for profile, log_name in {
+        "init": "lineage-init-key-artifacts.log",
+        "append": "lineage-append-key-artifacts.log",
+    }.items():
+        log_path = root / log_name
+        if not log_path.exists():
+            log_path.write_text(
+                f"{profile} lineage key artifacts generated\n",
+                encoding="utf-8",
+            )
+        key_logs[profile] = {
+            "path": log_name,
+            "size_bytes": (
+                key_log_size_overrides[profile]
+                if key_log_size_overrides and profile in key_log_size_overrides
+                else log_path.stat().st_size
+            ),
+        }
+    report = {
+        "schema": lineage_finalizer.STAGED_RUN_REPORT_SCHEMA,
+        "command": command or evidence_helper.DEFAULT_RECORD_ARCHIVE_PROOF_COMMAND,
+        "exit_code": exit_code,
+        "elapsed_seconds": elapsed_seconds,
+        "lineage_key_artifact_logs": key_logs,
+        "proof_log_path": readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS[
+            "record_archive_proof"
+        ],
+        "proof_log_size_bytes": proof_log_size_bytes,
+    }
+    path = root / lineage_finalizer.RUN_REPORT_FILENAME
+    path.write_text(
+        json.dumps(report, allow_nan=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def write_lineage_execution_report(
+    root: Path,
+    profile: str,
+    *,
+    exit_code: int = 0,
+    command: str | None = None,
+    log_name: str | None = None,
+) -> Path:
+    if profile == "proof":
+        phase = "lineage proof command"
+        command = command or lineage_staged_runner.DEFAULT_RECORD_ARCHIVE_PROOF_COMMAND
+        log_name = log_name or readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS[
+            "record_archive_proof"
+        ]
+    else:
+        phase = f"{profile} lineage key artifact command"
+        command = command or lineage_staged_runner.LINEAGE_KEY_ARTIFACT_COMMANDS[profile]
+        log_name = log_name or lineage_staged_runner.LINEAGE_KEY_ARTIFACT_LOG_FILENAMES[
+            profile
+        ]
+    log_path = root / log_name
+    if not log_path.exists():
+        log_path.write_text(f"{profile} staged log\n", encoding="utf-8")
+    report = {
+        "schema": lineage_staged_runner.EXECUTION_REPORT_SCHEMA,
+        "phase": phase,
+        "command": command,
+        "exit_code": exit_code,
+        "elapsed_seconds": 1.0,
+        "log_path": log_name,
+        "log_size_bytes": log_path.stat().st_size,
+    }
+    path = root / lineage_staged_runner.LINEAGE_EXECUTION_REPORT_FILENAMES[profile]
+    path.write_text(
+        json.dumps(report, allow_nan=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def create_compact_key_artifact_files_without_log(root: Path) -> None:
     for artifact in readiness.COMPACT_KEY_REQUIRED_ARTIFACTS:
         path = root / artifact
         path.parent.mkdir(parents=True, exist_ok=True)
         digest = hashlib.sha256(f"fixture compact artifact {artifact}".encode("utf-8")).digest()
         path.write_bytes(b"KCGK\x00\x01" + digest + digest[::-1])
+
+
+def create_compact_key_artifact_files(root: Path) -> None:
+    create_compact_key_artifact_files_without_log(root)
     write_compact_key_generator_log(root)
 
 
-def write_compact_key_generator_log(root: Path) -> Path:
+def write_compact_key_staged_run_report(
+    root: Path,
+    *,
+    exit_code: int = 0,
+    command: str | None = None,
+    elapsed_seconds: float = 1.0,
+    generator_log_size_bytes: int | None = None,
+) -> Path:
     log_path = root / readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME
+    if generator_log_size_bytes is None:
+        generator_log_size_bytes = log_path.stat().st_size
+    report = {
+        "schema": compact_key_finalizer.STAGED_RUN_REPORT_SCHEMA,
+        "command": command or compact_key_helper.DEFAULT_COMPACT_KEY_COMMAND,
+        "exit_code": exit_code,
+        "elapsed_seconds": elapsed_seconds,
+        "generator_log_path": readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME,
+        "generator_log_size_bytes": generator_log_size_bytes,
+    }
+    path = root / compact_key_finalizer.RUN_REPORT_FILENAME
+    path.write_text(
+        json.dumps(report, allow_nan=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def write_compact_key_execution_report(
+    root: Path,
+    *,
+    exit_code: int = 0,
+    command: str | None = None,
+    generator_log_size_bytes: int | None = None,
+) -> Path:
+    log_path = root / readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME
+    if generator_log_size_bytes is None:
+        generator_log_size_bytes = log_path.stat().st_size
+    report = {
+        "schema": compact_key_staged_runner.EXECUTION_REPORT_SCHEMA,
+        "phase": "recursive compact keygen command",
+        "command": command or compact_key_staged_runner.DEFAULT_COMPACT_KEY_COMMAND,
+        "exit_code": exit_code,
+        "elapsed_seconds": 1.0,
+        "generator_log_path": readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME,
+        "generator_log_size_bytes": generator_log_size_bytes,
+    }
+    path = root / compact_key_staged_runner.EXECUTION_REPORT_FILENAME
+    path.write_text(
+        json.dumps(report, allow_nan=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def compact_key_finalizer_args(
+    *,
+    staged_artifact_dir: Path,
+    exit_file: Path,
+    artifact_dir: Path,
+    replace: bool = False,
+) -> list[str]:
+    args = [
+        "--staged-artifact-dir",
+        str(staged_artifact_dir),
+        "--exit-file",
+        str(exit_file),
+        "--artifact-dir",
+        str(artifact_dir),
+        "--out",
+        str(artifact_dir / readiness.COMPACT_KEY_EVIDENCE_FILENAME),
+        "--generated-at-utc",
+        readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+    ]
+    if replace:
+        args.append("--replace")
+    return args
+
+
+def lineage_finalizer_args(
+    *,
+    staged_artifact_dir: Path,
+    exit_file: Path,
+    artifact_dir: Path,
+    elapsed_seconds: float = 14400.0,
+    replace: bool = False,
+) -> list[str]:
+    args = [
+        "--staged-artifact-dir",
+        str(staged_artifact_dir),
+        "--exit-file",
+        str(exit_file),
+        "--artifact-dir",
+        str(artifact_dir),
+        "--out",
+        str(artifact_dir / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME),
+        "--generated-at-utc",
+        readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+        "--elapsed-seconds",
+        str(elapsed_seconds),
+    ]
+    if replace:
+        args.append("--replace")
+    return args
+
+
+def write_compact_key_generator_log_to(root: Path, log_path: Path) -> Path:
+    log_path.parent.mkdir(parents=True, exist_ok=True)
     sizes = {
         artifact: (root / artifact).stat().st_size
         for artifact in readiness.COMPACT_KEY_REQUIRED_ARTIFACTS
@@ -148,6 +396,13 @@ def write_compact_key_generator_log(root: Path) -> Path:
         encoding="utf-8",
     )
     return log_path
+
+
+def write_compact_key_generator_log(root: Path) -> Path:
+    return write_compact_key_generator_log_to(
+        root,
+        root / readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME,
+    )
 
 
 def create_compact_key_evidence(root: Path) -> Path:
@@ -369,6 +624,12 @@ def copy_slot_binding(
     if key in attestation:
         attestation[key] = copied
         write_json(attestation_path, attestation)
+
+    attestation_report_path = target / "attestation" / "report.json"
+    attestation_report = json.loads(attestation_report_path.read_text(encoding="utf-8"))
+    if key in attestation_report:
+        attestation_report[key] = copied
+        write_json(attestation_report_path, attestation_report)
 
     transcript_path = target / "handoff" / "d2d-payment.json"
     transcript = json.loads(transcript_path.read_text(encoding="utf-8"))
@@ -2622,6 +2883,117 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             {error["message"] for error in errors},
         )
         self.assertEqual(len(temp_outputs), 1)
+
+    def test_write_release_bundle_reports_temp_cleanup_failure_after_post_stage_validation_failure(
+        self,
+    ) -> None:
+        original_validate_output_path = release_bundle._validate_output_path
+        original_unlink = Path.unlink
+
+        with tempfile.TemporaryDirectory() as temp:
+            bundle_root = Path(temp) / "bundle"
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+            bundle = {
+                "schema": release_bundle.RELEASE_BUNDLE_SCHEMA,
+                "generated_at_utc": readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                "ready": True,
+                "evidence": {},
+                "blockers": [],
+            }
+            validation_calls = 0
+
+            def racing_validate_output_path(
+                path: Path,
+                root: Path,
+            ) -> list[dict[str, object]]:
+                nonlocal validation_calls
+                if path == out:
+                    validation_calls += 1
+                    if validation_calls == 2:
+                        return [
+                            {
+                                "code": "kagemusha_release_bundle_out_invalid",
+                                "message": "--out changed after staging",
+                            }
+                        ]
+                return original_validate_output_path(path, root)
+
+            def failing_temp_unlink(path: Path, *args, **kwargs):
+                if path.name.startswith(f".{out.name}.") and path.suffix == ".tmp":
+                    raise OSError("simulated release-bundle temp cleanup failure")
+                return original_unlink(path, *args, **kwargs)
+
+            with (
+                mock.patch.object(
+                    release_bundle,
+                    "_validate_output_path",
+                    racing_validate_output_path,
+                ),
+                mock.patch.object(Path, "unlink", failing_temp_unlink),
+            ):
+                errors = release_bundle.write_release_bundle(out, bundle, bundle_root)
+            temp_outputs = list(out.parent.glob(f".{out.name}.*.tmp"))
+            output_exists = out.exists()
+
+        self.assertEqual(
+            [error["code"] for error in errors],
+            [
+                "kagemusha_release_bundle_out_invalid",
+                "kagemusha_release_bundle_out_invalid",
+            ],
+        )
+        self.assertEqual(
+            {error["message"] for error in errors},
+            {
+                "--out changed after staging",
+                "--out temporary file could not be removed",
+            },
+        )
+        self.assertEqual(validation_calls, 2)
+        self.assertFalse(output_exists)
+        self.assertEqual(len(temp_outputs), 1)
+
+    def test_write_release_bundle_rejects_parent_directory_sync_failure_after_replace(
+        self,
+    ) -> None:
+        original_fsync = release_bundle.os.fsync
+
+        with tempfile.TemporaryDirectory() as temp:
+            bundle_root = Path(temp) / "bundle"
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+            bundle = {
+                "schema": release_bundle.RELEASE_BUNDLE_SCHEMA,
+                "generated_at_utc": readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                "ready": True,
+                "evidence": {},
+                "blockers": [],
+            }
+            sync_calls = 0
+
+            def failing_parent_fsync(fd: int) -> None:
+                nonlocal sync_calls
+                sync_calls += 1
+                if sync_calls == 2:
+                    raise OSError("simulated release-bundle parent sync failure")
+                original_fsync(fd)
+
+            with mock.patch.object(release_bundle.os, "fsync", failing_parent_fsync):
+                errors = release_bundle.write_release_bundle(out, bundle, bundle_root)
+            written = out.read_text(encoding="utf-8")
+            temp_outputs = list(out.parent.glob(f".{out.name}.*.tmp"))
+
+        self.assertEqual(sync_calls, 2)
+        self.assertEqual(
+            errors,
+            [
+                {
+                    "code": "kagemusha_release_bundle_out_invalid",
+                    "message": "--out parent directory could not be synced",
+                }
+            ],
+        )
+        self.assertEqual(written, json.dumps(bundle, indent=2, sort_keys=True) + "\n")
+        self.assertEqual(temp_outputs, [])
 
     def test_write_release_bundle_rejects_regular_file_swap_before_readback(
         self,
@@ -6742,6 +7114,2692 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["state"], "compact_key_artifacts_validated")
 
+    def test_compact_key_staged_finalizer_publishes_validator_accepted_evidence(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            create_compact_key_artifact_files(staged_artifact_dir)
+            write_compact_key_staged_run_report(staged_artifact_dir)
+            exit_file = root / "staged.exit"
+            exit_file.write_text("0\n", encoding="utf-8")
+            artifact_dir = root / "published"
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout), redirect_stderr(io.StringIO()):
+                status = compact_key_finalizer.main(
+                    compact_key_finalizer_args(
+                        staged_artifact_dir=staged_artifact_dir,
+                        exit_file=exit_file,
+                        artifact_dir=artifact_dir,
+                    )
+                )
+            evidence_path = artifact_dir / readiness.COMPACT_KEY_EVIDENCE_FILENAME
+            result = readiness.check_compact_key_evidence(evidence_path)
+
+        self.assertEqual(status, 0)
+        self.assertIn(str(evidence_path), stdout.getvalue())
+        self.assertTrue(result["ok"], result["blockers"])
+        self.assertEqual(result["state"], "compact_key_artifacts_validated")
+
+    def test_compact_key_staged_finalizer_rejects_missing_exit_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            create_compact_key_artifact_files(staged_artifact_dir)
+            artifact_dir = root / "published"
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = compact_key_finalizer.main(
+                    compact_key_finalizer_args(
+                        staged_artifact_dir=staged_artifact_dir,
+                        exit_file=root / "missing.exit",
+                        artifact_dir=artifact_dir,
+                    )
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn("staged keygen exit marker is missing", stderr.getvalue())
+        self.assertFalse((artifact_dir / readiness.COMPACT_KEY_EVIDENCE_FILENAME).exists())
+
+    def test_compact_key_staged_finalizer_rejects_nonzero_exit_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            create_compact_key_artifact_files(staged_artifact_dir)
+            exit_file = root / "staged.exit"
+            exit_file.write_text("17\n", encoding="utf-8")
+            artifact_dir = root / "published"
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = compact_key_finalizer.main(
+                    compact_key_finalizer_args(
+                        staged_artifact_dir=staged_artifact_dir,
+                        exit_file=exit_file,
+                        artifact_dir=artifact_dir,
+                    )
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn("staged keygen exit code must be 0, got 17", stderr.getvalue())
+        self.assertFalse((artifact_dir / readiness.COMPACT_KEY_EVIDENCE_FILENAME).exists())
+
+    def test_compact_key_staged_finalizer_rejects_nonzero_marker_before_success_inputs(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            create_compact_key_artifact_files(staged_artifact_dir)
+            exit_file = root / "staged.exit"
+            exit_file.write_text("143\n", encoding="utf-8")
+            artifact_dir = root / "published"
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = compact_key_finalizer.main(
+                    [
+                        "--staged-artifact-dir",
+                        str(staged_artifact_dir),
+                        "--exit-file",
+                        str(exit_file),
+                        "--artifact-dir",
+                        str(artifact_dir),
+                        "--out",
+                        str(artifact_dir / readiness.COMPACT_KEY_EVIDENCE_FILENAME),
+                        "--generated-at-utc",
+                        "not-a-timestamp",
+                        "--command",
+                        "not the compact keygen command",
+                    ]
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn("staged keygen exit code must be 0, got 143", stderr.getvalue())
+        self.assertNotIn("generated_at_utc", stderr.getvalue())
+        self.assertNotIn("canonical ABI-7 recursive compact keygen command", stderr.getvalue())
+        self.assertFalse((artifact_dir / readiness.COMPACT_KEY_EVIDENCE_FILENAME).exists())
+
+    def test_compact_key_staged_finalizer_requires_run_report_on_success_marker(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            create_compact_key_artifact_files(staged_artifact_dir)
+            exit_file = root / "staged.exit"
+            exit_file.write_text("0\n", encoding="utf-8")
+            artifact_dir = root / "published"
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = compact_key_finalizer.main(
+                    compact_key_finalizer_args(
+                        staged_artifact_dir=staged_artifact_dir,
+                        exit_file=exit_file,
+                        artifact_dir=artifact_dir,
+                    )
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn("staged recursive compact key run report is missing", stderr.getvalue())
+        self.assertFalse((artifact_dir / readiness.COMPACT_KEY_EVIDENCE_FILENAME).exists())
+
+    def test_compact_key_staged_finalizer_rejects_run_report_exit_mismatch(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            create_compact_key_artifact_files(staged_artifact_dir)
+            write_compact_key_staged_run_report(staged_artifact_dir, exit_code=143)
+            exit_file = root / "staged.exit"
+            exit_file.write_text("0\n", encoding="utf-8")
+            artifact_dir = root / "published"
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = compact_key_finalizer.main(
+                    compact_key_finalizer_args(
+                        staged_artifact_dir=staged_artifact_dir,
+                        exit_file=exit_file,
+                        artifact_dir=artifact_dir,
+                    )
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "staged recursive compact key run report exit_code must match staged keygen exit marker 0, got 143",
+            stderr.getvalue(),
+        )
+        self.assertFalse((artifact_dir / readiness.COMPACT_KEY_EVIDENCE_FILENAME).exists())
+
+    def test_compact_key_staged_finalizer_rejects_run_report_command_mismatch(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            create_compact_key_artifact_files(staged_artifact_dir)
+            write_compact_key_staged_run_report(
+                staged_artifact_dir,
+                command=f"{compact_key_helper.DEFAULT_COMPACT_KEY_COMMAND} --extra",
+            )
+            exit_file = root / "staged.exit"
+            exit_file.write_text("0\n", encoding="utf-8")
+            artifact_dir = root / "published"
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = compact_key_finalizer.main(
+                    compact_key_finalizer_args(
+                        staged_artifact_dir=staged_artifact_dir,
+                        exit_file=exit_file,
+                        artifact_dir=artifact_dir,
+                    )
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "staged recursive compact key run report command must match the canonical ABI-7 compact key command",
+            stderr.getvalue(),
+        )
+        self.assertFalse((artifact_dir / readiness.COMPACT_KEY_EVIDENCE_FILENAME).exists())
+
+    def test_compact_key_staged_finalizer_rejects_run_report_log_size_drift(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            create_compact_key_artifact_files(staged_artifact_dir)
+            write_compact_key_staged_run_report(
+                staged_artifact_dir,
+                generator_log_size_bytes=999,
+            )
+            exit_file = root / "staged.exit"
+            exit_file.write_text("0\n", encoding="utf-8")
+            artifact_dir = root / "published"
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = compact_key_finalizer.main(
+                    compact_key_finalizer_args(
+                        staged_artifact_dir=staged_artifact_dir,
+                        exit_file=exit_file,
+                        artifact_dir=artifact_dir,
+                    )
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "staged recursive compact key run report generator_log_size_bytes must match staged generator log size",
+            stderr.getvalue(),
+        )
+        self.assertFalse((artifact_dir / readiness.COMPACT_KEY_EVIDENCE_FILENAME).exists())
+
+    def test_compact_key_staged_finalizer_rejects_symlinked_run_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            create_compact_key_artifact_files(staged_artifact_dir)
+            report = write_compact_key_staged_run_report(staged_artifact_dir)
+            target = staged_artifact_dir / "target-run-report.json"
+            target.write_bytes(report.read_bytes())
+            slot_helpers.replace_with_symlink(self, report, target)
+            exit_file = root / "staged.exit"
+            exit_file.write_text("0\n", encoding="utf-8")
+            artifact_dir = root / "published"
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = compact_key_finalizer.main(
+                    compact_key_finalizer_args(
+                        staged_artifact_dir=staged_artifact_dir,
+                        exit_file=exit_file,
+                        artifact_dir=artifact_dir,
+                    )
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "staged recursive compact key run report must not be a symlink",
+            stderr.getvalue(),
+        )
+        self.assertFalse((artifact_dir / readiness.COMPACT_KEY_EVIDENCE_FILENAME).exists())
+
+    def test_compact_key_staged_finalizer_rejects_hardlinked_run_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            create_compact_key_artifact_files(staged_artifact_dir)
+            report = write_compact_key_staged_run_report(staged_artifact_dir)
+            os.link(report, staged_artifact_dir / "hardlinked-run-report.json")
+            exit_file = root / "staged.exit"
+            exit_file.write_text("0\n", encoding="utf-8")
+            artifact_dir = root / "published"
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = compact_key_finalizer.main(
+                    compact_key_finalizer_args(
+                        staged_artifact_dir=staged_artifact_dir,
+                        exit_file=exit_file,
+                        artifact_dir=artifact_dir,
+                    )
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "staged recursive compact key run report must not be hardlinked",
+            stderr.getvalue(),
+        )
+        self.assertFalse((artifact_dir / readiness.COMPACT_KEY_EVIDENCE_FILENAME).exists())
+
+    def test_compact_key_staged_finalizer_redacts_secret_duplicate_run_report_key(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            create_compact_key_artifact_files(staged_artifact_dir)
+            report = staged_artifact_dir / compact_key_finalizer.RUN_REPORT_FILENAME
+            report.write_text(
+                '{"schema":"x","token=supersecret":1,"token=supersecret":2}\n',
+                encoding="utf-8",
+            )
+            exit_file = root / "staged.exit"
+            exit_file.write_text("0\n", encoding="utf-8")
+            artifact_dir = root / "published"
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = compact_key_finalizer.main(
+                    compact_key_finalizer_args(
+                        staged_artifact_dir=staged_artifact_dir,
+                        exit_file=exit_file,
+                        artifact_dir=artifact_dir,
+                    )
+                )
+            rendered = stderr.getvalue()
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "contains duplicate JSON object key <redacted-secret-path>",
+            rendered,
+        )
+        self.assertNotIn("supersecret", rendered)
+        self.assertFalse((artifact_dir / readiness.COMPACT_KEY_EVIDENCE_FILENAME).exists())
+
+    def test_compact_key_staged_finalizer_refuses_destination_overwrite(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            create_compact_key_artifact_files(staged_artifact_dir)
+            write_compact_key_staged_run_report(staged_artifact_dir)
+            exit_file = root / "staged.exit"
+            exit_file.write_text("0\n", encoding="utf-8")
+            artifact_dir = root / "published"
+            artifact_dir.mkdir()
+            existing = artifact_dir / "recursive-compact-len4.pk"
+            existing.write_bytes(b"existing")
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = compact_key_finalizer.main(
+                    compact_key_finalizer_args(
+                        staged_artifact_dir=staged_artifact_dir,
+                        exit_file=exit_file,
+                        artifact_dir=artifact_dir,
+                    )
+                )
+            existing_bytes = existing.read_bytes()
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "published recursive-compact-len4.pk already exists; refuse to overwrite without --replace",
+            stderr.getvalue(),
+        )
+        self.assertEqual(existing_bytes, b"existing")
+
+    def test_compact_key_staged_finalizer_rejects_symlinked_staged_artifact(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            create_compact_key_artifact_files(staged_artifact_dir)
+            write_compact_key_staged_run_report(staged_artifact_dir)
+            target = staged_artifact_dir / "target.pk"
+            target.write_bytes(b"KCGK\x00\x01" + b"9" * 64)
+            slot_helpers.replace_with_symlink(
+                self,
+                staged_artifact_dir / "recursive-compact-len4.pk",
+                target,
+            )
+            exit_file = root / "staged.exit"
+            exit_file.write_text("0\n", encoding="utf-8")
+            artifact_dir = root / "published"
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = compact_key_finalizer.main(
+                    compact_key_finalizer_args(
+                        staged_artifact_dir=staged_artifact_dir,
+                        exit_file=exit_file,
+                        artifact_dir=artifact_dir,
+                    )
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "staged recursive compact key artifact recursive-compact-len4.pk must not be a symlink",
+            stderr.getvalue(),
+        )
+        self.assertFalse((artifact_dir / readiness.COMPACT_KEY_EVIDENCE_FILENAME).exists())
+
+    def test_compact_key_staged_finalizer_rejects_generator_log_digest_drift(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            create_compact_key_artifact_files(staged_artifact_dir)
+            log_path = staged_artifact_dir / readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME
+            log_path.write_text(
+                log_path.read_text(encoding="utf-8").replace(
+                    "pk=",
+                    "pk=999",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            write_compact_key_staged_run_report(staged_artifact_dir)
+            exit_file = root / "staged.exit"
+            exit_file.write_text("0\n", encoding="utf-8")
+            artifact_dir = root / "published"
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = compact_key_finalizer.main(
+                    compact_key_finalizer_args(
+                        staged_artifact_dir=staged_artifact_dir,
+                        exit_file=exit_file,
+                        artifact_dir=artifact_dir,
+                    )
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "recursive compact key generator log size does not match local artifact recursive-compact-len4.pk",
+            stderr.getvalue(),
+        )
+        self.assertFalse((artifact_dir / readiness.COMPACT_KEY_EVIDENCE_FILENAME).exists())
+
+    def test_compact_key_staged_finalizer_defaults_out_under_artifact_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "published"
+
+            args = compact_key_finalizer.parse_args(
+                [
+                    "--staged-artifact-dir",
+                    str(Path(temp) / "staged" / "artifacts" / "kagemusha"),
+                    "--exit-file",
+                    str(Path(temp) / "staged.exit"),
+                    "--artifact-dir",
+                    str(artifact_dir),
+                ]
+            )
+
+        self.assertEqual(
+            args.out,
+            artifact_dir / readiness.COMPACT_KEY_EVIDENCE_FILENAME,
+        )
+
+    def test_compact_key_runner_and_finalizer_defaults_share_staging_paths(self) -> None:
+        runner_args = compact_key_staged_runner.parse_args([])
+        finalizer_args = compact_key_finalizer.parse_args([])
+
+        self.assertEqual(
+            finalizer_args.staged_artifact_dir,
+            runner_args.staged_artifact_dir,
+        )
+        self.assertEqual(finalizer_args.exit_file, runner_args.exit_file)
+
+    def test_compact_key_staged_finalizer_cleans_partial_publish_on_copy_error(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            stage_dir = root / "stage"
+            artifact_dir = root / "published"
+            stage_dir.mkdir()
+            artifact_dir.mkdir()
+            for name in compact_key_finalizer._required_publish_filenames():
+                (stage_dir / name).write_bytes(b"partial")
+            calls = 0
+
+            def fake_copy(_source: Path, destination: Path, _label: str) -> list[str]:
+                nonlocal calls
+                calls += 1
+                destination.write_bytes(b"partial")
+                if calls == 2:
+                    return ["copy drift"]
+                return []
+
+            with mock.patch.object(
+                compact_key_finalizer,
+                "_copy_validated_file",
+                side_effect=fake_copy,
+            ):
+                errors = compact_key_finalizer.publish_stage(
+                    stage_dir=stage_dir,
+                    artifact_dir=artifact_dir,
+                    replace=False,
+                )
+            remaining = list(artifact_dir.iterdir())
+
+        self.assertEqual(errors, ["copy drift"])
+        self.assertEqual(remaining, [])
+
+    def test_compact_key_staged_finalizer_verifies_published_stage_bytes(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            stage_dir = root / "stage"
+            artifact_dir = root / "published"
+            stage_dir.mkdir()
+            artifact_dir.mkdir()
+            create_compact_key_artifact_files(stage_dir)
+            evidence, evidence_errors = compact_key_helper.build_evidence(
+                artifact_dir=stage_dir,
+                command=readiness.expected_compact_key_command(),
+                generated_at_utc=readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+            )
+            self.assertEqual(evidence_errors, [])
+            assert evidence is not None
+            write_errors = compact_key_helper.write_evidence(
+                stage_dir / readiness.COMPACT_KEY_EVIDENCE_FILENAME,
+                evidence,
+            )
+            self.assertEqual(write_errors, [])
+            tampered_name = readiness.COMPACT_KEY_REQUIRED_ARTIFACTS[0]
+            original_replace = compact_key_finalizer.os.replace
+
+            def tampering_replace(source: Path, target: Path) -> None:
+                original_replace(source, target)
+                if target.name == tampered_name:
+                    target.write_bytes(b"tampered compact key bytes")
+
+            with mock.patch.object(
+                compact_key_finalizer.os,
+                "replace",
+                side_effect=tampering_replace,
+            ):
+                errors = compact_key_finalizer.publish_stage(
+                    stage_dir=stage_dir,
+                    artifact_dir=artifact_dir,
+                    replace=True,
+                )
+            remaining = list(artifact_dir.iterdir())
+
+        self.assertEqual(
+            errors,
+            [f"published {tampered_name} does not match staged bytes"],
+        )
+        self.assertEqual(remaining, [])
+
+    def test_compact_key_staged_runner_outputs_finalize_successfully(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            exit_file = root / "staged.exit"
+            published_dir = root / "published"
+            args = compact_key_staged_runner.parse_args(
+                [
+                    "--staged-artifact-dir",
+                    str(staged_artifact_dir),
+                    "--exit-file",
+                    str(exit_file),
+                ]
+            )
+
+            def fake_runner(command: list[str], cwd: Path, log_path: Path) -> int:
+                self.assertEqual(
+                    command,
+                    compact_key_staged_runner.shlex.split(
+                        compact_key_staged_runner.DEFAULT_COMPACT_KEY_COMMAND
+                    ),
+                )
+                self.assertEqual(cwd, staged_artifact_dir.parent.parent)
+                artifact_root = cwd / "artifacts" / "kagemusha"
+                create_compact_key_artifact_files_without_log(artifact_root)
+                write_compact_key_generator_log_to(artifact_root, log_path)
+                return 0
+
+            status, errors = compact_key_staged_runner.run_staged_keygen(
+                args,
+                runner=fake_runner,
+            )
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                finalize_status = compact_key_finalizer.main(
+                    compact_key_finalizer_args(
+                        staged_artifact_dir=staged_artifact_dir,
+                        exit_file=exit_file,
+                        artifact_dir=published_dir,
+                    )
+                )
+            result = readiness.check_compact_key_evidence(
+                published_dir / readiness.COMPACT_KEY_EVIDENCE_FILENAME
+            )
+            exit_text = exit_file.read_text(encoding="utf-8")
+            report = json.loads(
+                (
+                    staged_artifact_dir / compact_key_staged_runner.RUN_REPORT_FILENAME
+                ).read_text(encoding="utf-8")
+            )
+            execution_report = json.loads(
+                (
+                    staged_artifact_dir
+                    / compact_key_staged_runner.EXECUTION_REPORT_FILENAME
+                ).read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(errors, [])
+        self.assertEqual(exit_text, "0\n")
+        self.assertEqual(report["schema"], compact_key_staged_runner.STAGED_RUN_REPORT_SCHEMA)
+        self.assertEqual(report["exit_code"], 0)
+        self.assertEqual(
+            execution_report["schema"],
+            compact_key_staged_runner.EXECUTION_REPORT_SCHEMA,
+        )
+        self.assertEqual(execution_report["exit_code"], 0)
+        self.assertEqual(
+            execution_report["generator_log_size_bytes"],
+            report["generator_log_size_bytes"],
+        )
+        self.assertEqual(
+            report["generator_log_path"],
+            readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME,
+        )
+        self.assertEqual(finalize_status, 0)
+        self.assertTrue(result["ok"], result["blockers"])
+        self.assertEqual(result["state"], "compact_key_artifacts_validated")
+
+    def test_compact_key_staged_runner_resume_reuses_complete_keygen(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            exit_file = root / "staged.exit"
+            create_compact_key_artifact_files(staged_artifact_dir)
+            write_compact_key_execution_report(staged_artifact_dir)
+            write_compact_key_staged_run_report(staged_artifact_dir)
+            exit_file.write_text("0\n", encoding="utf-8")
+            args = compact_key_staged_runner.parse_args(
+                [
+                    "--staged-artifact-dir",
+                    str(staged_artifact_dir),
+                    "--exit-file",
+                    str(exit_file),
+                    "--resume-keygen",
+                ]
+            )
+
+            def forbidden_runner(_command: list[str], _cwd: Path, _log_path: Path) -> int:
+                raise AssertionError("runner must not rerun a complete staged keygen")
+
+            status, errors = compact_key_staged_runner.run_staged_keygen(
+                args,
+                runner=forbidden_runner,
+            )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(errors, [])
+
+    def test_compact_key_staged_runner_resume_replaces_failed_keygen(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            exit_file = root / "staged.exit"
+            create_compact_key_artifact_files(staged_artifact_dir)
+            write_compact_key_execution_report(staged_artifact_dir, exit_code=143)
+            write_compact_key_staged_run_report(staged_artifact_dir, exit_code=143)
+            exit_file.write_text("143\n", encoding="utf-8")
+            args = compact_key_staged_runner.parse_args(
+                [
+                    "--staged-artifact-dir",
+                    str(staged_artifact_dir),
+                    "--exit-file",
+                    str(exit_file),
+                    "--resume-keygen",
+                ]
+            )
+            calls: list[list[str]] = []
+
+            def fake_runner(command: list[str], cwd: Path, log_path: Path) -> int:
+                calls.append(command)
+                self.assertEqual(cwd, staged_artifact_dir.parent.parent)
+                artifact_root = cwd / "artifacts" / "kagemusha"
+                create_compact_key_artifact_files_without_log(artifact_root)
+                write_compact_key_generator_log_to(artifact_root, log_path)
+                return 0
+
+            status, errors = compact_key_staged_runner.run_staged_keygen(
+                args,
+                runner=fake_runner,
+            )
+            exit_text = exit_file.read_text(encoding="utf-8")
+            execution_report = json.loads(
+                (
+                    staged_artifact_dir
+                    / compact_key_staged_runner.EXECUTION_REPORT_FILENAME
+                ).read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(errors, [])
+        self.assertEqual(
+            calls,
+            [
+                compact_key_staged_runner.shlex.split(
+                    compact_key_staged_runner.DEFAULT_COMPACT_KEY_COMMAND
+                )
+            ],
+        )
+        self.assertEqual(exit_text, "0\n")
+        self.assertEqual(execution_report["exit_code"], 0)
+
+    def test_compact_key_staged_runner_resume_rejects_symlinked_artifact(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            staged_artifact_dir.mkdir(parents=True)
+            artifact_name = readiness.COMPACT_KEY_REQUIRED_ARTIFACTS[0]
+            target = root / "target.pk"
+            target.write_bytes(b"compact target bytes")
+            (staged_artifact_dir / artifact_name).write_bytes(b"placeholder")
+            slot_helpers.replace_with_symlink(
+                self,
+                staged_artifact_dir / artifact_name,
+                target,
+            )
+            args = compact_key_staged_runner.parse_args(
+                [
+                    "--staged-artifact-dir",
+                    str(staged_artifact_dir),
+                    "--exit-file",
+                    str(root / "staged.exit"),
+                    "--resume-keygen",
+                ]
+            )
+
+            def forbidden_runner(_command: list[str], _cwd: Path, _log_path: Path) -> int:
+                raise AssertionError("runner must not run after unsafe resume output")
+
+            status, errors = compact_key_staged_runner.run_staged_keygen(
+                args,
+                runner=forbidden_runner,
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            f"staged recursive compact key artifact {artifact_name} must not be a symlink",
+            errors,
+        )
+
+    def test_compact_key_staged_runner_refuses_existing_artifact_before_run(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            staged_artifact_dir.mkdir(parents=True)
+            (staged_artifact_dir / "recursive-compact-len4.pk").write_bytes(b"existing")
+            args = compact_key_staged_runner.parse_args(
+                [
+                    "--staged-artifact-dir",
+                    str(staged_artifact_dir),
+                    "--exit-file",
+                    str(root / "staged.exit"),
+                ]
+            )
+
+            def forbidden_runner(_command: list[str], _cwd: Path, _log_path: Path) -> int:
+                raise AssertionError("runner must not run after overwrite preflight failure")
+
+            status, errors = compact_key_staged_runner.run_staged_keygen(
+                args,
+                runner=forbidden_runner,
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            (
+                "staged recursive compact key artifact recursive-compact-len4.pk "
+                "already exists; refuse to overwrite without --replace"
+            ),
+            errors,
+        )
+
+    def test_compact_key_staged_runner_refuses_existing_run_report_before_run(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            staged_artifact_dir.mkdir(parents=True)
+            (staged_artifact_dir / compact_key_staged_runner.RUN_REPORT_FILENAME).write_text(
+                "{}\n",
+                encoding="utf-8",
+            )
+            args = compact_key_staged_runner.parse_args(
+                [
+                    "--staged-artifact-dir",
+                    str(staged_artifact_dir),
+                    "--exit-file",
+                    str(root / "staged.exit"),
+                ]
+            )
+
+            def forbidden_runner(_command: list[str], _cwd: Path, _log_path: Path) -> int:
+                raise AssertionError("runner must not run after report preflight failure")
+
+            status, errors = compact_key_staged_runner.run_staged_keygen(
+                args,
+                runner=forbidden_runner,
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            (
+                "staged recursive compact key run report already exists; refuse "
+                "to overwrite without --replace"
+            ),
+            errors,
+        )
+
+    def test_compact_key_staged_runner_preserves_nonzero_exit_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            exit_file = root / "staged.exit"
+            args = compact_key_staged_runner.parse_args(
+                [
+                    "--staged-artifact-dir",
+                    str(staged_artifact_dir),
+                    "--exit-file",
+                    str(exit_file),
+                ]
+            )
+
+            def fake_runner(_command: list[str], cwd: Path, log_path: Path) -> int:
+                artifact_root = cwd / "artifacts" / "kagemusha"
+                create_compact_key_artifact_files_without_log(artifact_root)
+                write_compact_key_generator_log_to(artifact_root, log_path)
+                return 17
+
+            status, errors = compact_key_staged_runner.run_staged_keygen(
+                args,
+                runner=fake_runner,
+            )
+            exit_text = exit_file.read_text(encoding="utf-8")
+            report = json.loads(
+                (
+                    staged_artifact_dir / compact_key_staged_runner.RUN_REPORT_FILENAME
+                ).read_text(encoding="utf-8")
+            )
+            execution_report = json.loads(
+                (
+                    staged_artifact_dir
+                    / compact_key_staged_runner.EXECUTION_REPORT_FILENAME
+                ).read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(status, 17)
+        self.assertEqual(errors, [])
+        self.assertEqual(exit_text, "17\n")
+        self.assertEqual(report["exit_code"], 17)
+        self.assertEqual(report["command"], compact_key_staged_runner.DEFAULT_COMPACT_KEY_COMMAND)
+        self.assertEqual(execution_report["exit_code"], 17)
+        self.assertEqual(
+            execution_report["command"],
+            compact_key_staged_runner.DEFAULT_COMPACT_KEY_COMMAND,
+        )
+
+    def test_compact_key_staged_runner_main_reports_nonzero_conventionally(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            exit_file = root / "staged.exit"
+            args = [
+                "--staged-artifact-dir",
+                str(staged_artifact_dir),
+                "--exit-file",
+                str(exit_file),
+            ]
+
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with mock.patch.object(
+                compact_key_staged_runner,
+                "run_staged_keygen",
+                return_value=(-9, []),
+            ):
+                with redirect_stdout(stdout), redirect_stderr(stderr):
+                    status = compact_key_staged_runner.main(args)
+
+        self.assertEqual(status, 1)
+        self.assertIn("staged keygen exited with -9", stderr.getvalue())
+        self.assertIn(str(staged_artifact_dir), stdout.getvalue())
+        self.assertIn(str(exit_file), stdout.getvalue())
+
+    def test_compact_key_staged_runner_main_errors_exit_conventionally(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            args = [
+                "--staged-artifact-dir",
+                str(root / "staged" / "artifacts" / "kagemusha"),
+                "--exit-file",
+                str(root / "staged.exit"),
+            ]
+
+            stderr = io.StringIO()
+            with mock.patch.object(
+                compact_key_staged_runner,
+                "run_staged_keygen",
+                return_value=(-9, ["synthetic failure"]),
+            ):
+                with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                    status = compact_key_staged_runner.main(args)
+
+        self.assertEqual(status, 1)
+        self.assertIn("synthetic failure", stderr.getvalue())
+
+    def test_compact_key_staged_runner_atomic_write_verifies_installed_bytes(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            marker = root / "staged.exit"
+            original_replace = compact_key_staged_runner.os.replace
+
+            def tampering_replace(source: Path, target: Path) -> None:
+                original_replace(source, target)
+                target.write_text("tampered\n", encoding="utf-8")
+
+            with mock.patch.object(
+                compact_key_staged_runner.os,
+                "replace",
+                side_effect=tampering_replace,
+            ):
+                errors = compact_key_staged_runner._write_text_atomic(
+                    marker,
+                    "0\n",
+                    "staged keygen exit marker",
+                    replace=True,
+                )
+
+        self.assertEqual(errors, ["staged keygen exit marker changed after write"])
+
+    def test_compact_key_staged_runner_rejects_symlinked_exit_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            staged_artifact_dir.mkdir(parents=True)
+            exit_file = root / "staged.exit"
+            target = root / "target.exit"
+            target.write_text("0\n", encoding="utf-8")
+            exit_file.write_text("0\n", encoding="utf-8")
+            slot_helpers.replace_with_symlink(self, exit_file, target)
+            args = compact_key_staged_runner.parse_args(
+                [
+                    "--staged-artifact-dir",
+                    str(staged_artifact_dir),
+                    "--exit-file",
+                    str(exit_file),
+                ]
+            )
+
+            def forbidden_runner(_command: list[str], _cwd: Path, _log_path: Path) -> int:
+                raise AssertionError("runner must not run with symlinked exit marker")
+
+            status, errors = compact_key_staged_runner.run_staged_keygen(
+                args,
+                runner=forbidden_runner,
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIn("staged keygen exit marker must not be a symlink", errors)
+
+    def test_compact_key_staged_runner_removes_temp_log_on_spawn_failure(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            args = compact_key_staged_runner.parse_args(
+                [
+                    "--staged-artifact-dir",
+                    str(staged_artifact_dir),
+                    "--exit-file",
+                    str(root / "staged.exit"),
+                ]
+            )
+
+            def failing_runner(_command: list[str], _cwd: Path, log_path: Path) -> int:
+                log_path.write_bytes(b"partial")
+                raise OSError("spawn failed")
+
+            status, errors = compact_key_staged_runner.run_staged_keygen(
+                args,
+                runner=failing_runner,
+            )
+            temp_log = (
+                staged_artifact_dir
+                / f".{readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME}.staged-runner.tmp"
+            )
+
+        self.assertEqual(status, 1)
+        self.assertEqual(
+            errors,
+            ["staged recursive compact keygen command could not be run: spawn failed"],
+        )
+        self.assertFalse(temp_log.exists())
+
+    def test_lineage_proof_staged_finalizer_publishes_validator_accepted_evidence(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            create_lineage_artifact_files(staged_artifact_dir)
+            write_passing_lineage_proof_log(
+                staged_artifact_dir
+                / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS["record_archive_proof"]
+            )
+            write_lineage_staged_run_report(staged_artifact_dir)
+            exit_file = root / "staged.exit"
+            exit_file.write_text("0\n", encoding="utf-8")
+            artifact_dir = root / "published"
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout), redirect_stderr(io.StringIO()):
+                status = lineage_finalizer.main(
+                    lineage_finalizer_args(
+                        staged_artifact_dir=staged_artifact_dir,
+                        exit_file=exit_file,
+                        artifact_dir=artifact_dir,
+                    )
+                )
+            evidence_path = artifact_dir / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME
+            result = readiness.check_lineage_proof_evidence(evidence_path)
+
+        self.assertEqual(status, 0)
+        self.assertIn(str(evidence_path), stdout.getvalue())
+        self.assertTrue(result["ok"], result["blockers"])
+        self.assertEqual(result["state"], "production_width_proof_passed")
+
+    def test_lineage_proof_staged_finalizer_rejects_missing_exit_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            create_lineage_artifact_files(staged_artifact_dir)
+            write_passing_lineage_proof_log(
+                staged_artifact_dir
+                / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS["record_archive_proof"]
+            )
+            artifact_dir = root / "published"
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = lineage_finalizer.main(
+                    lineage_finalizer_args(
+                        staged_artifact_dir=staged_artifact_dir,
+                        exit_file=root / "missing.exit",
+                        artifact_dir=artifact_dir,
+                    )
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn("staged lineage proof exit marker is missing", stderr.getvalue())
+        self.assertFalse(
+            (artifact_dir / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME).exists()
+        )
+
+    def test_lineage_proof_staged_finalizer_rejects_missing_marker_before_elapsed(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            staged_artifact_dir.mkdir(parents=True)
+            artifact_dir = root / "published"
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = lineage_finalizer.main(
+                    [
+                        "--staged-artifact-dir",
+                        str(staged_artifact_dir),
+                        "--exit-file",
+                        str(root / "missing.exit"),
+                        "--artifact-dir",
+                        str(artifact_dir),
+                        "--out",
+                        str(
+                            artifact_dir
+                            / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME
+                        ),
+                        "--generated-at-utc",
+                        readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                    ]
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn("staged lineage proof exit marker is missing", stderr.getvalue())
+        self.assertNotIn("--elapsed-seconds", stderr.getvalue())
+        self.assertFalse(
+            (artifact_dir / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME).exists()
+        )
+
+    def test_lineage_proof_staged_finalizer_rejects_nonzero_exit_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            create_lineage_artifact_files(staged_artifact_dir)
+            write_passing_lineage_proof_log(
+                staged_artifact_dir
+                / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS["record_archive_proof"]
+            )
+            exit_file = root / "staged.exit"
+            exit_file.write_text("17\n", encoding="utf-8")
+            artifact_dir = root / "published"
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = lineage_finalizer.main(
+                    lineage_finalizer_args(
+                        staged_artifact_dir=staged_artifact_dir,
+                        exit_file=exit_file,
+                        artifact_dir=artifact_dir,
+                    )
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn("staged lineage proof exit code must be 0, got 17", stderr.getvalue())
+        self.assertFalse(
+            (artifact_dir / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME).exists()
+        )
+
+    def test_lineage_proof_staged_finalizer_rejects_partial_nonzero_stage(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            staged_artifact_dir.mkdir(parents=True)
+            (staged_artifact_dir / "lineage-init-key-artifacts.log").write_text(
+                "Generating init Reserved-lineage verifier key\n",
+                encoding="utf-8",
+            )
+            exit_file = root / "staged.exit"
+            exit_file.write_text("-9\n", encoding="utf-8")
+            artifact_dir = root / "published"
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = lineage_finalizer.main(
+                    [
+                        "--staged-artifact-dir",
+                        str(staged_artifact_dir),
+                        "--exit-file",
+                        str(exit_file),
+                        "--artifact-dir",
+                        str(artifact_dir),
+                        "--out",
+                        str(
+                            artifact_dir
+                            / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME
+                        ),
+                        "--generated-at-utc",
+                        readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                    ]
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn("staged lineage proof exit code must be 0, got -9", stderr.getvalue())
+        self.assertNotIn("--elapsed-seconds", stderr.getvalue())
+        self.assertFalse(
+            (artifact_dir / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME).exists()
+        )
+
+    def test_lineage_proof_staged_finalizer_rejects_nonzero_marker_before_success_inputs(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            staged_artifact_dir.mkdir(parents=True)
+            exit_file = root / "staged.exit"
+            exit_file.write_text("-9\n", encoding="utf-8")
+            artifact_dir = root / "published"
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = lineage_finalizer.main(
+                    [
+                        "--staged-artifact-dir",
+                        str(staged_artifact_dir),
+                        "--exit-file",
+                        str(exit_file),
+                        "--artifact-dir",
+                        str(artifact_dir),
+                        "--out",
+                        str(
+                            artifact_dir
+                            / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME
+                        ),
+                        "--generated-at-utc",
+                        "not-a-timestamp",
+                        "--command",
+                        "not the lineage proof command",
+                    ]
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn("staged lineage proof exit code must be 0, got -9", stderr.getvalue())
+        self.assertNotIn("generated_at_utc", stderr.getvalue())
+        self.assertNotIn("canonical production Reserved-lineage proof command", stderr.getvalue())
+        self.assertNotIn("--elapsed-seconds", stderr.getvalue())
+        self.assertFalse(
+            (artifact_dir / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME).exists()
+        )
+
+    def test_lineage_proof_staged_finalizer_requires_run_report_on_success_marker(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            create_lineage_artifact_files(staged_artifact_dir)
+            write_passing_lineage_proof_log(
+                staged_artifact_dir
+                / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS["record_archive_proof"]
+            )
+            exit_file = root / "staged.exit"
+            exit_file.write_text("0\n", encoding="utf-8")
+            artifact_dir = root / "published"
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = lineage_finalizer.main(
+                    lineage_finalizer_args(
+                        staged_artifact_dir=staged_artifact_dir,
+                        exit_file=exit_file,
+                        artifact_dir=artifact_dir,
+                    )
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn("staged lineage proof run report is missing", stderr.getvalue())
+        self.assertFalse(
+            (artifact_dir / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME).exists()
+        )
+
+    def test_lineage_proof_staged_finalizer_rejects_run_report_exit_mismatch(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            create_lineage_artifact_files(staged_artifact_dir)
+            write_passing_lineage_proof_log(
+                staged_artifact_dir
+                / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS["record_archive_proof"]
+            )
+            write_lineage_staged_run_report(staged_artifact_dir, exit_code=143)
+            exit_file = root / "staged.exit"
+            exit_file.write_text("0\n", encoding="utf-8")
+            artifact_dir = root / "published"
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = lineage_finalizer.main(
+                    lineage_finalizer_args(
+                        staged_artifact_dir=staged_artifact_dir,
+                        exit_file=exit_file,
+                        artifact_dir=artifact_dir,
+                    )
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "staged lineage proof run report exit_code must match staged lineage proof exit marker 0, got 143",
+            stderr.getvalue(),
+        )
+        self.assertFalse(
+            (artifact_dir / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME).exists()
+        )
+
+    def test_lineage_proof_staged_finalizer_rejects_run_report_command_mismatch(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            create_lineage_artifact_files(staged_artifact_dir)
+            write_passing_lineage_proof_log(
+                staged_artifact_dir
+                / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS["record_archive_proof"]
+            )
+            write_lineage_staged_run_report(
+                staged_artifact_dir,
+                command=f"{evidence_helper.DEFAULT_RECORD_ARCHIVE_PROOF_COMMAND} --extra",
+            )
+            exit_file = root / "staged.exit"
+            exit_file.write_text("0\n", encoding="utf-8")
+            artifact_dir = root / "published"
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = lineage_finalizer.main(
+                    lineage_finalizer_args(
+                        staged_artifact_dir=staged_artifact_dir,
+                        exit_file=exit_file,
+                        artifact_dir=artifact_dir,
+                    )
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "staged lineage proof run report command must match the canonical Reserved-lineage proof command",
+            stderr.getvalue(),
+        )
+        self.assertFalse(
+            (artifact_dir / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME).exists()
+        )
+
+    def test_lineage_proof_staged_finalizer_rejects_run_report_elapsed_mismatch(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            create_lineage_artifact_files(staged_artifact_dir)
+            write_passing_lineage_proof_log(
+                staged_artifact_dir
+                / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS["record_archive_proof"]
+            )
+            write_lineage_staged_run_report(staged_artifact_dir, elapsed_seconds=14401.0)
+            exit_file = root / "staged.exit"
+            exit_file.write_text("0\n", encoding="utf-8")
+            artifact_dir = root / "published"
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = lineage_finalizer.main(
+                    lineage_finalizer_args(
+                        staged_artifact_dir=staged_artifact_dir,
+                        exit_file=exit_file,
+                        artifact_dir=artifact_dir,
+                    )
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "staged lineage proof run report elapsed_seconds must match staged elapsed seconds 14400.0, got 14401.0",
+            stderr.getvalue(),
+        )
+        self.assertFalse(
+            (artifact_dir / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME).exists()
+        )
+
+    def test_lineage_proof_staged_finalizer_rejects_run_report_log_size_drift(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            create_lineage_artifact_files(staged_artifact_dir)
+            write_passing_lineage_proof_log(
+                staged_artifact_dir
+                / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS["record_archive_proof"]
+            )
+            write_lineage_staged_run_report(
+                staged_artifact_dir,
+                proof_log_size_bytes=999,
+            )
+            exit_file = root / "staged.exit"
+            exit_file.write_text("0\n", encoding="utf-8")
+            artifact_dir = root / "published"
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = lineage_finalizer.main(
+                    lineage_finalizer_args(
+                        staged_artifact_dir=staged_artifact_dir,
+                        exit_file=exit_file,
+                        artifact_dir=artifact_dir,
+                    )
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "staged lineage proof run report proof_log_size_bytes must match staged proof log size",
+            stderr.getvalue(),
+        )
+        self.assertFalse(
+            (artifact_dir / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME).exists()
+        )
+
+    def test_lineage_proof_staged_finalizer_rejects_run_report_missing_key_log(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            create_lineage_artifact_files(staged_artifact_dir)
+            write_passing_lineage_proof_log(
+                staged_artifact_dir
+                / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS["record_archive_proof"]
+            )
+            report = write_lineage_staged_run_report(staged_artifact_dir)
+            document = json.loads(report.read_text(encoding="utf-8"))
+            del document["lineage_key_artifact_logs"]["append"]
+            report.write_text(
+                json.dumps(document, allow_nan=False, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            exit_file = root / "staged.exit"
+            exit_file.write_text("0\n", encoding="utf-8")
+            artifact_dir = root / "published"
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = lineage_finalizer.main(
+                    lineage_finalizer_args(
+                        staged_artifact_dir=staged_artifact_dir,
+                        exit_file=exit_file,
+                        artifact_dir=artifact_dir,
+                    )
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "staged lineage proof run report lineage_key_artifact_logs is missing profile append",
+            stderr.getvalue(),
+        )
+        self.assertFalse(
+            (artifact_dir / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME).exists()
+        )
+
+    def test_lineage_proof_staged_finalizer_rejects_run_report_key_log_size_drift(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            create_lineage_artifact_files(staged_artifact_dir)
+            write_passing_lineage_proof_log(
+                staged_artifact_dir
+                / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS["record_archive_proof"]
+            )
+            write_lineage_staged_run_report(
+                staged_artifact_dir,
+                key_log_size_overrides={"init": 999},
+            )
+            exit_file = root / "staged.exit"
+            exit_file.write_text("0\n", encoding="utf-8")
+            artifact_dir = root / "published"
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = lineage_finalizer.main(
+                    lineage_finalizer_args(
+                        staged_artifact_dir=staged_artifact_dir,
+                        exit_file=exit_file,
+                        artifact_dir=artifact_dir,
+                    )
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "staged lineage proof run report init lineage key artifact log size_bytes must match staged log size",
+            stderr.getvalue(),
+        )
+        self.assertFalse(
+            (artifact_dir / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME).exists()
+        )
+
+    def test_lineage_proof_staged_finalizer_rejects_symlinked_run_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            create_lineage_artifact_files(staged_artifact_dir)
+            write_passing_lineage_proof_log(
+                staged_artifact_dir
+                / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS["record_archive_proof"]
+            )
+            report = write_lineage_staged_run_report(staged_artifact_dir)
+            target = staged_artifact_dir / "target-run-report.json"
+            target.write_bytes(report.read_bytes())
+            slot_helpers.replace_with_symlink(self, report, target)
+            exit_file = root / "staged.exit"
+            exit_file.write_text("0\n", encoding="utf-8")
+            artifact_dir = root / "published"
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = lineage_finalizer.main(
+                    lineage_finalizer_args(
+                        staged_artifact_dir=staged_artifact_dir,
+                        exit_file=exit_file,
+                        artifact_dir=artifact_dir,
+                    )
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "staged lineage proof run report must not be a symlink",
+            stderr.getvalue(),
+        )
+        self.assertFalse(
+            (artifact_dir / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME).exists()
+        )
+
+    def test_lineage_proof_staged_finalizer_rejects_hardlinked_run_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            create_lineage_artifact_files(staged_artifact_dir)
+            write_passing_lineage_proof_log(
+                staged_artifact_dir
+                / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS["record_archive_proof"]
+            )
+            report = write_lineage_staged_run_report(staged_artifact_dir)
+            os.link(report, staged_artifact_dir / "hardlinked-run-report.json")
+            exit_file = root / "staged.exit"
+            exit_file.write_text("0\n", encoding="utf-8")
+            artifact_dir = root / "published"
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = lineage_finalizer.main(
+                    lineage_finalizer_args(
+                        staged_artifact_dir=staged_artifact_dir,
+                        exit_file=exit_file,
+                        artifact_dir=artifact_dir,
+                    )
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "staged lineage proof run report must not be hardlinked",
+            stderr.getvalue(),
+        )
+        self.assertFalse(
+            (artifact_dir / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME).exists()
+        )
+
+    def test_lineage_proof_staged_finalizer_redacts_secret_duplicate_run_report_key(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            create_lineage_artifact_files(staged_artifact_dir)
+            write_passing_lineage_proof_log(
+                staged_artifact_dir
+                / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS["record_archive_proof"]
+            )
+            report = staged_artifact_dir / lineage_finalizer.RUN_REPORT_FILENAME
+            report.write_text(
+                '{"schema":"x","token=supersecret":1,"token=supersecret":2}\n',
+                encoding="utf-8",
+            )
+            exit_file = root / "staged.exit"
+            exit_file.write_text("0\n", encoding="utf-8")
+            artifact_dir = root / "published"
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = lineage_finalizer.main(
+                    lineage_finalizer_args(
+                        staged_artifact_dir=staged_artifact_dir,
+                        exit_file=exit_file,
+                        artifact_dir=artifact_dir,
+                    )
+                )
+            rendered = stderr.getvalue()
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "contains duplicate JSON object key <redacted-secret-path>",
+            rendered,
+        )
+        self.assertNotIn("supersecret", rendered)
+        self.assertFalse(
+            (artifact_dir / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME).exists()
+        )
+
+    def test_lineage_proof_staged_finalizer_refuses_destination_overwrite(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            create_lineage_artifact_files(staged_artifact_dir)
+            write_passing_lineage_proof_log(
+                staged_artifact_dir
+                / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS["record_archive_proof"]
+            )
+            write_lineage_staged_run_report(staged_artifact_dir)
+            exit_file = root / "staged.exit"
+            exit_file.write_text("0\n", encoding="utf-8")
+            artifact_dir = root / "published"
+            artifact_dir.mkdir()
+            existing = artifact_dir / readiness.LINEAGE_PROOF_REQUIRED_ARTIFACTS[0]
+            existing.write_bytes(b"existing")
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = lineage_finalizer.main(
+                    lineage_finalizer_args(
+                        staged_artifact_dir=staged_artifact_dir,
+                        exit_file=exit_file,
+                        artifact_dir=artifact_dir,
+                    )
+                )
+            existing_bytes = existing.read_bytes()
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            (
+                f"published {readiness.LINEAGE_PROOF_REQUIRED_ARTIFACTS[0]} already "
+                "exists; refuse to overwrite without --replace"
+            ),
+            stderr.getvalue(),
+        )
+        self.assertEqual(existing_bytes, b"existing")
+
+    def test_lineage_proof_staged_finalizer_rejects_symlinked_staged_artifact(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            create_lineage_artifact_files(staged_artifact_dir)
+            write_passing_lineage_proof_log(
+                staged_artifact_dir
+                / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS["record_archive_proof"]
+            )
+            write_lineage_staged_run_report(staged_artifact_dir)
+            artifact_name = readiness.LINEAGE_PROOF_REQUIRED_ARTIFACTS[0]
+            target = staged_artifact_dir / "target.pk"
+            target.write_bytes(b"lineage target bytes")
+            slot_helpers.replace_with_symlink(
+                self,
+                staged_artifact_dir / artifact_name,
+                target,
+            )
+            exit_file = root / "staged.exit"
+            exit_file.write_text("0\n", encoding="utf-8")
+            artifact_dir = root / "published"
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = lineage_finalizer.main(
+                    lineage_finalizer_args(
+                        staged_artifact_dir=staged_artifact_dir,
+                        exit_file=exit_file,
+                        artifact_dir=artifact_dir,
+                    )
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            f"staged lineage proof artifact {artifact_name} must not be a symlink",
+            stderr.getvalue(),
+        )
+        self.assertFalse(
+            (artifact_dir / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME).exists()
+        )
+
+    def test_lineage_proof_staged_finalizer_rejects_bad_proof_log(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            create_lineage_artifact_files(staged_artifact_dir)
+            proof_log = (
+                staged_artifact_dir
+                / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS["record_archive_proof"]
+            )
+            write_passing_lineage_proof_log(proof_log)
+            proof_log.write_text(
+                proof_log.read_text(encoding="utf-8")
+                + "test result: FAILED. 0 passed; 1 failed; 0 ignored\n",
+                encoding="utf-8",
+            )
+            write_lineage_staged_run_report(staged_artifact_dir)
+            exit_file = root / "staged.exit"
+            exit_file.write_text("0\n", encoding="utf-8")
+            artifact_dir = root / "published"
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = lineage_finalizer.main(
+                    lineage_finalizer_args(
+                        staged_artifact_dir=staged_artifact_dir,
+                        exit_file=exit_file,
+                        artifact_dir=artifact_dir,
+                    )
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn("--proof-log must not contain cargo failure markers", stderr.getvalue())
+        self.assertFalse(
+            (artifact_dir / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME).exists()
+        )
+
+    def test_lineage_proof_staged_finalizer_verifies_published_stage_bytes(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            stage_dir = root / "stage"
+            artifact_dir = root / "published"
+            stage_dir.mkdir()
+            artifact_dir.mkdir()
+            create_lineage_artifact_files(stage_dir)
+            proof_log = (
+                stage_dir
+                / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS["record_archive_proof"]
+            )
+            write_passing_lineage_proof_log(proof_log)
+            evidence, evidence_errors = evidence_helper.build_evidence(
+                artifact_dir=stage_dir,
+                proof_log=proof_log,
+                command=readiness.expected_lineage_proof_command(
+                    readiness.LINEAGE_PROOF_REQUIRED_TESTS["record_archive_proof"]
+                ),
+                elapsed_seconds=14400.0,
+                generated_at_utc=readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+            )
+            self.assertEqual(evidence_errors, [])
+            assert evidence is not None
+            write_errors = evidence_helper.write_evidence(
+                stage_dir / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME,
+                evidence,
+            )
+            self.assertEqual(write_errors, [])
+            tampered_name = readiness.LINEAGE_PROOF_REQUIRED_ARTIFACTS[0]
+            original_replace = lineage_finalizer.os.replace
+
+            def tampering_replace(source: Path, target: Path) -> None:
+                original_replace(source, target)
+                if target.name == tampered_name:
+                    target.write_bytes(b"tampered lineage bytes")
+
+            with mock.patch.object(
+                lineage_finalizer.os,
+                "replace",
+                side_effect=tampering_replace,
+            ):
+                errors = lineage_finalizer.publish_stage(
+                    stage_dir=stage_dir,
+                    artifact_dir=artifact_dir,
+                    replace=True,
+                )
+            remaining = list(artifact_dir.iterdir())
+
+        self.assertEqual(
+            errors,
+            [f"published {tampered_name} does not match staged bytes"],
+        )
+        self.assertEqual(remaining, [])
+
+    def test_lineage_proof_staged_finalizer_defaults_out_under_artifact_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "published"
+
+            args = lineage_finalizer.parse_args(
+                [
+                    "--staged-artifact-dir",
+                    str(Path(temp) / "staged" / "artifacts" / "kagemusha"),
+                    "--exit-file",
+                    str(Path(temp) / "staged.exit"),
+                    "--artifact-dir",
+                    str(artifact_dir),
+                    "--elapsed-seconds",
+                    "14400",
+                ]
+            )
+
+        self.assertEqual(
+            args.out,
+            artifact_dir / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME,
+        )
+
+    def test_lineage_runner_and_finalizer_defaults_share_staging_paths(self) -> None:
+        runner_args = lineage_staged_runner.parse_args([])
+        finalizer_args = lineage_finalizer.parse_args([])
+
+        self.assertEqual(
+            finalizer_args.staged_artifact_dir,
+            runner_args.staged_artifact_dir,
+        )
+        self.assertEqual(finalizer_args.exit_file, runner_args.exit_file)
+        self.assertEqual(
+            finalizer_args.elapsed_seconds_file,
+            runner_args.elapsed_seconds_file,
+        )
+
+    def test_lineage_proof_staged_finalizer_cleans_partial_publish_on_copy_error(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            stage_dir = root / "stage"
+            artifact_dir = root / "published"
+            stage_dir.mkdir()
+            artifact_dir.mkdir()
+            for name in lineage_finalizer._required_publish_filenames():
+                (stage_dir / name).write_bytes(b"partial")
+            calls = 0
+
+            def fake_copy(_source: Path, destination: Path, _label: str) -> list[str]:
+                nonlocal calls
+                calls += 1
+                destination.write_bytes(b"partial")
+                if calls == 2:
+                    return ["copy drift"]
+                return []
+
+            with mock.patch.object(
+                lineage_finalizer,
+                "_copy_validated_file",
+                side_effect=fake_copy,
+            ):
+                errors = lineage_finalizer.publish_stage(
+                    stage_dir=stage_dir,
+                    artifact_dir=artifact_dir,
+                    replace=False,
+                )
+            remaining = list(artifact_dir.iterdir())
+
+        self.assertEqual(errors, ["copy drift"])
+        self.assertEqual(remaining, [])
+
+    def test_lineage_proof_staged_runner_outputs_finalize_successfully(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            exit_file = root / "staged.exit"
+            elapsed_file = root / "staged.elapsed"
+            published_dir = root / "published"
+            args = lineage_staged_runner.parse_args(
+                [
+                    "--repo-root",
+                    str(REPO_ROOT),
+                    "--staged-artifact-dir",
+                    str(staged_artifact_dir),
+                    "--exit-file",
+                    str(exit_file),
+                    "--elapsed-seconds-file",
+                    str(elapsed_file),
+                ]
+            )
+            staged_root = root / "staged"
+            calls: list[list[str]] = []
+
+            def fake_runner(command: list[str], cwd: Path, log_path: Path) -> int:
+                calls.append(command)
+                init_command = lineage_staged_runner.shlex.split(
+                    lineage_staged_runner.LINEAGE_KEY_ARTIFACT_COMMANDS["init"]
+                )
+                append_command = lineage_staged_runner.shlex.split(
+                    lineage_staged_runner.LINEAGE_KEY_ARTIFACT_COMMANDS["append"]
+                )
+                if command == init_command:
+                    self.assertEqual(cwd, staged_root)
+                    create_lineage_artifact_files_for_profile(staged_artifact_dir, "init")
+                    log_path.write_text("generated init lineage keys\n", encoding="utf-8")
+                    return 0
+                if command == append_command:
+                    self.assertEqual(cwd, staged_root)
+                    create_lineage_artifact_files_for_profile(staged_artifact_dir, "append")
+                    log_path.write_text("generated append lineage keys\n", encoding="utf-8")
+                    return 0
+                self.assertEqual(
+                    command,
+                    lineage_staged_runner.shlex.split(
+                        lineage_staged_runner.DEFAULT_RECORD_ARCHIVE_PROOF_COMMAND
+                    ),
+                )
+                self.assertEqual(cwd, REPO_ROOT)
+                write_passing_lineage_proof_log(log_path)
+                return 0
+
+            status, errors = lineage_staged_runner.run_staged_lineage_proof(
+                args,
+                runner=fake_runner,
+                monotonic=mock.Mock(side_effect=[10.0, 14.25]),
+            )
+            elapsed_seconds = float(elapsed_file.read_text(encoding="utf-8").strip())
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                finalize_status = lineage_finalizer.main(
+                    [
+                        "--staged-artifact-dir",
+                        str(staged_artifact_dir),
+                        "--exit-file",
+                        str(exit_file),
+                        "--elapsed-seconds-file",
+                        str(elapsed_file),
+                        "--artifact-dir",
+                        str(published_dir),
+                        "--out",
+                        str(published_dir / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME),
+                        "--generated-at-utc",
+                        readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                    ]
+                )
+            result = readiness.check_lineage_proof_evidence(
+                published_dir / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME
+            )
+            exit_text = exit_file.read_text(encoding="utf-8")
+            report = json.loads(
+                (
+                    staged_artifact_dir / lineage_staged_runner.RUN_REPORT_FILENAME
+                ).read_text(encoding="utf-8")
+            )
+            init_log = (
+                staged_artifact_dir
+                / lineage_staged_runner.LINEAGE_KEY_ARTIFACT_LOG_FILENAMES["init"]
+            )
+            append_log = (
+                staged_artifact_dir
+                / lineage_staged_runner.LINEAGE_KEY_ARTIFACT_LOG_FILENAMES["append"]
+            )
+            init_execution_report = json.loads(
+                (
+                    staged_artifact_dir
+                    / lineage_staged_runner.LINEAGE_EXECUTION_REPORT_FILENAMES["init"]
+                ).read_text(encoding="utf-8")
+            )
+            append_execution_report = json.loads(
+                (
+                    staged_artifact_dir
+                    / lineage_staged_runner.LINEAGE_EXECUTION_REPORT_FILENAMES["append"]
+                ).read_text(encoding="utf-8")
+            )
+            proof_execution_report = json.loads(
+                (
+                    staged_artifact_dir
+                    / lineage_staged_runner.LINEAGE_EXECUTION_REPORT_FILENAMES["proof"]
+                ).read_text(encoding="utf-8")
+            )
+            init_log_exists = init_log.exists()
+            append_log_exists = append_log.exists()
+
+        self.assertEqual(status, 0)
+        self.assertEqual(errors, [])
+        self.assertEqual(exit_text, "0\n")
+        self.assertEqual(elapsed_seconds, 4.25)
+        self.assertEqual(
+            calls,
+            [
+                lineage_staged_runner.shlex.split(
+                    lineage_staged_runner.LINEAGE_KEY_ARTIFACT_COMMANDS["init"]
+                ),
+                lineage_staged_runner.shlex.split(
+                    lineage_staged_runner.LINEAGE_KEY_ARTIFACT_COMMANDS["append"]
+                ),
+                lineage_staged_runner.shlex.split(
+                    lineage_staged_runner.DEFAULT_RECORD_ARCHIVE_PROOF_COMMAND
+                ),
+            ],
+        )
+        self.assertTrue(init_log_exists)
+        self.assertTrue(append_log_exists)
+        self.assertEqual(report["schema"], lineage_staged_runner.STAGED_RUN_REPORT_SCHEMA)
+        self.assertEqual(report["exit_code"], 0)
+        self.assertEqual(report["elapsed_seconds"], 4.25)
+        self.assertEqual(
+            init_execution_report["schema"],
+            lineage_staged_runner.EXECUTION_REPORT_SCHEMA,
+        )
+        self.assertEqual(init_execution_report["exit_code"], 0)
+        self.assertEqual(append_execution_report["exit_code"], 0)
+        self.assertEqual(proof_execution_report["exit_code"], 0)
+        self.assertEqual(proof_execution_report["elapsed_seconds"], 4.25)
+        self.assertEqual(
+            report["proof_log_path"],
+            readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS["record_archive_proof"],
+        )
+        self.assertEqual(finalize_status, 0)
+        self.assertTrue(result["ok"], result["blockers"])
+
+    def test_lineage_proof_staged_runner_resume_reuses_completed_init_phase(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            exit_file = root / "staged.exit"
+            elapsed_file = root / "staged.elapsed"
+            create_lineage_artifact_files_for_profile(staged_artifact_dir, "init")
+            (
+                staged_artifact_dir
+                / lineage_staged_runner.LINEAGE_KEY_ARTIFACT_LOG_FILENAMES["init"]
+            ).write_text("generated init lineage keys\n", encoding="utf-8")
+            write_lineage_execution_report(staged_artifact_dir, "init")
+            args = lineage_staged_runner.parse_args(
+                [
+                    "--repo-root",
+                    str(REPO_ROOT),
+                    "--staged-artifact-dir",
+                    str(staged_artifact_dir),
+                    "--exit-file",
+                    str(exit_file),
+                    "--elapsed-seconds-file",
+                    str(elapsed_file),
+                    "--resume-key-artifacts",
+                ]
+            )
+            calls: list[list[str]] = []
+
+            def fake_runner(command: list[str], cwd: Path, log_path: Path) -> int:
+                calls.append(command)
+                append_command = lineage_staged_runner.shlex.split(
+                    lineage_staged_runner.LINEAGE_KEY_ARTIFACT_COMMANDS["append"]
+                )
+                if command == append_command:
+                    self.assertEqual(cwd, root / "staged")
+                    create_lineage_artifact_files_for_profile(staged_artifact_dir, "append")
+                    log_path.write_text("generated append lineage keys\n", encoding="utf-8")
+                    return 0
+                self.assertEqual(
+                    command,
+                    lineage_staged_runner.shlex.split(
+                        lineage_staged_runner.DEFAULT_RECORD_ARCHIVE_PROOF_COMMAND
+                    ),
+                )
+                self.assertEqual(cwd, REPO_ROOT)
+                write_passing_lineage_proof_log(log_path)
+                return 0
+
+            status, errors = lineage_staged_runner.run_staged_lineage_proof(
+                args,
+                runner=fake_runner,
+                monotonic=mock.Mock(side_effect=[20.0, 23.5]),
+            )
+            init_execution_report = json.loads(
+                (
+                    staged_artifact_dir
+                    / lineage_staged_runner.LINEAGE_EXECUTION_REPORT_FILENAMES["init"]
+                ).read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(errors, [])
+        self.assertEqual(
+            calls,
+            [
+                lineage_staged_runner.shlex.split(
+                    lineage_staged_runner.LINEAGE_KEY_ARTIFACT_COMMANDS["append"]
+                ),
+                lineage_staged_runner.shlex.split(
+                    lineage_staged_runner.DEFAULT_RECORD_ARCHIVE_PROOF_COMMAND
+                ),
+            ],
+        )
+        self.assertEqual(init_execution_report["exit_code"], 0)
+
+    def test_lineage_proof_staged_runner_resume_replaces_failed_append_phase(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            exit_file = root / "staged.exit"
+            elapsed_file = root / "staged.elapsed"
+            create_lineage_artifact_files_for_profile(staged_artifact_dir, "init")
+            (
+                staged_artifact_dir
+                / lineage_staged_runner.LINEAGE_KEY_ARTIFACT_LOG_FILENAMES["init"]
+            ).write_text("generated init lineage keys\n", encoding="utf-8")
+            write_lineage_execution_report(staged_artifact_dir, "init")
+            (
+                staged_artifact_dir
+                / lineage_staged_runner.LINEAGE_KEY_ARTIFACT_LOG_FILENAMES["append"]
+            ).write_text("failed append lineage keys\n", encoding="utf-8")
+            write_lineage_execution_report(
+                staged_artifact_dir,
+                "append",
+                exit_code=143,
+            )
+            exit_file.write_text("143\n", encoding="utf-8")
+            args = lineage_staged_runner.parse_args(
+                [
+                    "--repo-root",
+                    str(REPO_ROOT),
+                    "--staged-artifact-dir",
+                    str(staged_artifact_dir),
+                    "--exit-file",
+                    str(exit_file),
+                    "--elapsed-seconds-file",
+                    str(elapsed_file),
+                    "--resume-key-artifacts",
+                ]
+            )
+            calls: list[list[str]] = []
+
+            def fake_runner(command: list[str], cwd: Path, log_path: Path) -> int:
+                calls.append(command)
+                append_command = lineage_staged_runner.shlex.split(
+                    lineage_staged_runner.LINEAGE_KEY_ARTIFACT_COMMANDS["append"]
+                )
+                if command == append_command:
+                    self.assertEqual(cwd, root / "staged")
+                    create_lineage_artifact_files_for_profile(staged_artifact_dir, "append")
+                    log_path.write_text("regenerated append lineage keys\n", encoding="utf-8")
+                    return 0
+                write_passing_lineage_proof_log(log_path)
+                return 0
+
+            status, errors = lineage_staged_runner.run_staged_lineage_proof(
+                args,
+                runner=fake_runner,
+                monotonic=mock.Mock(side_effect=[1.0, 2.0]),
+            )
+            append_execution_report = json.loads(
+                (
+                    staged_artifact_dir
+                    / lineage_staged_runner.LINEAGE_EXECUTION_REPORT_FILENAMES["append"]
+                ).read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(errors, [])
+        self.assertEqual(
+            calls,
+            [
+                lineage_staged_runner.shlex.split(
+                    lineage_staged_runner.LINEAGE_KEY_ARTIFACT_COMMANDS["append"]
+                ),
+                lineage_staged_runner.shlex.split(
+                    lineage_staged_runner.DEFAULT_RECORD_ARCHIVE_PROOF_COMMAND
+                ),
+            ],
+        )
+        self.assertEqual(append_execution_report["exit_code"], 0)
+
+    def test_lineage_proof_staged_runner_resume_rejects_symlinked_phase_output(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            staged_artifact_dir.mkdir(parents=True)
+            artifact_name = readiness.LINEAGE_PROOF_REQUIRED_ARTIFACTS[0]
+            target = root / "target.norito"
+            target.write_bytes(b"lineage target bytes")
+            (staged_artifact_dir / artifact_name).write_bytes(b"placeholder")
+            slot_helpers.replace_with_symlink(
+                self,
+                staged_artifact_dir / artifact_name,
+                target,
+            )
+            args = lineage_staged_runner.parse_args(
+                [
+                    "--repo-root",
+                    str(REPO_ROOT),
+                    "--staged-artifact-dir",
+                    str(staged_artifact_dir),
+                    "--exit-file",
+                    str(root / "staged.exit"),
+                    "--elapsed-seconds-file",
+                    str(root / "staged.elapsed"),
+                    "--resume-key-artifacts",
+                ]
+            )
+
+            def forbidden_runner(_command: list[str], _cwd: Path, _log_path: Path) -> int:
+                raise AssertionError("runner must not run after unsafe resume output")
+
+            status, errors = lineage_staged_runner.run_staged_lineage_proof(
+                args,
+                runner=forbidden_runner,
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            f"staged lineage proof artifact {artifact_name} must not be a symlink",
+            errors,
+        )
+
+    def test_lineage_proof_staged_finalizer_rejects_elapsed_seconds_file_conflict(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            create_lineage_artifact_files(staged_artifact_dir)
+            write_passing_lineage_proof_log(
+                staged_artifact_dir
+                / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS["record_archive_proof"]
+            )
+            exit_file = root / "staged.exit"
+            exit_file.write_text("0\n", encoding="utf-8")
+            elapsed_file = root / "staged.elapsed"
+            elapsed_file.write_text("14400\n", encoding="utf-8")
+            artifact_dir = root / "published"
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = lineage_finalizer.main(
+                    [
+                        *lineage_finalizer_args(
+                            staged_artifact_dir=staged_artifact_dir,
+                            exit_file=exit_file,
+                            artifact_dir=artifact_dir,
+                            elapsed_seconds=14401.0,
+                        ),
+                        "--elapsed-seconds-file",
+                        str(elapsed_file),
+                    ]
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn("--elapsed-seconds must match --elapsed-seconds-file", stderr.getvalue())
+        self.assertFalse(
+            (artifact_dir / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME).exists()
+        )
+
+    def test_lineage_proof_staged_finalizer_rejects_bad_elapsed_seconds_file(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            create_lineage_artifact_files(staged_artifact_dir)
+            write_passing_lineage_proof_log(
+                staged_artifact_dir
+                / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS["record_archive_proof"]
+            )
+            exit_file = root / "staged.exit"
+            exit_file.write_text("0\n", encoding="utf-8")
+            elapsed_file = root / "staged.elapsed"
+            elapsed_file.write_text("not-a-number\n", encoding="utf-8")
+            artifact_dir = root / "published"
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = lineage_finalizer.main(
+                    [
+                        "--staged-artifact-dir",
+                        str(staged_artifact_dir),
+                        "--exit-file",
+                        str(exit_file),
+                        "--elapsed-seconds-file",
+                        str(elapsed_file),
+                        "--artifact-dir",
+                        str(artifact_dir),
+                        "--out",
+                        str(artifact_dir / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME),
+                        "--generated-at-utc",
+                        readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                    ]
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "staged lineage proof elapsed-seconds file must contain a number",
+            stderr.getvalue(),
+        )
+        self.assertFalse(
+            (artifact_dir / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME).exists()
+        )
+
+    def test_lineage_proof_staged_runner_refuses_existing_log_before_run(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            staged_artifact_dir.mkdir(parents=True)
+            (staged_artifact_dir / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS["record_archive_proof"]).write_text(
+                "existing\n",
+                encoding="utf-8",
+            )
+            args = lineage_staged_runner.parse_args(
+                [
+                    "--repo-root",
+                    str(REPO_ROOT),
+                    "--staged-artifact-dir",
+                    str(staged_artifact_dir),
+                    "--exit-file",
+                    str(root / "staged.exit"),
+                    "--elapsed-seconds-file",
+                    str(root / "staged.elapsed"),
+                ]
+            )
+
+            def forbidden_runner(_command: list[str], _cwd: Path, _log_path: Path) -> int:
+                raise AssertionError("runner must not run after overwrite preflight failure")
+
+            status, errors = lineage_staged_runner.run_staged_lineage_proof(
+                args,
+                runner=forbidden_runner,
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "staged proof log already exists; refuse to overwrite without --replace",
+            errors,
+        )
+
+    def test_lineage_proof_staged_runner_refuses_existing_run_report_before_run(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            staged_artifact_dir.mkdir(parents=True)
+            (staged_artifact_dir / lineage_staged_runner.RUN_REPORT_FILENAME).write_text(
+                "{}\n",
+                encoding="utf-8",
+            )
+            args = lineage_staged_runner.parse_args(
+                [
+                    "--repo-root",
+                    str(REPO_ROOT),
+                    "--staged-artifact-dir",
+                    str(staged_artifact_dir),
+                    "--exit-file",
+                    str(root / "staged.exit"),
+                    "--elapsed-seconds-file",
+                    str(root / "staged.elapsed"),
+                ]
+            )
+
+            def forbidden_runner(_command: list[str], _cwd: Path, _log_path: Path) -> int:
+                raise AssertionError("runner must not run after report preflight failure")
+
+            status, errors = lineage_staged_runner.run_staged_lineage_proof(
+                args,
+                runner=forbidden_runner,
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            (
+                "staged lineage proof run report already exists; refuse to "
+                "overwrite without --replace"
+            ),
+            errors,
+        )
+
+    def test_lineage_proof_staged_runner_refuses_existing_artifact_before_run(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            staged_artifact_dir.mkdir(parents=True)
+            artifact_name = readiness.LINEAGE_PROOF_REQUIRED_ARTIFACTS[0]
+            (staged_artifact_dir / artifact_name).write_bytes(b"existing")
+            args = lineage_staged_runner.parse_args(
+                [
+                    "--repo-root",
+                    str(REPO_ROOT),
+                    "--staged-artifact-dir",
+                    str(staged_artifact_dir),
+                    "--exit-file",
+                    str(root / "staged.exit"),
+                    "--elapsed-seconds-file",
+                    str(root / "staged.elapsed"),
+                ]
+            )
+
+            def forbidden_runner(_command: list[str], _cwd: Path, _log_path: Path) -> int:
+                raise AssertionError("runner must not run after artifact preflight failure")
+
+            status, errors = lineage_staged_runner.run_staged_lineage_proof(
+                args,
+                runner=forbidden_runner,
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            (
+                f"staged lineage proof artifact {artifact_name} already exists; "
+                "refuse to overwrite without --replace"
+            ),
+            errors,
+        )
+
+    def test_lineage_proof_staged_runner_preserves_nonzero_exit_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            exit_file = root / "staged.exit"
+            elapsed_file = root / "staged.elapsed"
+            args = lineage_staged_runner.parse_args(
+                [
+                    "--repo-root",
+                    str(REPO_ROOT),
+                    "--staged-artifact-dir",
+                    str(staged_artifact_dir),
+                    "--exit-file",
+                    str(exit_file),
+                    "--elapsed-seconds-file",
+                    str(elapsed_file),
+                ]
+            )
+
+            def fake_runner(command: list[str], cwd: Path, log_path: Path) -> int:
+                init_command = lineage_staged_runner.shlex.split(
+                    lineage_staged_runner.LINEAGE_KEY_ARTIFACT_COMMANDS["init"]
+                )
+                append_command = lineage_staged_runner.shlex.split(
+                    lineage_staged_runner.LINEAGE_KEY_ARTIFACT_COMMANDS["append"]
+                )
+                if command == init_command:
+                    self.assertEqual(cwd, root / "staged")
+                    create_lineage_artifact_files_for_profile(staged_artifact_dir, "init")
+                    log_path.write_text("generated init lineage keys\n", encoding="utf-8")
+                    return 0
+                if command == append_command:
+                    self.assertEqual(cwd, root / "staged")
+                    create_lineage_artifact_files_for_profile(staged_artifact_dir, "append")
+                    log_path.write_text("generated append lineage keys\n", encoding="utf-8")
+                    return 0
+                write_passing_lineage_proof_log(log_path)
+                return 17
+
+            status, errors = lineage_staged_runner.run_staged_lineage_proof(
+                args,
+                runner=fake_runner,
+                monotonic=mock.Mock(side_effect=[1.0, 2.0]),
+            )
+            exit_text = exit_file.read_text(encoding="utf-8")
+            elapsed_seconds = float(elapsed_file.read_text(encoding="utf-8"))
+            report = json.loads(
+                (
+                    staged_artifact_dir / lineage_staged_runner.RUN_REPORT_FILENAME
+                ).read_text(encoding="utf-8")
+            )
+            proof_execution_report = json.loads(
+                (
+                    staged_artifact_dir
+                    / lineage_staged_runner.LINEAGE_EXECUTION_REPORT_FILENAMES["proof"]
+                ).read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(status, 17)
+        self.assertEqual(errors, [])
+        self.assertEqual(exit_text, "17\n")
+        self.assertEqual(elapsed_seconds, 1.0)
+        self.assertEqual(report["exit_code"], 17)
+        self.assertEqual(report["elapsed_seconds"], 1.0)
+        self.assertEqual(proof_execution_report["exit_code"], 17)
+        self.assertEqual(proof_execution_report["elapsed_seconds"], 1.0)
+        self.assertEqual(
+            report["command"],
+            lineage_staged_runner.DEFAULT_RECORD_ARCHIVE_PROOF_COMMAND,
+        )
+
+    def test_lineage_proof_staged_runner_reports_nonzero_init_keygen_phase(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            exit_file = root / "staged.exit"
+            elapsed_file = root / "staged.elapsed"
+            args = lineage_staged_runner.parse_args(
+                [
+                    "--repo-root",
+                    str(REPO_ROOT),
+                    "--staged-artifact-dir",
+                    str(staged_artifact_dir),
+                    "--exit-file",
+                    str(exit_file),
+                    "--elapsed-seconds-file",
+                    str(elapsed_file),
+                ]
+            )
+
+            def fake_runner(command: list[str], cwd: Path, log_path: Path) -> int:
+                self.assertEqual(cwd, root / "staged")
+                self.assertEqual(
+                    command,
+                    lineage_staged_runner.shlex.split(
+                        lineage_staged_runner.LINEAGE_KEY_ARTIFACT_COMMANDS["init"]
+                    ),
+                )
+                log_path.write_text(
+                    "Generating init Reserved-lineage verifier key\n",
+                    encoding="utf-8",
+                )
+                return -9
+
+            status, errors = lineage_staged_runner.run_staged_lineage_proof(
+                args,
+                runner=fake_runner,
+            )
+            execution_report = json.loads(
+                (
+                    staged_artifact_dir
+                    / lineage_staged_runner.LINEAGE_EXECUTION_REPORT_FILENAMES["init"]
+                ).read_text(encoding="utf-8")
+            )
+            exit_text = exit_file.read_text(encoding="utf-8")
+            elapsed_exists = elapsed_file.exists()
+            run_report_exists = (
+                staged_artifact_dir / lineage_staged_runner.RUN_REPORT_FILENAME
+            ).exists()
+            append_log_exists = (
+                staged_artifact_dir
+                / lineage_staged_runner.LINEAGE_KEY_ARTIFACT_LOG_FILENAMES["append"]
+            ).exists()
+
+        self.assertEqual(status, -9)
+        self.assertEqual(errors, [])
+        self.assertEqual(exit_text, "-9\n")
+        self.assertFalse(elapsed_exists)
+        self.assertFalse(run_report_exists)
+        self.assertFalse(append_log_exists)
+        self.assertEqual(execution_report["exit_code"], -9)
+        self.assertEqual(
+            execution_report["command"],
+            lineage_staged_runner.LINEAGE_KEY_ARTIFACT_COMMANDS["init"],
+        )
+        self.assertEqual(
+            execution_report["log_path"],
+            lineage_staged_runner.LINEAGE_KEY_ARTIFACT_LOG_FILENAMES["init"],
+        )
+
+    def test_lineage_proof_staged_runner_main_reports_nonzero_without_success_paths(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            exit_file = root / "staged.exit"
+            args = [
+                "--repo-root",
+                str(REPO_ROOT),
+                "--staged-artifact-dir",
+                str(staged_artifact_dir),
+                "--exit-file",
+                str(exit_file),
+                "--elapsed-seconds-file",
+                str(root / "staged.elapsed"),
+            ]
+
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with mock.patch.object(
+                lineage_staged_runner,
+                "run_staged_lineage_proof",
+                return_value=(-9, []),
+            ):
+                with redirect_stdout(stdout), redirect_stderr(stderr):
+                    status = lineage_staged_runner.main(args)
+
+        self.assertEqual(status, 1)
+        self.assertIn("staged run exited with -9", stderr.getvalue())
+        self.assertIn(str(exit_file), stdout.getvalue())
+        self.assertNotIn("record-archive-proof.log", stdout.getvalue())
+        self.assertNotIn(lineage_staged_runner.RUN_REPORT_FILENAME, stdout.getvalue())
+
+    def test_lineage_proof_staged_runner_main_errors_exit_conventionally(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            args = [
+                "--repo-root",
+                str(REPO_ROOT),
+                "--staged-artifact-dir",
+                str(root / "staged" / "artifacts" / "kagemusha"),
+                "--exit-file",
+                str(root / "staged.exit"),
+                "--elapsed-seconds-file",
+                str(root / "staged.elapsed"),
+            ]
+
+            stderr = io.StringIO()
+            with mock.patch.object(
+                lineage_staged_runner,
+                "run_staged_lineage_proof",
+                return_value=(-9, ["synthetic failure"]),
+            ):
+                with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                    status = lineage_staged_runner.main(args)
+
+        self.assertEqual(status, 1)
+        self.assertIn("synthetic failure", stderr.getvalue())
+
+    def test_lineage_proof_staged_runner_atomic_write_verifies_installed_bytes(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            marker = root / "staged.exit"
+            original_replace = lineage_staged_runner.os.replace
+
+            def tampering_replace(source: Path, target: Path) -> None:
+                original_replace(source, target)
+                target.write_text("tampered\n", encoding="utf-8")
+
+            with mock.patch.object(
+                lineage_staged_runner.os,
+                "replace",
+                side_effect=tampering_replace,
+            ):
+                errors = lineage_staged_runner._write_text_atomic(
+                    marker,
+                    "0\n",
+                    "staged lineage proof exit marker",
+                    replace=True,
+                )
+
+        self.assertEqual(errors, ["staged lineage proof exit marker changed after write"])
+
+    def test_lineage_proof_staged_runner_rejects_symlinked_exit_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            staged_artifact_dir.mkdir(parents=True)
+            exit_file = root / "staged.exit"
+            target = root / "target.exit"
+            target.write_text("0\n", encoding="utf-8")
+            exit_file.write_text("0\n", encoding="utf-8")
+            slot_helpers.replace_with_symlink(self, exit_file, target)
+            args = lineage_staged_runner.parse_args(
+                [
+                    "--repo-root",
+                    str(REPO_ROOT),
+                    "--staged-artifact-dir",
+                    str(staged_artifact_dir),
+                    "--exit-file",
+                    str(exit_file),
+                    "--elapsed-seconds-file",
+                    str(root / "staged.elapsed"),
+                ]
+            )
+
+            def forbidden_runner(_command: list[str], _cwd: Path, _log_path: Path) -> int:
+                raise AssertionError("runner must not run with symlinked exit marker")
+
+            status, errors = lineage_staged_runner.run_staged_lineage_proof(
+                args,
+                runner=forbidden_runner,
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIn("staged lineage proof exit marker must not be a symlink", errors)
+
+    def test_lineage_proof_staged_runner_removes_temp_log_on_spawn_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            args = lineage_staged_runner.parse_args(
+                [
+                    "--repo-root",
+                    str(REPO_ROOT),
+                    "--staged-artifact-dir",
+                    str(staged_artifact_dir),
+                    "--exit-file",
+                    str(root / "staged.exit"),
+                    "--elapsed-seconds-file",
+                    str(root / "staged.elapsed"),
+                ]
+            )
+
+            def failing_runner(command: list[str], cwd: Path, log_path: Path) -> int:
+                init_command = lineage_staged_runner.shlex.split(
+                    lineage_staged_runner.LINEAGE_KEY_ARTIFACT_COMMANDS["init"]
+                )
+                append_command = lineage_staged_runner.shlex.split(
+                    lineage_staged_runner.LINEAGE_KEY_ARTIFACT_COMMANDS["append"]
+                )
+                if command == init_command:
+                    self.assertEqual(cwd, root / "staged")
+                    create_lineage_artifact_files_for_profile(staged_artifact_dir, "init")
+                    log_path.write_text("generated init lineage keys\n", encoding="utf-8")
+                    return 0
+                if command == append_command:
+                    self.assertEqual(cwd, root / "staged")
+                    create_lineage_artifact_files_for_profile(staged_artifact_dir, "append")
+                    log_path.write_text("generated append lineage keys\n", encoding="utf-8")
+                    return 0
+                log_path.write_bytes(b"partial")
+                raise OSError("spawn failed")
+
+            status, errors = lineage_staged_runner.run_staged_lineage_proof(
+                args,
+                runner=failing_runner,
+            )
+            temp_log = staged_artifact_dir / ".record-archive-proof.log.staged-runner.tmp"
+
+        self.assertEqual(status, 1)
+        self.assertEqual(
+            errors,
+            ["staged lineage proof command could not be run: spawn failed"],
+        )
+        self.assertFalse(temp_log.exists())
+
     def test_compact_key_evidence_helper_rejects_missing_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             artifact_dir = Path(temp) / "compact"
@@ -7438,6 +10496,110 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(final_text, "existing compact evidence\n")
         self.assertEqual(temp_outputs, [])
 
+    def test_compact_key_write_evidence_reports_temp_cleanup_failure_after_write_failure(
+        self,
+    ) -> None:
+        original_unlink = Path.unlink
+
+        with tempfile.TemporaryDirectory() as temp:
+            out = Path(temp) / readiness.COMPACT_KEY_EVIDENCE_FILENAME
+
+            def failing_replace(src: Path, dst: Path) -> None:
+                raise OSError("simulated compact evidence replace failure")
+
+            def failing_temp_unlink(path: Path, *args, **kwargs):
+                if path.name.startswith(f".{out.name}.") and path.suffix == ".tmp":
+                    raise OSError("simulated compact evidence temp cleanup failure")
+                return original_unlink(path, *args, **kwargs)
+
+            with (
+                mock.patch.object(compact_key_helper.os, "replace", failing_replace),
+                mock.patch.object(Path, "unlink", failing_temp_unlink),
+            ):
+                errors = compact_key_helper.write_evidence(out, {"schema": "test"})
+            temp_outputs = list(out.parent.glob(f".{out.name}.*.tmp"))
+
+        self.assertEqual(
+            errors,
+            [
+                "--out could not be written",
+                "--out temporary file could not be removed",
+            ],
+        )
+        self.assertEqual(len(temp_outputs), 1)
+
+    def test_compact_key_write_evidence_reports_temp_cleanup_failure_after_post_stage_validation_failure(
+        self,
+    ) -> None:
+        original_validate_output_path = compact_key_helper.validate_output_path
+        original_unlink = Path.unlink
+
+        with tempfile.TemporaryDirectory() as temp:
+            out = Path(temp) / readiness.COMPACT_KEY_EVIDENCE_FILENAME
+            validation_calls = 0
+
+            def racing_validate_output_path(path: Path, label: str) -> list[str]:
+                nonlocal validation_calls
+                if path == out and label == "--out":
+                    validation_calls += 1
+                    if validation_calls == 2:
+                        return ["--out changed after staging"]
+                return original_validate_output_path(path, label)
+
+            def failing_temp_unlink(path: Path, *args, **kwargs):
+                if path.name.startswith(f".{out.name}.") and path.suffix == ".tmp":
+                    raise OSError("simulated compact evidence temp cleanup failure")
+                return original_unlink(path, *args, **kwargs)
+
+            with (
+                mock.patch.object(
+                    compact_key_helper,
+                    "validate_output_path",
+                    racing_validate_output_path,
+                ),
+                mock.patch.object(Path, "unlink", failing_temp_unlink),
+            ):
+                errors = compact_key_helper.write_evidence(out, {"schema": "test"})
+            temp_outputs = list(out.parent.glob(f".{out.name}.*.tmp"))
+            output_exists = out.exists()
+
+        self.assertEqual(
+            errors,
+            [
+                "--out changed after staging",
+                "--out temporary file could not be removed",
+            ],
+        )
+        self.assertEqual(validation_calls, 2)
+        self.assertFalse(output_exists)
+        self.assertEqual(len(temp_outputs), 1)
+
+    def test_compact_key_write_evidence_rejects_parent_directory_sync_failure_after_replace(
+        self,
+    ) -> None:
+        original_fsync = compact_key_helper.os.fsync
+
+        with tempfile.TemporaryDirectory() as temp:
+            out = Path(temp) / readiness.COMPACT_KEY_EVIDENCE_FILENAME
+            sync_calls = 0
+
+            def failing_parent_fsync(fd: int) -> None:
+                nonlocal sync_calls
+                sync_calls += 1
+                if sync_calls == 2:
+                    raise OSError("simulated compact evidence parent sync failure")
+                original_fsync(fd)
+
+            with mock.patch.object(compact_key_helper.os, "fsync", failing_parent_fsync):
+                errors = compact_key_helper.write_evidence(out, {"schema": "test"})
+            final_text = out.read_text(encoding="utf-8")
+            temp_outputs = list(out.parent.glob(f".{out.name}.*.tmp"))
+
+        self.assertEqual(sync_calls, 2)
+        self.assertEqual(errors, ["--out parent directory could not be synced"])
+        self.assertEqual(final_text, '{\n  "schema": "test"\n}\n')
+        self.assertEqual(temp_outputs, [])
+
     def test_compact_key_write_evidence_rejects_readback_mismatch(self) -> None:
         original_read_output_text = compact_key_helper._read_output_text
 
@@ -7734,6 +10896,62 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             self.assertIsNotNone(created_path)
             assert created_path is not None
             self.assertFalse(created_path.exists())
+
+    def test_compact_key_evidence_document_validator_reports_temp_cleanup_failure_after_write_failure(
+        self,
+    ) -> None:
+        class FailingValidationTempFile:
+            def __init__(self, path: Path) -> None:
+                self.path = path
+                self.name = str(path)
+                self._handle = None
+
+            def __enter__(self):
+                self._handle = self.path.open("w", encoding="utf-8")
+                return self
+
+            def __exit__(self, exc_type, exc, traceback) -> bool:
+                if self._handle is not None:
+                    self._handle.close()
+                return False
+
+            def write(self, _text: str) -> int:
+                raise OSError("simulated compact validation temp write failure")
+
+        original_unlink = Path.unlink
+
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "compact"
+            artifact_dir.mkdir()
+            created_path = artifact_dir / ".recursive-compact-key-evidence-failing-write.json"
+
+            def failing_named_temp_file(*args, **kwargs):
+                return FailingValidationTempFile(created_path)
+
+            def failing_unlink(path: Path, *args, **kwargs):
+                if path == created_path:
+                    raise OSError("simulated compact validation temp cleanup failure")
+                return original_unlink(path, *args, **kwargs)
+
+            with (
+                mock.patch.object(
+                    compact_key_helper.tempfile,
+                    "NamedTemporaryFile",
+                    side_effect=failing_named_temp_file,
+                ),
+                mock.patch.object(Path, "unlink", failing_unlink),
+            ):
+                errors = compact_key_helper.validate_evidence_document({}, artifact_dir)
+            leftover_exists = created_path.exists()
+
+        self.assertEqual(
+            errors,
+            [
+                "recursive compact key evidence validation file could not be written",
+                "recursive compact key evidence validation file could not be removed",
+            ],
+        )
+        self.assertTrue(leftover_exists)
 
     def test_compact_key_evidence_document_validator_rejects_temp_cleanup_failure(
         self,
@@ -9671,6 +12889,62 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             assert created_path is not None
             self.assertFalse(created_path.exists())
 
+    def test_lineage_proof_evidence_document_validator_reports_temp_cleanup_failure_after_write_failure(
+        self,
+    ) -> None:
+        class FailingValidationTempFile:
+            def __init__(self, path: Path) -> None:
+                self.path = path
+                self.name = str(path)
+                self._handle = None
+
+            def __enter__(self):
+                self._handle = self.path.open("w", encoding="utf-8")
+                return self
+
+            def __exit__(self, exc_type, exc, traceback) -> bool:
+                if self._handle is not None:
+                    self._handle.close()
+                return False
+
+            def write(self, _text: str) -> int:
+                raise OSError("simulated validation temp write failure")
+
+        original_unlink = Path.unlink
+
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "artifacts"
+            artifact_dir.mkdir()
+            created_path = artifact_dir / ".lineage-proof-evidence-failing-write.json"
+
+            def failing_named_temp_file(*args, **kwargs):
+                return FailingValidationTempFile(created_path)
+
+            def failing_unlink(path: Path, *args, **kwargs):
+                if path == created_path:
+                    raise OSError("simulated validation temp cleanup failure")
+                return original_unlink(path, *args, **kwargs)
+
+            with (
+                mock.patch.object(
+                    evidence_helper.tempfile,
+                    "NamedTemporaryFile",
+                    side_effect=failing_named_temp_file,
+                ),
+                mock.patch.object(Path, "unlink", failing_unlink),
+            ):
+                errors = evidence_helper.validate_evidence_document({}, artifact_dir)
+            leftover_exists = created_path.exists()
+
+        self.assertEqual(
+            errors,
+            [
+                "lineage proof evidence validation file could not be written",
+                "lineage proof evidence validation file could not be removed",
+            ],
+        )
+        self.assertTrue(leftover_exists)
+
     def test_lineage_proof_evidence_document_validator_rejects_temp_cleanup_failure(
         self,
     ) -> None:
@@ -10980,6 +14254,110 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
 
         self.assertEqual(errors, ["--out could not be written"])
         self.assertEqual(final_text, "existing lineage evidence\n")
+        self.assertEqual(temp_outputs, [])
+
+    def test_lineage_proof_write_evidence_reports_temp_cleanup_failure_after_write_failure(
+        self,
+    ) -> None:
+        original_unlink = Path.unlink
+
+        with tempfile.TemporaryDirectory() as temp:
+            out = Path(temp) / "lineage-proof-evidence.json"
+
+            def failing_replace(src: Path, dst: Path) -> None:
+                raise OSError("simulated lineage evidence replace failure")
+
+            def failing_temp_unlink(path: Path, *args, **kwargs):
+                if path.name.startswith(f".{out.name}.") and path.suffix == ".tmp":
+                    raise OSError("simulated lineage evidence temp cleanup failure")
+                return original_unlink(path, *args, **kwargs)
+
+            with (
+                mock.patch.object(evidence_helper.os, "replace", failing_replace),
+                mock.patch.object(Path, "unlink", failing_temp_unlink),
+            ):
+                errors = evidence_helper.write_evidence(out, {"schema": "test"})
+            temp_outputs = list(out.parent.glob(f".{out.name}.*.tmp"))
+
+        self.assertEqual(
+            errors,
+            [
+                "--out could not be written",
+                "--out temporary file could not be removed",
+            ],
+        )
+        self.assertEqual(len(temp_outputs), 1)
+
+    def test_lineage_proof_write_evidence_reports_temp_cleanup_failure_after_post_stage_validation_failure(
+        self,
+    ) -> None:
+        original_validate_output_path = evidence_helper.validate_output_path
+        original_unlink = Path.unlink
+
+        with tempfile.TemporaryDirectory() as temp:
+            out = Path(temp) / "lineage-proof-evidence.json"
+            validation_calls = 0
+
+            def racing_validate_output_path(path: Path, label: str) -> list[str]:
+                nonlocal validation_calls
+                if path == out and label == "--out":
+                    validation_calls += 1
+                    if validation_calls == 2:
+                        return ["--out changed after staging"]
+                return original_validate_output_path(path, label)
+
+            def failing_temp_unlink(path: Path, *args, **kwargs):
+                if path.name.startswith(f".{out.name}.") and path.suffix == ".tmp":
+                    raise OSError("simulated lineage evidence temp cleanup failure")
+                return original_unlink(path, *args, **kwargs)
+
+            with (
+                mock.patch.object(
+                    evidence_helper,
+                    "validate_output_path",
+                    racing_validate_output_path,
+                ),
+                mock.patch.object(Path, "unlink", failing_temp_unlink),
+            ):
+                errors = evidence_helper.write_evidence(out, {"schema": "test"})
+            temp_outputs = list(out.parent.glob(f".{out.name}.*.tmp"))
+            output_exists = out.exists()
+
+        self.assertEqual(
+            errors,
+            [
+                "--out changed after staging",
+                "--out temporary file could not be removed",
+            ],
+        )
+        self.assertEqual(validation_calls, 2)
+        self.assertFalse(output_exists)
+        self.assertEqual(len(temp_outputs), 1)
+
+    def test_lineage_proof_write_evidence_rejects_parent_directory_sync_failure_after_replace(
+        self,
+    ) -> None:
+        original_fsync = evidence_helper.os.fsync
+
+        with tempfile.TemporaryDirectory() as temp:
+            out = Path(temp) / "lineage-proof-evidence.json"
+            sync_calls = 0
+
+            def failing_parent_fsync(fd: int) -> None:
+                nonlocal sync_calls
+                sync_calls += 1
+                if sync_calls == 2:
+                    raise OSError("simulated lineage evidence parent sync failure")
+                original_fsync(fd)
+
+            with mock.patch.object(evidence_helper.os, "fsync", failing_parent_fsync):
+                errors = evidence_helper.write_evidence(out, {"schema": "test"})
+            final_text = out.read_text(encoding="utf-8")
+            temp_outputs = list(out.parent.glob(f".{out.name}.*.tmp"))
+
+        self.assertEqual(sync_calls, 2)
+        self.assertEqual(errors, ["--out parent directory could not be synced"])
+        self.assertEqual(final_text, '{\n  "schema": "test"\n}\n')
         self.assertEqual(temp_outputs, [])
 
     def test_lineage_proof_write_evidence_rejects_readback_mismatch(self) -> None:
@@ -12302,6 +15680,104 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             {error["message"] for error in errors},
         )
         self.assertEqual(len(temp_outputs), 1)
+
+    def test_write_summary_reports_temp_cleanup_failure_after_post_stage_validation_failure(
+        self,
+    ) -> None:
+        original_validate_summary_output_path = readiness.validate_summary_output_path
+        original_unlink = Path.unlink
+
+        with tempfile.TemporaryDirectory() as temp:
+            summary_path = Path(temp) / "summary.json"
+            validation_calls = 0
+
+            def racing_validate_summary_output_path(
+                path: Path,
+            ) -> list[dict[str, object]]:
+                nonlocal validation_calls
+                if path == summary_path:
+                    validation_calls += 1
+                    if validation_calls == 2:
+                        return [
+                            {
+                                "code": "kagemusha_summary_out_path_invalid",
+                                "message": "--summary-out changed after staging",
+                            }
+                        ]
+                return original_validate_summary_output_path(path)
+
+            def failing_temp_unlink(path: Path, *args, **kwargs):
+                if path.name.startswith(f".{summary_path.name}.") and path.suffix == ".tmp":
+                    raise OSError("simulated summary temp cleanup failure")
+                return original_unlink(path, *args, **kwargs)
+
+            with (
+                mock.patch.object(
+                    readiness,
+                    "validate_summary_output_path",
+                    racing_validate_summary_output_path,
+                ),
+                mock.patch.object(Path, "unlink", failing_temp_unlink),
+            ):
+                errors = readiness.write_summary(
+                    summary_path,
+                    {"schema": readiness.SUMMARY_SCHEMA, "ready": False},
+                )
+            temp_outputs = list(summary_path.parent.glob(f".{summary_path.name}.*.tmp"))
+            output_exists = summary_path.exists()
+
+        self.assertEqual(
+            [error["code"] for error in errors],
+            [
+                "kagemusha_summary_out_path_invalid",
+                "kagemusha_summary_out_path_invalid",
+            ],
+        )
+        self.assertEqual(
+            {error["message"] for error in errors},
+            {
+                "--summary-out changed after staging",
+                "--summary-out temporary file could not be removed",
+            },
+        )
+        self.assertEqual(validation_calls, 2)
+        self.assertFalse(output_exists)
+        self.assertEqual(len(temp_outputs), 1)
+
+    def test_write_summary_rejects_parent_directory_sync_failure_after_replace(
+        self,
+    ) -> None:
+        original_fsync = readiness.os.fsync
+
+        with tempfile.TemporaryDirectory() as temp:
+            summary_path = Path(temp) / "summary.json"
+            summary = {"schema": readiness.SUMMARY_SCHEMA, "ready": False}
+            sync_calls = 0
+
+            def failing_parent_fsync(fd: int) -> None:
+                nonlocal sync_calls
+                sync_calls += 1
+                if sync_calls == 2:
+                    raise OSError("simulated summary parent sync failure")
+                original_fsync(fd)
+
+            with mock.patch.object(readiness.os, "fsync", failing_parent_fsync):
+                errors = readiness.write_summary(summary_path, summary)
+            written = summary_path.read_text(encoding="utf-8")
+            temp_outputs = list(summary_path.parent.glob(f".{summary_path.name}.*.tmp"))
+
+        self.assertEqual(sync_calls, 2)
+        self.assertEqual(
+            errors,
+            [
+                {
+                    "code": "kagemusha_summary_out_path_invalid",
+                    "message": "--summary-out parent directory could not be synced",
+                }
+            ],
+        )
+        self.assertEqual(written, json.dumps(summary, indent=2, sort_keys=True) + "\n")
+        self.assertEqual(temp_outputs, [])
 
     def test_write_summary_rejects_symlink_swap_before_replace(self) -> None:
         original_validate_summary_output_path = readiness.validate_summary_output_path

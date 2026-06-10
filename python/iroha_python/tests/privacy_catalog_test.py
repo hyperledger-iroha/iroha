@@ -58,6 +58,7 @@ EXPECTED_PRIVACY_CAPABILITY_KEYS = frozenset(
         "vega_predicate_commitment_builder_v0",
         "vega_proof_envelope_builder_v0",
         "vega_sdk_exports_v0",
+        "verify_proof_instruction",
         "verange_commitment_builder_v1",
         "verange_dev_fixture_v1",
         "verange_local_verifier_v1",
@@ -141,6 +142,20 @@ def _privacy_production_test_entrypoints(
     return privacy_catalog._privacy_descriptor_production_sdk_entrypoints(descriptor)
 
 
+def _privacy_production_test_sdk_parity_artifacts(
+    algorithm_id: str,
+) -> dict[str, dict[str, dict[str, str]]]:
+    return {
+        kind: {
+            surface: _privacy_production_test_artifact(
+                f"{algorithm_id}-{surface}-{kind}-sdk-parity"
+            )
+            for surface in privacy_catalog.PRIVACY_PRODUCTION_SDK_ENTRYPOINT_SURFACES
+        }
+        for kind in privacy_catalog.PRIVACY_PRODUCTION_SDK_PARITY_ARTIFACT_KINDS
+    }
+
+
 def _privacy_production_test_row(
     descriptor: dict[str, object],
     *,
@@ -169,6 +184,9 @@ def _privacy_production_test_row(
             surface: list(entrypoints)
             for surface in privacy_catalog.PRIVACY_PRODUCTION_SDK_ENTRYPOINT_SURFACES
         },
+        "sdk_parity_artifacts": _privacy_production_test_sdk_parity_artifacts(
+            algorithm_id
+        ),
         "required_state": list(descriptor["required_state"]),
         "fuzz_results": {
             "passed": True,
@@ -3044,6 +3062,16 @@ def test_privacy_catalog_accepts_internal_review_evidence_for_all_rows() -> None
                 "verifyZkAceProofLocally"
             ),
             id="local-only-verifier-entrypoint",
+        ),
+        pytest.param(
+            lambda row: row["sdk_parity_artifacts"]["golden_vectors"].pop("ffi"),
+            id="missing-ffi-sdk-parity-artifact",
+        ),
+        pytest.param(
+            lambda row: row["sdk_parity_artifacts"]["types"]["swift"].update(
+                {"label": "Mock Swift types SDK parity artifact"}
+            ),
+            id="mock-sdk-parity-artifact",
         ),
         pytest.param(
             lambda row: row.update({"verifier_key_id": "wrong_verifier_key"}),
@@ -7456,11 +7484,12 @@ def test_privacy_capabilities_uses_client_entrypoints() -> None:
     capabilities = client.privacy_capabilities()
 
     assert capabilities["python_sdk_available"] is True
-    assert capabilities["bridge_available"] is False
+    assert capabilities["bridge_available"] is crypto.is_privacy_native_available()
     assert capabilities["transfer_asset_instruction"] is True
     assert capabilities["shield_instruction"] is True
     assert capabilities["zk_transfer_instruction"] is True
     assert capabilities["unshield_instruction"] is True
+    assert capabilities["verify_proof_instruction"] is True
     assert capabilities["zk_ace_register_identity_instruction"] is True
     assert capabilities["zk_ace_rotate_identity_instruction"] is True
     assert capabilities["zk_ace_revoke_identity_instruction"] is True
@@ -7515,7 +7544,9 @@ def test_privacy_capabilities_uses_client_entrypoints() -> None:
     assert capabilities["sis_hints_credential_dev_fixture_v0"] is True
     assert capabilities["sis_hints_credential_local_verifier_v0"] is True
     assert capabilities["sis_hints_credential_sdk_exports_v0"] is False
-    assert capabilities["asset_hidden_transfer_instruction"] is False
+    assert capabilities["asset_hidden_pool_registration_instruction"] is True
+    assert capabilities["asset_hidden_transfer_instruction"] is True
+    assert capabilities["asset_hidden_transfer_proof_v1"] is False
     assert capabilities["ml_kem_note_encryption"] is False
     assert capabilities["privacy_algorithms"][0]["id"] == "transparent-transfer"
 
@@ -7525,8 +7556,9 @@ def test_module_privacy_capabilities_defaults_to_static_sdk_surface() -> None:
 
     assert set(capabilities) == EXPECTED_PRIVACY_CAPABILITY_KEYS
     assert capabilities["python_sdk_available"] is True
-    assert capabilities["bridge_available"] is False
+    assert capabilities["bridge_available"] is crypto.is_privacy_native_available()
     assert capabilities["transfer_asset_instruction"] is True
+    assert capabilities["verify_proof_instruction"] is True
     assert capabilities["zk_ace_identity_lifecycle_instruction"] is True
     assert capabilities["zk_ace_authorized_transfer_instruction"] is True
     assert capabilities["zk_ace_authorization_proof_v1"] is True
@@ -7822,15 +7854,19 @@ def test_zk_ace_python_capabilities_require_both_proof_builder_names(
 def test_zk_ace_python_exports_catalog_named_proof_builder() -> None:
     assert "build_zk_ace_authorization_proof_v1" in crypto.__all__
     assert "build_zk_ace_authorization_proof_v1" in iroha_python.__all__
+    assert "privacy_proof_request_v1" in crypto.__all__
+    assert "privacy_proof_request_v1" in iroha_python.__all__
     assert (
         crypto.build_zk_ace_authorization_proof_v1
         is not crypto.zk_ace_build_transfer_authorization_v1
     )
     assert callable(crypto.build_zk_ace_authorization_proof_v1)
+    assert callable(crypto.privacy_proof_request_v1)
     assert (
         iroha_python.build_zk_ace_authorization_proof_v1
         is crypto.build_zk_ace_authorization_proof_v1
     )
+    assert iroha_python.privacy_proof_request_v1 is crypto.privacy_proof_request_v1
 
 
 def test_zk_ace_python_catalog_named_proof_builder_delegates(
@@ -8252,7 +8288,7 @@ def test_privacy_capabilities_tolerates_hostile_client_attribute_access() -> Non
     capabilities = privacy_capabilities(HostileClient())
 
     assert capabilities["python_sdk_available"] is True
-    assert capabilities["bridge_available"] is False
+    assert capabilities["bridge_available"] is crypto.is_privacy_native_available()
     assert capabilities["transfer_asset_instruction"] is False
     assert capabilities["shield_instruction"] is False
     assert capabilities["zk_transfer_instruction"] is False

@@ -76,6 +76,12 @@ const PRIVACY_PRODUCTION_SDK_ENTRYPOINT_SURFACES = Object.freeze([
   "swift",
   "csharp",
 ]);
+const PRIVACY_PRODUCTION_SDK_PARITY_ARTIFACT_KINDS = Object.freeze([
+  "types",
+  "validation_rules",
+  "error_codes",
+  "golden_vectors",
+]);
 const POST_QUANTUM_REQUIRED_SOURCE_URLS = Object.freeze([
   "https://csrc.nist.gov/pubs/fips/203/final",
   "https://csrc.nist.gov/pubs/fips/204/final",
@@ -1139,22 +1145,6 @@ const PUBLIC_PRIVACY_API_DECLARATION_SURFACES = Object.freeze([
     label: "Python package exports",
     path: "python/iroha_python/src/iroha_python/__init__.py",
   }),
-  Object.freeze({
-    label: "Swift privacy bridge",
-    path: "IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift",
-  }),
-  Object.freeze({
-    label: "Java Android privacy bridge",
-    path: "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridge.java",
-  }),
-  Object.freeze({
-    label: "Kotlin JVM privacy bridge",
-    path: "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt",
-  }),
-  Object.freeze({
-    label: "C# privacy native bridge",
-    path: "csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyNative.cs",
-  }),
 ]);
 const PUBLIC_PRIVACY_API_SOURCE_SCAN_SURFACES = Object.freeze([
   Object.freeze({
@@ -1366,6 +1356,20 @@ function productionEvidenceEntrypoints(descriptor) {
   return entrypoints;
 }
 
+function productionEvidenceSdkParityArtifacts(descriptor) {
+  return Object.fromEntries(
+    PRIVACY_PRODUCTION_SDK_PARITY_ARTIFACT_KINDS.map((kind) => [
+      kind,
+      Object.fromEntries(
+        PRIVACY_PRODUCTION_SDK_ENTRYPOINT_SURFACES.map((surface) => [
+          surface,
+          productionTestArtifact(`${descriptor.id}-${surface}-${kind}-sdk-parity`),
+        ]),
+      ),
+    ]),
+  );
+}
+
 function productionEvidenceRow(descriptor, { chainId, localnetRunId }) {
   const entrypoints = productionEvidenceEntrypoints(descriptor);
   return {
@@ -1386,6 +1390,7 @@ function productionEvidenceRow(descriptor, { chainId, localnetRunId }) {
         [...entrypoints],
       ]),
     ),
+    sdkParityArtifacts: productionEvidenceSdkParityArtifacts(descriptor),
     requiredState: [...(descriptor.requiredState ?? [])],
     fuzzResults: {
       passed: true,
@@ -3311,6 +3316,12 @@ test("privacy algorithm JS catalogs reject malformed internal review evidence", 
     },
     (row) => {
       row.sdkEntrypoints.javascript.push("verifyZkAceProofLocally");
+    },
+    (row) => {
+      delete row.sdkParityArtifacts.golden_vectors.ffi;
+    },
+    (row) => {
+      row.sdkParityArtifacts.types.swift.label = "Mock Swift types SDK parity artifact";
     },
     (row) => {
       row.verifierKeyId = "wrong_verifier_key";

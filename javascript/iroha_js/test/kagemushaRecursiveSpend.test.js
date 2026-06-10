@@ -173,6 +173,14 @@ function kagemushaNoritoFrameWithPayload(schemaByte) {
   return frame;
 }
 
+function kagemushaNoritoFrameWithHeaderPadding(archive, padding) {
+  return Buffer.concat([
+    archive.subarray(0, 40),
+    Buffer.from(padding),
+    archive.subarray(40),
+  ]);
+}
+
 const TEST_CRC64_MASK = 0xffff_ffff_ffff_ffffn;
 const TEST_CRC64_REFLECTED_POLY = 0xc96c_5795_d787_0f42n;
 const TEST_CRC64_TABLE = (() => {
@@ -2912,19 +2920,48 @@ test("Kagemusha recursive spend helpers reject oversized native outputs", () => 
 });
 
 test("Kagemusha recursive spend helpers reject malformed Norito native outputs", () => {
-  const binding = completeRecursiveSpendBinding({
-    kagemushaRecursiveSpendRedeem(request) {
-      rejectMalformedProbe("redeem", request);
-      return Buffer.from([0x01]);
-    },
-  });
+  function assertRejectsMalformedNativeRedeemOutput(output) {
+    const binding = completeRecursiveSpendBinding({
+      kagemushaRecursiveSpendRedeem(request) {
+        rejectMalformedProbe("redeem", request);
+        return output;
+      },
+    });
 
-  withNativeBinding(binding, () => {
-    assert.throws(
-      () => kagemushaRecursiveSpendRedeem(kagemushaInputArchive(0x8d)),
-      /native kagemushaRecursiveSpendRedeem returned invalid Norito archive/,
-    );
-  });
+    withNativeBinding(binding, () => {
+      assert.throws(
+        () => kagemushaRecursiveSpendRedeem(kagemushaInputArchive(0x8d)),
+        /native kagemushaRecursiveSpendRedeem returned invalid Norito archive/,
+      );
+    });
+  }
+
+  assertRejectsMalformedNativeRedeemOutput(Buffer.from([0x01]));
+
+  const compressed = kagemushaNoritoFrameWithPayload(0x36);
+  compressed[22] = 1;
+  assertRejectsMalformedNativeRedeemOutput(compressed);
+
+  const unsupportedFlags = kagemushaNoritoFrameWithPayload(0x36);
+  unsupportedFlags[39] = 0x08;
+  assertRejectsMalformedNativeRedeemOutput(unsupportedFlags);
+
+  const invalidFieldBitset = kagemushaNoritoFrameWithPayload(0x36);
+  invalidFieldBitset[39] = 0x20;
+  assertRejectsMalformedNativeRedeemOutput(invalidFieldBitset);
+
+  assertRejectsMalformedNativeRedeemOutput(
+    kagemushaNoritoFrameWithHeaderPadding(
+      kagemushaNoritoFrameWithPayload(0x36),
+      Buffer.from([0x7f]),
+    ),
+  );
+  assertRejectsMalformedNativeRedeemOutput(
+    kagemushaNoritoFrameWithHeaderPadding(
+      kagemushaNoritoFrameWithPayload(0x36),
+      Buffer.alloc(65),
+    ),
+  );
 });
 
 test("Kagemusha recursive spend helpers reject empty-payload Norito native outputs", () => {

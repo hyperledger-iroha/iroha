@@ -45,6 +45,9 @@ TEXT_REQUIREMENTS = {
         "hashes and parses `recursive-compact-key-artifacts.log`",
         "canonical CLI summary line",
         "compact key generator log",
+        "recursive-compact-key-staged-run.json",
+        "generator-log byte count",
+        "runner-report binding",
         "Reserved-lineage and compact key artifact size maps",
         "packaged lineage artifacts",
         "production proof logs",
@@ -155,7 +158,14 @@ TEXT_REQUIREMENTS = {
         "recursive-compact-key-artifacts.log",
         "canonical CLI summary line",
         "compact key generator log",
+        "recursive-compact-key-staged-run.json",
+        "generator-log byte count",
+        "runner-report binding",
         "captured `record-archive-proof.log`",
+        "lineage-proof-staged-run.json",
+        "proof-log byte count",
+        "lineage-key-artifact log byte counts",
+        "runner-report binding",
         "missing-vs-unreadable state",
         "Path.is_file()",
         "hashes and parses the local proof log",
@@ -164,12 +174,18 @@ TEXT_REQUIREMENTS = {
         "recorded command is the production",
         "run exactly as the canonical command string",
         "no quoted-token aliases, newlines, or appended shell commands",
+        "set -o pipefail",
+        "so `tee` cannot mask a terminated prover or key-generation",
         "runtime lineage keygen unset",
         "`cargo test -p iroha_core",
         "kagemusha_recursive_spend_lineage_init_append_from_record_archives_proves_reserved_lineage_output",
         "tee artifacts/kagemusha/record-archive-proof.log",
+        "python3 scripts/kagemusha_run_lineage_proof_staged.py",
+        "python3 scripts/kagemusha_run_recursive_compact_keygen_staged.py",
         "python3 scripts/kagemusha_lineage_proof_evidence.py",
         "python3 scripts/kagemusha_recursive_compact_key_evidence.py",
+        "python3 scripts/kagemusha_finalize_lineage_proof_staged_run.py",
+        "python3 scripts/kagemusha_finalize_recursive_compact_key_staged_run.py",
         "tee artifacts/kagemusha/recursive-compact-key-artifacts.log",
         "--generator-log artifacts/kagemusha/recursive-compact-key-artifacts.log",
         "python3 scripts/kagemusha_release_bundle.py",
@@ -262,7 +278,7 @@ TEXT_REQUIREMENTS = {
     ),
     "docs/source/sdk/android/readiness/android_strongbox_device_matrix.md": (
         "Android StrongBox Offline Payments Device Matrix",
-        "Last updated: 2026-06-09",
+        "Last updated: 2026-06-10",
         "ABI 6 recursive spend JNI probes pass on every required device family.",
         "ABI 7 recursive compact-token JNI probes prove and verify the packaged",
         "one-hop LEN=4 path on every required device family.",
@@ -271,9 +287,22 @@ TEXT_REQUIREMENTS = {
         "supplied, while empty, malformed, or dummy-proof local archives remain",
         "caller-input errors or soft-invalid verifier results",
         "Lab reports include raw test commands, device fingerprints, OS build IDs, and",
-        "connectedAndroidTest",
+        ":offline-wallet-android:connectedDebugAndroidTest",
+        ":offline-wallet-lab-app:assembleRelease",
+        ":offline-wallet-lab-app:installRelease",
+        ":offline-wallet-lab-app:installReleaseAndroidTest",
+        "adb shell am instrument",
         "org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest",
-        "OfflineNoteTransferHandoff",
+        "org.hyperledger.iroha.android.offline.OfflineNoteTransferHandoffTest",
+        "org.hyperledger.iroha.android.offline.KagemushaDeviceLabArtifactExportTest",
+        "kotlin/offline-wallet-lab-app",
+        "kotlin/offline-wallet-android/src/androidTest/java/org/hyperledger/iroha/android/offline/",
+        "kagemusha-device-lab/<slot-id>",
+        "kagemusha-device-lab/latest-slot.txt",
+        "python3 scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+        "--run-as-package org.hyperledger.iroha.sdk.offline.wallet.lab",
+        "rejects symlink, hardlink, special-file, traversal, duplicate,",
+        "oversized, and slot-mismatched tar members",
         "python3 scripts/check_android_device_lab_slot.py --root artifacts/android/device_lab --require-slot --require-kagemusha-production-evidence --require-kagemusha-standard-matrix --trusted-signer-public-key",
         "single safe slot",
         "python3 scripts/sign_android_device_lab_evidence.py --slot artifacts/android/device_lab/<slot-id> --private-key",
@@ -392,6 +421,13 @@ TEXT_REQUIREMENTS = {
         ":client-android:assembleRelease",
         ":offline-wallet-android:assembleRelease",
         "attestation/result.json",
+        "attestation/report.json",
+        "attestation verifier report",
+        "python3 scripts/kagemusha_android_attestation_report.py",
+        "--harness-result <android_keystore_attestation_result.json>",
+        "--physical-device-attestation --out <report.json>",
+        "unexpected verifier-result fields",
+        "explicit physical-device assertion",
         "StrongBox/KeyMint security level",
         "closed schema",
         "signed evidence artifact schema",
@@ -415,15 +451,70 @@ TEXT_REQUIREMENTS = {
         "renamed or copied signed evidence",
         "summary output path",
     ),
+    "kotlin/offline-wallet-android/src/androidTest/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java": (
+        "@RunWith(AndroidJUnit4.class)",
+        "productionHarnessResolvesKagemushaRecursiveSpendSurface",
+        "recursiveSpendWitnesslessPolicyFailsClosedAtBounds",
+        "recursiveSpendKeyArtifactsRejectInvalidPackagesBeforeNativeDispatch",
+        "recursiveCompactProjectionRejectsInvalidInputsBeforeNativeDispatch",
+        "lineageKeyArtifactsForInit",
+        "verifyRecursiveSpendCompactPaymentTokenProjectionAtHeight",
+        "18446744073709551615",
+    ),
+    "kotlin/offline-wallet-android/src/androidTest/java/org/hyperledger/iroha/android/offline/OfflineNoteTransferHandoffTest.java": (
+        "@RunWith(AndroidJUnit4.class)",
+        "productionHarnessResolvesOfflineNoteTransferHandoffFixture",
+        "nearbyQrAndNfcTokenHandoffRoundTripFixtureBytes",
+        "receiptAckHandoffRoundTripsFixtureRecipient",
+        "InstrumentationRegistry.getInstrumentation()",
+        "interop_contract.json",
+        "OfflineNoteTransferCapabilities.current(false, true)",
+        "OfflineNoteTransferHandoff.qrStreamingFrameBytes",
+        "OfflineNoteTransferHandoff.nfcFrameBytes",
+        "OfflineNoteReceiptAck.fromPaymentToken",
+    ),
+    "kotlin/offline-wallet-android/src/androidTest/java/org/hyperledger/iroha/android/offline/KagemushaDeviceLabArtifactExportTest.java": (
+        "@RunWith(AndroidJUnit4.class)",
+        "exportsKagemushaDeviceLabArtifactsFromPhysicalStrongBoxDevice",
+        "kagemusha-device-lab",
+        "latest-slot.txt",
+        "KeyGenParameterSpec.Builder",
+        "KeyProperties.KEY_ALGORITHM_EC",
+        "setIsStrongBoxBacked(true)",
+        "setAttestationChallenge(challenge)",
+        "attestation/result.json",
+        "attestation/keymint-certificate-chain.pem",
+        "handoff/d2d-payment.json",
+        "wallet/integrity.json",
+        "sha256File(new File(context.getPackageCodePath()))",
+        "getPackageCodePath",
+        "kagemusha device-lab run complete",
+        "strongbox_attestation",
+        "physical_device_attestation",
+    ),
+    "kotlin/offline-wallet-lab-app/build.gradle.kts": (
+        "alias(libs.plugins.android.application)",
+        "applicationId = \"org.hyperledger.iroha.sdk.offline.wallet.lab\"",
+        "testBuildType = \"release\"",
+        "isDebuggable = true",
+        "java.srcDir(\"../offline-wallet-android/src/androidTest/java\")",
+        "implementation(project(\":offline-wallet-android\"))",
+    ),
+    "kotlin/settings.gradle.kts": (
+        "include(\":offline-wallet-lab-app\")",
+    ),
     "scripts/check_android_device_lab_slot.py": (
         "KAGEMUSHA_STANDARD_DEVICE_FAMILIES",
         "KAGEMUSHA_STANDARD_DEVICE_MINIMUM_OS",
         "DEVICE_LAB_ROOT_SUMMARY_LABEL",
         "\"root\": DEVICE_LAB_ROOT_SUMMARY_LABEL",
         "RAW_TEST_COMMAND_REQUIRED_MARKERS",
+        'RAW_TEST_COMMAND_REQUIRED_MARKERS: tuple[str, ...] = (\n    ":client-android:assembleRelease",\n    ":offline-wallet-android:assembleRelease",\n    ":offline-wallet-android:connectedDebugAndroidTest",\n    ":offline-wallet-lab-app:assembleRelease",\n    ":offline-wallet-lab-app:installRelease",\n    ":offline-wallet-lab-app:installReleaseAndroidTest",\n    "adb shell am instrument",\n    "org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest",\n    "org.hyperledger.iroha.android.offline.OfflineNoteTransferHandoffTest",\n    "org.hyperledger.iroha.android.offline.KagemushaDeviceLabArtifactExportTest",\n)',
         "KAGEMUSHA_ANDROID_PRODUCTION_RAW_TEST_COMMAND",
         "KAGEMUSHA_ANDROID_PRODUCTION_RAW_TEST_COMMANDS",
         "must exactly match the Kagemusha Android production raw test command",
+        "org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest",
+        "org.hyperledger.iroha.android.offline.OfflineNoteTransferHandoffTest",
         "SIGNED_EVIDENCE_SCHEMA",
         "D2D_PAYMENT_TRANSCRIPT_SCHEMA",
         "D2D_PAYMENT_PAYLOAD_SCHEMA",
@@ -434,6 +525,9 @@ TEXT_REQUIREMENTS = {
         "telemetry/status.ndjson",
         "logs/runtime.log",
         "MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES",
+        "MAX_KAGEMUSHA_OFFLINE_WALLET_APK_BYTES",
+        "KAGEMUSHA_OFFLINE_WALLET_APK_PATH",
+        "def _slot_artifact_max_bytes",
         "MAX_ANDROID_DEVICE_LAB_JSON_BYTES",
         "MAX_ANDROID_DEVICE_LAB_SHA256_MANIFEST_BYTES",
         "validate_required_kagemusha_slot_artifact_shapes",
@@ -473,6 +567,10 @@ TEXT_REQUIREMENTS = {
         "SIGNED_EVIDENCE_SLOT_TRUE_FIELDS: tuple[str, ...]",
         "SLOT_METADATA_FIELDS",
         "ATTESTATION_RESULT_FIELDS",
+        "ATTESTATION_REPORT_SCHEMA",
+        "ATTESTATION_REPORT_FIELDS",
+        "validate_attestation_report",
+        "validate_attestation_report(slot_path, metadata, errors)",
         "set(result) - ATTESTATION_RESULT_FIELDS",
         "SECRET_PATH_REDACTION",
         "unsafe path contains secret-looking material",
@@ -598,8 +696,8 @@ TEXT_REQUIREMENTS = {
         "def _read_validated_manifest_artifact_bytes(",
         "manifest_expected_identity = (\n                expected_stat.st_dev,\n                expected_stat.st_ino,\n            )",
         "sha256sum.txt references artifact changed while being read",
-        "open_stat.st_size > MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES",
-        "size > MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES",
+        "open_stat.st_size > max_bytes",
+        "size > max_bytes",
         'artifact_path, artifact_stat, errors = _validate_manifest_artifact_for_digest(\n        slot_path,\n        relative,\n    )',
         "sha256sum.txt references artifact that could not be read",
         "sha256sum.txt references artifact file metadata could not be read",
@@ -750,7 +848,10 @@ TEXT_REQUIREMENTS = {
         ":client-android:assembleRelease",
         ":offline-wallet-android:assembleRelease",
         "KagemushaRecursiveSpendProverTest",
-        "connectedAndroidTest",
+        ":offline-wallet-android:connectedDebugAndroidTest",
+        ":offline-wallet-lab-app:installRelease",
+        ":offline-wallet-lab-app:installReleaseAndroidTest",
+        "adb shell am instrument",
         "signed evidence artifact signed_at_utc must be canonical UTC YYYY-MM-DDTHH:MM:SSZ",
         "_require_evidence_raw_string",
         '_require_evidence_raw_string(evidence, "signed_at_utc", errors)',
@@ -772,6 +873,7 @@ TEXT_REQUIREMENTS = {
         "_cleanup_summary_output",
         "--json-out temporary file could not be removed",
         "write_errors.extend(_cleanup_summary_output(tmp_path))",
+        "--json-out parent directory could not be synced",
         "_read_summary_output_text",
         "summary_expected_identity = (expected_stat.st_dev, expected_stat.st_ino)",
         "summary_open_identity = (open_stat.st_dev, open_stat.st_ino)",
@@ -813,6 +915,7 @@ TEXT_REQUIREMENTS = {
         "device_lab.KAGEMUSHA_SIGNED_EVIDENCE_ARTIFACT_PATH",
         "device_lab._load_json",
         "device_lab._canonical_signed_evidence_payload",
+        "device_lab.validate_attestation_report(slot_path, metadata, errors)",
         "device_lab.SIGNED_EVIDENCE_SLOT_INT_FIELDS",
         "slot.json native_bridge_abi_version must be an integer",
         "private key did not produce a signature accepted by the signer public key",
@@ -904,6 +1007,7 @@ TEXT_REQUIREMENTS = {
         "_cleanup_temp_output",
         'f"{label} temporary file could not be removed"',
         "write_errors.extend(_cleanup_temp_output(tmp_path, label))",
+        'f"{label} parent directory could not be synced"',
         "_read_existing_output_text",
         '        if read_errors == [f"{label} could not be read"]:\n            return None, [f"{label} write verification failed"]\n',
         "readback_text != text",
@@ -933,8 +1037,9 @@ TEXT_REQUIREMENTS = {
         "_read_validated_slot_artifact_bytes",
         "signer_expected_identity = (expected_stat.st_dev, expected_stat.st_ino)",
         "slot artifact {display} changed while being read",
-        "open_stat.st_size > device_lab.MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES",
-        "size > device_lab.MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES",
+        "artifact_max_bytes =",
+        "open_stat.st_size > artifact_max_bytes",
+        "size > artifact_max_bytes",
         '    try:\n        artifact_stat = artifact_path.lstat()\n    except FileNotFoundError:\n        return None, None, [f"slot artifact {display} is missing"]\n    except OSError:\n        return None, None, [f"slot artifact {display} file metadata could not be read"]\n    if stat.S_ISLNK(artifact_stat.st_mode):\n        return None, None, [f"slot artifact {display} must not be a symlink"]\n',
         '    try:\n        link_count = artifact_path.stat().st_nlink\n    except OSError:\n        return None, None, [\n            f"slot artifact {display} hardlink metadata could not be read"\n        ]\n',
         "slot artifact {display} could not be read",
@@ -963,6 +1068,73 @@ TEXT_REQUIREMENTS = {
         "validate_kagemusha_production_metadata",
         "--no-update-slot-json",
         "--no-update-sha256sum",
+    ),
+    "scripts/kagemusha_android_device_lab_slot.py": (
+        "Assemble a signed Kagemusha Android device-lab slot from lab artifacts",
+        "DEFAULT_ATTESTATION_CHAIN_PATH",
+        "DEFAULT_OFFLINE_WALLET_APK_PATH",
+        "DEFAULT_D2D_TRANSCRIPT_PATH",
+        "DEFAULT_WALLET_TRANSCRIPT_PATH",
+        "DEVICE_FAMILY_MODEL_PREFIXES",
+        "device_lab.validate_no_symlink_ancestors(",
+        "expected_identity = (expected_stat.st_dev, expected_stat.st_ino)",
+        "open_identity = (open_stat.st_dev, open_stat.st_ino)",
+        "open_identity != expected_identity or path_identity != expected_identity",
+        "changed while being read",
+        "device_lab.classify_device_lab_root_path(root)",
+        "slot directory already exists; refuse to overwrite evidence",
+        "signing inputs are required unless --allow-unsigned is set",
+        "--private-key, --public-key, and --signer-key-id must be supplied together",
+        "adb getprop {prop} failed",
+        "device family could not be inferred; pass --device-family",
+        "normalise_attestation_payloads",
+        "attestation/report.json device_fingerprint must match device identity",
+        "attestation/report.json os_build_id must match device identity",
+        "wallet integrity transcript rollback_rejection_passed must be true",
+        "evidence_signer.rewrite_sha256_manifest(stage_slot)",
+        "evidence_signer.sign_slot_evidence",
+        "--allow-unsigned",
+        "The production readiness rollup will reject it.",
+    ),
+    "scripts/kagemusha_pull_android_device_lab_raw_slot.py": (
+        "Pull raw Kagemusha Android device-lab artifacts from an attached device",
+        "DEFAULT_RUN_AS_PACKAGE = \"org.hyperledger.iroha.sdk.offline.wallet.lab\"",
+        "DEFAULT_DEVICE_LAB_DEVICE_ROOT = \"files/kagemusha-device-lab\"",
+        "ADB_LATEST_SLOT_COMMAND_HELP",
+        "ADB_PULL_TAR_COMMAND_HELP",
+        "KagemushaDeviceLabArtifactExportTest",
+        "RAW_SLOT_REQUIRED_PATHS",
+        "extract_raw_slot_tar",
+        "slot directory already exists; refuse to overwrite raw evidence",
+        "latest-slot.txt must match slot id",
+        "must not be a symlink or hardlink",
+        "must not exceed",
+        "slot-mismatched tar members",
+        "device_lab.validate_summary_output_path",
+    ),
+    "scripts/kagemusha_android_attestation_report.py": (
+        "Render a slot-bound Kagemusha Android attestation verifier report",
+        "DEFAULT_VERIFIER = \"android-keystore-attestation-harness\"",
+        "HARNESS_RESULT_FIELDS",
+        "PHYSICAL_DEVICE_ASSERTION_REQUIRED",
+        "--physical-device-attestation",
+        "physical device attestation must be explicitly asserted",
+        "attestation harness result strongbox_attestation must be true",
+        "attestation harness result keymaster_security_level must be STRONGBOX",
+        "attestation certificate chain path must stay under attestation/",
+        "device_lab.ATTESTATION_REPORT_SCHEMA",
+        "device_lab.validate_summary_output_path(path, label)",
+    ),
+    "scripts/android_keystore_attestation.sh": (
+        "Verify an Android Keystore attestation bundle using the Iroha Android attestation harness",
+        "Files named trust_root_*.pem in the bundle directory are detected",
+        "The script compiles the attestation harness and its direct verifier dependencies",
+        "MAIN_SOURCES=(",
+        "org/hyperledger/iroha/android/crypto/keystore/KeyAttestation.java",
+        "org/hyperledger/iroha/android/crypto/keystore/attestation/AttestationVerifier.java",
+        "org/hyperledger/iroha/android/tools/AndroidKeystoreAttestationHarness.java",
+        'javac "${JAVAC_FLAGS[@]}" "${MAIN_SOURCES[@]}"',
+        'if [[ -z "$BUNDLE_DIR" && ${#TRUST_ROOTS[@]} -eq 0',
     ),
     "scripts/kagemusha_production_readiness.py": (
         "Roll up Kagemusha production-readiness evidence into a strict summary",
@@ -1336,6 +1508,7 @@ TEXT_REQUIREMENTS = {
         "readback_text, readback_errors = _read_summary_output_text(path, expected_stat)",
         "readback_text != summary_text",
         "--summary-out write verification failed",
+        "--summary-out parent directory could not be synced",
         '    except OSError:\n        return None, [\n            _summary_out_blocker("--summary-out write verification failed")\n        ]\n',
         '    errors = validate_summary_output_path(path)\n    if errors:\n        return errors\n    try:\n        expected_stat = path.lstat()\n',
         "--summary-out must not be a symlink",
@@ -1434,6 +1607,10 @@ TEXT_REQUIREMENTS = {
         "handle.flush()",
         "os.fsync(handle.fileno())",
         "os.replace(tmp_path, path)",
+        "_cleanup_temp_output",
+        "--out temporary file could not be removed",
+        "write_errors.extend(_cleanup_temp_output(tmp_path))",
+        "--out parent directory could not be synced",
         "def _read_output_text(",
         "output_expected_identity = (expected_stat.st_dev, expected_stat.st_ino)",
         "output_open_identity = (open_stat.st_dev, open_stat.st_ino)",
@@ -1458,7 +1635,8 @@ TEXT_REQUIREMENTS = {
         "len(evidence_text.encode(\"utf-8\")) > readiness.MAX_LINEAGE_PROOF_EVIDENCE_JSON_BYTES",
         "max_bytes=readiness.MAX_LINEAGE_PROOF_EVIDENCE_JSON_BYTES",
         "lineage proof evidence validation file could not be written",
-        '    except OSError:\n        if path is not None:\n            try:\n                path.unlink(missing_ok=True)\n            except OSError:\n                pass\n        return ["lineage proof evidence validation file could not be written"]\n',
+        'errors = ["lineage proof evidence validation file could not be written"]',
+        'errors.append("lineage proof evidence validation file could not be removed")',
         '    try:\n        path.unlink(missing_ok=True)\n    except OSError:\n        return ["lineage proof evidence validation file could not be removed"]\n',
     ),
     "scripts/kagemusha_recursive_compact_key_evidence.py": (
@@ -1537,6 +1715,10 @@ TEXT_REQUIREMENTS = {
         "handle.flush()",
         "os.fsync(handle.fileno())",
         "os.replace(tmp_path, path)",
+        "_cleanup_temp_output",
+        "--out temporary file could not be removed",
+        "write_errors.extend(_cleanup_temp_output(tmp_path))",
+        "--out parent directory could not be synced",
         "def _read_output_text(",
         "output_expected_identity = (expected_stat.st_dev, expected_stat.st_ino)",
         "output_open_identity = (open_stat.st_dev, open_stat.st_ino)",
@@ -1555,7 +1737,165 @@ TEXT_REQUIREMENTS = {
         '    errors = validate_output_path(path, "--out")\n    if errors:\n        return errors\n    try:\n        expected_stat = path.lstat()',
         "recursive compact key evidence validation file could not be written",
         "recursive compact key evidence validation file could not be removed",
+        'errors = ["recursive compact key evidence validation file could not be written"]',
+        'errors.append(\n                    "recursive compact key evidence validation file could not be removed"\n                )',
         "wrote evidence",
+    ),
+    "scripts/kagemusha_finalize_recursive_compact_key_staged_run.py": (
+        "Finalize a completed staged ABI-7 recursive compact keygen run",
+        "DEFAULT_TEMP_ROOT",
+        "DEFAULT_EXIT_FILE",
+        "DEFAULT_STAGED_ARTIFACT_DIR",
+        "Path(\"/tmp\").resolve()",
+        "RUN_REPORT_FILENAME",
+        "STAGED_RUN_REPORT_SCHEMA",
+        "MAX_STAGED_RUN_REPORT_BYTES",
+        "validate_exit_marker",
+        "validate_staged_run_report",
+        "staged keygen exit code must be 0",
+        "if exit_errors:",
+        "return 1, None, errors",
+        "exit_code must match staged keygen exit marker",
+        "generator_log_size_bytes must match staged generator log",
+        "stage_compact_key_evidence",
+        "publish_stage",
+        "already exists; refuse to overwrite without --replace",
+        "_verify_published_file",
+        "verify_errors = _verify_published_file(",
+        "published {destination.name} does not match staged bytes",
+        "for path in [destination, *installed]:",
+        "check_compact_key_evidence(final_evidence_path)",
+        "compact_evidence.build_evidence",
+        "compact_evidence.validate_evidence_document",
+        "compact_evidence.write_evidence",
+    ),
+    "scripts/kagemusha_finalize_lineage_proof_staged_run.py": (
+        "Finalize a completed staged Reserved-lineage proof run",
+        "DEFAULT_TEMP_ROOT",
+        "DEFAULT_EXIT_FILE",
+        "DEFAULT_STAGED_ARTIFACT_DIR",
+        "Path(\"/tmp\").resolve()",
+        "DEFAULT_ELAPSED_SECONDS_FILE",
+        "RUN_REPORT_FILENAME",
+        "STAGED_RUN_REPORT_SCHEMA",
+        "MAX_STAGED_RUN_REPORT_BYTES",
+        "validate_exit_marker",
+        "validate_staged_run_report",
+        "staged lineage proof exit code must be 0",
+        "if exit_errors:",
+        "return 1, None, errors",
+        "exit_code must match staged lineage proof exit marker",
+        "elapsed_seconds must match staged elapsed seconds",
+        "proof_log_size_bytes must match staged proof log",
+        "lineage_key_artifact_logs",
+        "lineage key artifact log size_bytes must match",
+        "staged log size",
+        "resolve_elapsed_seconds",
+        "--elapsed-seconds-file",
+        "--elapsed-seconds must match --elapsed-seconds-file",
+        "stage_lineage_proof_evidence",
+        "publish_stage",
+        "already exists; refuse to overwrite without --replace",
+        "_verify_published_file",
+        "verify_errors = _verify_published_file(",
+        "published {destination.name} does not match staged bytes",
+        "for path in [destination, *installed]:",
+        "check_lineage_proof_evidence(final_evidence_path)",
+        "lineage_evidence.build_evidence",
+        "lineage_evidence.validate_evidence_document",
+        "lineage_evidence.write_evidence",
+    ),
+    "scripts/kagemusha_run_lineage_proof_staged.py": (
+        "Run the Kagemusha Reserved-lineage production proof into a staging directory",
+        "DEFAULT_TEMP_ROOT",
+        "Path(\"/tmp\").resolve()",
+        "LINEAGE_KEY_ARTIFACT_LOG_FILENAMES",
+        "LINEAGE_KEY_ARTIFACT_COMMANDS",
+        "iroha app zk kagemusha lineage-key-artifacts",
+        "--profile init",
+        "--profile append",
+        "_staged_root_from_artifact_dir",
+        "--staged-artifact-dir must end with artifacts/kagemusha",
+        "DEFAULT_RECORD_ARCHIVE_PROOF_COMMAND",
+        "PROOF_LOG_FILENAME",
+        "RUN_REPORT_FILENAME",
+        "STAGED_RUN_REPORT_SCHEMA",
+        "EXECUTION_REPORT_SCHEMA",
+        "LINEAGE_EXECUTION_REPORT_FILENAMES",
+        "lineage-init-key-artifacts-execution.json",
+        "lineage-append-key-artifacts-execution.json",
+        "lineage-proof-execution.json",
+        "LINEAGE_KEY_ARTIFACTS_BY_PROFILE",
+        "MAX_EXECUTION_REPORT_BYTES",
+        "--resume-key-artifacts",
+        "_validate_reusable_key_artifact_phase",
+        "_try_resume_key_artifact_phase",
+        "_cleanup_profile_for_resume",
+        "validate_output_file_path",
+        "staged lineage proof artifact",
+        "staged lineage proof execution report",
+        "already exists; refuse to overwrite without --replace",
+        "_verify_written_text_file",
+        "return _verify_written_text_file(path, expected_bytes, label)",
+        "changed after write",
+        "data = handle.read(len(expected_bytes) + 1)",
+        "_run_lineage_key_artifact_command",
+        "_write_execution_report",
+        "_write_run_report",
+        "_wrapper_exit_status",
+        "staged run exited with",
+        "return _wrapper_exit_status(status)",
+        "proof_log_size_bytes",
+        "lineage_key_artifact_logs",
+        "subprocess.Popen(",
+        "stderr=subprocess.STDOUT",
+        "shlex.split(DEFAULT_RECORD_ARCHIVE_PROOF_COMMAND)",
+        "readiness.validate_lineage_proof_command(",
+        "_write_exit_marker",
+        "f\"{exit_code}\\n\"",
+        "staged lineage proof exit marker",
+        "elapsed_seconds",
+        "_install_log_temp",
+    ),
+    "scripts/kagemusha_run_recursive_compact_keygen_staged.py": (
+        "Run ABI-7 recursive compact key generation into a staging directory",
+        "DEFAULT_TEMP_ROOT",
+        "Path(\"/tmp\").resolve()",
+        "DEFAULT_COMPACT_KEY_COMMAND",
+        "GENERATOR_LOG_FILENAME",
+        "RUN_REPORT_FILENAME",
+        "STAGED_RUN_REPORT_SCHEMA",
+        "EXECUTION_REPORT_FILENAME",
+        "EXECUTION_REPORT_SCHEMA",
+        "recursive-compact-key-execution.json",
+        "MAX_EXECUTION_REPORT_BYTES",
+        "MAX_RUN_REPORT_BYTES",
+        "--resume-keygen",
+        "_validate_reusable_staged_keygen",
+        "_validate_reusable_execution_report",
+        "_validate_reusable_run_report",
+        "_unlink_resume_outputs",
+        "validate_output_file_path",
+        "already exists; refuse to overwrite without --replace",
+        "staged recursive compact key execution report",
+        "_verify_written_text_file",
+        "return _verify_written_text_file(path, expected_bytes, label)",
+        "changed after write",
+        "data = handle.read(len(expected_bytes) + 1)",
+        "_write_execution_report",
+        "_write_run_report",
+        "_wrapper_exit_status",
+        "staged keygen exited with",
+        "return _wrapper_exit_status(status)",
+        "generator_log_size_bytes",
+        "subprocess.Popen(",
+        "stderr=subprocess.STDOUT",
+        "shlex.split(DEFAULT_COMPACT_KEY_COMMAND)",
+        "readiness.validate_compact_key_command(DEFAULT_COMPACT_KEY_COMMAND)",
+        'f"{exit_code}\\n"',
+        "staged keygen exit marker",
+        "--staged-artifact-dir must end with artifacts/kagemusha",
+        "_install_log_temp",
     ),
     "scripts/kagemusha_release_bundle.py": (
         "Validate and manifest a Kagemusha production release evidence bundle",
@@ -1701,6 +2041,7 @@ TEXT_REQUIREMENTS = {
         "--out temporary file could not be removed",
         "write_blockers.extend(_cleanup_temp_output(tmp_path))",
         "_read_output_text",
+        "--out parent directory could not be synced",
         "output_expected_identity = (expected_stat.st_dev, expected_stat.st_ino)",
         "output_open_identity = (open_stat.st_dev, open_stat.st_ino)",
         "--out changed while being read",
@@ -1724,6 +2065,19 @@ TEXT_REQUIREMENTS = {
     ),
     "scripts/tests/check_android_device_lab_slot_test.py": (
         "test_checked_in_sample_slot_passes_default_validation",
+        "test_kagemusha_slot_assembler_builds_signed_production_slot",
+        "test_kagemusha_slot_assembler_requires_signing_by_default",
+        "test_kagemusha_slot_assembler_rejects_report_device_mismatch_before_install",
+        "test_kagemusha_slot_assembler_rejects_symlinked_source_ancestor",
+        "test_kagemusha_slot_assembler_rejects_source_swap_after_preflight",
+        "test_kagemusha_android_raw_puller_reads_latest_and_installs_slot",
+        "test_kagemusha_android_raw_puller_refuses_existing_slot_before_adb_tar",
+        "test_kagemusha_android_raw_puller_rejects_tar_path_traversal",
+        "test_kagemusha_android_raw_puller_rejects_tar_symlink_member",
+        "test_kagemusha_android_raw_puller_rejects_tar_hardlink_member",
+        "test_kagemusha_android_raw_puller_rejects_oversized_tar_member",
+        "test_kagemusha_android_raw_puller_rejects_latest_slot_mismatch",
+        "test_kagemusha_android_raw_puller_rejects_tar_file_parent_collision",
         "test_scan_slot_rejects_sha256_drift",
         "test_explicit_missing_slot_returns_structured_error",
         "test_discover_slots_returns_structured_error_on_root_list_failure",
@@ -1954,6 +2308,8 @@ TEXT_REQUIREMENTS = {
         "test_write_summary_rejects_write_failure_after_preflight",
         "test_write_summary_preserves_existing_output_on_replace_failure",
         "test_write_summary_reports_temp_cleanup_failure_after_write_failure",
+        "test_write_summary_reports_temp_cleanup_failure_after_post_stage_validation_failure",
+        "test_write_summary_rejects_parent_directory_sync_failure_after_replace",
         "test_write_summary_rejects_symlink_swap_before_replace",
         "test_write_summary_rejects_readback_mismatch",
         "test_write_summary_rejects_readback_failure",
@@ -2022,6 +2378,8 @@ TEXT_REQUIREMENTS = {
         "test_signer_write_json_rejects_write_failure_after_preflight",
         "test_signer_write_json_preserves_existing_output_on_replace_failure",
         "test_signer_write_json_reports_temp_cleanup_failure_after_write_failure",
+        "test_signer_write_json_reports_temp_cleanup_failure_after_post_stage_validation_failure",
+        "test_signer_write_json_rejects_parent_directory_sync_failure_after_replace",
         "test_signer_write_json_rejects_symlink_swap_before_replace",
         "test_signer_write_json_rejects_readback_mismatch",
         "test_signer_write_json_rejects_readback_failure",
@@ -2220,6 +2578,74 @@ TEXT_REQUIREMENTS = {
         "test_compact_key_evidence_rejects_all_placeholder_prefixes",
         "test_compact_key_evidence_rejects_all_zero_local_artifact_file",
         "test_compact_key_evidence_helper_generates_validator_accepted_json",
+        "test_compact_key_staged_finalizer_publishes_validator_accepted_evidence",
+        "test_compact_key_staged_finalizer_rejects_missing_exit_marker",
+        "test_compact_key_staged_finalizer_rejects_nonzero_exit_marker",
+        "test_compact_key_staged_finalizer_rejects_nonzero_marker_before_success_inputs",
+        "test_compact_key_staged_finalizer_requires_run_report_on_success_marker",
+        "test_compact_key_staged_finalizer_rejects_run_report_exit_mismatch",
+        "test_compact_key_staged_finalizer_rejects_run_report_command_mismatch",
+        "test_compact_key_staged_finalizer_rejects_run_report_log_size_drift",
+        "test_compact_key_staged_finalizer_rejects_symlinked_run_report",
+        "test_compact_key_staged_finalizer_rejects_hardlinked_run_report",
+        "test_compact_key_staged_finalizer_redacts_secret_duplicate_run_report_key",
+        "test_compact_key_staged_finalizer_refuses_destination_overwrite",
+        "test_compact_key_staged_finalizer_rejects_symlinked_staged_artifact",
+        "test_compact_key_staged_finalizer_rejects_generator_log_digest_drift",
+        "test_compact_key_staged_finalizer_defaults_out_under_artifact_dir",
+        "test_compact_key_runner_and_finalizer_defaults_share_staging_paths",
+        "test_compact_key_staged_finalizer_cleans_partial_publish_on_copy_error",
+        "test_compact_key_staged_finalizer_verifies_published_stage_bytes",
+        "test_compact_key_staged_runner_outputs_finalize_successfully",
+        "test_compact_key_staged_runner_resume_reuses_complete_keygen",
+        "test_compact_key_staged_runner_resume_replaces_failed_keygen",
+        "test_compact_key_staged_runner_resume_rejects_symlinked_artifact",
+        "test_compact_key_staged_runner_refuses_existing_artifact_before_run",
+        "test_compact_key_staged_runner_refuses_existing_run_report_before_run",
+        "test_compact_key_staged_runner_preserves_nonzero_exit_marker",
+        "test_compact_key_staged_runner_main_reports_nonzero_conventionally",
+        "test_compact_key_staged_runner_main_errors_exit_conventionally",
+        "test_compact_key_staged_runner_atomic_write_verifies_installed_bytes",
+        "test_compact_key_staged_runner_rejects_symlinked_exit_marker",
+        "test_compact_key_staged_runner_removes_temp_log_on_spawn_failure",
+        "test_lineage_proof_staged_finalizer_publishes_validator_accepted_evidence",
+        "test_lineage_proof_staged_finalizer_rejects_missing_exit_marker",
+        "test_lineage_proof_staged_finalizer_rejects_missing_marker_before_elapsed",
+        "test_lineage_proof_staged_finalizer_rejects_nonzero_exit_marker",
+        "test_lineage_proof_staged_finalizer_rejects_partial_nonzero_stage",
+        "test_lineage_proof_staged_finalizer_rejects_nonzero_marker_before_success_inputs",
+        "test_lineage_proof_staged_finalizer_requires_run_report_on_success_marker",
+        "test_lineage_proof_staged_finalizer_rejects_run_report_exit_mismatch",
+        "test_lineage_proof_staged_finalizer_rejects_run_report_command_mismatch",
+        "test_lineage_proof_staged_finalizer_rejects_run_report_elapsed_mismatch",
+        "test_lineage_proof_staged_finalizer_rejects_run_report_log_size_drift",
+        "test_lineage_proof_staged_finalizer_rejects_run_report_missing_key_log",
+        "test_lineage_proof_staged_finalizer_rejects_run_report_key_log_size_drift",
+        "test_lineage_proof_staged_finalizer_rejects_symlinked_run_report",
+        "test_lineage_proof_staged_finalizer_rejects_hardlinked_run_report",
+        "test_lineage_proof_staged_finalizer_redacts_secret_duplicate_run_report_key",
+        "test_lineage_proof_staged_finalizer_refuses_destination_overwrite",
+        "test_lineage_proof_staged_finalizer_rejects_symlinked_staged_artifact",
+        "test_lineage_proof_staged_finalizer_rejects_bad_proof_log",
+        "test_lineage_proof_staged_finalizer_defaults_out_under_artifact_dir",
+        "test_lineage_runner_and_finalizer_defaults_share_staging_paths",
+        "test_lineage_proof_staged_finalizer_cleans_partial_publish_on_copy_error",
+        "test_lineage_proof_staged_finalizer_verifies_published_stage_bytes",
+        "test_lineage_proof_staged_runner_outputs_finalize_successfully",
+        "test_lineage_proof_staged_runner_resume_reuses_completed_init_phase",
+        "test_lineage_proof_staged_runner_resume_replaces_failed_append_phase",
+        "test_lineage_proof_staged_runner_resume_rejects_symlinked_phase_output",
+        "test_lineage_proof_staged_runner_refuses_existing_log_before_run",
+        "test_lineage_proof_staged_runner_refuses_existing_run_report_before_run",
+        "test_lineage_proof_staged_runner_preserves_nonzero_exit_marker",
+        "test_lineage_proof_staged_runner_reports_nonzero_init_keygen_phase",
+        "test_lineage_proof_staged_runner_main_reports_nonzero_without_success_paths",
+        "test_lineage_proof_staged_runner_main_errors_exit_conventionally",
+        "test_lineage_proof_staged_runner_atomic_write_verifies_installed_bytes",
+        "test_lineage_proof_staged_runner_rejects_symlinked_exit_marker",
+        "test_lineage_proof_staged_runner_removes_temp_log_on_spawn_failure",
+        "test_lineage_proof_staged_finalizer_rejects_elapsed_seconds_file_conflict",
+        "test_lineage_proof_staged_finalizer_rejects_bad_elapsed_seconds_file",
         "test_compact_key_evidence_helper_rejects_missing_artifact",
         "test_compact_key_evidence_helper_rejects_empty_artifact",
         "test_compact_key_evidence_helper_rejects_artifact_symlink_swap_after_preflight",
@@ -2247,6 +2673,9 @@ TEXT_REQUIREMENTS = {
         "test_compact_key_write_evidence_rejects_nonfinite_json_before_write",
         "test_compact_key_write_evidence_rejects_oversized_json_before_write",
         "test_compact_key_write_evidence_preserves_existing_output_on_replace_failure",
+        "test_compact_key_write_evidence_reports_temp_cleanup_failure_after_write_failure",
+        "test_compact_key_write_evidence_reports_temp_cleanup_failure_after_post_stage_validation_failure",
+        "test_compact_key_write_evidence_rejects_parent_directory_sync_failure_after_replace",
         "test_compact_key_write_evidence_rejects_readback_mismatch",
         "test_compact_key_write_evidence_rejects_readback_failure",
         "test_compact_key_write_evidence_rejects_oversized_readback_after_replace",
@@ -2256,6 +2685,7 @@ TEXT_REQUIREMENTS = {
         "test_compact_key_evidence_document_validator_rejects_artifact_dir_create_failure_after_preflight",
         "test_compact_key_evidence_document_validator_rejects_nonfinite_json_before_write",
         "test_compact_key_evidence_document_validator_rejects_temp_write_failure_after_preflight",
+        "test_compact_key_evidence_document_validator_reports_temp_cleanup_failure_after_write_failure",
         "test_compact_key_evidence_document_validator_rejects_temp_cleanup_failure",
         "test_compact_key_artifact_dir_validator_rejects_secret_path_directly",
         "test_compact_key_artifact_dir_validator_rejects_metadata_failure_directly",
@@ -2384,6 +2814,9 @@ TEXT_REQUIREMENTS = {
         "test_kagemusha_release_bundle_rejects_outside_evidence_before_scanners",
         "test_kagemusha_release_bundle_rejects_output_overwriting_evidence",
         "test_write_release_bundle_preserves_existing_output_on_replace_failure",
+        "test_write_release_bundle_reports_temp_cleanup_failure_after_write_failure",
+        "test_write_release_bundle_reports_temp_cleanup_failure_after_post_stage_validation_failure",
+        "test_write_release_bundle_rejects_parent_directory_sync_failure_after_replace",
         "test_write_release_bundle_rejects_nonfinite_manifest_before_write",
         "test_write_release_bundle_rejects_oversized_manifest_before_write",
         "test_write_release_bundle_rejects_oversized_readback_after_replace",
@@ -2446,6 +2879,7 @@ TEXT_REQUIREMENTS = {
         "test_lineage_proof_evidence_document_validator_rejects_artifact_dir_create_failure_after_preflight",
         "test_lineage_proof_evidence_document_validator_rejects_nonfinite_json_before_write",
         "test_lineage_proof_evidence_document_validator_rejects_temp_write_failure_after_preflight",
+        "test_lineage_proof_evidence_document_validator_reports_temp_cleanup_failure_after_write_failure",
         "test_lineage_proof_evidence_document_validator_rejects_temp_cleanup_failure",
         "test_lineage_proof_artifact_dir_validator_rejects_secret_path_directly",
         "test_lineage_proof_artifact_dir_validator_rejects_metadata_failure_directly",
@@ -2492,6 +2926,9 @@ TEXT_REQUIREMENTS = {
         "test_lineage_proof_write_evidence_rejects_nonfinite_json_before_write",
         "test_lineage_proof_write_evidence_rejects_oversized_json_before_write",
         "test_lineage_proof_write_evidence_preserves_existing_output_on_replace_failure",
+        "test_lineage_proof_write_evidence_reports_temp_cleanup_failure_after_write_failure",
+        "test_lineage_proof_write_evidence_reports_temp_cleanup_failure_after_post_stage_validation_failure",
+        "test_lineage_proof_write_evidence_rejects_parent_directory_sync_failure_after_replace",
         "test_lineage_proof_write_evidence_rejects_readback_mismatch",
         "test_lineage_proof_write_evidence_rejects_readback_failure",
         "test_lineage_proof_write_evidence_rejects_oversized_readback_after_replace",
@@ -2537,6 +2974,8 @@ TEXT_REQUIREMENTS = {
         "test_write_summary_rejects_oversized_readback_after_replace",
         "test_write_summary_preserves_existing_output_on_replace_failure",
         "test_write_summary_reports_temp_cleanup_failure_after_write_failure",
+        "test_write_summary_reports_temp_cleanup_failure_after_post_stage_validation_failure",
+        "test_write_summary_rejects_parent_directory_sync_failure_after_replace",
         "test_write_summary_rejects_symlink_swap_before_replace",
         "test_write_summary_rejects_readback_mismatch",
         "test_write_summary_rejects_readback_failure",
@@ -2754,11 +3193,23 @@ WORKFLOW_REQUIREMENTS = (
     '"ci/check_kagemusha_production_readiness.sh"',
     '"scripts/check_android_device_lab_slot.py"',
     '"scripts/sign_android_device_lab_evidence.py"',
+    '"scripts/kagemusha_android_device_lab_slot.py"',
+    '"scripts/kagemusha_pull_android_device_lab_raw_slot.py"',
+    '"scripts/kagemusha_android_attestation_report.py"',
+    '"scripts/android_keystore_attestation.sh"',
     '"scripts/kagemusha_production_readiness.py"',
     '"scripts/kagemusha_lineage_proof_evidence.py"',
     '"scripts/kagemusha_recursive_compact_key_evidence.py"',
+    '"scripts/kagemusha_run_lineage_proof_staged.py"',
+    '"scripts/kagemusha_run_recursive_compact_keygen_staged.py"',
+    '"scripts/kagemusha_finalize_lineage_proof_staged_run.py"',
+    '"scripts/kagemusha_finalize_recursive_compact_key_staged_run.py"',
     '"scripts/kagemusha_release_bundle.py"',
     '"scripts/tests/check_android_device_lab_slot_test.py"',
+    '"kotlin/offline-wallet-lab-app/**"',
+    '"kotlin/settings.gradle.kts"',
+    '"kotlin/gradle/libs.versions.toml"',
+    '"kotlin/offline-wallet-android/src/androidTest/java/org/hyperledger/iroha/android/offline/KagemushaDeviceLabArtifactExportTest.java"',
     '"scripts/tests/kagemusha_production_readiness_test.py"',
     '"fixtures/android/device_lab/**"',
     "python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py",
@@ -2778,6 +3229,8 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-pallas-envelope-type",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-matrix",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-test-workflow",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-instrumentation-harness",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-command-marker-specificity",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-artifact-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signed-evidence-path-root",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signed-evidence-path-canonical",
@@ -2992,6 +3445,11 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-cli-secret-paths",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-cli-secret-paths",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-command-exact",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-report",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-report-writer-physical-device",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-overwrite",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-signature-required",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-source-open-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-signed-evidence-freshness-report",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-signed-evidence-timestamp-raw",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-rollup",
@@ -3067,6 +3525,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-hardlink-metadata-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-early-preflight",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-write-failure",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-temp-cleanup-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-strict-json-write",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-readback-verification",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-readback-failure",
@@ -3077,6 +3536,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-hardlink-metadata-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-early-preflight",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-write-failure",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-temp-cleanup-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-strict-json-write",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-readback-verification",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-readback-failure",
@@ -3085,12 +3545,21 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-validation-dir-create-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-validation-strict-json-write",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-validation-temp-write-failure",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-validation-temp-cleanup-after-write-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-validation-temp-cleanup-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-direct-artifact-dir-secret-paths",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-direct-artifact-dir-metadata-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-direct-hash-shape",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-direct-hash-read-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-generator-log-strict-read",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-exit-marker",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-exit-marker",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-readback",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-readback",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-exit-marker",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-exit-marker",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-publish-readback",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-publish-readback",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-direct-secret-paths",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-direct-hash-shape",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-direct-hash-read-failure",
@@ -3102,6 +3571,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-validation-dir-create-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-validation-strict-json-write",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-validation-temp-write-failure",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-validation-temp-cleanup-after-write-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-validation-temp-cleanup-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-input-corridor",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-input-corridor-resolve-failure",
@@ -3576,6 +4046,35 @@ if mode == "--negative-control-android-device-lab-test-workflow":
             WORKFLOW_PATH,
             "python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py",
             "python3 -m unittest discover -s scripts/tests -p disabled_check_android_device_lab_slot_test.py",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-instrumentation-harness":
+    run_negative_control(
+        "Android device-lab instrumentation harness",
+        lambda: override_text(
+            "kotlin/offline-wallet-android/src/androidTest/java/org/hyperledger/iroha/android/offline/OfflineNoteTransferHandoffTest.java",
+            "nearbyQrAndNfcTokenHandoffRoundTripFixtureBytes",
+            "qrAndNfcTokenHandoffRoundTripDisabled",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-raw-command-marker-specificity":
+    run_negative_control(
+        "Android device-lab raw command marker specificity",
+        lambda: (
+            override_text(
+                "scripts/check_android_device_lab_slot.py",
+                '    "org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest",\n',
+                '    "KagemushaRecursiveSpendProverTest",\n',
+            ),
+            override_text(
+                "scripts/check_android_device_lab_slot.py",
+                '    "org.hyperledger.iroha.android.offline.OfflineNoteTransferHandoffTest",\n',
+                '    "OfflineNoteTransferHandoffTest",\n',
+            ),
         ),
     )
     raise SystemExit(0)
@@ -4892,10 +5391,17 @@ if mode == "--negative-control-android-device-lab-signed-evidence-artifact-diges
 if mode == "--negative-control-android-device-lab-signed-evidence-artifact-size-limit":
     run_negative_control(
         "Android device-lab signed evidence artifact digest size-limit gate",
-        lambda: override_text(
-            "scripts/check_android_device_lab_slot.py",
-            '            if open_stat.st_size > MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES:\n                return None, [\n                    "signed evidence artifact digest references artifact "\n                    f"{display} must be no more than "\n                    f"{MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES} bytes"\n                ]\n',
-            "",
+        lambda: (
+            override_text_all(
+                "scripts/check_android_device_lab_slot.py",
+                "open_stat.st_size > max_bytes",
+                "False",
+            ),
+            override_text_all(
+                "scripts/check_android_device_lab_slot.py",
+                "size > max_bytes",
+                "False",
+            ),
         ),
     )
     raise SystemExit(0)
@@ -4947,10 +5453,17 @@ if mode == "--negative-control-android-device-lab-metadata-artifact-digest-prefl
 if mode == "--negative-control-android-device-lab-metadata-artifact-size-limit":
     run_negative_control(
         "Android device-lab metadata artifact digest size-limit gate",
-        lambda: override_text(
-            "scripts/check_android_device_lab_slot.py",
-            '            if open_stat.st_size > MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES:\n                return None, [\n                    f"{label} references artifact {display} must be no more than "\n                    f"{MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES} bytes"\n                ]\n            size = 0\n            for chunk in iter(lambda: handle.read(1024 * 1024), b""):\n                size += len(chunk)\n                if size > MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES:\n                    return None, [\n                        f"{label} references artifact {display} must be no more than "\n                        f"{MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES} bytes"\n                    ]\n                digest_chunks.append(chunk)\n',
-            '            for chunk in iter(lambda: handle.read(1024 * 1024), b""):\n                digest_chunks.append(chunk)\n',
+        lambda: (
+            override_text_all(
+                "scripts/check_android_device_lab_slot.py",
+                "open_stat.st_size > max_bytes",
+                "False",
+            ),
+            override_text_all(
+                "scripts/check_android_device_lab_slot.py",
+                "size > max_bytes",
+                "False",
+            ),
         ),
     )
     raise SystemExit(0)
@@ -5618,10 +6131,17 @@ if mode == "--negative-control-android-device-lab-signing-helper-slot-artifact-d
 if mode == "--negative-control-android-device-lab-signing-helper-slot-artifact-size-limit":
     run_negative_control(
         "Android device-lab signed evidence helper slot artifact size-limit gate",
-        lambda: override_text(
-            "scripts/sign_android_device_lab_evidence.py",
-            "open_stat.st_size > device_lab.MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES",
-            "False",
+        lambda: (
+            override_text_all(
+                "scripts/sign_android_device_lab_evidence.py",
+                "open_stat.st_size > artifact_max_bytes",
+                "False",
+            ),
+            override_text_all(
+                "scripts/sign_android_device_lab_evidence.py",
+                "size > artifact_max_bytes",
+                "False",
+            ),
         ),
     )
     raise SystemExit(0)
@@ -5684,10 +6204,17 @@ if mode == "--negative-control-android-device-lab-manifest-artifact-digest-prefl
 if mode == "--negative-control-android-device-lab-manifest-artifact-size-limit":
     run_negative_control(
         "Android device-lab manifest artifact size-limit gate",
-        lambda: override_text_all(
-            "scripts/check_android_device_lab_slot.py",
-            "open_stat.st_size > MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES",
-            "False",
+        lambda: (
+            override_text_all(
+                "scripts/check_android_device_lab_slot.py",
+                "open_stat.st_size > max_bytes",
+                "False",
+            ),
+            override_text_all(
+                "scripts/check_android_device_lab_slot.py",
+                "size > max_bytes",
+                "False",
+            ),
         ),
     )
     raise SystemExit(0)
@@ -5974,6 +6501,61 @@ if mode == "--negative-control-android-device-lab-raw-command-exact":
             "scripts/check_android_device_lab_slot.py",
             "must exactly match the Kagemusha Android production raw test command",
             "may contain Kagemusha Android production raw test command markers",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-attestation-report":
+    run_negative_control(
+        "Android device-lab attestation verifier report gate",
+        lambda: override_text(
+            "scripts/check_android_device_lab_slot.py",
+            "validate_attestation_report(slot_path, metadata, errors)",
+            "validate_attestation_result(slot_path, metadata, errors)",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-attestation-report-writer-physical-device":
+    run_negative_control(
+        "Android attestation report writer physical-device assertion gate",
+        lambda: override_text(
+            "scripts/kagemusha_android_attestation_report.py",
+            "physical device attestation must be explicitly asserted with",
+            "physical device attestation is optional for local reports",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-raw-puller-overwrite":
+    run_negative_control(
+        "Android raw puller overwrite refusal gate",
+        lambda: override_text(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            "slot directory already exists; refuse to overwrite raw evidence",
+            "slot directory already exists; replacing raw evidence",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-slot-assembler-signature-required":
+    run_negative_control(
+        "Android device-lab slot assembler signing-required gate",
+        lambda: override_text(
+            "scripts/kagemusha_android_device_lab_slot.py",
+            "signing inputs are required unless --allow-unsigned is set",
+            "signing inputs are optional by default",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-slot-assembler-source-open-binding":
+    run_negative_control(
+        "Android device-lab slot assembler source open-path binding",
+        lambda: override_text(
+            "scripts/kagemusha_android_device_lab_slot.py",
+            "open_identity != expected_identity or path_identity != expected_identity",
+            "False",
         ),
     )
     raise SystemExit(0)
@@ -6946,6 +7528,17 @@ if mode == "--negative-control-lineage-proof-helper-output-write-failure":
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-lineage-proof-helper-output-temp-cleanup-failure":
+    run_negative_control(
+        "Reserved-lineage proof evidence helper output temp cleanup-failure gate",
+        lambda: override_text(
+            "scripts/kagemusha_lineage_proof_evidence.py",
+            '    except OSError:\n        return ["--out temporary file could not be removed"]\n',
+            "    except OSError:\n        return []\n",
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-lineage-proof-helper-strict-json-write":
     run_negative_control(
         "Reserved-lineage proof evidence helper strict JSON writer",
@@ -7090,6 +7683,17 @@ if mode == "--negative-control-compact-key-helper-output-write-failure":
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-compact-key-helper-output-temp-cleanup-failure":
+    run_negative_control(
+        "ABI-7 recursive compact key evidence helper output temp cleanup-failure gate",
+        lambda: override_text(
+            "scripts/kagemusha_recursive_compact_key_evidence.py",
+            '    except OSError:\n        return ["--out temporary file could not be removed"]\n',
+            "    except OSError:\n        return []\n",
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-compact-key-helper-strict-json-write":
     run_negative_control(
         "ABI-7 recursive compact key evidence helper strict JSON writer",
@@ -7203,6 +7807,17 @@ if mode == "--negative-control-compact-key-helper-validation-temp-write-failure"
             "scripts/kagemusha_recursive_compact_key_evidence.py",
             "recursive compact key evidence validation file could not be written",
             "recursive compact key evidence validation file write failures ignored",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-compact-key-helper-validation-temp-cleanup-after-write-failure":
+    run_negative_control(
+        "ABI-7 recursive compact key evidence helper validation temp cleanup after write-failure gate",
+        lambda: override_text(
+            "scripts/kagemusha_recursive_compact_key_evidence.py",
+            '                errors.append(\n                    "recursive compact key evidence validation file could not be removed"\n                )\n',
+            "                pass\n",
         ),
     )
     raise SystemExit(0)
@@ -7401,6 +8016,17 @@ if mode == "--negative-control-lineage-proof-helper-validation-temp-write-failur
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-lineage-proof-helper-validation-temp-cleanup-after-write-failure":
+    run_negative_control(
+        "Reserved-lineage proof evidence helper validation temp cleanup after write-failure gate",
+        lambda: override_text(
+            "scripts/kagemusha_lineage_proof_evidence.py",
+            '                errors.append("lineage proof evidence validation file could not be removed")\n',
+            "                pass\n",
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-lineage-proof-helper-validation-temp-cleanup-failure":
     run_negative_control(
         "Reserved-lineage proof evidence helper validation temp cleanup-failure gate",
@@ -7448,6 +8074,94 @@ if mode == "--negative-control-lineage-proof-helper-output-corridor-resolve-fail
             "scripts/kagemusha_lineage_proof_evidence.py",
             "path_errors.extend(validate_output_corridor(out_path, artifact_dir))",
             'if out_path.resolve().parent != artifact_dir.resolve():\n        path_errors.append("--out must be written directly under --artifact-dir")',
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-compact-key-finalizer-exit-marker":
+    run_negative_control(
+        "ABI-7 recursive compact key staged finalizer exit-marker gate",
+        lambda: override_text(
+            "scripts/kagemusha_finalize_recursive_compact_key_staged_run.py",
+            "staged keygen exit code must be 0",
+            "staged keygen exit code is advisory",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-lineage-proof-finalizer-exit-marker":
+    run_negative_control(
+        "Reserved-lineage proof staged finalizer exit-marker gate",
+        lambda: override_text(
+            "scripts/kagemusha_finalize_lineage_proof_staged_run.py",
+            "staged lineage proof exit code must be 0",
+            "staged lineage proof exit code is advisory",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-compact-key-finalizer-publish-readback":
+    run_negative_control(
+        "ABI-7 recursive compact key staged finalizer publish readback",
+        lambda: override_text(
+            "scripts/kagemusha_finalize_recursive_compact_key_staged_run.py",
+            "verify_errors = _verify_published_file(",
+            "verify_errors = _trust_published_file(",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-lineage-proof-finalizer-publish-readback":
+    run_negative_control(
+        "Reserved-lineage proof staged finalizer publish readback",
+        lambda: override_text(
+            "scripts/kagemusha_finalize_lineage_proof_staged_run.py",
+            "verify_errors = _verify_published_file(",
+            "verify_errors = _trust_published_file(",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-lineage-proof-staged-runner-exit-marker":
+    run_negative_control(
+        "Reserved-lineage proof staged runner exit-marker preservation",
+        lambda: override_text(
+            "scripts/kagemusha_run_lineage_proof_staged.py",
+            'f"{exit_code}\\n"',
+            '"0\\n"',
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-lineage-proof-staged-runner-readback":
+    run_negative_control(
+        "Reserved-lineage proof staged runner metadata readback",
+        lambda: override_text(
+            "scripts/kagemusha_run_lineage_proof_staged.py",
+            "return _verify_written_text_file(path, expected_bytes, label)",
+            "return []",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-compact-key-staged-runner-exit-marker":
+    run_negative_control(
+        "ABI-7 recursive compact key staged runner exit-marker preservation",
+        lambda: override_text(
+            "scripts/kagemusha_run_recursive_compact_keygen_staged.py",
+            'f"{exit_code}\\n"',
+            '"0\\n"',
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-compact-key-staged-runner-readback":
+    run_negative_control(
+        "ABI-7 recursive compact key staged runner metadata readback",
+        lambda: override_text(
+            "scripts/kagemusha_run_recursive_compact_keygen_staged.py",
+            "return _verify_written_text_file(path, expected_bytes, label)",
+            "return []",
         ),
     )
     raise SystemExit(0)

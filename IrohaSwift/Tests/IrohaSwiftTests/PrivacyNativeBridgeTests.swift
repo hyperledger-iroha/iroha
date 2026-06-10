@@ -5,7 +5,7 @@ import XCTest
 final class PrivacyNativeBridgeTests: XCTestCase {
     func testExportsStableFfiVersion() {
         XCTAssertEqual(PrivacyNativeBridge.ffiVersionV1, 1)
-        XCTAssertEqual(PrivacyNativeBridge.requiredBridgeAbiVersion, 6)
+        XCTAssertEqual(PrivacyNativeBridge.requiredBridgeAbiVersion, 7)
         XCTAssertEqual(PrivacyNativeBridge.privacyNativeArchiveMaxBytes, 64 * 1024 * 1024)
         XCTAssertEqual(PrivacyNativeBridge.ffiStatusError, 1)
         XCTAssertEqual(PrivacyNativeBridge.ffiErrorNullPointer, 1)
@@ -224,6 +224,7 @@ final class PrivacyNativeBridgeTests: XCTestCase {
             ("build", PrivacyNativeBridge.buildProofV1),
             ("confidential transfer", PrivacyNativeBridge.buildConfidentialTransferProofV2),
             ("confidential unshield", PrivacyNativeBridge.buildConfidentialUnshieldProofV3),
+            ("ZK-ACE authorization", PrivacyNativeBridge.buildZkAceAuthorizationProofV1),
             ("verify", PrivacyNativeBridge.verifyProofV1)
         ]
 

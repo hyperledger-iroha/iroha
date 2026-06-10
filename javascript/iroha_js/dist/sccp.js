@@ -8380,8 +8380,8 @@ const normalizeEthereumMainnetNativeEvmProverSdkArtifact = (
     `${label}.sdk`,
     "sdk",
   );
-  if (typeof sdk !== "string" || sdk.length === 0) {
-    throw new TypeError(`${label}.sdk must be a non-empty string`);
+  if (typeof sdk !== "string" || sdk.length === 0 || sdk.trim() !== sdk) {
+    throw new TypeError(`${label}.sdk must be a non-empty canonical string`);
   }
   const expectedImplementation =
     SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1[sdk];
@@ -10152,9 +10152,9 @@ const verifyNativeEvmProverArtifacts = (
     "nativeImplementationBytes",
     "native_implementation_bytes",
   );
-  if (typeof sdk !== "string" || sdk.length === 0) {
+  if (typeof sdk !== "string" || sdk.length === 0 || sdk.trim() !== sdk) {
     throw new TypeError(
-      "sdk must be a non-empty string for nativeProverBundle implementation binding",
+      "sdk must be a non-empty canonical string for nativeProverBundle implementation binding",
     );
   }
   if (implementationBytes === undefined) {
@@ -10289,9 +10289,9 @@ const verifyNativeEvmProverArtifactsFromBundle = async (
           profile,
         });
   const sdk = strictOptionalResultField(input, "sdk", "sdk");
-  if (typeof sdk !== "string" || sdk.length === 0) {
+  if (typeof sdk !== "string" || sdk.length === 0 || sdk.trim() !== sdk) {
     throw new TypeError(
-      "sdk must be a non-empty string for nativeProverBundle implementation binding",
+      "sdk must be a non-empty canonical string for nativeProverBundle implementation binding",
     );
   }
   const resolver = strictOptionalResultField(
@@ -10626,8 +10626,10 @@ const normalizeVerifiedNativeEvmProverArtifacts = (
           implementationHashInput,
           "nativeProverArtifacts.implementationHash",
         );
-  if (typeof sdk !== "string" || sdk.length === 0) {
-    throw new TypeError("nativeProverArtifacts.sdk must be a non-empty string");
+  if (typeof sdk !== "string" || sdk.length === 0 || sdk.trim() !== sdk) {
+    throw new TypeError(
+      "nativeProverArtifacts.sdk must be a non-empty canonical string",
+    );
   }
   if (implementation === SCCP_OPTIONAL_FIELD_MISSING) {
     throw new TypeError("nativeProverArtifacts.implementation is required");
@@ -10755,6 +10757,7 @@ const requireVerifiedNativeEvmProverArtifactsForRequest = (
   if (
     typeof artifacts.sdk !== "string" ||
     artifacts.sdk.length === 0 ||
+    artifacts.sdk.trim() !== artifacts.sdk ||
     typeof artifacts.implementation !== "string" ||
     artifacts.implementation.length === 0 ||
     typeof artifacts.implementationHash !== "string"
@@ -10891,6 +10894,7 @@ const requireVerifiedNativeEvmProverArtifactsForProofResult = (
   if (
     typeof artifacts.sdk !== "string" ||
     artifacts.sdk.length === 0 ||
+    artifacts.sdk.trim() !== artifacts.sdk ||
     typeof artifacts.implementation !== "string" ||
     artifacts.implementation.length === 0 ||
     typeof artifacts.implementationHash !== "string"
@@ -10958,6 +10962,11 @@ const normalizeEthereumMainnetNativeProverSelfTestResult = (
     );
   }
   const sdk = artifacts.sdk;
+  if (typeof sdk !== "string" || sdk.length === 0 || sdk.trim() !== sdk) {
+    throw new TypeError(
+      "nativeProverArtifacts.sdk must be a non-empty canonical string",
+    );
+  }
   const expected = artifacts.nativeProverSelfTest.sdkResults?.[sdk];
   if (expected == null) {
     throw new TypeError(`nativeProverSelfTest sdkResults missing sdk: ${sdk}`);
@@ -10984,6 +10993,11 @@ const requireEthereumMainnetNativeProverSelfTest = async (
     throw error;
   }
   const sdk = artifacts.sdk;
+  if (typeof sdk !== "string" || sdk.length === 0 || sdk.trim() !== sdk) {
+    throw new TypeError(
+      "nativeProverArtifacts.sdk must be a non-empty canonical string",
+    );
+  }
   const expectedResult = artifacts.nativeProverSelfTest?.sdkResults?.[sdk];
   if (expectedResult == null) {
     throw new TypeError(`nativeProverSelfTest sdkResults missing sdk: ${sdk}`);

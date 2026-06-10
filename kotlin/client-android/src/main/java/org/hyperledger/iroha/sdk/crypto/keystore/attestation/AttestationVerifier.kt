@@ -93,7 +93,7 @@ class AttestationVerifier private constructor(
         }
 
         val certPath = try {
-            factory.generateCertPath(chain)
+            factory.generateCertPath(certificatesForPath(chain))
         } catch (ex: CertificateException) {
             throw AttestationVerificationException("Failed to construct attestation CertPath", ex)
         }
@@ -123,6 +123,29 @@ class AttestationVerifier private constructor(
             )
         }
     }
+
+    private fun certificatesForPath(chain: List<X509Certificate>): List<X509Certificate> {
+        if (chain.size < 2) {
+            return chain
+        }
+        val trailingCertificate = chain[chain.size - 1]
+        for (anchor in trustAnchors) {
+            val trusted = anchor.trustedCert
+            if (trusted != null && sameTrustAnchorCertificate(trailingCertificate, trusted)) {
+                // The configured trust anchor is not part of the PKIX CertPath. Android
+                // attestation exports often include it as the final chain entry.
+                return chain.dropLast(1)
+            }
+        }
+        return chain
+    }
+
+    private fun sameTrustAnchorCertificate(
+        certificate: X509Certificate,
+        trusted: X509Certificate,
+    ): Boolean =
+        certificate.subjectX500Principal == trusted.subjectX500Principal &&
+            certificate.publicKey == trusted.publicKey
 
     private fun parseKeyDescription(leaf: X509Certificate): KeyDescription {
         val extension = leaf.getExtensionValue(ATTESTATION_OID)

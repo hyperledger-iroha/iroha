@@ -60,6 +60,10 @@ RESERVED_PLACEHOLDER_HOST_SUFFIXES = {
 TEMPLATE_CANARY_ENDPOINT_HOSTS = {
     "operator-canary.bank",
 }
+REPOSITORY_XML_FIXTURE_PARTS = (
+    "fixtures",
+    "iso20022",
+)
 NAT64_WELL_KNOWN_PREFIX = ipaddress.ip_network("64:ff9b::/96")
 IPV4_COMPATIBLE_IPV6_PREFIX = ipaddress.ip_network("::/96")
 SECRET_VALUE_PATTERNS = [
@@ -441,6 +445,7 @@ def _preflight_numeric_cli_values(
 
 def _ensure_text_output_target(path: Path) -> None:
     _reject_output_path_smuggling(path, "output path")
+    _reject_repository_iso_fixture_path(path, "output path")
     _reject_symlinked_existing_ancestors(path.parent)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -883,6 +888,34 @@ def _path_from_config(
     return resolved_parent / candidate.name
 
 
+def _path_contains_component_sequence(raw: str, components: tuple[str, ...]) -> bool:
+    parts = [part.casefold() for part in raw.split("/") if part]
+    target = [part.casefold() for part in components]
+    if len(parts) < len(target):
+        return False
+    last_start = len(parts) - len(target)
+    return any(
+        parts[offset : offset + len(target)] == target
+        for offset in range(last_start + 1)
+    )
+
+
+def _path_is_repository_iso_fixture(raw: str) -> bool:
+    return _path_contains_component_sequence(raw, REPOSITORY_XML_FIXTURE_PARTS)
+
+
+def _reject_repository_iso_fixture_path(path: Path, label: str) -> None:
+    if _path_is_repository_iso_fixture(str(path)):
+        raise CanaryError(
+            f"{label} must not point to checked-in ISO fixture artifacts"
+        )
+
+
+def _reject_repository_iso_fixture_paths(paths: list[Path], label: str) -> None:
+    for offset, path in enumerate(paths):
+        _reject_repository_iso_fixture_path(path, f"{label}[{offset}]")
+
+
 def _validate_endpoint_url(
     url: str,
     label: str,
@@ -1158,6 +1191,7 @@ def _build_rail_stage(
     *,
     require_explicit_policy: bool,
     allow_template_canary_endpoints: bool,
+    allow_repository_fixture_paths: bool,
 ) -> StagePlan:
     rail = _require_object(raw, "rail")
     _reject_unknown_keys(rail, RAIL_KEYS, "rail")
@@ -1192,6 +1226,11 @@ def _build_rail_stage(
         if receipt_dir_raw is not None
         else inbox_dir / "receipts"
     )
+    if not allow_repository_fixture_paths:
+        _reject_repository_iso_fixture_path(inbox_dir, "rail.inbox_dir")
+        if message_path is not None:
+            _reject_repository_iso_fixture_path(message_path, "rail.message")
+        _reject_repository_iso_fixture_path(receipt_dir, "rail.receipt_dir")
     bearer_raw = _optional_string(rail, "bearer_token_file", "rail")
     bearer_token_file = (
         _path_from_config(
@@ -1247,6 +1286,7 @@ def _build_notary_stage(
     *,
     require_explicit_policy: bool,
     allow_template_canary_endpoints: bool,
+    allow_repository_fixture_paths: bool,
 ) -> StagePlan:
     notary = _require_object(raw, "notary")
     _reject_unknown_keys(notary, NOTARY_KEYS, "notary")
@@ -1289,6 +1329,9 @@ def _build_notary_stage(
         if receipt_dir_raw is not None
         else export_dir / "receipts"
     )
+    if not allow_repository_fixture_paths:
+        _reject_repository_iso_fixture_path(export_dir, "notary.export_dir")
+        _reject_repository_iso_fixture_path(receipt_dir, "notary.receipt_dir")
     bearer_raw = _optional_string(notary, "bearer_token_file", "notary")
     bearer_token_file = (
         _path_from_config(
@@ -1344,6 +1387,7 @@ def _build_verify_stage(
     *,
     prior_failure: bool,
     require_explicit_policy: bool,
+    allow_repository_fixture_paths: bool,
 ) -> StagePlan | None:
     if require_explicit_policy and raw is None:
         raise CanaryError("verify must be configured when --require-explicit-policy is used")
@@ -1403,6 +1447,9 @@ def _build_verify_stage(
             )
         )
     ]
+    if not allow_repository_fixture_paths:
+        _reject_repository_iso_fixture_paths(receipt_dirs, "verify.receipt_dirs")
+        _reject_repository_iso_fixture_paths(receipts, "verify.receipts")
     _reject_duplicate_paths(receipt_dirs, "verify.receipt_dirs")
     _reject_duplicate_paths(receipts, "verify.receipts")
     _reject_receipts_covered_by_dirs(receipts, receipt_dirs)
@@ -1716,6 +1763,7 @@ def build_stage_plans(
     *,
     require_explicit_policy: bool,
     allow_template_canary_endpoints: bool,
+    allow_repository_fixture_paths: bool,
 ) -> tuple[str, str, list[StagePlan], Any]:
     """Validate a runbook and return provider metadata plus non-verify stages."""
 
@@ -1723,6 +1771,8 @@ def build_stage_plans(
     provider = _required_context_string(config, "provider", "config")
     environment = _required_context_string(config, "environment", "config")
     config_dir = config_path.resolve().parent
+    if not allow_repository_fixture_paths:
+        _reject_repository_iso_fixture_path(config_path, "config path")
 
     stages: list[StagePlan] = []
     if "rail" in config:
@@ -1732,6 +1782,7 @@ def build_stage_plans(
                 config["rail"],
                 require_explicit_policy=require_explicit_policy,
                 allow_template_canary_endpoints=allow_template_canary_endpoints,
+                allow_repository_fixture_paths=allow_repository_fixture_paths,
             )
         )
     if "notary" in config:
@@ -1741,6 +1792,7 @@ def build_stage_plans(
                 config["notary"],
                 require_explicit_policy=require_explicit_policy,
                 allow_template_canary_endpoints=allow_template_canary_endpoints,
+                allow_repository_fixture_paths=allow_repository_fixture_paths,
             )
         )
     if not stages:
@@ -1753,7 +1805,15 @@ def build_stage_plans(
 
 
 def run(args: argparse.Namespace) -> int:
+    if args.config is None:
+        raise CanaryError("provide --config")
+    if args.summary_out is not None:
+        _reject_output_path_smuggling(args.summary_out, "output path")
+        _reject_repository_iso_fixture_path(args.summary_out, "output path")
     config_path = args.config
+    _reject_output_path_smuggling(config_path, "--config")
+    if not args.plan_only:
+        _reject_repository_iso_fixture_path(config_path, "config path")
     config = _require_object(_load_json(config_path), "config")
     resolved_config_path = config_path.resolve()
     provider, environment, stages, verify_config = build_stage_plans(
@@ -1761,6 +1821,7 @@ def run(args: argparse.Namespace) -> int:
         config,
         require_explicit_policy=args.require_explicit_policy,
         allow_template_canary_endpoints=args.plan_only,
+        allow_repository_fixture_paths=args.plan_only,
     )
     if (
         isinstance(args.output_limit_bytes, bool)
@@ -1787,6 +1848,7 @@ def run(args: argparse.Namespace) -> int:
             stage_receipt_dirs,
             prior_failure=False,
             require_explicit_policy=args.require_explicit_policy,
+            allow_repository_fixture_paths=True,
         )
         planned_stages = [_plan_to_json(stage) for stage in stages]
         if verify_stage is not None:
@@ -1829,6 +1891,7 @@ def run(args: argparse.Namespace) -> int:
         stage_receipt_dirs,
         prior_failure=prior_failure,
         require_explicit_policy=args.require_explicit_policy,
+        allow_repository_fixture_paths=False,
     )
     if verify_stage is not None:
         if not verify_stage.argv:

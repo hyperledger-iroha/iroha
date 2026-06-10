@@ -87,6 +87,12 @@ PRIVACY_PRODUCTION_SDK_ENTRYPOINT_SURFACES = (
     "swift",
     "csharp",
 )
+PRIVACY_PRODUCTION_SDK_PARITY_ARTIFACT_KINDS = (
+    "types",
+    "validation_rules",
+    "error_codes",
+    "golden_vectors",
+)
 PRIVACY_PRODUCTION_EVIDENCE_ROW_KEYS = frozenset(
     (
         "version",
@@ -98,6 +104,7 @@ PRIVACY_PRODUCTION_EVIDENCE_ROW_KEYS = frozenset(
         "proof_family",
         "public_inputs_schema",
         "sdk_entrypoints",
+        "sdk_parity_artifacts",
         "required_state",
         "fuzz_results",
         "performance_results",
@@ -2884,6 +2891,33 @@ def _privacy_evidence_sdk_entrypoints(
     return expected
 
 
+def _privacy_evidence_sdk_parity_artifacts(
+    value: Any,
+) -> dict[str, dict[str, dict[str, str]]] | None:
+    if not isinstance(value, Mapping):
+        return None
+    if set(value) != set(PRIVACY_PRODUCTION_SDK_PARITY_ARTIFACT_KINDS):
+        return None
+    result: dict[str, dict[str, dict[str, str]]] = {}
+    for kind in PRIVACY_PRODUCTION_SDK_PARITY_ARTIFACT_KINDS:
+        artifacts_for_kind = value.get(kind)
+        if not isinstance(artifacts_for_kind, Mapping):
+            return None
+        if set(artifacts_for_kind) != set(PRIVACY_PRODUCTION_SDK_ENTRYPOINT_SURFACES):
+            return None
+        result[kind] = {}
+        for surface in PRIVACY_PRODUCTION_SDK_ENTRYPOINT_SURFACES:
+            artifact = _privacy_evidence_artifact(artifacts_for_kind.get(surface))
+            if artifact is None:
+                return None
+            if _entrypoint_is_dev_fixture(artifact["label"]) or _entrypoint_is_dev_fixture(
+                artifact["uri"]
+            ):
+                return None
+            result[kind][surface] = artifact
+    return result
+
+
 def _privacy_evidence_required_state_matches(
     value: Any,
     descriptor: Mapping[str, Any],
@@ -3044,6 +3078,11 @@ def _privacy_trusted_production_evidence(
         descriptor,
     )
     if sdk_entrypoints is None:
+        return None
+    sdk_parity_artifacts = _privacy_evidence_sdk_parity_artifacts(
+        source.get("sdk_parity_artifacts")
+    )
+    if sdk_parity_artifacts is None:
         return None
     if not _privacy_evidence_required_state_matches(
         source.get("required_state"),
@@ -4783,6 +4822,13 @@ def privacy_capabilities(
     zk_ace_rotate = _callable_on_instruction("rotate_zk_ace_identity_commitment")
     zk_ace_revoke = _callable_on_instruction("revoke_zk_ace_identity_commitment")
     zk_ace_transfer = _callable_on_instruction("zk_ace_authorized_transfer")
+    verify_proof = _callable_on_instruction("verify_proof")
+    asset_hidden_pool_registration = _callable_on_instruction(
+        "register_asset_hidden_zk_pool"
+    )
+    asset_hidden_transfer = _callable_on_instruction(
+        "asset_hidden_zk_transfer_prepared"
+    )
     zk_ace_prover = _callable_on_crypto(
         "build_zk_ace_authorization_proof_v1"
     ) and _callable_on_crypto("zk_ace_build_transfer_authorization_v1")
@@ -4932,6 +4978,19 @@ def privacy_capabilities(
         and zk_ace_revoke_available
         and zk_ace_transfer_available
     )
+    asset_hidden_pool_registration_available = (
+        asset_hidden_pool_registration
+        and _callable_on_client(
+            client,
+            "register_asset_hidden_zk_pool_and_wait",
+            default=True,
+        )
+    )
+    asset_hidden_transfer_available = asset_hidden_transfer and _callable_on_client(
+        client,
+        "asset_hidden_zk_transfer_prepared_and_wait",
+        default=True,
+    )
 
     return {
         "python_sdk_available": True,
@@ -4953,6 +5012,8 @@ def privacy_capabilities(
         "unshield_instruction": _callable_on_client(
             client, "unshield_prepared_and_wait", default=True
         ),
+        "verify_proof_instruction": verify_proof
+        and _callable_on_client(client, "verify_proof_and_wait", default=True),
         "zk_ace_register_identity_instruction": zk_ace_register_available,
         "zk_ace_rotate_identity_instruction": zk_ace_rotate_available,
         "zk_ace_revoke_identity_instruction": zk_ace_revoke_available,
@@ -5011,8 +5072,8 @@ def privacy_capabilities(
         "sis_hints_credential_sdk_exports_v0": sis_hints_credential_sdk_exports,
         "confidential_transfer_proof_v2": confidential_transfer_proof_v2,
         "confidential_unshield_proof_v3": confidential_unshield_proof_v3,
-        "asset_hidden_transfer_instruction": False,
-        "asset_hidden_pool_registration_instruction": False,
+        "asset_hidden_transfer_instruction": asset_hidden_transfer_available,
+        "asset_hidden_pool_registration_instruction": asset_hidden_pool_registration_available,
         "asset_hidden_transfer_proof_v1": False,
         "stark_proof_family": True,
         "ml_dsa_authorization": _ml_dsa_available(),

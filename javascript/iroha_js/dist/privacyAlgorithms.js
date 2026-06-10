@@ -549,6 +549,12 @@ const PRIVACY_PRODUCTION_SDK_ENTRYPOINT_SURFACES = Object.freeze([
   "swift",
   "csharp",
 ]);
+const PRIVACY_PRODUCTION_SDK_PARITY_ARTIFACT_KINDS = Object.freeze([
+  "types",
+  "validation_rules",
+  "error_codes",
+  "golden_vectors",
+]);
 const PRIVACY_PRODUCTION_EVIDENCE_ROW_KEYS = Object.freeze([
   "version",
   "covered_algorithm_id",
@@ -559,6 +565,7 @@ const PRIVACY_PRODUCTION_EVIDENCE_ROW_KEYS = Object.freeze([
   "proof_family",
   "public_inputs_schema",
   "sdk_entrypoints",
+  "sdk_parity_artifacts",
   "required_state",
   "fuzz_results",
   "performance_results",
@@ -575,6 +582,7 @@ const PRIVACY_PRODUCTION_EVIDENCE_KEY_MAP = Object.freeze({
   proofFamily: "proof_family",
   publicInputsSchema: "public_inputs_schema",
   sdkEntrypoints: "sdk_entrypoints",
+  sdkParityArtifacts: "sdk_parity_artifacts",
   requiredState: "required_state",
   fuzzResults: "fuzz_results",
   performanceResults: "performance_results",
@@ -2395,6 +2403,44 @@ function evidenceSdkEntrypoints(value, descriptor) {
   return expected;
 }
 
+function evidenceSdkParityArtifacts(value) {
+  if (
+    !isPlainObject(value) ||
+    !setEquals(
+      new Set(Object.keys(value)),
+      new Set(PRIVACY_PRODUCTION_SDK_PARITY_ARTIFACT_KINDS),
+    )
+  ) {
+    return null;
+  }
+  const result = {};
+  for (const kind of PRIVACY_PRODUCTION_SDK_PARITY_ARTIFACT_KINDS) {
+    const artifactsForKind = value[kind];
+    if (
+      !isPlainObject(artifactsForKind) ||
+      !setEquals(
+        new Set(Object.keys(artifactsForKind)),
+        new Set(PRIVACY_PRODUCTION_SDK_ENTRYPOINT_SURFACES),
+      )
+    ) {
+      return null;
+    }
+    result[kind] = {};
+    for (const surface of PRIVACY_PRODUCTION_SDK_ENTRYPOINT_SURFACES) {
+      const artifact = evidenceArtifact(artifactsForKind[surface]);
+      if (
+        artifact === null ||
+        entrypointIsDevFixture(artifact.label) ||
+        entrypointIsDevFixture(artifact.uri)
+      ) {
+        return null;
+      }
+      result[kind][surface] = artifact;
+    }
+  }
+  return result;
+}
+
 function evidenceRequiredStateMatches(value, descriptor) {
   const requiredState = evidenceStringList(value);
   const expected = descriptor.requiredState ?? [];
@@ -2572,6 +2618,10 @@ function trustedProductionEvidence(descriptor, evidenceRows, options = undefined
   }
   const sdkEntrypoints = evidenceSdkEntrypoints(source.sdk_entrypoints, descriptor);
   if (sdkEntrypoints === null) {
+    return null;
+  }
+  const sdkParityArtifacts = evidenceSdkParityArtifacts(source.sdk_parity_artifacts);
+  if (sdkParityArtifacts === null) {
     return null;
   }
   if (!evidenceRequiredStateMatches(source.required_state, descriptor)) {

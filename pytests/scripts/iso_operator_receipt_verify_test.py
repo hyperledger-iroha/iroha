@@ -568,6 +568,53 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                 self.assertNotIn(decoded_secret, message)
                 self.assertNotIn("receipt-path-leak", message)
 
+    def test_cli_receipt_selectors_reject_repository_fixture_artifacts(self):
+        cases = (
+            (
+                "--receipt",
+                Path("fixtures/iso20022/receipts/rail.receipt.json"),
+            ),
+            (
+                "--receipt-dir",
+                Path("fixtures/iso20022/receipts"),
+            ),
+        )
+        for flag, path in cases:
+            with self.subTest(flag=flag):
+                with self.assertRaisesRegex(
+                    VERIFIER.ReceiptError,
+                    f"{flag} must not point to checked-in ISO fixture artifacts",
+                ):
+                    VERIFIER._preflight_cli_paths([flag, str(path)], {flag})
+
+    def test_receipt_selectors_reject_repository_fixture_before_discovery(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            cases = (
+                (
+                    "--receipt",
+                    root / "fixtures" / "iso20022" / "receipts" / "rail.receipt.json",
+                ),
+                (
+                    "--receipt-dir",
+                    root / "fixtures" / "iso20022" / "receipts",
+                ),
+            )
+            for flag, path in cases:
+                with self.subTest(flag=flag):
+                    rc, stdout, stderr = run_verify(
+                        [flag, str(path), "--allow-insecure-http"]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(
+                        f"{flag} must not point to checked-in ISO fixture artifacts",
+                        stderr,
+                    )
+                    self.assertNotIn("does not exist", stderr)
+                    self.assertFalse((root / "fixtures").exists())
+
     def test_local_path_validators_reject_percent_encoded_smuggling(self):
         overlong_path = "out/" + ("a" * (VERIFIER.MAX_LOCAL_PATH_CHARS + 1))
         cases = (
@@ -821,6 +868,24 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                         )
                     ),
                 )
+                if receipt["receipt_kind"] == "iso-audit-notary":
+                    self.assertEqual(receipt["anchor_path"], raw_receipt["anchor_path"])
+                    anchor = json.loads(
+                        Path(raw_receipt["anchor_path"]).read_text(encoding="utf-8")
+                    )
+                    anchor_path = Path(raw_receipt["anchor_path"])
+                    export_dir = (
+                        anchor_path.parent.parent
+                        if anchor_path.parent.name == audit_test.ADAPTER.ANCHOR_DIR
+                        else anchor_path.parent
+                    )
+                    self.assertEqual(receipt["store_dir"], anchor["store_dir"])
+                    self.assertEqual(
+                        receipt["index_path"],
+                        str(export_dir / audit_test.ADAPTER.INDEX_FILE),
+                    )
+                if receipt["receipt_kind"] == "iso-rail-gateway":
+                    self.assertEqual(receipt["source_path"], raw_receipt["xml_path"])
             body = dict(summary)
             digest = body.pop("summary_sha256")
             self.assertEqual(
@@ -3198,6 +3263,11 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                 "store_dir must not contain whitespace",
             ),
             (
+                "anchor_store_dir_checked_in_fixture",
+                malformed_anchor_store_dir("/ops/release/fixtures/iso20022/notary-store"),
+                "store_dir must not point to checked-in ISO fixture artifacts",
+            ),
+            (
                 "anchor_store_dir_dash",
                 malformed_anchor_store_dir("--store"),
                 "store_dir must not start with a dash",
@@ -3367,6 +3437,20 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                 "anchor_path must not contain dot or parent segments",
             ),
             (
+                "anchor_path_checked_in_fixture",
+                lambda receipt, latest, digest_anchor, index_file: rewrite_receipt(
+                    receipt,
+                    lambda body: body.update(
+                        {
+                            "anchor_path": (
+                                "/ops/release/fixtures/iso20022/latest.notary.json"
+                            )
+                        }
+                    ),
+                ),
+                "anchor_path must not point to checked-in ISO fixture artifacts",
+            ),
+            (
                 "published_at_whitespace",
                 lambda receipt, latest, digest_anchor, index_file: rewrite_receipt(
                     receipt,
@@ -3501,6 +3585,54 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
 
                     self.assertEqual(rc, 2)
                     self.assertIn(expected, stderr)
+
+    def test_rail_xml_path_rejects_checked_in_iso_fixtures(self):
+        checked_in_fixture = REPO_ROOT / "fixtures" / "iso20022" / "pacs008_fixture.xml"
+        cases = (
+            "fixtures/iso20022/pacs008_fixture.xml",
+            str(checked_in_fixture),
+            "/ops/release/fixtures/iso20022/pacs008_fixture.xml",
+        )
+        with tempfile.TemporaryDirectory() as raw_inbox:
+            inbox = Path(raw_inbox)
+            rail_test.write_message(inbox)
+            with rail_test.capture_server() as (base_url, _requests):
+                self.assertEqual(
+                    rail_test.run_main(
+                        [
+                            "--inbox-dir",
+                            str(inbox),
+                            "--torii-base-url",
+                            base_url,
+                            "--allow-insecure-http",
+                        ]
+                    )[0],
+                    0,
+                )
+            receipt = next((inbox / "receipts").glob("*.receipt.json"))
+            original_receipt = receipt.read_bytes()
+
+            for source_path in cases:
+                with self.subTest(source_path=source_path):
+                    receipt.write_bytes(original_receipt)
+                    rewrite_receipt(
+                        receipt,
+                        lambda body, path=source_path: body.update(
+                            {"xml_path": path}
+                        ),
+                    )
+
+                    rc, _stdout, stderr = run_verify(
+                        [
+                            "--receipt",
+                            str(receipt),
+                            "--allow-insecure-http",
+                            "--require-source-files",
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn("checked-in ISO XML fixtures", stderr)
 
     def test_legacy_colr007_rail_receipts_require_explicit_local_override(self):
         with tempfile.TemporaryDirectory() as raw_inbox:

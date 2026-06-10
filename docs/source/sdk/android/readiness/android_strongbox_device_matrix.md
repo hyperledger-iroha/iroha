@@ -1,6 +1,6 @@
 # Android StrongBox Offline Payments Device Matrix
 
-Last updated: 2026-06-09
+Last updated: 2026-06-10
 
 This matrix gates production readiness for Android offline-offline payment
 flows. A device row is ready only after the lab attaches signed evidence for
@@ -10,7 +10,7 @@ ABI-7 package-backed multi-hop recursive compact proof probing.
 
 | Device family | Minimum OS | StrongBox / KeyMint gate | Kagemusha recursive compact gate | Status |
 | --- | --- | --- | --- | --- |
-| Google Pixel 6 / 6a | Android 14 | Pending lab attestation export | One-hop `recursive_compact_v1` proof probe required; package-backed multi-hop proof probe required | Blocked |
+| Google Pixel 6 / 6a | Android 14 | Physical Pixel 6 / Android 16 StrongBox export captured and signed in slot `google-pixel-6-6a-physical-1781070293478` | Focused production command passes with ABI-6/ABI-7 JNI load assertions; signed slot carries one-hop `recursive_compact_v1` JNI probe and package-backed multi-hop probe state | Blocked by remaining standard-matrix families |
 | Google Pixel 7 / 7 Pro | Android 14 | Pending lab attestation export | One-hop `recursive_compact_v1` proof probe required; package-backed multi-hop proof probe required | Blocked |
 | Google Pixel 8 / 8a / 8 Pro | Android 15 | Pending lab attestation export | One-hop `recursive_compact_v1` proof probe required; package-backed multi-hop proof probe required | Blocked |
 | Google Pixel Fold / Tablet | Android 15 | Pending lab attestation export | One-hop `recursive_compact_v1` proof probe required; package-backed multi-hop proof probe required | Blocked |
@@ -44,12 +44,13 @@ Production release criteria:
   transcript path and SHA-256, and that path must stay under `handoff/`.
   Each production slot must also keep `telemetry/telemetry.json`,
   `telemetry/status.ndjson`, `attestation/result.json`,
-  `queue/pending_queue.json`, and `logs/runtime.log`; signed evidence rejects
-  refreshed manifests that omit any of those base artifacts. Those required
-  base artifacts must be non-empty and no larger than 16 MiB each. Telemetry
-  JSON must bind to the slot id, status NDJSON must include an `ok` status and
-  no failure status, and `logs/runtime.log` must carry the Kagemusha device-lab
-  completion marker without build/test failure markers.
+  `attestation/report.json`, `queue/pending_queue.json`, and
+  `logs/runtime.log`; signed evidence rejects refreshed manifests that omit any
+  of those base artifacts. Those required base artifacts must be non-empty and
+  no larger than 16 MiB each. Telemetry JSON must bind to the slot id,
+  status NDJSON must include an `ok` status and no failure status, and
+  `logs/runtime.log` must carry the Kagemusha device-lab completion marker
+  without build/test failure markers.
   The device-lab root, operator-supplied root ancestors, slot parent
 	  directories, slot path ancestors, slot directories, slot metadata, the
 	  SHA-256 manifest, evidence directories, and artifact files must be ordinary
@@ -125,6 +126,19 @@ Production release criteria:
   and SHA-256, and the same slot id, device fingerprint, OS build id, app
   package, app signing certificate, attestation challenge, and offline wallet
   policy hashes as `slot.json`.
+  The attestation verifier report at `attestation/report.json` is a separate
+  closed-schema artifact: it repeats the slot id, device fingerprint, OS build
+  id, app package, attestation challenge, attestation certificate-chain path,
+  and certificate-chain SHA-256 from `slot.json`, names the verifier, and
+  reports `verification.status` as ok or passed with StrongBox/KeyMint and
+  physical-device attestation set to true. The signer refuses to create
+  `evidence/signed-evidence.json` when this verifier report is missing,
+  malformed, weakly attested, or not bound to the slot metadata.
+  Generate that closed report from the host-side StrongBox verifier output with
+  `python3 scripts/kagemusha_android_attestation_report.py --harness-result <android_keystore_attestation_result.json> --slot-id <slot-id> --device-fingerprint <adb-ro.build.fingerprint> --os-build-id <adb-ro.build.id> --attestation-certificate-chain <chain.pem> --physical-device-attestation --out <report.json>`.
+  The writer refuses non-StrongBox verifier results, unexpected verifier-result fields,
+  challenge digest drift, unsafe chain paths, and reports that do not
+  carry an explicit physical-device assertion.
   The referenced chain artifact must be a non-empty `.pem` or `.der` file under
   `attestation/`; PEM chains must contain certificate boundaries, DER chains
   must start with an ASN.1 SEQUENCE byte, and oversized chain payloads are
@@ -139,14 +153,57 @@ Production release criteria:
   device fingerprint or attestation challenge; copied lab evidence is blocked
   even if each individual slot is otherwise signed and hash-consistent.
   The signed raw command list must exactly match the canonical Android
-  production device-lab command: it runs the release assembly steps
+  production device-lab commands: the first runs the release assembly steps
   `:client-android:assembleRelease` and
-  `:offline-wallet-android:assembleRelease`, then `connectedAndroidTest` with
-  the focused
+  `:offline-wallet-android:assembleRelease`, then
+  `:offline-wallet-android:connectedDebugAndroidTest` with the focused
   `org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest`
-  plus `OfflineNoteTransferHandoff` harnesses. Marker-only commands, comments,
-  or `echo` wrappers are rejected even if they contain those strings.
-- Generate signed lab evidence from a completed slot with
+  plus `org.hyperledger.iroha.android.offline.OfflineNoteTransferHandoffTest`
+  harnesses. The second installs the lab app with
+  `:offline-wallet-lab-app:assembleRelease`,
+  `:offline-wallet-lab-app:installRelease`, and
+  `:offline-wallet-lab-app:installReleaseAndroidTest`, then runs
+  `adb shell am instrument -w -e class
+  org.hyperledger.iroha.android.offline.KagemushaDeviceLabArtifactExportTest
+  org.hyperledger.iroha.sdk.offline.wallet.lab.test/androidx.test.runner.AndroidJUnitRunner`.
+  The non-export class filters resolve to instrumentation tests under
+  `kotlin/offline-wallet-android/src/androidTest/java/org/hyperledger/iroha/android/offline/`.
+  Marker-only commands, comments, or `echo` wrappers are rejected even if they
+  contain those strings.
+- Capture raw attached-device artifacts with
+  `org.hyperledger.iroha.android.offline.KagemushaDeviceLabArtifactExportTest`.
+  This instrumentation harness is executed through the dedicated
+  `kotlin/offline-wallet-lab-app` application module so the target context is
+  `org.hyperledger.iroha.sdk.offline.wallet.lab`, not the oversized androidTest
+  package. It generates a StrongBox-backed Android Keystore key with a slot
+  challenge, exports `attestation/keymint-certificate-chain.pem` plus
+  `attestation/result.json`, and writes pullable D2D, wallet-integrity,
+  telemetry, queue, and runtime-log artifacts under the app files directory at
+  `kagemusha-device-lab/<slot-id>`. It also writes
+  `kagemusha-device-lab/latest-slot.txt` so the host can locate the newest raw
+  export before running the host-side attestation verifier report writer and
+  slot assembler. The exporter hash-binds the installed package returned by
+  `Context.getPackageCodePath()` as the offline-wallet APK digest; deterministic
+  slot-id placeholder digests and hashes of the androidTest APK are not
+  production evidence.
+  Pull the newest raw slot from an attached physical device with
+  `python3 scripts/kagemusha_pull_android_device_lab_raw_slot.py --serial <adb-serial> --run-as-package org.hyperledger.iroha.sdk.offline.wallet.lab --out-root target/kagemusha-android-raw --summary-out target/kagemusha-android-raw-pull-summary.json`.
+  The puller reads `latest-slot.txt` through `run-as`, streams the selected
+  slot with `adb exec-out ... tar`, refuses to overwrite an existing local raw
+  slot, and rejects symlink, hardlink, special-file, traversal, duplicate,
+  oversized, and slot-mismatched tar members before the raw artifacts can be
+  assembled into signed production evidence.
+- Assemble a production slot from completed attached-device artifacts with
+  `python3 scripts/kagemusha_android_device_lab_slot.py --slot-root artifacts/android/device_lab --slot-id <slot-id> --device-family "<standard-family>" --attestation-result <result.json> --attestation-report <report.json> --attestation-certificate-chain <chain.pem> --offline-wallet-apk <offline-wallet-release.apk> --d2d-payment-transcript <d2d-payment.json> --wallet-integrity-transcript <integrity.json> --telemetry-json <telemetry.json> --status-ndjson <status.ndjson> --pending-queue-json <pending_queue.json> --runtime-log <runtime.log> --private-key <runtime-only-lab-private-key.pem> --public-key <lab-public-key.pem> --signer-key-id <lab-signer-id>`.
+  The assembler reads the attached device identity from ADB unless explicit
+  device fingerprint and OS build overrides are supplied, refuses to overwrite
+  an existing slot directory, and requires signing inputs by default; unsigned
+  staging slots require the explicit `--allow-unsigned` flag and remain
+  rejected by production readiness. Every source artifact copied by the
+  assembler is read through symlink-free ancestors and an opened-file identity
+  binding, so symlinked source directories, hardlinked leaves, and post-preflight
+  source swaps fail before a signed slot can be installed.
+- Generate signed lab evidence from an already completed slot with
   `python3 scripts/sign_android_device_lab_evidence.py --slot artifacts/android/device_lab/<slot-id> --private-key <runtime-only-lab-private-key.pem> --public-key <lab-public-key.pem> --signer-key-id <lab-signer-id>`.
   The helper writes the signed evidence artifact, refreshes the slot artifact
 	  hash, and rewrites `sha256sum.txt`; private key paths are runtime inputs only
@@ -320,7 +377,21 @@ Production release criteria:
   and rejects stale, future-dated, renamed, symlinked, hardlinked,
   size-mismatched, digest-mismatched, extra-field, or obvious plain-text
   placeholder compact key evidence. The compact key evidence helper applies the
-  same placeholder-artifact and generator-log rejection before it emits evidence JSON. The
+  same placeholder-artifact and generator-log rejection before it emits evidence JSON.
+  When ABI-7 key material is generated in a detached staging directory, run
+  `python3 scripts/kagemusha_run_recursive_compact_keygen_staged.py --staged-artifact-dir <staged>/artifacts/kagemusha --exit-file <staged-exit-file>`
+  first so the real keygen exit code and generator log are captured, then
+  finalize it only after the staged process writes a zero exit marker:
+  `python3 scripts/kagemusha_finalize_recursive_compact_key_staged_run.py --staged-artifact-dir <staged>/artifacts/kagemusha --exit-file <staged-exit-file> --artifact-dir artifacts/kagemusha --out artifacts/kagemusha/recursive-compact-key-evidence.json`.
+  If path flags are omitted, both compact staged commands use the symlink-free
+  resolution of `/tmp`, for example `/private/tmp` on macOS, so the default
+  finalizer reads the default runner output without tripping the symlink-ancestor
+  guard.
+  The finalizer refuses missing or nonzero exit markers, symlinked or
+  hardlinked staged artifacts, destination overwrites unless `--replace` is
+  explicit, and generator-log size or digest drift before publishing the
+  canonical `recursive-compact-key-evidence.json`.
+  The
   device-lab scanner applies the same rule to `slot.json`,
   `attestation/result.json`, signed evidence, D2D handoff
   transcripts, and wallet-integrity transcripts before release summaries are
@@ -340,6 +411,22 @@ Production release criteria:
 			  rechecks created output parents before
 			  direct helper preflight returns. Input and output corridor resolver failures become structured
 			  helper blockers instead of tracebacks.
+		  Detached Reserved-lineage proof runs must be captured with
+		  `python3 scripts/kagemusha_run_lineage_proof_staged.py --repo-root . --staged-artifact-dir <staged>/artifacts/kagemusha --exit-file <staged-exit-file> --elapsed-seconds-file <staged-elapsed-seconds-file>`
+		  and promoted with
+		  `python3 scripts/kagemusha_finalize_lineage_proof_staged_run.py --staged-artifact-dir <staged>/artifacts/kagemusha --exit-file <staged-exit-file> --elapsed-seconds-file <staged-elapsed-seconds-file> --artifact-dir artifacts/kagemusha --out artifacts/kagemusha/lineage-proof-evidence.json`;
+		  if path flags are omitted, both commands share the symlink-free
+		  resolution of `/tmp`, for example `/private/tmp` on macOS, so the
+		  default finalizer reads the default runner output without tripping the
+		  symlink-ancestor guard;
+		  the finalizer requires a zero exit marker, reruns the proof-log and
+		  artifact checks, and refuses destination overwrites unless `--replace`
+		  is explicit. The staged runner first runs the canonical init and append
+		  `iroha app zk kagemusha lineage-key-artifacts` commands from the
+		  staged root, then preserves the real cargo exit code in the exit
+		  marker and refuses to overwrite previous staged key artifacts, keygen
+		  logs, proof logs, run reports, or elapsed-time files without
+		  `--replace`.
 		  The shared evidence builder
 	  also rejects secret-looking artifact/proof-log paths and detached proof logs
 	  before hashing artifacts or reading the proof log; direct artifact-dir,
@@ -410,9 +497,11 @@ Production release criteria:
   The release APK path and SHA-256 plus native bridge ABI version are
   signature-bound production claims.
   The release APK path must point to bytes inside the slot and
-  `offline_wallet_apk_sha256` must match those bytes. The native bridge ABI
-  version is pinned to the ABI-7 surface so the signed ABI-7 fail-closed probe
-  cannot come from a stale bridge build.
+  `offline_wallet_apk_sha256` must match those bytes. The APK artifact is capped
+  separately at 64 MiB so real arm64 JNI proof builds fit while telemetry,
+  transcript, report, and log artifacts retain the 16 MiB cap. The native bridge
+  ABI version is pinned to the ABI-7 surface so the signed ABI-7 fail-closed
+  probe cannot come from a stale bridge build.
   The hash must match the referenced artifact bytes inside the slot. The signed evidence artifact schema must repeat the slot identity fields, carry signer
   and signature metadata, including `signer_public_key_sha256` and
   `signature_payload_sha256`, include artifact digests for the required telemetry, attestation, queue, log, wallet integrity, and D2D handoff files, and verify against a trusted signer public key.

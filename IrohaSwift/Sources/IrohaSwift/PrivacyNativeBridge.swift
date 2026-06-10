@@ -124,7 +124,7 @@ public struct PrivacyCapabilities: Equatable, Sendable {
 
 public enum PrivacyNativeBridge {
     public static let ffiVersionV1: UInt32 = 1
-    public static let requiredBridgeAbiVersion: UInt32 = 6
+    public static let requiredBridgeAbiVersion: UInt32 = 7
     public static let privacyNativeArchiveMaxBytes = 64 * 1024 * 1024
     public static let ffiStatusError: UInt32 = 1
     public static let ffiErrorNullPointer: UInt32 = 1
@@ -156,6 +156,29 @@ public enum PrivacyNativeBridge {
         }
     }
 
+    public static func privacyProofRequestV1(
+        algorithmId: String,
+        entrypoint: String,
+        vkRef: String,
+        publicInputs: Data,
+        witness: Data = Data(),
+        proof: Data = Data()
+    ) throws -> Data {
+        try call(
+            bridgeAvailable: NoritoNativeBridge.shared.isPrivacyNativeAvailable,
+            expectedSchemaByte: privacyRequestSchemaByte
+        ) {
+            try NoritoNativeBridge.shared.privacyProofRequestV1(
+                algorithmId: algorithmId,
+                entrypoint: entrypoint,
+                vkRef: vkRef,
+                publicInputs: publicInputs,
+                witness: witness,
+                proof: proof
+            )
+        }
+    }
+
     public static func buildProofV1(requestArchive: Data) throws -> Data {
         try call(
             requestArchive: requestArchive,
@@ -171,6 +194,10 @@ public enum PrivacyNativeBridge {
     }
 
     public static func buildConfidentialUnshieldProofV3(requestArchive: Data) throws -> Data {
+        try buildProofV1(requestArchive: requestArchive)
+    }
+
+    public static func buildZkAceAuthorizationProofV1(requestArchive: Data) throws -> Data {
         try buildProofV1(requestArchive: requestArchive)
     }
 

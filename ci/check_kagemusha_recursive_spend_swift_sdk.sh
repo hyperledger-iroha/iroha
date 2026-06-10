@@ -14,9 +14,12 @@ cd "${ROOT_DIR}"
   IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift \
   IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveCompactPaymentTokenProver.swift \
   IrohaSwift/Sources/IrohaSwift/KagemushaInstructionTransactionEncoder.swift \
+  IrohaSwift/Sources/IrohaSwift/OfflineNoteV2.swift \
+  IrohaSwift/Sources/IrohaSwift/OfflineNoritoDecoding.swift \
   IrohaSwift/Tests/IrohaSwiftTests/KagemushaCompactPaymentTokenProverTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveAggregationProofBundleProverTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveCompactPaymentTokenProverTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/KagemushaInstructionTransactionEncoderTests.swift \
-  IrohaSwift/Tests/IrohaSwiftTests/UC4DecodePaymentTokenTests.swift
+  IrohaSwift/Tests/IrohaSwiftTests/UC4DecodePaymentTokenTests.swift \
+  IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteV2Tests.swift

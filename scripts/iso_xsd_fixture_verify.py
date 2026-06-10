@@ -101,6 +101,10 @@ MAX_XMLLINT_OUTPUT_BYTES = 64 * 1024
 MAX_XMLLINT_TIMEOUT_SECS = 300.0
 MAX_LOCAL_PATH_CHARS = 4096
 MAX_CLEAN_STRING_CHARS = 4096
+REPOSITORY_XML_FIXTURE_PARTS = (
+    "fixtures",
+    "iso20022",
+)
 MAX_SOURCE_REPOSITORY_CHARS = 2048
 MAX_SOURCE_PATH_CHARS = 2048
 MAX_REVIEWED_GAP_REASON_CHARS = 1024
@@ -535,8 +539,43 @@ def _preflight_numeric_cli_values(
             index += 1
 
 
+def _path_contains_component_sequence(raw: str, components: tuple[str, ...]) -> bool:
+    parts = [part.casefold() for part in raw.split("/") if part]
+    target = [part.casefold() for part in components]
+    if len(parts) < len(target):
+        return False
+    last_start = len(parts) - len(target)
+    return any(
+        parts[offset : offset + len(target)] == target
+        for offset in range(last_start + 1)
+    )
+
+
+def _path_is_repository_iso_fixture(raw: str) -> bool:
+    return _path_contains_component_sequence(raw, REPOSITORY_XML_FIXTURE_PARTS)
+
+
+def _output_path_is_repository_iso_fixture(raw: str) -> bool:
+    return _path_is_repository_iso_fixture(raw)
+
+
+def _reject_repository_input_path(path: Path, label: str) -> None:
+    if _path_is_repository_iso_fixture(str(path)):
+        raise FixtureManifestError(
+            f"{label} must not point to checked-in ISO fixture artifacts"
+        )
+
+
+def _reject_repository_output_path(path: Path, label: str) -> None:
+    if _output_path_is_repository_iso_fixture(str(path)):
+        raise FixtureManifestError(
+            f"{label} must not point to checked-in ISO fixture artifacts"
+        )
+
+
 def _write_text_output(path: Path, text: str) -> None:
     _reject_output_path_smuggling(path, "output path")
+    _reject_repository_output_path(path, "output path")
     _reject_symlinked_existing_ancestors(path.parent)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -2553,6 +2592,13 @@ def verify_manifest(path: Path, args: argparse.Namespace) -> dict[str, Any]:
 
 
 def run(args: argparse.Namespace) -> int:
+    if args.summary_out is not None:
+        _reject_output_path_smuggling(args.summary_out, "output path")
+        _reject_repository_output_path(args.summary_out, "output path")
+    _reject_output_path_smuggling(args.manifest, "--manifest")
+    if args.profile_catalog is not None:
+        _reject_output_path_smuggling(args.profile_catalog, "--profile-catalog")
+        _reject_repository_input_path(args.profile_catalog, "--profile-catalog")
     summary = verify_manifest(args.manifest, args)
     text = json.dumps(summary, indent=2, sort_keys=True) + "\n"
     if args.summary_out is not None:

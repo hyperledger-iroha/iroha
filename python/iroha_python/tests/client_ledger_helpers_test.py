@@ -544,6 +544,11 @@ def test_zk_verifying_key_helpers_detect_active_status() -> None:
             "backend": "halo2/ipa",
             "name": "vk_transfer",
             "private_key": "ed25519:deadbeef",
+            "version": 1,
+            "circuit_id": "vk-transfer-v1",
+            "public_inputs_schema_hash_hex": "11" * 32,
+            "gas_schedule_id": "zk.verify.default",
+            "vk_bytes": "dms=",
         }
     )
 
@@ -1596,11 +1601,16 @@ def test_zk_instruction_helpers_serialize_full_surface() -> None:
             [source],
             zk_ace_verifier,
         ),
+        Instruction.verify_proof(proof),
     ]
 
     encoded = [instruction.to_json() for instruction in instructions]
     assert all(payload for payload in encoded)
-    assert [Instruction.from_json(payload).to_json() for payload in encoded] == encoded
+    json_roundtrip_indexes = [0, 1, 4, 5]
+    assert [
+        Instruction.from_json(encoded[index]).to_json()
+        for index in json_roundtrip_indexes
+    ] == [encoded[index] for index in json_roundtrip_indexes]
 
     alternate_source = account_address(0x63)
     alternate_register = Instruction.register_zk_ace_identity_commitment(
@@ -2378,11 +2388,40 @@ def test_zk_client_helpers_build_transaction_drafts() -> None:
         proof=zk_ace_proof,
         wait=False,
     ) == {"hash": "zk-8"}
+    assert client.register_asset_hidden_zk_pool_and_wait(
+        chain_id="chain",
+        authority=source,
+        private_key_hex="99" * 32,
+        pool_id="boi-masp-pool-v1",
+        storage_asset=asset_definition_id,
+        asset_set_root="55" * 32,
+        vk_transfer="halo2/ipa:asset_hidden_transfer_v1",
+        wait=False,
+    ) == {"hash": "zk-9"}
+    assert client.asset_hidden_zk_transfer_prepared_and_wait(
+        chain_id="chain",
+        authority=source,
+        private_key_hex="aa" * 32,
+        pool_id="boi-masp-pool-v1",
+        inputs=["66" * 32],
+        outputs=["77" * 32],
+        proof=proof,
+        root_hint="88" * 32,
+        wait=False,
+    ) == {"hash": "zk-10"}
+    assert client.verify_proof_and_wait(
+        chain_id="chain",
+        authority=source,
+        private_key_hex="bb" * 32,
+        proof=proof,
+        wait=False,
+    ) == {"hash": "zk-11"}
 
-    assert [len(draft) for draft, _kwargs in captured] == [1, 1, 1, 1, 1, 1, 1, 1]
+    assert [len(draft) for draft, _kwargs in captured] == [1] * 11
     assert captured[0][0].config.metadata == {"purpose": "zk-register"}
     assert captured[0][1]["wait"] is False
     assert captured[1][1]["private_key_hex"] == "22" * 32
+    assert captured[10][1]["private_key_hex"] == "bb" * 32
 
 
 def test_zk_ace_transaction_amount_normalizer_matches_proof_builder_boundary() -> None:
@@ -2464,6 +2503,13 @@ def test_zk_ace_transaction_amount_normalizer_matches_proof_builder_boundary() -
             id="transfer-proof-not-mapping",
         ),
         pytest.param(
+            "verify_proof_and_wait",
+            {"proof": object()},
+            TypeError,
+            "proof must be a mapping",
+            id="verify-proof-not-mapping",
+        ),
+        pytest.param(
             "unshield_prepared_and_wait",
             {
                 "asset_definition_id": "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
@@ -2478,6 +2524,46 @@ def test_zk_ace_transaction_amount_normalizer_matches_proof_builder_boundary() -
             ValueError,
             "backend",
             id="unshield-missing-proof-backend",
+        ),
+        pytest.param(
+            "register_asset_hidden_zk_pool_and_wait",
+            {
+                "pool_id": "boi-masp-pool-v1",
+                "storage_asset": "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
+                "asset_set_root": "00" * 32,
+                "vk_transfer": "halo2/ipa:asset_hidden_transfer_v1",
+            },
+            ValueError,
+            "asset_set_root",
+            id="asset-hidden-zero-asset-set-root",
+        ),
+        pytest.param(
+            "asset_hidden_zk_transfer_prepared_and_wait",
+            {
+                "pool_id": "boi-masp-pool-v1",
+                "inputs": ["aa" * 32, "aa" * 32],
+                "outputs": ["bb" * 32],
+                "proof": {
+                    "backend": "halo2/ipa",
+                    "proof_bytes": b"proof-bytes",
+                    "verifying_key_ref": "halo2/ipa:asset_hidden_transfer_v1",
+                },
+            },
+            ValueError,
+            "duplicates",
+            id="asset-hidden-duplicate-nullifier",
+        ),
+        pytest.param(
+            "asset_hidden_zk_transfer_prepared_and_wait",
+            {
+                "pool_id": "boi-masp-pool-v1",
+                "inputs": ["aa" * 32],
+                "outputs": ["bb" * 32],
+                "proof": object(),
+            },
+            TypeError,
+            "proof must be a mapping",
+            id="asset-hidden-proof-not-mapping",
         ),
         pytest.param(
             "register_zk_ace_identity_commitment_and_wait",

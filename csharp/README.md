@@ -211,9 +211,12 @@ plus a record-backed lineage witness.
 
 `Hyperledger.Iroha.Privacy.PrivacyNative` exposes the privacy FFI surface as
 generic raw Norito archives: `CapabilitiesV1()`, `BuildProofV1(requestArchive)`,
-and `VerifyProofV1(requestArchive)`. The C# SDK does not expose
-algorithm-specific production proof builders while the privacy rows remain
-gated. Native availability requires ABI 6 or later, the privacy
+and `VerifyProofV1(requestArchive)`. Approved typed proof-builder aliases for
+admitted production privacy entrypoints, including
+`BuildZkAceAuthorizationProofV1(requestArchive)`, dispatch through the same
+production archive paths and remain fail-closed while the privacy rows are
+gated. Planned catalog entrypoints stay unexported until their production gates
+pass. Native availability requires ABI 6 or later, the privacy
 capability/build/verify symbols, and successful Norito probe outputs whose
 operation-specific result schema bytes match the called entry point.
 

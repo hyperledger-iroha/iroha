@@ -1,11 +1,22 @@
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
+using System.Text;
 using Hyperledger.Iroha.Privacy;
 
 namespace Hyperledger.Iroha.Sdk.Tests;
 
 public sealed class PrivacyNativeTests
 {
+    private static readonly IReadOnlyList<(string Label, Func<byte[], PrivacyProofResultArchive> Helper)>
+        PrivacyProofArchiveHelpers = new List<(string, Func<byte[], PrivacyProofResultArchive>)>
+        {
+            ("build", bytes => PrivacyNative.BuildProofV1(bytes)),
+            ("confidential transfer", bytes => PrivacyNative.buildConfidentialTransferProofV2(bytes)),
+            ("confidential unshield", bytes => PrivacyNative.buildConfidentialUnshieldProofV3(bytes)),
+            ("zk-ace authorization", bytes => PrivacyNative.buildZkAceAuthorizationProofV1(bytes)),
+            ("verify", bytes => PrivacyNative.VerifyProofV1(bytes)),
+        };
+
     [Fact]
     public void PrivacyNativeAvailabilityProbeDoesNotThrow()
     {
@@ -15,10 +26,10 @@ public sealed class PrivacyNativeTests
     [Fact]
     public void PrivacyNativeAvailabilityRequiresCompleteAbiSurface()
     {
-        Assert.True(PrivacyNative.IsAvailable(() => 6u, () => true));
+        Assert.True(PrivacyNative.IsAvailable(() => 7u, () => true));
         Assert.False(PrivacyNative.IsAvailable(() => null, () => true));
-        Assert.False(PrivacyNative.IsAvailable(() => 5u, () => true));
-        Assert.False(PrivacyNative.IsAvailable(() => 6u, () => false));
+        Assert.False(PrivacyNative.IsAvailable(() => 6u, () => true));
+        Assert.False(PrivacyNative.IsAvailable(() => 7u, () => false));
         Assert.False(PrivacyNative.IsAvailable(
             () => throw new DllNotFoundException("missing bridge"),
             () => true));
@@ -51,7 +62,7 @@ public sealed class PrivacyNativeTests
     [Fact]
     public void PrivacyNativeConstantsMatchRustFfiContract()
     {
-        Assert.Equal(6u, PrivacyNative.RequiredBridgeAbiVersion);
+        Assert.Equal(7u, PrivacyNative.RequiredBridgeAbiVersion);
         Assert.Equal(1u, PrivacyNative.FfiVersionV1);
         Assert.Equal("privacy-production-gate-v1", PrivacyNative.ProductionGateVersion);
         Assert.Equal(1u, PrivacyNative.StatusError);
@@ -134,6 +145,19 @@ public sealed class PrivacyNativeTests
             new PrivacyProofResultArchive(PrivacyNoritoFrameWithPayload(0x50)));
         Assert.Contains("expected privacy result schema", proofSchemaError.Message);
         Assert.Equal("noritoBytes", proofSchemaError.ParamName);
+
+        var requestBytes = PrivacyNoritoFrameWithPayload(0x52);
+        var request = new PrivacyProofRequestArchive(requestBytes);
+        requestBytes[0] = 0x7f;
+
+        var firstRequestRead = request.NoritoBytes;
+        Assert.Equal(PrivacyNoritoFrameWithPayload(0x52), firstRequestRead);
+        firstRequestRead[3] = 0x7f;
+        Assert.Equal(PrivacyNoritoFrameWithPayload(0x52), request.NoritoBytes);
+        var requestSchemaError = Assert.Throws<ArgumentException>(() =>
+            new PrivacyProofRequestArchive(PrivacyNoritoFrameWithPayload(0x42)));
+        Assert.Contains("expected privacy result schema", requestSchemaError.Message);
+        Assert.Equal("noritoBytes", requestSchemaError.ParamName);
     }
 
     [Fact]
@@ -198,29 +222,16 @@ public sealed class PrivacyNativeTests
     [Fact]
     public void PrivacyNativeRejectsEmptyProofRequestArchivesBeforeLoadingNativeBridge()
     {
-        Assert.Throws<ArgumentException>(() => PrivacyNative.BuildProofV1(Array.Empty<byte>()));
-        Assert.Throws<ArgumentException>(() =>
-            PrivacyNative.buildConfidentialTransferProofV2(Array.Empty<byte>()));
-        Assert.Throws<ArgumentException>(() =>
-            PrivacyNative.buildConfidentialUnshieldProofV3(Array.Empty<byte>()));
-        Assert.Throws<ArgumentException>(() => PrivacyNative.VerifyProofV1(Array.Empty<byte>()));
+        foreach (var (_, helper) in PrivacyProofArchiveHelpers)
+        {
+            Assert.Throws<ArgumentException>(
+                () => helper(Array.Empty<byte>()));
 
-        var buildEmptyPayload = Assert.Throws<ArgumentException>(() =>
-            PrivacyNative.BuildProofV1(PrivacyNoritoFrame(0x52)));
-        var transferEmptyPayload = Assert.Throws<ArgumentException>(() =>
-            PrivacyNative.buildConfidentialTransferProofV2(PrivacyNoritoFrame(0x52)));
-        var unshieldEmptyPayload = Assert.Throws<ArgumentException>(() =>
-            PrivacyNative.buildConfidentialUnshieldProofV3(PrivacyNoritoFrame(0x52)));
-        var verifyEmptyPayload = Assert.Throws<ArgumentException>(() =>
-            PrivacyNative.VerifyProofV1(PrivacyNoritoFrame(0x52)));
-        Assert.Contains("non-empty privacy request payload", buildEmptyPayload.Message);
-        Assert.Contains("non-empty privacy request payload", transferEmptyPayload.Message);
-        Assert.Contains("non-empty privacy request payload", unshieldEmptyPayload.Message);
-        Assert.Contains("non-empty privacy request payload", verifyEmptyPayload.Message);
-        Assert.Equal("requestArchive", buildEmptyPayload.ParamName);
-        Assert.Equal("requestArchive", transferEmptyPayload.ParamName);
-        Assert.Equal("requestArchive", unshieldEmptyPayload.ParamName);
-        Assert.Equal("requestArchive", verifyEmptyPayload.ParamName);
+            var emptyPayload = Assert.Throws<ArgumentException>(
+                () => helper(PrivacyNoritoFrame(0x52)));
+            Assert.Contains("non-empty privacy request payload", emptyPayload.Message);
+            Assert.Equal("requestArchive", emptyPayload.ParamName);
+        }
     }
 
     [Fact]
@@ -228,23 +239,12 @@ public sealed class PrivacyNativeTests
     {
         var oversized = new byte[PrivacyNative.PrivacyNativeArchiveMaxBytes + 1];
 
-        var buildError = Assert.Throws<ArgumentException>(() =>
-            PrivacyNative.BuildProofV1(oversized));
-        var transferError = Assert.Throws<ArgumentException>(() =>
-            PrivacyNative.buildConfidentialTransferProofV2(oversized));
-        var unshieldError = Assert.Throws<ArgumentException>(() =>
-            PrivacyNative.buildConfidentialUnshieldProofV3(oversized));
-        var verifyError = Assert.Throws<ArgumentException>(() =>
-            PrivacyNative.VerifyProofV1(oversized));
-
-        Assert.Contains("must not exceed", buildError.Message);
-        Assert.Contains("must not exceed", transferError.Message);
-        Assert.Contains("must not exceed", unshieldError.Message);
-        Assert.Contains("must not exceed", verifyError.Message);
-        Assert.Equal("requestArchive", buildError.ParamName);
-        Assert.Equal("requestArchive", transferError.ParamName);
-        Assert.Equal("requestArchive", unshieldError.ParamName);
-        Assert.Equal("requestArchive", verifyError.ParamName);
+        foreach (var (_, helper) in PrivacyProofArchiveHelpers)
+        {
+            var error = Assert.Throws<ArgumentException>(() => helper(oversized));
+            Assert.Contains("must not exceed", error.Message);
+            Assert.Equal("requestArchive", error.ParamName);
+        }
     }
 
     [Fact]
@@ -291,6 +291,84 @@ public sealed class PrivacyNativeTests
             free: Marshal.FreeHGlobal);
 
         Assert.Equal(expectedOutput, buildArchive);
+    }
+
+    [Fact]
+    public void PrivacyNativeBuildsProofRequestArchivesWithDefensiveCopies()
+    {
+        var expectedArchive = PrivacyNoritoFrameWithPayload(0x52);
+        byte[]? capturedAlgorithmId = null;
+        byte[]? capturedEntrypoint = null;
+        byte[]? capturedVkRef = null;
+        byte[]? capturedPublicInputs = null;
+        byte[]? capturedWitness = null;
+        byte[]? capturedProof = null;
+
+        var requestArchive = PrivacyNative.CallProofRequest(
+            "verange-transparent-range-v1",
+            "buildVeRangeProofV1",
+            "bulletproofs:verange_transparent_range_v1",
+            Encoding.UTF8.GetBytes("public-inputs"),
+            Encoding.UTF8.GetBytes("secret-witness"),
+            Encoding.UTF8.GetBytes("candidate-proof"),
+            (
+                byte[] algorithmIdPtr,
+                UIntPtr algorithmIdLen,
+                byte[] entrypointPtr,
+                UIntPtr entrypointLen,
+                byte[] vkRefPtr,
+                UIntPtr vkRefLen,
+                byte[] publicInputsPtr,
+                UIntPtr publicInputsLen,
+                byte[] witnessPtr,
+                UIntPtr witnessLen,
+                byte[] proofPtr,
+                UIntPtr proofLen,
+                out IntPtr outPtr,
+                out UIntPtr outLen) =>
+            {
+                Assert.Equal((UIntPtr)algorithmIdPtr.Length, algorithmIdLen);
+                Assert.Equal((UIntPtr)entrypointPtr.Length, entrypointLen);
+                Assert.Equal((UIntPtr)vkRefPtr.Length, vkRefLen);
+                Assert.Equal((UIntPtr)publicInputsPtr.Length, publicInputsLen);
+                Assert.Equal((UIntPtr)witnessPtr.Length, witnessLen);
+                Assert.Equal((UIntPtr)proofPtr.Length, proofLen);
+                Assert.Equal("verange-transparent-range-v1", Encoding.UTF8.GetString(algorithmIdPtr));
+                Assert.Equal("buildVeRangeProofV1", Encoding.UTF8.GetString(entrypointPtr));
+                Assert.Equal(
+                    "bulletproofs:verange_transparent_range_v1",
+                    Encoding.UTF8.GetString(vkRefPtr));
+                Assert.Equal("public-inputs", Encoding.UTF8.GetString(publicInputsPtr));
+                Assert.Equal("secret-witness", Encoding.UTF8.GetString(witnessPtr));
+                Assert.Equal("candidate-proof", Encoding.UTF8.GetString(proofPtr));
+                capturedAlgorithmId = algorithmIdPtr;
+                capturedEntrypoint = entrypointPtr;
+                capturedVkRef = vkRefPtr;
+                capturedPublicInputs = publicInputsPtr;
+                capturedWitness = witnessPtr;
+                capturedProof = proofPtr;
+                outPtr = Marshal.AllocHGlobal(expectedArchive.Length);
+                Marshal.Copy(expectedArchive, 0, outPtr, expectedArchive.Length);
+                outLen = (UIntPtr)expectedArchive.Length;
+                return 0;
+            },
+            requireAbi: false,
+            free: Marshal.FreeHGlobal);
+
+        Assert.Equal(expectedArchive, requestArchive);
+        foreach (var temporary in new[]
+                 {
+                     capturedAlgorithmId,
+                     capturedEntrypoint,
+                     capturedVkRef,
+                     capturedPublicInputs,
+                     capturedWitness,
+                     capturedProof,
+                 })
+        {
+            Assert.NotNull(temporary);
+            Assert.True(Array.TrueForAll(temporary!, value => value == 0));
+        }
     }
 
     [Fact]
@@ -522,6 +600,7 @@ public sealed class PrivacyNativeTests
     public void PrivacyNativeReadOutputRejectsEmptyPayloadSuccessArchiveAndFreesPointer()
     {
         AssertReadOutputRejectsEmptyPayload("iroha_privacy_capabilities_v1", 0x50);
+        AssertReadOutputRejectsEmptyPayload("iroha_privacy_proof_request_v1", 0x52);
         AssertReadOutputRejectsEmptyPayload("iroha_privacy_build_proof_v1", 0x42);
         AssertReadOutputRejectsEmptyPayload("iroha_privacy_verify_proof_v1", 0x56);
     }

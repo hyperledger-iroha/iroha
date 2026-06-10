@@ -3315,7 +3315,7 @@ def check_native_privacy_catalog_parity_coverage(errors):
         "`${source.label} native privacy capability catalog drifted from SDK catalog`",
         "assertRustNativeProductionGateParity(pythonCatalog);",
         "assertRustNativeCatalogParity(pythonCatalog);",
-        '"production_gate: privacy_production_gate()"',
+        '"production_gate: privacy_production_gate(entry)"',
     ):
         require(
             snippet in js_catalog_parity,
@@ -3328,7 +3328,8 @@ def check_native_privacy_catalog_parity_coverage(errors):
         "privacy_production_gate_missing_reason_is_required",
         "privacy_production_gate_invariants_hold",
         "privacy_capability_invariants_hold",
-        "!capability\\.production_ready",
+        "if\\s+capability\\.production_ready",
+        "capability\\.production_ready\\s*==\\s*capability\\.production_gate\\.ready",
         "privacy_production_gate_invariants_hold",
     ):
         require(
@@ -3649,7 +3650,7 @@ def check_native_privacy_production_gate_state_fail_closed_coverage(errors):
     )
 
     for snippet in (
-        'test("native privacy FFI capabilities keep production gates fail-closed"',
+        'test("native privacy FFI capabilities accept internal evidence while defaulting fail-closed"',
         "PRIVACY_PRODUCTION_GATE_MISSING_ENGINE",
         "real protocol engine is not production-enabled",
         "PRIVACY_PRODUCTION_GATE_MISSING_ALLOWLIST",
@@ -3659,9 +3660,11 @@ def check_native_privacy_production_gate_state_fail_closed_coverage(errors):
         "privacy_gate_statuses_match_requirements",
         "privacy_gate_missing_reasons_match_requirements",
         "privacy_production_gate_invariants_hold",
-        "!gate\\.ready",
-        "audit_references\\.is_empty\\(\\)",
-        "!status\\.passed",
+        "if\\s+gate\\.ready",
+        "gate\\.audit_references\\.is_empty\\(\\)",
+        "status\\.passed\\s*==\\s*\\(ready",
+        "privacy_capabilities_are_norito_v1_and_fail_closed",
+        "privacy_capabilities_accept_exact_internal_evidence_for_all_rows",
         "ZK-ACE native capability must be advertised",
         "ZK-ACE native capability must not become production-ready only because its verifier backend is allowlisted",
         "must pin ZK-ACE native capabilities to concrete profile while fail-closed",
@@ -3687,9 +3690,10 @@ def check_native_privacy_capability_claim_quarantine_coverage(errors):
     ffi_parity = read("javascript/iroha_js/test/privacyFfiContractParity.test.js")
 
     for snippet in (
-        'test("native privacy FFI capabilities keep production gates fail-closed"',
+        'test("native privacy FFI capabilities accept internal evidence while defaulting fail-closed"',
         "privacy_capability_invariants_hold",
-        "!capability\\.production_ready",
+        "if\\s+capability\\.production_ready",
+        "capability\\.production_ready\\s*==\\s*capability\\.production_gate\\.ready",
         "privacy_capability_invariants_reject_forged_production_readiness",
         "uppercase proof family",
         "delimited proof family",
@@ -3722,9 +3726,10 @@ def check_native_privacy_capability_archive_invariant_coverage(errors):
     ffi_parity = read("javascript/iroha_js/test/privacyFfiContractParity.test.js")
 
     for snippet in (
-        'test("native privacy FFI capabilities keep production gates fail-closed"',
+        'test("native privacy FFI capabilities accept internal evidence while defaulting fail-closed"',
         "privacy_capability_invariants_hold",
-        "!capability\\.production_ready",
+        "if\\s+capability\\.production_ready",
+        "capability\\.production_ready\\s*==\\s*capability\\.production_gate\\.ready",
         "privacy_production_gate_invariants_hold",
         "privacy_capability_rows_match_catalog_order",
         "privacy_capabilities_invariants_hold",
@@ -4529,7 +4534,7 @@ def check_privacy_ffi_required_algorithm_entrypoint_nonreflection_coverage(error
         "request\\.entrypoint\\.trim\\(\\)\\.is_empty\\(\\)",
         "privacy proof request must include non-empty algorithm_id and entrypoint",
         "privacy_request_rejects_empty_required_text_fields_without_reflection",
-        "required-text-field-never-echo",
+        "required-text-field-witness-never-echo",
         "algorithm_id",
         "entrypoint",
         "empty required field failure result",
@@ -4552,7 +4557,7 @@ def check_privacy_ffi_required_vk_ref_nonreflection_coverage(errors):
         "request\\.vk_ref\\.trim\\(\\)\\.is_empty\\(\\)",
         "privacy proof request must include non-empty vk_ref",
         "privacy_request_rejects_empty_required_text_fields_without_reflection",
-        "required-text-field-never-echo",
+        "required-text-field-witness-never-echo",
         "vk_ref",
         "empty required field failure result",
         "assert_subslice_absent",
@@ -5159,6 +5164,7 @@ def check_python_privacy_native_method_surface_coverage(errors):
         'test("Python privacy native wrappers require the complete FFI method surface"',
         "def _missing_privacy_native_methods",
         "_PRIVACY_NATIVE_METHODS",
+        "privacy_proof_request_v1",
         "privacy FFI requires complete native method surface; missing",
         "missing privacy_verify_proof_v1",
     ):
@@ -5646,6 +5652,7 @@ def check_privacy_ffi_c_symbol_surface_coverage(errors):
         'test("privacy FFI public symbol names stay stable across native bindings"',
         "EXPECTED_PRIVACY_C_FFI_SYMBOLS",
         "iroha_privacy_capabilities_v1",
+        "iroha_privacy_proof_request_v1",
         "iroha_privacy_build_proof_v1",
         "iroha_privacy_verify_proof_v1",
         "iroha_privacy_free_buffer",
@@ -5675,6 +5682,7 @@ def check_privacy_ffi_binding_loader_surface_coverage(errors):
         "Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_${method}",
         "nativeBridgeAbiVersion",
         "nativeCapabilities",
+        "nativeProofRequest",
         "nativeBuildProof",
         "nativeVerifyProof",
     ):
@@ -5764,7 +5772,7 @@ def check_privacy_sdk_bridge_method_surface_coverage(errors):
     ffi_parity = read("javascript/iroha_js/test/privacyFfiContractParity.test.js")
 
     for snippet in (
-        'test("SDK privacy native bridges expose only generic archive operations"',
+        'test("SDK privacy native bridges expose generic archive operations and typed proof aliases"',
         "EXPECTED_SWIFT_PRIVACY_BRIDGE_METHODS",
         "EXPECTED_JAVA_PRIVACY_BRIDGE_METHODS",
         "EXPECTED_KOTLIN_PRIVACY_BRIDGE_METHODS",
@@ -5772,9 +5780,11 @@ def check_privacy_sdk_bridge_method_surface_coverage(errors):
         '"privacyCapabilities"',
         '"capabilitiesV1"',
         '"buildProofV1"',
+        '"buildZkAceAuthorizationProofV1"',
         '"verifyProofV1"',
         '"capabilitiesArchive"',
         '"buildProof"',
+        '"BuildZkAceAuthorizationProofV1"',
         '"verifyProof"',
         '"GetPrivacyCapabilities"',
         '"CapabilitiesV1"',
@@ -9454,8 +9464,8 @@ if mode == "--negative-control-sdk-bridge-method-surface-coverage":
     target = "javascript/iroha_js/test/privacyFfiContractParity.test.js"
     original = read(target)
     mutated = original.replace(
-        'test("SDK privacy native bridges expose only generic archive operations"',
-        'test("SDK privacy native bridges expose algorithm-specific operations"',
+        'test("SDK privacy native bridges expose generic archive operations and typed proof aliases"',
+        'test("SDK privacy native bridges expose algorithm-specific operations and typed proof aliases"',
     )
     if mutated == original:
         raise SystemExit("negative control failed: unable to mutate privacy SDK bridge method-surface coverage")

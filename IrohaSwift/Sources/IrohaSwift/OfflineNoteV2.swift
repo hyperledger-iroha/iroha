@@ -108,6 +108,13 @@ public struct OfflineNoteRecursiveProofV2: Equatable, Sendable {
         let proof = try OfflineNoteProofBoxV2(backend: proofBackend, bytes: proofBytes)
         try self.init(verifierKeyId: verifierKeyId, publicInputsHash: publicInputsHash, proof: proof)
     }
+
+    public func noritoEncoded() throws -> Data {
+        try OfflineNoteV2Encoding.wrap(
+            typeName: OfflineNoteV2TypeNames.recursiveProof,
+            payload: OfflineNoteV2Encoding.encodeRecursiveProof(self)
+        )
+    }
 }
 
 public struct OfflineNoteKeyCertificatePayloadV2: Equatable, Sendable {
@@ -352,6 +359,13 @@ public struct OfflineNoteAuditOutputClaimV2: Equatable, Sendable {
         self.keyCertificate = keyCertificate
         self.assetId = try OfflineNorito.canonicalAssetIdLiteral(assetId)
         self.amount = try OfflineNorito.parseCanonicalNumeric(amount).canonicalString
+    }
+
+    public func noritoEncoded() throws -> Data {
+        try OfflineNoteV2Encoding.wrap(
+            typeName: OfflineNoteV2TypeNames.auditOutputClaim,
+            payload: OfflineNoteV2Encoding.encodeAuditOutputClaim(self)
+        )
     }
 }
 
@@ -723,9 +737,12 @@ enum OfflineNoteV2TypeNames {
     static let redeemPublicInputs = "iroha_data_model::offline::model::OfflineNoteRedeemPublicInputs"
     static let audit = "iroha_data_model::offline::model::OfflineNoteAuditBundle"
     static let auditPublicInputs = "iroha_data_model::offline::model::OfflineNoteAuditPublicInputs"
-    static let issueInstruction = "iroha_data_model::isi::offline::IssueOfflineNoteV2"
-    static let redeemInstruction = "iroha_data_model::isi::offline::RedeemOfflineNoteV2"
-    static let auditInstruction = "iroha_data_model::isi::offline::AuditOfflineNoteV2"
+    static let issueInstruction = "iroha_data_model::isi::offline::IssueOfflineNote"
+    static let redeemInstruction = "iroha_data_model::isi::offline::RedeemOfflineNote"
+    static let auditInstruction = "iroha_data_model::isi::offline::AuditOfflineNote"
+    static let issueInstructionAlias = "iroha_data_model::isi::offline::IssueOfflineNoteV2"
+    static let redeemInstructionAlias = "iroha_data_model::isi::offline::RedeemOfflineNoteV2"
+    static let auditInstructionAlias = "iroha_data_model::isi::offline::AuditOfflineNoteV2"
 }
 
 enum OfflineNoteV2Validation {

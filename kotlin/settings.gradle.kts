@@ -14,3 +14,4 @@ rootProject.name = "iroha_kotlin_sdk"
 include(":core-jvm")
 include(":client-android")
 include(":offline-wallet-android")
+include(":offline-wallet-lab-app")
