@@ -168,10 +168,6 @@ public final class PrivacyNativeBridge {
     return buildProof(requestArchive);
   }
 
-  public static byte[] buildVeRangeProofV1(final byte[] requestArchive) {
-    return buildProof(requestArchive);
-  }
-
   public static byte[] buildJindoLatticeProofV0(final byte[] requestArchive) {
     return buildProof(requestArchive);
   }
@@ -181,10 +177,6 @@ public final class PrivacyNativeBridge {
   }
 
   public static byte[] verifyJindoPolynomialCommitmentV0(final byte[] requestArchive) {
-    return verifyProof(requestArchive);
-  }
-
-  public static byte[] verifyVeRangeProofV1(final byte[] requestArchive) {
     return verifyProof(requestArchive);
   }
 

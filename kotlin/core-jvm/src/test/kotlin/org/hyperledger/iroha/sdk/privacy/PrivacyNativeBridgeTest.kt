@@ -78,10 +78,8 @@ class PrivacyNativeBridgeTest {
             PrivacyNativeBridge::buildConfidentialTransferProofV2,
             PrivacyNativeBridge::buildConfidentialUnshieldProofV3,
             PrivacyNativeBridge::buildZkAceAuthorizationProofV1,
-            PrivacyNativeBridge::buildVeRangeProofV1,
             PrivacyNativeBridge::buildJindoLatticeProofV0,
             PrivacyNativeBridge::verifyJindoPolynomialCommitmentV0,
-            PrivacyNativeBridge::verifyVeRangeProofV1,
             PrivacyNativeBridge::verifyProof,
         )
 
