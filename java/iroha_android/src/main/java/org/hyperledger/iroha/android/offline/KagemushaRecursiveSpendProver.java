@@ -371,6 +371,9 @@ public final class KagemushaRecursiveSpendProver {
       value |= chunk << shift;
       if ((valueByte & 0x80) == 0) {
         final int encodedLength = cursor - offset;
+        if (encodedLength > 5) {
+          throw new IllegalArgumentException("lineage_proving_key_archive");
+        }
         if (encodedLength > 1 && value < (1L << (7 * (encodedLength - 1)))) {
           throw new IllegalArgumentException("lineage_proving_key_archive");
         }

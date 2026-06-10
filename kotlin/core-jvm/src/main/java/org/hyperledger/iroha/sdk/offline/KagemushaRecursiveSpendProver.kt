@@ -433,6 +433,9 @@ class KagemushaRecursiveSpendProver private constructor() {
                 value = value or (chunk shl shift)
                 if ((byte and 0x80) == 0) {
                     val encodedLength = cursor - offset
+                    require(encodedLength <= 5) {
+                        "lineage_proving_key_archive"
+                    }
                     require(encodedLength <= 1 || value >= (1L shl (7 * (encodedLength - 1)))) {
                         "lineage_proving_key_archive"
                     }
