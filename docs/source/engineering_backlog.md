@@ -3623,13 +3623,11 @@ redistributable schemas, and official trust/revocation bundles.
     deferring committed-block catch-up until after VRF metadata handling,
     epoch-record hydration before reveal validation, stale pending-seal
     retention, and external Torii VRF metadata gossip. The focused core units
-    for those paths are green. The remaining integration blocker is now a
-    separate four-peer NPoS/DA liveness stall: the late reveal is accepted in
-    Sumeragi status, but the network repeatedly stalls at height 4 with RBC
-    READY/DELIVER data waiting on missing INIT/chunk state before the pending
-    VRF seal can be committed. Fix that h4 DA/RBC stall, then rerun
+    for those paths are green. The four-peer NPoS/DA late-reveal persistence
+    gate was rerun on 2026-06-10 after the DA/RBC cleanup hardening and passed:
     `sumeragi_randomness::npos_late_vrf_reveal_clears_penalty_and_preserves_seed`
-    as the final persistence gate.
+    advanced past the earlier height-4 READY/DELIVER stall, recorded the late
+    reveal, and finalized the epoch with clean peer shutdown.
   - Focused commit, block-sync, VRF, QC-validation, roster-selection, Torii VRF
     OpenAPI/parser, and data-model consensus roundtrip tests are green as of
     2026-05-02 with `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-verify`.

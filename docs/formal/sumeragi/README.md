@@ -74,11 +74,13 @@ decision after session context exists:
 - required READY quorum is checked before chunk availability, so a session
   missing both READY and chunks reports READY deferral first,
 - missing chunks defer DELIVER unless the caller explicitly allows missing
-  chunks, while zero-total sessions do not synthesize chunk deferral,
+  chunks, while zero-total and over-counted chunk shapes are invalid after
+  READY quorum is satisfied,
 - a present expected chunk root and present computed chunk root must match,
   but an absent expected or computed root does not fail closed by itself,
-- accepted DELIVER decisions require READY, chunk, and root gates to be open.
-Its TLC cross-check independently exhausts the same ten expected-failure
+- accepted DELIVER decisions require READY, chunk-shape, chunk-availability,
+  and root gates to be open.
+Its TLC cross-check independently exhausts the same eleven expected-failure
 configs as Apalache.
 
 `SumeragiRbcReadyEmissionGate.tla` captures `maybe_emit_rbc_ready(...)`, the
@@ -108,7 +110,9 @@ Apalache.
 `maybe_emit_rbc_deliver_at_with_local_ready_bypass(...)`, the top-level local
 DELIVER emission path:
 - retired, missing, already-delivered, invalid, and hydration-reloaded terminal
-  sessions return without creating a duplicate broadcast,
+  sessions return without creating a duplicate broadcast, while zero-total and
+  over-counted sessions repaired from authoritative local payloads proceed to
+  DELIVER,
 - missing or unverified commit rosters defer before DELIVER emission, with
   unverified-roster rebroadcasts gated by available payload and READY evidence,
 - missing authoritative payload defers and requests the appropriate
@@ -120,7 +124,7 @@ DELIVER emission path:
 - successful local DELIVER clears DELIVER deferral state, records status,
   drives availability, suppresses broadcast for already-committed blocks, and
   otherwise broadcasts plus runs block recovery and commit processing.
-Its TLC cross-check exhausts the same thirty-one expected-failure configs as
+Its TLC cross-check exhausts the same thirty-five expected-failure configs as
 Apalache.
 
 `SumeragiRbcDeliveredRebroadcastGate.tla` captures delivered-session RBC
@@ -325,11 +329,13 @@ telemetry helpers:
 - missing chunk slots reject local byte computation instead of counting absent
   chunks as zero,
 - telemetry extraction is once-only and ignores fallback bytes when the session
-  is undelivered or already recorded, and
+  is undelivered, invalid, missing its payload hash, already recorded, has an
+  invalid zero-total or overcounted chunk shape, or has complete local chunks
+  that do not match the advertised payload hash, and
 - delivered unrecorded sessions use computed bytes before fallback bytes, use
   fallback bytes when local bytes are unavailable, and set the recorded marker
   only after a byte count is returned.
-Its TLC cross-check independently exhausts the same sixteen expected-failure
+Its TLC cross-check independently exhausts the same twenty-one expected-failure
 configs as Apalache.
 
 `SumeragiRbcRs16InitialFanoutGate.tla` captures
@@ -389,7 +395,7 @@ message label surface:
   distinct,
 - every `ConsensusMessageReason::as_str(...)` label remains exact, including
   stash-cap, deferred-roster, mode-mismatch, and membership-mismatch reasons.
-Its TLC cross-check independently exhausts the same twenty-five
+Its TLC cross-check independently exhausts the same thirty
 expected-failure configs as Apalache.
 
 `SumeragiRbcStatusLookupGate.tla` captures RBC status lookup helpers used by
@@ -404,7 +410,7 @@ payload recovery and cleanup:
   require DELIVER,
 - stale-key and next-due helpers use zero TTL as disabled, treat exact TTL
   boundary as due-but-not-stale, and saturate future timestamps to age zero.
-Its TLC cross-check independently exhausts the same twenty-one
+Its TLC cross-check independently exhausts the same twenty-four
 expected-failure configs as Apalache.
 
 `SumeragiRbcStatusRetentionGate.tla` captures RBC status retention helpers used
@@ -464,8 +470,9 @@ expected-failure configs as Apalache.
 `SumeragiRbcBacklogStatusGate.tla` captures RBC backlog summary and status
 publication helpers:
 - `rbc_backlog_summary()` counts only DA-enabled, active, non-invalid sessions
-  that still lack authoritative payload progress, plus pending stashes at the
-  committed tip or next height,
+  that still lack authoritative payload progress, treats malformed live chunk
+  counters as trusted missing pressure even when authoritative payloads exist,
+  plus pending stashes at the committed tip or next height,
 - `proposal_rbc_backlog_summary()` uses the stricter proposal-blocking
   predicate and does not count tip/next pending stashes unless they block
   proposal assembly,
@@ -698,13 +705,28 @@ before deciding whether to drop stale traffic or refetch payloads:
 - future messages without a local Kura block remain live,
 - `rbc_session_needs_payload(...)` never refetches invalid sessions, skips
   delivered complete payload matches, and skips complete undelivered matches,
-- incomplete chunks, missing payload hashes, and mismatched payload hashes still
-  require payload recovery.
+- incomplete chunks, missing payload hashes, mismatched payload hashes,
+  zero-chunk metadata, and over-counted metadata still require payload recovery.
+
+`SumeragiRbcPayloadHydrationGate.tla` captures authoritative local payload
+hydration after recovery:
+- invalid sessions and already complete positive-shape sessions skip
+  hydration,
+- incomplete, zero-total, and over-counted sessions attempt local payload
+  hydration,
+- zero-total metadata adopts the deterministic positive chunk count from the
+  exact local payload, and over-counted metadata recounts to the observed
+  positive total, and
+- empty payloads, payload-hash mismatches, zero-total digest/root mismatches,
+  and nonzero chunk-count mismatches still fail closed.
 
 `SumeragiRbcMissingBlockRecoveryGate.tla` captures RBC-specific missing
 BlockCreated recovery admission before the generic fetch planner runs:
 - locally known blocks bypass BlockCreated recovery, while absent sessions,
   incomplete metadata, and invalid sessions still require recovery,
+- block materialization requires authoritative complete payload evidence and
+  does not fall back to raw complete chunk bytes when the payload hash is
+  missing,
 - exact-frontier, next-slot, and already-committed payload gaps force the
   authoritative body repair path unless the session is invalid, the payload is
   already authoritative, or the RBC session has authoritative progress,
@@ -2315,13 +2337,13 @@ and contiguous-frontier fast resend helpers:
 `SumeragiRbcAvailabilityRescheduleGate.tla` captures
 `rbc_availability_unresolved_for_reschedule(...)`:
 - DA-disabled, timed-out, local-payload, absent, invalid, delivered,
-  complete-ready, and zero-total READY sessions fail open,
-- pending entries, zero-timeout pending entries, missing chunks, missing READY
-  quorum, and complete-but-not-ready sessions block rescheduling before
-  timeout, and
+  and complete-ready sessions fail open,
+- pending entries, zero-timeout pending entries, invalid chunk shapes
+  (zero-total or overcounted chunks), missing chunks, missing READY quorum,
+  and complete-but-not-ready sessions block rescheduling before timeout, and
 - `RbcAvailabilityRescheduleExactness` composes exact fail-open gates,
-  terminal-session exits, pending-entry blocks, missing-chunk blocks, and
-  missing-READY quorum blocks.
+  terminal-session exits, pending-entry blocks, invalid-shape blocks,
+  missing-chunk blocks, and missing-READY quorum blocks.
 
 `SumeragiVoteBackedReassemblyStallGate.tla` captures the vote-backed
 same-height frontier reassembly stall helpers:
@@ -6356,13 +6378,13 @@ verification, and full networking details.
 - `SumeragiRbcCausalityGate_bug_*.cfg`: expected-failure INIT evidence, chunk integrity, READY validation, DELIVER validation, stash, duplicate, and commit-wakeup mutations.
 - `SumeragiRbcDeliverAcceptanceGate.tla`: RBC DELIVER acceptance decision model.
 - `SumeragiRbcDeliverAcceptanceGate_fast.cfg`: CI-friendly direct RBC DELIVER acceptance decision check.
-- `SumeragiRbcDeliverAcceptanceGate_bug_*.cfg`: expected-failure READY quorum, deferral-order, chunk availability, chunk-root, absent-root, and count-reporting mutations.
+- `SumeragiRbcDeliverAcceptanceGate_bug_*.cfg`: expected-failure READY quorum, deferral-order, chunk-shape, chunk availability, chunk-root, absent-root, and count-reporting mutations.
 - `SumeragiRbcReadyEmissionGate.tla`: RBC local READY emission decision model.
 - `SumeragiRbcReadyEmissionGate_fast.cfg`: CI-friendly direct RBC local READY emission check.
 - `SumeragiRbcReadyEmissionGate_bug_*.cfg`: expected-failure terminal, roster, payload, chunk-root, broadcast, observer, local-membership, and builder-miss mutations.
 - `SumeragiRbcDeliverEmissionGate.tla`: RBC local DELIVER emission decision model.
 - `SumeragiRbcDeliverEmissionGate_fast.cfg`: CI-friendly direct RBC local DELIVER emission check.
-- `SumeragiRbcDeliverEmissionGate_bug_*.cfg`: expected-failure terminal-session, hydration, roster, payload, READY, chunk-root, local-bypass, builder, committed-suppression, broadcast, recovery, and status mutations.
+- `SumeragiRbcDeliverEmissionGate_bug_*.cfg`: expected-failure terminal-session, malformed-hydration, hydration-terminal, roster, payload, READY, chunk-root, local-bypass, builder, committed-suppression, broadcast, recovery, and status mutations.
 - `SumeragiRbcDeliveredRebroadcastGate.tla`: RBC delivered-session rebroadcast scheduling and tick-branch model.
 - `SumeragiRbcDeliveredRebroadcastGate_fast.cfg`: CI-friendly direct RBC delivered-session rebroadcast check.
 - `SumeragiRbcDeliveredRebroadcastGate_bug_*.cfg`: expected-failure next-due, observer/DA, cursor, hot-repair, rescue, DELIVER cooldown/build, timestamp, progress, and delivered-branch fallthrough mutations.
@@ -6404,7 +6426,7 @@ verification, and full networking details.
 - `SumeragiRbcSessionReadyDeliverGate_bug_*.cfg`: expected-failure READY duplicate/conflict, roster-hash, first-DELIVER, and DELIVER-replay mutations.
 - `SumeragiRbcDeliveredPayloadBytesGate.tla`: RBC delivered-payload byte telemetry model.
 - `SumeragiRbcDeliveredPayloadBytesGate_fast.cfg`: CI-friendly direct RBC delivered-payload byte telemetry check.
-- `SumeragiRbcDeliveredPayloadBytesGate_bug_*.cfg`: expected-failure delivered/completeness guard, layout-vs-sum, fallback, saturation, and once-only marker mutations.
+- `SumeragiRbcDeliveredPayloadBytesGate_bug_*.cfg`: expected-failure delivered/completeness/invalid-shape guard, payload-hash guard, layout-vs-sum, fallback, saturation, and once-only marker mutations.
 - `SumeragiRbcRs16InitialFanoutGate.tla`: RBC RS16 reduced initial fanout helper model.
 - `SumeragiRbcRs16InitialFanoutGate_fast.cfg`: CI-friendly direct RBC RS16 initial fanout helper check.
 - `SumeragiRbcRs16InitialFanoutGate_bug_*.cfg`: expected-failure Full/plain/zero-return, required-count, width-clamp, stripe-count, duplicate, out-of-range, sort, coverage, and reconstruction mutations.
@@ -6467,7 +6489,7 @@ verification, and full networking details.
 - `SumeragiCommitInflightStatusGate_bug_*.cfg`: expected-failure reset, start, finish, timeout, elapsed, JSON, and typed-status projection mutations.
 - `SumeragiRbcStatusLookupGate.tla`: RBC status lookup and stale-summary helper model.
 - `SumeragiRbcStatusLookupGate_fast.cfg`: CI-friendly direct RBC status lookup helper check.
-- `SumeragiRbcStatusLookupGate_bug_*.cfg`: expected-failure delivered lookup, payload-completeness, exact-view, invalid-summary, TTL boundary, future-time, and next-due mutations.
+- `SumeragiRbcStatusLookupGate_bug_*.cfg`: expected-failure delivered lookup, payload-completeness, exact-view, invalid-summary, over-counted-summary, TTL boundary, future-time, and next-due mutations.
 - `SumeragiRbcStatusRetentionGate.tla`: RBC status retention and update-pruning helper model.
 - `SumeragiRbcStatusRetentionGate_fast.cfg`: CI-friendly direct RBC status retention helper check.
 - `SumeragiRbcStatusRetentionGate_bug_*.cfg`: expected-failure TTL disabled/boundary/stale/future, capacity pruning, update persistence, timestamp refresh, active-count, and changed-summary mutations.
@@ -6479,7 +6501,7 @@ verification, and full networking details.
 - `SumeragiRbcStatusHandleGate_bug_*.cfg`: expected-failure configure, remove, clear, update-at, active-store, snapshot, and session-count mutations.
 - `SumeragiRbcBacklogStatusGate.tla`: RBC backlog summary and status snapshot model.
 - `SumeragiRbcBacklogStatusGate_fast.cfg`: CI-friendly direct RBC backlog/status helper check.
-- `SumeragiRbcBacklogStatusGate_bug_*.cfg`: expected-failure DA-disabled, inactive, invalid, authoritative-payload, pending-stash, strict-soft-limit, and snapshot publication mutations.
+- `SumeragiRbcBacklogStatusGate_bug_*.cfg`: expected-failure DA-disabled, inactive, invalid, authoritative-payload, malformed-chunk, pending-stash, strict-soft-limit, and snapshot publication mutations.
 - `SumeragiRbcAbortStatusGate.tla`: RBC abort status counter and latest-slot model.
 - `SumeragiRbcAbortStatusGate_fast.cfg`: CI-friendly RBC abort status counter component/anchor check.
 - `SumeragiRbcAbortStatusGate_bug_*.cfg`: expected-failure reset, count, latest height/view, lower-slot, zero-slot, and status-snapshot mutations.
@@ -6527,10 +6549,13 @@ verification, and full networking details.
 - `SumeragiRoundGapStatusGate_bug_*.cfg`: expected-failure marker identity, incomplete snapshot, duration, EMA, pruning, projection, and reset mutations.
 - `SumeragiRbcRecoveryHelperGate.tla`: RBC stale-message and payload-refetch helper model.
 - `SumeragiRbcRecoveryHelperGate_fast.cfg`: CI-friendly direct RBC recovery helper check.
-- `SumeragiRbcRecoveryHelperGate_bug_*.cfg`: expected-failure committed-height, Kura-presence, future-message, invalid-session, delivered-complete, chunk-completeness, and payload-hash mutations.
+- `SumeragiRbcRecoveryHelperGate_bug_*.cfg`: expected-failure committed-height, Kura-presence, future-message, invalid-session, delivered-complete, chunk-completeness, payload-hash, and invalid-shape recovery mutations.
+- `SumeragiRbcPayloadHydrationGate.tla`: RBC authoritative local payload hydration model.
+- `SumeragiRbcPayloadHydrationGate_fast.cfg`: CI-friendly direct RBC payload hydration check.
+- `SumeragiRbcPayloadHydrationGate_bug_*.cfg`: expected-failure empty-payload, payload-hash, zero-total digest/root, zero-total repair, over-count, and count-mismatch hydration mutations.
 - `SumeragiRbcMissingBlockRecoveryGate.tla`: RBC BlockCreated recovery admission, signer fallback, and far-future suppression model.
 - `SumeragiRbcMissingBlockRecoveryGate_fast.cfg`: CI-friendly direct RBC missing-block recovery helper check.
-- `SumeragiRbcMissingBlockRecoveryGate_bug_*.cfg`: expected-failure known-block bypass, metadata recovery, exact-frontier force, signer fallback, and far-future suppression/reanchor mutations.
+- `SumeragiRbcMissingBlockRecoveryGate_bug_*.cfg`: expected-failure known-block bypass, metadata recovery, authoritative-only materialization, exact-frontier force, signer fallback, and far-future suppression/reanchor mutations.
 - `SumeragiRbcUnverifiedRosterGate.tla`: RBC unverified-roster escape-hatch helper model.
 - `SumeragiRbcUnverifiedRosterGate_fast.cfg`: CI-friendly direct RBC unverified-roster escape-hatch check.
 - `SumeragiRbcUnverifiedRosterGate_bug_*.cfg`: expected-failure mode, active-fallback, same-epoch payload, vote-roster, next-epoch payload, and empty-roster mutations.
@@ -6980,7 +7005,7 @@ verification, and full networking details.
 - `SumeragiQuorumRescheduleBackoffGate_bug_*.cfg`: expected-failure deficit multiplier, stall escalation, resend-window, and fast-resend gate mutations.
 - `SumeragiRbcAvailabilityRescheduleGate.tla`: DA/RBC availability reschedule gate model.
 - `SumeragiRbcAvailabilityRescheduleGate_fast.cfg`: CI-friendly direct RBC availability reschedule gate check.
-- `SumeragiRbcAvailabilityRescheduleGate_bug_*.cfg`: expected-failure DA-disabled, timeout, local-payload, pending/session-state, missing-chunk, and READY-quorum mutations.
+- `SumeragiRbcAvailabilityRescheduleGate_bug_*.cfg`: expected-failure DA-disabled, timeout, local-payload, pending/session-state, invalid-shape, missing-chunk, and READY-quorum mutations.
 - `SumeragiVoteBackedReassemblyStallGate.tla`: vote-backed same-height frontier reassembly stall helper model.
 - `SumeragiVoteBackedReassemblyStallGate_fast.cfg`: CI-friendly direct vote-backed reassembly stall helper check.
 - `SumeragiVoteBackedReassemblyStallGate_bug_*.cfg`: expected-failure hard-cap, slot-owner, recovery-owner, progress-timestamp, and expiry-threshold mutations.
@@ -8313,9 +8338,10 @@ RBC DELIVER acceptance gate invariants:
 - `ReadyQuorumDefersFirst`
 - `ZeroRequiredReadyDoesNotDefer`
 - `ReadyDeferralPrecedesChunkDeferral`
+- `ReadyDeferralPrecedesInvalidShape`
 - `MissingChunksDeferUnlessAllowed`
 - `AllowMissingChunksBypassesChunkDeferral`
-- `ZeroTotalBypassesChunkDeferral`
+- `InvalidChunkShapeRejected`
 - `MismatchedChunkRootRejected`
 - `AbsentExpectedRootDoesNotReject`
 - `AbsentComputedRootDoesNotReject`
@@ -10564,10 +10590,12 @@ implementation surfaces it abstracts:
 | --- | --- |
 | `ReadyQuorumDefersFirst` | `evaluate_deliver_acceptance_with_policy(...)` checks `required_ready != 0 && ready_signatures.len() < required_ready` before chunk availability, so missing READY evidence wins over missing chunks. |
 | `ZeroRequiredReadyDoesNotDefer` | A zero `required_ready` bypasses READY deferral instead of requiring at least one READY signature. |
-| `MissingChunksDeferUnlessAllowed`, `AllowMissingChunksBypassesChunkDeferral`, `ZeroTotalBypassesChunkDeferral` | `received_chunks() < total_chunks()` defers only when `allow_missing_chunks` is false and `total_chunks() != 0`; policy-allowed missing chunks and zero-total sessions do not synthesize chunk deferral. |
+| `ReadyDeferralPrecedesInvalidShape` | READY-quorum deferral is checked before `InvalidChunkShape`, so malformed chunk counts with missing READY still report the READY dependency first. |
+| `MissingChunksDeferUnlessAllowed`, `AllowMissingChunksBypassesChunkDeferral` | `received_chunks() < total_chunks()` defers only when `allow_missing_chunks` is false and the chunk shape is valid; policy-allowed missing chunks do not synthesize chunk deferral. |
+| `InvalidChunkShapeRejected` | `total_chunks == 0` and `received_chunks > total_chunks` return `DeliverAcceptance::InvalidChunkShape`, including when missing chunks are otherwise policy-allowed. |
 | `MismatchedChunkRootRejected` | When both `expected_chunk_root` and `chunk_root()` are present, mismatches return `DeliverAcceptance::InvalidChunkRoot`. |
 | `AbsentExpectedRootDoesNotReject`, `AbsentComputedRootDoesNotReject` | The implementation compares roots only when both are present. |
-| `AcceptRequiresAllGatesOpen` | `DeliverAcceptance::Accept` is reachable only after READY, chunk-availability, and chunk-root gates have all passed. |
+| `AcceptRequiresAllGatesOpen` | `DeliverAcceptance::Accept` is reachable only after READY, chunk-shape, chunk-availability, and chunk-root gates have all passed. |
 
 The RBC commit-processing trigger model is intentionally finite. These are the
 implementation surfaces it abstracts:
@@ -11093,8 +11121,8 @@ implementation surfaces it abstracts:
 | `DaDisabled`, `TimeoutBoundary`, `LocalPayloadAvailable` | `rbc_availability_unresolved_for_reschedule(...)` fails open when DA is disabled, when a nonzero availability timeout has elapsed, or when the payload is already available locally. |
 | `TimeoutBelowPending`, `TimeoutZeroPending`, `PendingEntry` | Before the timeout, and indefinitely for a zero timeout, a pending RBC entry keeps quorum rescheduling blocked. |
 | `NoSession`, `InvalidSession`, `DeliveredSession` | Absent, invalid, and already-delivered RBC sessions do not block quorum rescheduling. |
-| `CompleteReady`, `MissingChunks`, `ZeroTotalReady`, `NotReady`, `CompleteButNotReady` | A usable session blocks when it has an impossible zero-total shape, nonzero chunks are still missing, or READY quorum is not reached; complete positive-chunk READY sessions fail open. |
-| `RbcAvailabilityRescheduleExactness` | The aggregate invariant ties DA-disabled, timeout, local-payload, absent/invalid/delivered/complete-positive fail-open paths with pending-entry, zero-total, missing-chunk, and missing-READY blocking paths for every bounded case. |
+| `CompleteReady`, `MissingChunks`, `ZeroTotalReady`, `OvercountReady`, `NotReady`, `CompleteButNotReady` | A usable session blocks when it has an invalid chunk shape (zero total or received chunks above total), nonzero chunks are still missing, or READY quorum is not reached; complete positive-chunk READY sessions fail open. |
+| `RbcAvailabilityRescheduleExactness` | The aggregate invariant ties DA-disabled, timeout, local-payload, absent/invalid/delivered/complete-positive fail-open paths with pending-entry, invalid-shape, missing-chunk, and missing-READY blocking paths for every bounded case. |
 
 The vote-backed reassembly stall model is intentionally finite. These are the
 implementation surfaces it abstracts:
@@ -13098,6 +13126,7 @@ bash scripts/formal/sumeragi_apalache.sh rbc-store-status-fast
 bash scripts/formal/sumeragi_apalache.sh rbc-store-pressure-log-fast
 bash scripts/formal/sumeragi_apalache.sh round-gap-status-fast
 bash scripts/formal/sumeragi_apalache.sh rbc-recovery-helper-fast
+bash scripts/formal/sumeragi_apalache.sh rbc-payload-hydration-fast
 bash scripts/formal/sumeragi_apalache.sh rbc-missing-block-recovery-fast
 bash scripts/formal/sumeragi_apalache.sh rbc-unverified-roster-fast
 bash scripts/formal/sumeragi_apalache.sh rbc-preimage-fast
@@ -13829,6 +13858,7 @@ bash scripts/formal/sumeragi_tlc.sh rbc-store-status-fast
 bash scripts/formal/sumeragi_tlc.sh rbc-store-pressure-log-fast
 bash scripts/formal/sumeragi_tlc.sh round-gap-status-fast
 bash scripts/formal/sumeragi_tlc.sh rbc-recovery-helper-fast
+bash scripts/formal/sumeragi_tlc.sh rbc-payload-hydration-fast
 bash scripts/formal/sumeragi_tlc.sh rbc-missing-block-recovery-fast
 bash scripts/formal/sumeragi_tlc.sh rbc-unverified-roster-fast
 bash scripts/formal/sumeragi_tlc.sh rbc-preimage-fast
@@ -14109,6 +14139,7 @@ The runner sets an explicit Apalache `--length` for each mode:
 | `rbc-store-pressure-log-fast` | 1 | CI RBC store pressure log throttling component/anchor check |
 | `round-gap-status-fast` | 1 | CI round-gap marker/snapshot/EMA status component/anchor check |
 | `rbc-recovery-helper-fast` | 1 | CI direct RBC stale-message/payload-refetch helper check |
+| `rbc-payload-hydration-fast` | 1 | CI direct RBC authoritative local payload hydration check |
 | `rbc-missing-block-recovery-fast` | 1 | CI direct RBC BlockCreated recovery helper check |
 | `rbc-unverified-roster-fast` | 1 | CI direct RBC unverified-roster escape-hatch helper check |
 | `rbc-preimage-fast` | 1 | CI RBC signing-preimage component/anchor check |
@@ -15036,12 +15067,19 @@ projection, and reset cleanup.
 RBC message commitment and payload-refetch decisions, including stale/current
 message handling, Kura presence, future-message rejection, invalid-session
 suppression, delivered/complete session suppression, payload-hash mismatch
-fetches, missing-payload fetches, and zero-chunk recovery.
+fetches, missing-payload fetches, zero-chunk recovery, and over-counted
+metadata recovery.
+`rbc-payload-hydration-fast` and `rbc-payload-hydration-bug-*` cross-check
+authoritative local payload hydration after recovery: invalid/complete skip
+gates, incomplete session repair, zero-total metadata adoption, over-count
+recounting, empty-payload rejection, hash mismatch rejection, zero-total
+digest/root mismatch rejection, and nonzero chunk-count mismatch rejection.
 `rbc-missing-block-recovery-fast` and `rbc-missing-block-recovery-bug-*`
 cross-check RBC-specific missing-block recovery: known-local bypass,
-BlockCreated metadata recovery, forced frontier body fetches, signer fallback
-mode thresholds, near-frontier suppression rejection, far-future suppression,
-request cleanup, height-recovery cleanup, and range-pull reanchor triggers.
+BlockCreated metadata recovery, authoritative-only block materialization,
+forced frontier body fetches, signer fallback mode thresholds, near-frontier
+suppression rejection, far-future suppression, request cleanup,
+height-recovery cleanup, and range-pull reanchor triggers.
 `rbc-unverified-roster-fast` and `rbc-unverified-roster-bug-*` cross-check the
 permissioned unverified-roster escape hatch and roster availability: active
 fallback use, same-epoch payload fallback, vote-roster recovery, next-epoch
@@ -16169,14 +16207,15 @@ cross-check independently exhausts the same twenty expected-failure configs as
 Apalache.
 `rbc-availability-reschedule-fast` and `rbc-availability-reschedule-bug-*`
 cross-check DA/RBC availability gating for quorum rescheduling: DA-disabled,
-timed-out, local-payload, absent, invalid, delivered, complete-ready, and
-zero-total sessions fail open, while pending entries, zero-timeout pending
-entries, missing chunks, missing READY quorum, and complete-but-not-ready
-sessions block rescheduling before timeout. The fast check also includes the
+timed-out, local-payload, absent, invalid, delivered, and complete-ready
+sessions fail open, while pending entries, zero-timeout pending entries,
+invalid chunk shapes (zero-total or overcounted chunks), missing chunks,
+missing READY quorum, and complete-but-not-ready sessions block rescheduling
+before timeout. The fast check also includes the
 aggregate `RbcAvailabilityRescheduleExactness` invariant tying fail-open
-gates, terminal-session exits, pending-entry blocks, missing chunks, and
-missing READY quorum together. Its TLC cross-check independently exhausts the
-same thirteen expected-failure configs as Apalache.
+gates, terminal-session exits, pending-entry blocks, invalid-shape blocks,
+missing chunks, and missing READY quorum together. Its TLC cross-check
+independently exhausts the same fourteen expected-failure configs as Apalache.
 `vote-backed-reassembly-stall-fast` and `vote-backed-reassembly-stall-bug-*`
 cross-check vote-backed same-height frontier reassembly stall helpers:
 hard-cap arithmetic uses twice the maximum frontier recovery window, quorum
@@ -16793,6 +16832,7 @@ bash scripts/formal/sumeragi_apalache.sh rbc-deliver-acceptance-bug-prefer-chunk
 bash scripts/formal/sumeragi_apalache.sh rbc-deliver-acceptance-bug-ignore-missing-chunks
 bash scripts/formal/sumeragi_apalache.sh rbc-deliver-acceptance-bug-reject-allowed-missing-chunks
 bash scripts/formal/sumeragi_apalache.sh rbc-deliver-acceptance-bug-require-chunks-for-zero-total
+bash scripts/formal/sumeragi_apalache.sh rbc-deliver-acceptance-bug-accept-overcounted-chunks
 bash scripts/formal/sumeragi_apalache.sh rbc-deliver-acceptance-bug-ignore-chunk-root-mismatch
 bash scripts/formal/sumeragi_apalache.sh rbc-deliver-acceptance-bug-reject-absent-root
 bash scripts/formal/sumeragi_apalache.sh rbc-deliver-acceptance-bug-wrong-defer-ready-count
@@ -16827,6 +16867,10 @@ bash scripts/formal/sumeragi_apalache.sh rbc-deliver-emission-bug-terminal-keeps
 bash scripts/formal/sumeragi_apalache.sh rbc-deliver-emission-bug-terminal-drops-session
 bash scripts/formal/sumeragi_apalache.sh rbc-deliver-emission-bug-hydration-missing-reinserts
 bash scripts/formal/sumeragi_apalache.sh rbc-deliver-emission-bug-hydration-terminal-keeps-deferrals
+bash scripts/formal/sumeragi_apalache.sh rbc-deliver-emission-bug-hydration-zero-total-defers
+bash scripts/formal/sumeragi_apalache.sh rbc-deliver-emission-bug-hydration-overcount-defers
+bash scripts/formal/sumeragi_apalache.sh rbc-deliver-emission-bug-hydration-zero-total-skips-broadcast
+bash scripts/formal/sumeragi_apalache.sh rbc-deliver-emission-bug-hydration-overcount-skips-broadcast
 bash scripts/formal/sumeragi_apalache.sh rbc-deliver-emission-bug-roster-missing-delivers
 bash scripts/formal/sumeragi_apalache.sh rbc-deliver-emission-bug-unverified-delivers
 bash scripts/formal/sumeragi_apalache.sh rbc-deliver-emission-bug-unverified-skips-payload-rebroadcast
@@ -17064,9 +17108,14 @@ bash scripts/formal/sumeragi_apalache.sh rbc-delivered-payload-bytes-bug-missing
 bash scripts/formal/sumeragi_apalache.sh rbc-delivered-payload-bytes-bug-chunk-sum-not-saturating
 bash scripts/formal/sumeragi_apalache.sh rbc-delivered-payload-bytes-bug-take-recorded-reports-again
 bash scripts/formal/sumeragi_apalache.sh rbc-delivered-payload-bytes-bug-take-not-delivered-uses-fallback
+bash scripts/formal/sumeragi_apalache.sh rbc-delivered-payload-bytes-bug-take-invalid-uses-fallback
+bash scripts/formal/sumeragi_apalache.sh rbc-delivered-payload-bytes-bug-take-missing-hash-uses-fallback
 bash scripts/formal/sumeragi_apalache.sh rbc-delivered-payload-bytes-bug-take-none-sets-recorded
 bash scripts/formal/sumeragi_apalache.sh rbc-delivered-payload-bytes-bug-fallback-ignored-for-incomplete
 bash scripts/formal/sumeragi_apalache.sh rbc-delivered-payload-bytes-bug-fallback-does-not-set-recorded
+bash scripts/formal/sumeragi_apalache.sh rbc-delivered-payload-bytes-bug-zero-total-uses-fallback
+bash scripts/formal/sumeragi_apalache.sh rbc-delivered-payload-bytes-bug-overcount-uses-fallback
+bash scripts/formal/sumeragi_apalache.sh rbc-delivered-payload-bytes-bug-mismatch-uses-fallback
 bash scripts/formal/sumeragi_apalache.sh rbc-delivered-payload-bytes-bug-computed-uses-fallback
 bash scripts/formal/sumeragi_apalache.sh rbc-delivered-payload-bytes-bug-computed-does-not-set-recorded
 bash scripts/formal/sumeragi_apalache.sh rbc-delivered-payload-bytes-bug-missing-slot-ignores-fallback
@@ -17608,10 +17657,12 @@ bash scripts/formal/sumeragi_apalache.sh commit-inflight-status-bug-typed-core-m
 bash scripts/formal/sumeragi_apalache.sh commit-inflight-status-bug-typed-timeout-mismatch
 bash scripts/formal/sumeragi_apalache.sh commit-inflight-status-bug-typed-queue-depth-mismatch
 bash scripts/formal/sumeragi_apalache.sh rbc-status-lookup-bug-is-delivered-accepts-incomplete
+bash scripts/formal/sumeragi_apalache.sh rbc-status-lookup-bug-is-delivered-accepts-overcount
 bash scripts/formal/sumeragi_apalache.sh rbc-status-lookup-bug-is-delivered-accepts-invalid
 bash scripts/formal/sumeragi_apalache.sh rbc-status-lookup-bug-is-delivered-checks-payload
 bash scripts/formal/sumeragi_apalache.sh rbc-status-lookup-bug-is-delivered-ignores-other-view
 bash scripts/formal/sumeragi_apalache.sh rbc-status-lookup-bug-delivered-accepts-incomplete
+bash scripts/formal/sumeragi_apalache.sh rbc-status-lookup-bug-delivered-accepts-overcount
 bash scripts/formal/sumeragi_apalache.sh rbc-status-lookup-bug-delivered-accepts-invalid
 bash scripts/formal/sumeragi_apalache.sh rbc-status-lookup-bug-delivered-accepts-missing-payload
 bash scripts/formal/sumeragi_apalache.sh rbc-status-lookup-bug-delivered-accepts-wrong-payload
@@ -17620,6 +17671,7 @@ bash scripts/formal/sumeragi_apalache.sh rbc-status-lookup-bug-complete-requires
 bash scripts/formal/sumeragi_apalache.sh rbc-status-lookup-bug-complete-accepts-wrong-view
 bash scripts/formal/sumeragi_apalache.sh rbc-status-lookup-bug-complete-accepts-invalid
 bash scripts/formal/sumeragi_apalache.sh rbc-status-lookup-bug-complete-accepts-incomplete
+bash scripts/formal/sumeragi_apalache.sh rbc-status-lookup-bug-complete-accepts-overcount
 bash scripts/formal/sumeragi_apalache.sh rbc-status-lookup-bug-complete-accepts-wrong-payload
 bash scripts/formal/sumeragi_apalache.sh rbc-status-lookup-bug-stale-zero-ttl-expires
 bash scripts/formal/sumeragi_apalache.sh rbc-status-lookup-bug-stale-boundary-expires
@@ -17716,6 +17768,8 @@ bash scripts/formal/sumeragi_apalache.sh rbc-backlog-status-bug-summary-invalid-
 bash scripts/formal/sumeragi_apalache.sh rbc-backlog-status-bug-summary-authoritative-counts
 bash scripts/formal/sumeragi_apalache.sh rbc-backlog-status-bug-summary-missing-chunks-ignored
 bash scripts/formal/sumeragi_apalache.sh rbc-backlog-status-bug-summary-missing-uses-received
+bash scripts/formal/sumeragi_apalache.sh rbc-backlog-status-bug-summary-malformed-uses-saturating-zero
+bash scripts/formal/sumeragi_apalache.sh rbc-backlog-status-bug-summary-authoritative-malformed-ignored
 bash scripts/formal/sumeragi_apalache.sh rbc-backlog-status-bug-summary-pending-tip-ignored
 bash scripts/formal/sumeragi_apalache.sh rbc-backlog-status-bug-summary-pending-next-ignored
 bash scripts/formal/sumeragi_apalache.sh rbc-backlog-status-bug-summary-pending-future-counts
@@ -17724,6 +17778,8 @@ bash scripts/formal/sumeragi_apalache.sh rbc-backlog-status-bug-summary-drops-de
 bash scripts/formal/sumeragi_apalache.sh rbc-backlog-status-bug-proposal-pending-tip-counts
 bash scripts/formal/sumeragi_apalache.sh rbc-backlog-status-bug-proposal-blocking-pending-ignored
 bash scripts/formal/sumeragi_apalache.sh rbc-backlog-status-bug-proposal-session-ignores-missing
+bash scripts/formal/sumeragi_apalache.sh rbc-backlog-status-bug-proposal-malformed-uses-saturating-zero
+bash scripts/formal/sumeragi_apalache.sh rbc-backlog-status-bug-proposal-authoritative-malformed-ignored
 bash scripts/formal/sumeragi_apalache.sh rbc-backlog-status-bug-proposal-inactive-counts
 bash scripts/formal/sumeragi_apalache.sh rbc-backlog-status-bug-soft-exact-session-triggers
 bash scripts/formal/sumeragi_apalache.sh rbc-backlog-status-bug-soft-exact-missing-triggers
@@ -17732,6 +17788,7 @@ bash scripts/formal/sumeragi_apalache.sh rbc-backlog-status-bug-soft-ignores-mis
 bash scripts/formal/sumeragi_apalache.sh rbc-backlog-status-bug-snapshot-counts-delivered-as-pending
 bash scripts/formal/sumeragi_apalache.sh rbc-backlog-status-bug-snapshot-ignores-undelivered
 bash scripts/formal/sumeragi_apalache.sh rbc-backlog-status-bug-snapshot-max-uses-total
+bash scripts/formal/sumeragi_apalache.sh rbc-backlog-status-bug-snapshot-malformed-uses-saturating-zero
 bash scripts/formal/sumeragi_apalache.sh rbc-backlog-status-bug-snapshot-pending-stash-ignored
 bash scripts/formal/sumeragi_apalache.sh rbc-backlog-status-bug-snapshot-caps-zeroed
 bash scripts/formal/sumeragi_apalache.sh rbc-backlog-status-bug-snapshot-pending-stash-as-session
@@ -18126,6 +18183,16 @@ bash scripts/formal/sumeragi_apalache.sh rbc-recovery-helper-bug-needs-wrong-pay
 bash scripts/formal/sumeragi_apalache.sh rbc-recovery-helper-bug-needs-incomplete-match-skips
 bash scripts/formal/sumeragi_apalache.sh rbc-recovery-helper-bug-needs-missing-payload-skips
 bash scripts/formal/sumeragi_apalache.sh rbc-recovery-helper-bug-needs-zero-chunk-skips
+bash scripts/formal/sumeragi_apalache.sh rbc-recovery-helper-bug-needs-overcount-skips
+bash scripts/formal/sumeragi_apalache.sh rbc-payload-hydration-bug-empty-payload-accepted
+bash scripts/formal/sumeragi_apalache.sh rbc-payload-hydration-bug-hash-mismatch-accepted
+bash scripts/formal/sumeragi_apalache.sh rbc-payload-hydration-bug-zero-total-rejected
+bash scripts/formal/sumeragi_apalache.sh rbc-payload-hydration-bug-zero-total-helper-skips
+bash scripts/formal/sumeragi_apalache.sh rbc-payload-hydration-bug-overcount-helper-skips
+bash scripts/formal/sumeragi_apalache.sh rbc-payload-hydration-bug-overcount-keeps-received
+bash scripts/formal/sumeragi_apalache.sh rbc-payload-hydration-bug-zero-total-digest-mismatch-accepted
+bash scripts/formal/sumeragi_apalache.sh rbc-payload-hydration-bug-zero-total-root-mismatch-accepted
+bash scripts/formal/sumeragi_apalache.sh rbc-payload-hydration-bug-count-mismatch-accepted
 bash scripts/formal/sumeragi_apalache.sh rbc-missing-block-recovery-bug-needs-known-local-fetches
 bash scripts/formal/sumeragi_apalache.sh rbc-missing-block-recovery-bug-needs-missing-session-skips
 bash scripts/formal/sumeragi_apalache.sh rbc-missing-block-recovery-bug-needs-payload-hash-skips
@@ -18133,6 +18200,7 @@ bash scripts/formal/sumeragi_apalache.sh rbc-missing-block-recovery-bug-needs-he
 bash scripts/formal/sumeragi_apalache.sh rbc-missing-block-recovery-bug-needs-signature-skips
 bash scripts/formal/sumeragi_apalache.sh rbc-missing-block-recovery-bug-needs-invalid-skips
 bash scripts/formal/sumeragi_apalache.sh rbc-missing-block-recovery-bug-needs-complete-fetches
+bash scripts/formal/sumeragi_apalache.sh rbc-missing-block-recovery-bug-materialize-missing-payload-hash
 bash scripts/formal/sumeragi_apalache.sh rbc-missing-block-recovery-bug-force-invalid-fetches
 bash scripts/formal/sumeragi_apalache.sh rbc-missing-block-recovery-bug-force-payload-available-fetches
 bash scripts/formal/sumeragi_apalache.sh rbc-missing-block-recovery-bug-force-frontier-gap-skips
@@ -21325,6 +21393,7 @@ bash scripts/formal/sumeragi_apalache.sh rbc-availability-reschedule-bug-deliver
 bash scripts/formal/sumeragi_apalache.sh rbc-availability-reschedule-bug-complete-ready-blocks
 bash scripts/formal/sumeragi_apalache.sh rbc-availability-reschedule-bug-missing-chunks-ignored
 bash scripts/formal/sumeragi_apalache.sh rbc-availability-reschedule-bug-zero-total-counts-missing
+bash scripts/formal/sumeragi_apalache.sh rbc-availability-reschedule-bug-overcount-counts-complete
 bash scripts/formal/sumeragi_apalache.sh rbc-availability-reschedule-bug-not-ready-ignored
 bash scripts/formal/sumeragi_apalache.sh rbc-availability-reschedule-bug-complete-not-ready-allowed
 bash scripts/formal/sumeragi_apalache.sh vote-backed-reassembly-stall-bug-hard-cap-uses-min

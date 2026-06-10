@@ -61,9 +61,27 @@ fn exec_witness_lock() -> &'static Mutex<()> {
 }
 
 fn lock_slot() -> MutexGuard<'static, BlockWitness> {
-    slot()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+    match slot().lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            iroha_logger::warn!(
+                "execution witness recorder mutex was poisoned; recovering block witness state"
+            );
+            poisoned.into_inner()
+        }
+    }
+}
+
+fn lock_exec_witness_lock() -> MutexGuard<'static, ()> {
+    match exec_witness_lock().lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            iroha_logger::warn!(
+                "execution witness guard mutex was poisoned; recovering exclusive witness access"
+            );
+            poisoned.into_inner()
+        }
+    }
 }
 
 fn with_active_slot(f: impl FnOnce(&mut BlockWitness)) {
@@ -84,9 +102,7 @@ fn clear_block() {
 /// Hold exclusive access to the global witness recorder for the duration of a block execution.
 pub fn exec_witness_guard() -> ExecWitnessGuard {
     ExecWitnessGuard {
-        _guard: exec_witness_lock()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner),
+        _guard: lock_exec_witness_lock(),
     }
 }
 
@@ -1280,6 +1296,36 @@ mod tests {
             drain_exec_witness().reads.is_empty(),
             "drain must deactivate capture so inactive records are ignored"
         );
+    }
+
+    #[test]
+    fn recorder_recovers_poisoned_witness_locks() {
+        let _ = std::panic::catch_unwind(|| {
+            let _guard = exec_witness_lock()
+                .lock()
+                .expect("execution witness guard lock should be held");
+            panic!("poison execution witness guard for recovery test");
+        });
+        let _ = std::panic::catch_unwind(|| {
+            let mut guard = slot()
+                .lock()
+                .expect("execution witness slot lock should be held");
+            guard.active = true;
+            panic!("poison execution witness slot for recovery test");
+        });
+
+        let _guard = exec_witness_guard();
+        start_block();
+
+        let account = (*ALICE_ID).clone();
+        let key: Name = "color".parse().expect("metadata key");
+        let value = Json::new("red");
+        record_read_account_kv(&account, &key, Some(&value));
+
+        let drained = drain_exec_witness();
+        assert_eq!(drained.reads.len(), 1);
+        assert_eq!(drained.reads[0].key, key_account_kv(&account, &key));
+        assert_eq!(drained.reads[0].value, bytes_from_json(&value));
     }
 
     #[test]

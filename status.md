@@ -2,6 +2,96 @@
 
 Last updated: 2026-06-10
 
+## 2026-06-10 Sumeragi malformed RBC hydration validation follow-up
+
+- Revalidated the malformed DA/RBC chunk-counter repair slice after wiring the
+  dedicated payload-hydration formal gate into the CI inventory. Zero-total local
+  sessions hydrate from authoritative payload bytes before READY, DELIVER, and
+  stalled rebroadcast, over-counted sessions are recounted from the local payload,
+  and receiver-side malformed DELIVER evidence still fails closed.
+- Added direct local-DELIVER emission regressions for zero-total and over-counted
+  live sessions. Both tests seed a pending authoritative block payload plus READY
+  quorum, then assert the session is hydrated into a positive complete chunk shape
+  before the actor records and broadcasts DELIVER.
+- Extended `SumeragiRbcDeliverEmissionGate.tla` so the top-level local DELIVER
+  emission model now has explicit zero-total and over-count hydration-success
+  cases. Four new expected-failure configs pin regressions that keep those
+  repaired sessions deferred or skip the required DELIVER broadcast, bringing the
+  `rbc-deliver-emission` mutation inventory to `35`.
+- Fixed the new `SumeragiRbcPayloadHydrationGate_fast.cfg` wiring so the PR fast
+  mode targets the model-specific `RbcPayloadHydrationMatchesSpec` and
+  `HydrationSafetyAnchors` invariants instead of the generic compatibility alias.
+- Added direct `apply_hydrated_payload(...)` regressions for zero-total repair,
+  over-count recounting, and fail-closed zero-total repair attempts with hostile
+  carried chunk-digest or chunk-root metadata. The payload-hydration TLA gate now
+  models those digest/root mismatch cases with two additional expected-failure
+  configs, bringing `rbc-payload-hydration` to `9` mutations.
+- Hardened `recover_block_from_rbc_session(...)` so it no longer falls back to
+  raw count-complete chunk bytes when the RBC session is missing authoritative
+  payload metadata. Block materialization now goes through the same verified
+  `rbc_session_has_authoritative_payload_for_progress(...)` boundary used by the
+  DA/RBC progress gates.
+- Added a runtime regression that seeds complete RBC bytes plus signed
+  BlockCreated metadata but removes the payload hash, then verifies recovery does
+  not materialize a pending block. The paired authoritative-payload recovery test
+  still passes.
+- Extended `SumeragiRbcMissingBlockRecoveryGate.tla` with a direct
+  materialization submodel and a `materialize_missing_payload_hash` expected
+  failure, bringing `rbc-missing-block-recovery` to `31` mutation configs.
+- Updated the DA/RBC operator documentation to spell out the local
+  authoritative-hydration path before READY/DELIVER signing while keeping
+  receiver-side malformed DELIVER acceptance fail-closed.
+- Patched the top-level Sumeragi formal-suite inventory in `ci/README.md` so it
+  now lists `rbc-payload-hydration` alongside the detailed wrapper, CI, and
+  expected-failure documentation.
+- Validation:
+  - `cargo fmt --all -- --check`
+  - `bash -n ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `rg --files docs/formal/sumeragi | rg 'SumeragiRbcDeliverEmissionGate_bug_.*\.cfg$' | wc -l`
+    (`35`)
+  - `for mode in hydration-zero-total-defers hydration-overcount-defers hydration-zero-total-skips-broadcast hydration-overcount-skips-broadcast; do cfg="docs/formal/sumeragi/SumeragiRbcDeliverEmissionGate_bug_${mode//-/_}.cfg"; test -f "$cfg" || exit 1; done`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `10379` documented modes,
+    `500` TLC fast modes, `9873` TLC mutation modes)
+  - `git diff --check`
+  - `rg --files docs/formal/sumeragi | rg 'SumeragiRbcMissingBlockRecoveryGate_bug_.*\.cfg$' | wc -l`
+    (`31`)
+  - `cargo test -p iroha_core recover_block_from_rbc_session_requires_authoritative_payload_hash --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core qc_missing_block_defer_recovers_authoritative_rbc_session_before_fetch --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `java -version` (blocked locally: no Java Runtime available, so
+    Apalache/TLC execution was not rerun in this environment)
+  - `cargo test -p iroha_core hydrated_payload_ --lib -- --nocapture`
+    (`12` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core zero_total --lib -- --nocapture`
+    (`8` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core overcounted --lib -- --nocapture`
+    (`6` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core rbc_backlog --lib -- --nocapture`
+    (`15` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core maybe_emit_rbc_ready --lib -- --nocapture`
+    (`16` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core rebroadcast_stalled_rbc_payloads --lib -- --nocapture`
+    (`20` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core maybe_emit_rbc_deliver --lib -- --nocapture`
+    (`13` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core maybe_emit_rbc_deliver_hydrates --lib -- --nocapture`
+    (`2` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_torii --features telemetry --test torii_sumeragi_telemetry sumeragi_rbc -- --nocapture`
+    (`6` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warning)
+
 ## 2026-06-10 Sumeragi adversarial docs and Torii RBC status test hygiene
 
 - Synced `docs/source/sumeragi_da.md` with the eleven-entry
@@ -25,6 +115,155 @@ Last updated: 2026-06-10
   count-complete session summary. The OpenAPI route summary, MCP tool
   description, operator docs, roadmap, endpoint tests, and metadata assertions
   now cover the distinction.
+- Extended Torii delivered and sessions endpoint negatives to over-counted
+  raw-delivered summaries, keeping malformed `received_chunks > total_chunks`
+  rows diagnostic-only instead of treating them as complete delivery.
+- Extended the core `rbc_status` delivery predicate regression so over-counted
+  summaries also fail `is_delivered`, `delivered_payload_matches`, and
+  `complete_payload_matches`, matching the persisted-recovery shape guard.
+- Extended runtime Sumeragi regressions so a live over-counted delivered
+  `RbcSession` cannot satisfy `delivered_payload_matches`, and an over-counted
+  retained RBC summary cannot elevate pending-block validation priority as
+  `rbc_deliver` evidence.
+- Hardened the operator-facing RBC status store so poisoned handle or active
+  snapshot mutexes recover with a warning instead of panicking and taking down
+  non-consensus delivery/status bookkeeping.
+- Hardened persisted RBC session recovery so delivered snapshots must carry a
+  deliver sender plus non-empty signature, stale deliver metadata with
+  `delivered=false` is rejected during store load, and unchecked reconstruction
+  clears stale deliver metadata before any later re-persist.
+- Hardened the block-sync roster validation memo so a poisoned cache mutex
+  recovers with a warning instead of panicking in consensus recovery helpers.
+  The memo remains only a validation cache; misses still recompute from the
+  canonical roster/QC/checkpoint inputs.
+- Hardened the operator RBC store eviction-history snapshot so poisoned
+  telemetry locks recover with a warning, preserve the bounded recent-eviction
+  deque, and continue recording/resetting DA/RBC store-pressure diagnostics.
+- Hardened the shared block payload/RBC ingress dedup cache so poisoned locks
+  recover with a warning across handle-side duplicate suppression and
+  actor-side pending RBC release paths, avoiding process-level failure in
+  best-effort ingress bookkeeping.
+- Hardened direct block-sync response permits so poisoned recovery-gossip
+  permit locks recover with a warning and continue preserving the single-use,
+  TTL-bounded response contract used by missing-payload/frontier recovery.
+- Hardened the vote ingress dedup cache so poisoned duplicate-suppression locks
+  recover with a warning and continue rejecting repeated votes instead of
+  panicking in the consensus ingress path that DA/RBC commit progress depends
+  on.
+- Hardened view-change-cause and validation-reject status telemetry so poisoned
+  last-field locks recover with a warning and continue recording, snapshotting,
+  and resetting the operator diagnostics used to debug DA/RBC stalls and
+  validation-triggered view changes.
+- Hardened vote-validation-drop and peer-key-policy status telemetry so
+  poisoned recent-history, peer-aggregate, and last-reason locks recover with a
+  warning instead of panicking or silently dropping the per-peer diagnostics used
+  to investigate consensus ingress rejection.
+- Hardened Kura persistence/staging status telemetry so poisoned last hash and
+  reason locks recover with a warning while continuing to record, snapshot, and
+  reset store-failure, post-commit sidecar, staging, rollback, and lock-reset
+  diagnostics.
+- Hardened consensus history status telemetry so poisoned validator-checkpoint,
+  commit-certificate, precommit-signer, NPoS-election, and key-lifecycle
+  history locks recover with a warning while preserving bounded record/query
+  behavior used by block-sync and roster recovery hints.
+- Hardened DA/lane status snapshots so poisoned availability, QC latency, RBC
+  backlog, pending-RBC, lane activity, pipeline execution, access-set source,
+  lane/dataspace RBC backlog, lane commitment, relay-envelope, and lane
+  governance locks recover with a warning while preserving status endpoint
+  visibility and bounded relay-envelope behavior.
+- Hardened core consensus status snapshots so poisoned highest/locked QC hash,
+  membership view hash, PRF seed, mode/staged tags, consensus-capability, and
+  commit-quorum hash locks recover with a warning while preserving operator
+  visibility into the active consensus state.
+- Hardened mode-flip last-error status bookkeeping so poisoned locks recover
+  with a warning instead of silently dropping write and snapshot visibility for
+  blocked/failed runtime consensus-mode transitions.
+- Hardened the non-consensus NEW_VIEW receipt tracker so poisoned locks recover
+  with a warning while preserving bounded receipt counting and Torii/operator
+  snapshot visibility.
+- Hardened execution-witness recorder lock recovery so poisoned block-witness
+  and exclusive-access mutexes emit warnings while preserving capture, snapshot,
+  and drain behavior.
+- Hardened the operator VRF-penalties epoch-report store so poisoned locks
+  recover with a warning while preserving update, read-only get, latest-epoch,
+  and test clear behavior.
+- Hardened consensus message-handling status counters so poisoned telemetry
+  maps recover with a warning across record, snapshot, and reset paths instead
+  of silently recovering without operator evidence.
+- Hardened the Sumeragi actor gate so a poisoned worker-scheduling mutex
+  recovers with a warning after a panic while preserving DA/availability,
+  urgent, and regular priority scheduling semantics.
+- Hardened settlement and Nexus economics status telemetry so poisoned DvP/PvP
+  settlement, Nexus fee, and Nexus staking snapshot locks recover with a
+  warning across record, snapshot, and test reset paths instead of panicking.
+- Hardened receiver-side RBC DELIVER acceptance so malformed live sessions
+  with `total_chunks == 0` or `received_chunks > total_chunks` are marked
+  invalid, dropped as `InvalidPayload`, and cannot satisfy delivery, including
+  under the DA missing-chunk policy. The direct DELIVER acceptance TLA gate now
+  models the invalid-shape branch and includes an over-counted expected-failure
+  mutation.
+- Hardened delivered-payload telemetry fallback so authoritative local payload
+  bytes are still accepted for incomplete valid raw deliveries, but zero-total
+  and over-counted delivered sessions cannot emit payload-byte metrics or
+  consume the once-only telemetry marker. The delivered-payload byte TLA gate
+  now also models invalid-session, missing-hash, invalid-shape, and
+  payload-mismatch fallback rejection with matching expected-failure configs.
+- Hardened the actor-level authoritative-local-payload telemetry fallback with
+  the same invalid-shape guard, so status/cleanup/DELIVER paths cannot bypass
+  the session helper and record delivered bytes for over-counted live sessions.
+- Hardened the DA/RBC availability reschedule gate so live sessions with
+  `total_chunks == 0` or `received_chunks > total_chunks` stay availability
+  unresolved before timeout, even with READY quorum. The direct availability
+  reschedule TLA gate now models the over-counted case and includes the matching
+  expected-failure mutation.
+- Extended the RBC recovery-helper unit and TLA coverage so non-invalid
+  over-counted chunk metadata stays payload-repairable instead of being treated
+  as complete or terminal recovery evidence.
+- Hardened local DA/RBC maintenance for malformed live chunk counters: READY and
+  DELIVER emission now attempt local-payload hydration before signing and defer
+  zero-total or over-counted sessions that remain malformed, authoritative
+  local payload hydration now repairs zero-total metadata by adopting the
+  deterministic positive chunk layout, the rebroadcast loop repairs or cools
+  down those sessions instead of spinning, and generic plus lane/dataspace
+  backlog snapshots report trusted missing pressure instead of letting
+  `received_chunks > total_chunks` look complete. The RBC backlog-status TLA
+  gate now includes malformed summary/proposal/snapshot cases plus matching
+  expected-failure mutations for saturating-to-zero or ignoring authoritative
+  malformed sessions.
+- Added a dedicated RBC payload-hydration TLA gate for the post-fetch repair
+  transition: invalid/complete sessions skip hydration, incomplete sessions
+  hydrate, zero-total metadata adopts the deterministic positive chunk count,
+  over-counted metadata is recounted, and empty payloads, payload-hash
+  mismatches, and nonzero chunk-count mismatches fail closed. The gate is wired
+  into the Apalache/TLC wrappers and CI expected-failure inventory with seven
+  mutations.
+- Hardened stale-view RBC pruning so it only drains committed sessions after
+  verified complete delivery. Raw-delivered incomplete sessions now keep their
+  runtime session, chunk-repair state, and persisted recovery bookkeeping across
+  stale-view cleanup even when the block payload is already locally available.
+- Hardened RBC session TTL pruning so stale retained status summaries and
+  persisted snapshots are aged out even when committed cleanup has already
+  removed the live runtime session. Quiet nodes no longer need a later live RBC
+  session before old retained status/store leftovers can be deleted, and both
+  TTL pruning and store-limit eviction now use the shared runtime cleanup helper
+  for pending, repair, outbound, and seed-inflight bookkeeping.
+- Hardened RBC roster refresh so changed roster evidence clears stale READY and
+  DELIVER deferrals whenever READY signatures are reset, preventing retry
+  bookkeeping from leaking across commit-topology changes.
+- Hardened local RBC DELIVER emission so complete chunk sets with mismatched
+  chunk roots are rejected before missing-payload retry state is armed, and
+  terminal invalidation paths now clear pending READY/DELIVER deferrals
+  alongside pending RBC messages.
+- Added direct regressions for equivocated inbound READY evidence and
+  DELIVER-bundled READY conflicts so terminal invalidation clears pending RBC,
+  pending payload dedup, and both READY/DELIVER deferral maps.
+- Reran the four-peer NPoS/DA late-VRF persistence gate on the current tree; it
+  advanced past the previously documented height-4 READY/DELIVER stall, recorded
+  the late reveal, finalized the epoch, and shut down the peers cleanly.
+- Extended the RBC status lookup formal gate with over-counted summary cases
+  and added expected-failure configs for `is_delivered`,
+  `delivered_payload_matches`, and `complete_payload_matches` acceptance of
+  malformed `received_chunks > total_chunks` evidence.
 - Clarified the Torii delivered endpoint OpenAPI, MCP metadata, and operator
   docs so `delivered=true` is documented as complete-delivery evidence requiring
   a non-invalid positive complete chunk summary, and pinned that wording in the
@@ -41,8 +280,230 @@ Last updated: 2026-06-10
   - `cargo fmt -p iroha_core -- --check`
   - `cargo fmt -p integration_tests -- --check`
   - `cargo fmt -p iroha_torii -- --check`
+  - `git diff --check`
+  - `git diff -- Cargo.lock` (empty)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh`
+  - `bash -n scripts/formal/sumeragi_apalache.sh`
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `java -version` (blocked locally: no Java Runtime available, so
+    Apalache/TLC model execution was not rerun in this environment)
+  - targeted `rg` scan for invalid-shape DELIVER guard symbols and
+    settlement/Nexus status-lock recovery tests, docs, and status entries
   - `cargo test -p iroha_core allow_unverified_rbc_roster --lib -- --nocapture`
     (`11` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core delivery_predicates_require_valid_complete_chunks --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warning)
+  - `cargo test -p iroha_core rbc_session_delivered_payload_matches_requires_complete_chunks --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core pending_block_validation_priority_requires_complete_rbc_delivery_evidence --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core evaluate_deliver_acceptance --lib -- --nocapture`
+    (`8` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core evaluate_rbc_deliver_outcome --lib -- --nocapture`
+    (`2` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core delivered_payload_metrics --lib -- --nocapture`
+    (`8` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core handle_rbc_deliver_accepts_missing_chunks_when_da_enabled --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core handle_rbc_deliver_force_quorum_one_still_requires_protocol_quorum_for_external_payload --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core prune_stale_view_state_ --lib -- --nocapture`
+    (`6` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core committed_rbc_cleanup --lib -- --nocapture`
+    (`9` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core retain_rbc_sessions_after_commit_when_undelivered --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core rbc_session_ttl_prunes --lib -- --nocapture`
+    (`2` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core rbc_persist --lib -- --nocapture`
+    (`5` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core handle_rbc_store_evictions_clears_session_caches --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core record_rbc_session_roster --lib -- --nocapture`
+    (`18` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core maybe_emit_rbc_deliver --lib -- --nocapture`
+    (`11` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core handle_rbc_deliver --lib -- --nocapture`
+    (`17` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core handle_rbc_ready_conflict_invalidates_and_clears_pending_deferrals --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core rbc_deliver_bundle_conflicting_ready_invalidates_session_and_clears_pending --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core handle_rbc_ready --lib -- --nocapture`
+    (`16` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core maybe_emit_rbc_ready --lib -- --nocapture`
+    (`14` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core pending_block_hydration_invalidates_mismatched_root_and_clears_deferrals --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_randomness::npos_late_vrf_reveal_clears_penalty_and_preserves_seed -- --nocapture`
+    (`1` test passed; built `iroha3d` through the test-network target first,
+    emitted the pre-existing unrelated `soracloud.rs` warning, and completed the
+    four-peer NPoS/DA late-VRF scenario with clean peer shutdown)
+  - `cargo test -p iroha_core settlement_status_snapshot_recovers_poisoned_lock --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings and the expected caught panic line from deliberately poisoning the
+    settlement status lock)
+  - `cargo test -p iroha_core nexus_economics_snapshots_recover_poisoned_locks --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings and the expected caught panic lines from deliberately poisoning the
+    Nexus fee and staking status locks)
+  - `cargo test -p iroha_core nexus_ --lib -- --nocapture`
+    (`77` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings and the expected caught panic lines from deliberately poisoning
+    Nexus status locks)
+  - `cargo test -p iroha_core settlement_status --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings and the expected caught panic line from deliberately poisoning the
+    settlement status lock)
+  - `cargo test -p iroha_core handle_recovers_from_poisoned_status_lock --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings and the expected caught panic line from deliberately poisoning the
+    test mutex)
+  - `cargo test -p iroha_core store_validation_deletes_adversarial_metadata_and_integrity_failures --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core from_persisted_clears_deliver_metadata_when_not_delivered --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core roster_validation_cache_recovers_poisoned_memo_lock --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings and the expected caught panic line from deliberately poisoning the
+    test mutex)
+  - `cargo test -p iroha_core rbc_store_eviction_history_recovers_poisoned_lock --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings and the expected caught panic line from deliberately poisoning the
+    test mutex)
+  - `cargo test -p iroha_core block_payload_dedup_recovers_poisoned_cache --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings and the expected caught panic line from deliberately poisoning the
+    test mutex)
+  - `cargo test -p iroha_core direct_block_sync_response_permits_recover_poisoned_lock --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings and the expected caught panic line from deliberately poisoning the
+    test mutex)
+  - `cargo test -p iroha_core frontier_block_sync_hint --lib -- --nocapture`
+    (`4` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings and the expected caught panic line from deliberately poisoning the
+    direct-response permit test mutex)
+  - `cargo test -p iroha_core vote_dedup_recovers_poisoned_cache --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings and the expected caught panic line from deliberately poisoning the
+    test mutex)
+  - `cargo test -p iroha_core snapshot_recovers_poisoned --lib -- --nocapture`
+    (`2` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings and expected caught panic lines from deliberately poisoning the
+    view-change-cause and validation-reject status locks)
+  - `cargo test -p iroha_core view_change_cause --lib -- --nocapture`
+    (`5` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings and the expected caught panic line from deliberately poisoning the
+    view-change-cause status lock)
+  - `cargo test -p iroha_core validation_reject --lib -- --nocapture`
+    (`12` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings and expected caught panic lines from deliberately poisoning the
+    validation-reject status locks)
+  - `cargo test -p iroha_core vote_validation_drop --lib -- --nocapture`
+    (`12` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings and expected caught panic lines from deliberately poisoning the
+    vote-validation drop history and peer-registry locks)
+  - `cargo test -p iroha_core peer_key_policy --lib -- --nocapture`
+    (`2` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings and the expected caught panic line from deliberately poisoning the
+    peer-key policy reason lock)
+  - `cargo test -p iroha_core kura_store --lib -- --nocapture`
+    (`12` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings and expected caught panic lines from deliberately poisoning the
+    Kura status hash/reason locks)
+  - `cargo test -p iroha_core consensus_histories_recover_poisoned_locks --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings and expected caught panic lines from deliberately poisoning the
+    consensus history locks)
+  - `cargo test -p iroha_core history --lib -- --nocapture`
+    (`59` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings and expected caught panic lines from deliberately poisoning RBC
+    store and vote-validation drop history locks)
+  - `cargo test -p iroha_core da_lane_status_snapshots_recover_poisoned_locks --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings and expected caught panic lines from deliberately poisoning the
+    DA/lane status snapshot locks)
+  - `cargo test -p iroha_core core_consensus_status_snapshots_recover_poisoned_locks --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings and expected caught panic lines from deliberately poisoning the
+    core consensus status locks)
+  - `cargo test -p iroha_core locked_qc --lib -- --nocapture`
+    (`16` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core mode_tags --lib -- --nocapture`
+    (`2` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core mode_flip --lib -- --nocapture`
+    (`13` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings and the expected caught panic line from deliberately poisoning the
+    mode-flip last-error lock)
+  - `cargo test -p iroha_core commit_quorum_snapshot --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core membership_snapshot_tracks_view_hash --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core new_view_stats --lib -- --nocapture`
+    (`3` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings and the expected caught panic line from deliberately poisoning the
+    NEW_VIEW stats store)
+  - `cargo test -p iroha_core recorder_recovers_poisoned_witness_locks --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings and expected caught panic lines from deliberately poisoning the
+    execution-witness guard and slot locks)
+  - `cargo test -p iroha_core recorder_ --lib -- --nocapture`
+    (`4` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings and expected caught panic lines from deliberately poisoning the
+    execution-witness guard and slot locks)
+  - `cargo test -p iroha_core vrf_penalties_report --lib -- --nocapture`
+    (`3` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings and the expected caught panic line from deliberately poisoning the
+    VRF penalties report store)
+  - `cargo test -p iroha_core consensus_message_handling --lib -- --nocapture`
+    (`3` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings and the expected caught panic line from deliberately poisoning the
+    consensus message-handling totals map)
+  - `cargo test -p iroha_core actor_gate_recovers_poisoned_state --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings and the expected caught panic line from deliberately poisoning the
+    Sumeragi actor gate)
+  - `cargo test -p iroha_core actor_gate --lib -- --nocapture`
+    (`6` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings and the expected caught panic line from deliberately poisoning the
+    Sumeragi actor gate)
+  - `cargo test -p iroha_core rbc_backlog --lib -- --nocapture`
+    (`13` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core lane_relay --lib -- --nocapture`
+    (`107` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core lane_governance --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
     warnings)
   - `cargo test -p iroha_core unverified_roster --lib -- --nocapture`
     (`6` tests passed; emitted the pre-existing unrelated `soracloud.rs`
@@ -69,13 +530,35 @@ Last updated: 2026-06-10
     (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
     warning)
   - `bash -n ci/check_sumeragi_formal_expected_failures.sh`
+  - `rg -n "rbc-status-lookup-bug-.*overcount|accepts_overcount|AcceptsOvercount" ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi scripts/formal status.md`
+    (confirmed over-counted lookup mutation configs and expected-failure
+    wiring)
+  - `rg -n "rbc-status-lookup.*twenty-one|twenty-one.*rbc-status-lookup|RbcStatusLookupGate.*twenty-one|twenty-one.*RbcStatusLookupGate" docs/formal/sumeragi/README.md`
+    (no matches; the RBC status lookup expected-failure count now says
+    twenty-four)
   - `rg -n "rbc-status-lookup-bug-is-delivered-(requires-complete|accepts-incomplete|accepts-invalid)|is_delivered_requires_complete|is_delivered_accepts_incomplete|is_delivered_accepts_invalid" ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi scripts/formal`
-    (confirmed the new `accepts-*` mutation configs and no stale
+    (confirmed the earlier `accepts-*` mutation configs and no stale
     `requires-complete` references)
   - `java -version` (failed: no Java runtime available, so the full Apalache
     expected-failure sweep was not run in this environment)
   - `git diff --check`
   - `git diff -- Cargo.lock` (empty)
+  - `rg -n "HIGHEST_QC_HASH.*\\.lock\\(\\)\\.unwrap|LOCKED_QC_HASH.*\\.lock\\(\\)\\.unwrap|MEMBERSHIP_VIEW_HASH.*\\.lock\\(\\)\\.unwrap|PRF_SEED.*\\.lock\\(\\)\\.unwrap|MODE_TAG.*\\.lock\\(\\)\\.unwrap|STAGED_MODE_TAG.*\\.lock\\(\\)\\.unwrap|STAGED_MODE_ACTIVATION_HEIGHT.*\\.lock\\(\\)\\.unwrap|MODE_ACTIVATION_LAG_BLOCKS.*\\.lock\\(\\)\\.unwrap|CONSENSUS_CAPS.*\\.lock\\(\\)\\.unwrap|COMMIT_QUORUM_HASH.*\\.lock\\(\\)\\.unwrap" crates/iroha_core/src/sumeragi/status.rs`
+    (no matches)
+  - `rg -n "\\.lock\\(\\)\\.unwrap\\(|\\.read\\(\\)\\.unwrap\\(|\\.write\\(\\)\\.unwrap\\(" crates/iroha_core/src/sumeragi/status.rs crates/iroha_core/src/sumeragi/main_loop.rs crates/iroha_core/src/sumeragi/main_loop/*.rs crates/iroha_core/src/sumeragi/rbc_status.rs crates/iroha_core/src/sumeragi/rbc_store.rs crates/iroha_core/src/sumeragi/mod.rs`
+    (no matches)
+  - `rg -n "global\\(\\)\\.lock\\(\\)\\.(unwrap|expect)|\\.lock\\(\\)\\.unwrap\\(" crates/iroha_core/src/sumeragi/new_view_stats.rs`
+    (only the deliberate test poison `expect` remains)
+  - `rg -n "PoisonError::into_inner|slot\\(\\)\\.lock\\(\\)\\.unwrap|exec_witness_lock\\(\\)\\.lock\\(\\)\\.unwrap" crates/iroha_core/src/sumeragi/witness.rs`
+    (only test inspection unwraps remain)
+  - `rg -n "reports\\(\\)\\.lock\\(\\)\\.(unwrap|expect)|\\.lock\\(\\)\\.unwrap\\(" crates/iroha_core/src/sumeragi/epoch_report.rs`
+    (no matches)
+  - `rg -n "PoisonError::into_inner|MESSAGE_HANDLING_TOTALS.*lock\\(\\)\\.(unwrap|expect)|message handling totals" crates/iroha_core/src/sumeragi/status.rs`
+    (message-handling production paths use `lock_operator_status_slot`; remaining
+    `PoisonError::into_inner` hits are test-lock infrastructure and deliberate
+    poison tests)
+  - `rg -n "self\\.state\\.lock\\(\\)\\.expect\\(\\\"sumeragi actor gate poisoned\\\"\\)|self\\.cvar\\.wait\\(guard\\)\\.expect\\(\\\"sumeragi actor gate poisoned\\\"\\)|Sumeragi actor gate mutex" crates/iroha_core/src/sumeragi/mod.rs`
+    (only the warning-backed actor gate recovery paths remain)
   - `rg -n "^(<<<<<<< .+|=======$|>>>>>>> .+)$" docs/source/sumeragi_da.md integration_tests/tests/sumeragi_adversarial.rs status.md roadmap.md ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi crates/iroha_torii/tests/grouped/sumeragi_telemetry.rs crates/iroha_torii/tests/sumeragi_rbc_delivered_endpoint.rs crates/iroha_torii/tests/sumeragi_rbc_sessions_endpoint.rs`
     (no matches)
 

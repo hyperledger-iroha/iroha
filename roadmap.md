@@ -4029,7 +4029,8 @@ and completed history lives in [`status.md`](./status.md).
   direct RBC READY/DELIVER deferral throttle semantics,
   direct RBC missing-INIT broad rebroadcast semantics,
   round-gap marker/snapshot/EMA status component/anchor semantics,
-  direct RBC missing BlockCreated recovery semantics,
+  direct RBC missing BlockCreated recovery and authoritative-only
+  materialization semantics,
   direct RBC unverified-roster escape-hatch semantics,
   RBC signing-preimage component/anchor binding semantics,
   classic Vote/VRF signing-preimage aggregate exactness,
@@ -4118,8 +4119,8 @@ and completed history lives in [`status.md`](./status.md).
 - Sumeragi prepare-quorum phase-gating validation is closed for the current
   formal slice: the dedicated 2026-06-03 Apalache fast run reached `NoError`
   up to computation length `10` with `CommitPhasesNeverBypassPrepareQuorum`
-  loaded, and the formal coverage guard still reports `504` PR modes,
-  `9788` expected-failure modes, and `10293` documented modes.
+	  loaded, and the formal coverage guard now reports `505` PR modes,
+	  `9873` expected-failure modes, and `10379` documented modes.
 - The focused SCCP prover corridor is green for the current production-hardening
   slice across JavaScript, Python, Swift, Kotlin/JVM, Java Android, the Rust
   `iroha_sccp` verifier crate, core bridge-proof admission tests, and on-chain
@@ -10464,15 +10465,50 @@ fixture corridor into broader release validation.
   bytes, and complete RBC chunk sets must reconstruct to the advertised payload
   hash before they unlock authoritative validation/recovery progress or advance
   the internal `AuthoritativePayload` stage.
-  The DA/RBC availability reschedule gate now follows the same zero-chunk
-  invariant: a non-invalid zero-chunk session with READY quorum remains
-  unresolved before the availability timeout unless local block payload bytes
-  are already available; the timeout boundary still releases the reschedule
-  gate.
-  Core Sumeragi DA/RBC readiness no longer carries obsolete exact-frontier or
-  frontier-first ignored unit tests: stale direct-rotation and generic-handoff
-  fixtures were removed, active `force_view_change_if_idle` coverage now
-  asserts current non-leader timeout rotation semantics, and the only remaining
+  The DA/RBC availability reschedule gate now follows the same invalid-shape
+  invariant: non-invalid zero-chunk or over-counted sessions with READY quorum
+  remain unresolved before the availability timeout unless local block payload
+  bytes are already available; the timeout boundary still releases the
+  reschedule gate. The direct availability reschedule TLA gate includes the
+  over-counted case and expected-failure mutation.
+  RBC recovery-helper coverage now also pins non-invalid over-counted metadata
+  as payload-repairable, matching zero-chunk metadata rather than treating the
+  impossible count as complete recovery evidence.
+  Receiver-side RBC DELIVER acceptance now rejects impossible live chunk shapes
+  (`total_chunks == 0` or `received_chunks > total_chunks`) as invalid payload
+  evidence after READY quorum, including under the DA missing-chunk policy, and
+  the direct DELIVER acceptance TLA gate models that invalid-shape branch plus
+  an over-counted expected-failure mutation.
+	  Delivered-payload telemetry follows the same shape boundary: authoritative
+	  local fallback bytes can account for incomplete valid raw deliveries, but
+	  zero-total or over-counted delivered sessions cannot emit payload-byte
+	  metrics or consume the once-only telemetry marker. The delivered-payload byte
+	  TLA gate now also covers invalid-session, missing-hash, invalid-shape, and
+	  payload-mismatch fallback rejection, and the actor-level local-payload
+	  telemetry fallback now uses the same invalid-shape guard before status,
+	  cleanup, or DELIVER emission can record bytes.
+	  Live maintenance now carries that invalid-shape invariant through READY and
+	  DELIVER emission, rebroadcast scheduling, and operator backlog accounting:
+	  malformed zero-total or over-counted sessions first try local-payload
+	  hydration; exact authoritative local payloads can rebuild zero-total
+	  metadata into the deterministic positive chunk layout, while sessions that
+	  remain malformed stay deferred/repair-visible instead of signing from
+	  malformed counters or reporting zero missing pressure. The RBC
+	  backlog-status TLA gate now also models malformed summary/proposal/snapshot
+	  pressure so saturating-to-zero accounting and authoritative-payload skips
+	  stay pinned as expected failures. A dedicated RBC payload-hydration TLA
+		  gate now pins the post-fetch transition as well: zero-total adoption,
+		  over-count recounting, invalid/complete skip gates, and empty/hash/count
+		  mismatch rejection each have explicit mutations. Direct helper
+		  regressions and TLA mutations now also pin hostile zero-total digest/root
+		  metadata so local repair cannot silently accept INIT-bound mismatch
+		  evidence. The local DELIVER-emission formal gate now also models repaired
+		  zero-total and over-counted sessions reaching DELIVER, with mutations for
+		  stale deferral and missing broadcast side effects.
+		  Core Sumeragi DA/RBC readiness no longer carries obsolete exact-frontier or
+	  frontier-first ignored unit tests: stale direct-rotation and generic-handoff
+	  fixtures were removed, active `force_view_change_if_idle` coverage now
+	  asserts current non-leader timeout rotation semantics, and the only remaining
   ignored core Sumeragi tests are deliberate deep-topology model coverage.
   Sumeragi operator docs now match the manifest guard policy lanes: strict
   lanes keep DA-gated commit/proposal sealing blocked until the manifest guard
@@ -10556,14 +10592,27 @@ fixture corridor into broader release validation.
   Committed-block RBC cleanup now shares that exact complete-delivery boundary:
   raw delivered sessions with missing chunks or mismatched complete bytes remain
   retained after commit, while verified delivered payloads still drain runtime
-  session state and retain the final status snapshot. Committed-tip repair
+  session state and retain the final status snapshot. Stale-view RBC pruning now
+  uses the same boundary, so raw-delivered incomplete sessions keep runtime and
+  repair state even when the payload is locally available. Committed-tip repair
   scheduling and committed-delivery suppression use the same verified boundary,
   so retained raw-delivered tip sessions remain repair-active until chunks
-  verify.
+  verify. Session TTL pruning now also ages out retained status summaries and
+  persisted snapshots without requiring a live RBC session to still be present,
+  so committed-cleanup leftovers do not survive indefinitely on quiet nodes. RBC
+  roster refresh now clears stale READY and DELIVER deferrals whenever changed
+  roster evidence resets READY signatures, preventing retry bookkeeping from
+  leaking across commit-topology changes. Local DELIVER emission now rejects
+  complete chunk sets with mismatched chunk roots before arming missing-payload
+  retry state, and terminal invalidation paths clear pending READY/DELIVER
+  deferrals together with pending RBC messages. The
+  four-peer NPoS/DA late-VRF persistence gate now passes on the current tree,
+  advancing past the previously documented height-4 RBC stall and finalizing the
+  epoch after recording the late reveal.
   The RBC status lookup formal model now matches the current helper contract:
   `is_delivered` requires delivered, non-invalid, complete chunk metadata while
   intentionally not checking payload equality, and the expected-failure configs
-  now mutate incomplete/invalid acceptance instead of the obsolete
+  now mutate incomplete/invalid/over-counted acceptance instead of the obsolete
   "requires complete" case.
   Operator backlog aggregation now ignores invalid RBC sessions, so conflicting
   or mismatched evidence stays diagnosable through invalid/mismatch status

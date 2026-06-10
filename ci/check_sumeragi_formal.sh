@@ -71,6 +71,7 @@ bash scripts/formal/sumeragi_apalache.sh rbc-store-status-fast
 bash scripts/formal/sumeragi_apalache.sh rbc-store-pressure-log-fast
 bash scripts/formal/sumeragi_apalache.sh round-gap-status-fast
 bash scripts/formal/sumeragi_apalache.sh rbc-recovery-helper-fast
+bash scripts/formal/sumeragi_apalache.sh rbc-payload-hydration-fast
 bash scripts/formal/sumeragi_apalache.sh rbc-missing-block-recovery-fast
 bash scripts/formal/sumeragi_apalache.sh rbc-unverified-roster-fast
 bash scripts/formal/sumeragi_apalache.sh rbc-preimage-fast

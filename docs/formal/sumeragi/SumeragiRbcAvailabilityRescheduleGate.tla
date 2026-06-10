@@ -8,8 +8,8 @@ The helper gates quorum rescheduling on DA/RBC availability. It is intentionally
 fail-open outside DA mode, after the availability timeout, when the block
 payload is already local, when no usable session exists, and for invalid or
 delivered sessions. Before the timeout it blocks rescheduling when the session
-is still pending, has an impossible zero-chunk shape, is still missing chunks,
-or lacks enough READY signatures.
+is still pending, has an invalid chunk shape, is still missing chunks, or lacks
+enough READY signatures.
 ***************************************************************************)
 
 CONSTANT
@@ -35,6 +35,7 @@ DeliveredSession == "DeliveredSession"
 CompleteReady == "CompleteReady"
 MissingChunks == "MissingChunks"
 ZeroTotalReady == "ZeroTotalReady"
+OvercountReady == "OvercountReady"
 NotReady == "NotReady"
 CompleteButNotReady == "CompleteButNotReady"
 
@@ -51,6 +52,7 @@ Cases == {
   CompleteReady,
   MissingChunks,
   ZeroTotalReady,
+  OvercountReady,
   NotReady,
   CompleteButNotReady
 }
@@ -77,6 +79,7 @@ PendingSessionCases == {
 AvailabilityDeficitCases == {
   MissingChunks,
   ZeroTotalReady,
+  OvercountReady,
   NotReady,
   CompleteButNotReady
 }
@@ -114,6 +117,7 @@ TotalChunks(c) ==
 
 ReceivedChunks(c) ==
   CASE c = MissingChunks -> 2
+    [] c = OvercountReady -> 5
     [] OTHER -> TotalChunks(c)
 
 RequiredReady(c) ==
@@ -132,6 +136,12 @@ SessionMissingChunks(c) ==
 SessionZeroTotal(c) ==
   TotalChunks(c) = 0
 
+SessionOvercount(c) ==
+  ReceivedChunks(c) > TotalChunks(c)
+
+InvalidChunkShape(c) ==
+  SessionZeroTotal(c) \/ SessionOvercount(c)
+
 ReadyQuorum(c) ==
   ReadySignatures(c) >= RequiredReady(c)
 
@@ -143,7 +153,7 @@ SpecUnresolved(c) ==
   ELSE IF ~SessionPresent(c) THEN FALSE
   ELSE IF SessionInvalid(c) THEN FALSE
   ELSE IF SessionDelivered(c) THEN FALSE
-  ELSE SessionZeroTotal(c) \/ SessionMissingChunks(c) \/ ~ReadyQuorum(c)
+  ELSE InvalidChunkShape(c) \/ SessionMissingChunks(c) \/ ~ReadyQuorum(c)
 
 ActualUnresolved(c) ==
   CASE Bug = "da_disabled_blocks"
@@ -168,6 +178,8 @@ ActualUnresolved(c) ==
        /\ c = MissingChunks -> FALSE
     [] Bug = "zero_total_counts_missing"
        /\ c = ZeroTotalReady -> FALSE
+    [] Bug = "overcount_counts_complete"
+       /\ c = OvercountReady -> FALSE
     [] Bug = "not_ready_ignored"
        /\ c = NotReady -> FALSE
     [] Bug = "complete_not_ready_allowed"
@@ -187,6 +199,7 @@ BugSet == {
   "complete_ready_blocks",
   "missing_chunks_ignored",
   "zero_total_counts_missing",
+  "overcount_counts_complete",
   "not_ready_ignored",
   "complete_not_ready_allowed"
 }
@@ -221,6 +234,7 @@ UnresolvedBlocksStable ==
   /\ ActualUnresolved(PendingEntry)
   /\ ActualUnresolved(MissingChunks)
   /\ ActualUnresolved(ZeroTotalReady)
+  /\ ActualUnresolved(OvercountReady)
   /\ ActualUnresolved(NotReady)
   /\ ActualUnresolved(CompleteButNotReady)
 
@@ -266,7 +280,8 @@ RbcAvailabilityDeficitBlocksExact ==
     /\ SessionPresent(c)
     /\ ~SessionInvalid(c)
     /\ ~SessionDelivered(c)
-    /\ IF c = ZeroTotalReady THEN SessionZeroTotal(c) ELSE TRUE
+    /\ IF c = ZeroTotalReady THEN InvalidChunkShape(c) /\ SessionZeroTotal(c) ELSE TRUE
+    /\ IF c = OvercountReady THEN InvalidChunkShape(c) /\ SessionOvercount(c) ELSE TRUE
     /\ IF c = MissingChunks THEN SessionMissingChunks(c) ELSE TRUE
     /\ IF c \in {NotReady, CompleteButNotReady} THEN ~ReadyQuorum(c)
        ELSE TRUE

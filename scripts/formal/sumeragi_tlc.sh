@@ -3245,11 +3245,22 @@ case "$mode" in
     module="SumeragiRbcRecoveryHelperGate"
     cfg_file="$spec_dir/SumeragiRbcRecoveryHelperGate_fast.cfg"
     ;;
+  rbc-payload-hydration-fast)
+    module="SumeragiRbcPayloadHydrationGate"
+    cfg_file="$spec_dir/SumeragiRbcPayloadHydrationGate_fast.cfg"
+    ;;
   rbc-recovery-helper-bug-*)
     bug_name="${mode#rbc-recovery-helper-bug-}"
     cfg_bug_name="${bug_name//-/_}"
     module="SumeragiRbcRecoveryHelperGate"
     cfg_file="$spec_dir/SumeragiRbcRecoveryHelperGate_bug_${cfg_bug_name}.cfg"
+    expect_failure=1
+    ;;
+  rbc-payload-hydration-bug-*)
+    bug_name="${mode#rbc-payload-hydration-bug-}"
+    cfg_bug_name="${bug_name//-/_}"
+    module="SumeragiRbcPayloadHydrationGate"
+    cfg_file="$spec_dir/SumeragiRbcPayloadHydrationGate_bug_${cfg_bug_name}.cfg"
     expect_failure=1
     ;;
   rbc-missing-block-recovery-fast)

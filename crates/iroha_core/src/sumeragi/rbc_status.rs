@@ -8,7 +8,7 @@ use std::{
     fs,
     io::{self, Write},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, OnceLock},
+    sync::{Arc, Mutex, MutexGuard, OnceLock},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -26,6 +26,19 @@ static ACTIVE_STORE: OnceLock<Mutex<Option<Arc<Store>>>> = OnceLock::new();
 
 fn active_slot() -> &'static Mutex<Option<Arc<Store>>> {
     ACTIVE_STORE.get_or_init(|| Mutex::new(None))
+}
+
+fn lock_or_recover<'a, T>(mutex: &'a Mutex<T>, name: &'static str) -> MutexGuard<'a, T> {
+    match mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            warn!(
+                lock = name,
+                "recovering poisoned RBC status mutex; preserving in-memory operator state"
+            );
+            poisoned.into_inner()
+        }
+    }
 }
 
 #[derive(Default)]
@@ -62,8 +75,12 @@ impl Default for Store {
 }
 
 impl Store {
+    fn lock_inner(&self) -> MutexGuard<'_, Inner> {
+        lock_or_recover(&self.inner, "rbc_status_store")
+    }
+
     fn snapshot(&self) -> Vec<Summary> {
-        let inner = self.inner.lock().expect("rbc status lock poisoned");
+        let inner = self.lock_inner();
         inner
             .map
             .values()
@@ -103,7 +120,7 @@ impl Handle {
     /// Configure the disk-backed snapshot for this handle.
     /// Passing `None` disables persistence and clears existing state.
     pub fn configure(&self, config: Option<StoreConfig>) {
-        let mut inner = self.store.inner.lock().expect("rbc status lock poisoned");
+        let mut inner = self.store.lock_inner();
         inner.map.clear();
         match config {
             Some(cfg) => match DiskStore::new(&cfg) {
@@ -137,7 +154,7 @@ impl Handle {
 
     /// Update or insert a session summary.
     pub fn update(&self, summary: Summary, updated_at: SystemTime) {
-        let mut inner = self.store.inner.lock().expect("rbc status lock poisoned");
+        let mut inner = self.store.lock_inner();
         let key = (summary.block_hash, summary.height, summary.view);
         let mut persist_needed = true;
         if let Some(entry) = inner.map.get_mut(&key) {
@@ -175,7 +192,7 @@ impl Handle {
 
     /// Fetch the stored summary for `key` if present.
     pub fn get(&self, key: &(HashOf<BlockHeader>, u64, u64)) -> Option<Summary> {
-        let inner = self.store.inner.lock().expect("rbc status lock poisoned");
+        let inner = self.store.lock_inner();
         inner.map.get(key).map(|entry| entry.summary.clone())
     }
 
@@ -188,7 +205,7 @@ impl Handle {
         if ttl == Duration::ZERO {
             return Vec::new();
         }
-        let inner = self.store.inner.lock().expect("rbc status lock poisoned");
+        let inner = self.store.lock_inner();
         inner
             .map
             .iter()
@@ -206,7 +223,7 @@ impl Handle {
         if ttl == Duration::ZERO {
             return None;
         }
-        let inner = self.store.inner.lock().expect("rbc status lock poisoned");
+        let inner = self.store.lock_inner();
         let mut next_due: Option<Duration> = None;
         for entry in inner.map.values() {
             let age = now
@@ -227,16 +244,10 @@ impl Handle {
 
     /// Remove a session summary by key.
     pub fn remove(&self, key: &(HashOf<BlockHeader>, u64, u64)) {
-        let mut inner = self.store.inner.lock().expect("rbc status lock poisoned");
+        let mut inner = self.store.lock_inner();
         inner.map.remove(key);
-        if inner.disk.is_some() {
-            let (ttl, capacity) = {
-                let disk = inner
-                    .disk
-                    .as_ref()
-                    .expect("disk store should exist when checked");
-                (disk.store.ttl, disk.store.capacity)
-            };
+        if let Some(disk) = inner.disk.as_ref() {
+            let (ttl, capacity) = (disk.store.ttl, disk.store.capacity);
             enforce_map_limits(&mut inner.map, ttl, capacity);
             persist_if_needed(&mut inner, "remove");
         }
@@ -247,7 +258,7 @@ impl Handle {
 
     /// Clear all session summaries.
     pub fn clear(&self) {
-        let mut inner = self.store.inner.lock().expect("rbc status lock poisoned");
+        let mut inner = self.store.lock_inner();
         inner.map.clear();
         persist_if_needed(&mut inner, "clear");
         self.store.active_count.store(0, Ordering::Relaxed);
@@ -265,7 +276,7 @@ impl Handle {
 
     #[cfg(test)]
     fn persistence_unavailable_for_tests(&self) -> bool {
-        let inner = self.store.inner.lock().expect("rbc status lock poisoned");
+        let inner = self.store.lock_inner();
         inner.persistence_unavailable
             || inner
                 .disk
@@ -275,7 +286,7 @@ impl Handle {
 
     /// Check whether a delivered session exists for the given `(block_hash, height)` pair.
     pub fn is_delivered(&self, block_hash: &HashOf<BlockHeader>, height: u64) -> bool {
-        let inner = self.store.inner.lock().expect("rbc status lock poisoned");
+        let inner = self.store.lock_inner();
         let start = (*block_hash, height, 0);
         let end = (*block_hash, height, u64::MAX);
         inner
@@ -291,7 +302,7 @@ impl Handle {
         height: u64,
         payload_hash: &Hash,
     ) -> bool {
-        let inner = self.store.inner.lock().expect("rbc status lock poisoned");
+        let inner = self.store.lock_inner();
         let start = (*block_hash, height, 0);
         let end = (*block_hash, height, u64::MAX);
         inner.map.range(start..=end).any(|(_, entry)| {
@@ -312,7 +323,7 @@ impl Handle {
         view: u64,
         payload_hash: &Hash,
     ) -> bool {
-        let inner = self.store.inner.lock().expect("rbc status lock poisoned");
+        let inner = self.store.lock_inner();
         inner
             .map
             .get(&(*block_hash, height, view))
@@ -339,7 +350,7 @@ impl Handle {
         updated_at: SystemTime,
         recovered_from_disk: bool,
     ) {
-        let mut inner = self.store.inner.lock().expect("rbc status lock poisoned");
+        let mut inner = self.store.lock_inner();
         let (block_hash, height, view) = key;
         inner.map.insert(
             key,
@@ -380,14 +391,11 @@ pub fn register_handle() -> Handle {
 
 /// Mark the supplied handle as active for global snapshot queries.
 pub fn set_active(handle: &Handle) {
-    *active_slot().lock().expect("rbc active slot poisoned") = Some(handle.store.clone());
+    *lock_or_recover(active_slot(), "rbc_status_active_slot") = Some(handle.store.clone());
 }
 
 fn active_store() -> Option<Arc<Store>> {
-    active_slot()
-        .lock()
-        .expect("rbc active slot poisoned")
-        .clone()
+    lock_or_recover(active_slot(), "rbc_status_active_slot").clone()
 }
 
 /// Compact summary of an RBC session.
@@ -1398,6 +1406,27 @@ mod tests {
 
         handle.update(
             Summary {
+                total_chunks: 2,
+                received_chunks: 3,
+                ..base_summary.clone()
+            },
+            SystemTime::now(),
+        );
+        assert!(
+            !handle.is_delivered(&block_hash, 12),
+            "over-counted delivered summaries must not count as delivered"
+        );
+        assert!(
+            !handle.delivered_payload_matches(&block_hash, 12, &payload_hash),
+            "over-counted delivered summaries must not match delivered payloads"
+        );
+        assert!(
+            !handle.complete_payload_matches(&block_hash, 12, 0, &payload_hash),
+            "over-counted summaries must not match complete payloads"
+        );
+
+        handle.update(
+            Summary {
                 total_chunks: 0,
                 received_chunks: 0,
                 ..base_summary.clone()
@@ -1586,12 +1615,50 @@ mod tests {
         assert_eq!(entry.updated_at_ms, system_time_to_ms(updated_time));
 
         let key = (block_hash, height, view);
-        let inner = handle.store.inner.lock().expect("rbc status lock poisoned");
+        let inner = handle.store.lock_inner();
         let entry = inner.map.get(&key).expect("entry exists");
         assert_eq!(
             system_time_to_ms(entry.updated_at),
             system_time_to_ms(updated_time)
         );
+    }
+
+    #[test]
+    fn handle_recovers_from_poisoned_status_lock() {
+        let handle = register_handle();
+        let store = handle.store.clone();
+        {
+            let _suppressor = panic_hook::ScopedSuppressor::new();
+            let result = std::panic::catch_unwind({
+                let store = store.clone();
+                move || {
+                    let _guard = store.inner.lock().expect("fresh RBC status lock");
+                    panic!("poison RBC status lock for recovery test");
+                }
+            });
+            assert!(result.is_err());
+        }
+        assert!(
+            store.inner.is_poisoned(),
+            "test precondition should poison the status mutex"
+        );
+
+        let observed = SystemTime::now();
+        let summary = summary(41, 41, 2, 1, false, Some(b"poisoned-lock"));
+        let key = (summary.block_hash, summary.height, summary.view);
+        handle.update(summary.clone(), observed);
+
+        assert_eq!(
+            handle.get(&key),
+            Some(summary.clone()),
+            "poisoned status locks should recover and keep accepting updates"
+        );
+        assert_eq!(handle.snapshot(), vec![summary]);
+        assert_eq!(handle.sessions_active(), 1);
+
+        handle.remove(&key);
+        assert_eq!(handle.get(&key), None);
+        assert_eq!(handle.sessions_active(), 0);
     }
 
     #[test]
@@ -1748,7 +1815,7 @@ mod tests {
         let persisted_before_fault = fs::read(&path).expect("persisted snapshot");
 
         {
-            let mut inner = handle.store.inner.lock().expect("rbc status lock poisoned");
+            let mut inner = handle.store.lock_inner();
             inner
                 .disk
                 .as_mut()
@@ -1764,7 +1831,7 @@ mod tests {
         handle.update(updated.clone(), base + Duration::from_secs(1));
 
         assert_eq!(handle.get(&key), Some(updated));
-        let inner = handle.store.inner.lock().expect("rbc status lock poisoned");
+        let inner = handle.store.lock_inner();
         assert!(
             inner.disk.as_ref().is_some_and(|disk| disk.disabled),
             "fatal persist errors must disable future disk writes"
@@ -1812,7 +1879,7 @@ mod tests {
         let path = dir.path().join(FILE_NAME);
 
         {
-            let mut inner = handle.store.inner.lock().expect("rbc status lock poisoned");
+            let mut inner = handle.store.lock_inner();
             inner
                 .disk
                 .as_mut()
@@ -1849,7 +1916,7 @@ mod tests {
             capacity: 8,
         }));
         {
-            let inner = handle.store.inner.lock().expect("rbc status lock poisoned");
+            let inner = handle.store.lock_inner();
             assert!(
                 inner.disk.as_ref().is_some_and(|disk| !disk.disabled),
                 "explicit configure(Some(...)) must re-enable persistence"

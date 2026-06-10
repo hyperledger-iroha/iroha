@@ -343,6 +343,11 @@ case "$mode" in
     cfg_file="$spec_dir/SumeragiRbcRecoveryHelperGate_fast.cfg"
     apalache_length=1
     ;;
+  rbc-payload-hydration-fast)
+    spec_file="$spec_dir/SumeragiRbcPayloadHydrationGate.tla"
+    cfg_file="$spec_dir/SumeragiRbcPayloadHydrationGate_fast.cfg"
+    apalache_length=1
+    ;;
   rbc-missing-block-recovery-fast)
     spec_file="$spec_dir/SumeragiRbcMissingBlockRecoveryGate.tla"
     cfg_file="$spec_dir/SumeragiRbcMissingBlockRecoveryGate_fast.cfg"
@@ -3540,6 +3545,14 @@ case "$mode" in
     cfg_bug_name="${bug_name//-/_}"
     spec_file="$spec_dir/SumeragiRbcRecoveryHelperGate.tla"
     cfg_file="$spec_dir/SumeragiRbcRecoveryHelperGate_bug_${cfg_bug_name}.cfg"
+    apalache_length=1
+    expect_failure=1
+    ;;
+  rbc-payload-hydration-bug-*)
+    bug_name="${mode#rbc-payload-hydration-bug-}"
+    cfg_bug_name="${bug_name//-/_}"
+    spec_file="$spec_dir/SumeragiRbcPayloadHydrationGate.tla"
+    cfg_file="$spec_dir/SumeragiRbcPayloadHydrationGate_bug_${cfg_bug_name}.cfg"
     apalache_length=1
     expect_failure=1
     ;;
