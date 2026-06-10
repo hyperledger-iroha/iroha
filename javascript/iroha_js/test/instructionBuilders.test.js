@@ -5175,6 +5175,12 @@ descriptorTest("privacy algorithm descriptors enforce PQ and catalog availabilit
     "performance gate is incomplete",
     "internal cryptographic review signoff is missing",
   ];
+  const transparentTransferWaivedMissingReasons = new Set([
+    "real proving engine is not registered",
+    "real verifier is not registered",
+    "witness privacy checks are incomplete",
+    "verifier fuzzing gate is incomplete",
+  ]);
   const supplementalProductionGateMissing = [
     "implementation stage is not production-hardened",
     "planned SDK entrypoints remain",
@@ -5207,7 +5213,11 @@ descriptorTest("privacy algorithm descriptors enforce PQ and catalog availabilit
     assert.deepEqual(
       descriptor.productionGate.missing,
       [
-        ...requiredProductionGateMissing,
+        ...requiredProductionGateMissing.filter(
+          (reason) =>
+            descriptor.id !== "transparent-transfer" ||
+            !transparentTransferWaivedMissingReasons.has(reason),
+        ),
         ...supplementalProductionGateMissing.filter((reason) =>
           descriptor.productionGate.missing.includes(reason),
         ),
@@ -5363,10 +5373,13 @@ function sharedPrivacyFrame(schemaByte) {
 function completePrivacyNativeBinding(overrides = {}) {
   return {
     connectNoritoBridgeAbiVersion() {
-      return 6;
+      return 7;
     },
     privacyCapabilitiesV1() {
       return privacyNoritoFrameWithPayload(0x50);
+    },
+    privacyProofRequestV1() {
+      return privacyNoritoFrameWithPayload(0x52);
     },
     privacyBuildProofV1() {
       return privacyNoritoFrameWithPayload(0x42);
@@ -5752,10 +5765,16 @@ descriptorTest("privacy capabilities report native bridge without production cla
       "fuzzing gate is incomplete",
       "parser fuzzing gate is incomplete",
       "verifier fuzzing gate is incomplete",
-      "performance gate is incomplete",
-      "internal cryptographic review signoff is missing",
-    ];
-    const supplementalProductionGateMissing = [
+    "performance gate is incomplete",
+    "internal cryptographic review signoff is missing",
+  ];
+  const transparentTransferWaivedMissingReasons = new Set([
+    "real proving engine is not registered",
+    "real verifier is not registered",
+    "witness privacy checks are incomplete",
+    "verifier fuzzing gate is incomplete",
+  ]);
+  const supplementalProductionGateMissing = [
       "implementation stage is not production-hardened",
       "planned SDK entrypoints remain",
       "dev fixture entrypoints are not production entrypoints",
@@ -5795,7 +5814,11 @@ descriptorTest("privacy capabilities report native bridge without production cla
       assert.deepEqual(
         descriptor.productionGate.missing,
         [
-          ...requiredProductionGateMissing,
+          ...requiredProductionGateMissing.filter(
+            (reason) =>
+              descriptor.id !== "transparent-transfer" ||
+              !transparentTransferWaivedMissingReasons.has(reason),
+          ),
           ...supplementalProductionGateMissing.filter((reason) =>
             descriptor.productionGate.missing.includes(reason),
           ),
@@ -5833,11 +5856,17 @@ descriptorTest("privacy capabilities report native bridge without production cla
       expectedProductionGateEntries,
     );
     assert.deepEqual(
-      fresh.privacyAlgorithms[0].productionGate.missing.slice(
-        0,
-        requiredProductionGateMissing.length,
-      ),
-      requiredProductionGateMissing,
+      fresh.privacyAlgorithms[0].productionGate.missing,
+      [
+        ...requiredProductionGateMissing.filter(
+          (reason) =>
+            fresh.privacyAlgorithms[0].id !== "transparent-transfer" ||
+            !transparentTransferWaivedMissingReasons.has(reason),
+        ),
+        ...supplementalProductionGateMissing.filter((reason) =>
+          fresh.privacyAlgorithms[0].productionGate.missing.includes(reason),
+        ),
+      ],
     );
     assert.deepEqual(fresh.privacyCriteria, getPrivacyCriteria());
   });

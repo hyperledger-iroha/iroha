@@ -13,26 +13,28 @@ use std::{
     time::Duration,
 };
 
-use base64::{engine::general_purpose as b64gp, Engine as _};
+use base64::{Engine as _, engine::general_purpose as b64gp};
 use blake3::hash as blake3_hash;
 use iroha_crypto::{
-    kex::KeyExchangeScheme,
-    sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature},
     Algorithm, EcdsaSecp256k1Sha256, Error as CryptoError, Hash, KeyGenOption, KeyPair, PrivateKey,
     PublicKey, RamLfeBackend, RamLfeVerificationMode, Signature,
+    kex::KeyExchangeScheme,
+    sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature},
 };
 use iroha_data_model::{
+    ChainId,
     account::{
-        address::{AccountAddress, AccountAddressError},
         AccountId,
+        address::{AccountAddress, AccountAddressError},
     },
     asset::id::{AssetBalanceScope, AssetDefinitionId, AssetId},
-    confidential::{ConfidentialEncryptedPayload, CONFIDENTIAL_ENCRYPTED_PAYLOAD_V1},
+    confidential::{CONFIDENTIAL_ENCRYPTED_PAYLOAD_V1, ConfidentialEncryptedPayload},
     da::manifest::DaManifestV1,
     domain::DomainId,
     governance::types::AtWindow,
     identifier::{IdentifierResolutionReceipt, IdentifierResolutionReceiptPayload},
     isi::{
+        InstructionBox, RemoveAssetKeyValue, RemoveKeyValue, SetAssetKeyValue, SetKeyValue,
         governance::{
             CastPlainBallot, CastZkBallot, CouncilDerivationKind, EnactReferendum,
             FinalizeReferendum, PersistCouncilForEpoch, ProposeDeployContract, VotingMode,
@@ -40,7 +42,7 @@ use iroha_data_model::{
         identifier::ClaimIdentifier,
         mint_burn::{Burn, Mint},
         transfer::Transfer,
-        zk, InstructionBox, RemoveAssetKeyValue, RemoveKeyValue, SetAssetKeyValue, SetKeyValue,
+        zk,
     },
     metadata::Metadata,
     name::Name,
@@ -51,9 +53,8 @@ use iroha_data_model::{
     rwa::RwaId,
     smart_contract::manifest::ContractManifest,
     transaction::{
-        signed::TransactionBuilder, Executable, SignedTransaction, TransactionSubmissionReceipt,
+        Executable, SignedTransaction, TransactionSubmissionReceipt, signed::TransactionBuilder,
     },
-    ChainId,
 };
 use iroha_executor_data_model::isi::multisig::{MultisigRegister, MultisigSpec};
 use iroha_primitives::{json::Json, numeric::Numeric};
@@ -64,13 +65,12 @@ use libc::{c_char, c_int, c_uchar, c_ulong, free, malloc};
 use norito::decode_from_bytes;
 use norito::json::{Map as JsonMap, Value as JsonValue};
 use sorafs_car::{
-    build_plan_from_da_manifest,
+    ChunkStore, ChunkStoreError, InMemoryPayload, PorProof, build_plan_from_da_manifest,
     local_fetch::{
         self, LocalFetchError, LocalFetchOptions, LocalFetchResult, LocalProviderInput,
         ProviderMetadataInput, RangeCapabilityInput, StreamBudgetInput, TelemetryEntryInput,
         TransportHintInput,
     },
-    ChunkStore, ChunkStoreError, InMemoryPayload, PorProof,
 };
 use zeroize::Zeroizing;
 
@@ -901,6 +901,18 @@ const PRIVACY_TRANSPARENT_TRANSFER_BASELINE_WAIVED_GATE_KEYS: &[&str] = &[
 const PRIVACY_PRODUCTION_EVIDENCE_HASH_PREFIX: &str = "sha256:";
 const PRIVACY_PRODUCTION_LOCALNET_TARGET: &str = "localnet";
 const PRIVACY_PRODUCTION_LOCALNET_PEER_COUNT: u8 = 4;
+const PRIVACY_PRODUCTION_SDK_EXPORT_SURFACES: &[&str] = &[
+    "rust_core",
+    "ffi",
+    "python",
+    "javascript",
+    "java_android",
+    "kotlin",
+    "swift",
+    "csharp",
+];
+const PRIVACY_PRODUCTION_SDK_PARITY_ARTIFACT_KINDS: &[&str] =
+    &["types", "validation_rules", "error_codes", "golden_vectors"];
 
 const PRIVACY_REQUIRED_PRODUCTION_PLAN_ROWS: &[(&str, &str, &str)] = &[
     (
@@ -1387,6 +1399,19 @@ struct PrivacyProductionLocalnetEvidenceV1 {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+struct PrivacyProductionSdkExportV1 {
+    surface: &'static str,
+    entrypoints: Vec<&'static str>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PrivacyProductionSdkParityArtifactV1 {
+    kind: &'static str,
+    surface: &'static str,
+    artifact_hash: &'static str,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct PrivacyProductionEvidenceRowV1 {
     algorithm_id: &'static str,
     chain_id: &'static str,
@@ -1397,6 +1422,8 @@ struct PrivacyProductionEvidenceRowV1 {
     proof_family: &'static str,
     public_inputs_schema: Option<&'static str>,
     sdk_entrypoints: Vec<&'static str>,
+    sdk_exports: Vec<PrivacyProductionSdkExportV1>,
+    sdk_parity_artifacts: Vec<PrivacyProductionSdkParityArtifactV1>,
     required_state: Vec<&'static str>,
     fuzz_artifact_hash: &'static str,
     performance_artifact_hash: &'static str,
@@ -1448,25 +1475,63 @@ fn privacy_expected_public_inputs_schema(entry: &PrivacyAlgorithmEntry) -> Optio
     match entry.id {
         "transparent-transfer" => None,
         "shield" => Some("asset,from,amount,note_commitment"),
-        "confidential-transfer-v2" => Some("input_commitment_0,input_commitment_1,nullifier_0,nullifier_1,output_commitment_0,output_commitment_1,root,asset_tag,chain_tag"),
-        "unshield" => Some("input_commitment_0,input_commitment_1,nullifier_0,nullifier_1,change_commitment_0,root,public_amount,asset_tag,chain_tag"),
-        "asset-hidden-confidential-transfer-v1" => Some("pool_id,asset_set_root,input_commitment_0,input_commitment_1,nullifier_0,nullifier_1,output_commitment_0,output_commitment_1,root,chain_tag"),
-        "zk-ace-pq-authorization-v0" => Some("identity_commitment,tx_digest,chain_id,domain_separator,action_class,replay_nullifier,policy_hash,from,to,asset,amount,verifier_key_id"),
-        "anonymous-pgc-k-out-of-n-v1" => Some("anonymity_set_root,tx_digest,balance_commitments,receiver_set_commitment,receiver_ciphertext_commitments,receiver_threshold,receiver_count,link_tag,range_commitments,chain_id,domain_separator"),
-        "verange-transparent-range-v1" => Some("commitments,range_parameters,aggregation_count,domain_separator,payload_digest"),
-        "zkat-policy-private-auth-v1" => Some("policy_commitment,tx_digest,account_id,action_class,domain_separator,policy_epoch"),
-        "zk-ams-recursive-admission-v0" => Some("issuer_root,admission_batch_root,admission_nullifiers,anonymous_account_commitments,recursive_admission_digest,domain_separator"),
-        "vega-existing-credential-zk-v0" => Some("issuer_commitment,credential_schema,predicate_commitment,subject_binding,expiration_epoch,domain_separator"),
-        "silent-threshold-anoncred-v0" => Some("issuer_set_commitment,threshold_policy_hash,credential_showing_commitment,showing_nullifier,verifier_policy_hash,domain_separator"),
-        "zk-x509-onchain-identity-v0" => Some("ca_root_commitment,certificate_policy_hash,revocation_root,subject_commitment,address_binding,domain_separator"),
-        "jindo-lattice-pcs-zk-v0" => Some("commitment,opening_claim,query_set,parameter_hash,domain_separator"),
-        "sis-hints-anoncred-pq-v0" => Some("issuer_commitment,credential_commitment,showing_policy_hash,parameter_hash,domain_separator"),
-        "orchard-halo2-actions-v1" => Some("anchor,nullifiers,cmx,value_commitments,binding_signature"),
-        "penumbra-masp-v1" => Some("state_commitment_anchor,nullifiers,note_commitments,balance_commitment,asset_id_commitment"),
-        "monero-fcmp-plus-plus-v1" => Some("membership_root,key_image_or_link_tag,amount_commitments,range_commitments,spend_authorization,chain_tag"),
-        "miden-stark-note-v1" => Some("account_id,initial_account_commitment,final_account_commitment,input_note_nullifiers,output_note_hashes,reference_block"),
-        "aztec-private-rollup-v1" => Some("note_hashes,nullifiers,encrypted_logs,public_call_requests,private_kernel_commitment,rollup_state_roots"),
-        "pq-masp-stark-v0" => Some("pool_id,asset_set_root,nullifier_set,output_commitments,root,chain_tag,pq_policy_hash"),
+        "confidential-transfer-v2" => Some(
+            "input_commitment_0,input_commitment_1,nullifier_0,nullifier_1,output_commitment_0,output_commitment_1,root,asset_tag,chain_tag",
+        ),
+        "unshield" => Some(
+            "input_commitment_0,input_commitment_1,nullifier_0,nullifier_1,change_commitment_0,root,public_amount,asset_tag,chain_tag",
+        ),
+        "asset-hidden-confidential-transfer-v1" => Some(
+            "pool_id,asset_set_root,input_commitment_0,input_commitment_1,nullifier_0,nullifier_1,output_commitment_0,output_commitment_1,root,chain_tag",
+        ),
+        "zk-ace-pq-authorization-v0" => Some(
+            "identity_commitment,tx_digest,chain_id,domain_separator,action_class,replay_nullifier,policy_hash,from,to,asset,amount,verifier_key_id",
+        ),
+        "anonymous-pgc-k-out-of-n-v1" => Some(
+            "anonymity_set_root,tx_digest,balance_commitments,receiver_set_commitment,receiver_ciphertext_commitments,receiver_threshold,receiver_count,link_tag,range_commitments,chain_id,domain_separator",
+        ),
+        "verange-transparent-range-v1" => {
+            Some("commitments,range_parameters,aggregation_count,domain_separator,payload_digest")
+        }
+        "zkat-policy-private-auth-v1" => Some(
+            "policy_commitment,tx_digest,account_id,action_class,domain_separator,policy_epoch",
+        ),
+        "zk-ams-recursive-admission-v0" => Some(
+            "issuer_root,admission_batch_root,admission_nullifiers,anonymous_account_commitments,recursive_admission_digest,domain_separator",
+        ),
+        "vega-existing-credential-zk-v0" => Some(
+            "issuer_commitment,credential_schema,predicate_commitment,subject_binding,expiration_epoch,domain_separator",
+        ),
+        "silent-threshold-anoncred-v0" => Some(
+            "issuer_set_commitment,threshold_policy_hash,credential_showing_commitment,showing_nullifier,verifier_policy_hash,domain_separator",
+        ),
+        "zk-x509-onchain-identity-v0" => Some(
+            "ca_root_commitment,certificate_policy_hash,revocation_root,subject_commitment,address_binding,domain_separator",
+        ),
+        "jindo-lattice-pcs-zk-v0" => {
+            Some("commitment,opening_claim,query_set,parameter_hash,domain_separator")
+        }
+        "sis-hints-anoncred-pq-v0" => Some(
+            "issuer_commitment,credential_commitment,showing_policy_hash,parameter_hash,domain_separator",
+        ),
+        "orchard-halo2-actions-v1" => {
+            Some("anchor,nullifiers,cmx,value_commitments,binding_signature")
+        }
+        "penumbra-masp-v1" => Some(
+            "state_commitment_anchor,nullifiers,note_commitments,balance_commitment,asset_id_commitment",
+        ),
+        "monero-fcmp-plus-plus-v1" => Some(
+            "membership_root,key_image_or_link_tag,amount_commitments,range_commitments,spend_authorization,chain_tag",
+        ),
+        "miden-stark-note-v1" => Some(
+            "account_id,initial_account_commitment,final_account_commitment,input_note_nullifiers,output_note_hashes,reference_block",
+        ),
+        "aztec-private-rollup-v1" => Some(
+            "note_hashes,nullifiers,encrypted_logs,public_call_requests,private_kernel_commitment,rollup_state_roots",
+        ),
+        "pq-masp-stark-v0" => Some(
+            "pool_id,asset_set_root,nullifier_set,output_commitments,root,chain_tag,pq_policy_hash",
+        ),
         _ => None,
     }
 }
@@ -1741,6 +1806,67 @@ fn privacy_production_evidence_sdk_entrypoints_are_valid(
         })
 }
 
+fn privacy_production_evidence_sdk_exports_are_valid(
+    row: &PrivacyProductionEvidenceRowV1,
+    entry: &PrivacyAlgorithmEntry,
+) -> bool {
+    let expected_entrypoints = privacy_expected_production_sdk_entrypoints(entry);
+    row.sdk_exports.len() == PRIVACY_PRODUCTION_SDK_EXPORT_SURFACES.len()
+        && PRIVACY_PRODUCTION_SDK_EXPORT_SURFACES
+            .iter()
+            .enumerate()
+            .all(|(index, expected_surface)| {
+                let Some(export) = row.sdk_exports.get(index) else {
+                    return false;
+                };
+                export.surface == *expected_surface
+                    && privacy_text_field_is_portable_identifier(export.surface)
+                    && !privacy_evidence_text_has_non_production_marker(export.surface)
+                    && !privacy_exposed_label_claims_production_readiness(export.surface)
+                    && privacy_string_slice_matches_vec(&export.entrypoints, &expected_entrypoints)
+                    && !privacy_string_slice_has_duplicates(&export.entrypoints)
+                    && export.entrypoints.iter().all(|entrypoint| {
+                        privacy_sdk_entrypoint_is_portable(entrypoint)
+                            && !privacy_entrypoint_is_dev_fixture(entrypoint)
+                            && !privacy_entrypoint_is_local_verifier(entrypoint)
+                            && !privacy_exposed_label_claims_production_readiness(entrypoint)
+                    })
+            })
+}
+
+fn privacy_production_evidence_sdk_parity_artifacts_are_valid(
+    row: &PrivacyProductionEvidenceRowV1,
+) -> bool {
+    row.sdk_parity_artifacts.len()
+        == PRIVACY_PRODUCTION_SDK_PARITY_ARTIFACT_KINDS.len()
+            * PRIVACY_PRODUCTION_SDK_EXPORT_SURFACES.len()
+        && PRIVACY_PRODUCTION_SDK_PARITY_ARTIFACT_KINDS
+            .iter()
+            .enumerate()
+            .all(|(kind_index, expected_kind)| {
+                PRIVACY_PRODUCTION_SDK_EXPORT_SURFACES
+                    .iter()
+                    .enumerate()
+                    .all(|(surface_index, expected_surface)| {
+                        let artifact_index = kind_index
+                            * PRIVACY_PRODUCTION_SDK_EXPORT_SURFACES.len()
+                            + surface_index;
+                        let Some(artifact) = row.sdk_parity_artifacts.get(artifact_index) else {
+                            return false;
+                        };
+                        artifact.kind == *expected_kind
+                            && artifact.surface == *expected_surface
+                            && privacy_text_field_is_portable_identifier(artifact.kind)
+                            && privacy_text_field_is_portable_identifier(artifact.surface)
+                            && !privacy_evidence_text_has_non_production_marker(artifact.kind)
+                            && !privacy_evidence_text_has_non_production_marker(artifact.surface)
+                            && !privacy_exposed_label_claims_production_readiness(artifact.kind)
+                            && !privacy_exposed_label_claims_production_readiness(artifact.surface)
+                            && privacy_production_evidence_hash_is_valid(artifact.artifact_hash)
+                    })
+            })
+}
+
 fn privacy_production_evidence_required_state_is_valid(
     row: &PrivacyProductionEvidenceRowV1,
     entry: &PrivacyAlgorithmEntry,
@@ -1776,6 +1902,8 @@ fn privacy_production_evidence_row_is_valid(
         && row.proof_family == entry.proof_family
         && row.public_inputs_schema == privacy_expected_public_inputs_schema(entry)
         && privacy_production_evidence_sdk_entrypoints_are_valid(row, entry)
+        && privacy_production_evidence_sdk_exports_are_valid(row, entry)
+        && privacy_production_evidence_sdk_parity_artifacts_are_valid(row)
         && privacy_production_evidence_required_state_is_valid(row, entry)
         && privacy_production_evidence_hash_is_valid(row.fuzz_artifact_hash)
         && privacy_production_evidence_hash_is_valid(row.performance_artifact_hash)
@@ -2728,6 +2856,18 @@ fn privacy_failure_result(
     result
 }
 
+fn privacy_failure_result_without_vk_ref(
+    error_code: u32,
+    message: &str,
+    request: &PrivacyProofRequestV1,
+) -> PrivacyProofResultV1 {
+    let mut sanitized = request.clone();
+    sanitized.vk_ref.clear();
+    sanitized.witness.clear();
+    sanitized.proof.clear();
+    privacy_failure_result(error_code, message, Some(&sanitized))
+}
+
 fn privacy_failure_result_invariants_hold(result: &PrivacyProofResultV1) -> bool {
     result.version == PRIVACY_FFI_VERSION_V1
         && result.status == PRIVACY_FFI_STATUS_ERROR
@@ -2823,7 +2963,7 @@ fn privacy_result_for_request(
             return privacy_failure_result(
                 PRIVACY_FFI_ERROR_INVALID_REQUEST,
                 "privacy proof request must include non-empty algorithm_id and entrypoint",
-                None,
+                Some(&request),
             );
         }
 
@@ -2835,11 +2975,22 @@ fn privacy_result_for_request(
             );
         }
 
+        let known_entry = privacy_algorithm_entry(&request.algorithm_id);
+        if let Some(entry) = known_entry {
+            if privacy_entrypoint_planned(entry, &request.entrypoint) {
+                return privacy_failure_result_without_vk_ref(
+                    PRIVACY_FFI_ERROR_INVALID_REQUEST,
+                    "privacy proof request entrypoint is planned but not executable until the production gate passes",
+                    &request,
+                );
+            }
+        }
+
         if request.vk_ref.trim().is_empty() {
             return privacy_failure_result(
                 PRIVACY_FFI_ERROR_INVALID_REQUEST,
                 "privacy proof request must include non-empty vk_ref",
-                None,
+                Some(&request),
             );
         }
 
@@ -2851,21 +3002,13 @@ fn privacy_result_for_request(
             );
         }
 
-        let Some(entry) = privacy_algorithm_entry(&request.algorithm_id) else {
+        let Some(entry) = known_entry else {
             return privacy_failure_result(
                 PRIVACY_FFI_ERROR_UNSUPPORTED_ALGORITHM,
                 "unsupported privacy algorithm id",
                 Some(&request),
             );
         };
-
-        if privacy_entrypoint_planned(entry, &request.entrypoint) {
-            return privacy_failure_result(
-                PRIVACY_FFI_ERROR_INVALID_REQUEST,
-                "privacy proof request entrypoint is planned but not executable until the production gate passes",
-                Some(&request),
-            );
-        }
 
         if !privacy_entrypoint_supported(entry, &request.entrypoint) {
             return privacy_failure_result(
@@ -3106,6 +3249,72 @@ fn write_privacy_payload<T: norito::NoritoSerialize>(
     result
 }
 
+unsafe fn read_privacy_component_bytes(ptr_: *const c_uchar, len: c_ulong) -> Result<Vec<u8>, u32> {
+    let len = usize::try_from(len).map_err(|_| PRIVACY_FFI_ERROR_INVALID_REQUEST)?;
+    if len > PRIVACY_NATIVE_ARCHIVE_MAX_BYTES || len > isize::MAX as usize {
+        return Err(PRIVACY_FFI_ERROR_INVALID_REQUEST);
+    }
+    if len == 0 {
+        return Ok(Vec::new());
+    }
+    if ptr_.is_null() {
+        return Err(PRIVACY_FFI_ERROR_NULL_POINTER);
+    }
+    Ok(unsafe { slice::from_raw_parts(ptr_, len) }.to_vec())
+}
+
+unsafe fn read_privacy_text_component(ptr_: *const c_uchar, len: c_ulong) -> Result<String, u32> {
+    let mut bytes = unsafe { read_privacy_component_bytes(ptr_, len) }?;
+    if bytes.len() > PRIVACY_REQUEST_TEXT_FIELD_MAX_BYTES {
+        bytes.fill(0);
+        return Err(PRIVACY_FFI_ERROR_INVALID_REQUEST);
+    }
+    let text = match std::str::from_utf8(&bytes) {
+        Ok(text) => text.to_owned(),
+        Err(_) => {
+            bytes.fill(0);
+            return Err(PRIVACY_FFI_ERROR_INVALID_REQUEST);
+        }
+    };
+    bytes.fill(0);
+    Ok(text)
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe fn read_privacy_proof_request_components(
+    algorithm_id_ptr: *const c_uchar,
+    algorithm_id_len: c_ulong,
+    entrypoint_ptr: *const c_uchar,
+    entrypoint_len: c_ulong,
+    vk_ref_ptr: *const c_uchar,
+    vk_ref_len: c_ulong,
+    public_inputs_ptr: *const c_uchar,
+    public_inputs_len: c_ulong,
+    witness_ptr: *const c_uchar,
+    witness_len: c_ulong,
+    proof_ptr: *const c_uchar,
+    proof_len: c_ulong,
+) -> Result<PrivacyProofRequestV1, u32> {
+    let algorithm_id = unsafe { read_privacy_text_component(algorithm_id_ptr, algorithm_id_len) }?;
+    let entrypoint = unsafe { read_privacy_text_component(entrypoint_ptr, entrypoint_len) }?;
+    let vk_ref = unsafe { read_privacy_text_component(vk_ref_ptr, vk_ref_len) }?;
+    let public_inputs =
+        unsafe { read_privacy_component_bytes(public_inputs_ptr, public_inputs_len) }?;
+    if public_inputs.is_empty() {
+        return Err(PRIVACY_FFI_ERROR_INVALID_REQUEST);
+    }
+    let witness = unsafe { read_privacy_component_bytes(witness_ptr, witness_len) }?;
+    let proof = unsafe { read_privacy_component_bytes(proof_ptr, proof_len) }?;
+    Ok(PrivacyProofRequestV1 {
+        algorithm_id,
+        entrypoint,
+        vk_ref,
+        public_inputs,
+        witness,
+        proof,
+    })
+}
+
 unsafe fn read_privacy_request(
     request_ptr: *const c_uchar,
     request_len: c_ulong,
@@ -3156,6 +3365,52 @@ unsafe fn iroha_privacy_process_request_v1(
         &result,
         privacy_result_schema_byte(operation),
     )
+}
+
+#[allow(clippy::too_many_arguments)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn iroha_privacy_proof_request_v1(
+    algorithm_id_ptr: *const c_uchar,
+    algorithm_id_len: c_ulong,
+    entrypoint_ptr: *const c_uchar,
+    entrypoint_len: c_ulong,
+    vk_ref_ptr: *const c_uchar,
+    vk_ref_len: c_ulong,
+    public_inputs_ptr: *const c_uchar,
+    public_inputs_len: c_ulong,
+    witness_ptr: *const c_uchar,
+    witness_len: c_ulong,
+    proof_ptr: *const c_uchar,
+    proof_len: c_ulong,
+    out_ptr: *mut *mut c_uchar,
+    out_len: *mut c_ulong,
+) -> c_int {
+    clear_privacy_output(out_ptr, out_len);
+    if out_ptr.is_null() || out_len.is_null() {
+        return ERR_NULL_PTR;
+    }
+    let mut request = match unsafe {
+        read_privacy_proof_request_components(
+            algorithm_id_ptr,
+            algorithm_id_len,
+            entrypoint_ptr,
+            entrypoint_len,
+            vk_ref_ptr,
+            vk_ref_len,
+            public_inputs_ptr,
+            public_inputs_len,
+            witness_ptr,
+            witness_len,
+            proof_ptr,
+            proof_len,
+        )
+    } {
+        Ok(request) => request,
+        Err(code) => return code as c_int,
+    };
+    let result = write_privacy_payload(out_ptr, out_len, &request, PRIVACY_REQUEST_SCHEMA_BYTE);
+    privacy_clear_request_byte_fields(&mut request);
+    result
 }
 
 #[unsafe(no_mangle)]
@@ -4745,11 +5000,7 @@ fn json_option_string_array(values: &Option<Vec<String>>) -> JsonValue {
 }
 
 fn bool_to_u8(value: bool) -> u8 {
-    if value {
-        1
-    } else {
-        0
-    }
+    if value { 1 } else { 0 }
 }
 
 fn option_to_ffi(value: Option<usize>) -> (u64, u8) {
@@ -7163,11 +7414,7 @@ pub unsafe extern "C" fn connect_norito_offline_verify_note_redeem_with_vk(
     match verify_offline_note_redeem_recursive_with_vk(redeem_bytes, vk_bytes) {
         Ok(valid) => {
             unsafe { *out_valid = if valid { 1 } else { 0 } };
-            if valid {
-                1
-            } else {
-                0
-            }
+            if valid { 1 } else { 0 }
         }
         Err(_) => ERR_OFFLINE_NOTE_VERIFY,
     }
@@ -7194,11 +7441,7 @@ pub unsafe extern "C" fn connect_norito_offline_verify_note_audit_with_vk(
     match verify_offline_note_audit_recursive_with_vk(audit_bytes, vk_bytes) {
         Ok(valid) => {
             unsafe { *out_valid = if valid { 1 } else { 0 } };
-            if valid {
-                1
-            } else {
-                0
-            }
+            if valid { 1 } else { 0 }
         }
         Err(_) => ERR_OFFLINE_NOTE_VERIFY,
     }
@@ -7208,7 +7451,7 @@ fn prove_offline_note_redeem_recursive(
     redeem_archive: &[u8],
 ) -> BridgeResult<iroha_data_model::offline::OfflineNoteRecursiveProof> {
     use iroha_core::zk::{
-        offline_note_recursive_vk_box, prove_offline_note_redeem, OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID,
+        OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID, offline_note_recursive_vk_box, prove_offline_note_redeem,
     };
     use iroha_data_model::{
         offline::{OfflineNoteRecursiveProof, OfflineNoteRedeem},
@@ -7243,7 +7486,7 @@ fn prove_offline_note_audit_recursive(
     audit_archive: &[u8],
 ) -> BridgeResult<iroha_data_model::offline::OfflineNoteRecursiveProof> {
     use iroha_core::zk::{
-        offline_note_recursive_vk_box, prove_offline_note_audit, OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID,
+        OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID, offline_note_recursive_vk_box, prove_offline_note_audit,
     };
     use iroha_data_model::{
         offline::{OfflineNoteAuditBundle, OfflineNoteRecursiveProof},
@@ -7274,7 +7517,7 @@ fn prove_offline_note_redeem_recursive_with_vk(
     redemption_norito: &[u8],
     vk_box_norito: &[u8],
 ) -> Result<Vec<u8>, String> {
-    use iroha_core::zk::{prove_offline_note_redeem, OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID};
+    use iroha_core::zk::{OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID, prove_offline_note_redeem};
     use iroha_data_model::{
         offline::{OfflineNoteRecursiveProof, OfflineNoteRedeem},
         proof::{VerifyingKeyBox, VerifyingKeyId},
@@ -7311,7 +7554,7 @@ fn prove_offline_note_audit_recursive_with_vk(
     audit_norito: &[u8],
     vk_box_norito: &[u8],
 ) -> Result<Vec<u8>, String> {
-    use iroha_core::zk::{prove_offline_note_audit, OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID};
+    use iroha_core::zk::{OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID, prove_offline_note_audit};
     use iroha_data_model::{
         offline::{OfflineNoteAuditBundle, OfflineNoteRecursiveProof},
         proof::{VerifyingKeyBox, VerifyingKeyId},
@@ -7429,7 +7672,7 @@ fn zk1_read_instance_columns(payload: &[u8]) -> Option<Vec<Vec<[u8; 32]>>> {
 fn offline_note_vk_box_is_canonical(
     vk_box: &iroha_data_model::proof::VerifyingKeyBox,
 ) -> Result<bool, String> {
-    use iroha_core::zk::{hash_vk, offline_note_recursive_vk_box, ZK_BACKEND_HALO2_IPA};
+    use iroha_core::zk::{ZK_BACKEND_HALO2_IPA, hash_vk, offline_note_recursive_vk_box};
 
     if vk_box.backend.as_str() != ZK_BACKEND_HALO2_IPA || vk_box.bytes.is_empty() {
         return Ok(false);
@@ -7446,7 +7689,7 @@ fn verify_offline_note_recursive_proof_with_vk(
     vk_box: &iroha_data_model::proof::VerifyingKeyBox,
 ) -> Result<bool, String> {
     use iroha_core::zk::{
-        hash_vk, verify_backend, OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID, ZK_BACKEND_HALO2_IPA,
+        OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID, ZK_BACKEND_HALO2_IPA, hash_vk, verify_backend,
     };
     use iroha_data_model::{
         offline::OFFLINE_NOTE_RECURSIVE_PUBLIC_INPUTS_SCHEMA,
@@ -7621,8 +7864,8 @@ fn prove_verified_kagemusha_compact_token_from_record_bundle(
     verified_record_bundle_archive: &[u8],
 ) -> BridgeResult<iroha_data_model::offline::KagemushaCompactPaymentToken> {
     use iroha_core::zk::{
-        kagemusha_folded_vk_box, prove_verified_kagemusha_compact_payment_token_from_record_bundle,
-        KAGEMUSHA_FOLDED_CIRCUIT_ID,
+        KAGEMUSHA_FOLDED_CIRCUIT_ID, kagemusha_folded_vk_box,
+        prove_verified_kagemusha_compact_payment_token_from_record_bundle,
     };
     use iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle;
 
@@ -7691,9 +7934,8 @@ fn prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_record_bundl
     pallas_open_envelopes_archive: &[u8],
 ) -> BridgeResult<iroha_data_model::offline::KagemushaRecursiveAggregationProofBundle> {
     use iroha_core::zk::{
-        kagemusha_recursive_aggregation_proof_vk_box,
+        KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID, kagemusha_recursive_aggregation_proof_vk_box,
         prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_record_bundle_and_pallas_open_envelope_archive,
-        KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
     };
     use iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle;
 
@@ -8101,10 +8343,9 @@ fn kagemusha_recursive_spend_append_from_request_archive(
     request_archive: &[u8],
 ) -> BridgeResult<iroha_data_model::offline::KagemushaRecursiveSpendBundleV1> {
     use iroha_core::zk::{
-        kagemusha_recursive_aggregation_proof_vk_box,
+        KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID, kagemusha_recursive_aggregation_proof_vk_box,
         prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive,
         prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive_at_height,
-        KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
     };
     use iroha_data_model::offline::KagemushaRecursiveSpendAppendRequestV1;
 
@@ -8213,8 +8454,8 @@ fn kagemusha_recursive_spend_transition_profile_init_from_request_archive(
         kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelope_archive_at_height,
     };
     use iroha_data_model::offline::{
-        kagemusha_recursive_spend_transition_profile_from_initial_evidence,
         KagemushaRecursiveSpendInitRequestV1,
+        kagemusha_recursive_spend_transition_profile_from_initial_evidence,
     };
 
     let request: KagemushaRecursiveSpendInitRequestV1 =
@@ -8282,9 +8523,9 @@ fn kagemusha_recursive_spend_transition_profile_append_from_request_archive(
         kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelope_archive_at_height,
     };
     use iroha_data_model::offline::{
+        KagemushaRecursiveSpendAppendRequestV1,
         kagemusha_recursive_spend_transition_profile_append_evidence_with_opening_preflight_contract,
         kagemusha_recursive_spend_transition_profile_append_evidence_with_previous_proof_openings,
-        KagemushaRecursiveSpendAppendRequestV1,
     };
 
     let request: KagemushaRecursiveSpendAppendRequestV1 =
@@ -8381,8 +8622,8 @@ fn kagemusha_recursive_spend_lineage_append_boundary_from_transition_profile_arc
     profile_archive: &[u8],
 ) -> BridgeResult<iroha_data_model::offline::KagemushaRecursiveSpendLineageAppendBoundaryV1> {
     use iroha_data_model::offline::{
-        kagemusha_recursive_spend_lineage_append_boundary_from_transition_profile,
         KagemushaRecursiveSpendTransitionProfileV1,
+        kagemusha_recursive_spend_lineage_append_boundary_from_transition_profile,
     };
 
     let profile: KagemushaRecursiveSpendTransitionProfileV1 =
@@ -8432,8 +8673,8 @@ fn kagemusha_recursive_spend_lineage_witness_from_init_result_archives(
     bundle_archive: &[u8],
 ) -> BridgeResult<iroha_data_model::offline::KagemushaRecursiveSpendLineageWitnessV1> {
     use iroha_data_model::offline::{
-        kagemusha_recursive_spend_lineage_witness_from_init_result,
         KagemushaRecursiveSpendBundleV1, KagemushaRecursiveSpendInitRequestV1,
+        kagemusha_recursive_spend_lineage_witness_from_init_result,
     };
 
     let request: KagemushaRecursiveSpendInitRequestV1 =
@@ -8490,9 +8731,9 @@ fn kagemusha_recursive_spend_lineage_witness_append_result_archives(
     bundle_archive: &[u8],
 ) -> BridgeResult<iroha_data_model::offline::KagemushaRecursiveSpendLineageWitnessV1> {
     use iroha_data_model::offline::{
-        kagemusha_recursive_spend_lineage_witness_append_result,
         KagemushaRecursiveSpendAppendRequestV1, KagemushaRecursiveSpendBundleV1,
         KagemushaRecursiveSpendLineageWitnessV1,
+        kagemusha_recursive_spend_lineage_witness_append_result,
     };
 
     let previous_witness: KagemushaRecursiveSpendLineageWitnessV1 =
@@ -8592,6 +8833,7 @@ fn kagemusha_recursive_spend_redeem_from_request_archive(
     request_archive: &[u8],
 ) -> BridgeResult<iroha_data_model::isi::offline::RedeemKagemushaRecursive> {
     use iroha_core::zk::{
+        KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID, ZK_BACKEND_HALO2_IPA,
         ensure_kagemusha_recursive_spend_chain_admission_proves_lineage,
         kagemusha_recursive_aggregation_proof_vk_box,
         preverify_kagemusha_recursive_spend_bundle_with_record,
@@ -8604,7 +8846,6 @@ fn kagemusha_recursive_spend_redeem_from_request_archive(
         verify_kagemusha_recursive_spend_lineage_witness_and_bundle_with_vk_box,
         verify_kagemusha_recursive_spend_lineage_witness_with_record_resolver,
         verify_kagemusha_recursive_spend_lineage_witness_with_record_resolver_at_height,
-        KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID, ZK_BACKEND_HALO2_IPA,
     };
     use iroha_data_model::{
         isi::offline::RedeemKagemushaRecursive, offline::KagemushaRecursiveSpendRedeemRequestV1,
@@ -8770,6 +9011,7 @@ mod offline_note_prover_tests {
     use std::{ffi::CString, sync::OnceLock};
 
     use iroha_core::zk::{
+        KAGEMUSHA_HOP_MAX_PROOF_BYTES, OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID, ZK_BACKEND_HALO2_IPA,
         confidential_v2, hash_vk, kagemusha_fold_step_proof_hash,
         kagemusha_fold_step_public_inputs_digest, kagemusha_folded_vk_box,
         kagemusha_pallas_open_envelope_metadata_for_verified_hop,
@@ -8781,18 +9023,18 @@ mod offline_note_prover_tests {
         kagemusha_verified_folded_public_inputs_from_record_bundle, offline_note_recursive_vk_box,
         verify_backend, verify_kagemusha_compact_payment_token,
         verify_kagemusha_recursive_aggregation_proof_bundle,
-        verify_kagemusha_recursive_compact_payment_token, KAGEMUSHA_HOP_MAX_PROOF_BYTES,
-        OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID, ZK_BACKEND_HALO2_IPA,
+        verify_kagemusha_recursive_compact_payment_token,
     };
     use iroha_data_model::{
         confidential::ConfidentialStatus,
         offline::{
-            kagemusha_lineage_proving_key_archive,
-            kagemusha_recursive_aggregation_evidence_from_steps,
-            kagemusha_recursive_aggregation_proof_public_inputs_from_evidence,
-            kagemusha_recursive_spend_accumulator_from_initial_evidence,
-            kagemusha_recursive_spend_compact_payment_token_from_bundle,
-            kagemusha_recursive_spend_public_inputs_from_accumulator, KagemushaCompactPaymentToken,
+            KAGEMUSHA_AGGREGATION_MODE_RECURSIVE_IN_CIRCUIT_V1,
+            KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+            KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_PUBLIC_INPUTS_SCHEMA,
+            KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1,
+            KAGEMUSHA_RECURSIVE_COMPACT_SUPPORTED_OPENING_LENS_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_ACCUMULATOR_DOMAIN,
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, KagemushaCompactPaymentToken,
             KagemushaFoldedProof, KagemushaRecursiveAggregationProof,
             KagemushaRecursiveAggregationProofBundle, KagemushaRecursiveCompactKeyArtifactEntryV1,
             KagemushaRecursiveCompactKeyArtifactsV1, KagemushaRecursiveCompactVerifierKeyEntryV1,
@@ -8805,13 +9047,12 @@ mod offline_note_prover_tests {
             KagemushaVerifiedFoldStep, KagemushaVerifiedFoldVerifierRecord, OfflineNoteAuditBundle,
             OfflineNoteAuditOutputClaim, OfflineNoteIssue, OfflineNoteIssuedClaim,
             OfflineNoteKeyCertificate, OfflineNoteRecursiveProof, OfflineNoteRedeem,
-            KAGEMUSHA_AGGREGATION_MODE_RECURSIVE_IN_CIRCUIT_V1,
-            KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
-            KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_PUBLIC_INPUTS_SCHEMA,
-            KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1,
-            KAGEMUSHA_RECURSIVE_COMPACT_SUPPORTED_OPENING_LENS_V1,
-            KAGEMUSHA_RECURSIVE_SPEND_ACCUMULATOR_DOMAIN,
-            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+            kagemusha_lineage_proving_key_archive,
+            kagemusha_recursive_aggregation_evidence_from_steps,
+            kagemusha_recursive_aggregation_proof_public_inputs_from_evidence,
+            kagemusha_recursive_spend_accumulator_from_initial_evidence,
+            kagemusha_recursive_spend_compact_payment_token_from_bundle,
+            kagemusha_recursive_spend_public_inputs_from_accumulator,
         },
         proof::{ProofBox, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
         zk::{BackendTag, OpenVerifyEnvelope},
@@ -9236,8 +9477,8 @@ mod offline_note_prover_tests {
         }
     }
 
-    fn sample_semantic_redeem_request_with_reserved_previous_lineage(
-    ) -> KagemushaRecursiveSpendRedeemRequestV1 {
+    fn sample_semantic_redeem_request_with_reserved_previous_lineage()
+    -> KagemushaRecursiveSpendRedeemRequestV1 {
         let mut request = sample_recursive_spend_redeem_request(42);
         let mut witness = sample_fast_recursive_spend_lineage_witness_for_bundle(&request.bundle);
         let previous_proof = witness
@@ -9990,8 +10231,8 @@ mod offline_note_prover_tests {
         .expect("encode recursive compact test proving-key archive")
     }
 
-    fn recursive_compact_key_artifacts_for_tests(
-    ) -> &'static KagemushaRecursiveCompactKeyArtifactsV1 {
+    fn recursive_compact_key_artifacts_for_tests()
+    -> &'static KagemushaRecursiveCompactKeyArtifactsV1 {
         static KEY_ARTIFACTS: OnceLock<KagemushaRecursiveCompactKeyArtifactsV1> = OnceLock::new();
         KEY_ARTIFACTS.get_or_init(|| {
             let entries = KAGEMUSHA_RECURSIVE_COMPACT_SUPPORTED_OPENING_LENS_V1
@@ -10297,6 +10538,14 @@ mod offline_note_prover_tests {
             valid, 0,
             "height-aware malformed projection verifier calls must clear stale valid flags"
         );
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_compact_projection_jni_height_uses_raw_u64_bits() {
+        assert_eq!(java_jlong_to_u64_bits(0), 0);
+        assert_eq!(java_jlong_to_u64_bits(i64::MAX), 0x7fff_ffff_ffff_ffff);
+        assert_eq!(java_jlong_to_u64_bits(i64::MIN), 0x8000_0000_0000_0000);
+        assert_eq!(java_jlong_to_u64_bits(-1), u64::MAX);
     }
 
     #[test]
@@ -12117,8 +12366,8 @@ mod offline_note_prover_tests {
         }
     }
 
-    fn sample_recursive_spend_init_request_for_transition_profile(
-    ) -> KagemushaRecursiveSpendInitRequestV1 {
+    fn sample_recursive_spend_init_request_for_transition_profile()
+    -> KagemushaRecursiveSpendInitRequestV1 {
         let record_bundle = sample_kagemusha_verified_record_bundle();
         let step = record_bundle
             .bundle
@@ -12154,8 +12403,8 @@ mod offline_note_prover_tests {
         record.withdraw_height = Some(4);
     }
 
-    fn sample_reserved_lineage_append_request_missing_key_artifacts(
-    ) -> KagemushaRecursiveSpendAppendRequestV1 {
+    fn sample_reserved_lineage_append_request_missing_key_artifacts()
+    -> KagemushaRecursiveSpendAppendRequestV1 {
         let (mut previous_bundle, witness) =
             sample_verifying_semantic_recursive_spend_lineage_fixture();
         let record_bundle = witness.record_bundle.clone();
@@ -12327,8 +12576,8 @@ mod offline_note_prover_tests {
     }
 
     #[test]
-    fn kagemusha_recursive_spend_transition_profile_append_ffi_rejects_stale_previous_public_input_hash(
-    ) {
+    fn kagemusha_recursive_spend_transition_profile_append_ffi_rejects_stale_previous_public_input_hash()
+     {
         let mut request =
             sample_recursive_spend_append_request(sample_kagemusha_recursive_spend_bundle(), None);
         request.previous_bundle.recursive_proof.public_inputs_hash =
@@ -14110,14 +14359,18 @@ mod offline_note_prover_tests {
         match signed.instructions() {
             Executable::Instructions(instructions) => {
                 assert_eq!(instructions.len(), 2);
-                assert!(instructions[0]
-                    .as_any()
-                    .downcast_ref::<iroha_data_model::isi::offline::AuditOfflineNote>()
-                    .is_some());
-                assert!(instructions[1]
-                    .as_any()
-                    .downcast_ref::<iroha_data_model::isi::offline::RedeemOfflineNote>()
-                    .is_some());
+                assert!(
+                    instructions[0]
+                        .as_any()
+                        .downcast_ref::<iroha_data_model::isi::offline::AuditOfflineNote>()
+                        .is_some()
+                );
+                assert!(
+                    instructions[1]
+                        .as_any()
+                        .downcast_ref::<iroha_data_model::isi::offline::RedeemOfflineNote>()
+                        .is_some()
+                );
             }
             other => panic!("unexpected executable: {other:?}"),
         }
@@ -20107,11 +20360,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAcceler
     use jni::sys::{JNI_FALSE, JNI_TRUE};
 
     let available = catch_unwind(ivm::cuda_available).unwrap_or(false);
-    if available {
-        JNI_TRUE
-    } else {
-        JNI_FALSE
-    }
+    if available { JNI_TRUE } else { JNI_FALSE }
 }
 
 #[cfg(any(
@@ -20131,11 +20380,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAcceler
     use jni::sys::{JNI_FALSE, JNI_TRUE};
 
     let disabled = catch_unwind(ivm::cuda_disabled).unwrap_or(false);
-    if disabled {
-        JNI_TRUE
-    } else {
-        JNI_FALSE
-    }
+    if disabled { JNI_TRUE } else { JNI_FALSE }
 }
 
 #[cfg(any(
@@ -20168,7 +20413,7 @@ fn catch_unwind_to_java<T, F>(env: &mut jni::JNIEnv<'_>, label: &str, f: F) -> O
 where
     F: FnOnce() -> T,
 {
-    use std::panic::{catch_unwind, AssertUnwindSafe};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
 
     match catch_unwind(AssertUnwindSafe(f)) {
         Ok(value) => Some(value),
@@ -20880,6 +21125,16 @@ fn java_native_kagemusha_recursive_spend_compact_payment_token_from_bundle(
     target_os = "macos",
     target_os = "windows"
 ))]
+fn java_jlong_to_u64_bits(value: jni::sys::jlong) -> u64 {
+    value as u64
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 fn java_native_kagemusha_verify_recursive_spend_compact_payment_token_projection(
     env: &mut jni::JNIEnv<'_>,
     compact_token_archive: jni::objects::JByteArray<'_>,
@@ -20894,11 +21149,7 @@ fn java_native_kagemusha_verify_recursive_spend_compact_payment_token_projection
         let verifier_record_bytes =
             read_java_byte_array(env, &verifier_record_archive, "verifierRecordArchive")
                 .ok_or_else(|| "invalid Kagemusha verifier record archive bytes".to_owned())?;
-        let height = match block_height {
-            Some(value) if value < 0 => return Err("blockHeight must be non-negative".to_owned()),
-            Some(value) => Some(value as u64),
-            None => None,
-        };
+        let height = block_height.map(java_jlong_to_u64_bits);
         let valid = java_kagemusha_verify_recursive_spend_compact_payment_token_projection(
             &token_bytes,
             &verifier_record_bytes,
@@ -21126,6 +21377,42 @@ fn java_privacy_result_archive(
     target_os = "macos",
     target_os = "windows"
 ))]
+fn java_privacy_text_component(bytes: &mut [u8], context: &str) -> Result<String, String> {
+    if bytes.len() > PRIVACY_REQUEST_TEXT_FIELD_MAX_BYTES {
+        bytes.fill(0);
+        return Err(format!("{context} exceeds maximum length"));
+    }
+    let text = match std::str::from_utf8(bytes) {
+        Ok(text) => text.to_owned(),
+        Err(_) => {
+            bytes.fill(0);
+            return Err(format!("{context} must be UTF-8"));
+        }
+    };
+    bytes.fill(0);
+    Ok(text)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_privacy_request_archive(request: &PrivacyProofRequestV1) -> Result<Vec<u8>, String> {
+    java_privacy_public_archive(
+        request,
+        PRIVACY_REQUEST_SCHEMA_BYTE,
+        "privacy proof request",
+    )
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 fn java_native_privacy_capabilities(env: &mut jni::JNIEnv<'_>) -> jni::sys::jbyteArray {
     let result = (|| -> Result<jni::sys::jbyteArray, String> {
         let mut archive = java_privacy_capabilities_archive()?;
@@ -21162,6 +21449,67 @@ fn java_native_privacy_result_archive(
             .ok_or_else(|| format!("invalid privacy {context} request bytes"))?;
         let archive_result = java_privacy_result_archive(&request_bytes, operation);
         request_bytes.fill(0);
+        let mut archive = archive_result?;
+        let array_result = env
+            .byte_array_from_slice(&archive)
+            .map_err(|err| err.to_string());
+        archive.fill(0);
+        let array = array_result?;
+        Ok(array.into_raw())
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(env, message);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_native_privacy_request_archive(
+    env: &mut jni::JNIEnv<'_>,
+    algorithm_id: jni::objects::JByteArray<'_>,
+    entrypoint: jni::objects::JByteArray<'_>,
+    vk_ref: jni::objects::JByteArray<'_>,
+    public_inputs: jni::objects::JByteArray<'_>,
+    witness: jni::objects::JByteArray<'_>,
+    proof: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    let result = (|| -> Result<jni::sys::jbyteArray, String> {
+        let mut algorithm_id_bytes = read_java_byte_array(env, &algorithm_id, "algorithmId")
+            .ok_or_else(|| "invalid privacy proof request algorithmId bytes".to_owned())?;
+        let mut entrypoint_bytes = read_java_byte_array(env, &entrypoint, "entrypoint")
+            .ok_or_else(|| "invalid privacy proof request entrypoint bytes".to_owned())?;
+        let mut vk_ref_bytes = read_java_byte_array(env, &vk_ref, "vkRef")
+            .ok_or_else(|| "invalid privacy proof request vkRef bytes".to_owned())?;
+        let algorithm_id = java_privacy_text_component(&mut algorithm_id_bytes, "algorithmId")?;
+        let entrypoint = java_privacy_text_component(&mut entrypoint_bytes, "entrypoint")?;
+        let vk_ref = java_privacy_text_component(&mut vk_ref_bytes, "vkRef")?;
+        let public_inputs = read_java_byte_array(env, &public_inputs, "publicInputs")
+            .ok_or_else(|| "invalid privacy proof request publicInputs bytes".to_owned())?;
+        if public_inputs.is_empty() {
+            return Err("publicInputs must not be empty".to_owned());
+        }
+        let witness = read_java_byte_array(env, &witness, "witness")
+            .ok_or_else(|| "invalid privacy proof request witness bytes".to_owned())?;
+        let proof = read_java_byte_array(env, &proof, "proof")
+            .ok_or_else(|| "invalid privacy proof request proof bytes".to_owned())?;
+        let mut request = PrivacyProofRequestV1 {
+            algorithm_id,
+            entrypoint,
+            vk_ref,
+            public_inputs,
+            witness,
+            proof,
+        };
+        let archive_result = java_privacy_request_archive(&request);
+        privacy_clear_request_byte_fields(&mut request);
         let mut archive = archive_result?;
         let array_result = env
             .byte_array_from_slice(&archive)
@@ -21359,6 +21707,35 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNati
 ))]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeProofRequest(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    algorithm_id: jni::objects::JByteArray<'_>,
+    entrypoint: jni::objects::JByteArray<'_>,
+    vk_ref: jni::objects::JByteArray<'_>,
+    public_inputs: jni::objects::JByteArray<'_>,
+    witness: jni::objects::JByteArray<'_>,
+    proof: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_privacy_request_archive(
+        &mut env,
+        algorithm_id,
+        entrypoint,
+        vk_ref,
+        public_inputs,
+        witness,
+        proof,
+    )
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeBuildProof(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
@@ -21421,6 +21798,35 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_privacy_Privacy
     _class: jni::objects::JClass<'_>,
 ) -> jni::sys::jbyteArray {
     java_native_privacy_capabilities(&mut env)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeProofRequest(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    algorithm_id: jni::objects::JByteArray<'_>,
+    entrypoint: jni::objects::JByteArray<'_>,
+    vk_ref: jni::objects::JByteArray<'_>,
+    public_inputs: jni::objects::JByteArray<'_>,
+    witness: jni::objects::JByteArray<'_>,
+    proof: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_privacy_request_archive(
+        &mut env,
+        algorithm_id,
+        entrypoint,
+        vk_ref,
+        public_inputs,
+        witness,
+        proof,
+    )
 }
 
 #[cfg(any(
@@ -23931,6 +24337,7 @@ mod tests {
         T: norito::NoritoSerialize,
     {
         if [
+            PRIVACY_REQUEST_SCHEMA_BYTE,
             PRIVACY_CAPABILITIES_RESULT_SCHEMA_BYTE,
             PRIVACY_BUILD_PROOF_RESULT_SCHEMA_BYTE,
             PRIVACY_VERIFY_PROOF_RESULT_SCHEMA_BYTE,
@@ -25281,14 +25688,15 @@ mod tests {
 
     #[test]
     fn privacy_request_rejects_empty_required_text_fields_without_reflection() {
-        let marker = b"required-text-field-never-echo";
         for field in ["algorithm_id", "entrypoint", "vk_ref"] {
             let mut request = privacy_request(
                 "confidential-transfer-v2",
                 "buildConfidentialTransferProofV2",
                 Vec::new(),
             );
-            request.public_inputs = marker.to_vec();
+            request.public_inputs = b"public".to_vec();
+            let witness = b"required-text-field-witness-never-echo";
+            request.witness = witness.to_vec();
             match field {
                 "algorithm_id" => request.algorithm_id.clear(),
                 "entrypoint" => request.entrypoint.clear(),
@@ -25302,9 +25710,34 @@ mod tests {
                 _ => "non-empty algorithm_id and entrypoint",
             };
 
-            assert_unreflected_invalid_privacy_request_result(&result, message_fragment, field);
+            assert_eq!(result.version, PRIVACY_FFI_VERSION_V1, "{field}");
+            assert_eq!(result.status, PRIVACY_FFI_STATUS_ERROR, "{field}");
+            assert_eq!(
+                result.error_code, PRIVACY_FFI_ERROR_INVALID_REQUEST,
+                "{field}"
+            );
+            assert!(result.message.contains(message_fragment), "{field}");
+            assert_eq!(result.public_inputs, b"public", "{field}");
+            assert!(result.proof.is_empty(), "{field}");
+            assert!(!result.verified, "{field}");
+            if field == "algorithm_id" {
+                assert!(result.algorithm_id.is_empty(), "{field}");
+            } else {
+                assert_eq!(result.algorithm_id, "confidential-transfer-v2", "{field}");
+            }
+            if field == "entrypoint" {
+                assert!(result.entrypoint.is_empty(), "{field}");
+            } else {
+                assert_eq!(
+                    result.entrypoint, "buildConfidentialTransferProofV2",
+                    "{field}"
+                );
+            }
+            if field == "vk_ref" {
+                assert!(result.vk_ref.is_empty(), "{field}");
+            }
             let encoded = norito::to_bytes(&result).expect("encode privacy result");
-            assert_subslice_absent(&encoded, marker, "empty required field failure result");
+            assert_subslice_absent(&encoded, witness, "empty required field failure result");
         }
     }
 
@@ -25459,8 +25892,7 @@ mod tests {
     const PRIVACY_TEST_PRODUCTION_LOCALNET_RUN_ID: &str = "boi-privacy-4peer-localnet-2026-01-02";
     const PRIVACY_TEST_PRODUCTION_HASH: &str =
         "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    const PRIVACY_TEST_PRODUCTION_SIGNATURE: &str =
-        "ed25519:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const PRIVACY_TEST_PRODUCTION_SIGNATURE: &str = "ed25519:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
     fn privacy_test_production_entrypoints(entry: &PrivacyAlgorithmEntry) -> Vec<&'static str> {
         entry
@@ -25493,7 +25925,33 @@ mod tests {
             .collect()
     }
 
+    fn privacy_test_sdk_exports(entrypoints: &[&'static str]) -> Vec<PrivacyProductionSdkExportV1> {
+        PRIVACY_PRODUCTION_SDK_EXPORT_SURFACES
+            .iter()
+            .map(|surface| PrivacyProductionSdkExportV1 {
+                surface: *surface,
+                entrypoints: entrypoints.to_vec(),
+            })
+            .collect()
+    }
+
+    fn privacy_test_sdk_parity_artifacts() -> Vec<PrivacyProductionSdkParityArtifactV1> {
+        PRIVACY_PRODUCTION_SDK_PARITY_ARTIFACT_KINDS
+            .iter()
+            .flat_map(|kind| {
+                PRIVACY_PRODUCTION_SDK_EXPORT_SURFACES
+                    .iter()
+                    .map(move |surface| PrivacyProductionSdkParityArtifactV1 {
+                        kind: *kind,
+                        surface: *surface,
+                        artifact_hash: PRIVACY_TEST_PRODUCTION_HASH,
+                    })
+            })
+            .collect()
+    }
+
     fn privacy_test_evidence_row(entry: &PrivacyAlgorithmEntry) -> PrivacyProductionEvidenceRowV1 {
+        let sdk_entrypoints = privacy_test_production_entrypoints(entry);
         PrivacyProductionEvidenceRowV1 {
             algorithm_id: entry.id,
             chain_id: PRIVACY_TEST_PRODUCTION_CHAIN_ID,
@@ -25503,7 +25961,9 @@ mod tests {
             verifier_key_id: privacy_expected_verifier_key_id(entry),
             proof_family: entry.proof_family,
             public_inputs_schema: privacy_expected_public_inputs_schema(entry),
-            sdk_entrypoints: privacy_test_production_entrypoints(entry),
+            sdk_entrypoints: sdk_entrypoints.clone(),
+            sdk_exports: privacy_test_sdk_exports(&sdk_entrypoints),
+            sdk_parity_artifacts: privacy_test_sdk_parity_artifacts(),
             required_state: privacy_expected_required_state(entry).to_vec(),
             fuzz_artifact_hash: PRIVACY_TEST_PRODUCTION_HASH,
             performance_artifact_hash: PRIVACY_TEST_PRODUCTION_HASH,
@@ -25628,29 +26088,37 @@ mod tests {
             privacy_required_production_gate_keys(zk_ace_entry),
             "ZK-ACE must require the full production proof gate set",
         );
-        assert!(zk_ace
-            .production_gate
-            .missing
-            .iter()
-            .any(|missing| missing == PRIVACY_PRODUCTION_GATE_MISSING_ENGINE));
-        assert!(zk_ace
-            .production_gate
-            .missing
-            .iter()
-            .any(|missing| missing == PRIVACY_PRODUCTION_GATE_MISSING_ALLOWLIST));
+        assert!(
+            zk_ace
+                .production_gate
+                .missing
+                .iter()
+                .any(|missing| missing == PRIVACY_PRODUCTION_GATE_MISSING_ENGINE)
+        );
+        assert!(
+            zk_ace
+                .production_gate
+                .missing
+                .iter()
+                .any(|missing| missing == PRIVACY_PRODUCTION_GATE_MISSING_ALLOWLIST)
+        );
         for algorithm in capabilities.algorithms {
             assert!(!algorithm.production_ready);
             assert!(!algorithm.production_gate.ready);
             assert!(algorithm.production_gate.audit_references.is_empty());
-            assert!(algorithm
-                .production_gate
-                .gates
-                .iter()
-                .all(|gate| !gate.passed));
-            assert!(algorithm
-                .production_gate
-                .missing
-                .contains(&"internal cryptographic review signoff is missing".to_owned()));
+            assert!(
+                algorithm
+                    .production_gate
+                    .gates
+                    .iter()
+                    .all(|gate| !gate.passed)
+            );
+            assert!(
+                algorithm
+                    .production_gate
+                    .missing
+                    .contains(&"internal cryptographic review signoff is missing".to_owned())
+            );
             assert!(algorithm.production_gate.missing.contains(
                 &"Iroha production allowlist is not enabled for this audited row".to_owned()
             ));
@@ -25663,6 +26131,79 @@ mod tests {
                 algorithm.algorithm_id,
             );
         }
+    }
+
+    #[test]
+    fn privacy_proof_request_v1_encodes_norito_request_archive() {
+        let algorithm_id = b"verange-transparent-range-v1";
+        let entrypoint = b"buildVeRangeProofV1";
+        let vk_ref = b"bulletproofs:verange_transparent_range_v1";
+        let public_inputs = b"public-inputs";
+        let witness = b"secret-witness";
+        let proof = b"candidate-proof";
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+
+        let rc = unsafe {
+            iroha_privacy_proof_request_v1(
+                algorithm_id.as_ptr(),
+                algorithm_id.len() as c_ulong,
+                entrypoint.as_ptr(),
+                entrypoint.len() as c_ulong,
+                vk_ref.as_ptr(),
+                vk_ref.len() as c_ulong,
+                public_inputs.as_ptr(),
+                public_inputs.len() as c_ulong,
+                witness.as_ptr(),
+                witness.len() as c_ulong,
+                proof.as_ptr(),
+                proof.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        assert_eq!(rc, 0);
+        let request: PrivacyProofRequestV1 = take_privacy_output(out_ptr, out_len);
+
+        assert_eq!(request.algorithm_id, "verange-transparent-range-v1");
+        assert_eq!(request.entrypoint, "buildVeRangeProofV1");
+        assert_eq!(request.vk_ref, "bulletproofs:verange_transparent_range_v1");
+        assert_eq!(request.public_inputs, public_inputs);
+        assert_eq!(request.witness, witness);
+        assert_eq!(request.proof, proof);
+    }
+
+    #[test]
+    fn privacy_proof_request_v1_rejects_invalid_components_without_output() {
+        let algorithm_id = b"verange-transparent-range-v1";
+        let entrypoint = b"buildVeRangeProofV1";
+        let vk_ref = b"bulletproofs:verange_transparent_range_v1";
+        let witness = b"secret-witness";
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+
+        let rc = unsafe {
+            iroha_privacy_proof_request_v1(
+                algorithm_id.as_ptr(),
+                algorithm_id.len() as c_ulong,
+                entrypoint.as_ptr(),
+                entrypoint.len() as c_ulong,
+                vk_ref.as_ptr(),
+                vk_ref.len() as c_ulong,
+                ptr::null(),
+                0,
+                witness.as_ptr(),
+                witness.len() as c_ulong,
+                ptr::null(),
+                0,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+
+        assert_eq!(rc, PRIVACY_FFI_ERROR_INVALID_REQUEST as c_int);
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
     }
 
     #[test]
@@ -25746,12 +26287,16 @@ mod tests {
             .iter()
             .find(|algorithm| algorithm.algorithm_id == "zk-ace-pq-authorization-v0")
             .expect("ZK-ACE capability");
-        assert!(zk_ace
-            .sdk_entrypoints
-            .contains(&"buildZkAceAuthorizationProofV1".to_owned()));
-        assert!(zk_ace
-            .sdk_entrypoints
-            .contains(&"buildZkAceAuthorizedTransferInstruction".to_owned()));
+        assert!(
+            zk_ace
+                .sdk_entrypoints
+                .contains(&"buildZkAceAuthorizationProofV1".to_owned())
+        );
+        assert!(
+            zk_ace
+                .sdk_entrypoints
+                .contains(&"buildZkAceAuthorizedTransferInstruction".to_owned())
+        );
     }
 
     #[test]
@@ -25773,6 +26318,28 @@ mod tests {
         });
         assert_zk_ace_evidence_rejected("local verifier entrypoint", |row| {
             row.sdk_entrypoints.push("verifyZkAceProofLocally");
+        });
+        assert_zk_ace_evidence_rejected("missing SDK export surface", |row| {
+            row.sdk_exports.pop();
+        });
+        assert_zk_ace_evidence_rejected("mismatched SDK export entrypoint", |row| {
+            row.sdk_exports[3]
+                .entrypoints
+                .push("buildShadowZkAceProductionProof");
+        });
+        assert_zk_ace_evidence_rejected("dev fixture SDK export", |row| {
+            row.sdk_exports[2]
+                .entrypoints
+                .push("buildZkAceDevProofFixture");
+        });
+        assert_zk_ace_evidence_rejected("missing SDK parity artifact", |row| {
+            row.sdk_parity_artifacts.pop();
+        });
+        assert_zk_ace_evidence_rejected("wrong SDK parity artifact kind", |row| {
+            row.sdk_parity_artifacts[0].kind = "fixture_vectors";
+        });
+        assert_zk_ace_evidence_rejected("bad SDK parity artifact hash", |row| {
+            row.sdk_parity_artifacts[0].artifact_hash = "sha256:not-a-hex-digest";
         });
         assert_zk_ace_evidence_rejected("three-peer localnet downgrade", |row| {
             row.localnet_acceptance.peer_count = 3;
@@ -26639,9 +27206,10 @@ mod tests {
         assert_eq!(result.error_code, PRIVACY_FFI_ERROR_INVALID_REQUEST);
         assert!(result.algorithm_id.is_empty());
         assert!(result.entrypoint.is_empty());
-        assert!(result.vk_ref.is_empty());
-        assert!(result.public_inputs.is_empty());
+        assert_eq!(result.vk_ref, "unknown:vk_unknown");
+        assert_eq!(result.public_inputs, b"public-inputs");
         assert!(result.proof.is_empty());
+        assert!(!result.message.contains("secret"));
     }
 
     #[test]
@@ -26905,10 +27473,10 @@ mod tests {
 
         assert_eq!(result.error_code, PRIVACY_FFI_ERROR_INVALID_REQUEST);
         assert!(result.message.contains("vk_ref"));
-        assert!(result.algorithm_id.is_empty());
-        assert!(result.entrypoint.is_empty());
+        assert_eq!(result.algorithm_id, "confidential-transfer-v2");
+        assert_eq!(result.entrypoint, "buildConfidentialTransferProofV2");
         assert!(result.vk_ref.is_empty());
-        assert!(result.public_inputs.is_empty());
+        assert!(!result.public_inputs.is_empty());
         assert!(result.proof.is_empty());
     }
 
@@ -27031,7 +27599,23 @@ mod tests {
 
             let result = privacy_result_for_request(request, PrivacyProofOperationV1::Build);
 
-            assert_unreflected_invalid_privacy_request_result(&result, "backend:name", case);
+            if case == "planned-entrypoint" {
+                assert_eq!(result.version, PRIVACY_FFI_VERSION_V1, "{case}");
+                assert_eq!(result.status, PRIVACY_FFI_STATUS_ERROR, "{case}");
+                assert_eq!(
+                    result.error_code, PRIVACY_FFI_ERROR_INVALID_REQUEST,
+                    "{case}"
+                );
+                assert!(result.message.contains("planned"), "{case}");
+                assert!(result.message.contains("not executable"), "{case}");
+                assert_eq!(result.algorithm_id, algorithm_id, "{case}");
+                assert_eq!(result.entrypoint, entrypoint, "{case}");
+                assert!(result.vk_ref.is_empty(), "{case}");
+                assert!(result.proof.is_empty(), "{case}");
+                assert!(!result.verified, "{case}");
+            } else {
+                assert_unreflected_invalid_privacy_request_result(&result, "backend:name", case);
+            }
             let encoded = norito::to_bytes(&result).expect("encode privacy result");
             assert_subslice_absent(
                 &encoded,
@@ -27818,7 +28402,7 @@ mod tests {
     fn print_sample_claim_identifier_wire_payload_hex() {
         use iroha_crypto::Signature;
         use iroha_data_model::identifier::IdentifierResolutionReceipt;
-        use iroha_data_model::isi::{identifier::ClaimIdentifier, Instruction, InstructionBox};
+        use iroha_data_model::isi::{Instruction, InstructionBox, identifier::ClaimIdentifier};
 
         let payload = sample_identifier_receipt_payload();
         let receipt = IdentifierResolutionReceipt {
@@ -28534,9 +29118,9 @@ mod signed_transaction_fixture_tests {
 
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
-        account::{address, AccountId},
-        transaction::TransactionBuilder,
         ChainId,
+        account::{AccountId, address},
+        transaction::TransactionBuilder,
     };
     use iroha_version::codec::EncodeVersioned as _;
 
@@ -28757,7 +29341,7 @@ mod da_proof_summary_tests {
 mod sorafs_tests {
     use std::{ffi::CString, fs, ptr, slice};
 
-    use sorafs_car::{fetch_plan::chunk_fetch_specs_to_string, CarBuildPlan};
+    use sorafs_car::{CarBuildPlan, fetch_plan::chunk_fetch_specs_to_string};
     use sorafs_chunker::ChunkProfile;
     use tempfile::tempdir;
 

@@ -8839,10 +8839,14 @@ mod tests {
         include_str!(r"../../../fixtures/iso20022/xsd/iso/pacs.009.001.08.xsd");
     const OFFICIAL_XSD_PACS002_001_10: &str =
         include_str!(r"../../../fixtures/iso20022/xsd/iso/pacs.002.001.10.xsd");
+    const OFFICIAL_XSD_PACS004_001_09: &str =
+        include_str!(r"../../../fixtures/iso20022/xsd/iso/pacs.004.001.09.xsd");
     const OFFICIAL_XSD_PACS004_001_10: &str =
         include_str!(r"../../../fixtures/iso20022/xsd/iso/pacs.004.001.10.xsd");
     const OFFICIAL_XSD_CAMT056_001_08: &str =
         include_str!(r"../../../fixtures/iso20022/xsd/iso/camt.056.001.08.xsd");
+    const OFFICIAL_XSD_CAMT056_001_09: &str =
+        include_str!(r"../../../fixtures/iso20022/xsd/iso/camt.056.001.09.xsd");
     const PACS002_FIXTURE_XML: &str =
         include_str!(r"../../../fixtures/iso20022/pacs002_fixture.xml");
     const PACS004_FIXTURE_XML: &str =
@@ -17789,6 +17793,19 @@ mod tests {
             (
                 "swift-cbpr-plus",
                 "pacs.004",
+                "pacs.004.001.09",
+                "swift.cbprplus.02",
+                OFFICIAL_XSD_PACS004_001_09,
+                "PmtRtr",
+                live_pacs004_xml(
+                    "SWIFT-PACS004-00109-MDR-XSD-1",
+                    "pacs.004.001.09",
+                    "swift.cbprplus.02",
+                ),
+            ),
+            (
+                "swift-cbpr-plus",
+                "pacs.004",
                 "pacs.004.001.10",
                 "swift.cbprplus.02",
                 OFFICIAL_XSD_PACS004_001_10,
@@ -17809,6 +17826,19 @@ mod tests {
                 live_camt056_xml(
                     "SWIFT-CAMT056-MDR-XSD-1",
                     "camt.056.001.08",
+                    "swift.cbprplus.02",
+                ),
+            ),
+            (
+                "swift-cbpr-plus",
+                "camt.056",
+                "camt.056.001.09",
+                "swift.cbprplus.02",
+                OFFICIAL_XSD_CAMT056_001_09,
+                "FIToFIPmtCxlReq",
+                live_camt056_xml(
+                    "SWIFT-CAMT056-00109-MDR-XSD-1",
+                    "camt.056.001.09",
                     "swift.cbprplus.02",
                 ),
             ),
@@ -17838,6 +17868,19 @@ mod tests {
                 live_pacs002_xml(
                     "FEDWIRE-PACS002-MDR-XSD-1",
                     "pacs.002.001.10",
+                    "fedwire.funds.01",
+                ),
+            ),
+            (
+                "fedwire-funds",
+                "pacs.004",
+                "pacs.004.001.09",
+                "fedwire.funds.01",
+                OFFICIAL_XSD_PACS004_001_09,
+                "PmtRtr",
+                live_pacs004_xml(
+                    "FEDWIRE-PACS004-00109-MDR-XSD-1",
+                    "pacs.004.001.09",
                     "fedwire.funds.01",
                 ),
             ),
@@ -17882,6 +17925,19 @@ mod tests {
             (
                 "sepa-sct-inst",
                 "pacs.004",
+                "pacs.004.001.09",
+                "sepa.sct.inst",
+                OFFICIAL_XSD_PACS004_001_09,
+                "PmtRtr",
+                live_pacs004_xml(
+                    "SEPA-PACS004-00109-MDR-XSD-1",
+                    "pacs.004.001.09",
+                    "sepa.sct.inst",
+                ),
+            ),
+            (
+                "sepa-sct-inst",
+                "pacs.004",
                 "pacs.004.001.10",
                 "sepa.sct.inst",
                 OFFICIAL_XSD_PACS004_001_10,
@@ -17896,6 +17952,19 @@ mod tests {
                 OFFICIAL_XSD_CAMT056_001_08,
                 "FIToFIPmtCxlReq",
                 live_camt056_xml("SEPA-CAMT056-MDR-XSD-1", "camt.056.001.08", "sepa.sct.inst"),
+            ),
+            (
+                "sepa-sct-inst",
+                "camt.056",
+                "camt.056.001.09",
+                "sepa.sct.inst",
+                OFFICIAL_XSD_CAMT056_001_09,
+                "FIToFIPmtCxlReq",
+                live_camt056_xml(
+                    "SEPA-CAMT056-00109-MDR-XSD-1",
+                    "camt.056.001.09",
+                    "sepa.sct.inst",
+                ),
             ),
             (
                 "securities-csd",
@@ -17926,6 +17995,19 @@ mod tests {
             (
                 "securities-csd",
                 "pacs.004",
+                "pacs.004.001.09",
+                "securities.csd.cash",
+                OFFICIAL_XSD_PACS004_001_09,
+                "PmtRtr",
+                live_pacs004_xml(
+                    "SECURITIES-PACS004-00109-MDR-XSD-1",
+                    "pacs.004.001.09",
+                    "securities.csd.cash",
+                ),
+            ),
+            (
+                "securities-csd",
+                "pacs.004",
                 "pacs.004.001.10",
                 "securities.csd.cash",
                 OFFICIAL_XSD_PACS004_001_10,
@@ -17946,6 +18028,19 @@ mod tests {
                 live_camt056_xml(
                     "SECURITIES-CAMT056-MDR-XSD-1",
                     "camt.056.001.08",
+                    "securities.csd.cash",
+                ),
+            ),
+            (
+                "securities-csd",
+                "camt.056",
+                "camt.056.001.09",
+                "securities.csd.cash",
+                OFFICIAL_XSD_CAMT056_001_09,
+                "FIToFIPmtCxlReq",
+                live_camt056_xml(
+                    "SECURITIES-CAMT056-00109-MDR-XSD-1",
+                    "camt.056.001.09",
                     "securities.csd.cash",
                 ),
             ),

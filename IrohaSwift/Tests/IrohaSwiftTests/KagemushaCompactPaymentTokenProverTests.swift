@@ -33,20 +33,24 @@ final class KagemushaCompactPaymentTokenProverTests: XCTestCase {
     }
 
     func testRejectsMalformedRecordBundleArchiveBeforeBridgeCall() {
-        XCTAssertThrowsError(
-            try KagemushaCompactPaymentTokenProver
-                .proveVerifiedCompactPaymentTokenWithRecords(
-                    recordBundleArchive: Data([0x01, 0x02]),
-                    bridgeAvailable: false
-                ) {
-                    XCTFail("native compact-token prover body must not run for malformed record bundles")
-                    return nil
-                }
-        ) { error in
-            XCTAssertEqual(
-                error as? KagemushaCompactPaymentTokenProverError,
-                .invalidRecordBundleArchive
-            )
+        let validArchive = validKagemushaNoritoArchive()
+        for (label, malformedArchive) in malformedKagemushaNoritoArchives(validArchive) {
+            XCTAssertThrowsError(
+                try KagemushaCompactPaymentTokenProver
+                    .proveVerifiedCompactPaymentTokenWithRecords(
+                        recordBundleArchive: malformedArchive,
+                        bridgeAvailable: false
+                    ) {
+                        XCTFail("native compact-token prover body must not run for malformed record bundles")
+                        return nil
+                    },
+                "record bundle \(label) should be rejected"
+            ) { error in
+                XCTAssertEqual(
+                    error as? KagemushaCompactPaymentTokenProverError,
+                    .invalidRecordBundleArchive
+                )
+            }
         }
     }
 
@@ -96,20 +100,56 @@ final class KagemushaCompactPaymentTokenProverTests: XCTestCase {
     }
 
     func testRejectsMalformedNativeOutput() {
-        XCTAssertThrowsError(
-            try KagemushaCompactPaymentTokenProver
-                .proveVerifiedCompactPaymentTokenWithRecords(
-                    recordBundleArchive: validKagemushaNoritoArchive(),
-                    bridgeAvailable: true
-                ) {
-                    Data([0x01])
-                }
-        ) { error in
-            XCTAssertEqual(
-                error as? KagemushaCompactPaymentTokenProverError,
-                .invalidCompactTokenArchive
-            )
+        let validArchive = validKagemushaNoritoArchive()
+        for (label, nativeOutput) in malformedKagemushaNoritoArchives(validArchive) {
+            XCTAssertThrowsError(
+                try KagemushaCompactPaymentTokenProver
+                    .proveVerifiedCompactPaymentTokenWithRecords(
+                        recordBundleArchive: validArchive,
+                        bridgeAvailable: true
+                    ) {
+                        nativeOutput
+                    },
+                "native output \(label) should be rejected"
+            ) { error in
+                XCTAssertEqual(
+                    error as? KagemushaCompactPaymentTokenProverError,
+                    .invalidCompactTokenArchive
+                )
+            }
         }
+    }
+
+    private func malformedKagemushaNoritoArchives(_ validArchive: Data) -> [(String, Data)] {
+        var compressed = validArchive
+        compressed[22] = 0x01
+        var unsupportedFlags = validArchive
+        unsupportedFlags[39] = NoritoHeader.varintOffsets
+        var invalidFieldBitset = validArchive
+        invalidFieldBitset[39] = NoritoHeader.fieldBitset
+        return [
+            ("truncated", Data([0x01])),
+            ("compressed", compressed),
+            ("unsupported flags", unsupportedFlags),
+            ("invalid field bitset", invalidFieldBitset),
+            (
+                "nonzero header padding",
+                kagemushaNoritoFrameWithHeaderPadding(validArchive, padding: Data([0x7f]))
+            ),
+            (
+                "excessive header padding",
+                kagemushaNoritoFrameWithHeaderPadding(
+                    validArchive,
+                    padding: Data(repeating: 0, count: 65)
+                )
+            ),
+        ]
+    }
+
+    private func kagemushaNoritoFrameWithHeaderPadding(_ archive: Data, padding: Data) -> Data {
+        var padded = archive
+        padded.insert(contentsOf: padding, at: NoritoHeader.encodedLength)
+        return padded
     }
 
     func testRejectsEmptyPayloadNativeOutput() {

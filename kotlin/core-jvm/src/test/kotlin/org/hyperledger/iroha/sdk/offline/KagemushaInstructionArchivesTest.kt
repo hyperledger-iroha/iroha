@@ -11,6 +11,7 @@ import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.core.model.WirePayload
 import org.hyperledger.iroha.sdk.norito.NoritoAdapters
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
+import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -119,6 +120,30 @@ class KagemushaInstructionArchivesTest {
         assertFailsWith<IllegalArgumentException> {
             KagemushaInstructionArchives.recursiveRedeemInstructionBox(tampered)
         }
+
+        val compressed = kagemushaArchive(KagemushaInstructionType.REDEEM_RECURSIVE)
+        compressed[22] = 1
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaInstructionArchives.recursiveRedeemInstructionBox(compressed)
+        }
+
+        val unsupportedFlags = kagemushaArchive(KagemushaInstructionType.REDEEM_RECURSIVE)
+        unsupportedFlags[39] = NoritoHeader.VARINT_OFFSETS.toByte()
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaInstructionArchives.recursiveRedeemInstructionBox(unsupportedFlags)
+        }
+
+        val invalidFieldBitsetFlags = kagemushaArchive(KagemushaInstructionType.REDEEM_RECURSIVE)
+        invalidFieldBitsetFlags[39] = NoritoHeader.FIELD_BITSET.toByte()
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaInstructionArchives.recursiveRedeemInstructionBox(invalidFieldBitsetFlags)
+        }
+
+        val nonZeroPadding = kagemushaArchive(KagemushaInstructionType.REDEEM_RECURSIVE)
+            .withNonZeroHeaderPadding()
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaInstructionArchives.recursiveRedeemInstructionBox(nonZeroPadding)
+        }
     }
 
     private fun kagemushaArchive(instructionType: KagemushaInstructionType): ByteArray =
@@ -127,6 +152,18 @@ class KagemushaInstructionArchivesTest {
             instructionType.wireName,
             NoritoAdapters.stringAdapter(),
         )
+
+    private fun ByteArray.withNonZeroHeaderPadding(): ByteArray {
+        val padded = ByteArray(size + 1)
+        copyInto(padded, endIndex = NoritoHeader.HEADER_LENGTH)
+        padded[NoritoHeader.HEADER_LENGTH] = 0x7f
+        copyInto(
+            destination = padded,
+            destinationOffset = NoritoHeader.HEADER_LENGTH + 1,
+            startIndex = NoritoHeader.HEADER_LENGTH,
+        )
+        return padded
+    }
 
     private fun sampleAuthority(): String = AccountAddress
         .fromAccount(ByteArray(32) { 0x2a.toByte() }, "ed25519")

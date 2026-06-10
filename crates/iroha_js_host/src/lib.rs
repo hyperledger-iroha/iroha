@@ -10306,6 +10306,18 @@ const PRIVACY_TRANSPARENT_TRANSFER_BASELINE_WAIVED_GATE_KEYS: &[&str] = &[
 const PRIVACY_PRODUCTION_EVIDENCE_HASH_PREFIX: &str = "sha256:";
 const PRIVACY_PRODUCTION_LOCALNET_TARGET: &str = "localnet";
 const PRIVACY_PRODUCTION_LOCALNET_PEER_COUNT: u8 = 4;
+const PRIVACY_PRODUCTION_SDK_EXPORT_SURFACES: &[&str] = &[
+    "rust_core",
+    "ffi",
+    "python",
+    "javascript",
+    "java_android",
+    "kotlin",
+    "swift",
+    "csharp",
+];
+const PRIVACY_PRODUCTION_SDK_PARITY_ARTIFACT_KINDS: &[&str] =
+    &["types", "validation_rules", "error_codes", "golden_vectors"];
 
 const PRIVACY_REQUIRED_PRODUCTION_PLAN_ROWS: &[(&str, &str, &str)] = &[
     (
@@ -10792,6 +10804,19 @@ struct PrivacyProductionLocalnetEvidenceV1 {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+struct PrivacyProductionSdkExportV1 {
+    surface: &'static str,
+    entrypoints: Vec<&'static str>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PrivacyProductionSdkParityArtifactV1 {
+    kind: &'static str,
+    surface: &'static str,
+    artifact_hash: &'static str,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct PrivacyProductionEvidenceRowV1 {
     algorithm_id: &'static str,
     chain_id: &'static str,
@@ -10802,6 +10827,8 @@ struct PrivacyProductionEvidenceRowV1 {
     proof_family: &'static str,
     public_inputs_schema: Option<&'static str>,
     sdk_entrypoints: Vec<&'static str>,
+    sdk_exports: Vec<PrivacyProductionSdkExportV1>,
+    sdk_parity_artifacts: Vec<PrivacyProductionSdkParityArtifactV1>,
     required_state: Vec<&'static str>,
     fuzz_artifact_hash: &'static str,
     performance_artifact_hash: &'static str,
@@ -11184,6 +11211,67 @@ fn privacy_production_evidence_sdk_entrypoints_are_valid(
         })
 }
 
+fn privacy_production_evidence_sdk_exports_are_valid(
+    row: &PrivacyProductionEvidenceRowV1,
+    entry: &PrivacyAlgorithmEntry,
+) -> bool {
+    let expected_entrypoints = privacy_expected_production_sdk_entrypoints(entry);
+    row.sdk_exports.len() == PRIVACY_PRODUCTION_SDK_EXPORT_SURFACES.len()
+        && PRIVACY_PRODUCTION_SDK_EXPORT_SURFACES
+            .iter()
+            .enumerate()
+            .all(|(index, expected_surface)| {
+                let Some(export) = row.sdk_exports.get(index) else {
+                    return false;
+                };
+                export.surface == *expected_surface
+                    && privacy_text_field_is_portable_identifier(export.surface)
+                    && !privacy_evidence_text_has_non_production_marker(export.surface)
+                    && !privacy_exposed_label_claims_production_readiness(export.surface)
+                    && privacy_string_slice_matches_vec(&export.entrypoints, &expected_entrypoints)
+                    && !privacy_string_slice_has_duplicates(&export.entrypoints)
+                    && export.entrypoints.iter().all(|entrypoint| {
+                        privacy_sdk_entrypoint_is_portable(entrypoint)
+                            && !privacy_entrypoint_is_dev_fixture(entrypoint)
+                            && !privacy_entrypoint_is_local_verifier(entrypoint)
+                            && !privacy_exposed_label_claims_production_readiness(entrypoint)
+                    })
+            })
+}
+
+fn privacy_production_evidence_sdk_parity_artifacts_are_valid(
+    row: &PrivacyProductionEvidenceRowV1,
+) -> bool {
+    row.sdk_parity_artifacts.len()
+        == PRIVACY_PRODUCTION_SDK_PARITY_ARTIFACT_KINDS.len()
+            * PRIVACY_PRODUCTION_SDK_EXPORT_SURFACES.len()
+        && PRIVACY_PRODUCTION_SDK_PARITY_ARTIFACT_KINDS
+            .iter()
+            .enumerate()
+            .all(|(kind_index, expected_kind)| {
+                PRIVACY_PRODUCTION_SDK_EXPORT_SURFACES
+                    .iter()
+                    .enumerate()
+                    .all(|(surface_index, expected_surface)| {
+                        let artifact_index = kind_index
+                            * PRIVACY_PRODUCTION_SDK_EXPORT_SURFACES.len()
+                            + surface_index;
+                        let Some(artifact) = row.sdk_parity_artifacts.get(artifact_index) else {
+                            return false;
+                        };
+                        artifact.kind == *expected_kind
+                            && artifact.surface == *expected_surface
+                            && privacy_text_field_is_portable_identifier(artifact.kind)
+                            && privacy_text_field_is_portable_identifier(artifact.surface)
+                            && !privacy_evidence_text_has_non_production_marker(artifact.kind)
+                            && !privacy_evidence_text_has_non_production_marker(artifact.surface)
+                            && !privacy_exposed_label_claims_production_readiness(artifact.kind)
+                            && !privacy_exposed_label_claims_production_readiness(artifact.surface)
+                            && privacy_production_evidence_hash_is_valid(artifact.artifact_hash)
+                    })
+            })
+}
+
 fn privacy_production_evidence_required_state_is_valid(
     row: &PrivacyProductionEvidenceRowV1,
     entry: &PrivacyAlgorithmEntry,
@@ -11219,6 +11307,8 @@ fn privacy_production_evidence_row_is_valid(
         && row.proof_family == entry.proof_family
         && row.public_inputs_schema == privacy_expected_public_inputs_schema(entry)
         && privacy_production_evidence_sdk_entrypoints_are_valid(row, entry)
+        && privacy_production_evidence_sdk_exports_are_valid(row, entry)
+        && privacy_production_evidence_sdk_parity_artifacts_are_valid(row)
         && privacy_production_evidence_required_state_is_valid(row, entry)
         && privacy_production_evidence_hash_is_valid(row.fuzz_artifact_hash)
         && privacy_production_evidence_hash_is_valid(row.performance_artifact_hash)
@@ -12171,6 +12261,18 @@ fn privacy_failure_result(
     result
 }
 
+fn privacy_failure_result_without_vk_ref(
+    error_code: u32,
+    message: &str,
+    request: &PrivacyProofRequestV1,
+) -> PrivacyProofResultV1 {
+    let mut sanitized = request.clone();
+    sanitized.vk_ref.clear();
+    sanitized.witness.clear();
+    sanitized.proof.clear();
+    privacy_failure_result(error_code, message, Some(&sanitized))
+}
+
 fn privacy_failure_result_invariants_hold(result: &PrivacyProofResultV1) -> bool {
     result.version == PRIVACY_FFI_VERSION_V1
         && result.status == PRIVACY_FFI_STATUS_ERROR
@@ -12266,7 +12368,7 @@ fn privacy_result_for_request(
             return privacy_failure_result(
                 PRIVACY_FFI_ERROR_INVALID_REQUEST,
                 "privacy proof request must include non-empty algorithm_id and entrypoint",
-                None,
+                Some(&request),
             );
         }
 
@@ -12278,11 +12380,22 @@ fn privacy_result_for_request(
             );
         }
 
+        let known_entry = privacy_algorithm_entry(&request.algorithm_id);
+        if let Some(entry) = known_entry {
+            if privacy_entrypoint_planned(entry, &request.entrypoint) {
+                return privacy_failure_result_without_vk_ref(
+                    PRIVACY_FFI_ERROR_INVALID_REQUEST,
+                    "privacy proof request entrypoint is planned but not executable until the production gate passes",
+                    &request,
+                );
+            }
+        }
+
         if request.vk_ref.trim().is_empty() {
             return privacy_failure_result(
                 PRIVACY_FFI_ERROR_INVALID_REQUEST,
                 "privacy proof request must include non-empty vk_ref",
-                None,
+                Some(&request),
             );
         }
 
@@ -12294,21 +12407,13 @@ fn privacy_result_for_request(
             );
         }
 
-        let Some(entry) = privacy_algorithm_entry(&request.algorithm_id) else {
+        let Some(entry) = known_entry else {
             return privacy_failure_result(
                 PRIVACY_FFI_ERROR_UNSUPPORTED_ALGORITHM,
                 "unsupported privacy algorithm id",
                 Some(&request),
             );
         };
-
-        if privacy_entrypoint_planned(entry, &request.entrypoint) {
-            return privacy_failure_result(
-                PRIVACY_FFI_ERROR_INVALID_REQUEST,
-                "privacy proof request entrypoint is planned but not executable until the production gate passes",
-                Some(&request),
-            );
-        }
 
         if !privacy_entrypoint_supported(entry, &request.entrypoint) {
             return privacy_failure_result(
@@ -12463,6 +12568,34 @@ pub fn privacy_capabilities_v1() -> napi::Result<Buffer> {
         "encode privacy capabilities",
         PRIVACY_CAPABILITIES_RESULT_SCHEMA_BYTE,
     )
+}
+
+#[napi]
+#[allow(clippy::needless_pass_by_value)]
+/// Encode a Norito V1 privacy proof request for the native build/verify FFI.
+pub fn privacy_proof_request_v1(
+    algorithm_id: String,
+    entrypoint: String,
+    vk_ref: String,
+    public_inputs: Uint8Array,
+    witness: Uint8Array,
+    proof: Uint8Array,
+) -> napi::Result<Buffer> {
+    let mut request = PrivacyProofRequestV1 {
+        algorithm_id,
+        entrypoint,
+        vk_ref,
+        public_inputs: public_inputs.as_ref().to_vec(),
+        witness: witness.as_ref().to_vec(),
+        proof: proof.as_ref().to_vec(),
+    };
+    let encoded = encode_privacy_archive(
+        &request,
+        "encode privacy proof request",
+        PRIVACY_REQUEST_SCHEMA_BYTE,
+    );
+    privacy_clear_request_byte_fields(&mut request);
+    encoded
 }
 
 #[napi]
@@ -14869,14 +15002,15 @@ mod tests {
 
     #[test]
     fn privacy_request_rejects_empty_required_text_fields_without_reflection() {
-        let marker = b"required-text-field-never-echo";
         for field in ["algorithm_id", "entrypoint", "vk_ref"] {
             let mut request = privacy_request(
                 "confidential-transfer-v2",
                 "buildConfidentialTransferProofV2",
                 Vec::new(),
             );
-            request.public_inputs = marker.to_vec();
+            request.public_inputs = b"public".to_vec();
+            let witness = b"required-text-field-witness-never-echo";
+            request.witness = witness.to_vec();
             match field {
                 "algorithm_id" => request.algorithm_id.clear(),
                 "entrypoint" => request.entrypoint.clear(),
@@ -14890,9 +15024,34 @@ mod tests {
                 _ => "non-empty algorithm_id and entrypoint",
             };
 
-            assert_unreflected_invalid_privacy_request_result(&result, message_fragment, field);
+            assert_eq!(result.version, PRIVACY_FFI_VERSION_V1, "{field}");
+            assert_eq!(result.status, PRIVACY_FFI_STATUS_ERROR, "{field}");
+            assert_eq!(
+                result.error_code, PRIVACY_FFI_ERROR_INVALID_REQUEST,
+                "{field}"
+            );
+            assert!(result.message.contains(message_fragment), "{field}");
+            assert_eq!(result.public_inputs, b"public", "{field}");
+            assert!(result.proof.is_empty(), "{field}");
+            assert!(!result.verified, "{field}");
+            if field == "algorithm_id" {
+                assert!(result.algorithm_id.is_empty(), "{field}");
+            } else {
+                assert_eq!(result.algorithm_id, "confidential-transfer-v2", "{field}");
+            }
+            if field == "entrypoint" {
+                assert!(result.entrypoint.is_empty(), "{field}");
+            } else {
+                assert_eq!(
+                    result.entrypoint, "buildConfidentialTransferProofV2",
+                    "{field}"
+                );
+            }
+            if field == "vk_ref" {
+                assert!(result.vk_ref.is_empty(), "{field}");
+            }
             let encoded = norito::to_bytes(&result).expect("encode privacy result");
-            assert_subslice_absent(&encoded, marker, "empty required field failure result");
+            assert_subslice_absent(&encoded, witness, "empty required field failure result");
         }
     }
 
@@ -15054,7 +15213,33 @@ mod tests {
             .collect()
     }
 
+    fn privacy_test_sdk_exports(entrypoints: &[&'static str]) -> Vec<PrivacyProductionSdkExportV1> {
+        PRIVACY_PRODUCTION_SDK_EXPORT_SURFACES
+            .iter()
+            .map(|surface| PrivacyProductionSdkExportV1 {
+                surface: *surface,
+                entrypoints: entrypoints.to_vec(),
+            })
+            .collect()
+    }
+
+    fn privacy_test_sdk_parity_artifacts() -> Vec<PrivacyProductionSdkParityArtifactV1> {
+        PRIVACY_PRODUCTION_SDK_PARITY_ARTIFACT_KINDS
+            .iter()
+            .flat_map(|kind| {
+                PRIVACY_PRODUCTION_SDK_EXPORT_SURFACES
+                    .iter()
+                    .map(move |surface| PrivacyProductionSdkParityArtifactV1 {
+                        kind: *kind,
+                        surface: *surface,
+                        artifact_hash: PRIVACY_TEST_PRODUCTION_HASH,
+                    })
+            })
+            .collect()
+    }
+
     fn privacy_test_evidence_row(entry: &PrivacyAlgorithmEntry) -> PrivacyProductionEvidenceRowV1 {
+        let sdk_entrypoints = privacy_test_production_entrypoints(entry);
         PrivacyProductionEvidenceRowV1 {
             algorithm_id: entry.id,
             chain_id: PRIVACY_TEST_PRODUCTION_CHAIN_ID,
@@ -15064,7 +15249,9 @@ mod tests {
             verifier_key_id: privacy_expected_verifier_key_id(entry),
             proof_family: entry.proof_family,
             public_inputs_schema: privacy_expected_public_inputs_schema(entry),
-            sdk_entrypoints: privacy_test_production_entrypoints(entry),
+            sdk_entrypoints: sdk_entrypoints.clone(),
+            sdk_exports: privacy_test_sdk_exports(&sdk_entrypoints),
+            sdk_parity_artifacts: privacy_test_sdk_parity_artifacts(),
             required_state: privacy_expected_required_state(entry).to_vec(),
             fuzz_artifact_hash: PRIVACY_TEST_PRODUCTION_HASH,
             performance_artifact_hash: PRIVACY_TEST_PRODUCTION_HASH,
@@ -15343,6 +15530,28 @@ mod tests {
         });
         assert_zk_ace_evidence_rejected("local verifier entrypoint", |row| {
             row.sdk_entrypoints.push("verifyZkAceProofLocally");
+        });
+        assert_zk_ace_evidence_rejected("missing SDK export surface", |row| {
+            row.sdk_exports.pop();
+        });
+        assert_zk_ace_evidence_rejected("mismatched SDK export entrypoint", |row| {
+            row.sdk_exports[3]
+                .entrypoints
+                .push("buildShadowZkAceProductionProof");
+        });
+        assert_zk_ace_evidence_rejected("dev fixture SDK export", |row| {
+            row.sdk_exports[2]
+                .entrypoints
+                .push("buildZkAceDevProofFixture");
+        });
+        assert_zk_ace_evidence_rejected("missing SDK parity artifact", |row| {
+            row.sdk_parity_artifacts.pop();
+        });
+        assert_zk_ace_evidence_rejected("wrong SDK parity artifact kind", |row| {
+            row.sdk_parity_artifacts[0].kind = "fixture_vectors";
+        });
+        assert_zk_ace_evidence_rejected("bad SDK parity artifact hash", |row| {
+            row.sdk_parity_artifacts[0].artifact_hash = "sha256:not-a-hex-digest";
         });
         assert_zk_ace_evidence_rejected("three-peer localnet downgrade", |row| {
             row.localnet_acceptance.peer_count = 3;
@@ -16367,7 +16576,23 @@ mod tests {
 
             let result = privacy_result_for_request(request, PrivacyProofOperationV1::Build);
 
-            assert_unreflected_invalid_privacy_request_result(&result, "backend:name", case);
+            if case == "planned-entrypoint" {
+                assert_eq!(result.version, PRIVACY_FFI_VERSION_V1, "{case}");
+                assert_eq!(result.status, PRIVACY_FFI_STATUS_ERROR, "{case}");
+                assert_eq!(
+                    result.error_code, PRIVACY_FFI_ERROR_INVALID_REQUEST,
+                    "{case}"
+                );
+                assert!(result.message.contains("planned"), "{case}");
+                assert!(result.message.contains("not executable"), "{case}");
+                assert_eq!(result.algorithm_id, algorithm_id, "{case}");
+                assert_eq!(result.entrypoint, entrypoint, "{case}");
+                assert!(result.vk_ref.is_empty(), "{case}");
+                assert!(result.proof.is_empty(), "{case}");
+                assert!(!result.verified, "{case}");
+            } else {
+                assert_unreflected_invalid_privacy_request_result(&result, "backend:name", case);
+            }
             let encoded = norito::to_bytes(&result).expect("encode privacy result");
             assert_subslice_absent(
                 &encoded,

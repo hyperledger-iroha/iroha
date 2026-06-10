@@ -11,7 +11,7 @@ export const SM2_PUBLIC_KEY_LENGTH = 65;
 export const SM2_SIGNATURE_LENGTH = 64;
 export const SM2_DEFAULT_DISTINGUISHED_ID = "1234567812345678";
 export const PRIVACY_FFI_VERSION_V1 = 1;
-export const PRIVACY_REQUIRED_BRIDGE_ABI_VERSION = 6;
+export const PRIVACY_REQUIRED_BRIDGE_ABI_VERSION = 7;
 export const PRIVACY_NATIVE_ARCHIVE_MAX_BYTES = 64 * 1024 * 1024;
 export const PRIVACY_FFI_STATUS_ERROR = 1;
 export const PRIVACY_FFI_ERROR_NULL_POINTER = 1;
@@ -1138,6 +1138,10 @@ export function isPrivacyNativeAvailable() {
 
 export function privacyCapabilitiesV1() {
   return unsupported("privacyCapabilitiesV1");
+}
+
+export function privacyProofRequestV1() {
+  return unsupported("privacyProofRequestV1");
 }
 
 export function privacyBuildProofV1() {

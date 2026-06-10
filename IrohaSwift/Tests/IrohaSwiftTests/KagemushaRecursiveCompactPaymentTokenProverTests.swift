@@ -54,22 +54,25 @@ final class KagemushaRecursiveCompactPaymentTokenProverTests: XCTestCase {
                 .emptyKeyArtifactsArchive
             )
         }
-        XCTAssertThrowsError(
-            try KagemushaRecursiveCompactPaymentTokenProver
-                .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
-                    recordBundleArchive: validArchive,
-                    pallasOpenEnvelopesArchive: validArchive,
-                    recursiveCompactKeyArtifactsArchive: Data([0x01, 0x02]),
-                    bridgeAvailable: false
-                ) {
-                    XCTFail("native compact-token prover body must not run for malformed key artifacts")
-                    return nil
-                }
-        ) { error in
-            XCTAssertEqual(
-                error as? KagemushaRecursiveCompactPaymentTokenProverError,
-                .invalidKeyArtifactsArchive
-            )
+        for (label, malformedArchive) in malformedKagemushaNoritoArchives(validArchive) {
+            XCTAssertThrowsError(
+                try KagemushaRecursiveCompactPaymentTokenProver
+                    .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+                        recordBundleArchive: validArchive,
+                        pallasOpenEnvelopesArchive: validArchive,
+                        recursiveCompactKeyArtifactsArchive: malformedArchive,
+                        bridgeAvailable: false
+                    ) {
+                        XCTFail("native compact-token prover body must not run for malformed key artifacts")
+                        return nil
+                    },
+                "key artifacts archive \(label) should be rejected before bridge call"
+            ) { error in
+                XCTAssertEqual(
+                    error as? KagemushaRecursiveCompactPaymentTokenProverError,
+                    .invalidKeyArtifactsArchive
+                )
+            }
         }
         XCTAssertThrowsError(
             try KagemushaRecursiveCompactPaymentTokenProver
@@ -92,39 +95,45 @@ final class KagemushaRecursiveCompactPaymentTokenProverTests: XCTestCase {
 
     func testRejectsMalformedInputArchivesBeforeBridgeCall() {
         let validArchive = validKagemushaNoritoArchive()
-        XCTAssertThrowsError(
-            try KagemushaRecursiveCompactPaymentTokenProver
-                .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
-                    recordBundleArchive: Data([0x01, 0x02]),
-                    pallasOpenEnvelopesArchive: validArchive,
-                    recursiveCompactKeyArtifactsArchive: validRecursiveCompactKeyArtifactsArchive(),
-                    bridgeAvailable: false
-                ) {
-                    XCTFail("native compact-token prover body must not run for malformed record bundles")
-                    return nil
-                }
-        ) { error in
-            XCTAssertEqual(
-                error as? KagemushaRecursiveCompactPaymentTokenProverError,
-                .invalidRecordBundleArchive
-            )
+        for (label, malformedArchive) in malformedKagemushaNoritoArchives(validArchive) {
+            XCTAssertThrowsError(
+                try KagemushaRecursiveCompactPaymentTokenProver
+                    .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+                        recordBundleArchive: malformedArchive,
+                        pallasOpenEnvelopesArchive: validArchive,
+                        recursiveCompactKeyArtifactsArchive: validRecursiveCompactKeyArtifactsArchive(),
+                        bridgeAvailable: false
+                    ) {
+                        XCTFail("native compact-token prover body must not run for malformed record bundles")
+                        return nil
+                    },
+                "record bundle archive \(label) should be rejected before bridge call"
+            ) { error in
+                XCTAssertEqual(
+                    error as? KagemushaRecursiveCompactPaymentTokenProverError,
+                    .invalidRecordBundleArchive
+                )
+            }
         }
-        XCTAssertThrowsError(
-            try KagemushaRecursiveCompactPaymentTokenProver
-                .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
-                    recordBundleArchive: validArchive,
-                    pallasOpenEnvelopesArchive: Data([0x01, 0x02]),
-                    recursiveCompactKeyArtifactsArchive: validRecursiveCompactKeyArtifactsArchive(),
-                    bridgeAvailable: false
-                ) {
-                    XCTFail("native compact-token prover body must not run for malformed Pallas openings")
-                    return nil
-                }
-        ) { error in
-            XCTAssertEqual(
-                error as? KagemushaRecursiveCompactPaymentTokenProverError,
-                .invalidPallasOpenEnvelopesArchive
-            )
+        for (label, malformedArchive) in malformedKagemushaNoritoArchives(validArchive) {
+            XCTAssertThrowsError(
+                try KagemushaRecursiveCompactPaymentTokenProver
+                    .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+                        recordBundleArchive: validArchive,
+                        pallasOpenEnvelopesArchive: malformedArchive,
+                        recursiveCompactKeyArtifactsArchive: validRecursiveCompactKeyArtifactsArchive(),
+                        bridgeAvailable: false
+                    ) {
+                        XCTFail("native compact-token prover body must not run for malformed Pallas openings")
+                        return nil
+                    },
+                "Pallas openings archive \(label) should be rejected before bridge call"
+            ) { error in
+                XCTAssertEqual(
+                    error as? KagemushaRecursiveCompactPaymentTokenProverError,
+                    .invalidPallasOpenEnvelopesArchive
+                )
+            }
         }
     }
 
@@ -253,21 +262,24 @@ final class KagemushaRecursiveCompactPaymentTokenProverTests: XCTestCase {
 
     func testRejectsMalformedNativeOutput() {
         let validArchive = validKagemushaNoritoArchive()
-        XCTAssertThrowsError(
-            try KagemushaRecursiveCompactPaymentTokenProver
-                .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
-                    recordBundleArchive: validArchive,
-                    pallasOpenEnvelopesArchive: validArchive,
-                    recursiveCompactKeyArtifactsArchive: validRecursiveCompactKeyArtifactsArchive(),
-                    bridgeAvailable: true
-                ) {
-                    Data([0x01])
-                }
-        ) { error in
-            XCTAssertEqual(
-                error as? KagemushaRecursiveCompactPaymentTokenProverError,
-                .invalidCompactTokenArchive
-            )
+        for (label, nativeOutput) in malformedKagemushaNoritoArchives(validArchive) {
+            XCTAssertThrowsError(
+                try KagemushaRecursiveCompactPaymentTokenProver
+                    .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+                        recordBundleArchive: validArchive,
+                        pallasOpenEnvelopesArchive: validArchive,
+                        recursiveCompactKeyArtifactsArchive: validRecursiveCompactKeyArtifactsArchive(),
+                        bridgeAvailable: true
+                    ) {
+                        nativeOutput
+                    },
+                "native output \(label) should be rejected"
+            ) { error in
+                XCTAssertEqual(
+                    error as? KagemushaRecursiveCompactPaymentTokenProverError,
+                    .invalidCompactTokenArchive
+                )
+            }
         }
     }
 
@@ -307,20 +319,24 @@ final class KagemushaRecursiveCompactPaymentTokenProverTests: XCTestCase {
     }
 
     func testProjectionRejectsMalformedBundleArchiveBeforeBridgeCall() {
-        XCTAssertThrowsError(
-            try KagemushaRecursiveCompactPaymentTokenProver
-                .recursiveSpendCompactPaymentTokenFromBundle(
-                    bundleArchive: Data([0x01]),
-                    bridgeAvailable: false
-                ) {
-                    XCTFail("native projection body must not run for malformed bundle archives")
-                    return nil
-                }
-        ) { error in
-            XCTAssertEqual(
-                error as? KagemushaRecursiveCompactPaymentTokenProverError,
-                .invalidBundleArchive
-            )
+        let validArchive = validKagemushaNoritoArchive()
+        for (label, malformedArchive) in malformedKagemushaNoritoArchives(validArchive) {
+            XCTAssertThrowsError(
+                try KagemushaRecursiveCompactPaymentTokenProver
+                    .recursiveSpendCompactPaymentTokenFromBundle(
+                        bundleArchive: malformedArchive,
+                        bridgeAvailable: false
+                    ) {
+                        XCTFail("native projection body must not run for malformed bundle archives")
+                        return nil
+                    },
+                "bundle archive \(label) should be rejected before bridge call"
+            ) { error in
+                XCTAssertEqual(
+                    error as? KagemushaRecursiveCompactPaymentTokenProverError,
+                    .invalidBundleArchive
+                )
+            }
         }
     }
 
@@ -386,20 +402,56 @@ final class KagemushaRecursiveCompactPaymentTokenProverTests: XCTestCase {
     }
 
     func testProjectionRejectsMalformedNativeOutput() {
-        XCTAssertThrowsError(
-            try KagemushaRecursiveCompactPaymentTokenProver
-                .recursiveSpendCompactPaymentTokenFromBundle(
-                    bundleArchive: validKagemushaNoritoArchive(),
-                    bridgeAvailable: true
-                ) {
-                    Data([0x01])
-                }
-        ) { error in
-            XCTAssertEqual(
-                error as? KagemushaRecursiveCompactPaymentTokenProverError,
-                .invalidCompactTokenArchive
-            )
+        let validArchive = validKagemushaNoritoArchive()
+        for (label, nativeOutput) in malformedKagemushaNoritoArchives(validArchive) {
+            XCTAssertThrowsError(
+                try KagemushaRecursiveCompactPaymentTokenProver
+                    .recursiveSpendCompactPaymentTokenFromBundle(
+                        bundleArchive: validArchive,
+                        bridgeAvailable: true
+                    ) {
+                        nativeOutput
+                    },
+                "projection native output \(label) should be rejected"
+            ) { error in
+                XCTAssertEqual(
+                    error as? KagemushaRecursiveCompactPaymentTokenProverError,
+                    .invalidCompactTokenArchive
+                )
+            }
         }
+    }
+
+    private func malformedKagemushaNoritoArchives(_ validArchive: Data) -> [(String, Data)] {
+        var compressed = validArchive
+        compressed[22] = 0x01
+        var unsupportedFlags = validArchive
+        unsupportedFlags[39] = NoritoHeader.varintOffsets
+        var invalidFieldBitset = validArchive
+        invalidFieldBitset[39] = NoritoHeader.fieldBitset
+        return [
+            ("truncated", Data([0x01])),
+            ("compressed", compressed),
+            ("unsupported flags", unsupportedFlags),
+            ("invalid field bitset", invalidFieldBitset),
+            (
+                "nonzero header padding",
+                kagemushaNoritoFrameWithHeaderPadding(validArchive, padding: Data([0x7f]))
+            ),
+            (
+                "excessive header padding",
+                kagemushaNoritoFrameWithHeaderPadding(
+                    validArchive,
+                    padding: Data(repeating: 0, count: 65)
+                )
+            ),
+        ]
+    }
+
+    private func kagemushaNoritoFrameWithHeaderPadding(_ archive: Data, padding: Data) -> Data {
+        var padded = archive
+        padded.insert(contentsOf: padding, at: NoritoHeader.encodedLength)
+        return padded
     }
 
     func testProjectionReturnsValidNativeOutput() throws {
@@ -416,21 +468,25 @@ final class KagemushaRecursiveCompactPaymentTokenProverTests: XCTestCase {
     }
 
     func testProjectionVerifierRejectsMalformedVerifierRecordBeforeBridgeCall() {
-        XCTAssertThrowsError(
-            try KagemushaRecursiveCompactPaymentTokenProver
-                .verifyRecursiveSpendCompactPaymentTokenProjection(
-                    compactTokenArchive: validKagemushaNoritoArchive(),
-                    verifierRecordArchive: Data([0x01]),
-                    bridgeAvailable: true
-                ) {
-                    XCTFail("native projection verifier body must not run for malformed records")
-                    return true
-                }
-        ) { error in
-            XCTAssertEqual(
-                error as? KagemushaRecursiveCompactPaymentTokenProverError,
-                .invalidVerifierRecordArchive
-            )
+        let validArchive = validKagemushaNoritoArchive()
+        for (label, malformedArchive) in malformedKagemushaNoritoArchives(validArchive) {
+            XCTAssertThrowsError(
+                try KagemushaRecursiveCompactPaymentTokenProver
+                    .verifyRecursiveSpendCompactPaymentTokenProjection(
+                        compactTokenArchive: validArchive,
+                        verifierRecordArchive: malformedArchive,
+                        bridgeAvailable: true
+                    ) {
+                        XCTFail("native projection verifier body must not run for malformed records")
+                        return true
+                    },
+                "verifier record archive \(label) should be rejected before bridge call"
+            ) { error in
+                XCTAssertEqual(
+                    error as? KagemushaRecursiveCompactPaymentTokenProverError,
+                    .invalidVerifierRecordArchive
+                )
+            }
         }
     }
 
@@ -601,20 +657,24 @@ final class KagemushaRecursiveCompactPaymentTokenProverTests: XCTestCase {
     }
 
     func testVerifyRejectsMalformedCompactTokenArchiveBeforeBridgeCall() {
-        XCTAssertThrowsError(
-            try KagemushaRecursiveCompactPaymentTokenProver
-                .verifyRecursiveCompactPaymentToken(
-                    compactTokenArchive: Data([0x01]),
-                    recursiveCompactVerifierKeysArchive: validRecursiveCompactVerifierKeysArchive(),
-                    bridgeAvailable: true
-                ) {
-                    true
-                }
-        ) { error in
-            XCTAssertEqual(
-                error as? KagemushaRecursiveCompactPaymentTokenProverError,
-                .invalidCompactTokenArchive
-            )
+        let validArchive = validKagemushaNoritoArchive()
+        for (label, malformedArchive) in malformedKagemushaNoritoArchives(validArchive) {
+            XCTAssertThrowsError(
+                try KagemushaRecursiveCompactPaymentTokenProver
+                    .verifyRecursiveCompactPaymentToken(
+                        compactTokenArchive: malformedArchive,
+                        recursiveCompactVerifierKeysArchive: validRecursiveCompactVerifierKeysArchive(),
+                        bridgeAvailable: true
+                    ) {
+                        true
+                    },
+                "compact token archive \(label) should be rejected before bridge call"
+            ) { error in
+                XCTAssertEqual(
+                    error as? KagemushaRecursiveCompactPaymentTokenProverError,
+                    .invalidCompactTokenArchive
+                )
+            }
         }
     }
 
@@ -682,21 +742,24 @@ final class KagemushaRecursiveCompactPaymentTokenProverTests: XCTestCase {
                 .emptyVerifierKeysArchive
             )
         }
-        XCTAssertThrowsError(
-            try KagemushaRecursiveCompactPaymentTokenProver
-                .verifyRecursiveCompactPaymentToken(
-                    compactTokenArchive: validArchive,
-                    recursiveCompactVerifierKeysArchive: Data([0x01, 0x02]),
-                    bridgeAvailable: true
-                ) {
-                    XCTFail("native compact-token verifier body must not run for malformed verifier keys")
-                    return true
-                }
-        ) { error in
-            XCTAssertEqual(
-                error as? KagemushaRecursiveCompactPaymentTokenProverError,
-                .invalidVerifierKeysArchive
-            )
+        for (label, malformedArchive) in malformedKagemushaNoritoArchives(validArchive) {
+            XCTAssertThrowsError(
+                try KagemushaRecursiveCompactPaymentTokenProver
+                    .verifyRecursiveCompactPaymentToken(
+                        compactTokenArchive: validArchive,
+                        recursiveCompactVerifierKeysArchive: malformedArchive,
+                        bridgeAvailable: true
+                    ) {
+                        XCTFail("native compact-token verifier body must not run for malformed verifier keys")
+                        return true
+                    },
+                "verifier keys archive \(label) should be rejected before bridge call"
+            ) { error in
+                XCTAssertEqual(
+                    error as? KagemushaRecursiveCompactPaymentTokenProverError,
+                    .invalidVerifierKeysArchive
+                )
+            }
         }
         XCTAssertThrowsError(
             try KagemushaRecursiveCompactPaymentTokenProver

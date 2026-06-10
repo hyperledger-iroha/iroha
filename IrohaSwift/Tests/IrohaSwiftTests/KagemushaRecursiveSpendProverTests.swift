@@ -447,7 +447,7 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
         )
     }
 
-    func testRedeemSpendRejectsAbi7FixtureRequestWhileAdmissionRemainsReserved() throws {
+    func testRedeemSpendBuildsAbi7FixtureInstructionWhenBridgeAvailable() throws {
         let archiveFixture = try Self.sharedRecursiveSpendAbi7Archives()
         XCTAssertEqual(
             archiveFixture["schema"] as? String,
@@ -460,8 +460,14 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
         XCTAssertEqual(redeemInstruction["norito_type"] as? String, "RedeemKagemushaRecursive")
 
         let requestArchive = try XCTUnwrap(Data(base64Encoded: try XCTUnwrap(redeemRequest["bytes_base64"] as? String)))
-        XCTAssertThrowsError(try KagemushaRecursiveSpendProver.redeemSpend(requestArchive: requestArchive)) { error in
-            XCTAssertEqual(error as? KagemushaRecursiveSpendProverError, .proofRejected)
+        let expectedInstructionArchive = try XCTUnwrap(
+            Data(base64Encoded: try XCTUnwrap(redeemInstruction["bytes_base64"] as? String))
+        )
+        do {
+            let output = try KagemushaRecursiveSpendProver.redeemSpend(requestArchive: requestArchive)
+            XCTAssertEqual(output, expectedInstructionArchive)
+        } catch KagemushaRecursiveSpendProverError.bridgeUnavailable {
+            throw XCTSkip("Kagemusha recursive spend native bridge is unavailable.")
         }
     }
 
@@ -1055,7 +1061,6 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
 
     func testRejectsMalformedInputArchivesBeforeBridgeCall() {
         let validArchive = Self.validKagemushaNoritoArchive()
-        let malformedArchive = Data([0x01, 0x02])
         let helpers: [(String, (Data) throws -> Data)] = [
             ("init", KagemushaRecursiveSpendProver.initSpend),
             ("append", KagemushaRecursiveSpendProver.appendSpend),
@@ -1066,44 +1071,64 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
             ("redeem", KagemushaRecursiveSpendProver.redeemSpend)
         ]
 
-        for (label, helper) in helpers {
-            assertRecursiveSpendInputError(.invalidInputArchive, "helper \(label)") {
-                try helper(malformedArchive)
+        for (archiveLabel, malformedArchive) in Self.malformedKagemushaNoritoArchives(validArchive) {
+            for (label, helper) in helpers {
+                assertRecursiveSpendInputError(
+                    .invalidInputArchive,
+                    "helper \(label) archive \(archiveLabel)"
+                ) {
+                    try helper(malformedArchive)
+                }
             }
-        }
 
-        assertRecursiveSpendInputError(.invalidInputArchive, "init witness request") {
-            try KagemushaRecursiveSpendProver.lineageWitnessFromInitResult(
-                requestArchive: malformedArchive,
-                bundleArchive: validArchive
-            )
-        }
-        assertRecursiveSpendInputError(.invalidInputArchive, "init witness bundle") {
-            try KagemushaRecursiveSpendProver.lineageWitnessFromInitResult(
-                requestArchive: validArchive,
-                bundleArchive: malformedArchive
-            )
-        }
-        assertRecursiveSpendInputError(.invalidInputArchive, "append witness previous witness") {
-            try KagemushaRecursiveSpendProver.lineageWitnessAppendResult(
-                previousWitnessArchive: malformedArchive,
-                requestArchive: validArchive,
-                bundleArchive: validArchive
-            )
-        }
-        assertRecursiveSpendInputError(.invalidInputArchive, "append witness request") {
-            try KagemushaRecursiveSpendProver.lineageWitnessAppendResult(
-                previousWitnessArchive: validArchive,
-                requestArchive: malformedArchive,
-                bundleArchive: validArchive
-            )
-        }
-        assertRecursiveSpendInputError(.invalidInputArchive, "append witness bundle") {
-            try KagemushaRecursiveSpendProver.lineageWitnessAppendResult(
-                previousWitnessArchive: validArchive,
-                requestArchive: validArchive,
-                bundleArchive: malformedArchive
-            )
+            assertRecursiveSpendInputError(
+                .invalidInputArchive,
+                "init witness request archive \(archiveLabel)"
+            ) {
+                try KagemushaRecursiveSpendProver.lineageWitnessFromInitResult(
+                    requestArchive: malformedArchive,
+                    bundleArchive: validArchive
+                )
+            }
+            assertRecursiveSpendInputError(
+                .invalidInputArchive,
+                "init witness bundle archive \(archiveLabel)"
+            ) {
+                try KagemushaRecursiveSpendProver.lineageWitnessFromInitResult(
+                    requestArchive: validArchive,
+                    bundleArchive: malformedArchive
+                )
+            }
+            assertRecursiveSpendInputError(
+                .invalidInputArchive,
+                "append witness previous witness archive \(archiveLabel)"
+            ) {
+                try KagemushaRecursiveSpendProver.lineageWitnessAppendResult(
+                    previousWitnessArchive: malformedArchive,
+                    requestArchive: validArchive,
+                    bundleArchive: validArchive
+                )
+            }
+            assertRecursiveSpendInputError(
+                .invalidInputArchive,
+                "append witness request archive \(archiveLabel)"
+            ) {
+                try KagemushaRecursiveSpendProver.lineageWitnessAppendResult(
+                    previousWitnessArchive: validArchive,
+                    requestArchive: malformedArchive,
+                    bundleArchive: validArchive
+                )
+            }
+            assertRecursiveSpendInputError(
+                .invalidInputArchive,
+                "append witness bundle archive \(archiveLabel)"
+            ) {
+                try KagemushaRecursiveSpendProver.lineageWitnessAppendResult(
+                    previousWitnessArchive: validArchive,
+                    requestArchive: validArchive,
+                    bundleArchive: malformedArchive
+                )
+            }
         }
     }
 
@@ -1277,15 +1302,18 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
 
     func testRejectsMalformedNativeOutput() {
         let validArchive = Self.validKagemushaNoritoArchive()
-        XCTAssertThrowsError(
-            try KagemushaRecursiveSpendProver.call(
-                requestArchive: validArchive,
-                bridgeAvailable: true
-            ) { _ in
-                Data([0x01, 0x02])
+        for (label, nativeOutput) in Self.malformedKagemushaNoritoArchives(validArchive) {
+            XCTAssertThrowsError(
+                try KagemushaRecursiveSpendProver.call(
+                    requestArchive: validArchive,
+                    bridgeAvailable: true
+                ) { _ in
+                    nativeOutput
+                },
+                "native output \(label) should be rejected"
+            ) { error in
+                XCTAssertEqual(error as? KagemushaRecursiveSpendProverError, .invalidNativeOutput)
             }
-        ) { error in
-            XCTAssertEqual(error as? KagemushaRecursiveSpendProverError, .invalidNativeOutput)
         }
     }
 
@@ -1470,6 +1498,38 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
             typeName: "KagemushaRecursiveSpendInputArchiveV1",
             payload: Data()
         )
+    }
+
+    private static func malformedKagemushaNoritoArchives(_ validArchive: Data) -> [(String, Data)] {
+        var compressed = validArchive
+        compressed[22] = 0x01
+        var unsupportedFlags = validArchive
+        unsupportedFlags[39] = NoritoHeader.varintOffsets
+        var invalidFieldBitset = validArchive
+        invalidFieldBitset[39] = NoritoHeader.fieldBitset
+        return [
+            ("truncated", Data([0x01])),
+            ("compressed", compressed),
+            ("unsupported flags", unsupportedFlags),
+            ("invalid field bitset", invalidFieldBitset),
+            (
+                "nonzero header padding",
+                Self.kagemushaNoritoFrameWithHeaderPadding(validArchive, padding: Data([0x7f]))
+            ),
+            (
+                "excessive header padding",
+                Self.kagemushaNoritoFrameWithHeaderPadding(
+                    validArchive,
+                    padding: Data(repeating: 0, count: 65)
+                )
+            ),
+        ]
+    }
+
+    private static func kagemushaNoritoFrameWithHeaderPadding(_ archive: Data, padding: Data) -> Data {
+        var padded = archive
+        padded.insert(contentsOf: padding, at: NoritoHeader.encodedLength)
+        return padded
     }
 
     private static func zk1Tlv(tag: String, payload: Data) -> Data {

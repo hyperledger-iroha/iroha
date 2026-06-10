@@ -183,6 +183,7 @@ expected_recursive_signatures = {
 }
 required_privacy_ffi = {
     "iroha_privacy_capabilities_v1",
+    "iroha_privacy_proof_request_v1",
     "iroha_privacy_build_proof_v1",
     "iroha_privacy_verify_proof_v1",
     "iroha_privacy_free_buffer",
@@ -190,6 +191,24 @@ required_privacy_ffi = {
 expected_privacy_signatures = {
     "iroha_privacy_capabilities_v1": (
         r"int32_t\s+iroha_privacy_capabilities_v1\s*\(\s*"
+        r"uint8_t\s*\*\*\s*out_ptr\s*,\s*"
+        r"unsigned\s+long\s*\*\s*out_len\s*"
+        r"\)\s*;"
+    ),
+    "iroha_privacy_proof_request_v1": (
+        r"int32_t\s+iroha_privacy_proof_request_v1\s*\(\s*"
+        r"const\s+uint8_t\s*\*\s*algorithm_id_ptr\s*,\s*"
+        r"unsigned\s+long\s+algorithm_id_len\s*,\s*"
+        r"const\s+uint8_t\s*\*\s*entrypoint_ptr\s*,\s*"
+        r"unsigned\s+long\s+entrypoint_len\s*,\s*"
+        r"const\s+uint8_t\s*\*\s*vk_ref_ptr\s*,\s*"
+        r"unsigned\s+long\s+vk_ref_len\s*,\s*"
+        r"const\s+uint8_t\s*\*\s*public_inputs_ptr\s*,\s*"
+        r"unsigned\s+long\s+public_inputs_len\s*,\s*"
+        r"const\s+uint8_t\s*\*\s*witness_ptr\s*,\s*"
+        r"unsigned\s+long\s+witness_len\s*,\s*"
+        r"const\s+uint8_t\s*\*\s*proof_ptr\s*,\s*"
+        r"unsigned\s+long\s+proof_len\s*,\s*"
         r"uint8_t\s*\*\*\s*out_ptr\s*,\s*"
         r"unsigned\s+long\s*\*\s*out_len\s*"
         r"\)\s*;"

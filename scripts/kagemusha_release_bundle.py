@@ -2027,14 +2027,13 @@ def write_release_bundle(path: Path, bundle: dict[str, Any], bundle_root: Path) 
     try:
         parent_fd = os.open(path.parent, os.O_RDONLY)
     except OSError:
-        parent_fd = None
-    if parent_fd is not None:
-        try:
-            os.fsync(parent_fd)
-        except OSError:
-            pass
-        finally:
-            os.close(parent_fd)
+        return [_release_bundle_out_blocker("--out parent directory could not be synced")]
+    try:
+        os.fsync(parent_fd)
+    except OSError:
+        return [_release_bundle_out_blocker("--out parent directory could not be synced")]
+    finally:
+        os.close(parent_fd)
     try:
         expected_stat = path.lstat()
     except (FileNotFoundError, OSError):

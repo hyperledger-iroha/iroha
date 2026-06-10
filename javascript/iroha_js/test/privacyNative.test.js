@@ -15,6 +15,7 @@ import {
   isPrivacyNativeAvailable,
   privacyBuildProofV1,
   privacyCapabilitiesV1,
+  privacyProofRequestV1,
   privacyVerifyProofV1,
 } from "../src/crypto.js";
 
@@ -210,6 +211,23 @@ function completePrivacyBinding(overrides = {}) {
     privacyCapabilitiesV1() {
       return Uint8Array.from(PRIVACY_CAPABILITIES_ARCHIVE);
     },
+    privacyProofRequestV1(
+      algorithmId,
+      entrypoint,
+      vkRef,
+      publicInputs,
+      witness,
+      proof,
+    ) {
+      assert.equal(typeof algorithmId, "string");
+      assert.equal(typeof entrypoint, "string");
+      assert.equal(typeof vkRef, "string");
+      assert.ok(Buffer.from(publicInputs).length > 0);
+      assert.ok(Buffer.isBuffer(publicInputs));
+      assert.ok(Buffer.isBuffer(witness));
+      assert.ok(Buffer.isBuffer(proof));
+      return Uint8Array.from(PRIVACY_REQUEST_ARCHIVE);
+    },
     privacyBuildProofV1(request) {
       assert.ok(Buffer.from(request).length > 0);
       return Uint8Array.from(PRIVACY_BUILD_ARCHIVE);
@@ -303,7 +321,7 @@ test("privacy native availability requires all raw archive methods", () => {
 
 test("privacy FFI deterministic error constants are public", () => {
   assert.equal(PRIVACY_FFI_VERSION_V1, 1);
-  assert.equal(PRIVACY_REQUIRED_BRIDGE_ABI_VERSION, 6);
+  assert.equal(PRIVACY_REQUIRED_BRIDGE_ABI_VERSION, 7);
   assert.equal(PRIVACY_FFI_STATUS_ERROR, 1);
   assert.equal(PRIVACY_FFI_ERROR_NULL_POINTER, 1);
   assert.equal(PRIVACY_FFI_ERROR_MALFORMED_NORITO, 2);
@@ -485,11 +503,20 @@ test("privacy native availability probes build and verify with Norito request ar
     "utf8",
   );
   const expectedProbe = privacyNoritoFrame(0x52);
+  const expectedProofRequestPublicInputs = Buffer.from(
+    "privacy-native-availability-public-input-v1",
+    "utf8",
+  );
+  let proofRequestProbe;
+  let proofRequestProbeAfterReturn;
+  let proofRequestWitnessAfterReturn;
+  let proofRequestProofAfterReturn;
   let buildProbe;
   let verifyProbe;
   let buildProbeAfterReturn;
   let verifyProbeAfterReturn;
   let capabilitiesOutput;
+  let proofRequestOutput;
   let buildOutput;
   let verifyOutput;
 
@@ -498,6 +525,24 @@ test("privacy native availability probes build and verify with Norito request ar
       privacyCapabilitiesV1() {
         capabilitiesOutput = Buffer.from(PRIVACY_CAPABILITIES_ARCHIVE);
         return capabilitiesOutput;
+      },
+      privacyProofRequestV1(
+        algorithmId,
+        entrypoint,
+        vkRef,
+        publicInputs,
+        witness,
+        proof,
+      ) {
+        assert.equal(algorithmId, "verange-transparent-range-v1");
+        assert.equal(entrypoint, "buildVeRangeProofV1");
+        assert.equal(vkRef, "bulletproofs:verange_transparent_range_v1");
+        proofRequestProbe = Buffer.from(publicInputs);
+        proofRequestProbeAfterReturn = publicInputs;
+        proofRequestWitnessAfterReturn = witness;
+        proofRequestProofAfterReturn = proof;
+        proofRequestOutput = Buffer.from(PRIVACY_REQUEST_ARCHIVE);
+        return proofRequestOutput;
       },
       privacyBuildProofV1(request) {
         buildProbe = Buffer.from(request);
@@ -517,21 +562,52 @@ test("privacy native availability probes build and verify with Norito request ar
     },
   );
 
+  assert.deepEqual(proofRequestProbe, expectedProofRequestPublicInputs);
   assert.deepEqual(buildProbe, expectedProbe);
   assert.deepEqual(verifyProbe, expectedProbe);
   assert.notDeepEqual(buildProbe, legacyTextProbe);
   assert.notDeepEqual(verifyProbe, legacyTextProbe);
+  assert.equal(proofRequestProbeAfterReturn.every((value) => value === 0), true);
+  assert.equal(proofRequestWitnessAfterReturn.every((value) => value === 0), true);
+  assert.equal(proofRequestProofAfterReturn.every((value) => value === 0), true);
   assert.equal(buildProbeAfterReturn.every((value) => value === 0), true);
   assert.equal(verifyProbeAfterReturn.every((value) => value === 0), true);
   assert.equal(capabilitiesOutput.every((value) => value === 0), true);
+  assert.equal(proofRequestOutput.every((value) => value === 0), true);
   assert.equal(buildOutput.every((value) => value === 0), true);
   assert.equal(verifyOutput.every((value) => value === 0), true);
 });
 
 test("privacy native availability probes clear request copies after native failures", () => {
+  let throwingProofRequestProbe;
+  let badProofRequestOutput;
   let throwingProbe;
   let badOutputProbe;
   let badOutput;
+
+  withNativeBinding(
+    completePrivacyBinding({
+      privacyProofRequestV1(_algorithmId, _entrypoint, _vkRef, publicInputs) {
+        throwingProofRequestProbe = publicInputs;
+        throw new Error("proof-request probe failure after public input copy");
+      },
+    }),
+    () => {
+      assert.equal(isPrivacyNativeAvailable(), false);
+    },
+  );
+
+  withNativeBinding(
+    completePrivacyBinding({
+      privacyProofRequestV1() {
+        badProofRequestOutput = Buffer.from([0x52]);
+        return badProofRequestOutput;
+      },
+    }),
+    () => {
+      assert.equal(isPrivacyNativeAvailable(), false);
+    },
+  );
 
   withNativeBinding(
     completePrivacyBinding({
@@ -558,6 +634,8 @@ test("privacy native availability probes clear request copies after native failu
     },
   );
 
+  assert.equal(throwingProofRequestProbe.every((value) => value === 0), true);
+  assert.deepEqual(badProofRequestOutput, Buffer.alloc(1));
   assert.deepEqual(
     Buffer.from(throwingProbe),
     Buffer.alloc(privacyNoritoFrame(0x52).length),
@@ -574,6 +652,21 @@ test("privacy native availability probes reject unsafe raw output", () => {
     {
       privacyCapabilitiesV1() {
         return "json is not Norito";
+      },
+    },
+    {
+      privacyProofRequestV1() {
+        return "json is not Norito";
+      },
+    },
+    {
+      privacyProofRequestV1() {
+        return Buffer.from(PRIVACY_BUILD_ARCHIVE);
+      },
+    },
+    {
+      privacyProofRequestV1() {
+        return Buffer.from([0x52]);
       },
     },
     {
@@ -628,7 +721,17 @@ test("privacy native availability probes reject unsafe raw output", () => {
       },
     },
     {
+      privacyProofRequestV1() {
+        throw new Error("native request probe failed with witness-like bytes");
+      },
+    },
+    {
       privacyCapabilitiesV1() {
+        return Buffer.alloc(PRIVACY_NATIVE_ARCHIVE_MAX_BYTES + 1, 0x7f);
+      },
+    },
+    {
+      privacyProofRequestV1() {
         return Buffer.alloc(PRIVACY_NATIVE_ARCHIVE_MAX_BYTES + 1, 0x7f);
       },
     },
@@ -647,6 +750,13 @@ test("privacy native availability probes reject unsafe raw output", () => {
   for (const archive of malformedPrivacyNativeOutputArchives(0x50)) {
     overrides.push({
       privacyCapabilitiesV1() {
+        return Buffer.from(archive);
+      },
+    });
+  }
+  for (const archive of malformedPrivacyNativeOutputArchives(0x52)) {
+    overrides.push({
+      privacyProofRequestV1() {
         return Buffer.from(archive);
       },
     });
@@ -675,10 +785,93 @@ test("privacy native availability probes reject unsafe raw output", () => {
 
 test("privacy native wrappers return opaque archive bytes", () => {
   withNativeBinding(completePrivacyBinding(), () => {
+    const requestArchive = privacyProofRequestV1({
+      algorithmId: "verange-transparent-range-v1",
+      entrypoint: "buildVeRangeProofV1",
+      vkRef: "bulletproofs:verange_transparent_range_v1",
+      publicInputs: Buffer.from("public-inputs"),
+      witness: Uint8Array.from(Buffer.from("secret-witness")),
+    });
+
     assert.deepEqual(privacyCapabilitiesV1(), PRIVACY_CAPABILITIES_ARCHIVE);
-    assert.deepEqual(privacyBuildProofV1(PRIVACY_REQUEST_ARCHIVE), PRIVACY_BUILD_ARCHIVE);
-    assert.deepEqual(privacyVerifyProofV1(Uint8Array.from(PRIVACY_REQUEST_ARCHIVE)), PRIVACY_VERIFY_ARCHIVE);
+    assert.deepEqual(requestArchive, PRIVACY_REQUEST_ARCHIVE);
+    assert.deepEqual(privacyBuildProofV1(requestArchive), PRIVACY_BUILD_ARCHIVE);
+    assert.deepEqual(privacyVerifyProofV1(Uint8Array.from(requestArchive)), PRIVACY_VERIFY_ARCHIVE);
   });
+});
+
+test("privacyProofRequestV1 validates text and byte fields before native dispatch", () => {
+  withNativeBinding(
+    completePrivacyBinding({
+      privacyProofRequestV1() {
+        assert.fail("invalid proof request fields must not reach native dispatch");
+      },
+    }),
+    () => {
+      const valid = {
+        algorithmId: "verange-transparent-range-v1",
+        entrypoint: "buildVeRangeProofV1",
+        vkRef: "bulletproofs:verange_transparent_range_v1",
+        publicInputs: Buffer.from("public-inputs"),
+      };
+      assert.throws(
+        () => privacyProofRequestV1(null),
+        /privacyProofRequestV1 input must be an object/,
+      );
+      assert.throws(
+        () => privacyProofRequestV1({ ...valid, algorithmId: 7 }),
+        /algorithmId must be a string/,
+      );
+      assert.throws(
+        () => privacyProofRequestV1({ ...valid, vkRef: null }),
+        /vkRef must be a string/,
+      );
+      assert.throws(
+        () => privacyProofRequestV1({ ...valid, publicInputs: "public-inputs" }),
+        /publicInputs must be bytes-like, not a string/,
+      );
+      assert.throws(
+        () => privacyProofRequestV1({ ...valid, publicInputs: Buffer.alloc(0) }),
+        /publicInputs must not be empty/,
+      );
+
+      const shared = new SharedArrayBuffer(8);
+      assert.throws(
+        () => privacyProofRequestV1({ ...valid, witness: new Uint8Array(shared) }),
+        /witness must not use shared memory/,
+      );
+    },
+  );
+});
+
+test("privacyProofRequestV1 validates native request archive output", () => {
+  const valid = {
+    algorithmId: "verange-transparent-range-v1",
+    entrypoint: "buildVeRangeProofV1",
+    vkRef: "bulletproofs:verange_transparent_range_v1",
+    publicInputs: Buffer.from("public-inputs"),
+  };
+  for (const [label, override, pattern] of [
+    [
+      "text",
+      { privacyProofRequestV1: () => "not norito" },
+      /native privacyProofRequestV1 returned text instead of Norito V1 bytes/,
+    ],
+    [
+      "wrong schema",
+      { privacyProofRequestV1: () => PRIVACY_BUILD_ARCHIVE },
+      /privacyProofRequestV1 must use the privacy request schema/,
+    ],
+    [
+      "malformed",
+      { privacyProofRequestV1: () => Buffer.from([0x52, 0x52]) },
+      /privacyProofRequestV1 must be a valid Norito V1 archive/,
+    ],
+  ]) {
+    withNativeBinding(completePrivacyBinding(override), () => {
+      assert.throws(() => privacyProofRequestV1(valid), pattern, label);
+    });
+  }
 });
 
 test("privacy native wrappers respect sliced request archive views", () => {

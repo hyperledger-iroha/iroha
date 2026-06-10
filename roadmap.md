@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-06-09
+Last updated: 2026-06-10
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 The detailed engineering backlog lives in
@@ -17,7 +17,75 @@ and completed history lives in [`status.md`](./status.md).
   aligned across package roots and native hosts. Python now exposes both the
   optional-height verifier and the explicit
   `kagemusha_verify_recursive_spend_compact_payment_token_projection_at_height(...)`
-  root helper, and the SDK parity guard must continue pinning that surface.
+  root helper. The JS SDK validates compact projection `blockHeight` values
+  before native probing or dispatch, accepting safe non-negative numbers and
+  bounded `u64` bigints only, and the SDK parity guard must continue pinning
+  those surfaces.
+- Kagemusha Android production readiness now has host-side verifier-report
+  rendering, a signed-slot assembler, a physical-device raw artifact exporter,
+  a strict host puller for those raw slots, and a dedicated
+  `:offline-wallet-lab-app` target whose release APK is hash-bound by the
+  physical exporter. The signed-slot assembler binds every copied source
+  artifact to symlink-free ancestors and the opened file identity, uses a
+  separate 64 MiB cap for the JNI-bearing offline wallet APK while retaining
+  16 MiB caps for smaller evidence artifacts, and rejects source-directory
+  aliases or post-preflight source swaps before signed slot installation. The
+  latest attached Pixel 6 / Android 16 slot
+  `google-pixel-6-6a-physical-1781070293478` verifies and signs successfully
+  through the lab-app path; remaining Android release work is evidence
+  acquisition for the rest of the standard matrix: Pixel 7, Pixel 8, Pixel
+  Fold/Tablet, Samsung Galaxy S23, and Samsung Galaxy S24.
+- Kagemusha Reserved-lineage proof evidence now has a staged-run finalizer that
+  requires a zero exit marker, validates staged lineage artifacts and the
+  captured production proof log, writes canonical `lineage-proof-evidence.json`,
+  and refuses destination overwrites by default. The matching staged runner
+  first runs the canonical init and append `lineage-key-artifacts` commands
+  into its staging root, then captures the canonical ignored cargo proof
+  command, preserves the real exit code, writes elapsed-time metadata, and emits
+  `lineage-proof-staged-run.json` so the finalizer can bind the canonical
+  command, exit code, elapsed seconds, proof-log filename, proof-log byte
+  count, and init/append lineage-key-artifact log byte counts before publishing.
+  It also emits per-phase closed-schema execution reports for init, append, and
+  proof attempts so signal-style failures are diagnosable without becoming
+  publishable evidence. The wrapper exits conventionally on failure while
+  preserving the exact subprocess status in the staged marker, execution
+  reports, and run report.
+  The runner can now resume at init/append key-artifact phase boundaries:
+  `--resume-key-artifacts` reuses only phases whose artifacts, log, canonical
+  zero-exit execution report, and log byte count validate, then reruns missing
+  or failed regular phase outputs while still rejecting symlinked or hardlinked
+  staged material.
+  Staged metadata writes are now self-verifying: after the atomic rename the
+  runner reopens marker, elapsed, and JSON report files, checks the opened file
+  identity, and compares exact bytes before returning.
+  The finalizer also verifies each published file after install by reopening it
+  through the identity-bound artifact reader and comparing it with the staged
+  source bytes before the final evidence check.
+  The latest staged attempts, including one retry with the existing release
+  `iroha` binary, exited `-9` during init LEN=128 key generation after
+  producing only the init key-log, so the remaining lineage release blocker is
+  successful production-width init/append key-artifact generation plus the
+  heavy ignored proof run, followed by finalization into `artifacts/kagemusha`.
+- Kagemusha ABI-7 recursive compact key evidence now has a staged-run finalizer
+  that requires a zero exit marker, validates staged artifacts and the generator
+  log, writes canonical `recursive-compact-key-evidence.json`, and refuses
+  destination overwrites by default. The matching staged runner captures the
+  canonical ABI-7 recursive compact key-generation command, preserves the real
+  exit code in the marker, execution report, and run report while returning a
+  conventional wrapper failure status, and refuses staged overwrites by default.
+  `--resume-keygen` now reuses only a complete zero-exit compact keygen whose
+  artifacts, generator log, execution report, run report, marker, canonical
+  command, and generator-log byte count validate; failed or malformed regular
+  staged outputs are replaced and rerun, while unsafe aliases still fail closed.
+  The runner also self-verifies marker and JSON report writes after atomic
+  rename so post-write metadata drift is rejected before finalization.
+  The finalizer reopens every published key artifact, generator log, and
+  evidence JSON after install and compares the identity-bound readback with the
+  staged source bytes before reporting success.
+  The latest staged production-width keygen attempt exited nonzero (`143`) after
+  about 9h26m with no artifacts, so the remaining compact-key release blocker is
+  a successful rerun that produces artifacts and is finalized into
+  `artifacts/kagemusha`.
 - Continue reducing local/CI compile memory after the WSL cargo-test hardening
   and Kagemusha record-bound compact preflight isolation: plain default tests no
   longer run the heavy ABI-7 recursive compact record-bound Pallas proof matrix,
@@ -704,10 +772,15 @@ and completed history lives in [`status.md`](./status.md).
   directories, slot path ancestors, and slot directories plus regular-file slot
   metadata/manifests/artifacts, scanner rejection of unreadable slot directory
   or parent metadata before traversal, and wallet/handoff artifact digests,
-  plus exact raw-command checks for the canonical release assembly plus
-  `connectedAndroidTest` invocation and the focused
-  `KagemushaRecursiveSpendProverTest` and `OfflineNoteTransferHandoff`
-  harnesses. The attestation summary is now a
+  plus exact raw-command checks for the canonical release assembly,
+  `:offline-wallet-android:connectedDebugAndroidTest` harness run, and the
+  lab-app `installRelease`/`installReleaseAndroidTest` plus
+  `adb shell am instrument` export run. Production slots must also carry a separate
+  `attestation/report.json` verifier report that repeats the slot identity,
+  device fingerprint, OS build, app package, attestation challenge, and
+  certificate-chain path/hash from `slot.json`, names the verifier, and reports
+  ok/passed StrongBox/KeyMint plus physical-device attestation before the signer
+  can emit `evidence/signed-evidence.json`. The attestation summary is now a
   closed schema with canonical lowercase SHA-256 hash fields, and it has to
   repeat the slot id, device, OS build, app, challenge, policy,
   attestation-chain path/hash, and StrongBox/KeyMint bindings plus
@@ -732,6 +805,13 @@ and completed history lives in [`status.md`](./status.md).
 	  fsynced temp-file writes with atomic replace and opened-file identity-bound
 	  readback verification capped at 16 MiB,
 	  discovered slot-name rejection/redaction before artifact traversal or summary serialization,
+	  a signed-slot assembler that consumes completed attached-device
+	  attestation, verifier-report, certificate-chain, release APK, D2D handoff,
+	  wallet-integrity, telemetry, queue, status, and runtime-log artifacts,
+	  reads ADB device identity unless explicit overrides are supplied, refuses
+	  existing-slot overwrite, requires signing inputs by default, and leaves
+	  explicitly unsigned staging slots rejected by the production readiness
+	  rollup,
 	  signer-helper rejection
 	  of secret-looking `--slot`, `--output`, and `--signer-key-id` runtime
 	  arguments before metadata reads, standard device-family coverage,
@@ -883,7 +963,12 @@ and completed history lives in [`status.md`](./status.md).
 	  canonical LF line endings, strict UTF-8
 	  bytes, a final LF terminator, and no trailing whitespace, and checks the reported `.vk`,
 	  `.pk`, `.record.norito`, key-artifacts package, and verifier-keys package
-	  sizes and SHA-256 digests against local bytes.
+	  sizes and SHA-256 digests against local bytes. The staged compact-key
+	  runner also writes `recursive-compact-key-staged-run.json`, and the
+	  finalizer applies that runner-report binding for successful exit markers so
+	  the canonical command, exit code, elapsed seconds, generator-log filename,
+	  and generator-log byte count are bound before staged artifacts can be
+	  published.
 	  The proof-log and compact generator-log byte caps are enforced from the
 	  opened file metadata used for hashing and decoding, so readiness does not
 	  trust a separate path-size lookup for replacement log bytes; the checked-in
@@ -906,23 +991,30 @@ and completed history lives in [`status.md`](./status.md).
 		  evidence-helper, and release-bundle JSON writers also reject non-finite
 		  `NaN`/`Infinity` values before creating temporary outputs, and the
 		  evidence-helper validation scratch files now use the same strict JSON
-		  preflight before touching `--artifact-dir`. The readiness guard pins
-		  the evidence helpers' writer-specific strict JSON blocks so validation
-		  scratch-file serialization cannot mask writer drift. The readiness
+		  preflight before touching `--artifact-dir` and report scratch-file
+		  cleanup failures even when the scratch write itself fails. The readiness
+		  guard pins the evidence helpers' writer-specific strict JSON blocks so
+		  validation scratch-file serialization cannot mask writer drift. The readiness
 		  summary writer enforces a 16 MiB `--summary-out` cap before
 		  temporary-file creation, during final opened-file readback, and
-		  reports temporary-file cleanup failures after write errors. The lineage and compact-key
+		  reports temporary-file cleanup failures after write or post-stage
+		  output-validation errors. The lineage and compact-key
 		  evidence helpers also enforce their readiness evidence JSON byte caps
 		  before creating `--out` temporary files and during final opened-file
-		  readback after atomic replacement, and the Android device-lab summary
+		  readback after atomic replacement, and report temporary-file cleanup
+		  failures after output write or post-stage output-validation errors. The Android device-lab summary
 		  writer enforces the 16 MiB JSON cap before creating `--json-out`
 		  temporary files plus during final opened-file readback and reports
-		  temporary-file cleanup failures after write errors. The Android
+		  temporary-file cleanup failures after write or post-stage
+		  output-validation errors. The Android
 		  signed-evidence helper output writer applies the same cleanup failure
 		  reporting to its atomic JSON and manifest text writes, while the
 		  release-bundle writer enforces its 16 MiB manifest cap before
 		  temporary-file creation and during final opened-file readback and
-		  reports temporary-file cleanup failures as structured blockers. Android signed-evidence
+		  reports temporary-file cleanup failures after write or post-stage
+		  output-validation errors as structured blockers. The release-output
+		  writers now fail closed on parent-directory sync failures after atomic
+		  replacement rather than accepting an unsynced directory entry. Android signed-evidence
 		  canonical signature payloads also reject non-finite values before
 		  hashing, signing, or verification.
 	  The Kagemusha release
@@ -1053,7 +1145,11 @@ and completed history lives in [`status.md`](./status.md).
 	  before those rows can move from blocked to ready; those JSON inputs are
 	  also capped at 16 MiB before parsing, while direct `sha256sum.txt` manifests
 	  are capped at 1 MiB using opened-file metadata and streamed byte counts.
-	  Real signed lab evidence is still required before release readiness can pass.
+	  A physical Pixel 6 / Android 16 smoke run now passes the focused
+	  production command with ABI-6/ABI-7 JNI load assertions plus the full
+	  offline-wallet connected suite, but real signed lab evidence and the
+	  remaining Android family matrix are still required before release readiness
+	  can pass.
 	  C/JNI/Node/PyO3 receiver verification rejects malformed compact-token
 	  bindings before returning a soft invalid result. The C bridge now carries a
 	  shape-valid ABI-7 compact-token fixture that returns `valid = 0` while
@@ -2437,7 +2533,10 @@ and completed history lives in [`status.md`](./status.md).
   broader MDR/XSD validation breadth beyond the checked-in live-profile fixture
   corridor, which now covers `pacs.002`, `pacs.004`, `camt.056`, `sese.023`,
   `sese.024`, `sese.025`, and `colr.012` payment, securities, and collateral
-  lifecycle XML. An offline XSD/XML fixture-manifest preflight now pins checked-in
+  lifecycle XML, including official-MDR XSD assertions for
+  profile-advertised `pacs.004.001.09`/`pacs.004.001.10` and
+  `camt.056.001.08`/`camt.056.001.09` return/cancellation variants. An offline
+  XSD/XML fixture-manifest preflight now pins checked-in
 	  schema target namespaces, `Document` payload roots, fixture namespaces, and
 	  reviewed missing-schema exceptions, while requiring schema/fixture identifier
 	  material and schema attribute names to remain printable ASCII before mismatch
@@ -2516,7 +2615,7 @@ and completed history lives in [`status.md`](./status.md).
 			  successful remote response bodies before receipt persistence, redact
 			  failed remote response previews and secret-looking or control-bearing
 			  transport errors, and preflight receipt output
-		  directories/leaves before publication or Torii submission, rejecting
+			  directories/leaves before input loading, publication, or Torii submission, rejecting
 		  control characters, whitespace, leading-dash segments, backslashes,
 		  semicolon parameters, URI/drive prefixes, malformed or smuggled percent escapes, empty segments, dot/parent traversal, symlinked existing
 		  ancestors, hard-linked outputs, or symlinked outputs, and using
@@ -2575,9 +2674,41 @@ and completed history lives in [`status.md`](./status.md).
 			  rail sidecars,
 			  4096-character direct trust-bundle generic string/OID-list, XSD
 			  profile-catalog generic string/list, canary runbook generic
-			  string/list, and evidence replay clean string/list caps before trust
-			  preflight, XSD profile validation, planning, or archive replay, with
+			  string/list, evidence replay clean string/list, and readiness
+			  compact clean string/list caps before trust preflight, XSD profile
+			  validation, planning, archive replay, or final readiness replay, with
 			  embedded trust/profile DER base64 retaining its decoded-size guard,
+			  final-readiness `xsd.repository_fixture_manifest` blockers for
+			  summaries still generated from the checked-in ISO fixture manifest
+			  unless the run is explicitly local diagnostic mode, plus
+			  `xsd.repository_xsd_summary` blockers for archived summary paths
+			  under the checked-in ISO fixture corpus, and
+			  `xsd.repository_profile_catalog` blockers for archived
+			  profile-catalog paths that point back at those fixtures,
+			  evidence/readiness blockers for canary `config_path` values that still
+			  point at checked-in `fixtures/iso20022/operator_canary/` runbook
+			  templates, plus live canary preflight failures for non-plan
+			  config/stage/explicit verifier receipt paths under
+			  `fixtures/iso20022/` and evidence replay failures for executed or
+			  planned child-command path flags that reintroduce those fixtures, plus
+			  direct receipt-verifier and evidence-gate selector failures for
+			  `--receipt` and `--receipt-dir` paths under `fixtures/iso20022/`
+			  before discovery or child verifier launch,
+			  evidence/readiness blockers for compact XSD/evidence/canary/trust
+			  summary paths under repository ISO fixture coordinates,
+			  trust-bundle source-path retention plus evidence/readiness blockers
+			  for compact trust profiles that still point at checked-in
+			  `fixtures/iso20022/trust_bundles/` templates,
+			  rail receipt `source_path` retention plus receipt/evidence/readiness
+			  blockers and adapter preflight failures for checked-in
+			  `fixtures/iso20022/*.xml` payload fixtures,
+			  notary receipt `anchor_path`/`store_dir`/`index_path` retention
+			  plus evidence/readiness replay that binds `latest.notary.json` or
+			  digest-addressed `anchors/<index_sha256>.notary.json` paths,
+			  `messages.index.json` peers, and source stores into direct archive
+			  metadata matching and rejects checked-in `fixtures/iso20022/`
+			  anchor/store/index artifacts, with adapter preflight failures for
+			  checked-in notary anchor/store fixture inputs,
 			  Torii durable-store reload,
 	  audit record filename/message-id bindings, Torii reload clean-string enforcement,
 	  Torii reload filename/message-id binding, symlink-free regular-file-only Torii record
@@ -2645,9 +2776,22 @@ and completed history lives in [`status.md`](./status.md).
 	  accept them as timeouts, byte limits, or evidence age budgets. Those gates
 	  also reject symlinked or
   non-regular canary runbooks, trust bundles, evidence/readiness summaries, XSD
-  manifests, profile catalogs, schema files, and XML fixtures before digest,
-  provenance, or policy checks run, opening those inputs through no-follow file
-  descriptors where available. Direct CLI artifact paths for live rail inbox
+	  manifests, profile catalogs, schema files, and XML fixtures before digest,
+	  provenance, or policy checks run, opening those inputs through no-follow file
+	  descriptors where available. Summary/profile/receipt output paths now also
+	  reject checked-in `fixtures/iso20022/` artifact destinations during
+	  run-level preflight and again before parent creation or temporary output
+	  writes. Production-readiness direct `run(args)` calls now also preflight
+	  XSD summary, evidence summary, and summary-output path smuggling before
+	  input loading while keeping checked-in fixture summary inputs as structured
+	  release blockers; direct XSD/trust verifier `run(args)` calls also
+	  preflight manifest/profile-catalog, bundle, profile-output, and
+	  summary-output path smuggling before manifest or bundle loading, and
+	  direct canary/rail/notary adapter `run(args)` calls mirror their CLI
+	  path-smuggling guards before config, inbox/export, receipt, token, or
+	  network loading. Live rail/notary adapter runs also reject inbox/export
+	  roots under checked-in `fixtures/iso20022/` artifacts before discovery,
+	  fixture parsing, or network delivery. Direct CLI artifact paths for live rail inbox
   roots, live notary export roots, rail/notary bearer-token files, canary
   configs, trust bundles, XSD manifests/profile catalogs, receipt
 	  files/directories, canary/trust summaries, and XSD/evidence summaries reject
@@ -2796,8 +2940,9 @@ and completed history lives in [`status.md`](./status.md).
 		  at least one trust summary records `profile_json_emitted=false`,
 		  revoked-certificate pin
 	  counts, certificate-policy OID counts,
-	  and compact trust-anchor/revoked/CRL/OCSP DER proof digests and byte lengths
-	  for release review, rejects profile-emittable drift and
+	  CRL/OCSP material-class proof, and compact
+	  trust-anchor/revoked/CRL/OCSP DER proof digests, byte lengths, and
+	  cross-role uniqueness for release review, rejects profile-emittable drift and
 	  emitted-but-not-emittable contradictions against the archived trust source
 	  policy,
 	  and the aggregate readiness gate rechecks that proof plus the evidence policy
@@ -2849,6 +2994,7 @@ and completed history lives in [`status.md`](./status.md).
 				  unique, non-overlapping receipt selectors so they become production
 				  blockers instead of malformed executed-evidence claims,
 		  requiring summary digests, rejecting duplicate receipt paths or receipt digests,
+	  rejecting rail/notary source path or source digest replay across canary summaries during evidence verification and across distinct evidence summaries during readiness replay,
 	  rejecting non-canonical compact receipt paths, rejecting duplicate compact
 	  trust profile IDs or bundle digests across trust summaries, rejecting control-bearing or whitespace-padded
   compact identity strings, rejecting non-canonical compact trust profile IDs,
@@ -2877,7 +3023,8 @@ and completed history lives in [`status.md`](./status.md).
 	  empty/non-string archived reviewed reasons in both the XSD preflight and readiness rollup,
 		  rejecting stale missing-schema reasons
 			  on schema-backed archived fixtures, rejecting embedded
-			  non-ASCII characters, overlong source or relative paths, whitespace,
+			  non-ASCII characters, overlong source or relative paths, overlong
+			  archived XML identifiers, whitespace,
 			  leading-dash path segments, semicolon path parameters, URI/drive prefixes,
 			  or malformed/smuggled percent escapes in checked-in XSD source provenance,
 			  rejects omitted checked-in and blocked-source `source` keys separately
@@ -2885,7 +3032,9 @@ and completed history lives in [`status.md`](./status.md).
 		  manifest schema, fixture, fixture schema-reference, and archived
 	  profile-catalog paths during preflight and archived-summary readiness
 	  rechecks, requiring archived summaries to retain the emitted manifest
-	  path and explicit profile-catalog object/null state, requiring
+	  path and explicit profile-catalog object/null state, binding archived schema
+	  namespaces, fixture schema message ids, and fixture payload roots back to
+	  their referenced schemas, requiring
 	  profile-catalog source and embedded JSON
   digest provenance from exactly one active Rust `DEFAULT_PROFILES_JSON`
 	  raw-string declaration plus duplicate-free profile/message/direction/version shape
@@ -2897,7 +3046,7 @@ and completed history lives in [`status.md`](./status.md).
 	  canonical profile ids, ISO family message types, allowed directions, and
   message-definition family binding in consumed summaries, and schema-backed
   proof for advertised concrete message versions, recomputing
-  profile-catalog missing-version lists, and
+  profile-catalog missing-version lists and represented profile-id counts, and
   requiring timezone-aware non-future XSD/evidence/trust verification
   timestamps and ordered canary and non-overlapping per-stage start/finish
   windows for final evidence traceability. Compact stage-window names must

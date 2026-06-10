@@ -366,6 +366,34 @@ class TransactionDraft:
         )
         return self
 
+    def verify_proof(self, proof: Mapping[str, Any]) -> TransactionDraft:
+        """Append a generic `zk::VerifyProof` instruction."""
+
+        if not isinstance(proof, Mapping):
+            raise TypeError("proof must be a mapping")
+        self.add_instruction(Instruction.verify_proof(dict(proof)))
+        return self
+
+    def register_asset_hidden_zk_pool(
+        self,
+        pool_id: str,
+        storage_asset: str,
+        *,
+        asset_set_root: FixedBytesLike,
+        vk_transfer: VerifyingKeyLike,
+    ) -> TransactionDraft:
+        """Append a `RegisterAssetHiddenZkPool` instruction."""
+
+        self.add_instruction(
+            Instruction.register_asset_hidden_zk_pool(
+                _require_non_empty_string(pool_id, "pool_id"),
+                _require_non_empty_string(storage_asset, "storage_asset"),
+                asset_set_root,
+                vk_transfer,
+            )
+        )
+        return self
+
     def register_zk_ace_identity_commitment(
         self,
         asset_definition_id: str,
@@ -526,6 +554,30 @@ class TransactionDraft:
                 list(inputs),
                 dict(proof),
                 outputs=list(outputs or []),
+                root_hint=root_hint,
+            )
+        )
+        return self
+
+    def asset_hidden_zk_transfer_prepared(
+        self,
+        pool_id: str,
+        *,
+        inputs: Iterable[FixedBytesLike],
+        outputs: Iterable[FixedBytesLike],
+        proof: Mapping[str, Any],
+        root_hint: Optional[FixedBytesLike] = None,
+    ) -> TransactionDraft:
+        """Append a prepared `AssetHiddenZkTransfer` instruction."""
+
+        if not isinstance(proof, Mapping):
+            raise TypeError("proof must be a mapping")
+        self.add_instruction(
+            Instruction.asset_hidden_zk_transfer_prepared(
+                _require_non_empty_string(pool_id, "pool_id"),
+                list(inputs),
+                list(outputs),
+                dict(proof),
                 root_hint=root_hint,
             )
         )

@@ -3543,14 +3543,13 @@ def write_summary(path: Path, summary: dict[str, Any]) -> list[dict[str, Any]]:
     try:
         parent_fd = os.open(path.parent, os.O_RDONLY)
     except OSError:
-        parent_fd = None
-    if parent_fd is not None:
-        try:
-            os.fsync(parent_fd)
-        except OSError:
-            pass
-        finally:
-            os.close(parent_fd)
+        return [_summary_out_blocker("--summary-out parent directory could not be synced")]
+    try:
+        os.fsync(parent_fd)
+    except OSError:
+        return [_summary_out_blocker("--summary-out parent directory could not be synced")]
+    finally:
+        os.close(parent_fd)
     errors = validate_summary_output_path(path)
     if errors:
         return errors

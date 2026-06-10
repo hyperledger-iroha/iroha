@@ -1,3 +1,4 @@
+import argparse
 import base64
 import contextlib
 import importlib.util
@@ -335,6 +336,73 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                 self.assertNotIn(raw_path, message)
                 self.assertNotIn(decoded_secret, message)
                 self.assertNotIn("xsd-path-leak", message)
+
+    def test_summary_output_rejects_repository_fixture_artifacts(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            output_path = root / "fixtures" / "iso20022" / "xsd" / "summary.json"
+
+            with self.assertRaisesRegex(
+                VERIFIER.FixtureManifestError,
+                "output path must not point to checked-in ISO fixture artifacts",
+            ):
+                VERIFIER._write_text_output(output_path, "{}\n")
+
+            self.assertFalse((root / "fixtures").exists())
+            with self.assertRaisesRegex(
+                VERIFIER.FixtureManifestError,
+                "output path must not point to checked-in ISO fixture artifacts",
+            ):
+                VERIFIER._reject_repository_output_path(
+                    Path("fixtures/iso20022/xsd/summary.json"),
+                    "output path",
+                )
+
+    def test_summary_output_rejects_repository_fixture_before_manifest_loading(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            output_path = root / "fixtures" / "iso20022" / "xsd" / "summary.json"
+
+            rc, stdout, stderr = run_verify(
+                [
+                    "--manifest",
+                    str(root / "missing-manifest.json"),
+                    "--summary-out",
+                    str(output_path),
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn(
+                "output path must not point to checked-in ISO fixture artifacts",
+                stderr,
+            )
+            self.assertNotIn("does not exist", stderr)
+            self.assertFalse((root / "fixtures").exists())
+
+    def test_profile_catalog_rejects_repository_fixture_before_manifest_loading(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            profile_catalog = root / "fixtures" / "iso20022" / "profiles.rs"
+
+            rc, stdout, stderr = run_verify(
+                [
+                    "--manifest",
+                    str(root / "missing-manifest.json"),
+                    "--profile-catalog",
+                    str(profile_catalog),
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn(
+                "--profile-catalog must not point to checked-in ISO fixture artifacts",
+                stderr,
+            )
+            self.assertNotIn("does not exist", stderr)
+            self.assertFalse((root / "fixtures").exists())
 
     def test_local_path_validators_reject_percent_encoded_smuggling(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -1362,6 +1430,56 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertEqual(stdout, "")
                     self.assertIn(message, stderr)
+
+    def test_direct_run_paths_reject_smuggling_before_manifest_loading(self):
+        def args_for(root, **overrides):
+            values = {
+                "manifest": root / "missing-manifest.json",
+                "summary_out": root / "xsd.summary.json",
+                "require_schema_backed_fixtures": False,
+                "require_fixture_for_schema": False,
+                "profile_catalog": None,
+                "require_profile_schema_backed_versions": False,
+                "validate_xml_schema": False,
+                "xmllint_timeout_secs": VERIFIER.DEFAULT_XMLLINT_TIMEOUT_SECS,
+            }
+            values.update(overrides)
+            return argparse.Namespace(**values)
+
+        cases = (
+            (
+                "manifest whitespace",
+                lambda root: args_for(root, manifest=root / "fixture manifest.json"),
+                "--manifest must not contain whitespace",
+            ),
+            (
+                "catalog parent",
+                lambda root: args_for(
+                    root,
+                    profile_catalog=root / "nested" / ".." / "profiles.rs",
+                ),
+                "--profile-catalog must not contain dot or parent segments",
+            ),
+            (
+                "output leading dash",
+                lambda root: args_for(
+                    root,
+                    summary_out=root / "nested" / "-xsd.summary.json",
+                ),
+                "output path must not contain leading-dash path segments",
+            ),
+        )
+        for name, make_args, message in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+
+                    with self.assertRaises(VERIFIER.FixtureManifestError) as caught:
+                        VERIFIER.run(make_args(root))
+
+                    error = str(caught.exception)
+                    self.assertIn(message, error)
+                    self.assertNotIn("does not exist", error)
 
     def test_symlinked_manifest_ancestor_is_rejected_before_summary(self):
         with tempfile.TemporaryDirectory() as raw_root:

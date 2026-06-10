@@ -114,6 +114,64 @@ struct ParsedPublicAssetLiteral {
     let dataspaceId: UInt64?
 }
 
+public enum OfflineNoteV2Decoding {
+    public static func decodeCertificatePayload(_ data: Data) throws -> OfflineNoteKeyCertificatePayloadV2 {
+        try OfflineNoteDecoding.decodeKeyCertificatePayloadV2(data)
+    }
+
+    public static func decodeKeyCertificatePayload(_ data: Data) throws -> OfflineNoteKeyCertificatePayloadV2 {
+        try decodeCertificatePayload(data)
+    }
+
+    public static func decodeCertificate(_ data: Data) throws -> OfflineNoteKeyCertificateV2 {
+        try OfflineNoteDecoding.decodeKeyCertificateV2(data)
+    }
+
+    public static func decodeIssue(_ data: Data) throws -> OfflineNoteIssueV2 {
+        try OfflineNoteDecoding.decodeIssueV2(data)
+    }
+
+    public static func decodeIssuedClaim(_ data: Data) throws -> OfflineNoteIssuedClaimV2 {
+        try OfflineNoteDecoding.decodeIssuedClaimV2(data)
+    }
+
+    public static func decodeAuditOutputClaim(_ data: Data) throws -> OfflineNoteAuditOutputClaimV2 {
+        try OfflineNoteDecoding.decodeAuditOutputClaimV2(data)
+    }
+
+    public static func decodeRecursiveProof(_ data: Data) throws -> OfflineNoteRecursiveProofV2 {
+        try OfflineNoteDecoding.decodeRecursiveProofV2(data)
+    }
+
+    public static func decodeRedeem(_ data: Data) throws -> OfflineNoteRedeemV2 {
+        try OfflineNoteDecoding.decodeRedeemV2(data)
+    }
+
+    public static func decodeRedeemPublicInputs(_ data: Data) throws -> OfflineNoteRedeemPublicInputsV2 {
+        try OfflineNoteDecoding.decodeRedeemPublicInputsV2(data)
+    }
+
+    public static func decodeAudit(_ data: Data) throws -> OfflineNoteAuditBundleV2 {
+        try OfflineNoteDecoding.decodeAuditV2(data)
+    }
+
+    public static func decodeAuditPublicInputs(_ data: Data) throws -> OfflineNoteAuditPublicInputsV2 {
+        try OfflineNoteDecoding.decodeAuditPublicInputsV2(data)
+    }
+
+    public static func decodeIssueInstruction(_ data: Data) throws -> OfflineNoteIssueV2 {
+        try OfflineNoteDecoding.decodeIssueInstructionV2(data)
+    }
+
+    public static func decodeRedeemInstruction(_ data: Data) throws -> OfflineNoteRedeemV2 {
+        try OfflineNoteDecoding.decodeRedeemInstructionV2(data)
+    }
+
+    public static func decodeAuditInstruction(_ data: Data) throws -> OfflineNoteAuditBundleV2 {
+        try OfflineNoteDecoding.decodeAuditInstructionV2(data)
+    }
+}
+
 public enum OfflineNoteDecoding {
     public static func decodeKeyCertificatePayload(_ data: Data) throws -> OfflineNoteKeyCertificatePayload {
         try decodePayload(data, typeName: OfflineNoteTypeNames.keyCertificatePayload) { reader in
@@ -190,6 +248,112 @@ public enum OfflineNoteDecoding {
                 outputClaims: readField(&reader) { child in try readVec(&child, decodeIssuedClaimFields) }
             )
         }
+    }
+
+    public static func decodeKeyCertificatePayloadV2(_ data: Data) throws -> OfflineNoteKeyCertificatePayloadV2 {
+        try decodePayload(data, typeName: OfflineNoteV2TypeNames.keyCertificatePayload) { reader in
+            try decodeKeyCertificatePayloadV2Fields(&reader)
+        }
+    }
+
+    public static func decodeKeyCertificateV2(_ data: Data) throws -> OfflineNoteKeyCertificateV2 {
+        try decodePayload(data, typeName: OfflineNoteV2TypeNames.keyCertificate) { reader in
+            try decodeKeyCertificateV2Fields(&reader)
+        }
+    }
+
+    public static func decodeIssueV2(_ data: Data) throws -> OfflineNoteIssueV2 {
+        try decodePayload(data, typeName: OfflineNoteV2TypeNames.issue, decode: decodeIssueV2Fields)
+    }
+
+    public static func decodeIssuedClaimV2(_ data: Data) throws -> OfflineNoteIssuedClaimV2 {
+        try decodePayload(data, typeName: OfflineNoteV2TypeNames.issuedClaim, decode: decodeIssuedClaimV2Fields)
+    }
+
+    public static func decodeAuditOutputClaimV2(_ data: Data) throws -> OfflineNoteAuditOutputClaimV2 {
+        try decodePayload(data, typeName: OfflineNoteV2TypeNames.auditOutputClaim, decode: decodeAuditOutputClaimV2Fields)
+    }
+
+    public static func decodeRecursiveProofV2(_ data: Data) throws -> OfflineNoteRecursiveProofV2 {
+        try decodePayload(data, typeName: OfflineNoteV2TypeNames.recursiveProof, decode: decodeRecursiveProofV2Fields)
+    }
+
+    public static func decodeRedeemV2(_ data: Data) throws -> OfflineNoteRedeemV2 {
+        try decodePayload(data, typeName: OfflineNoteV2TypeNames.redeem, decode: decodeRedeemV2Fields)
+    }
+
+    public static func decodeRedeemPublicInputsV2(_ data: Data) throws -> OfflineNoteRedeemPublicInputsV2 {
+        try decodePayload(data, typeName: OfflineNoteV2TypeNames.redeemPublicInputs) { reader in
+            try OfflineNoteRedeemPublicInputsV2(
+                domain: readField(&reader, readString),
+                sourceNoteCommitment: readField(&reader) { child in
+                    try readHashV2(&child, field: "source_note_commitment")
+                },
+                inputNullifiers: readField(&reader) { child in
+                    try readVec(&child) { element in try readHashV2(&element, field: "input_nullifier") }
+                },
+                keyCertificatePayloadHash: readField(&reader) { child in
+                    try readHashV2(&child, field: "key_certificate_payload_hash")
+                },
+                recipient: readField(&reader, readAccountId),
+                assetId: readField(&reader, readAssetId),
+                amount: readField(&reader, readNumeric)
+            )
+        }
+    }
+
+    public static func decodeAuditV2(_ data: Data) throws -> OfflineNoteAuditBundleV2 {
+        try decodePayload(data, typeName: OfflineNoteV2TypeNames.audit, decode: decodeAuditV2Fields)
+    }
+
+    public static func decodeAuditPublicInputsV2(_ data: Data) throws -> OfflineNoteAuditPublicInputsV2 {
+        try decodePayload(data, typeName: OfflineNoteV2TypeNames.auditPublicInputs) { reader in
+            try OfflineNoteAuditPublicInputsV2(
+                domain: readField(&reader, readString),
+                tokenId: readField(&reader) { child in try readHashV2(&child, field: "token_id") },
+                keyCertificatePayloadHash: readField(&reader) { child in
+                    try readHashV2(&child, field: "key_certificate_payload_hash")
+                },
+                inputNullifiers: readField(&reader) { child in
+                    try readVec(&child) { element in try readHashV2(&element, field: "input_nullifier") }
+                },
+                inputClaims: readField(&reader) { child in try readVec(&child, decodeIssuedClaimV2Fields) },
+                outputCommitments: readField(&reader) { child in
+                    try readVec(&child) { element in try readHashV2(&element, field: "output_commitment") }
+                },
+                outputClaims: readField(&reader) { child in try readVec(&child, decodeIssuedClaimV2Fields) }
+            )
+        }
+    }
+
+    public static func decodeIssueInstructionV2(_ data: Data) throws -> OfflineNoteIssueV2 {
+        try decodeInstructionModel(
+            data,
+            instructionTypeName: OfflineNoteV2TypeNames.issueInstruction,
+            compatibleInstructionTypeNames: [OfflineNoteV2TypeNames.issueInstructionAlias],
+            decodeHeader: decodeIssueV2,
+            decodeBare: decodeIssueV2Fields
+        )
+    }
+
+    public static func decodeRedeemInstructionV2(_ data: Data) throws -> OfflineNoteRedeemV2 {
+        try decodeInstructionModel(
+            data,
+            instructionTypeName: OfflineNoteV2TypeNames.redeemInstruction,
+            compatibleInstructionTypeNames: [OfflineNoteV2TypeNames.redeemInstructionAlias],
+            decodeHeader: decodeRedeemV2,
+            decodeBare: decodeRedeemV2Fields
+        )
+    }
+
+    public static func decodeAuditInstructionV2(_ data: Data) throws -> OfflineNoteAuditBundleV2 {
+        try decodeInstructionModel(
+            data,
+            instructionTypeName: OfflineNoteV2TypeNames.auditInstruction,
+            compatibleInstructionTypeNames: [OfflineNoteV2TypeNames.auditInstructionAlias],
+            decodeHeader: decodeAuditV2,
+            decodeBare: decodeAuditV2Fields
+        )
     }
 
     public static func decodeNoteCommitmentPreimage(_ data: Data) throws -> OfflineNoteCommitmentPreimage {
@@ -296,11 +460,13 @@ public enum OfflineNoteDecoding {
     private static func decodeInstructionModel<T>(
         _ data: Data,
         instructionTypeName: String,
+        compatibleInstructionTypeNames: [String] = [],
         decodeHeader: (Data) throws -> T,
         decodeBare: (inout OfflineNoritoReader) throws -> T
     ) throws -> T {
-        let wirePayload = try extractInstructionWirePayload(data, expectedWireName: instructionTypeName)
-        let modelPayload = try decodeInstructionWrapper(wirePayload, typeName: instructionTypeName)
+        let instructionTypeNames = [instructionTypeName] + compatibleInstructionTypeNames
+        let wirePayload = try extractInstructionWirePayload(data, expectedWireNames: instructionTypeNames)
+        let modelPayload = try decodeInstructionWrapper(wirePayload, typeNames: instructionTypeNames)
         if isNoritoFrame(modelPayload) {
             return try decodeHeader(modelPayload)
         }
@@ -310,14 +476,14 @@ public enum OfflineNoteDecoding {
         return value
     }
 
-    private static func extractInstructionWirePayload(_ data: Data, expectedWireName: String) throws -> Data {
+    private static func extractInstructionWirePayload(_ data: Data, expectedWireNames: [String]) throws -> Data {
         if isNoritoFrame(data) {
             return data
         }
-        if let payload = tryDecodeInstructionPair(data, expectedWireName: expectedWireName, compact: true) {
+        if let payload = tryDecodeInstructionPair(data, expectedWireNames: expectedWireNames, compact: true) {
             return payload
         }
-        if let payload = tryDecodeInstructionPair(data, expectedWireName: expectedWireName, compact: false) {
+        if let payload = tryDecodeInstructionPair(data, expectedWireNames: expectedWireNames, compact: false) {
             return payload
         }
         throw OfflineNoritoDecodingError.invalidField("invalid instruction envelope")
@@ -325,7 +491,7 @@ public enum OfflineNoteDecoding {
 
     private static func tryDecodeInstructionPair(
         _ data: Data,
-        expectedWireName: String,
+        expectedWireNames: [String],
         compact: Bool
     ) -> Data? {
         do {
@@ -333,7 +499,7 @@ public enum OfflineNoteDecoding {
             let wireName = try readFramedField(&reader, compact: compact) { child in
                 try readString(&child, compact: compact)
             }
-            guard wireName == expectedWireName else { return nil }
+            guard expectedWireNames.contains(wireName) else { return nil }
             let payload = try readFramedField(&reader, compact: compact) { child in
                 try readBytesVec(&child)
             }
@@ -344,11 +510,11 @@ public enum OfflineNoteDecoding {
         }
     }
 
-    private static func decodeInstructionWrapper(_ data: Data, typeName: String) throws -> Data {
+    private static func decodeInstructionWrapper(_ data: Data, typeNames: [String]) throws -> Data {
         guard let frame = noritoDecodeFrame(data) else {
             throw OfflineNoritoDecodingError.invalidField("invalid instruction Norito frame")
         }
-        guard frame.header.schema == noritoSchemaHash(forTypeName: typeName) else {
+        guard typeNames.contains(where: { frame.header.schema == noritoSchemaHash(forTypeName: $0) }) else {
             throw OfflineNoritoDecodingError.invalidField("instruction schema hash mismatch")
         }
         guard frame.header.compression == .none else {
@@ -468,6 +634,118 @@ public enum OfflineNoteDecoding {
         )
     }
 
+    private static func decodeKeyCertificatePayloadV2Fields(
+        _ reader: inout OfflineNoritoReader
+    ) throws -> OfflineNoteKeyCertificatePayloadV2 {
+        try OfflineNoteKeyCertificatePayloadV2(
+            domain: readField(&reader, readString),
+            version: readField(&reader) { try $0.readUInt16LE() },
+            platform: readField(&reader, readString),
+            keyId: readField(&reader, readString),
+            deviceId: readField(&reader, readString),
+            accountId: readField(&reader, readAccountId),
+            publicKey: readField(&reader, readBytesVec),
+            assertionScheme: readField(&reader, readString),
+            assertionKeyAlgorithm: readField(&reader, readString),
+            assertionPublicKey: readField(&reader, readBytesVec),
+            assertionUsageCountLimit: readField(&reader, readOptionUInt32),
+            oneUse: readField(&reader, readBool)
+        )
+    }
+
+    private static func decodeKeyCertificateV2Fields(
+        _ reader: inout OfflineNoritoReader
+    ) throws -> OfflineNoteKeyCertificateV2 {
+        try OfflineNoteKeyCertificateV2(
+            version: readField(&reader) { try $0.readUInt16LE() },
+            platform: readField(&reader, readString),
+            keyId: readField(&reader, readString),
+            deviceId: readField(&reader, readString),
+            accountId: readField(&reader, readAccountId),
+            publicKey: readField(&reader, readBytesVec),
+            assertionScheme: readField(&reader, readString),
+            assertionKeyAlgorithm: readField(&reader, readString),
+            assertionPublicKey: readField(&reader, readBytesVec),
+            assertionUsageCountLimit: readField(&reader, readOptionUInt32),
+            oneUse: readField(&reader, readBool),
+            issuerSignature: readField(&reader, readConstVec)
+        )
+    }
+
+    private static func decodeIssueV2Fields(_ reader: inout OfflineNoritoReader) throws -> OfflineNoteIssueV2 {
+        try OfflineNoteIssueV2(
+            noteCommitment: readField(&reader) { child in try readHashV2(&child, field: "note_commitment") },
+            keyCertificate: readField(&reader, decodeKeyCertificateV2Fields),
+            assetId: readField(&reader, readAssetId),
+            amount: readField(&reader, readNumeric)
+        )
+    }
+
+    private static func decodeIssuedClaimV2Fields(
+        _ reader: inout OfflineNoritoReader
+    ) throws -> OfflineNoteIssuedClaimV2 {
+        try OfflineNoteIssuedClaimV2(
+            domain: readField(&reader, readString),
+            noteCommitment: readField(&reader) { child in try readHashV2(&child, field: "note_commitment") },
+            keyCertificatePayloadHash: readField(&reader) { child in
+                try readHashV2(&child, field: "key_certificate_payload_hash")
+            },
+            assetId: readField(&reader, readAssetId),
+            amount: readField(&reader, readNumeric)
+        )
+    }
+
+    private static func decodeAuditOutputClaimV2Fields(
+        _ reader: inout OfflineNoritoReader
+    ) throws -> OfflineNoteAuditOutputClaimV2 {
+        try OfflineNoteAuditOutputClaimV2(
+            noteCommitment: readField(&reader) { child in try readHashV2(&child, field: "note_commitment") },
+            keyCertificate: readField(&reader, decodeKeyCertificateV2Fields),
+            assetId: readField(&reader, readAssetId),
+            amount: readField(&reader, readNumeric)
+        )
+    }
+
+    private static func decodeRecursiveProofV2Fields(
+        _ reader: inout OfflineNoritoReader
+    ) throws -> OfflineNoteRecursiveProofV2 {
+        try OfflineNoteRecursiveProofV2(
+            verifierKeyId: readField(&reader, readVerifyingKeyId),
+            publicInputsHash: readField(&reader) { child in try readHashV2(&child, field: "public_inputs_hash") },
+            proof: readField(&reader, readProofBoxV2)
+        )
+    }
+
+    private static func decodeRedeemV2Fields(_ reader: inout OfflineNoritoReader) throws -> OfflineNoteRedeemV2 {
+        try OfflineNoteRedeemV2(
+            sourceNoteCommitment: readField(&reader) { child in try readHashV2(&child, field: "source_note_commitment") },
+            inputNullifiers: readField(&reader) { child in
+                try readVec(&child) { element in try readHashV2(&element, field: "input_nullifier") }
+            },
+            senderKeyCertificate: readField(&reader, decodeKeyCertificateV2Fields),
+            recipient: readField(&reader, readAccountId),
+            assetId: readField(&reader, readAssetId),
+            amount: readField(&reader, readNumeric),
+            recursiveProof: readField(&reader, decodeRecursiveProofV2Fields)
+        )
+    }
+
+    private static func decodeAuditV2Fields(_ reader: inout OfflineNoritoReader) throws -> OfflineNoteAuditBundleV2 {
+        try OfflineNoteAuditBundleV2(
+            tokenId: readField(&reader) { child in try readHashV2(&child, field: "token_id") },
+            senderKeyCertificate: readField(&reader, decodeKeyCertificateV2Fields),
+            inputNullifiers: readField(&reader) { child in
+                try readVec(&child) { element in try readHashV2(&element, field: "input_nullifier") }
+            },
+            inputClaims: readField(&reader) { child in try readVec(&child, decodeIssuedClaimV2Fields) },
+            outputCommitments: readField(&reader) { child in
+                try readVec(&child) { element in try readHashV2(&element, field: "output_commitment") }
+            },
+            outputClaims: readField(&reader) { child in try readVec(&child, decodeAuditOutputClaimV2Fields) },
+            recursiveProof: readField(&reader, decodeRecursiveProofV2Fields)
+        )
+    }
+
     private static func readField<T>(
         _ reader: inout OfflineNoritoReader,
         _ decode: (inout OfflineNoritoReader) throws -> T
@@ -569,6 +847,12 @@ public enum OfflineNoteDecoding {
         return bytes
     }
 
+    private static func readHashV2(_ reader: inout OfflineNoritoReader, field: String) throws -> Data {
+        let bytes = try reader.readBytes(32)
+        try OfflineNoteV2Validation.validateHash(bytes, field: field)
+        return bytes
+    }
+
     private static func readVerifyingKeyId(_ reader: inout OfflineNoritoReader) throws -> VerifyingKeyIdReference {
         try VerifyingKeyIdReference(
             backend: readField(&reader, readString),
@@ -578,6 +862,13 @@ public enum OfflineNoteDecoding {
 
     private static func readProofBox(_ reader: inout OfflineNoritoReader) throws -> OfflineNoteProofBox {
         try OfflineNoteProofBox(
+            backend: readField(&reader, readString),
+            bytes: readField(&reader, readBytesVec)
+        )
+    }
+
+    private static func readProofBoxV2(_ reader: inout OfflineNoritoReader) throws -> OfflineNoteProofBoxV2 {
+        try OfflineNoteProofBoxV2(
             backend: readField(&reader, readString),
             bytes: readField(&reader, readBytesVec)
         )

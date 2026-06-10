@@ -62,7 +62,7 @@ const PYTHON_PRIVACY_CATALOG = fileURLToPath(
 );
 
 const EXPECTED_CONTRACT = Object.freeze({
-  requiredBridgeAbiVersion: 6,
+  requiredBridgeAbiVersion: 7,
   ffiVersionV1: 1,
   statusError: 1,
   errorNullPointer: 1,
@@ -76,6 +76,7 @@ const LEGACY_PRIVACY_MALFORMED_AVAILABILITY_PROBE_ARCHIVE =
 const EXPECTED_PRIVACY_NATIVE_ARCHIVE_MAX_BYTES = 64 * 1024 * 1024;
 const EXPECTED_PRIVACY_C_FFI_SYMBOLS = Object.freeze([
   "iroha_privacy_capabilities_v1",
+  "iroha_privacy_proof_request_v1",
   "iroha_privacy_build_proof_v1",
   "iroha_privacy_verify_proof_v1",
   "iroha_privacy_free_buffer",
@@ -166,6 +167,7 @@ const REQUIRED_PRIVACY_HEADER_NEGATIVE_CONTROL_MODES = Object.freeze([
 const EXPECTED_PRIVACY_JNI_METHODS = Object.freeze([
   "nativeBridgeAbiVersion",
   "nativeCapabilities",
+  "nativeProofRequest",
   "nativeBuildProof",
   "nativeVerifyProof",
 ]);
@@ -373,38 +375,51 @@ const EXPECTED_JAVA_PRIVACY_CAPABILITY_FIELDS = Object.freeze([
 const EXPECTED_SWIFT_PRIVACY_BRIDGE_METHODS = Object.freeze([
   "privacyCapabilities",
   "capabilitiesV1",
+  "privacyProofRequestV1",
   "buildProofV1",
   "buildConfidentialTransferProofV2",
   "buildConfidentialUnshieldProofV3",
+  "buildZkAceAuthorizationProofV1",
   "verifyProofV1",
 ]);
 const EXPECTED_JAVA_PRIVACY_BRIDGE_METHODS = Object.freeze([
   "isNativeAvailable",
   "privacyCapabilities",
   "capabilitiesArchive",
+  "privacyProofRequestV1",
+  "privacyProofRequestV1",
   "buildProof",
   "buildConfidentialTransferProofV2",
   "buildConfidentialUnshieldProofV3",
+  "buildZkAceAuthorizationProofV1",
   "verifyProof",
 ]);
 const EXPECTED_KOTLIN_PRIVACY_BRIDGE_METHODS = Object.freeze([
   "isNativeAvailable",
   "privacyCapabilities",
   "capabilitiesArchive",
+  "privacyProofRequestV1",
   "buildProof",
   "buildConfidentialTransferProofV2",
   "buildConfidentialUnshieldProofV3",
+  "buildZkAceAuthorizationProofV1",
   "verifyProof",
 ]);
 const EXPECTED_CSHARP_PRIVACY_BRIDGE_METHODS = Object.freeze([
   "IsAvailable",
   "GetPrivacyCapabilities",
   "CapabilitiesV1",
+  "privacyProofRequestV1",
+  "privacyProofRequestV1",
+  "PrivacyProofRequestV1",
+  "PrivacyProofRequestV1",
   "BuildProofV1",
   "buildConfidentialTransferProofV2",
   "BuildConfidentialTransferProofV2",
   "buildConfidentialUnshieldProofV3",
   "BuildConfidentialUnshieldProofV3",
+  "buildZkAceAuthorizationProofV1",
+  "BuildZkAceAuthorizationProofV1",
   "VerifyProofV1",
 ]);
 
@@ -1365,6 +1380,12 @@ test("privacy FFI public symbol names stay stable across native bindings", () =>
   );
   assertRustNoMangleExport(
     connectBridge,
+    "iroha_privacy_proof_request_v1",
+    'unsafe\\s+extern\\s+"C"\\s+fn',
+    "connect_norito_bridge",
+  );
+  assertRustNoMangleExport(
+    connectBridge,
     "iroha_privacy_build_proof_v1",
     'unsafe\\s+extern\\s+"C"\\s+fn',
     "connect_norito_bridge",
@@ -1430,10 +1451,12 @@ test("privacy FFI public symbol names stay stable across native bindings", () =>
   }
   assert.match(javaBridge, /private\s+static\s+native\s+int\s+nativeBridgeAbiVersion\(\);/);
   assert.match(javaBridge, /private\s+static\s+native\s+byte\[\]\s+nativeCapabilities\(\);/);
+  assert.match(javaBridge, /private\s+static\s+native\s+byte\[\]\s+nativeProofRequest\(\s*byte\[\]\s+algorithmId,\s*byte\[\]\s+entrypoint,\s*byte\[\]\s+vkRef,\s*byte\[\]\s+publicInputs,\s*byte\[\]\s+witness,\s*byte\[\]\s+proof\s*\);/);
   assert.match(javaBridge, /private\s+static\s+native\s+byte\[\]\s+nativeBuildProof\(byte\[\]\s+requestArchive\);/);
   assert.match(javaBridge, /private\s+static\s+native\s+byte\[\]\s+nativeVerifyProof\(byte\[\]\s+requestArchive\);/);
   assert.match(kotlinBridge, /private\s+external\s+fun\s+nativeBridgeAbiVersion\(\):\s+Int/);
   assert.match(kotlinBridge, /private\s+external\s+fun\s+nativeCapabilities\(\):\s+ByteArray\?/);
+  assert.match(kotlinBridge, /private\s+external\s+fun\s+nativeProofRequest\(\s*algorithmId:\s+ByteArray,\s*entrypoint:\s+ByteArray,\s*vkRef:\s+ByteArray,\s*publicInputs:\s+ByteArray,\s*witness:\s+ByteArray,\s*proof:\s+ByteArray,\s*\):\s+ByteArray\?/);
   assert.match(kotlinBridge, /private\s+external\s+fun\s+nativeBuildProof\(requestArchive:\s+ByteArray\):\s+ByteArray\?/);
   assert.match(kotlinBridge, /private\s+external\s+fun\s+nativeVerifyProof\(requestArchive:\s+ByteArray\):\s+ByteArray\?/);
 });
@@ -1470,7 +1493,7 @@ test("SDK privacy native bridges expose generic archive operations and typed pro
   assert.deepEqual(
     namesFromMatches(
       kotlinBridge,
-      /@JvmStatic\s*\n\s*fun\s+([A-Za-z][A-Za-z0-9_]*)\s*\(/g,
+      /@JvmStatic(?:\s*\n\s*@[A-Za-z][A-Za-z0-9_]*)*\s*\n\s*fun\s+([A-Za-z][A-Za-z0-9_]*)\s*\(/g,
     ),
     EXPECTED_KOTLIN_PRIVACY_BRIDGE_METHODS,
     "Kotlin/JVM PrivacyNativeBridge public methods drifted",
@@ -2254,7 +2277,12 @@ test("native privacy FFI capabilities accept internal evidence while defaulting 
     );
     assert.match(
       text,
-      /struct\s+PrivacyProductionEvidenceRowV1[\s\S]*algorithm_id:\s*&'static str[\s\S]*chain_id:\s*&'static str[\s\S]*reviewer_identity:\s*&'static str[\s\S]*review_artifact_hash:\s*&'static str[\s\S]*review_artifact_signature:\s*&'static str[\s\S]*verifier_key_id:\s*&'static str[\s\S]*proof_family:\s*&'static str[\s\S]*public_inputs_schema:\s*Option<&'static str>[\s\S]*sdk_entrypoints:\s*Vec<&'static str>[\s\S]*required_state:\s*Vec<&'static str>[\s\S]*localnet_acceptance:\s*PrivacyProductionLocalnetEvidenceV1[\s\S]*gate_evidence:\s*Vec<PrivacyProductionGateEvidenceV1>/,
+      /const\s+PRIVACY_PRODUCTION_SDK_EXPORT_SURFACES:\s*&\[&str\]\s*=\s*&\[[\s\S]*"rust_core"[\s\S]*"ffi"[\s\S]*"python"[\s\S]*"javascript"[\s\S]*"java_android"[\s\S]*"kotlin"[\s\S]*"swift"[\s\S]*"csharp"[\s\S]*\][\s\S]*const\s+PRIVACY_PRODUCTION_SDK_PARITY_ARTIFACT_KINDS:\s*&\[&str\]\s*=\s*&\[[\s\S]*"types"[\s\S]*"validation_rules"[\s\S]*"error_codes"[\s\S]*"golden_vectors"[\s\S]*\]/,
+      `${label} must pin the production SDK export and parity artifact surfaces`,
+    );
+    assert.match(
+      text,
+      /struct\s+PrivacyProductionSdkExportV1[\s\S]*surface:\s*&'static str[\s\S]*entrypoints:\s*Vec<&'static str>[\s\S]*struct\s+PrivacyProductionSdkParityArtifactV1[\s\S]*kind:\s*&'static str[\s\S]*surface:\s*&'static str[\s\S]*artifact_hash:\s*&'static str[\s\S]*struct\s+PrivacyProductionEvidenceRowV1[\s\S]*algorithm_id:\s*&'static str[\s\S]*chain_id:\s*&'static str[\s\S]*reviewer_identity:\s*&'static str[\s\S]*review_artifact_hash:\s*&'static str[\s\S]*review_artifact_signature:\s*&'static str[\s\S]*verifier_key_id:\s*&'static str[\s\S]*proof_family:\s*&'static str[\s\S]*public_inputs_schema:\s*Option<&'static str>[\s\S]*sdk_entrypoints:\s*Vec<&'static str>[\s\S]*sdk_exports:\s*Vec<PrivacyProductionSdkExportV1>[\s\S]*sdk_parity_artifacts:\s*Vec<PrivacyProductionSdkParityArtifactV1>[\s\S]*required_state:\s*Vec<&'static str>[\s\S]*localnet_acceptance:\s*PrivacyProductionLocalnetEvidenceV1[\s\S]*gate_evidence:\s*Vec<PrivacyProductionGateEvidenceV1>/,
       `${label} must model complete internal production evidence rows`,
     );
     assert.match(
@@ -2389,7 +2417,7 @@ test("native privacy FFI capabilities accept internal evidence while defaulting 
     );
     assert.match(
       text,
-      /privacy_production_evidence_rejects_adversarial_zk_ace_bindings[\s\S]*wrong chain[\s\S]*mock chain marker[\s\S]*wrong verifier key[\s\S]*mutated public input schema[\s\S]*dev fixture entrypoint[\s\S]*local verifier entrypoint[\s\S]*three-peer localnet downgrade[\s\S]*replay acceptance[\s\S]*restart replay acceptance[\s\S]*bad review artifact hash[\s\S]*unsigned review artifact[\s\S]*missing required state/,
+      /privacy_production_evidence_rejects_adversarial_zk_ace_bindings[\s\S]*wrong chain[\s\S]*mock chain marker[\s\S]*wrong verifier key[\s\S]*mutated public input schema[\s\S]*dev fixture entrypoint[\s\S]*local verifier entrypoint[\s\S]*missing SDK export surface[\s\S]*mismatched SDK export entrypoint[\s\S]*dev fixture SDK export[\s\S]*missing SDK parity artifact[\s\S]*wrong SDK parity artifact kind[\s\S]*bad SDK parity artifact hash[\s\S]*three-peer localnet downgrade[\s\S]*replay acceptance[\s\S]*restart replay acceptance[\s\S]*bad review artifact hash[\s\S]*unsigned review artifact[\s\S]*missing required state/,
       `${label} must test adversarial ZK-ACE production evidence rejection`,
     );
     assert.match(
@@ -2561,8 +2589,13 @@ test("native privacy FFI hosts reject verifier-key backend drift before producti
     );
     assert.match(
       text,
-      /!privacy_vk_ref_is_well_formed\(&request\.vk_ref\)[\s\S]*None[\s\S]*let\s+Some\(entry\)\s*=\s*privacy_algorithm_entry\(&request\.algorithm_id\)/,
-      `${label} must validate vk_ref shape before catalog lookup and entrypoint binding`,
+      /let\s+known_entry\s*=\s*privacy_algorithm_entry\(&request\.algorithm_id\)[\s\S]*privacy_entrypoint_planned\(entry,\s*&request\.entrypoint\)[\s\S]*privacy_failure_result_without_vk_ref/,
+      `${label} must classify planned entrypoints before verifier-key validation without reflecting vk_ref`,
+    );
+    assert.match(
+      text,
+      /!privacy_vk_ref_is_well_formed\(&request\.vk_ref\)[\s\S]*None[\s\S]*let\s+Some\(entry\)\s*=\s*known_entry/,
+      `${label} must reject malformed vk_ref before unsupported-algorithm fallback and entrypoint binding`,
     );
     assert.match(
       text,
@@ -2576,8 +2609,8 @@ test("native privacy FFI hosts reject verifier-key backend drift before producti
     );
     assert.match(
       text,
-      /privacy_proof_ffi_rejects_malformed_vk_ref_before_catalog_binding_without_reflection[\s\S]*vk-ref-order-never-echo[\s\S]*unsupported-algorithm[\s\S]*planned-entrypoint[\s\S]*unregistered-entrypoint[\s\S]*non-proof-entrypoint[\s\S]*backend:name/,
-      `${label} must test malformed vk_ref rejection before catalog and entrypoint binding`,
+      /privacy_proof_ffi_rejects_malformed_vk_ref_before_catalog_binding_without_reflection[\s\S]*vk-ref-order-never-echo[\s\S]*unsupported-algorithm[\s\S]*planned-entrypoint[\s\S]*unregistered-entrypoint[\s\S]*non-proof-entrypoint[\s\S]*if\s+case\s*==\s*"planned-entrypoint"[\s\S]*message\.contains\("planned"\)[\s\S]*vk_ref\.is_empty\(\)[\s\S]*backend:name/,
+      `${label} must test malformed vk_ref rejection while allowing planned-entrypoint sanitization`,
     );
     assert.match(
       text,
@@ -2718,13 +2751,13 @@ test("native privacy FFI hosts bound reflected request fields before production 
     );
     assert.match(
       text,
-      /request\.algorithm_id\.trim\(\)\.is_empty\(\)\s*\|\|\s*request\.entrypoint\.trim\(\)\.is_empty\(\)[\s\S]*privacy proof request must include non-empty algorithm_id and entrypoint[\s\S]*None/,
-      `${label} must reject empty algorithm_id and entrypoint without request reflection`,
+      /request\.algorithm_id\.trim\(\)\.is_empty\(\)\s*\|\|\s*request\.entrypoint\.trim\(\)\.is_empty\(\)[\s\S]*privacy proof request must include non-empty algorithm_id and entrypoint[\s\S]*Some\(&request\)/,
+      `${label} must reject empty algorithm_id and entrypoint with sanitized public request context`,
     );
     assert.match(
       text,
-      /request\.vk_ref\.trim\(\)\.is_empty\(\)[\s\S]*privacy proof request must include non-empty vk_ref[\s\S]*None/,
-      `${label} must reject empty vk_ref without request reflection`,
+      /request\.vk_ref\.trim\(\)\.is_empty\(\)[\s\S]*privacy proof request must include non-empty vk_ref[\s\S]*Some\(&request\)/,
+      `${label} must reject empty vk_ref with sanitized public request context`,
     );
     assert.match(
       text,
@@ -2791,11 +2824,11 @@ test("native privacy FFI hosts bound reflected request fields before production 
     );
     const emptyRequiredTextFieldTest = requireMatch(
       text,
-      /fn\s+privacy_request_rejects_empty_required_text_fields_without_reflection\([^)]*\)\s*\{[\s\S]*?assert_subslice_absent\(&encoded,\s*marker,\s*"empty required field failure result"\);\s*\n\s*\}/,
+      /fn\s+privacy_request_rejects_empty_required_text_fields_without_reflection\([^)]*\)\s*\{[\s\S]*?let\s+witness\s*=\s*b"required-text-field-witness-never-echo";[\s\S]*?assert_eq!\(result\.public_inputs,\s*b"public"[\s\S]*?assert_subslice_absent\(&encoded,\s*witness,\s*"empty required field failure result"\);\s*\n\s*\}/,
       `${label} empty required text-field regression`,
     )[0];
     for (const snippet of [
-      "required-text-field-never-echo",
+      "required-text-field-witness-never-echo",
       "algorithm_id",
       "entrypoint",
       "vk_ref",
@@ -4384,6 +4417,7 @@ test("Python privacy native wrappers require the complete FFI method surface", (
   );
   for (const pattern of [
     /privacy_capabilities_v1\(\)/,
+    /privacy_proof_request_v1\([\s\S]*public_inputs=b"public-inputs"/,
     /privacy_build_proof_v1\(_PRIVACY_REQUEST_ARCHIVE\)/,
     /privacy_verify_proof_v1\(_PRIVACY_REQUEST_ARCHIVE\)/,
   ]) {
@@ -4845,7 +4879,7 @@ test("privacy SDK guard runs wrong-operation result schema regressions", () => {
   );
   assert.match(
     bridgeHeaderRunner,
-    /required_privacy_ffi[\s\S]*iroha_privacy_capabilities_v1[\s\S]*iroha_privacy_build_proof_v1[\s\S]*iroha_privacy_verify_proof_v1[\s\S]*iroha_privacy_free_buffer/,
+    /required_privacy_ffi[\s\S]*iroha_privacy_capabilities_v1[\s\S]*iroha_privacy_proof_request_v1[\s\S]*iroha_privacy_build_proof_v1[\s\S]*iroha_privacy_verify_proof_v1[\s\S]*iroha_privacy_free_buffer/,
     "NoritoBridge header guard must require all privacy FFI symbols",
   );
   assert.match(
@@ -6242,6 +6276,36 @@ test("privacy native availability proof probes use shared Norito request archive
     assert.match(
       sliceBetween(
         text,
+        "function privacyNativeProofRequestProbeReturnsBytes",
+        "function hasPrivacyNative",
+        `${label} privacy proof-request native probe`,
+      ),
+      /native\.privacyProofRequestV1\([\s\S]*"verange-transparent-range-v1"[\s\S]*"buildVeRangeProofV1"[\s\S]*"bulletproofs:verange_transparent_range_v1"[\s\S]*publicInputs/,
+      `${label} privacy availability must build a typed request archive through the native request builder`,
+    );
+    assert.match(
+      sliceBetween(
+        text,
+        "function privacyNativeProofRequestProbeReturnsBytes",
+        "function hasPrivacyNative",
+        `${label} privacy proof-request native probe`,
+      ),
+      /privacyRequestNativeOutputToBuffer\(result,\s*"privacyProofRequestV1",\s*\{\s*clearSource:\s*true,?\s*\}\)[\s\S]*publicInputs\.fill\(0\)/,
+      `${label} privacy proof-request probe must validate request archives and clear probe inputs`,
+    );
+    assert.match(
+      sliceBetween(
+        text,
+        "function hasPrivacyNative",
+        "function privacyBridgeAbiVersion",
+        `${label} privacy native availability`,
+      ),
+      /privacyNativeProofRequestProbeReturnsBytes\(native\)/,
+      `${label} privacy availability must require a passing native request-builder probe`,
+    );
+    assert.match(
+      sliceBetween(
+        text,
         "function privacyNativeOutputToBuffer",
         "function invokePrivacyNative",
         `${label} privacy native output decoder`,
@@ -7093,7 +7157,7 @@ test("privacy native availability proof probes use shared Norito request archive
       "private static bool TryGetAbiVersion",
       "C# privacy native availability probes",
     ),
-    /PrivacyCapabilitiesResultSchemaByte[\s\S]*PrivacyBuildProofResultSchemaByte[\s\S]*PrivacyVerifyProofResultSchemaByte/,
+    /PrivacyCapabilitiesResultSchemaByte[\s\S]*PrivacyRequestSchemaByte[\s\S]*PrivacyBuildProofResultSchemaByte[\s\S]*PrivacyVerifyProofResultSchemaByte/,
     "C# privacy availability probes must require operation-specific result schemas",
   );
   assert.match(

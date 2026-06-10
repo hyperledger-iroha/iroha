@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.android.offline;
 
+import java.io.ByteArrayOutputStream;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
@@ -19,6 +20,7 @@ import org.hyperledger.iroha.android.address.AccountAddress.SingleKeyPayload;
 import org.hyperledger.iroha.android.address.AssetDefinitionIdEncoder;
 import org.hyperledger.iroha.android.address.PublicKeyCodec;
 import org.hyperledger.iroha.android.crypto.IrohaHash;
+import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.norito.NoritoCodec;
 import org.hyperledger.iroha.norito.NoritoDecoder;
 import org.hyperledger.iroha.norito.NoritoEncoder;
@@ -58,6 +60,10 @@ public final class OfflineNoteV2 {
       "iroha_data_model::offline::model::OfflineNoteIssue";
   private static final String ISSUED_CLAIM_SCHEMA =
       "iroha_data_model::offline::model::OfflineNoteIssuedClaim";
+  private static final String AUDIT_OUTPUT_CLAIM_SCHEMA =
+      "iroha_data_model::offline::model::OfflineNoteAuditOutputClaim";
+  private static final String RECURSIVE_PROOF_SCHEMA =
+      "iroha_data_model::offline::model::OfflineNoteRecursiveProof";
   private static final String REDEEM_SCHEMA =
       "iroha_data_model::offline::model::OfflineNoteRedeem";
   private static final String REDEEM_PUBLIC_INPUTS_SCHEMA =
@@ -66,6 +72,18 @@ public final class OfflineNoteV2 {
       "iroha_data_model::offline::model::OfflineNoteAuditBundle";
   private static final String AUDIT_PUBLIC_INPUTS_SCHEMA =
       "iroha_data_model::offline::model::OfflineNoteAuditPublicInputs";
+  public static final String ISSUE_INSTRUCTION_SCHEMA =
+      "iroha_data_model::isi::offline::IssueOfflineNote";
+  public static final String REDEEM_INSTRUCTION_SCHEMA =
+      "iroha_data_model::isi::offline::RedeemOfflineNote";
+  public static final String AUDIT_INSTRUCTION_SCHEMA =
+      "iroha_data_model::isi::offline::AuditOfflineNote";
+  private static final String ISSUE_INSTRUCTION_ALIAS_SCHEMA =
+      "iroha_data_model::isi::offline::IssueOfflineNoteV2";
+  private static final String REDEEM_INSTRUCTION_ALIAS_SCHEMA =
+      "iroha_data_model::isi::offline::RedeemOfflineNoteV2";
+  private static final String AUDIT_INSTRUCTION_ALIAS_SCHEMA =
+      "iroha_data_model::isi::offline::AuditOfflineNoteV2";
 
   private OfflineNoteV2() {}
 
@@ -85,6 +103,14 @@ public final class OfflineNoteV2 {
     return encodeWithHeader(value, ISSUED_CLAIM_SCHEMA, ISSUED_CLAIM_ADAPTER);
   }
 
+  public static byte[] encodeAuditOutputClaim(final AuditOutputClaimV2 value) {
+    return encodeWithHeader(value, AUDIT_OUTPUT_CLAIM_SCHEMA, AUDIT_OUTPUT_CLAIM_ADAPTER);
+  }
+
+  public static byte[] encodeRecursiveProof(final RecursiveProofV2 value) {
+    return encodeWithHeader(value, RECURSIVE_PROOF_SCHEMA, RECURSIVE_PROOF_ADAPTER);
+  }
+
   public static byte[] encodeRedeem(final RedeemV2 value) {
     return encodeWithHeader(value, REDEEM_SCHEMA, REDEEM_ADAPTER);
   }
@@ -99,6 +125,81 @@ public final class OfflineNoteV2 {
 
   public static byte[] encodeAuditPublicInputs(final AuditPublicInputsV2 value) {
     return encodeWithHeader(value, AUDIT_PUBLIC_INPUTS_SCHEMA, AUDIT_PUBLIC_INPUTS_ADAPTER);
+  }
+
+  public static InstructionBox issueInstruction(final IssueV2 value) {
+    return InstructionBox.fromWirePayload(
+        ISSUE_INSTRUCTION_SCHEMA,
+        encodeInstructionWrapper(ISSUE_INSTRUCTION_SCHEMA, encodeIssue(value)));
+  }
+
+  public static InstructionBox redeemInstruction(final RedeemV2 value) {
+    value.validateProofBinding();
+    return InstructionBox.fromWirePayload(
+        REDEEM_INSTRUCTION_SCHEMA,
+        encodeInstructionWrapper(REDEEM_INSTRUCTION_SCHEMA, encodeRedeem(value)));
+  }
+
+  public static InstructionBox auditInstruction(final AuditBundleV2 value) {
+    value.validateProofBinding();
+    return InstructionBox.fromWirePayload(
+        AUDIT_INSTRUCTION_SCHEMA,
+        encodeInstructionWrapper(AUDIT_INSTRUCTION_SCHEMA, encodeAudit(value)));
+  }
+
+  public static KeyCertificatePayloadV2 decodeCertificatePayload(final byte[] bytes) {
+    return decodeWithHeader(bytes, KEY_CERTIFICATE_PAYLOAD_SCHEMA, KEY_CERTIFICATE_PAYLOAD_ADAPTER);
+  }
+
+  public static KeyCertificateV2 decodeCertificate(final byte[] bytes) {
+    return decodeWithHeader(bytes, KEY_CERTIFICATE_SCHEMA, KEY_CERTIFICATE_ADAPTER);
+  }
+
+  public static IssueV2 decodeIssue(final byte[] bytes) {
+    return decodeWithHeader(bytes, ISSUE_SCHEMA, ISSUE_ADAPTER);
+  }
+
+  public static IssuedClaimV2 decodeIssuedClaim(final byte[] bytes) {
+    return decodeWithHeader(bytes, ISSUED_CLAIM_SCHEMA, ISSUED_CLAIM_ADAPTER);
+  }
+
+  public static AuditOutputClaimV2 decodeAuditOutputClaim(final byte[] bytes) {
+    return decodeWithHeader(bytes, AUDIT_OUTPUT_CLAIM_SCHEMA, AUDIT_OUTPUT_CLAIM_ADAPTER);
+  }
+
+  public static RecursiveProofV2 decodeRecursiveProof(final byte[] bytes) {
+    return decodeWithHeader(bytes, RECURSIVE_PROOF_SCHEMA, RECURSIVE_PROOF_ADAPTER);
+  }
+
+  public static RedeemV2 decodeRedeem(final byte[] bytes) {
+    return decodeWithHeader(bytes, REDEEM_SCHEMA, REDEEM_ADAPTER);
+  }
+
+  public static RedeemPublicInputsV2 decodeRedeemPublicInputs(final byte[] bytes) {
+    return decodeWithHeader(bytes, REDEEM_PUBLIC_INPUTS_SCHEMA, REDEEM_PUBLIC_INPUTS_ADAPTER);
+  }
+
+  public static AuditBundleV2 decodeAudit(final byte[] bytes) {
+    return decodeWithHeader(bytes, AUDIT_SCHEMA, AUDIT_ADAPTER);
+  }
+
+  public static AuditPublicInputsV2 decodeAuditPublicInputs(final byte[] bytes) {
+    return decodeWithHeader(bytes, AUDIT_PUBLIC_INPUTS_SCHEMA, AUDIT_PUBLIC_INPUTS_ADAPTER);
+  }
+
+  public static IssueV2 decodeIssueInstruction(final byte[] bytes) {
+    return decodeInstructionModel(
+        bytes, ISSUE_INSTRUCTION_SCHEMA, ISSUE_INSTRUCTION_ALIAS_SCHEMA, ISSUE_SCHEMA, ISSUE_ADAPTER);
+  }
+
+  public static RedeemV2 decodeRedeemInstruction(final byte[] bytes) {
+    return decodeInstructionModel(
+        bytes, REDEEM_INSTRUCTION_SCHEMA, REDEEM_INSTRUCTION_ALIAS_SCHEMA, REDEEM_SCHEMA, REDEEM_ADAPTER);
+  }
+
+  public static AuditBundleV2 decodeAuditInstruction(final byte[] bytes) {
+    return decodeInstructionModel(
+        bytes, AUDIT_INSTRUCTION_SCHEMA, AUDIT_INSTRUCTION_ALIAS_SCHEMA, AUDIT_SCHEMA, AUDIT_ADAPTER);
   }
 
   public static byte[] hash(final byte[] bytes) {
@@ -118,6 +219,107 @@ public final class OfflineNoteV2 {
   private static <T> byte[] encodeWithHeader(
       final T value, final String schema, final TypeAdapter<T> adapter) {
     return NoritoCodec.encode(value, schema, adapter, NoritoHeader.COMPACT_LEN);
+  }
+
+  private static <T> T decodeWithHeader(
+      final byte[] bytes, final String schema, final TypeAdapter<T> adapter) {
+    return NoritoCodec.decode(bytes, adapter, schema);
+  }
+
+  private static byte[] encodeInstructionWrapper(final String schema, final byte[] modelPayload) {
+    return NoritoCodec.encode(modelPayload, schema, INSTRUCTION_WRAPPER_ADAPTER, 0);
+  }
+
+  private static <T> T decodeInstructionModel(
+      final byte[] bytes,
+      final String instructionSchema,
+      final String instructionAliasSchema,
+      final String modelSchema,
+      final TypeAdapter<T> modelAdapter) {
+    final List<String> instructionSchemas = List.of(instructionSchema, instructionAliasSchema);
+    final byte[] wirePayload = extractInstructionWirePayload(bytes, instructionSchemas);
+    RuntimeException lastError = null;
+    for (final String candidateSchema : instructionSchemas) {
+      try {
+        final InstructionModelPayload modelPayload =
+            NoritoCodec.decode(wirePayload, INSTRUCTION_WRAPPER_PAYLOAD_ADAPTER, candidateSchema);
+        return decodeModelPayload(modelPayload.bytes(), modelSchema, modelAdapter, modelPayload.flags());
+      } catch (final RuntimeException ex) {
+        lastError = ex;
+      }
+    }
+    throw new IllegalArgumentException("Offline Note V2 instruction envelope is invalid", lastError);
+  }
+
+  private static byte[] extractInstructionWirePayload(
+      final byte[] bytes, final List<String> expectedWireNames) {
+    if (isNoritoFrame(bytes)) {
+      return Arrays.copyOf(bytes, bytes.length);
+    }
+    byte[] wirePayload = tryDecodeInstructionPair(bytes, expectedWireNames, NoritoHeader.COMPACT_LEN);
+    if (wirePayload != null) {
+      return wirePayload;
+    }
+    wirePayload = tryDecodeInstructionPair(bytes, expectedWireNames, 0);
+    if (wirePayload != null) {
+      return wirePayload;
+    }
+    throw new IllegalArgumentException("Offline Note V2 instruction envelope is invalid");
+  }
+
+  private static byte[] tryDecodeInstructionPair(
+      final byte[] bytes, final List<String> expectedWireNames, final int flags) {
+    try {
+      final NoritoDecoder decoder = new NoritoDecoder(bytes, flags);
+      final String wireName = readField(decoder, OfflineNoteV2::readString);
+      if (!expectedWireNames.contains(wireName)) {
+        throw new IllegalArgumentException(
+            "Offline Note V2 instruction wire name mismatch: " + wireName);
+      }
+      final byte[] wirePayload = readField(decoder, OfflineNoteV2::readBytesVec);
+      if (decoder.remaining() != 0) {
+        throw new IllegalArgumentException("Trailing bytes after Offline Note V2 instruction envelope");
+      }
+      return wirePayload;
+    } catch (final RuntimeException ex) {
+      return null;
+    }
+  }
+
+  private static <T> T decodeModelPayload(
+      final byte[] bytes,
+      final String modelSchema,
+      final TypeAdapter<T> modelAdapter,
+      final int flags) {
+    if (isNoritoFrame(bytes)) {
+      return decodeWithHeader(bytes, modelSchema, modelAdapter);
+    }
+    final int[] attempts =
+        flags == NoritoHeader.COMPACT_LEN ? new int[] {flags, 0} : new int[] {flags, NoritoHeader.COMPACT_LEN};
+    RuntimeException lastError = null;
+    for (final int attemptFlags : attempts) {
+      try {
+        final NoritoDecoder decoder = new NoritoDecoder(bytes, attemptFlags);
+        final T value = modelAdapter.decode(decoder);
+        if (decoder.remaining() != 0) {
+          throw new IllegalArgumentException("Trailing bytes after Offline Note V2 instruction model decode");
+        }
+        return value;
+      } catch (final RuntimeException ex) {
+        lastError = ex;
+      }
+    }
+    throw new IllegalArgumentException(
+        "Offline Note V2 instruction model payload is invalid", lastError);
+  }
+
+  private static boolean isNoritoFrame(final byte[] bytes) {
+    return bytes != null
+        && bytes.length >= NoritoHeader.HEADER_LENGTH
+        && bytes[0] == (byte) 'N'
+        && bytes[1] == (byte) 'R'
+        && bytes[2] == (byte) 'T'
+        && bytes[3] == (byte) '0';
   }
 
   public static final class VerifyingKeyIdReference {
@@ -1186,6 +1388,36 @@ public final class OfflineNoteV2 {
     }
   }
 
+  private static final TypeAdapter<byte[]> INSTRUCTION_WRAPPER_ADAPTER =
+      new TypeAdapter<>() {
+        @Override
+        public void encode(final NoritoEncoder encoder, final byte[] value) {
+          writeField(encoder, child -> child.writeBytes(value));
+        }
+
+        @Override
+        public byte[] decode(final NoritoDecoder decoder) {
+          return readField(decoder, child -> child.readBytes(child.remaining()));
+        }
+      };
+
+  private record InstructionModelPayload(byte[] bytes, int flags) {}
+
+  private static final TypeAdapter<InstructionModelPayload> INSTRUCTION_WRAPPER_PAYLOAD_ADAPTER =
+      new TypeAdapter<>() {
+        @Override
+        public void encode(final NoritoEncoder encoder, final InstructionModelPayload value) {
+          writeField(encoder, child -> child.writeBytes(value.bytes()));
+        }
+
+        @Override
+        public InstructionModelPayload decode(final NoritoDecoder decoder) {
+          return new InstructionModelPayload(
+              readField(decoder, child -> child.readBytes(child.remaining())),
+              decoder.flags());
+        }
+      };
+
   private static final TypeAdapter<KeyCertificatePayloadV2> KEY_CERTIFICATE_PAYLOAD_ADAPTER =
       new TypeAdapter<>() {
         @Override
@@ -1206,7 +1438,19 @@ public final class OfflineNoteV2 {
 
         @Override
         public KeyCertificatePayloadV2 decode(final NoritoDecoder decoder) {
-          throw new UnsupportedOperationException("Offline Note V2 decoding is not supported yet");
+          return new KeyCertificatePayloadV2(
+              readField(decoder, OfflineNoteV2::readString),
+              readField(decoder, child -> (int) child.readUInt(16)),
+              readField(decoder, OfflineNoteV2::readString),
+              readField(decoder, OfflineNoteV2::readString),
+              readField(decoder, OfflineNoteV2::readString),
+              readField(decoder, OfflineNoteV2::readAccountId),
+              readField(decoder, OfflineNoteV2::readBytesVec),
+              readField(decoder, OfflineNoteV2::readString),
+              readField(decoder, OfflineNoteV2::readString),
+              readField(decoder, OfflineNoteV2::readBytesVec),
+              readField(decoder, OfflineNoteV2::readOptionU32),
+              readField(decoder, OfflineNoteV2::readBool));
         }
       };
 
@@ -1230,7 +1474,19 @@ public final class OfflineNoteV2 {
 
         @Override
         public KeyCertificateV2 decode(final NoritoDecoder decoder) {
-          throw new UnsupportedOperationException("Offline Note V2 decoding is not supported yet");
+          return new KeyCertificateV2(
+              readField(decoder, child -> (int) child.readUInt(16)),
+              readField(decoder, OfflineNoteV2::readString),
+              readField(decoder, OfflineNoteV2::readString),
+              readField(decoder, OfflineNoteV2::readString),
+              readField(decoder, OfflineNoteV2::readAccountId),
+              readField(decoder, OfflineNoteV2::readBytesVec),
+              readField(decoder, OfflineNoteV2::readString),
+              readField(decoder, OfflineNoteV2::readString),
+              readField(decoder, OfflineNoteV2::readBytesVec),
+              readField(decoder, OfflineNoteV2::readOptionU32),
+              readField(decoder, OfflineNoteV2::readBool),
+              readField(decoder, OfflineNoteV2::readConstVec));
         }
       };
 
@@ -1245,7 +1501,10 @@ public final class OfflineNoteV2 {
 
         @Override
         public RecursiveProofV2 decode(final NoritoDecoder decoder) {
-          throw new UnsupportedOperationException("Offline Note V2 decoding is not supported yet");
+          return new RecursiveProofV2(
+              readField(decoder, OfflineNoteV2::readVerifyingKeyId),
+              readField(decoder, child -> readHash(child, "public_inputs_hash")),
+              readField(decoder, OfflineNoteV2::readProofBox));
         }
       };
 
@@ -1261,7 +1520,11 @@ public final class OfflineNoteV2 {
 
         @Override
         public IssueV2 decode(final NoritoDecoder decoder) {
-          throw new UnsupportedOperationException("Offline Note V2 decoding is not supported yet");
+          return new IssueV2(
+              readField(decoder, child -> readHash(child, "note_commitment")),
+              readField(decoder, KEY_CERTIFICATE_ADAPTER::decode),
+              readField(decoder, OfflineNoteV2::readAssetId),
+              readField(decoder, OfflineNoteV2::readNumeric));
         }
       };
 
@@ -1278,7 +1541,12 @@ public final class OfflineNoteV2 {
 
         @Override
         public IssuedClaimV2 decode(final NoritoDecoder decoder) {
-          throw new UnsupportedOperationException("Offline Note V2 decoding is not supported yet");
+          return new IssuedClaimV2(
+              readField(decoder, OfflineNoteV2::readString),
+              readField(decoder, child -> readHash(child, "note_commitment")),
+              readField(decoder, child -> readHash(child, "key_certificate_payload_hash")),
+              readField(decoder, OfflineNoteV2::readAssetId),
+              readField(decoder, OfflineNoteV2::readNumeric));
         }
       };
 
@@ -1294,7 +1562,11 @@ public final class OfflineNoteV2 {
 
         @Override
         public AuditOutputClaimV2 decode(final NoritoDecoder decoder) {
-          throw new UnsupportedOperationException("Offline Note V2 decoding is not supported yet");
+          return new AuditOutputClaimV2(
+              readField(decoder, child -> readHash(child, "note_commitment")),
+              readField(decoder, KEY_CERTIFICATE_ADAPTER::decode),
+              readField(decoder, OfflineNoteV2::readAssetId),
+              readField(decoder, OfflineNoteV2::readNumeric));
         }
       };
 
@@ -1313,7 +1585,14 @@ public final class OfflineNoteV2 {
 
         @Override
         public RedeemPublicInputsV2 decode(final NoritoDecoder decoder) {
-          throw new UnsupportedOperationException("Offline Note V2 decoding is not supported yet");
+          return new RedeemPublicInputsV2(
+              readField(decoder, OfflineNoteV2::readString),
+              readField(decoder, child -> readHash(child, "source_note_commitment")),
+              readField(decoder, child -> readVec(child, element -> readHash(element, "input_nullifier"))),
+              readField(decoder, child -> readHash(child, "key_certificate_payload_hash")),
+              readField(decoder, OfflineNoteV2::readAccountId),
+              readField(decoder, OfflineNoteV2::readAssetId),
+              readField(decoder, OfflineNoteV2::readNumeric));
         }
       };
 
@@ -1333,7 +1612,14 @@ public final class OfflineNoteV2 {
 
         @Override
         public RedeemV2 decode(final NoritoDecoder decoder) {
-          throw new UnsupportedOperationException("Offline Note V2 decoding is not supported yet");
+          return new RedeemV2(
+              readField(decoder, child -> readHash(child, "source_note_commitment")),
+              readField(decoder, child -> readVec(child, element -> readHash(element, "input_nullifier"))),
+              readField(decoder, KEY_CERTIFICATE_ADAPTER::decode),
+              readField(decoder, OfflineNoteV2::readAccountId),
+              readField(decoder, OfflineNoteV2::readAssetId),
+              readField(decoder, OfflineNoteV2::readNumeric),
+              readField(decoder, RECURSIVE_PROOF_ADAPTER::decode));
         }
       };
 
@@ -1354,7 +1640,14 @@ public final class OfflineNoteV2 {
 
         @Override
         public AuditPublicInputsV2 decode(final NoritoDecoder decoder) {
-          throw new UnsupportedOperationException("Offline Note V2 decoding is not supported yet");
+          return new AuditPublicInputsV2(
+              readField(decoder, OfflineNoteV2::readString),
+              readField(decoder, child -> readHash(child, "token_id")),
+              readField(decoder, child -> readHash(child, "key_certificate_payload_hash")),
+              readField(decoder, child -> readVec(child, element -> readHash(element, "input_nullifier"))),
+              readField(decoder, child -> readVec(child, ISSUED_CLAIM_ADAPTER::decode)),
+              readField(decoder, child -> readVec(child, element -> readHash(element, "output_commitment"))),
+              readField(decoder, child -> readVec(child, ISSUED_CLAIM_ADAPTER::decode)));
         }
       };
 
@@ -1377,7 +1670,14 @@ public final class OfflineNoteV2 {
 
         @Override
         public AuditBundleV2 decode(final NoritoDecoder decoder) {
-          throw new UnsupportedOperationException("Offline Note V2 decoding is not supported yet");
+          return new AuditBundleV2(
+              readField(decoder, child -> readHash(child, "token_id")),
+              readField(decoder, KEY_CERTIFICATE_ADAPTER::decode),
+              readField(decoder, child -> readVec(child, element -> readHash(element, "input_nullifier"))),
+              readField(decoder, child -> readVec(child, ISSUED_CLAIM_ADAPTER::decode)),
+              readField(decoder, child -> readVec(child, element -> readHash(element, "output_commitment"))),
+              readField(decoder, child -> readVec(child, AUDIT_OUTPUT_CLAIM_ADAPTER::decode)),
+              readField(decoder, RECURSIVE_PROOF_ADAPTER::decode));
         }
       };
 
@@ -1389,6 +1689,223 @@ public final class OfflineNoteV2 {
   @FunctionalInterface
   private interface ElementWriter<T> {
     void write(NoritoEncoder encoder, T value);
+  }
+
+  @FunctionalInterface
+  private interface FieldReader<T> {
+    T read(NoritoDecoder decoder);
+  }
+
+  private static <T> T readField(
+      final NoritoDecoder parent, final FieldReader<T> readPayload) {
+    final int length = checkedLength(parent.readLength(compact(parent)), "field length");
+    final NoritoDecoder child = new NoritoDecoder(parent.readBytes(length), parent.flags(), parent.flagsHint());
+    final T value = readPayload.read(child);
+    if (child.remaining() != 0) {
+      throw new IllegalArgumentException("Trailing bytes after Offline Note V2 field decode");
+    }
+    return value;
+  }
+
+  private static String readString(final NoritoDecoder decoder) {
+    final int length = checkedLength(decoder.readLength(compact(decoder)), "string length");
+    return new String(decoder.readBytes(length), StandardCharsets.UTF_8);
+  }
+
+  private static boolean readBool(final NoritoDecoder decoder) {
+    final int tag = decoder.readByte();
+    if (tag == 0) {
+      return false;
+    }
+    if (tag == 1) {
+      return true;
+    }
+    throw new IllegalArgumentException("invalid boolean tag: " + tag);
+  }
+
+  private static byte[] readBytesVec(final NoritoDecoder decoder) {
+    final int length = checkedLength(decoder.readUInt(64), "byte vector length");
+    return decoder.readBytes(length);
+  }
+
+  private static byte[] readConstVec(final NoritoDecoder decoder) {
+    final int length = checkedLength(decoder.readUInt(64), "const vector length");
+    final byte[] out = new byte[length];
+    for (int idx = 0; idx < out.length; idx++) {
+      final long elementLength = decoder.readLength(compact(decoder));
+      if (elementLength != 1L) {
+        throw new IllegalArgumentException("const u8 vector element length must be 1");
+      }
+      out[idx] = (byte) decoder.readByte();
+    }
+    return out;
+  }
+
+  private static Integer readOptionU32(final NoritoDecoder decoder) {
+    final int tag = decoder.readByte();
+    if (tag == 0) {
+      return null;
+    }
+    if (tag == 1) {
+      return readField(decoder, child -> (int) child.readUInt(32));
+    }
+    throw new IllegalArgumentException("invalid option tag: " + tag);
+  }
+
+  private static <T> List<T> readVec(
+      final NoritoDecoder decoder, final FieldReader<T> readElement) {
+    final int count = checkedLength(decoder.readUInt(64), "vector length");
+    final List<T> values = new ArrayList<>(count);
+    for (int idx = 0; idx < count; idx++) {
+      values.add(readField(decoder, readElement));
+    }
+    return Collections.unmodifiableList(values);
+  }
+
+  private static byte[] readHash(final NoritoDecoder decoder, final String field) {
+    final byte[] bytes = decoder.readBytes(32);
+    requireHash(bytes, field);
+    return bytes;
+  }
+
+  private static VerifyingKeyIdReference readVerifyingKeyId(final NoritoDecoder decoder) {
+    return new VerifyingKeyIdReference(
+        readField(decoder, OfflineNoteV2::readString),
+        readField(decoder, OfflineNoteV2::readString));
+  }
+
+  private static ProofBox readProofBox(final NoritoDecoder decoder) {
+    return new ProofBox(
+        readField(decoder, OfflineNoteV2::readString),
+        readField(decoder, OfflineNoteV2::readBytesVec));
+  }
+
+  private static String readAccountId(final NoritoDecoder decoder) {
+    final long tag = decoder.readUInt(32);
+    if (tag == 0L) {
+      return readField(
+          decoder,
+          payload -> {
+            final PublicKeyCodec.PublicKeyPayload publicKey = readPublicKeyPayload(payload);
+            final String algorithm = PublicKeyCodec.algorithmForCurveId(publicKey.curveId());
+            if (algorithm == null) {
+              throw new IllegalArgumentException(
+                  "unsupported public key curve id: " + publicKey.curveId());
+            }
+            try {
+              return AccountAddress.fromAccount(publicKey.keyBytes(), algorithm)
+                  .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
+            } catch (final AccountAddressException ex) {
+              throw new IllegalArgumentException("invalid decoded account id", ex);
+            }
+          });
+    }
+    if (tag == 1L) {
+      return readField(
+          decoder,
+          payload -> {
+            try {
+              return AccountAddress.fromMultisigPolicy(readMultisigPolicy(payload))
+                  .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
+            } catch (final AccountAddressException ex) {
+              throw new IllegalArgumentException("invalid decoded multisig account id", ex);
+            }
+          });
+    }
+    throw new IllegalArgumentException("unsupported account controller tag: " + tag);
+  }
+
+  private static PublicKeyCodec.PublicKeyPayload readPublicKeyPayload(
+      final NoritoDecoder decoder) {
+    final PublicKeyCodec.PublicKeyPayload payload =
+        PublicKeyCodec.decodeCompactPublicKeyPayload(readConstVec(decoder));
+    if (payload == null) {
+      throw new IllegalArgumentException("invalid public key payload");
+    }
+    return payload;
+  }
+
+  private static MultisigPolicyPayload readMultisigPolicy(final NoritoDecoder decoder) {
+    final int version = readField(decoder, child -> (int) child.readUInt(8));
+    final int threshold = readField(decoder, child -> (int) child.readUInt(16));
+    final List<MultisigMemberPayload> members =
+        readField(
+            decoder,
+            payload ->
+                readVec(
+                    payload,
+                    member -> {
+                      final PublicKeyCodec.PublicKeyPayload publicKey =
+                          readField(member, OfflineNoteV2::readPublicKeyPayload);
+                      final int weight = readField(member, child -> (int) child.readUInt(16));
+                      return MultisigMemberPayload.of(publicKey.curveId(), weight, publicKey.keyBytes());
+                    }));
+    return MultisigPolicyPayload.of(version, threshold, members);
+  }
+
+  private static String readAssetId(final NoritoDecoder decoder) {
+    final String accountId = readField(decoder, OfflineNoteV2::readAccountId);
+    final byte[] definitionBytes = readField(decoder, OfflineNoteV2::readAssetDefinitionAddress);
+    final String definitionId = AssetDefinitionIdEncoder.encodeFromBytes(definitionBytes);
+    final Long dataspaceId = readField(decoder, OfflineNoteV2::readAssetBalanceScope);
+    final String base = definitionId + "#" + accountId;
+    return dataspaceId == null ? base : base + "#dataspace:" + dataspaceId;
+  }
+
+  private static byte[] readAssetDefinitionAddress(final NoritoDecoder decoder) {
+    final ByteArrayOutputStream out = new ByteArrayOutputStream();
+    while (decoder.remaining() > 0) {
+      final long length = decoder.readLength(compact(decoder));
+      if (length != 1L) {
+        throw new IllegalArgumentException("asset definition byte field length must be 1");
+      }
+      out.write(decoder.readByte());
+    }
+    return out.toByteArray();
+  }
+
+  private static Long readAssetBalanceScope(final NoritoDecoder decoder) {
+    final long tag = decoder.readUInt(32);
+    if (tag == 0L) {
+      return null;
+    }
+    if (tag == 1L) {
+      return readField(decoder, child -> child.readUInt(64));
+    }
+    throw new IllegalArgumentException("unsupported asset balance scope tag: " + tag);
+  }
+
+  private static String readNumeric(final NoritoDecoder decoder) {
+    final byte[] mantissaBytes =
+        readField(
+            decoder,
+            payload -> {
+              final int length = checkedLength(payload.readUInt(32), "numeric mantissa length");
+              return payload.readBytes(length);
+            });
+    final int scale = readField(decoder, child -> (int) child.readUInt(32));
+    return canonicalNumericString(bigIntegerFromLittleEndianTwosComplement(mantissaBytes), scale);
+  }
+
+  private static BigInteger bigIntegerFromLittleEndianTwosComplement(final byte[] bytes) {
+    if (bytes.length == 0) {
+      return BigInteger.ZERO;
+    }
+    final byte[] bigEndian = new byte[bytes.length];
+    for (int idx = 0; idx < bytes.length; idx++) {
+      bigEndian[idx] = bytes[bytes.length - 1 - idx];
+    }
+    return new BigInteger(bigEndian);
+  }
+
+  private static int checkedLength(final long value, final String field) {
+    if (value < 0) {
+      throw new IllegalArgumentException(field + " must be non-negative");
+    }
+    if (value > Integer.MAX_VALUE) {
+      throw new IllegalArgumentException(field + " exceeds JVM array limit");
+    }
+    return (int) value;
   }
 
   private static void writeField(final NoritoEncoder parent, final FieldWriter writePayload) {
@@ -1818,6 +2335,10 @@ public final class OfflineNoteV2 {
 
   private static boolean compact(final NoritoEncoder encoder) {
     return (encoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
+  }
+
+  private static boolean compact(final NoritoDecoder decoder) {
+    return (decoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
   }
 
   private static String hexLower(final byte[] bytes) {

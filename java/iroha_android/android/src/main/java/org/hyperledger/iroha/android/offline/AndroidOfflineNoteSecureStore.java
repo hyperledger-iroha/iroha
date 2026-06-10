@@ -171,9 +171,12 @@ public final class AndroidOfflineNoteSecureStore implements OfflineNoteStore {
   }
 
   private byte[] decrypt(final String envelope) {
-    if (envelope.startsWith(VALUE_PREFIX)) {
-      final String[] parts = envelope.substring(VALUE_PREFIX.length()).split(":", -1);
-      if (parts.length != 2) {
+    if (!envelope.startsWith(VALUE_PREFIX)) {
+      throw new IllegalStateException("unknown Offline Note wallet note envelope");
+    }
+    final String[] parts = envelope.substring(VALUE_PREFIX.length()).split(":", -1);
+    if (parts.length == 2) {
+      if (parseRevision(parts[0]) != null) {
         throw new IllegalStateException("invalid Offline Note wallet note envelope");
       }
       try {
@@ -187,28 +190,30 @@ public final class AndroidOfflineNoteSecureStore implements OfflineNoteStore {
         throw new IllegalStateException("failed to decrypt Offline Note wallet note", e);
       }
     }
-    if (!envelope.startsWith(VALUE_PREFIX)) {
-      throw new IllegalStateException("unknown Offline Note wallet note envelope");
-    }
-    final String[] parts = envelope.substring(VALUE_PREFIX.length()).split(":", -1);
     if (parts.length != 3) {
       throw new IllegalStateException("invalid Offline Note wallet note envelope");
     }
-    final long revision;
-    try {
-      revision = Long.parseLong(parts[0]);
-    } catch (final NumberFormatException e) {
-      throw new IllegalStateException("invalid Offline Note wallet note revision", e);
+    final Long revision = parseRevision(parts[0]);
+    if (revision == null) {
+      throw new IllegalStateException("invalid Offline Note wallet note revision");
     }
     try {
       final Cipher cipher = Cipher.getInstance(AES_GCM);
       cipher.init(
           Cipher.DECRYPT_MODE,
-          secretKey(storeKeyAlias(revision), false),
+          secretKey(storeKeyAlias(revision.longValue()), false),
           new GCMParameterSpec(GCM_TAG_BITS, Base64.getDecoder().decode(parts[1])));
       return cipher.doFinal(Base64.getDecoder().decode(parts[2]));
     } catch (final GeneralSecurityException e) {
       throw new IllegalStateException("failed to decrypt Offline Note wallet note", e);
+    }
+  }
+
+  private static Long parseRevision(final String value) {
+    try {
+      return Long.valueOf(value);
+    } catch (final NumberFormatException e) {
+      return null;
     }
   }
 

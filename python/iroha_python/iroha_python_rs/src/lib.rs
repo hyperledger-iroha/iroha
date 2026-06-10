@@ -57,9 +57,9 @@ use iroha_data_model::{
             SettlementLeg, SettlementPlan,
         },
         zk::{
-            RegisterZkAceIdentityCommitment, RegisterZkAsset, RevokeZkAceIdentityCommitment,
-            RotateZkAceIdentityCommitment, Shield, SubmitZkAceAuthorizedTransfer, Unshield,
-            ZkAssetMode, ZkTransfer,
+            AssetHiddenZkTransfer, RegisterAssetHiddenZkPool, RegisterZkAceIdentityCommitment,
+            RegisterZkAsset, RevokeZkAceIdentityCommitment, RotateZkAceIdentityCommitment, Shield,
+            SubmitZkAceAuthorizedTransfer, Unshield, VerifyProof, ZkAssetMode, ZkTransfer,
         },
     },
     metadata::Metadata,
@@ -6819,7 +6819,33 @@ mod tests {
             .collect()
     }
 
+    fn privacy_test_sdk_exports(entrypoints: &[&'static str]) -> Vec<PrivacyProductionSdkExportV1> {
+        PRIVACY_PRODUCTION_SDK_EXPORT_SURFACES
+            .iter()
+            .map(|surface| PrivacyProductionSdkExportV1 {
+                surface: *surface,
+                entrypoints: entrypoints.to_vec(),
+            })
+            .collect()
+    }
+
+    fn privacy_test_sdk_parity_artifacts() -> Vec<PrivacyProductionSdkParityArtifactV1> {
+        PRIVACY_PRODUCTION_SDK_PARITY_ARTIFACT_KINDS
+            .iter()
+            .flat_map(|kind| {
+                PRIVACY_PRODUCTION_SDK_EXPORT_SURFACES
+                    .iter()
+                    .map(move |surface| PrivacyProductionSdkParityArtifactV1 {
+                        kind: *kind,
+                        surface: *surface,
+                        artifact_hash: PRIVACY_TEST_PRODUCTION_HASH,
+                    })
+            })
+            .collect()
+    }
+
     fn privacy_test_evidence_row(entry: &PrivacyAlgorithmEntry) -> PrivacyProductionEvidenceRowV1 {
+        let sdk_entrypoints = privacy_test_production_entrypoints(entry);
         PrivacyProductionEvidenceRowV1 {
             algorithm_id: entry.id,
             chain_id: PRIVACY_TEST_PRODUCTION_CHAIN_ID,
@@ -6829,7 +6855,9 @@ mod tests {
             verifier_key_id: privacy_expected_verifier_key_id(entry),
             proof_family: entry.proof_family,
             public_inputs_schema: privacy_expected_public_inputs_schema(entry),
-            sdk_entrypoints: privacy_test_production_entrypoints(entry),
+            sdk_entrypoints: sdk_entrypoints.clone(),
+            sdk_exports: privacy_test_sdk_exports(&sdk_entrypoints),
+            sdk_parity_artifacts: privacy_test_sdk_parity_artifacts(),
             required_state: privacy_expected_required_state(entry).to_vec(),
             fuzz_artifact_hash: PRIVACY_TEST_PRODUCTION_HASH,
             performance_artifact_hash: PRIVACY_TEST_PRODUCTION_HASH,
@@ -7110,6 +7138,28 @@ mod tests {
         });
         assert_zk_ace_evidence_rejected("local verifier entrypoint", |row| {
             row.sdk_entrypoints.push("verifyZkAceProofLocally");
+        });
+        assert_zk_ace_evidence_rejected("missing SDK export surface", |row| {
+            row.sdk_exports.pop();
+        });
+        assert_zk_ace_evidence_rejected("mismatched SDK export entrypoint", |row| {
+            row.sdk_exports[3]
+                .entrypoints
+                .push("buildShadowZkAceProductionProof");
+        });
+        assert_zk_ace_evidence_rejected("dev fixture SDK export", |row| {
+            row.sdk_exports[2]
+                .entrypoints
+                .push("buildZkAceDevProofFixture");
+        });
+        assert_zk_ace_evidence_rejected("missing SDK parity artifact", |row| {
+            row.sdk_parity_artifacts.pop();
+        });
+        assert_zk_ace_evidence_rejected("wrong SDK parity artifact kind", |row| {
+            row.sdk_parity_artifacts[0].kind = "fixture_vectors";
+        });
+        assert_zk_ace_evidence_rejected("bad SDK parity artifact hash", |row| {
+            row.sdk_parity_artifacts[0].artifact_hash = "sha256:not-a-hex-digest";
         });
         assert_zk_ace_evidence_rejected("three-peer localnet downgrade", |row| {
             row.localnet_acceptance.peer_count = 3;
@@ -7926,14 +7976,15 @@ mod tests {
 
     #[test]
     fn privacy_request_rejects_empty_required_text_fields_without_reflection() {
-        let marker = b"required-text-field-never-echo";
         for field in ["algorithm_id", "entrypoint", "vk_ref"] {
             let mut request = privacy_request(
                 "confidential-transfer-v2",
                 "buildConfidentialTransferProofV2",
                 Vec::new(),
             );
-            request.public_inputs = marker.to_vec();
+            request.public_inputs = b"public".to_vec();
+            let witness = b"required-text-field-witness-never-echo";
+            request.witness = witness.to_vec();
             match field {
                 "algorithm_id" => request.algorithm_id.clear(),
                 "entrypoint" => request.entrypoint.clear(),
@@ -7947,9 +7998,34 @@ mod tests {
                 _ => "non-empty algorithm_id and entrypoint",
             };
 
-            assert_unreflected_invalid_privacy_request_result(&result, message_fragment, field);
+            assert_eq!(result.version, PRIVACY_FFI_VERSION_V1, "{field}");
+            assert_eq!(result.status, PRIVACY_FFI_STATUS_ERROR, "{field}");
+            assert_eq!(
+                result.error_code, PRIVACY_FFI_ERROR_INVALID_REQUEST,
+                "{field}"
+            );
+            assert!(result.message.contains(message_fragment), "{field}");
+            assert_eq!(result.public_inputs, b"public", "{field}");
+            assert!(result.proof.is_empty(), "{field}");
+            assert!(!result.verified, "{field}");
+            if field == "algorithm_id" {
+                assert!(result.algorithm_id.is_empty(), "{field}");
+            } else {
+                assert_eq!(result.algorithm_id, "confidential-transfer-v2", "{field}");
+            }
+            if field == "entrypoint" {
+                assert!(result.entrypoint.is_empty(), "{field}");
+            } else {
+                assert_eq!(
+                    result.entrypoint, "buildConfidentialTransferProofV2",
+                    "{field}"
+                );
+            }
+            if field == "vk_ref" {
+                assert!(result.vk_ref.is_empty(), "{field}");
+            }
             let encoded = norito::to_bytes(&result).expect("encode privacy result");
-            assert_subslice_absent(&encoded, marker, "empty required field failure result");
+            assert_subslice_absent(&encoded, witness, "empty required field failure result");
         }
     }
 
@@ -8528,7 +8604,23 @@ mod tests {
 
             let result = privacy_result_for_request(request, PrivacyProofOperationV1::Build);
 
-            assert_unreflected_invalid_privacy_request_result(&result, "backend:name", case);
+            if case == "planned-entrypoint" {
+                assert_eq!(result.version, PRIVACY_FFI_VERSION_V1, "{case}");
+                assert_eq!(result.status, PRIVACY_FFI_STATUS_ERROR, "{case}");
+                assert_eq!(
+                    result.error_code, PRIVACY_FFI_ERROR_INVALID_REQUEST,
+                    "{case}"
+                );
+                assert!(result.message.contains("planned"), "{case}");
+                assert!(result.message.contains("not executable"), "{case}");
+                assert_eq!(result.algorithm_id, algorithm_id, "{case}");
+                assert_eq!(result.entrypoint, entrypoint, "{case}");
+                assert!(result.vk_ref.is_empty(), "{case}");
+                assert!(result.proof.is_empty(), "{case}");
+                assert!(!result.verified, "{case}");
+            } else {
+                assert_unreflected_invalid_privacy_request_result(&result, "backend:name", case);
+            }
             let encoded = norito::to_bytes(&result).expect("encode privacy result");
             assert_subslice_absent(
                 &encoded,
@@ -13382,6 +13474,212 @@ mod tests {
     }
 
     #[test]
+    fn asset_hidden_instruction_classmethods_serialize_payloads() {
+        ensure_python();
+        Python::attach(|py| {
+            let instruction_type = py.get_type::<Instruction>();
+            let json_module = py.import("json").expect("json module");
+            let verifier = json_module
+                .call_method1(
+                    "loads",
+                    (r#"{"backend":"halo2/ipa","name":"asset_hidden_transfer_v1"}"#,),
+                )
+                .expect("verifier loads");
+            let proof = json_module
+                .call_method1(
+                    "loads",
+                    (r#"{"backend":"halo2/ipa","proof_b64":"cHJvb2Y=","verifying_key_ref":{"backend":"halo2/ipa","name":"asset_hidden_transfer_v1"}}"#,),
+                )
+                .expect("proof loads");
+            let asset_set_root = PyBytes::new(py, &[0x10; 32]);
+            let root_hint = PyBytes::new(py, &[0x11; 32]);
+            let inputs = PyList::empty(py);
+            inputs.append("22".repeat(32)).expect("input append");
+            let outputs = PyList::empty(py);
+            outputs.append("33".repeat(32)).expect("output append");
+
+            let register = Instruction::register_asset_hidden_zk_pool(
+                &instruction_type,
+                "boi-masp-pool-v1",
+                "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
+                asset_set_root.as_any(),
+                verifier.as_any(),
+            )
+            .expect("asset-hidden pool registration builds");
+            let decoded = json::from_str::<InstructionBox>(&register.to_json().expect("json"))
+                .expect("instruction json decodes");
+            let instruction_ref: &dyn iroha_data_model::isi::Instruction = &*decoded;
+            let register = instruction_ref
+                .as_any()
+                .downcast_ref::<RegisterAssetHiddenZkPool>()
+                .expect("expected RegisterAssetHiddenZkPool");
+            assert_eq!(register.pool_id, "boi-masp-pool-v1");
+            assert_eq!(register.asset_set_root, [0x10; 32]);
+            assert_eq!(register.vk_transfer.name, "asset_hidden_transfer_v1");
+
+            let transfer = Instruction::asset_hidden_zk_transfer_prepared(
+                &instruction_type,
+                "boi-masp-pool-v1",
+                inputs.as_any(),
+                outputs.as_any(),
+                proof.as_any(),
+                Some(root_hint.as_any()),
+            )
+            .expect("asset-hidden transfer builds");
+            let decoded = json::from_str::<InstructionBox>(&transfer.to_json().expect("json"))
+                .expect("instruction json decodes");
+            let instruction_ref: &dyn iroha_data_model::isi::Instruction = &*decoded;
+            let transfer = instruction_ref
+                .as_any()
+                .downcast_ref::<AssetHiddenZkTransfer>()
+                .expect("expected AssetHiddenZkTransfer");
+            assert_eq!(transfer.pool_id, "boi-masp-pool-v1");
+            assert_eq!(transfer.inputs, vec![[0x22; 32]]);
+            assert_eq!(transfer.outputs, vec![[0x33; 32]]);
+            assert_eq!(transfer.root_hint, Some([0x11; 32]));
+            assert_eq!(transfer.proof.backend.to_string(), "halo2/ipa");
+        });
+    }
+
+    #[test]
+    fn verify_proof_instruction_classmethod_serializes_payload() {
+        ensure_python();
+        Python::attach(|py| {
+            let instruction_type = py.get_type::<Instruction>();
+            let json_module = py.import("json").expect("json module");
+            let proof = json_module
+                .call_method1(
+                    "loads",
+                    (r#"{"backend":"halo2/ipa","proof_b64":"cHJvb2Y=","verifying_key_ref":{"backend":"halo2/ipa","name":"component_verify_v1"},"verifying_key_commitment":"4444444444444444444444444444444444444444444444444444444444444444","envelope_hash":"5555555555555555555555555555555555555555555555555555555555555555"}"#,),
+                )
+                .expect("proof loads");
+
+            let instruction = Instruction::verify_proof(&instruction_type, proof.as_any())
+                .expect("VerifyProof instruction builds");
+            let instruction_ref: &dyn iroha_data_model::isi::Instruction = &*instruction.inner;
+            let verify = instruction_ref
+                .as_any()
+                .downcast_ref::<VerifyProof>()
+                .expect("expected VerifyProof");
+            assert_eq!(verify.attachment.backend.to_string(), "halo2/ipa");
+            assert_eq!(verify.attachment.proof.bytes, b"proof");
+            assert_eq!(verify.attachment.vk_ref.name, "component_verify_v1");
+            assert_eq!(verify.attachment.vk_commitment, Some([0x44; 32]));
+            assert_eq!(verify.attachment.envelope_hash, Some([0x55; 32]));
+        });
+    }
+
+    #[test]
+    fn asset_hidden_instruction_classmethods_reject_adversarial_inputs() {
+        ensure_python();
+        Python::attach(|py| {
+            let instruction_type = py.get_type::<Instruction>();
+            let json_module = py.import("json").expect("json module");
+            let verifier = json_module
+                .call_method1(
+                    "loads",
+                    (r#"{"backend":"halo2/ipa","name":"asset_hidden_transfer_v1"}"#,),
+                )
+                .expect("verifier loads");
+            let proof = json_module
+                .call_method1(
+                    "loads",
+                    (r#"{"backend":"halo2/ipa","proof_b64":"cHJvb2Y=","verifying_key_ref":{"backend":"halo2/ipa","name":"asset_hidden_transfer_v1"}}"#,),
+                )
+                .expect("proof loads");
+            let zero_root = PyBytes::new(py, &[0x00; 32]);
+            let root = PyBytes::new(py, &[0x10; 32]);
+            let duplicate_inputs = PyList::empty(py);
+            duplicate_inputs
+                .append("22".repeat(32))
+                .expect("first input append");
+            duplicate_inputs
+                .append("22".repeat(32))
+                .expect("duplicate input append");
+            let outputs = PyList::empty(py);
+            outputs.append("33".repeat(32)).expect("output append");
+            let missing_backend_proof = json_module
+                .call_method1(
+                    "loads",
+                    (r#"{"proof_b64":"cHJvb2Y=","verifying_key_ref":{"backend":"halo2/ipa","name":"asset_hidden_transfer_v1"}}"#,),
+                )
+                .expect("bad proof loads");
+            let wrong_backend_proof = json_module
+                .call_method1(
+                    "loads",
+                    (r#"{"backend":"halo2/ipa","proof_b64":"cHJvb2Y=","verifying_key_ref":{"backend":"stark/fri","name":"component_verify_v1"}}"#,),
+                )
+                .expect("wrong backend proof loads");
+
+            let err = match Instruction::register_asset_hidden_zk_pool(
+                &instruction_type,
+                "",
+                "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
+                root.as_any(),
+                verifier.as_any(),
+            ) {
+                Ok(_) => panic!("blank pool id must fail"),
+                Err(err) => err.to_string(),
+            };
+            assert!(err.contains("pool_id"));
+
+            let err = match Instruction::register_asset_hidden_zk_pool(
+                &instruction_type,
+                "boi-masp-pool-v1",
+                "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
+                zero_root.as_any(),
+                verifier.as_any(),
+            ) {
+                Ok(_) => panic!("zero asset set root must fail"),
+                Err(err) => err.to_string(),
+            };
+            assert!(err.contains("asset_set_root"));
+
+            let err = match Instruction::asset_hidden_zk_transfer_prepared(
+                &instruction_type,
+                "boi-masp-pool-v1",
+                duplicate_inputs.as_any(),
+                outputs.as_any(),
+                proof.as_any(),
+                None,
+            ) {
+                Ok(_) => panic!("duplicate input nullifier must fail"),
+                Err(err) => err.to_string(),
+            };
+            assert!(err.contains("duplicates"));
+
+            let err = match Instruction::asset_hidden_zk_transfer_prepared(
+                &instruction_type,
+                "boi-masp-pool-v1",
+                outputs.as_any(),
+                outputs.as_any(),
+                missing_backend_proof.as_any(),
+                None,
+            ) {
+                Ok(_) => panic!("missing proof backend must fail"),
+                Err(err) => err.to_string(),
+            };
+            assert!(err.contains("proof.backend"));
+
+            let err = match Instruction::verify_proof(
+                &instruction_type,
+                missing_backend_proof.as_any(),
+            ) {
+                Ok(_) => panic!("VerifyProof missing proof backend must fail"),
+                Err(err) => err.to_string(),
+            };
+            assert!(err.contains("proof.backend"));
+
+            let err =
+                match Instruction::verify_proof(&instruction_type, wrong_backend_proof.as_any()) {
+                    Ok(_) => panic!("VerifyProof verifier key backend mismatch must fail"),
+                    Err(err) => err.to_string(),
+                };
+            assert!(err.contains("proof.vk_ref.backend"));
+        });
+    }
+
+    #[test]
     fn zk_ace_instruction_classmethods_serialize_payloads() {
         ensure_python();
         Python::attach(|py| {
@@ -16017,6 +16315,40 @@ impl Instruction {
     }
 
     #[classmethod]
+    #[pyo3(signature = (proof))]
+    fn verify_proof<'py>(_cls: &Bound<'py, PyType>, proof: &Bound<'py, PyAny>) -> PyResult<Self> {
+        let instruction = VerifyProof::new(parse_zk_proof_attachment(proof, "proof")?);
+        Ok(Instruction::new(instruction.into()))
+    }
+
+    #[classmethod]
+    #[pyo3(signature = (pool_id, storage_asset, asset_set_root, vk_transfer))]
+    fn register_asset_hidden_zk_pool<'py>(
+        _cls: &Bound<'py, PyType>,
+        pool_id: &str,
+        storage_asset: &str,
+        asset_set_root: &Bound<'py, PyAny>,
+        vk_transfer: &Bound<'py, PyAny>,
+    ) -> PyResult<Self> {
+        let pool_id = pool_id.trim();
+        if pool_id.is_empty() {
+            return Err(PyValueError::new_err("pool_id must be non-empty"));
+        }
+        let storage_asset: AssetDefinitionId = storage_asset.parse().map_err(|err| {
+            PyValueError::new_err(format!(
+                "invalid storage asset definition id `{storage_asset}`: {err}"
+            ))
+        })?;
+        let instruction = RegisterAssetHiddenZkPool::new(
+            pool_id.to_owned(),
+            storage_asset,
+            py_non_zero_fixed_array::<32>(asset_set_root, "asset_set_root")?,
+            parse_required_verifying_key_id_py(Some(vk_transfer), "vk_transfer")?,
+        );
+        Ok(Instruction::new(instruction.into()))
+    }
+
+    #[classmethod]
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (asset_definition_id, identity_commitment, policy_hash, allowed_accounts, verifier_key=None, *, action_class=None, domain_tag=None))]
     fn register_zk_ace_identity_commitment<'py>(
@@ -16215,6 +16547,41 @@ impl Instruction {
         let root_hint = parse_optional_root_hint(root_hint, "root_hint")?;
         let instruction =
             Unshield::new_with_outputs(asset, to, public_amount, inputs, outputs, proof, root_hint);
+        Ok(Instruction::new(instruction.into()))
+    }
+
+    #[classmethod]
+    #[pyo3(signature = (pool_id, inputs, outputs, proof, *, root_hint=None))]
+    fn asset_hidden_zk_transfer_prepared<'py>(
+        _cls: &Bound<'py, PyType>,
+        pool_id: &str,
+        inputs: &Bound<'py, PyAny>,
+        outputs: &Bound<'py, PyAny>,
+        proof: &Bound<'py, PyAny>,
+        root_hint: Option<&Bound<'py, PyAny>>,
+    ) -> PyResult<Self> {
+        let pool_id = pool_id.trim();
+        if pool_id.is_empty() {
+            return Err(PyValueError::new_err("pool_id must be non-empty"));
+        }
+        let inputs = py_fixed_array_list(inputs, "inputs")?;
+        if inputs.is_empty() {
+            return Err(PyValueError::new_err(
+                "inputs must contain at least one nullifier",
+            ));
+        }
+        ensure_unique_fixed_arrays(&inputs, "inputs")?;
+        let outputs = py_fixed_array_list(outputs, "outputs")?;
+        if outputs.is_empty() {
+            return Err(PyValueError::new_err(
+                "outputs must contain at least one commitment",
+            ));
+        }
+        ensure_unique_fixed_arrays(&outputs, "outputs")?;
+        let proof = parse_zk_proof_attachment(proof, "proof")?;
+        let root_hint = parse_optional_root_hint(root_hint, "root_hint")?;
+        let instruction =
+            AssetHiddenZkTransfer::new(pool_id.to_owned(), inputs, outputs, proof, root_hint);
         Ok(Instruction::new(instruction.into()))
     }
 
@@ -18305,6 +18672,18 @@ const PRIVACY_TRANSPARENT_TRANSFER_BASELINE_WAIVED_GATE_KEYS: &[&str] = &[
 const PRIVACY_PRODUCTION_EVIDENCE_HASH_PREFIX: &str = "sha256:";
 const PRIVACY_PRODUCTION_LOCALNET_TARGET: &str = "localnet";
 const PRIVACY_PRODUCTION_LOCALNET_PEER_COUNT: u8 = 4;
+const PRIVACY_PRODUCTION_SDK_EXPORT_SURFACES: &[&str] = &[
+    "rust_core",
+    "ffi",
+    "python",
+    "javascript",
+    "java_android",
+    "kotlin",
+    "swift",
+    "csharp",
+];
+const PRIVACY_PRODUCTION_SDK_PARITY_ARTIFACT_KINDS: &[&str] =
+    &["types", "validation_rules", "error_codes", "golden_vectors"];
 
 const PRIVACY_REQUIRED_PRODUCTION_PLAN_ROWS: &[(&str, &str, &str)] = &[
     (
@@ -18791,6 +19170,19 @@ struct PrivacyProductionLocalnetEvidenceV1 {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+struct PrivacyProductionSdkExportV1 {
+    surface: &'static str,
+    entrypoints: Vec<&'static str>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PrivacyProductionSdkParityArtifactV1 {
+    kind: &'static str,
+    surface: &'static str,
+    artifact_hash: &'static str,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct PrivacyProductionEvidenceRowV1 {
     algorithm_id: &'static str,
     chain_id: &'static str,
@@ -18801,6 +19193,8 @@ struct PrivacyProductionEvidenceRowV1 {
     proof_family: &'static str,
     public_inputs_schema: Option<&'static str>,
     sdk_entrypoints: Vec<&'static str>,
+    sdk_exports: Vec<PrivacyProductionSdkExportV1>,
+    sdk_parity_artifacts: Vec<PrivacyProductionSdkParityArtifactV1>,
     required_state: Vec<&'static str>,
     fuzz_artifact_hash: &'static str,
     performance_artifact_hash: &'static str,
@@ -19183,6 +19577,67 @@ fn privacy_production_evidence_sdk_entrypoints_are_valid(
         })
 }
 
+fn privacy_production_evidence_sdk_exports_are_valid(
+    row: &PrivacyProductionEvidenceRowV1,
+    entry: &PrivacyAlgorithmEntry,
+) -> bool {
+    let expected_entrypoints = privacy_expected_production_sdk_entrypoints(entry);
+    row.sdk_exports.len() == PRIVACY_PRODUCTION_SDK_EXPORT_SURFACES.len()
+        && PRIVACY_PRODUCTION_SDK_EXPORT_SURFACES
+            .iter()
+            .enumerate()
+            .all(|(index, expected_surface)| {
+                let Some(export) = row.sdk_exports.get(index) else {
+                    return false;
+                };
+                export.surface == *expected_surface
+                    && privacy_text_field_is_portable_identifier(export.surface)
+                    && !privacy_evidence_text_has_non_production_marker(export.surface)
+                    && !privacy_exposed_label_claims_production_readiness(export.surface)
+                    && privacy_string_slice_matches_vec(&export.entrypoints, &expected_entrypoints)
+                    && !privacy_string_slice_has_duplicates(&export.entrypoints)
+                    && export.entrypoints.iter().all(|entrypoint| {
+                        privacy_sdk_entrypoint_is_portable(entrypoint)
+                            && !privacy_entrypoint_is_dev_fixture(entrypoint)
+                            && !privacy_entrypoint_is_local_verifier(entrypoint)
+                            && !privacy_exposed_label_claims_production_readiness(entrypoint)
+                    })
+            })
+}
+
+fn privacy_production_evidence_sdk_parity_artifacts_are_valid(
+    row: &PrivacyProductionEvidenceRowV1,
+) -> bool {
+    row.sdk_parity_artifacts.len()
+        == PRIVACY_PRODUCTION_SDK_PARITY_ARTIFACT_KINDS.len()
+            * PRIVACY_PRODUCTION_SDK_EXPORT_SURFACES.len()
+        && PRIVACY_PRODUCTION_SDK_PARITY_ARTIFACT_KINDS
+            .iter()
+            .enumerate()
+            .all(|(kind_index, expected_kind)| {
+                PRIVACY_PRODUCTION_SDK_EXPORT_SURFACES
+                    .iter()
+                    .enumerate()
+                    .all(|(surface_index, expected_surface)| {
+                        let artifact_index = kind_index
+                            * PRIVACY_PRODUCTION_SDK_EXPORT_SURFACES.len()
+                            + surface_index;
+                        let Some(artifact) = row.sdk_parity_artifacts.get(artifact_index) else {
+                            return false;
+                        };
+                        artifact.kind == *expected_kind
+                            && artifact.surface == *expected_surface
+                            && privacy_text_field_is_portable_identifier(artifact.kind)
+                            && privacy_text_field_is_portable_identifier(artifact.surface)
+                            && !privacy_evidence_text_has_non_production_marker(artifact.kind)
+                            && !privacy_evidence_text_has_non_production_marker(artifact.surface)
+                            && !privacy_exposed_label_claims_production_readiness(artifact.kind)
+                            && !privacy_exposed_label_claims_production_readiness(artifact.surface)
+                            && privacy_production_evidence_hash_is_valid(artifact.artifact_hash)
+                    })
+            })
+}
+
 fn privacy_production_evidence_required_state_is_valid(
     row: &PrivacyProductionEvidenceRowV1,
     entry: &PrivacyAlgorithmEntry,
@@ -19218,6 +19673,8 @@ fn privacy_production_evidence_row_is_valid(
         && row.proof_family == entry.proof_family
         && row.public_inputs_schema == privacy_expected_public_inputs_schema(entry)
         && privacy_production_evidence_sdk_entrypoints_are_valid(row, entry)
+        && privacy_production_evidence_sdk_exports_are_valid(row, entry)
+        && privacy_production_evidence_sdk_parity_artifacts_are_valid(row)
         && privacy_production_evidence_required_state_is_valid(row, entry)
         && privacy_production_evidence_hash_is_valid(row.fuzz_artifact_hash)
         && privacy_production_evidence_hash_is_valid(row.performance_artifact_hash)
@@ -20170,6 +20627,18 @@ fn privacy_failure_result(
     result
 }
 
+fn privacy_failure_result_without_vk_ref(
+    error_code: u32,
+    message: &str,
+    request: &PrivacyProofRequestV1,
+) -> PrivacyProofResultV1 {
+    let mut sanitized = request.clone();
+    sanitized.vk_ref.clear();
+    sanitized.witness.clear();
+    sanitized.proof.clear();
+    privacy_failure_result(error_code, message, Some(&sanitized))
+}
+
 fn privacy_failure_result_invariants_hold(result: &PrivacyProofResultV1) -> bool {
     result.version == PRIVACY_FFI_VERSION_V1
         && result.status == PRIVACY_FFI_STATUS_ERROR
@@ -20265,7 +20734,7 @@ fn privacy_result_for_request(
             return privacy_failure_result(
                 PRIVACY_FFI_ERROR_INVALID_REQUEST,
                 "privacy proof request must include non-empty algorithm_id and entrypoint",
-                None,
+                Some(&request),
             );
         }
 
@@ -20277,11 +20746,22 @@ fn privacy_result_for_request(
             );
         }
 
+        let known_entry = privacy_algorithm_entry(&request.algorithm_id);
+        if let Some(entry) = known_entry {
+            if privacy_entrypoint_planned(entry, &request.entrypoint) {
+                return privacy_failure_result_without_vk_ref(
+                    PRIVACY_FFI_ERROR_INVALID_REQUEST,
+                    "privacy proof request entrypoint is planned but not executable until the production gate passes",
+                    &request,
+                );
+            }
+        }
+
         if request.vk_ref.trim().is_empty() {
             return privacy_failure_result(
                 PRIVACY_FFI_ERROR_INVALID_REQUEST,
                 "privacy proof request must include non-empty vk_ref",
-                None,
+                Some(&request),
             );
         }
 
@@ -20293,21 +20773,13 @@ fn privacy_result_for_request(
             );
         }
 
-        let Some(entry) = privacy_algorithm_entry(&request.algorithm_id) else {
+        let Some(entry) = known_entry else {
             return privacy_failure_result(
                 PRIVACY_FFI_ERROR_UNSUPPORTED_ALGORITHM,
                 "unsupported privacy algorithm id",
                 Some(&request),
             );
         };
-
-        if privacy_entrypoint_planned(entry, &request.entrypoint) {
-            return privacy_failure_result(
-                PRIVACY_FFI_ERROR_INVALID_REQUEST,
-                "privacy proof request entrypoint is planned but not executable until the production gate passes",
-                Some(&request),
-            );
-        }
 
         if !privacy_entrypoint_supported(entry, &request.entrypoint) {
             return privacy_failure_result(
@@ -20471,6 +20943,35 @@ fn privacy_capabilities_v1_py(py: Python<'_>) -> PyResult<Py<PyBytes>> {
 #[pyo3(name = "privacy_bridge_abi_version")]
 fn privacy_bridge_abi_version_py() -> u32 {
     7
+}
+
+#[pyfunction]
+#[pyo3(name = "privacy_proof_request_v1")]
+fn privacy_proof_request_v1_py(
+    py: Python<'_>,
+    algorithm_id: &str,
+    entrypoint: &str,
+    vk_ref: &str,
+    public_inputs: &[u8],
+    witness: &[u8],
+    proof: &[u8],
+) -> PyResult<Py<PyBytes>> {
+    let mut request = PrivacyProofRequestV1 {
+        algorithm_id: algorithm_id.to_owned(),
+        entrypoint: entrypoint.to_owned(),
+        vk_ref: vk_ref.to_owned(),
+        public_inputs: public_inputs.to_vec(),
+        witness: witness.to_vec(),
+        proof: proof.to_vec(),
+    };
+    let encoded = encode_privacy_archive_py(
+        py,
+        &request,
+        "encode privacy proof request",
+        PRIVACY_REQUEST_SCHEMA_BYTE,
+    );
+    privacy_clear_request_byte_fields(&mut request);
+    encoded
 }
 
 #[pyfunction]
@@ -20658,6 +21159,7 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
         module
     )?)?;
     module.add_function(wrap_pyfunction!(privacy_bridge_abi_version_py, module)?)?;
+    module.add_function(wrap_pyfunction!(privacy_proof_request_v1_py, module)?)?;
     module.add_function(wrap_pyfunction!(privacy_capabilities_v1_py, module)?)?;
     module.add_function(wrap_pyfunction!(privacy_build_proof_v1_py, module)?)?;
     module.add_function(wrap_pyfunction!(privacy_verify_proof_v1_py, module)?)?;

@@ -389,6 +389,56 @@ baseTest("buildKagemushaInstructionArchiveInstruction normalizes archive bytes",
       }),
     /must not be compressed/u,
   );
+  assert.throws(
+    () =>
+      buildKagemushaInstructionArchiveInstruction({
+        type: "KagemushaTransfer",
+        instructionArchive: frameKagemushaInstructionArchive(
+          "KagemushaTransfer",
+          [0x01],
+          { flags: 0x08 },
+        ),
+      }),
+    /valid KagemushaTransfer Norito archive/u,
+  );
+  assert.throws(
+    () =>
+      buildKagemushaInstructionArchiveInstruction({
+        type: "KagemushaTransfer",
+        instructionArchive: frameKagemushaInstructionArchive(
+          "KagemushaTransfer",
+          [0x01],
+          { flags: 0x20 },
+        ),
+      }),
+    /valid KagemushaTransfer Norito archive/u,
+  );
+  const invalidPadding = frameKagemushaInstructionArchive(
+    "KagemushaTransfer",
+    [0x01],
+    { paddingLength: 1 },
+  );
+  invalidPadding[40] = 0xff;
+  assert.throws(
+    () =>
+      buildKagemushaInstructionArchiveInstruction({
+        type: "KagemushaTransfer",
+        instructionArchive: invalidPadding,
+      }),
+    /valid KagemushaTransfer Norito archive/u,
+  );
+  assert.throws(
+    () =>
+      buildKagemushaInstructionArchiveInstruction({
+        type: "KagemushaTransfer",
+        instructionArchive: frameKagemushaInstructionArchive(
+          "KagemushaTransfer",
+          [0x01],
+          { paddingLength: 65 },
+        ),
+      }),
+    /valid KagemushaTransfer Norito archive/u,
+  );
   const tampered = Buffer.from(transferArchive);
   tampered[tampered.length - 1] ^= 0xff;
   assert.throws(

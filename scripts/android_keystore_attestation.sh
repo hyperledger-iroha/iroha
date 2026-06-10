@@ -13,6 +13,8 @@ Verify an Android Keystore attestation bundle using the Iroha Android attestatio
 Required:
   --bundle-dir <path>      Directory containing chain.pem/alias.txt/challenge.hex (see docs).
   --trust-root <path>      Trusted root certificate (PEM/DER). Repeat for additional roots.
+                             Files named trust_root_*.pem in the bundle directory are detected
+                             automatically.
 
 Optional:
   --trust-root-dir <path>  Directory containing trusted roots (PEM/DER/CRT). Repeat as needed.
@@ -25,9 +27,9 @@ Optional:
   --output <path>          Write JSON summary to <path>.
   --help                   Show this message.
 
-The script compiles the Iroha Android library with the Norito Java sources and executes the
-attestation harness. See docs/source/sdk/android/readiness/android_strongbox_device_matrix.md
-for collection guidance and required firmware levels.
+The script compiles the attestation harness and its direct verifier dependencies.
+See docs/source/sdk/android/readiness/android_strongbox_device_matrix.md for collection
+guidance and required firmware levels.
 EOF
 }
 
@@ -38,7 +40,6 @@ fi
 
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 ANDROID_ROOT="${REPO_ROOT}/java/iroha_android"
-NORITO_ROOT="${ANDROID_ROOT}/../norito_java/src/main/java"
 
 BUNDLE_DIR=""
 CHAIN_FILE=""
@@ -111,7 +112,7 @@ if [[ -z "$BUNDLE_DIR" && -z "$CHAIN_FILE" ]]; then
   exit 1
 fi
 
-if [[ ${#TRUST_ROOTS[@]} -eq 0 && ${#TRUST_ROOT_DIRS[@]} -eq 0 && ${#TRUST_ROOT_BUNDLES[@]} -eq 0 ]]; then
+if [[ -z "$BUNDLE_DIR" && ${#TRUST_ROOTS[@]} -eq 0 && ${#TRUST_ROOT_DIRS[@]} -eq 0 && ${#TRUST_ROOT_BUNDLES[@]} -eq 0 ]]; then
   echo "At least one --trust-root, --trust-root-dir, or --trust-root-bundle must be supplied." >&2
   usage >&2
   exit 1
@@ -198,20 +199,26 @@ trap 'rm -rf "$BUILD_DIR"' EXIT
 CLASSES="$BUILD_DIR/classes"
 mkdir -p "$CLASSES"
 
-if [[ ! -d "$NORITO_ROOT" ]]; then
-  echo "Expected norito_java sources at $NORITO_ROOT" >&2
-  exit 1
-fi
-
-MAIN_SOURCES=$(find "$ANDROID_ROOT/src/main/java" -name '*.java')
-NORITO_SOURCES=$(find "$NORITO_ROOT" -name '*.java')
+MAIN_SOURCES=(
+  "$ANDROID_ROOT/src/main/java/org/hyperledger/iroha/android/crypto/keystore/KeyAttestation.java"
+  "$ANDROID_ROOT/src/main/java/org/hyperledger/iroha/android/crypto/keystore/attestation/AttestationResult.java"
+  "$ANDROID_ROOT/src/main/java/org/hyperledger/iroha/android/crypto/keystore/attestation/AttestationVerificationException.java"
+  "$ANDROID_ROOT/src/main/java/org/hyperledger/iroha/android/crypto/keystore/attestation/AttestationVerifier.java"
+  "$ANDROID_ROOT/src/main/java/org/hyperledger/iroha/android/tools/AndroidKeystoreAttestationHarness.java"
+)
+for source in "${MAIN_SOURCES[@]}"; do
+  if [[ ! -f "$source" ]]; then
+    echo "Expected attestation harness source at $source" >&2
+    exit 1
+  fi
+done
 
 JAVAC_FLAGS=("-d" "$CLASSES")
 if javac --release 21 -version >/dev/null 2>&1; then
   JAVAC_FLAGS=("--release" "21" "-d" "$CLASSES")
 fi
 
-javac "${JAVAC_FLAGS[@]}" $NORITO_SOURCES $MAIN_SOURCES
+javac "${JAVAC_FLAGS[@]}" "${MAIN_SOURCES[@]}"
 
 COMMAND=("java" "-cp" "$CLASSES" "org.hyperledger.iroha.android.tools.AndroidKeystoreAttestationHarness")
 

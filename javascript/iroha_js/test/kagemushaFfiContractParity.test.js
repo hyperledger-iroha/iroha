@@ -658,6 +658,36 @@ test("Kagemusha mobile compact-token native output guards require Norito archive
     );
     assert.match(
       text,
+      /assertRejectsMalformedNativeRedeemOutput/u,
+      `${label} must route malformed recursive native output variants through a shared assertion`,
+    );
+    assert.match(
+      text,
+      /compressed\[22\] = 1/u,
+      `${label} must reject compressed recursive native output frames`,
+    );
+    assert.match(
+      text,
+      /unsupportedFlags\[39\] = 0x08/u,
+      `${label} must reject unsupported recursive native output flags`,
+    );
+    assert.match(
+      text,
+      /invalidFieldBitset\[39\] = 0x20/u,
+      `${label} must reject invalid field-bitset recursive native output flags`,
+    );
+    assert.match(
+      text,
+      /withHeaderPadding\(kagemushaNoritoFrameWithPayload\(0x4b\),\s*(?:byteArrayOf\(0x7f\)|new byte\[\] \{0x7f\})\)/u,
+      `${label} must reject nonzero recursive native output header padding`,
+    );
+    assert.match(
+      text,
+      /withHeaderPadding\(kagemushaNoritoFrameWithPayload\(0x4b\),\s*(?:ByteArray\(65\)|new byte\[65\])\)/u,
+      `${label} must reject excessive recursive native output header padding`,
+    );
+    assert.match(
+      text,
       /kagemushaNoritoFrameWithPayload/u,
       `${label} must retain a deterministic valid Norito output fixture`,
     );
@@ -694,6 +724,13 @@ test("Kagemusha JavaScript and Python native output guards require Norito archiv
       "Kagemusha recursive spend helpers reject empty-payload Norito native outputs",
       "native kagemushaRecursiveSpendRedeem returned invalid Norito archive",
       "native kagemushaRecursiveSpendRedeem returned empty Norito payload",
+      "assertRejectsMalformedNativeRedeemOutput",
+      "compressed[22] = 1",
+      "unsupportedFlags[39] = 0x08",
+      "invalidFieldBitset[39] = 0x20",
+      "kagemushaNoritoFrameWithHeaderPadding",
+      "Buffer.from([0x7f])",
+      "Buffer.alloc(65)",
       "kagemushaNoritoFrameWithPayload",
     ],
     "JavaScript native output guard tests",
@@ -716,6 +753,13 @@ test("Kagemusha JavaScript and Python native output guards require Norito archiv
       "test_recursive_kagemusha_helpers_reject_empty_payload_native_outputs",
       "returned invalid Norito archive",
       "returned empty Norito payload",
+      "assert_rejects_malformed_native_outputs",
+      "compressed[22] = 1",
+      "unsupported_flags[39] = 0x08",
+      "invalid_field_bitset[39] = 0x20",
+      "_kagemusha_norito_frame_with_header_padding",
+      'b"\\x7f"',
+      'b"\\x00" * 65',
       "_kagemusha_norito_frame_with_payload",
     ],
     "Python native output guard tests",
@@ -898,6 +942,15 @@ test("Kagemusha Swift and C# recursive spend inputs require Norito archives", ()
       "Recursive spend bundle archive must be a valid Norito archive",
       "Pallas open-envelopes archive must contain a non-empty Norito payload",
       "KagemushaNoritoFrameWithPayload",
+      "AssertRejectsMalformedEverywhere",
+      "AssertRejectsMalformedEverywhere(compressed, validArchive)",
+      "AssertRejectsMalformedEverywhere(unsupportedFlags, validArchive)",
+      "AssertRejectsMalformedEverywhere(invalidFieldBitset, validArchive)",
+      "compressed[22] = 1",
+      "unsupportedFlags[39] = 0x08",
+      "invalidFieldBitset[39] = 0x20",
+      "WithHeaderPadding(KagemushaNoritoFrameWithPayload(0x4b), new byte[] { 0x7f })",
+      "WithHeaderPadding(KagemushaNoritoFrameWithPayload(0x4b), new byte[65])",
     ],
     "C# recursive spend input guard tests",
   );
@@ -996,6 +1049,13 @@ test("Kagemusha Swift compact-token prover inputs and outputs require Norito arc
       ".emptyCompactTokenPayload",
       "validKagemushaNoritoArchive",
       "emptyPayloadKagemushaNoritoArchive",
+      "malformedKagemushaNoritoArchives",
+      "compressed[22] = 0x01",
+      "unsupportedFlags[39] = NoritoHeader.varintOffsets",
+      "invalidFieldBitset[39] = NoritoHeader.fieldBitset",
+      "kagemushaNoritoFrameWithHeaderPadding",
+      "Data([0x7f])",
+      "Data(repeating: 0, count: 65)",
     ],
     "Swift compact-token input/output guard tests",
   );
@@ -1036,6 +1096,13 @@ test("Kagemusha Swift recursive aggregation prover inputs and outputs require No
       ".emptyProofBundlePayload",
       "validKagemushaNoritoArchive",
       "emptyPayloadKagemushaNoritoArchive",
+      "malformedKagemushaNoritoArchives",
+      "compressed[22] = 0x01",
+      "unsupportedFlags[39] = NoritoHeader.varintOffsets",
+      "invalidFieldBitset[39] = NoritoHeader.fieldBitset",
+      "kagemushaNoritoFrameWithHeaderPadding",
+      "Data([0x7f])",
+      "Data(repeating: 0, count: 65)",
     ],
     "Swift recursive aggregation input/output guard tests",
   );
@@ -1063,6 +1130,13 @@ test("Kagemusha Swift recursive spend native outputs require Norito archives", (
       ".emptyNativeOutputPayload",
       "validKagemushaNoritoArchive",
       "emptyPayloadKagemushaNoritoArchive",
+      "malformedKagemushaNoritoArchives",
+      "compressed[22] = 0x01",
+      "unsupportedFlags[39] = NoritoHeader.varintOffsets",
+      "invalidFieldBitset[39] = NoritoHeader.fieldBitset",
+      "kagemushaNoritoFrameWithHeaderPadding",
+      "Data([0x7f])",
+      "Data(repeating: 0, count: 65)",
     ],
     "Swift recursive spend output guard tests",
   );
@@ -1134,6 +1208,7 @@ test("Kagemusha Swift instruction transaction builder stays wired", () => {
       ".unsupportedRequestArchiveType",
       ".unexpectedInstructionArchiveType(expected: .redeemRecursive, actual: .transfer)",
       "unsupportedFlagsArchive",
+      "invalidFieldBitsetArchive",
       "nonZeroPaddingArchive",
       "excessivePaddingArchive",
       "KagemushaRecursiveCompactPaymentTokenProver.nativeArchiveMaxBytes + 1",
@@ -1209,6 +1284,11 @@ test("Kagemusha C# instruction transaction builder stays wired", () => {
       "Assert.Equal(archive, instruction.Payload)",
       'Assert.Equal("iroha_data_model::isi::offline::RedeemKagemushaRecursive", instruction.WireId)',
       'NoritoCodec.Encode("KagemushaRecursiveSpendRedeemRequestV1", new byte[] { 1, 2, 3 })',
+      "compressed[22] = 1",
+      "unsupportedFlags[39] = 0x08",
+      "invalidFieldBitset[39] = 0x20",
+      "WithHeaderPadding",
+      "new byte[65]",
     ],
     "C# Kagemusha instruction transaction builder tests",
   );
@@ -1283,6 +1363,10 @@ test("Kagemusha JVM instruction archive transaction helpers stay wired", () => {
       "recursiveRedeemTransactionPayloadFromRequest(",
       '"KagemushaRecursiveSpendRedeemRequestV1"',
       "tampered[tampered.lastIndex]",
+      "compressed[22] = 1",
+      "NoritoHeader.VARINT_OFFSETS",
+      "NoritoHeader.FIELD_BITSET",
+      "withNonZeroHeaderPadding",
     ],
     "Kotlin Kagemusha instruction archive transaction helper tests",
   );
@@ -1301,6 +1385,10 @@ test("Kagemusha JVM instruction archive transaction helpers stay wired", () => {
       "Arrays.equals(transferArchive, transferWire.payloadBytes())",
       '"KagemushaRecursiveSpendRedeemRequestV1"',
       "tampered[tampered.length - 1] ^= 0x01",
+      "compressed[22] = 1",
+      "NoritoHeader.VARINT_OFFSETS",
+      "NoritoHeader.FIELD_BITSET",
+      "withNonZeroHeaderPadding",
     ],
     "Android Java Kagemusha instruction archive transaction helper tests",
   );
@@ -1396,6 +1484,10 @@ test("Kagemusha JavaScript instruction transaction builder stays wired", () => {
       "schema must match RedeemKagemushaRecursive",
       "checksum is invalid",
       "must not be compressed",
+      "flags: 0x08",
+      "flags: 0x20",
+      "invalidPadding[40] = 0xff",
+      "paddingLength: 65",
       "valid KagemushaTransfer Norito archive",
       "bytesBase64 must be canonical standard base64",
       "buildKagemushaInstructionTransaction wraps one archive instruction",
@@ -1493,6 +1585,12 @@ test("Kagemusha Python instruction transaction builder stays wired", () => {
       "instruction_archive must be a valid Norito archive",
       "schema must match RedeemKagemushaRecursive",
       "KAGEMUSHA_INSTRUCTION_ARCHIVE_WIRE_NAMES",
+      "compressed[22] = 1",
+      "unsupported_flags[39] = 0x08",
+      "invalid_field_bitset[39] = 0x20",
+      "non_zero_padding.insert(40, 0x7F)",
+      'excessive_padding[40:40] = b"\\x00" * 65',
+      "bad_request_flags[39] = 0x20",
       "redeem_request_archive must be a valid Norito archive",
       "draft.kagemusha_recursive_redeem(request_archive)",
     ],
@@ -1815,6 +1913,13 @@ test("recursive Kagemusha ABI-7 compact verifier surface stays in parity", () =>
       "testRejectsInvalidKeyArtifactsArchiveBeforeBridgeCall",
       "testRejectsMalformedNativeOutput",
       "testRejectsEmptyPayloadNativeOutput",
+      "malformedKagemushaNoritoArchives",
+      "compressed[22] = 0x01",
+      "unsupportedFlags[39] = NoritoHeader.varintOffsets",
+      "invalidFieldBitset[39] = NoritoHeader.fieldBitset",
+      "kagemushaNoritoFrameWithHeaderPadding",
+      "Data([0x7f])",
+      "Data(repeating: 0, count: 65)",
       "testReturnsValidNativeOutput",
       "testProjectionRejectsMalformedBundleArchiveBeforeBridgeCall",
       "testProjectionRequiresBridgeAfterInputValidation",
@@ -1993,6 +2098,10 @@ test("recursive Kagemusha ABI-7 compact verifier surface stays in parity", () =>
       "RecursiveSpendNativeReadBridgeOutputRejectsMalformedNoritoSuccessOutput",
       "RecursiveSpendNativeReadBridgeOutputRejectsEmptyPayloadNoritoSuccessOutput",
       "RecursiveSpendNativeReadBridgeOutputReturnsValidNoritoSuccessOutput",
+      "AssertRejectsMalformedBridgeOutput",
+      "AssertRejectsMalformedBridgeOutput(compressed)",
+      "AssertRejectsMalformedBridgeOutput(unsupportedFlags)",
+      "AssertRejectsMalformedBridgeOutput(invalidFieldBitset)",
       "valid Norito archive",
       "non-empty Norito payload",
       "KagemushaNoritoFrameWithPayload",
@@ -3834,6 +3943,10 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-js-browser-helper",
     "--negative-control-js-lineage-key-artifact-copy",
     "--negative-control-js-lineage-key-package-binding",
+    "--negative-control-js-kagemusha-instruction-transaction-builder",
+    "--negative-control-js-python-native-output-headers",
+    "--negative-control-python-kagemusha-instruction-transaction-builder",
+    "--negative-control-csharp-kagemusha-instruction-transaction-builder",
     "--negative-control-python-lineage-key-package-binding",
     "--negative-control-csharp-lineage-key-package-binding",
     "--negative-control-swift-lineage-key-package-binding",
@@ -3884,6 +3997,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-recursive-spend-compact-projection-surface",
     "--negative-control-js-compact-projection-block-height-validation",
     "--negative-control-python-recursive-spend-compact-projection-root-export",
+    "--negative-control-jvm-compact-projection-unsigned-block-height",
     "--negative-control-native-bridge-zero-envelope-pallas-guard",
     "--negative-control-kagemusha-abi-probe-bounds",
     "--negative-control-kagemusha-probe-rejection-shape",
@@ -3927,6 +4041,13 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-jvm-sdk-java-home-reject-script",
     "--negative-control-jvm-recursive-compact-verifier-availability",
     "--negative-control-jvm-recursive-compact-shape-classifier",
+    "--negative-control-mobile-recursive-spend-native-output-headers",
+    "--negative-control-jvm-offline-note-v2-decoder-placeholder",
+    "--negative-control-jvm-offline-note-v2-instruction-wrapper",
+    "--negative-control-jvm-offline-note-v2-instruction-decoder",
+    "--negative-control-offline-note-v2-canonical-instruction-wire-names",
+    "--negative-control-swift-offline-note-v2-decoder-placeholder",
+    "--negative-control-swift-offline-note-v2-instruction-decoder",
     "--negative-control-jvm-sdk-android-harness-script",
     "--negative-control-jvm-sdk-test-order-workflow",
     "--negative-control-jvm-sdk-needs-workflow",
@@ -3938,6 +4059,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-swift-recursive-compact-verifier-bool",
     "--negative-control-swift-recursive-compact-verifier-availability",
     "--negative-control-swift-kagemusha-native-output-cap",
+    "--negative-control-swift-native-output-headers",
+    "--negative-control-swift-native-input-headers",
     "--negative-control-swift-kagemusha-instruction-transaction-builder",
     "--negative-control-swift-sdk-version-script",
     "--negative-control-swift-sdk-override-script",
@@ -5026,6 +5149,35 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "JVM recursive compact verifier availability negative control must not unconditionally pass after run_checks",
   );
+  const mobileNativeOutputHeaderBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-mobile-recursive-spend-native-output-headers":'),
+    guard.indexOf('if mode == "--negative-control-jvm-sdk-android-harness-script":'),
+  );
+  assert.match(
+    mobileNativeOutputHeaderBranch,
+    /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[target\]\s*=\s*mutated[\s\S]*?run_checks\(mutated_texts\)/u,
+    "mobile native output header negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    mobileNativeOutputHeaderBranch,
+    /invalidFieldBitset\[39\] = 0x20[\s\S]*?invalidFieldBitset\[39\] = 0x06/u,
+    "mobile native output header negative control must mutate malformed-header coverage",
+  );
+  assert.match(
+    mobileNativeOutputHeaderBranch,
+    /Kotlin recursive spend native output Norito guard tests[\s\S]*?Android Java recursive spend native output Norito guard tests/u,
+    "mobile native output header negative control must require both mobile guard labels",
+  );
+  assert.match(
+    mobileNativeOutputHeaderBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: mobile native output header drift was not detected"\)/u,
+    "mobile native output header negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    mobileNativeOutputHeaderBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "mobile native output header negative control must not unconditionally pass after run_checks",
+  );
   const csharpArchiveCopyBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-csharp-archive-copy":'),
     guard.indexOf('if mode == "--negative-control-csharp-recursive-compact-verifier-unavailable":'),
@@ -5034,6 +5186,31 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     csharpArchiveCopyBranch,
     /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[[^\]]+\]\s*=\s*mutated_(?:test|source)[\s\S]*?run_checks\(mutated_texts\)/u,
     "C# archive wrapper copy negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    csharpArchiveCopyBranch,
+    /invalidFieldBitset\[39\] = 0x20[\s\S]*?invalidFieldBitset\[39\] = 0x06/u,
+    "C# archive wrapper copy negative control must mutate malformed-header coverage",
+  );
+  assert.match(
+    csharpArchiveCopyBranch,
+    /AssertRejectsMalformedEverywhere\(invalidFieldBitset, validArchive\)[\s\S]*?AssertRejectsMalformedEverywhere\(validArchive, validArchive\)/u,
+    "C# archive wrapper copy negative control must mutate native input malformed-header coverage",
+  );
+  assert.match(
+    csharpArchiveCopyBranch,
+    /AssertRejectsMalformedBridgeOutput\(invalidFieldBitset\)[\s\S]*?AssertRejectsMalformedBridgeOutput\(KagemushaNoritoFrameWithPayload\(0x4b\)\)/u,
+    "C# archive wrapper copy negative control must mutate native output malformed-header coverage",
+  );
+  assert.match(
+    csharpArchiveCopyBranch,
+    /C# recursive spend input Norito guard tests/u,
+    "C# archive wrapper copy negative control must require native input guard test drift detection",
+  );
+  assert.match(
+    csharpArchiveCopyBranch,
+    /C# recursive compact verifier tests/u,
+    "C# archive wrapper copy negative control must require native output guard test drift detection",
   );
   assert.match(
     csharpArchiveCopyBranch,
@@ -5104,7 +5281,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const swiftKagemushaNativeOutputCapBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-swift-kagemusha-native-output-cap":'),
-    guard.indexOf('if mode == "--negative-control-swift-sdk-version-script":'),
+    guard.indexOf('if mode == "--negative-control-swift-native-output-headers":'),
   );
   assert.match(
     swiftKagemushaNativeOutputCapBranch,
@@ -5125,6 +5302,64 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     swiftKagemushaNativeOutputCapBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "Swift Kagemusha native output cap negative control must not unconditionally pass after run_checks",
+  );
+  const swiftNativeOutputHeaderBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-swift-native-output-headers":'),
+    guard.indexOf('if mode == "--negative-control-swift-native-input-headers":'),
+  );
+  assert.match(
+    swiftNativeOutputHeaderBranch,
+    /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[target\]\s*=\s*mutated[\s\S]*?run_checks\(mutated_texts\)/u,
+    "Swift native output header negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    swiftNativeOutputHeaderBranch,
+    /invalidFieldBitset\[39\] = NoritoHeader\.fieldBitset[\s\S]*?invalidFieldBitset\[39\] = NoritoHeader\.packedStruct \| NoritoHeader\.compactLen/u,
+    "Swift native output header negative control must mutate malformed-header coverage",
+  );
+  assert.match(
+    swiftNativeOutputHeaderBranch,
+    /Swift recursive spend native output header guard tests[\s\S]*?Swift compact-token native output header guard tests[\s\S]*?Swift recursive aggregation native output header guard tests[\s\S]*?Swift recursive compact native output header guard tests/u,
+    "Swift native output header negative control must require every Swift guard label",
+  );
+  assert.match(
+    swiftNativeOutputHeaderBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: Swift native output header drift was not detected"\)/u,
+    "Swift native output header negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    swiftNativeOutputHeaderBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "Swift native output header negative control must not unconditionally pass after run_checks",
+  );
+  const swiftNativeInputHeaderBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-swift-native-input-headers":'),
+    guard.indexOf('if mode == "--negative-control-swift-kagemusha-instruction-transaction-builder":'),
+  );
+  assert.match(
+    swiftNativeInputHeaderBranch,
+    /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[target\]\s*=\s*mutated[\s\S]*?run_checks\(mutated_texts\)/u,
+    "Swift native input header negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    swiftNativeInputHeaderBranch,
+    /invalidFieldBitset\[39\] = NoritoHeader\.fieldBitset[\s\S]*?invalidFieldBitset\[39\] = NoritoHeader\.packedStruct \| NoritoHeader\.compactLen/u,
+    "Swift native input header negative control must mutate malformed-header coverage",
+  );
+  assert.match(
+    swiftNativeInputHeaderBranch,
+    /Swift recursive spend input header guard tests[\s\S]*?Swift compact-token input header guard tests[\s\S]*?Swift recursive aggregation input header guard tests[\s\S]*?Swift recursive compact input header guard tests/u,
+    "Swift native input header negative control must require every Swift input guard label",
+  );
+  assert.match(
+    swiftNativeInputHeaderBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: Swift native input header drift was not detected"\)/u,
+    "Swift native input header negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    swiftNativeInputHeaderBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "Swift native input header negative control must not unconditionally pass after run_checks",
   );
   const swiftInstructionTransactionBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-swift-kagemusha-instruction-transaction-builder":'),
@@ -5152,7 +5387,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const jsInstructionTransactionBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-js-kagemusha-instruction-transaction-builder":'),
-    guard.indexOf('if mode == "--negative-control-python-lineage-key-package-binding":'),
+    guard.indexOf('if mode == "--negative-control-js-python-native-output-headers":'),
   );
   assert.match(
     jsInstructionTransactionBranch,
@@ -5173,6 +5408,35 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     jsInstructionTransactionBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "JS instruction transaction builder negative control must not unconditionally pass after run_checks",
+  );
+  const jsPythonNativeOutputHeaderBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-js-python-native-output-headers":'),
+    guard.indexOf('if mode == "--negative-control-python-kagemusha-instruction-transaction-builder":'),
+  );
+  assert.match(
+    jsPythonNativeOutputHeaderBranch,
+    /mutated\s*=\s*dict\(texts\)[\s\S]*?mutated\[target\]\s*=\s*updated[\s\S]*?run_checks\(mutated\)/u,
+    "JS/Python native output header negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    jsPythonNativeOutputHeaderBranch,
+    /invalidFieldBitset\[39\] = 0x20[\s\S]*?invalidFieldBitset\[39\] = 0x06[\s\S]*?invalid_field_bitset\[39\] = 0x20[\s\S]*?invalid_field_bitset\[39\] = 0x06/u,
+    "JS/Python native output header negative control must mutate both malformed-header cases",
+  );
+  assert.match(
+    jsPythonNativeOutputHeaderBranch,
+    /JavaScript recursive spend native output header guard tests[\s\S]*?Python recursive spend native output header guard tests/u,
+    "JS/Python native output header negative control must require both guard labels",
+  );
+  assert.match(
+    jsPythonNativeOutputHeaderBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: JS\/Python native output header drift was not detected"\)/u,
+    "JS/Python native output header negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    jsPythonNativeOutputHeaderBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "JS/Python native output header negative control must not unconditionally pass after run_checks",
   );
   const jsRunner = source("ci/check_kagemusha_recursive_spend_js_sdk.sh");
   const pythonRunner = source("ci/check_kagemusha_recursive_spend_python_sdk.sh");
