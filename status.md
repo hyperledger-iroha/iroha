@@ -2,6 +2,24 @@
 
 Last updated: 2026-06-10
 
+## 2026-06-10 WSL cargo-test memory hardening
+
+- Root-caused the WSL crash during `cargo test` to compile-time RSS spikes, not
+  test execution: `iroha_data_model` reached about `10 GiB` RSS and
+  `iroha_core --lib --test` reached about `9.5 GiB` RSS in a serialized
+  `cargo test -p iroha_core --lib --no-run -j1` repro.
+- Made the workspace-inherited `iroha_data_model` dependency carry only the JSON
+  feature. Crates must now request heavier data-model features explicitly, and
+  `iroha_p2p` no longer re-enables the data-model default feature set.
+- Kept the 197k-line private Sumeragi main-loop unit-test harness available but
+  moved it behind `iroha_core`'s explicit `sumeragi-main-loop-tests` feature, so
+  plain local `cargo test` no longer compiles that oversized harness by default.
+- Validation: `/usr/bin/time -v cargo test -p iroha_core --lib --no-run -j1
+  --message-format=short` completed in 7m58s after the final hardening patch.
+  Maximum RSS was `11,206,596 KiB` (~10.7 GiB), still dominated by
+  `iroha_data_model`; `iroha_core --lib --test` was observed around `7.9 GiB`
+  after the private Sumeragi harness was gated out.
+
 ## 2026-06-10 SCCP not-ready bundle checklist pre-render gate
 
 - Tightened the release-bundle builder's pre-render checklist validation so a

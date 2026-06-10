@@ -16853,6 +16853,54 @@ mod tests {
             sample_full_bootstrap_bounded_noise_sample_extraction_switch_key_artifact_payload(
                 params, secret_key,
             );
+        #[cfg(feature = "zk-stark")]
+        let (prover_key_material, verifier_key_material) = {
+            let verifier_key = sample_fhe_full_bootstrap_execution_vk_box();
+            let prover_key_material =
+                encode_bfv_full_bootstrap_native_stark_fri_prover_key_material_v1(
+                    SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
+                )
+                .expect("sample native full-bootstrap prover-key material");
+            let verifier_key_material =
+                sample_full_bootstrap_native_verifier_material_for_core_vk(&verifier_key);
+            (prover_key_material, verifier_key_material)
+        };
+        #[cfg(not(feature = "zk-stark"))]
+        let (prover_key_material, verifier_key_material) = {
+            let prover_key_material =
+                encode_bfv_full_bootstrap_native_stark_fri_prover_key_material_v1(
+                    SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
+                )
+                .expect("sample native full-bootstrap prover-key material");
+            let verifier_key_material =
+                iroha_crypto::fhe_bfv::encode_bfv_full_bootstrap_native_stark_fri_verifier_key_material_v1(
+                    SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
+                )
+                .expect("sample native full-bootstrap verifier-key material");
+            (prover_key_material, verifier_key_material)
+        };
+        let proof_public_input_schema_digest = Hash::new(&artifacts.proof_public_input_schema);
+        let evaluator_artifact_set_digest = bfv_full_bootstrap_evaluator_artifact_set_digest_v1(
+            params,
+            1,
+            &artifacts.coefficient_to_slot_key,
+            &artifacts.slot_to_coefficient_key,
+            &artifacts.blind_rotation_key,
+            &artifacts.sample_extraction_key,
+            &artifacts.accumulator,
+            &artifacts.proof_public_input_schema,
+            &artifacts.arithmetic_air_constraint_system,
+        )
+        .expect("sample bounded full-bootstrap evaluator artifact-set digest");
+        let (prover_key, verifier_key) = sample_full_bootstrap_proof_key_artifact_payloads(
+            params,
+            proof_public_input_schema_digest,
+            evaluator_artifact_set_digest,
+            &prover_key_material,
+            &verifier_key_material,
+        );
+        artifacts.prover_key = prover_key;
+        artifacts.verifier_key = verifier_key;
         artifacts
     }
 
@@ -18283,6 +18331,17 @@ mod tests {
     }
 
     #[cfg(feature = "zk-stark")]
+    fn full_bootstrap_material_generic_air_tamper_error(
+        tamper: NativeAirTamper,
+        _generic_binding_error: &'static str,
+    ) -> &'static str {
+        match tamper {
+            NativeAirTamper::TranscriptLabel => "native material AIR transcript label mismatch",
+            _ => FHE_FULL_BOOTSTRAP_GENERIC_BINDING_AIR_REJECTED,
+        }
+    }
+
+    #[cfg(feature = "zk-stark")]
     fn apply_native_air_tamper(
         native: &mut crate::zk_stark::StarkVerifyEnvelopeV1,
         tamper: NativeAirTamper,
@@ -18515,17 +18574,17 @@ mod tests {
     }
 
     #[cfg(feature = "zk-stark")]
-    fn try_sample_full_bootstrap_bfv_native_air_envelope(
+    fn sample_full_bootstrap_bfv_native_air_material(
         statement_hash: Hash,
-    ) -> Option<crate::zk_stark::StarkVerifyEnvelopeV1> {
-        let params = soracloud_fhe_full_bootstrap_native_air_stark_params_v1(statement_hash);
+        n_log2: u8,
+    ) -> (Vec<Vec<u64>>, Vec<u64>) {
+        let public_padding_context = sample_full_bootstrap_bfv_native_air_public_padding_context();
         let public_start = u32::from(
             iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PRIVATE_ROW_COUNT_V1,
         );
         let public_start_usize =
             usize::try_from(public_start).expect("public row start fits usize");
-        let public_padding_context = sample_full_bootstrap_bfv_native_air_public_padding_context();
-        let domain_size = 1_usize << usize::from(params.n_log2);
+        let domain_size = 1_usize << usize::from(n_log2);
         let row_width =
             usize::from(iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_ROW_WIDTH_V1);
         let mut trace_rows = Vec::with_capacity(domain_size);
@@ -18549,6 +18608,31 @@ mod tests {
             };
             trace_rows.push(row);
         }
+        (trace_rows, vec![0; domain_size])
+    }
+
+    #[cfg(feature = "zk-stark")]
+    fn sample_full_bootstrap_bfv_native_air_public_padding_context_for_statement(
+        statement_hash: Hash,
+        native: &crate::zk_stark::StarkVerifyEnvelopeV1,
+    ) -> BfvFullBootstrapNativeAirPublicPaddingContext {
+        let (expected_trace_rows, expected_composition_values) =
+            sample_full_bootstrap_bfv_native_air_material(statement_hash, native.params.n_log2);
+        BfvFullBootstrapNativeAirPublicPaddingContext {
+            slot_index: 0,
+            bound_mode: BfvFullBootstrapExecutionProofBoundModeV1::ExactResidualMultiple,
+            expected_trace_rows: Some(expected_trace_rows),
+            expected_composition_values: Some(expected_composition_values),
+        }
+    }
+
+    #[cfg(feature = "zk-stark")]
+    fn try_sample_full_bootstrap_bfv_native_air_envelope(
+        statement_hash: Hash,
+    ) -> Option<crate::zk_stark::StarkVerifyEnvelopeV1> {
+        let params = soracloud_fhe_full_bootstrap_native_air_stark_params_v1(statement_hash);
+        let (trace_rows, _composition_values) =
+            sample_full_bootstrap_bfv_native_air_material(statement_hash, params.n_log2);
         let transcript_label =
             iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_NATIVE_STARK_AIR_TRANSCRIPT_LABEL_V1
                 .to_owned();
@@ -18600,30 +18684,6 @@ mod tests {
             .iter()
             .map(|opening| opening.index)
             .collect()
-    }
-
-    #[cfg(feature = "zk-stark")]
-    fn expected_full_bootstrap_bfv_native_air_material_from_openings(
-        native: &crate::zk_stark::StarkVerifyEnvelopeV1,
-    ) -> (Vec<Vec<u64>>, Vec<u64>) {
-        let domain_size = 1_usize << usize::from(native.params.n_log2);
-        let row_width =
-            usize::from(iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_ROW_WIDTH_V1);
-        let mut trace_rows = vec![vec![0; row_width]; domain_size];
-        let mut composition_values = vec![0; domain_size];
-        for opening in &native
-            .proof
-            .air
-            .as_ref()
-            .expect("sample carries BFV AIR")
-            .openings
-        {
-            let index = usize::try_from(opening.index).expect("opening index fits usize");
-            trace_rows[index] = opening.row.clone();
-            trace_rows[(index + 1) % domain_size] = opening.next_row.clone();
-            composition_values[index] = opening.composition_value;
-        }
-        (trace_rows, composition_values)
     }
 
     #[cfg(feature = "zk-stark")]
@@ -19654,14 +19714,12 @@ mod tests {
         let label = "FHE full-bootstrap execution proof";
         let (statement_hash, native) =
             sample_safe_full_bootstrap_bfv_native_air_envelope(b"full-bootstrap-bfv-air-boundary");
-        let (expected_trace_rows, expected_composition_values) =
-            expected_full_bootstrap_bfv_native_air_material_from_openings(&native);
-        let public_padding_context = Some(BfvFullBootstrapNativeAirPublicPaddingContext {
-            slot_index: 0,
-            bound_mode: BfvFullBootstrapExecutionProofBoundModeV1::ExactResidualMultiple,
-            expected_trace_rows: Some(expected_trace_rows),
-            expected_composition_values: Some(expected_composition_values),
-        });
+        let public_padding_context = Some(
+            sample_full_bootstrap_bfv_native_air_public_padding_context_for_statement(
+                statement_hash,
+                &native,
+            ),
+        );
         validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
             label,
             statement_hash,
@@ -19713,11 +19771,17 @@ mod tests {
             sample_private_full_bootstrap_bfv_native_air_envelope(
                 b"full-bootstrap-bfv-air-private-boundary",
             );
+        let private_public_padding_context = Some(
+            sample_full_bootstrap_bfv_native_air_public_padding_context_for_statement(
+                private_statement_hash,
+                &private_native,
+            ),
+        );
         let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
             label,
             private_statement_hash,
             &private_native,
-            public_padding_context.clone(),
+            private_public_padding_context,
         )
         .expect_err("BFV AIR boundary must reject transcript-sampled private-row openings");
         assert_invalid_parameter_contains(err, "unmasked private row");
@@ -19752,11 +19816,17 @@ mod tests {
             sample_duplicate_public_full_bootstrap_bfv_native_air_envelope(
                 b"full-bootstrap-bfv-air-duplicate-public-boundary",
             );
+        let duplicate_public_padding_context = Some(
+            sample_full_bootstrap_bfv_native_air_public_padding_context_for_statement(
+                duplicate_statement_hash,
+                &duplicate_native,
+            ),
+        );
         let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
             label,
             duplicate_statement_hash,
             &duplicate_native,
-            public_padding_context.clone(),
+            duplicate_public_padding_context,
         )
         .expect_err("BFV AIR boundary must reject transcript-sampled duplicate public openings");
         assert_invalid_parameter_contains(err, "duplicated");
@@ -19947,14 +20017,12 @@ mod tests {
         let (statement_hash, native) = sample_safe_full_bootstrap_bfv_native_air_envelope(
             b"full-bootstrap-bfv-air-governed-trace",
         );
-        let (expected_trace_rows, expected_composition_values) =
-            expected_full_bootstrap_bfv_native_air_material_from_openings(&native);
-        let public_padding_context = Some(BfvFullBootstrapNativeAirPublicPaddingContext {
-            slot_index: 0,
-            bound_mode: BfvFullBootstrapExecutionProofBoundModeV1::ExactResidualMultiple,
-            expected_trace_rows: Some(expected_trace_rows),
-            expected_composition_values: Some(expected_composition_values),
-        });
+        let public_padding_context = Some(
+            sample_full_bootstrap_bfv_native_air_public_padding_context_for_statement(
+                statement_hash,
+                &native,
+            ),
+        );
         validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
             label,
             statement_hash,
@@ -20588,8 +20656,12 @@ mod tests {
             )
         };
 
-        let public_padding_context =
-            Some(sample_full_bootstrap_bfv_native_air_public_padding_context());
+        let public_padding_context = Some(
+            sample_full_bootstrap_bfv_native_air_public_padding_context_for_statement(
+                statement_hash,
+                &safe_native,
+            ),
+        );
         let test_guardrails = crate::zk::ZkVerifyGuardrails {
             halo2_enabled: true,
             halo2_max_envelope_bytes: usize::MAX,
@@ -23384,6 +23456,8 @@ mod tests {
         let (_vk_id, vk_commitment) =
             install_fhe_full_bootstrap_material_verifier_record(&mut stx, verifier_key);
         let proof = sample_fhe_full_bootstrap_material_proof(statement_hash, vk_commitment);
+        #[cfg(feature = "zk-stark")]
+        enable_stark_sample_proof_quotas(&mut stx, &[proof.proof.proof.bytes.len()]);
 
         let err = verify_soracloud_fhe_full_bootstrap_material_proof(
             &mut stx,
@@ -23396,7 +23470,7 @@ mod tests {
         )
         .expect_err("active full-bootstrap verifier must still reject an unverified fake proof");
         #[cfg(feature = "zk-stark")]
-        assert_invalid_parameter_contains(err, "native AIR envelope");
+        assert_invalid_parameter_contains(err, "native material AIR envelope");
         #[cfg(not(feature = "zk-stark"))]
         assert_invalid_parameter_contains(err, "proof verification failed");
         Ok(())
@@ -23800,7 +23874,7 @@ mod tests {
             .expect_err("full-bootstrap material generic AIR drift must fail");
             assert_invalid_parameter_contains(
                 err,
-                full_bootstrap_generic_air_tamper_error(tamper, expected_error),
+                full_bootstrap_material_generic_air_tamper_error(tamper, expected_error),
             );
         }
 
@@ -23856,7 +23930,7 @@ mod tests {
             );
             assert_invalid_parameter_contains(
                 err,
-                full_bootstrap_generic_air_tamper_error(tamper, expected_error),
+                full_bootstrap_material_generic_air_tamper_error(tamper, expected_error),
             );
         }
 
@@ -25762,6 +25836,14 @@ mod tests {
             output_bound,
             vk_commitment,
         );
+        #[cfg(feature = "zk-stark")]
+        {
+            let proof_lengths = proofs
+                .iter()
+                .map(|proof| proof.proof.proof.bytes.len())
+                .collect::<Vec<_>>();
+            enable_stark_sample_proof_quotas(&mut stx, &proof_lengths);
+        }
 
         let err = verify_soracloud_fhe_full_bootstrap_execution_proofs(
             &mut stx,
@@ -26848,7 +26930,11 @@ mod tests {
         let (statement_hash, native) = sample_safe_full_bootstrap_bfv_native_air_envelope(
             b"full-bootstrap-native-zero-composition-active-verifier",
         );
-        let public_padding_context = sample_full_bootstrap_bfv_native_air_public_padding_context();
+        let public_padding_context =
+            sample_full_bootstrap_bfv_native_air_public_padding_context_for_statement(
+                statement_hash,
+                &native,
+            );
         let proof =
             sample_full_bootstrap_execution_bfv_native_air_proof(statement_hash, &native, &vk_box);
         enable_stark_sample_proof_quotas(&mut stx, &[proof.proof.proof.bytes.len()]);
@@ -26952,7 +27038,7 @@ mod tests {
             b"full-bootstrap-native-air-requires-governed-material",
         );
         let (expected_trace_rows, expected_composition_values) =
-            expected_full_bootstrap_bfv_native_air_material_from_openings(&native);
+            sample_full_bootstrap_bfv_native_air_material(statement_hash, native.params.n_log2);
         let vk_box = sample_fhe_full_bootstrap_execution_vk_box();
         let proof =
             sample_full_bootstrap_execution_bfv_native_air_proof(statement_hash, &native, &vk_box);

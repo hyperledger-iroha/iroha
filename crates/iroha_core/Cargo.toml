@@ -85,6 +85,10 @@ zk-preverify = []
 zk-tests = ["iroha-core-tests"]
 # Enable developer Halo2 test vectors (heavy tooling, opt-in only).
 halo2-dev-tests = []
+# Compile the large private Sumeragi main-loop unit-test harness. This remains
+# opt-in so plain `cargo test` does not require a ~10 GiB rustc test-harness
+# compile on WSL and memory-constrained developer machines.
+sumeragi-main-loop-tests = []
 cuda = ["ivm/cuda"]
 
 # Prototype: index ZK1 TLV tags per ProofId in WSV for future proof list/count filters.
@@ -119,7 +123,7 @@ maintenance = { status = "actively-developed" }
 
 [dependencies]
 norito = {workspace = true}
-iroha_data_model = { workspace = true, default-features = false, features = ["transparent_api", "tx_predicates", "json", "bridge"] }
+iroha_data_model = { workspace = true, default-features = false, features = ["transparent_api", "tx_predicates", "json", "bridge", "governance"] }
 iroha_macro = { workspace = true }
 iroha_p2p = { workspace = true }
 iroha_logger = { workspace = true }

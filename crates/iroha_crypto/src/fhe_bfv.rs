@@ -22420,6 +22420,26 @@ mod tests {
             sample_full_bootstrap_bounded_noise_sample_extraction_switch_key_artifact_payload(
                 params, secret_key,
             );
+        let proof_public_input_schema_digest = Hash::new(&artifacts.proof_public_input_schema);
+        let evaluator_artifact_set_digest = bfv_full_bootstrap_evaluator_artifact_set_digest_v1(
+            params,
+            1,
+            &artifacts.coefficient_to_slot_key,
+            &artifacts.slot_to_coefficient_key,
+            &artifacts.blind_rotation_key,
+            &artifacts.sample_extraction_key,
+            &artifacts.accumulator,
+            &artifacts.proof_public_input_schema,
+            &artifacts.arithmetic_air_constraint_system,
+        )
+        .expect("derive sample bounded evaluator artifact set digest");
+        let (prover_key, verifier_key) = sample_full_bootstrap_proof_key_artifact_payloads(
+            params,
+            proof_public_input_schema_digest,
+            evaluator_artifact_set_digest,
+        );
+        artifacts.prover_key = prover_key;
+        artifacts.verifier_key = verifier_key;
         artifacts
     }
 

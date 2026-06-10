@@ -7983,6 +7983,7 @@ pub(crate) fn reset_round_gap_status_for_tests() {
 }
 
 #[cfg(test)]
+#[cfg_attr(not(feature = "sumeragi-main-loop-tests"), allow(dead_code))]
 pub(crate) fn reset_round_trace_for_tests() {
     let _guard = commit_timing_test_guard();
     if let Ok(mut guard) = round_trace_status_slot().lock() {

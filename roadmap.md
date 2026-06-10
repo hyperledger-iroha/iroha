@@ -112,9 +112,10 @@ and completed history lives in [`status.md`](./status.md).
   `artifacts/kagemusha`.
 - Continue reducing local/CI compile memory after the WSL cargo-test hardening
   and Kagemusha record-bound compact preflight isolation: plain default tests no
-  longer run the heavy ABI-7 recursive compact record-bound Pallas proof matrix,
-  but `iroha_data_model` still has a single stripped-debuginfo compile phase
-  that can peak around `10 GiB` RSS. Future work should split or simplify that
+  longer run the heavy ABI-7 recursive compact record-bound Pallas proof matrix
+  or the oversized private Sumeragi main-loop unit-test harness.
+  `iroha_data_model` still has a single stripped-debuginfo compile phase that
+  can peak around `10.5 GiB` RSS, so future work should split or simplify that
   compile surface rather than reintroducing broad Cargo parallelism or
   one-file-one-binary integration-test discovery.
 - Native asset locks are now first-class ISIs for escrow-style conditional
