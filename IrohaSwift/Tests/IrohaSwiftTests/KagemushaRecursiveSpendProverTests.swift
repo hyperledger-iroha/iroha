@@ -321,6 +321,68 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
                 lineageProvingKeyArchive: overlongVersionLengthArchive
             )
         }
+        var oversizedTerminalCompactLengthPayload = Data()
+        oversizedTerminalCompactLengthPayload.append(Self.noritoOversizedTerminalCompactLength())
+        oversizedTerminalCompactLengthPayload.append(contentsOf: [1, 0])
+        oversizedTerminalCompactLengthPayload.append(Self.noritoField(
+            Self.noritoString(
+                KagemushaRecursiveSpendProver.recursiveSpendLineageOneHopProofCircuitIdV1,
+                flags: NoritoHeader.compactLen
+            ),
+            flags: NoritoHeader.compactLen
+        ))
+        oversizedTerminalCompactLengthPayload.append(Self.noritoField(
+            Self.verifierKeyCommitment(verifierKey: initVerifierKey),
+            flags: NoritoHeader.compactLen
+        ))
+        oversizedTerminalCompactLengthPayload.append(Self.noritoField(
+            Self.noritoByteVec(Data(repeating: 0xB0, count: 64)),
+            flags: NoritoHeader.compactLen
+        ))
+        let oversizedTerminalCompactLengthArchive = Self.noritoFrameFromSchemaHash(
+            Self.kagemushaLineageProvingKeyArchiveSchemaHash,
+            payload: oversizedTerminalCompactLengthPayload,
+            flags: NoritoHeader.compactLen
+        )
+        try assertInvalidLineageKeyArtifact("lineage_proving_key_archive") {
+            _ = try KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
+                verifierOpeningLen: 2,
+                lineageVerifierKeyBackend: KagemushaRecursiveSpendProver.recursiveAggregationProofBackend,
+                lineageVerifierKey: initVerifierKey,
+                lineageProvingKeyArchive: oversizedTerminalCompactLengthArchive
+            )
+        }
+        var hugeCanonicalCompactLengthPayload = Data()
+        hugeCanonicalCompactLengthPayload.append(Self.noritoHugeCanonicalCompactLength())
+        hugeCanonicalCompactLengthPayload.append(contentsOf: [1, 0])
+        hugeCanonicalCompactLengthPayload.append(Self.noritoField(
+            Self.noritoString(
+                KagemushaRecursiveSpendProver.recursiveSpendLineageOneHopProofCircuitIdV1,
+                flags: NoritoHeader.compactLen
+            ),
+            flags: NoritoHeader.compactLen
+        ))
+        hugeCanonicalCompactLengthPayload.append(Self.noritoField(
+            Self.verifierKeyCommitment(verifierKey: initVerifierKey),
+            flags: NoritoHeader.compactLen
+        ))
+        hugeCanonicalCompactLengthPayload.append(Self.noritoField(
+            Self.noritoByteVec(Data(repeating: 0xB1, count: 64)),
+            flags: NoritoHeader.compactLen
+        ))
+        let hugeCanonicalCompactLengthArchive = Self.noritoFrameFromSchemaHash(
+            Self.kagemushaLineageProvingKeyArchiveSchemaHash,
+            payload: hugeCanonicalCompactLengthPayload,
+            flags: NoritoHeader.compactLen
+        )
+        try assertInvalidLineageKeyArtifact("lineage_proving_key_archive") {
+            _ = try KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
+                verifierOpeningLen: 2,
+                lineageVerifierKeyBackend: KagemushaRecursiveSpendProver.recursiveAggregationProofBackend,
+                lineageVerifierKey: initVerifierKey,
+                lineageProvingKeyArchive: hugeCanonicalCompactLengthArchive
+            )
+        }
         var overlongCircuitString = Self.noritoOverlongCompactLength(circuitIdBytes.count)
         overlongCircuitString.append(circuitIdBytes)
         var overlongCircuitStringPayload = Data()
@@ -1861,6 +1923,14 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
     private static func noritoOverlongCompactLength(_ value: Int) -> Data {
         precondition(value >= 0 && value < 0x80)
         return Data([UInt8(value) | 0x80, 0x00])
+    }
+
+    private static func noritoOversizedTerminalCompactLength() -> Data {
+        Data(repeating: 0x80, count: 9) + Data([0x02])
+    }
+
+    private static func noritoHugeCanonicalCompactLength() -> Data {
+        Data(repeating: 0x80, count: 9) + Data([0x01])
     }
 
     private static func verifierKeyCommitment(verifierKey: Data) -> Data {

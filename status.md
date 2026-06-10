@@ -2,6 +2,40 @@
 
 Last updated: 2026-06-10
 
+## 2026-06-10 Privacy production evidence hash canonicalization
+
+- Hardened Python and JavaScript privacy production-evidence catalogs so all
+  hash-addressed evidence URIs use exact lowercase SHA-256 forms (`sha256:`,
+  `urn:sha256:`, or `hash://sha256/` with 64 lowercase hex characters).
+  Uppercase prefixes or digest nibbles no longer pass by lowercasing during
+  validation.
+- Mirrored the JavaScript source change into committed dist output so package
+  consumers and BOI ingestion see the same fail-closed behavior.
+- Hardened the native connect bridge, JavaScript host, and Python Rust binding
+  production-evidence validators to reject uppercase SHA-256 evidence hashes,
+  aligning review, gate, SDK parity, fuzz/perf, and 4-peer localnet evidence
+  with the BOI renderer's lowercase production-gate contract.
+- Added Python, JavaScript, and native adversarial coverage for uppercase
+  review artifact hashes in addition to malformed hashes and uppercase review
+  signatures.
+- Validation:
+  - `PYTHONPATH=python/iroha_python/src /private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-sdk-guard-venv/bin/python -m pytest -q python/iroha_python/tests/privacy_catalog_test.py -k "internal_review_evidence or mock_chain"`
+    (`25` tests passed)
+  - `PYTHONPATH=python/iroha_python/src /private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-sdk-guard-venv/bin/python -m pytest -q python/iroha_python/tests/privacy_catalog_test.py`
+    (`751` tests passed)
+  - `node --test --test-reporter=spec javascript/iroha_js/test/privacyCatalogParity.test.js --test-name-pattern "malformed internal review evidence|mock chain"`
+    (`19` tests passed)
+  - `node --test --test-reporter=spec javascript/iroha_js/test/privacyCatalogParity.test.js`
+    (`19` tests passed)
+  - `cargo test -p connect_norito_bridge privacy_production_evidence -- --nocapture`
+    (`4` focused tests passed)
+  - `cargo test -p iroha_js_host privacy_production_evidence -- --nocapture`
+    (`4` focused tests passed)
+  - `cargo test -p iroha_python_rs privacy_production_evidence -- --nocapture`
+    (`4` focused tests passed)
+  - `bash ci/check_privacy_sdk_guard.sh`
+    (`1160` Python catalog tests passed after the release native SDK build)
+
 ## 2026-06-10 Kagemusha all-SDK lineage archive canonical length hardening
 
 - Mirrored canonical compact Norito length rejection from Python and
@@ -9,18 +43,30 @@ Last updated: 2026-06-10
   proving-key archive parsers. Kotlin/JVM and Java Android additionally bound
   accepted compact length encodings to the 5-byte range needed for the
   `Int`-bounded archive lengths before applying the canonical-threshold check.
-- Added Swift, Kotlin/JVM, Java Android, and C# adversarial lineage
-  key-artifact coverage for an overlong version field length, an overlong
-  nested circuit-family string length, and invalid UTF-8 in the parsed circuit
-  family while the archive byte-smuggles the expected circuit id through
-  proving-key bytes.
+- Added Swift, Kotlin/JVM, Java Android, JavaScript/Node, Python, and C#
+  adversarial lineage key-artifact coverage for an overlong version field
+  length, a 10-byte terminal compact length that exceeds the supported length
+  space, a huge but canonical 10-byte compact length that exceeds each SDK's
+  addressable archive bounds, an overlong nested circuit-family string length,
+  and invalid UTF-8 in the parsed circuit family while the archive byte-smuggles
+  the expected circuit id through proving-key bytes.
+- Hardened the Swift compact-length reader to reject an oversized terminal
+  varint chunk before shifting, matching the existing C#, Kotlin/JVM, and Java
+  Android overflow guards.
+- Hardened the Python and JavaScript/Node compact-length readers to reject the
+  same oversized terminal varint chunk explicitly instead of relying on later
+  archive-size bounds; mirrored the JavaScript guard into browser source and
+  committed dist files.
 - Extended the recursive Kagemusha SDK parity guard and documentation so the
-  non-canonical compact-length and invalid-UTF-8 lineage archive contract is
-  pinned across Swift, Kotlin/JVM, Java Android, JavaScript/Node, Python, and C#.
+  non-canonical compact-length, address-space oversized canonical
+  compact-length, u64-overflowing compact-length, and invalid-UTF-8 lineage
+  archive contract is pinned across Swift, Kotlin/JVM, Java Android,
+  JavaScript/Node, Python, and C#.
 - Local C# runtime validation remains a Windows-machine follow-up because this
   macOS host has no `dotnet` binary; the source and parity guards now pin the
   new C# parser/test markers.
 - Validation:
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/kagemusha.py python/iroha_python/tests/kagemusha_test.py`
   - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh ci/check_kagemusha_recursive_spend_csharp_sdk.sh ci/check_kagemusha_recursive_spend_policy.sh`
   - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
   - `swift test --filter KagemushaRecursiveSpendProverTests/testLineageKeyArtifactPackagesValidateReleaseProfiles`
@@ -28,6 +74,10 @@ Last updated: 2026-06-10
   - `swift test --filter KagemushaRecursiveSpendProverTests`
     (`18` tests passed)
   - `ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=python/iroha_python/src:python/norito_py/src:python /tmp/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q python/iroha_python/tests/kagemusha_test.py -k lineage_key_artifacts`
+    (`1` focused test passed)
+  - `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=python/iroha_python/src:python/norito_py/src:python /tmp/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q python/iroha_python/tests/kagemusha_test.py`
+    (`44` tests passed)
   - `KAGEMUSHA_RECURSIVE_SPEND_JVM_JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
   - `ci/check_kagemusha_recursive_spend_policy.sh`
   - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
@@ -38,6 +88,8 @@ Last updated: 2026-06-10
   - `python3 scripts/kagemusha_production_readiness.py --repo-root . --min-signed-at-utc '' --min-lineage-proof-evidence-at-utc '' --min-compact-key-evidence-at-utc ''`
     (still blocked by `lineage_proof_evidence_missing`,
     `compact_key_evidence_missing`, and `android_device_lab_root_missing`)
+  - `ci/check_kagemusha_recursive_spend_csharp_sdk.sh` (expected preflight
+    failure: `dotnet` was not found on this macOS host)
   - `git diff --check` on the touched SDK, parity, roadmap, docs, and status
     files
 

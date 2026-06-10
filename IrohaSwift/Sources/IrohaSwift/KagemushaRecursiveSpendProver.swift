@@ -453,7 +453,11 @@ public enum KagemushaRecursiveSpendProver {
             }
             let byte = buffer[buffer.index(buffer.startIndex, offsetBy: cursor)]
             cursor += 1
-            value |= UInt64(byte & 0x7f) << shift
+            let chunk = UInt64(byte & 0x7f)
+            if shift >= 63 && chunk > 1 {
+                throw KagemushaRecursiveSpendProverError.invalidLineageKeyArtifact("lineage_proving_key_archive")
+            }
+            value |= chunk << shift
             if (byte & 0x80) == 0 {
                 let encodedLength = cursor - offset
                 if encodedLength > 1 && value < (UInt64(1) << UInt64(7 * (encodedLength - 1))) {

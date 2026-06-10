@@ -55,10 +55,14 @@ and completed history lives in [`status.md`](./status.md).
   - Confirm the pass includes `KagemushaRecursiveSpendNativeTests`,
     `PrivacyNativeTests`, and `TransactionBuilderTests`.
   - Confirm `KagemushaRecursiveSpendNativeTests` exercises
-    `KagemushaOverlongCompactLength`, `overlongVersionLengthArchive`,
-    `overlongCircuitStringArchive`, and `invalidUtf8CircuitArchive` so the C#
-    parser rejects non-canonical compact lengths and invalid UTF-8 lineage
-    archive circuit fields on Windows.
+    `KagemushaOverlongCompactLength`,
+    `KagemushaOversizedTerminalCompactLength`,
+    `KagemushaHugeCanonicalCompactLength`,
+    `overlongVersionLengthArchive`, `oversizedTerminalCompactLengthArchive`,
+    `hugeCanonicalCompactLengthArchive`, `overlongCircuitStringArchive`, and
+    `invalidUtf8CircuitArchive` so the C# parser rejects non-canonical,
+    address-space oversized, u64-overflowing compact lengths and invalid UTF-8
+    lineage archive circuit fields on Windows.
   - Re-run `ci/check_kagemusha_recursive_spend_sdk_parity.sh` after recording
     the Windows evidence so C# SDK parity status can be cleared explicitly.
 - Kagemusha JVM SDK validation must keep the focused runner aligned with the
@@ -974,8 +978,8 @@ and completed history lives in [`status.md`](./status.md).
   parse the canonical `KagemushaRecursiveSpendLineageKeyArtifactsV1` archive
   fields and reject stale schemas, unsupported flags, byte-smuggled bindings,
   wrong versions, empty proving keys, trailing payloads, non-canonical compact
-  Norito length encodings, and invalid UTF-8 circuit family fields before native
-  loading. Swift,
+  Norito length encodings, u64-overflowing terminal compact length bytes, and
+  invalid UTF-8 circuit family fields before native loading. Swift,
   Kotlin/JVM, Java Android, JavaScript/Node, Python, and C# compact-token,
   recursive aggregation,
   recursive compact, and recursive spend validators also reject over-cap caller
