@@ -35,6 +35,7 @@ MAX_RAW_SLOT_FILE_BYTES = device_lab.MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES
 MAX_RAW_SLOT_FILES = 128
 RAW_SLOT_REQUIRED_PATHS: tuple[str, ...] = (
     "attestation/challenge.hex",
+    "attestation/harness-result.json",
     "attestation/keymint-certificate-chain.pem",
     "attestation/result.json",
     "handoff/d2d-payment.json",
@@ -43,6 +44,16 @@ RAW_SLOT_REQUIRED_PATHS: tuple[str, ...] = (
     "telemetry/status.ndjson",
     "queue/pending_queue.json",
     "logs/runtime.log",
+)
+HARNESS_RESULT_ALLOWED_FIELDS: frozenset[str] = frozenset(
+    {
+        "alias",
+        "attestation_security_level",
+        "keymaster_security_level",
+        "strongbox_attestation",
+        "challenge_hex",
+        "chain_length",
+    }
 )
 ADB_LATEST_SLOT_COMMAND_HELP = (
     "adb shell run-as <package> cat files/kagemusha-device-lab/latest-slot.txt"
@@ -84,6 +95,64 @@ def _validate_non_secret_adb_string(value: str, label: str) -> list[str]:
     if device_lab.SECRET_RE.search(value):
         return [f"{label} must not contain secret-looking material"]
     return []
+
+
+def _pem_certificate_count(chain_text: str) -> int:
+    return chain_text.count("-----BEGIN CERTIFICATE-----")
+
+
+def _validate_harness_result(
+    *,
+    harness: dict[str, Any],
+    challenge_text: str | None,
+    chain_text: str | None,
+    errors: list[str],
+) -> None:
+    for field in sorted(set(harness) - HARNESS_RESULT_ALLOWED_FIELDS):
+        errors.append(f"attestation/harness-result.json contains unexpected field {field}")
+    alias = harness.get("alias")
+    if not isinstance(alias, str) or not alias:
+        errors.append("attestation/harness-result.json alias must be a non-empty string")
+    elif alias != alias.strip():
+        errors.append("attestation/harness-result.json alias must not have surrounding whitespace")
+    elif device_lab.SECRET_RE.search(alias):
+        errors.append("attestation/harness-result.json alias must not contain secret-looking material")
+    for key in ("attestation_security_level", "keymaster_security_level"):
+        level = harness.get(key)
+        if not isinstance(level, str) or level not in device_lab.STRONGBOX_LEVELS:
+            errors.append(f"attestation/harness-result.json {key} must be STRONGBOX")
+    if harness.get("strongbox_attestation") is not True:
+        errors.append("attestation/harness-result.json strongbox_attestation must be true")
+    chain_length = harness.get("chain_length")
+    if not isinstance(chain_length, int) or chain_length < 2:
+        errors.append("attestation/harness-result.json chain_length must be at least 2")
+    elif chain_text is not None:
+        certificate_count = _pem_certificate_count(chain_text)
+        if certificate_count < 2:
+            errors.append("attestation/keymint-certificate-chain.pem must contain at least two PEM certificates")
+        elif chain_length != certificate_count:
+            errors.append(
+                "attestation/harness-result.json chain_length must match "
+                "attestation/keymint-certificate-chain.pem certificate count"
+            )
+    challenge_hex = harness.get("challenge_hex")
+    if not isinstance(challenge_hex, str) or not challenge_hex.strip():
+        errors.append("attestation/harness-result.json challenge_hex must be a non-empty string")
+        return
+    normalized = "".join(challenge_hex.split()).lower()
+    if challenge_hex != normalized:
+        errors.append("attestation/harness-result.json challenge_hex must be lowercase hexadecimal without whitespace")
+        return
+    if len(normalized) % 2 != 0:
+        errors.append("attestation/harness-result.json challenge_hex must have even length")
+        return
+    try:
+        bytes.fromhex(normalized)
+    except ValueError:
+        errors.append("attestation/harness-result.json challenge_hex must be hex")
+        return
+    if challenge_text is not None and normalized != challenge_text.strip().lower():
+        errors.append("attestation/harness-result.json challenge_hex must match attestation/challenge.hex")
 
 
 def _adb_command(adb: str, serial: str | None, args: list[str]) -> list[str]:
@@ -416,6 +485,29 @@ def _validate_raw_slot_files(slot_path: Path, slot_id: str, root_latest: Path) -
     if latest_text is not None and latest_text.strip() != slot_id:
         errors.append("latest-slot.txt must match slot id")
 
+    challenge_text = _read_text_file(
+        slot_path / "attestation" / "challenge.hex",
+        "attestation/challenge.hex",
+        errors,
+    )
+    chain_text = _read_text_file(
+        slot_path / "attestation" / "keymint-certificate-chain.pem",
+        "attestation/keymint-certificate-chain.pem",
+        errors,
+    )
+    harness = device_lab._load_json(
+        slot_path / "attestation" / "harness-result.json",
+        "attestation harness result",
+        errors,
+    )
+    if harness is not None:
+        _validate_harness_result(
+            harness=dict(harness),
+            challenge_text=challenge_text,
+            chain_text=chain_text,
+            errors=errors,
+        )
+
     result = device_lab._load_json(slot_path / "attestation" / "result.json", "attestation result", errors)
     if result is not None:
         if result.get("slot_id") != slot_id:
@@ -440,11 +532,6 @@ def _validate_raw_slot_files(slot_path: Path, slot_id: str, root_latest: Path) -
             digest = hashlib.sha256(chain_file.read_bytes()).hexdigest()
             if chain_digest != digest:
                 errors.append("attestation/result.json certificate-chain SHA-256 mismatch")
-        challenge_text = _read_text_file(
-            slot_path / "attestation" / "challenge.hex",
-            "attestation/challenge.hex",
-            errors,
-        )
         challenge_digest = result.get("attestation_challenge_sha256")
         if challenge_text is not None:
             challenge_hex = challenge_text.strip().lower()

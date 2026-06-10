@@ -432,6 +432,8 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-instrumentation-harness
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-command-marker-specificity
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-artifact-binding
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-harness-result
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signed-harness-result
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signed-evidence-path-root
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signed-evidence-path-canonical
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-release-apk-binding
@@ -651,6 +653,10 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-report
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-report-writer-physical-device
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-overwrite
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-harness-challenge
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-harness-strongbox
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-harness-chain-length
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-harness-canonical
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-signature-required
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-source-open-binding
           ci/check_kagemusha_production_readiness.sh --negative-control-android-signed-evidence-freshness-report
@@ -805,6 +811,8 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-exit-marker
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-readback
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-readback
+          ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-resume-replace-conflict
+          ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-resume-replace-conflict
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-exit-marker
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-exit-marker
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-publish-readback

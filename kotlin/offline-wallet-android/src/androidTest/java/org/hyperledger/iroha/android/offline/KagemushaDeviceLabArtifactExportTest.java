@@ -79,6 +79,15 @@ public final class KagemushaDeviceLabArtifactExportTest {
       writeText(chainFile, pemChain(attestationChain));
       final String chainSha256 = sha256File(chainFile);
       writeText(file(slot, "attestation/challenge.hex"), challengeHex + "\n");
+      writeJson(
+          file(slot, "attestation/harness-result.json"),
+          mapOf(
+              "alias", alias,
+              "attestation_security_level", "STRONG_BOX",
+              "keymaster_security_level", "STRONG_BOX",
+              "strongbox_attestation", Boolean.TRUE,
+              "challenge_hex", challengeHex,
+              "chain_length", Integer.valueOf(attestationChain.size())));
 
       final String appPackageName = context.getPackageName();
       final String appSigningSha256 = appSigningCertificateSha256(context);

@@ -23,6 +23,7 @@ OPTIONAL_EVIDENCE_DIRS: tuple[str, ...] = ("evidence", "handoff", "wallet")
 REQUIRED_KAGEMUSHA_SLOT_ARTIFACT_PATHS: tuple[str, ...] = (
     "telemetry/telemetry.json",
     "telemetry/status.ndjson",
+    "attestation/harness-result.json",
     "attestation/result.json",
     "attestation/report.json",
     "queue/pending_queue.json",
@@ -273,6 +274,16 @@ ATTESTATION_REPORT_VERIFICATION_FIELDS: frozenset[str] = frozenset(
         "keymint_security_level",
         "attestation_security_level",
         "keymaster_security_level",
+    }
+)
+ATTESTATION_HARNESS_RESULT_FIELDS: frozenset[str] = frozenset(
+    {
+        "alias",
+        "attestation_security_level",
+        "keymaster_security_level",
+        "strongbox_attestation",
+        "challenge_hex",
+        "chain_length",
     }
 )
 D2D_PAYMENT_TRANSCRIPT_SLOT_STRING_BINDINGS: tuple[str, ...] = (
@@ -1884,6 +1895,96 @@ def validate_attestation_report(
             )
 
 
+def _attestation_harness_result_string(
+    result: dict[str, Any],
+    key: str,
+    errors: list[str],
+) -> str | None:
+    value = result.get(key)
+    if not isinstance(value, str) or not value.strip():
+        errors.append(f"attestation/harness-result.json {key} must be a non-empty string")
+        return None
+    if SECRET_RE.search(value):
+        errors.append(
+            f"attestation/harness-result.json {key} must not contain secret-looking material"
+        )
+        return None
+    return value.strip()
+
+
+def _certificate_chain_pem_count(payload: bytes) -> int:
+    return payload.count(b"-----BEGIN CERTIFICATE-----")
+
+
+def validate_attestation_harness_result(
+    slot_path: Path,
+    metadata: dict[str, Any],
+    errors: list[str],
+    *,
+    attestation_certificate_chain_bytes: bytes | None = None,
+) -> None:
+    """Validate the original StrongBox attestation harness result preserved in the slot."""
+
+    if _reject_secret_slot_path(slot_path, errors):
+        return
+    result = _load_json(
+        slot_path / "attestation" / "harness-result.json",
+        "attestation/harness-result.json",
+        errors,
+    )
+    if result is None:
+        return
+
+    for field in sorted(set(result) - ATTESTATION_HARNESS_RESULT_FIELDS):
+        errors.append(
+            "attestation/harness-result.json contains unexpected field "
+            f"{_display_path(field)}"
+        )
+
+    _attestation_harness_result_string(result, "alias", errors)
+    for key in ("attestation_security_level", "keymaster_security_level"):
+        level = _attestation_harness_result_string(result, key, errors)
+        if level is not None and level.upper() not in STRONGBOX_LEVELS:
+            errors.append(f"attestation/harness-result.json {key} must be STRONGBOX")
+
+    if result.get("strongbox_attestation") is not True:
+        errors.append("attestation/harness-result.json strongbox_attestation must be true")
+
+    challenge_hex = _attestation_harness_result_string(result, "challenge_hex", errors)
+    challenge: bytes | None = None
+    if challenge_hex is not None:
+        if len(challenge_hex) % 2 != 0:
+            errors.append("attestation/harness-result.json challenge_hex must be even-length hex")
+        else:
+            try:
+                challenge = bytes.fromhex(challenge_hex)
+            except ValueError:
+                errors.append("attestation/harness-result.json challenge_hex must be hex")
+    expected_challenge_digest = metadata.get("attestation_challenge_sha256")
+    if (
+        challenge is not None
+        and isinstance(expected_challenge_digest, str)
+        and SHA256_HEX_RE.fullmatch(expected_challenge_digest)
+        and hashlib.sha256(challenge).hexdigest() != expected_challenge_digest
+    ):
+        errors.append(
+            "attestation/harness-result.json challenge_hex digest must match slot.json attestation_challenge_sha256"
+        )
+
+    chain_length = result.get("chain_length")
+    if not isinstance(chain_length, int) or isinstance(chain_length, bool):
+        errors.append("attestation/harness-result.json chain_length must be an integer")
+    elif chain_length < 2:
+        errors.append("attestation/harness-result.json chain_length must be at least 2")
+    elif attestation_certificate_chain_bytes is not None:
+        certificate_count = _certificate_chain_pem_count(attestation_certificate_chain_bytes)
+        if certificate_count and chain_length != certificate_count:
+            errors.append(
+                "attestation/harness-result.json chain_length must match "
+                "attestation certificate-chain certificate count"
+            )
+
+
 def _d2d_transcript_string(
     transcript: dict[str, Any],
     key: str,
@@ -3003,6 +3104,7 @@ def validate_kagemusha_production_metadata(
     if metadata is None:
         return errors, details
 
+    attestation_certificate_chain_bytes: bytes | None = None
     validate_slot_metadata_fields(metadata, errors)
     if metadata.get("schema") != "iroha.android.device_lab.kagemusha.v1":
         errors.append("slot.json schema must be iroha.android.device_lab.kagemusha.v1")
@@ -3066,6 +3168,7 @@ def validate_kagemusha_production_metadata(
             if digest_errors:
                 errors.extend(digest_errors)
             elif chain_bytes is not None and actual_chain_digest is not None:
+                attestation_certificate_chain_bytes = chain_bytes
                 _validate_attestation_certificate_chain_artifact(
                     chain_relative,
                     chain_bytes,
@@ -3183,6 +3286,12 @@ def validate_kagemusha_production_metadata(
         errors.append("slot.json keymint_security_level must be STRONGBOX")
     validate_attestation_result(slot_path, metadata, errors)
     validate_attestation_report(slot_path, metadata, errors)
+    validate_attestation_harness_result(
+        slot_path,
+        metadata,
+        errors,
+        attestation_certificate_chain_bytes=attestation_certificate_chain_bytes,
+    )
 
     digest = _require_non_empty_string(metadata, "signed_evidence_artifact_sha256", errors)
     if digest is not None and not SHA256_HEX_RE.fullmatch(digest):

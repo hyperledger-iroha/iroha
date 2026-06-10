@@ -2656,6 +2656,50 @@ class IsoProductionReadinessTest(unittest.TestCase):
                 },
             )
 
+    def test_allow_reviewed_xsd_gaps_does_not_downgrade_unreviewed_profile_gaps(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            manifest_path = xsd_test.write_minimal_tree(
+                root / "xsd",
+                xsd_test.minimal_manifest(),
+            )
+            profile_catalog = xsd_test.write_profile_catalog(
+                root / "xsd" / "profiles.rs",
+                versions=["fooo.001.001.01", "fooo.001.001.02"],
+            )
+            xsd_summary = root / "xsd" / "unreviewed-profile-gap.summary.json"
+            rc, _stdout, stderr = xsd_test.run_verify(
+                [
+                    "--manifest",
+                    str(manifest_path),
+                    "--require-schema-backed-fixtures",
+                    "--require-fixture-for-schema",
+                    "--profile-catalog",
+                    str(profile_catalog),
+                    "--validate-xml-schema",
+                    "--summary-out",
+                    str(xsd_summary),
+                ]
+            )
+            self.assertEqual(rc, 0, stderr)
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+
+            rc, stdout, stderr = run_readiness(
+                [
+                    "--xsd-summary",
+                    str(xsd_summary),
+                    "--evidence-summary",
+                    str(evidence_summary),
+                    "--allow-reviewed-xsd-gaps",
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("requires at least one reviewed XSD gap warning", stderr)
+
     def test_repository_xsd_summary_path_is_production_blocker(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)

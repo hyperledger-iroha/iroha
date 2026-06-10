@@ -7761,6 +7761,40 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertEqual(errors, [])
 
+    def test_compact_key_staged_runner_rejects_replace_with_resume_keygen(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            staged_artifact_dir.mkdir(parents=True)
+            artifact_name = readiness.COMPACT_KEY_REQUIRED_ARTIFACTS[0]
+            artifact_path = staged_artifact_dir / artifact_name
+            artifact_path.write_bytes(b"existing compact artifact")
+            args = compact_key_staged_runner.parse_args(
+                [
+                    "--staged-artifact-dir",
+                    str(staged_artifact_dir),
+                    "--exit-file",
+                    str(root / "staged.exit"),
+                    "--replace",
+                    "--resume-keygen",
+                ]
+            )
+
+            def forbidden_runner(_command: list[str], _cwd: Path, _log_path: Path) -> int:
+                raise AssertionError("runner must not run after flag conflict")
+
+            status, errors = compact_key_staged_runner.run_staged_keygen(
+                args,
+                runner=forbidden_runner,
+            )
+            artifact_bytes = artifact_path.read_bytes()
+
+        self.assertEqual(status, 1)
+        self.assertIn("--replace and --resume-keygen cannot be combined", errors)
+        self.assertEqual(artifact_bytes, b"existing compact artifact")
+
     def test_compact_key_staged_runner_resume_replaces_failed_keygen(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -9163,6 +9197,47 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             ],
         )
         self.assertEqual(init_execution_report["exit_code"], 0)
+
+    def test_lineage_proof_staged_runner_rejects_replace_with_resume_key_artifacts(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            staged_artifact_dir.mkdir(parents=True)
+            artifact_name = readiness.LINEAGE_PROOF_REQUIRED_ARTIFACTS[0]
+            artifact_path = staged_artifact_dir / artifact_name
+            artifact_path.write_bytes(b"existing lineage artifact")
+            args = lineage_staged_runner.parse_args(
+                [
+                    "--repo-root",
+                    str(REPO_ROOT),
+                    "--staged-artifact-dir",
+                    str(staged_artifact_dir),
+                    "--exit-file",
+                    str(root / "staged.exit"),
+                    "--elapsed-seconds-file",
+                    str(root / "staged.elapsed"),
+                    "--replace",
+                    "--resume-key-artifacts",
+                ]
+            )
+
+            def forbidden_runner(_command: list[str], _cwd: Path, _log_path: Path) -> int:
+                raise AssertionError("runner must not run after flag conflict")
+
+            status, errors = lineage_staged_runner.run_staged_lineage_proof(
+                args,
+                runner=forbidden_runner,
+            )
+            artifact_bytes = artifact_path.read_bytes()
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "--replace and --resume-key-artifacts cannot be combined",
+            errors,
+        )
+        self.assertEqual(artifact_bytes, b"existing lineage artifact")
 
     def test_lineage_proof_staged_runner_resume_replaces_failed_append_phase(
         self,

@@ -665,7 +665,9 @@ phase outputs are replaced and rerun, while symlinked, hardlinked, or special
 staged outputs still fail closed before anything is removed. Resume also
 replaces stale proof logs, proof execution reports, run reports, elapsed files,
 and exit markers so a previous nonzero proof or keygen marker cannot block a
-validated phase-boundary retry. The
+validated phase-boundary retry. `--resume-key-artifacts` and `--replace` are
+mutually exclusive, so operators must choose either selective validated resume
+or full staged-output replacement before any cleanup can occur. The
 runner reopens each installed metadata file after the atomic rename, checks the
 opened file identity, and compares the exact bytes so marker, elapsed, and JSON
 report drift fails before finalization. The
@@ -696,7 +698,9 @@ report, and zero exit marker all validate against the canonical command and
 current generator-log byte count. If regular staged outputs are missing,
 nonzero, or malformed, resume replaces the whole compact keygen stage and
 reruns it; symlinked, hardlinked, special, or secret-looking staged outputs
-still fail closed before cleanup. The compact-key
+still fail closed before cleanup. `--resume-keygen` and `--replace` are
+mutually exclusive, so a caller cannot accidentally request both a validated
+resume and destructive staged-output replacement. The compact-key
 runner also reopens marker and JSON report outputs after the atomic rename,
 checks the opened file identity, and compares the exact bytes before returning.
 The compact-key finalizer requires that

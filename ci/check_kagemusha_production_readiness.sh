@@ -420,11 +420,13 @@ TEXT_REQUIREMENTS = {
         "native bridge ABI version",
         ":client-android:assembleRelease",
         ":offline-wallet-android:assembleRelease",
+        "attestation/harness-result.json",
         "attestation/result.json",
         "attestation/report.json",
         "attestation verifier report",
         "python3 scripts/kagemusha_android_attestation_report.py",
         "--harness-result <android_keystore_attestation_result.json>",
+        "--attestation-harness-result <harness-result.json>",
         "--physical-device-attestation --out <report.json>",
         "unexpected verifier-result fields",
         "explicit physical-device assertion",
@@ -482,8 +484,10 @@ TEXT_REQUIREMENTS = {
         "KeyProperties.KEY_ALGORITHM_EC",
         "setIsStrongBoxBacked(true)",
         "setAttestationChallenge(challenge)",
+        "attestation/harness-result.json",
         "attestation/result.json",
         "attestation/keymint-certificate-chain.pem",
+        "chain_length",
         "handoff/d2d-payment.json",
         "wallet/integrity.json",
         "sha256File(new File(context.getPackageCodePath()))",
@@ -522,6 +526,7 @@ TEXT_REQUIREMENTS = {
         "ED25519_SIGNATURE_BYTES = 64",
         "REQUIRED_KAGEMUSHA_SLOT_ARTIFACT_PATHS",
         "KAGEMUSHA_SIGNED_EVIDENCE_ARTIFACT_PATH",
+        "attestation/harness-result.json",
         "telemetry/status.ndjson",
         "logs/runtime.log",
         "MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES",
@@ -569,8 +574,13 @@ TEXT_REQUIREMENTS = {
         "ATTESTATION_RESULT_FIELDS",
         "ATTESTATION_REPORT_SCHEMA",
         "ATTESTATION_REPORT_FIELDS",
+        "ATTESTATION_HARNESS_RESULT_FIELDS",
         "validate_attestation_report",
         "validate_attestation_report(slot_path, metadata, errors)",
+        "validate_attestation_harness_result",
+        "validate_attestation_harness_result(",
+        "attestation/harness-result.json challenge_hex digest must match slot.json attestation_challenge_sha256",
+        "attestation/harness-result.json chain_length must match",
         "set(result) - ATTESTATION_RESULT_FIELDS",
         "SECRET_PATH_REDACTION",
         "unsafe path contains secret-looking material",
@@ -1071,6 +1081,7 @@ TEXT_REQUIREMENTS = {
     ),
     "scripts/kagemusha_android_device_lab_slot.py": (
         "Assemble a signed Kagemusha Android device-lab slot from lab artifacts",
+        "DEFAULT_ATTESTATION_HARNESS_RESULT_PATH",
         "DEFAULT_ATTESTATION_CHAIN_PATH",
         "DEFAULT_OFFLINE_WALLET_APK_PATH",
         "DEFAULT_D2D_TRANSCRIPT_PATH",
@@ -1088,6 +1099,10 @@ TEXT_REQUIREMENTS = {
         "adb getprop {prop} failed",
         "device family could not be inferred; pass --device-family",
         "normalise_attestation_payloads",
+        "validate_attestation_harness_source_claims",
+        "--attestation-harness-result",
+        "attestation harness result source",
+        "attestation harness result challenge_hex digest must match",
         "attestation/report.json device_fingerprint must match device identity",
         "attestation/report.json os_build_id must match device identity",
         "wallet integrity transcript rollback_rejection_passed must be true",
@@ -1104,6 +1119,13 @@ TEXT_REQUIREMENTS = {
         "ADB_PULL_TAR_COMMAND_HELP",
         "KagemushaDeviceLabArtifactExportTest",
         "RAW_SLOT_REQUIRED_PATHS",
+        "attestation/harness-result.json",
+        "HARNESS_RESULT_ALLOWED_FIELDS",
+        "_validate_harness_result",
+        "attestation/harness-result.json strongbox_attestation must be true",
+        "attestation/harness-result.json challenge_hex must be lowercase hexadecimal without whitespace",
+        "attestation/harness-result.json chain_length must match",
+        "attestation/harness-result.json challenge_hex must match attestation/challenge.hex",
         "extract_raw_slot_tar",
         "slot directory already exists; refuse to overwrite raw evidence",
         "latest-slot.txt must match slot id",
@@ -1828,6 +1850,7 @@ TEXT_REQUIREMENTS = {
         "LINEAGE_KEY_ARTIFACTS_BY_PROFILE",
         "MAX_EXECUTION_REPORT_BYTES",
         "--resume-key-artifacts",
+        "--replace and --resume-key-artifacts cannot be combined",
         "_validate_reusable_key_artifact_phase",
         "_try_resume_key_artifact_phase",
         "_cleanup_profile_for_resume",
@@ -1871,6 +1894,7 @@ TEXT_REQUIREMENTS = {
         "MAX_EXECUTION_REPORT_BYTES",
         "MAX_RUN_REPORT_BYTES",
         "--resume-keygen",
+        "--replace and --resume-keygen cannot be combined",
         "_validate_reusable_staged_keygen",
         "_validate_reusable_execution_report",
         "_validate_reusable_run_report",
@@ -2070,7 +2094,11 @@ TEXT_REQUIREMENTS = {
         "test_kagemusha_slot_assembler_rejects_report_device_mismatch_before_install",
         "test_kagemusha_slot_assembler_rejects_symlinked_source_ancestor",
         "test_kagemusha_slot_assembler_rejects_source_swap_after_preflight",
+        "test_kagemusha_slot_assembler_requires_attestation_harness_result",
+        "test_kagemusha_slot_assembler_rejects_harness_challenge_mismatch",
         "test_kagemusha_android_raw_puller_reads_latest_and_installs_slot",
+        "test_kagemusha_android_raw_puller_requires_harness_result",
+        "test_kagemusha_android_raw_puller_rejects_harness_challenge_mismatch",
         "test_kagemusha_android_raw_puller_refuses_existing_slot_before_adb_tar",
         "test_kagemusha_android_raw_puller_rejects_tar_path_traversal",
         "test_kagemusha_android_raw_puller_rejects_tar_symlink_member",
@@ -2078,6 +2106,11 @@ TEXT_REQUIREMENTS = {
         "test_kagemusha_android_raw_puller_rejects_oversized_tar_member",
         "test_kagemusha_android_raw_puller_rejects_latest_slot_mismatch",
         "test_kagemusha_android_raw_puller_rejects_tar_file_parent_collision",
+        "test_kagemusha_android_raw_puller_rejects_noncanonical_harness_strings",
+        "test_kagemusha_android_raw_puller_rejects_harness_chain_length_mismatch",
+        "test_kagemusha_android_raw_puller_rejects_malformed_harness_result",
+        "test_scan_slot_rejects_missing_attestation_harness_result",
+        "test_scan_slot_rejects_attestation_harness_challenge_mismatch",
         "test_scan_slot_rejects_sha256_drift",
         "test_explicit_missing_slot_returns_structured_error",
         "test_discover_slots_returns_structured_error_on_root_list_failure",
@@ -2598,6 +2631,7 @@ TEXT_REQUIREMENTS = {
         "test_compact_key_staged_finalizer_verifies_published_stage_bytes",
         "test_compact_key_staged_runner_outputs_finalize_successfully",
         "test_compact_key_staged_runner_resume_reuses_complete_keygen",
+        "test_compact_key_staged_runner_rejects_replace_with_resume_keygen",
         "test_compact_key_staged_runner_resume_replaces_failed_keygen",
         "test_compact_key_staged_runner_resume_rejects_symlinked_artifact",
         "test_compact_key_staged_runner_refuses_existing_artifact_before_run",
@@ -2633,6 +2667,7 @@ TEXT_REQUIREMENTS = {
         "test_lineage_proof_staged_finalizer_verifies_published_stage_bytes",
         "test_lineage_proof_staged_runner_outputs_finalize_successfully",
         "test_lineage_proof_staged_runner_resume_reuses_completed_init_phase",
+        "test_lineage_proof_staged_runner_rejects_replace_with_resume_key_artifacts",
         "test_lineage_proof_staged_runner_resume_replaces_failed_append_phase",
         "test_lineage_proof_staged_runner_resume_rejects_symlinked_phase_output",
         "test_lineage_proof_staged_runner_refuses_existing_log_before_run",
@@ -3232,6 +3267,8 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-instrumentation-harness",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-command-marker-specificity",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-artifact-binding",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-harness-result",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signed-harness-result",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signed-evidence-path-root",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signed-evidence-path-canonical",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-release-apk-binding",
@@ -3448,6 +3485,10 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-report",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-report-writer-physical-device",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-overwrite",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-harness-challenge",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-harness-strongbox",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-harness-chain-length",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-harness-canonical",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-signature-required",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-source-open-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-signed-evidence-freshness-report",
@@ -3556,6 +3597,8 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-exit-marker",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-readback",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-readback",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-resume-replace-conflict",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-resume-replace-conflict",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-exit-marker",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-exit-marker",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-publish-readback",
@@ -4086,6 +4129,28 @@ if mode == "--negative-control-android-device-lab-artifact-binding":
             "scripts/check_android_device_lab_slot.py",
             "signed_evidence_artifact_sha256 does not match signed_evidence_artifact_path",
             "signed_evidence_artifact_sha256 is accepted without matching signed_evidence_artifact_path",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-raw-harness-result":
+    run_negative_control(
+        "Android device-lab raw harness-result contract",
+        lambda: override_text_all(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            "_validate_harness_result",
+            "_trust_harness_result",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-signed-harness-result":
+    run_negative_control(
+        "Android device-lab signed harness-result contract",
+        lambda: override_text(
+            "scripts/check_android_device_lab_slot.py",
+            "attestation/harness-result.json challenge_hex digest must match slot.json attestation_challenge_sha256",
+            "attestation/harness-result.json challenge_hex digest may differ from slot.json attestation_challenge_sha256",
         ),
     )
     raise SystemExit(0)
@@ -6538,6 +6603,50 @@ if mode == "--negative-control-android-device-lab-raw-puller-overwrite":
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-android-device-lab-raw-puller-harness-challenge":
+    run_negative_control(
+        "Android raw puller harness challenge binding gate",
+        lambda: override_text(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            "attestation/harness-result.json challenge_hex must match attestation/challenge.hex",
+            "attestation/harness-result.json challenge_hex may differ from attestation/challenge.hex",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-raw-puller-harness-strongbox":
+    run_negative_control(
+        "Android raw puller harness StrongBox claim gate",
+        lambda: override_text(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            "attestation/harness-result.json strongbox_attestation must be true",
+            "attestation/harness-result.json strongbox_attestation may be false",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-raw-puller-harness-chain-length":
+    run_negative_control(
+        "Android raw puller harness certificate-chain length binding gate",
+        lambda: override_text(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            "attestation/harness-result.json chain_length must match",
+            "attestation/harness-result.json chain_length may differ from",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-raw-puller-harness-canonical":
+    run_negative_control(
+        "Android raw puller harness canonical string gate",
+        lambda: override_text(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            "attestation/harness-result.json challenge_hex must be lowercase hexadecimal without whitespace",
+            "attestation/harness-result.json challenge_hex may be normalized",
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-android-device-lab-slot-assembler-signature-required":
     run_negative_control(
         "Android device-lab slot assembler signing-required gate",
@@ -8162,6 +8271,28 @@ if mode == "--negative-control-compact-key-staged-runner-readback":
             "scripts/kagemusha_run_recursive_compact_keygen_staged.py",
             "return _verify_written_text_file(path, expected_bytes, label)",
             "return []",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-lineage-proof-staged-runner-resume-replace-conflict":
+    run_negative_control(
+        "Reserved-lineage proof staged runner resume/replace conflict gate",
+        lambda: override_text(
+            "scripts/kagemusha_run_lineage_proof_staged.py",
+            "--replace and --resume-key-artifacts cannot be combined",
+            "--replace and --resume-key-artifacts may be combined",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-compact-key-staged-runner-resume-replace-conflict":
+    run_negative_control(
+        "ABI-7 recursive compact key staged runner resume/replace conflict gate",
+        lambda: override_text(
+            "scripts/kagemusha_run_recursive_compact_keygen_staged.py",
+            "--replace and --resume-keygen cannot be combined",
+            "--replace and --resume-keygen may be combined",
         ),
     )
     raise SystemExit(0)

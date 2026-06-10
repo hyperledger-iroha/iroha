@@ -117,6 +117,8 @@ def _staged_root_from_artifact_dir(path: Path) -> tuple[Path | None, list[str]]:
 
 def _preflight_paths(args: argparse.Namespace) -> tuple[Path | None, list[str]]:
     errors: list[str] = []
+    if args.replace and args.resume_keygen:
+        errors.append("--replace and --resume-keygen cannot be combined")
     replace_outputs = args.replace or args.resume_keygen
     staged_root, root_errors = _staged_root_from_artifact_dir(args.staged_artifact_dir)
     errors.extend(root_errors)

@@ -27,6 +27,7 @@ import sign_android_device_lab_evidence as evidence_signer  # noqa: E402
 
 DEFAULT_APP_PACKAGE_NAME = "org.hyperledger.iroha.android.offlinewallet"
 DEFAULT_POLICY_BYTES = b"kagemusha-offline-wallet-policy-v1"
+DEFAULT_ATTESTATION_HARNESS_RESULT_PATH = "attestation/harness-result.json"
 DEFAULT_ATTESTATION_CHAIN_PATH = "attestation/keymint-certificate-chain.pem"
 DEFAULT_OFFLINE_WALLET_APK_PATH = "evidence/offline-wallet-release.apk"
 DEFAULT_D2D_TRANSCRIPT_PATH = "handoff/d2d-payment-transcript.json"
@@ -327,6 +328,86 @@ def normalise_attestation_payloads(
     return result, report
 
 
+def validate_attestation_harness_source_claims(
+    *,
+    attestation_harness_result: dict[str, Any],
+    attestation_result: dict[str, Any],
+    attestation_report: dict[str, Any],
+    attestation_certificate_chain_bytes: bytes,
+    errors: list[str],
+) -> None:
+    """Validate the preserved raw StrongBox harness result before signing a slot."""
+
+    for field in sorted(
+        set(attestation_harness_result) - device_lab.ATTESTATION_HARNESS_RESULT_FIELDS
+    ):
+        errors.append(
+            "attestation harness result contains unexpected field "
+            f"{device_lab._display_path(field)}"
+        )
+
+    _require_source_string(attestation_harness_result, "alias", "attestation harness result", errors)
+    for key in ("attestation_security_level", "keymaster_security_level"):
+        level = _require_source_string(
+            attestation_harness_result,
+            key,
+            "attestation harness result",
+            errors,
+        )
+        if level is not None and level.upper() not in device_lab.STRONGBOX_LEVELS:
+            errors.append(f"attestation harness result {key} must be STRONGBOX")
+
+    _require_source_true(
+        attestation_harness_result,
+        "strongbox_attestation",
+        "attestation harness result",
+        errors,
+    )
+
+    challenge_hex = _require_source_string(
+        attestation_harness_result,
+        "challenge_hex",
+        "attestation harness result",
+        errors,
+    )
+    challenge: bytes | None = None
+    if challenge_hex is not None:
+        if len(challenge_hex) % 2 != 0:
+            errors.append("attestation harness result challenge_hex must be even-length hex")
+        else:
+            try:
+                challenge = bytes.fromhex(challenge_hex)
+            except ValueError:
+                errors.append("attestation harness result challenge_hex must be hex")
+    if challenge is not None:
+        challenge_digest = hashlib.sha256(challenge).hexdigest()
+        for payload, label in (
+            (attestation_result, "attestation/result.json"),
+            (attestation_report, "attestation/report.json"),
+        ):
+            expected = payload.get("attestation_challenge_sha256")
+            if isinstance(expected, str) and expected.strip() and expected != challenge_digest:
+                errors.append(
+                    "attestation harness result challenge_hex digest must match "
+                    f"{label} attestation_challenge_sha256"
+                )
+
+    chain_length = attestation_harness_result.get("chain_length")
+    if not isinstance(chain_length, int) or isinstance(chain_length, bool):
+        errors.append("attestation harness result chain_length must be an integer")
+    elif chain_length < 2:
+        errors.append("attestation harness result chain_length must be at least 2")
+    else:
+        certificate_count = device_lab._certificate_chain_pem_count(
+            attestation_certificate_chain_bytes
+        )
+        if certificate_count and chain_length != certificate_count:
+            errors.append(
+                "attestation harness result chain_length must match "
+                "attestation certificate-chain certificate count"
+            )
+
+
 def build_slot_metadata(
     *,
     slot_id: str,
@@ -523,6 +604,12 @@ def assemble_slot(args: argparse.Namespace) -> tuple[int, Path | None, list[str]
             label="wallet integrity transcript source",
             errors=errors,
         )
+        harness_digest = _copy_source_file(
+            source=args.attestation_harness_result,
+            destination=stage_slot / DEFAULT_ATTESTATION_HARNESS_RESULT_PATH,
+            label="attestation harness result source",
+            errors=errors,
+        )
         _copy_source_file(
             source=args.telemetry_json,
             destination=stage_slot / "telemetry" / "telemetry.json",
@@ -552,6 +639,7 @@ def assemble_slot(args: argparse.Namespace) -> tuple[int, Path | None, list[str]
             or apk_digest is None
             or d2d_digest is None
             or wallet_digest is None
+            or harness_digest is None
         ):
             return 1, None, errors
 
@@ -567,6 +655,28 @@ def assemble_slot(args: argparse.Namespace) -> tuple[int, Path | None, list[str]
         )
         if errors:
             return 1, None, errors
+
+        harness = _load_source_json(
+            stage_slot / DEFAULT_ATTESTATION_HARNESS_RESULT_PATH,
+            "attestation harness result",
+            errors,
+        )
+        try:
+            chain_payload = (stage_slot / chain_relative).read_bytes()
+        except OSError:
+            errors.append("attestation certificate chain staged copy could not be read")
+            chain_payload = b""
+        if harness is not None:
+            validate_attestation_harness_source_claims(
+                attestation_harness_result=harness,
+                attestation_result=result,
+                attestation_report=report,
+                attestation_certificate_chain_bytes=chain_payload,
+                errors=errors,
+            )
+        if errors:
+            return 1, None, errors
+
         _write_json(stage_slot / "attestation" / "result.json", result)
         _write_json(stage_slot / "attestation" / "report.json", report)
 
@@ -634,6 +744,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--device-model")
     parser.add_argument("--device-codename")
     parser.add_argument("--attestation-result", type=Path, required=True)
+    parser.add_argument("--attestation-harness-result", type=Path, required=True)
     parser.add_argument("--attestation-report", type=Path, required=True)
     parser.add_argument("--attestation-certificate-chain", type=Path, required=True)
     parser.add_argument("--offline-wallet-apk", type=Path, required=True)

@@ -2,6 +2,117 @@
 
 Last updated: 2026-06-10
 
+## 2026-06-10 ISO reviewed XSD gap override hardening
+
+- Tightened `scripts/iso_production_readiness.py` so
+  `--allow-reviewed-xsd-gaps` only downgrades XSD blockers when the summary
+  actually carries reviewed local gap evidence: a repository fixture manifest,
+  reviewed missing-schema fixtures, schema-only entries, or blocked candidate
+  source records.
+- An arbitrary operator XSD summary with only an unreviewed advertised
+  profile-version gap now remains a blocker; the local override is treated as
+  unused instead of turning that profile-catalog gap into a warning.
+- Added an adversarial readiness regression that generates a valid non-repo XSD
+  summary with one unbacked profile version and proves the override fails closed
+  without producing a readiness summary.
+- Validation:
+  - `python3 -m py_compile scripts/iso_production_readiness.py pytests/scripts/iso_production_readiness_test.py`
+  - `python3 -m unittest pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_allow_reviewed_xsd_gaps_does_not_downgrade_unreviewed_profile_gaps`
+    (`1` test)
+  - `python3 -m unittest pytests.scripts.iso_production_readiness_test`
+    (`170` tests)
+  - `python3 -m unittest discover -s pytests/scripts -p 'iso_*_test.py'`
+    (`820` tests)
+
+## 2026-06-10 Kagemusha Android raw harness contract
+
+- Tightened the physical Android raw-evidence path so fresh
+  `KagemushaDeviceLabArtifactExportTest` runs now write
+  `attestation/harness-result.json` alongside the certificate chain,
+  challenge, and production attestation summary. The host raw puller now
+  requires that harness result, validates its closed field set, StrongBox
+  levels, chain length, and challenge binding, and rejects a raw slot before
+  signed-slot assembly if the harness challenge does not match
+  `attestation/challenge.hex`. Malformed harness rows with unexpected fields,
+  non-StrongBox levels, false StrongBox claims, too-short certificate chains,
+  certificate-chain length drift, or trim/lowercase-normalized harness strings
+  now have explicit adversarial raw-puller coverage, and the production
+  readiness guard pins the challenge-binding, StrongBox-claim, chain-length,
+  and canonical-string negative controls.
+- A serial-scoped scratch pull from the attached Pixel 6
+  (`19181FDF600918`) succeeded into
+  `target/kagemusha-android-raw-refresh-pixel6`, but the currently installed
+  older lab app did not expose `attestation/harness-result.json`, so scratch
+  signed-slot assembly correctly failed before writing a slot. The code fix
+  makes the next lab-app reinstall/export self-contained for host verifier
+  report generation.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_pull_android_device_lab_raw_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest -k raw_puller scripts.tests.check_android_device_lab_slot_test`
+    (`13` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-harness-challenge`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-harness-strongbox`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-harness-chain-length`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-harness-canonical`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`426` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-harness-result`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `python3 scripts/check_android_device_lab_slot.py --root target/kagemusha-android-device-lab-lab-app-v2 --slot google-pixel-6-6a-physical-1781070293478 --require-slot --require-kagemusha-production-evidence --trusted-signer-public-key target/kagemusha-android-lab-keys/lab-public.pem --json-out target/kagemusha-android-device-lab-lab-app-v2-validation-latest.json`
+  - `python3 scripts/kagemusha_production_readiness.py --repo-root . --device-lab-root target/kagemusha-android-device-lab-lab-app-v2 --slot google-pixel-6-6a-physical-1781070293478 --trusted-signer-public-key target/kagemusha-android-lab-keys/lab-public.pem --summary-out target/kagemusha-readiness-summary-current.json`
+    exits `1` with `lineage_proof_evidence_missing`,
+    `compact_key_evidence_missing`, and
+    `android_device_lab_standard_matrix_missing`.
+
+## 2026-06-10 ISO 20022 official MDR/XSD profile matrix
+
+- Extended Torii official-MDR XSD live-profile coverage to include the
+  `pacs.004.001.09` return fixture for SWIFT CBPR+, Fedwire Funds, SEPA SCT
+  Inst, and securities CSD.
+- Added the matching `camt.056.001.09` cancellation fixture assertions for the
+  live profiles that advertise that version: SWIFT CBPR+, SEPA SCT Inst, and
+  securities CSD. Fedwire remains covered for its advertised
+  `camt.056.001.08` cancellation profile.
+- The test now asserts checked-in XSD namespace/root metadata and validates BAH
+  payloads under exact profile business-service/version controls across the
+  `001.09`, `001.10`, and `001.08` return/cancellation variants.
+- Validation:
+  - `cargo fmt --all --check`
+  - `python3 -m py_compile scripts/iso_*.py pytests/scripts/iso_*_test.py`
+  - `cargo test -p iroha_torii official_mdr_xsd_fixtures_cover_live_rail_profiles --lib -- --nocapture`
+    (`1` passed; `2363` filtered out)
+  - `python3 -m unittest discover -s pytests/scripts -p 'iso_*_test.py'`
+    (`819` tests)
+
+## 2026-06-10 Kagemusha staged resume flag conflicts
+
+- Hardened both production staged runners so `--replace` cannot be combined
+  with the selective resume flags. The lineage runner now rejects
+  `--replace --resume-key-artifacts`, and the ABI-7 compact-key runner rejects
+  `--replace --resume-keygen`, before any cleanup, directory creation, or child
+  command execution can occur.
+- Added adversarial regressions that seed an existing staged artifact, pass the
+  conflicting flags, and assert the runner callback is not invoked and the
+  existing artifact bytes are preserved. The strict readiness guard now pins the
+  new source checks, test names, workflow invocations, and negative-control
+  modes that remove the resume/replace conflict gates.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_run_lineage_proof_staged.py scripts/kagemusha_run_recursive_compact_keygen_staged.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest -k replace_with_resume scripts.tests.kagemusha_production_readiness_test`
+    (`2` tests)
+  - `python3 -m unittest -k staged_runner scripts.tests.kagemusha_production_readiness_test`
+    (`28` tests)
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test`
+    (`501` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-resume-replace-conflict`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-resume-replace-conflict`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `python3 scripts/check_android_device_lab_slot.py --root target/kagemusha-android-device-lab-lab-app-v2 --slot google-pixel-6-6a-physical-1781070293478 --require-slot --require-kagemusha-production-evidence --trusted-signer-public-key target/kagemusha-android-lab-keys/lab-public.pem --json-out target/kagemusha-android-device-lab-lab-app-v2-validation-latest.json`
+  - `python3 scripts/kagemusha_production_readiness.py --repo-root . --device-lab-root target/kagemusha-android-device-lab-lab-app-v2 --slot google-pixel-6-6a-physical-1781070293478 --trusted-signer-public-key target/kagemusha-android-lab-keys/lab-public.pem --summary-out target/kagemusha-readiness-summary-current.json`
+    exits `1` with `lineage_proof_evidence_missing`,
+    `compact_key_evidence_missing`, and
+    `android_device_lab_standard_matrix_missing`.
+
 ## 2026-06-10 Kagemusha compact staged resume
 
 - Added explicit `--resume-keygen` support to the ABI-7 recursive compact

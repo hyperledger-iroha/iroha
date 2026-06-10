@@ -3391,19 +3391,7 @@ def verify_xsd_summary(
     )
     manifest = _require_string(summary, "manifest", str(path))
     _reject_path_smuggling(manifest, f"{path}.manifest")
-    if _xsd_manifest_is_repository_fixture(manifest):
-        target = warnings if allow_reviewed_xsd_gaps else blockers
-        target.append(
-            {
-                "code": "xsd.repository_fixture_manifest",
-                "message": (
-                    "XSD summary was generated from the repository ISO fixture "
-                    "manifest; production evidence must use an operator-supplied "
-                    "official MDR/XSD package manifest"
-                ),
-                "path": str(path),
-            }
-        )
+    repository_fixture_manifest = _xsd_manifest_is_repository_fixture(manifest)
     manifest_sha256 = _require_sha256(summary, "manifest_sha256", str(path))
     verified_schemas = _require_positive_int(summary, "verified_schemas", str(path))
     verified_fixtures = _require_positive_int(summary, "verified_fixtures", str(path))
@@ -3537,9 +3525,30 @@ def verify_xsd_summary(
                 path,
             )
 
+    has_reviewed_xsd_gap = (
+        repository_fixture_manifest
+        or bool(missing_schema_fixtures)
+        or bool(schema_only_entries)
+        or bool(blocked_schema_sources)
+    )
+
+    def reviewed_gap_target() -> list[dict[str, Any]]:
+        return warnings if allow_reviewed_xsd_gaps and has_reviewed_xsd_gap else blockers
+
+    if repository_fixture_manifest:
+        reviewed_gap_target().append(
+            {
+                "code": "xsd.repository_fixture_manifest",
+                "message": (
+                    "XSD summary was generated from the repository ISO fixture "
+                    "manifest; production evidence must use an operator-supplied "
+                    "official MDR/XSD package manifest"
+                ),
+                "path": str(path),
+            }
+        )
     if not require_schema_backed:
-        target = warnings if allow_reviewed_xsd_gaps else blockers
-        target.append(
+        reviewed_gap_target().append(
             {
                 "code": "xsd.strict_schema_backed_not_proven",
                 "message": "XSD summary was not produced with --require-schema-backed-fixtures",
@@ -3547,8 +3556,7 @@ def verify_xsd_summary(
             }
         )
     if not require_fixture_for_schema:
-        target = warnings if allow_reviewed_xsd_gaps else blockers
-        target.append(
+        reviewed_gap_target().append(
             {
                 "code": "xsd.strict_fixture_for_schema_not_proven",
                 "message": "XSD summary was not produced with --require-fixture-for-schema",
@@ -3556,8 +3564,7 @@ def verify_xsd_summary(
             }
         )
     if not require_profile_schema_backed:
-        target = warnings if allow_reviewed_xsd_gaps else blockers
-        target.append(
+        reviewed_gap_target().append(
             {
                 "code": "xsd.profile_schema_backed_not_proven",
                 "message": (
@@ -3568,8 +3575,7 @@ def verify_xsd_summary(
             }
         )
     if not validate_xml_schema:
-        target = warnings if allow_reviewed_xsd_gaps else blockers
-        target.append(
+        reviewed_gap_target().append(
             {
                 "code": "xsd.xml_schema_validation_not_proven",
                 "message": "XSD summary was not produced with --validate-xml-schema",
@@ -3577,8 +3583,7 @@ def verify_xsd_summary(
             }
         )
     if missing_schema_fixtures:
-        target = warnings if allow_reviewed_xsd_gaps else blockers
-        target.append(
+        reviewed_gap_target().append(
             {
                 "code": "xsd.missing_schema_fixtures",
                 "message": f"{len(missing_schema_fixtures)} XML fixtures are not schema-backed",
@@ -3587,8 +3592,7 @@ def verify_xsd_summary(
             }
         )
     if schema_only_entries:
-        target = warnings if allow_reviewed_xsd_gaps else blockers
-        target.append(
+        reviewed_gap_target().append(
             {
                 "code": "xsd.schema_only_entries",
                 "message": f"{len(schema_only_entries)} XSDs have no standalone XML fixture",
@@ -3604,8 +3608,7 @@ def verify_xsd_summary(
             path,
         )
     if missing_profile_schema_versions:
-        target = warnings if allow_reviewed_xsd_gaps else blockers
-        target.append(
+        reviewed_gap_target().append(
             {
                 "code": "xsd.missing_profile_schema_versions",
                 "message": (

@@ -644,7 +644,9 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   loading, and archived `profile_catalog.path` values under those artifacts
   replay as `xsd.repository_profile_catalog` blockers. Local
   `--allow-reviewed-xsd-gaps`
-  diagnostic runs can only downgrade reviewed corpus warnings.
+  diagnostic runs can only downgrade reviewed corpus warnings; an unreviewed
+  profile-catalog-only schema gap remains a production blocker and makes the
+  override unused.
   Operator evidence verification rejects canary summaries whose `config_path`
   still points at checked-in `fixtures/iso20022/operator_canary/` runbook
   templates, and final readiness replays the compact path as an
@@ -1542,7 +1544,8 @@ local diagnostic audits of the current checked-in fixture corpus; production
 release evidence should omit them and must make the strict XSD, profile-catalog,
 and receipt-archive checks pass. The final readiness gate rejects those local
 overrides when they are unused, so `--allow-reviewed-xsd-gaps` must correspond
-to at least one reviewed XSD or repository-fixture warning and
+to at least one reviewed XSD or repository-fixture warning, not just an
+unreviewed advertised profile-version gap, and
 `--allow-canary-stage-receipts-only` must correspond to an evidence summary with
 canary-stage-only receipt policy or missing direct receipt archive verification.
 

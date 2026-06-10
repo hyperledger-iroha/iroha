@@ -21,6 +21,23 @@ and completed history lives in [`status.md`](./status.md).
   before native probing or dispatch, accepting safe non-negative numbers and
   bounded `u64` bigints only, and the SDK parity guard must continue pinning
   those surfaces.
+- Kagemusha C# SDK validation remains a Windows-machine follow-up because this
+  macOS host does not have `dotnet` installed. On Windows, install or select a
+  .NET 8 SDK, run the standalone C# Kagemusha guard
+  `ci/check_kagemusha_recursive_spend_csharp_sdk.sh` or its direct
+  `dotnet test` equivalent, and preserve the selected `dotnet --version`
+  evidence in the output. The focused pass should cover
+  `csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs`,
+  `PrivacyNativeTests.cs`, and `TransactionBuilderTests.cs`, with native bridge
+  loading and P/Invoke symbol probing enabled for the ABI-6 recursive spend and
+  ABI-7 compact-token, recursive aggregation, recursive compact
+  verifier/projection, and instruction transaction-builder surfaces. The
+  Windows pass must also pin the C# negative controls for malformed Norito
+  input/output headers, caller archive-copy immutability, verifier-unavailable
+  status mapping, transaction-builder schema and wire-name drift, and
+  package/evidence parity. After the Windows run passes, update `status.md`
+  with the C# SDK evidence and rerun the Kagemusha SDK parity or production
+  readiness guards needed to clear the C# row.
 - Kagemusha Android production readiness now has host-side verifier-report
   rendering, a signed-slot assembler, a physical-device raw artifact exporter,
   a strict host puller for those raw slots, and a dedicated
@@ -29,7 +46,10 @@ and completed history lives in [`status.md`](./status.md).
   artifact to symlink-free ancestors and the opened file identity, uses a
   separate 64 MiB cap for the JNI-bearing offline wallet APK while retaining
   16 MiB caps for smaller evidence artifacts, and rejects source-directory
-  aliases or post-preflight source swaps before signed slot installation. The
+  aliases or post-preflight source swaps before signed slot installation. Fresh
+  raw exports now include `attestation/harness-result.json`, and the raw puller
+  requires that harness result to match the slot challenge before the host
+  verifier report and signed slot can be assembled. The
   latest attached Pixel 6 / Android 16 slot
   `google-pixel-6-6a-physical-1781070293478` verifies and signs successfully
   through the lab-app path; remaining Android release work is evidence
@@ -54,7 +74,9 @@ and completed history lives in [`status.md`](./status.md).
   `--resume-key-artifacts` reuses only phases whose artifacts, log, canonical
   zero-exit execution report, and log byte count validate, then reruns missing
   or failed regular phase outputs while still rejecting symlinked or hardlinked
-  staged material.
+  staged material. `--resume-key-artifacts` is mutually exclusive with
+  `--replace`, so a caller cannot mix selective phase-boundary resume with full
+  staged-output replacement.
   Staged metadata writes are now self-verifying: after the atomic rename the
   runner reopens marker, elapsed, and JSON report files, checks the opened file
   identity, and compares exact bytes before returning.
@@ -77,6 +99,8 @@ and completed history lives in [`status.md`](./status.md).
   artifacts, generator log, execution report, run report, marker, canonical
   command, and generator-log byte count validate; failed or malformed regular
   staged outputs are replaced and rerun, while unsafe aliases still fail closed.
+  `--resume-keygen` is mutually exclusive with `--replace`, so operators must
+  choose validated resume or full staged-output replacement before cleanup.
   The runner also self-verifies marker and JSON report writes after atomic
   rename so post-write metadata drift is rejected before finalization.
   The finalizer reopens every published key artifact, generator log, and
@@ -2970,7 +2994,8 @@ and completed history lives in [`status.md`](./status.md).
 		  policy flag when forged direct archive verification is present, rejects
 		  unused final-readiness `--allow-reviewed-xsd-gaps` and
 		  `--allow-canary-stage-receipts-only` overrides unless a reviewed XSD warning
-		  or canary-stage-only receipt evidence is actually present, and
+		  beyond an unreviewed profile-version gap or canary-stage-only receipt
+		  evidence is actually present, and
 	  rechecks compact trust profile JSON emission and digest, CRL/OCSP revocation
 	  posture, direct archive/canary receipt digest/kind/status/response-body digest/endpoint-policy/metadata binding,
 	  empty successful direct-verifier stderr, trust

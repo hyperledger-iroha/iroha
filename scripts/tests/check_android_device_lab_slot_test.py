@@ -170,10 +170,11 @@ def add_tar_link(
 
 
 def raw_slot_artifacts(slot_id: str = "pixel6") -> dict[str, bytes]:
-    chain = (
+    chain = b"".join(
         b"-----BEGIN CERTIFICATE-----\n"
-        b"slot-bound-strongbox-keymint-certificate-chain\n"
-        b"-----END CERTIFICATE-----\n"
+        + f"slot-bound-strongbox-keymint-certificate-{index}\n".encode("utf-8")
+        + b"-----END CERTIFICATE-----\n"
+        for index in range(4)
     )
     challenge = bytes.fromhex("01020304")
     app_signing = hashlib.sha256(f"{slot_id}:app-signing".encode("utf-8")).hexdigest()
@@ -198,6 +199,18 @@ def raw_slot_artifacts(slot_id: str = "pixel6") -> dict[str, bytes]:
     }
     return {
         "attestation/challenge.hex": challenge.hex().encode("utf-8") + b"\n",
+        "attestation/harness-result.json": json.dumps(
+            {
+                "alias": "android-keystore-alias",
+                "attestation_security_level": "STRONG_BOX",
+                "keymaster_security_level": "STRONG_BOX",
+                "strongbox_attestation": True,
+                "challenge_hex": challenge.hex(),
+                "chain_length": 4,
+            },
+            sort_keys=True,
+        ).encode("utf-8")
+        + b"\n",
         "attestation/keymint-certificate-chain.pem": chain,
         "attestation/result.json": json.dumps(result, sort_keys=True).encode("utf-8")
         + b"\n",
@@ -215,6 +228,7 @@ def raw_slot_tar_bytes(
     *,
     latest_slot_id: str | None = None,
     extra_files: dict[str, bytes] | None = None,
+    omit_files: set[str] | None = None,
     symlinks: dict[str, str] | None = None,
     hardlinks: dict[str, str] | None = None,
 ) -> bytes:
@@ -223,7 +237,10 @@ def raw_slot_tar_bytes(
         add_tar_directory(tar, slot_id)
         for dirname in ("attestation", "handoff", "wallet", "telemetry", "queue", "logs"):
             add_tar_directory(tar, f"{slot_id}/{dirname}")
+        skipped = omit_files or set()
         for relative, data in raw_slot_artifacts(slot_id).items():
+            if relative in skipped:
+                continue
             add_tar_file(tar, f"{slot_id}/{relative}", data)
         for relative, data in (extra_files or {}).items():
             add_tar_file(tar, relative, data)
@@ -725,14 +742,16 @@ def create_slot(
     app_signing_certificate_sha256 = hashlib.sha256(
         f"{name}:app-signing-certificate".encode("utf-8")
     ).hexdigest()
-    attestation_challenge_sha256 = hashlib.sha256(
-        f"{name}:attestation-challenge".encode("utf-8")
-    ).hexdigest()
+    attestation_challenge = f"{name}:attestation-challenge".encode("utf-8")
+    attestation_challenge_sha256 = hashlib.sha256(attestation_challenge).hexdigest()
     attestation_certificate_chain_path = "attestation/keymint-certificate-chain.pem"
     write_text(
         slot / attestation_certificate_chain_path,
         "-----BEGIN CERTIFICATE-----\n"
-        f"{name}-strongbox-keymint-certificate-chain\n"
+        f"{name}-strongbox-keymint-certificate-leaf\n"
+        "-----END CERTIFICATE-----\n"
+        "-----BEGIN CERTIFICATE-----\n"
+        f"{name}-strongbox-keymint-certificate-issuer\n"
         "-----END CERTIFICATE-----\n",
     )
     attestation_certificate_chain_sha256 = hashlib.sha256(
@@ -755,6 +774,17 @@ def create_slot(
         {"schema_version": 1, "slot_id": name, "suite": "kagemusha-device-lab"},
     )
     write_text(slot / "telemetry" / "status.ndjson", '{"status":"ok"}\n')
+    write_json(
+        slot / "attestation" / "harness-result.json",
+        {
+            "alias": "android-keystore-alias",
+            "attestation_security_level": "STRONG_BOX",
+            "keymaster_security_level": "STRONG_BOX",
+            "strongbox_attestation": True,
+            "challenge_hex": attestation_challenge.hex(),
+            "chain_length": 2,
+        },
+    )
     write_json(
         slot / "attestation" / "result.json",
         {
@@ -1030,6 +1060,8 @@ def slot_assembler_args(
         "oriole",
         "--attestation-result",
         str(source_slot / "attestation" / "result.json"),
+        "--attestation-harness-result",
+        str(source_slot / "attestation" / "harness-result.json"),
         "--attestation-report",
         str(source_slot / "attestation" / "report.json"),
         "--attestation-certificate-chain",
@@ -1098,10 +1130,23 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                 require_kagemusha_production_evidence=True,
                 trusted_signer_public_keys=trusted,
             )
+            harness_exists = (
+                slot_root / "pixel6" / "attestation" / "harness-result.json"
+            ).is_file()
+            signed_artifact_digests = json.loads(
+                (slot_root / "pixel6" / "evidence" / "signed-evidence.json").read_text(
+                    encoding="utf-8"
+                )
+            )["artifact_digests"]
 
         self.assertEqual(status, 0)
         self.assertIn("wrote", stdout.getvalue())
         self.assertEqual(report["status"], "ok", report["errors"])
+        self.assertTrue(harness_exists)
+        self.assertIn(
+            "attestation/harness-result.json",
+            signed_artifact_digests,
+        )
 
     def test_kagemusha_slot_assembler_requires_signing_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -1246,6 +1291,71 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertIn(
             "offline wallet release APK source changed while being read",
+            stderr.getvalue(),
+        )
+        self.assertFalse((slot_root / "pixel6").exists())
+
+    def test_kagemusha_slot_assembler_requires_attestation_harness_result(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            source_signer = create_test_signer(Path(temp) / "source-keys")
+            signer = create_test_signer(Path(temp) / "slot-keys")
+            source_slot = create_slot(
+                Path(temp) / "source",
+                "pixel6",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+                source_signer,
+            )
+            (source_slot / "attestation" / "harness-result.json").unlink()
+            slot_root = Path(temp) / "device-lab"
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = slot_assembler.main(
+                    slot_assembler_args(
+                        slot_root=slot_root,
+                        source_slot=source_slot,
+                        signer=signer,
+                    )
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn("attestation harness result source is missing", stderr.getvalue())
+        self.assertFalse((slot_root / "pixel6").exists())
+
+    def test_kagemusha_slot_assembler_rejects_harness_challenge_mismatch(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            source_signer = create_test_signer(Path(temp) / "source-keys")
+            signer = create_test_signer(Path(temp) / "slot-keys")
+            source_slot = create_slot(
+                Path(temp) / "source",
+                "pixel6",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+                source_signer,
+            )
+            harness_path = source_slot / "attestation" / "harness-result.json"
+            harness = json.loads(harness_path.read_text(encoding="utf-8"))
+            harness["challenge_hex"] = "00"
+            write_json(harness_path, harness)
+            slot_root = Path(temp) / "device-lab"
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = slot_assembler.main(
+                    slot_assembler_args(
+                        slot_root=slot_root,
+                        source_slot=source_slot,
+                        signer=signer,
+                    )
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "attestation harness result challenge_hex digest must match "
+            "attestation/result.json attestation_challenge_sha256",
             stderr.getvalue(),
         )
         self.assertFalse((slot_root / "pixel6").exists())
@@ -1466,16 +1576,82 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             result_exists = (
                 out_root / "pixel6" / "attestation" / "result.json"
             ).is_file()
+            harness_exists = (
+                out_root / "pixel6" / "attestation" / "harness-result.json"
+            ).is_file()
 
         self.assertEqual(status, 0, errors)
         self.assertEqual(slot_path, out_root / "pixel6")
         self.assertEqual(latest_text, "pixel6\n")
         self.assertTrue(result_exists)
+        self.assertTrue(harness_exists)
         self.assertEqual(summary["schema"], raw_puller.RAW_PULL_SUMMARY_SCHEMA)
         self.assertEqual(summary["slot_id"], "pixel6")
+        self.assertIn("attestation/harness-result.json", summary["artifact_sha256"])
         self.assertIn("attestation/result.json", summary["artifact_sha256"])
         self.assertTrue(any("cat" in call for call in runner.calls))  # type: ignore[attr-defined]
         self.assertTrue(any("exec-out" in call for call in runner.calls))  # type: ignore[attr-defined]
+
+    def test_kagemusha_android_raw_puller_requires_harness_result(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            temp_path = Path(temp)
+            out_root = temp_path / "raw"
+            tar_bytes = raw_slot_tar_bytes(
+                "pixel6",
+                omit_files={"attestation/harness-result.json"},
+            )
+            runner = fake_raw_pull_runner(tar_bytes, "pixel6")
+
+            status, slot_path, errors = raw_puller.pull_raw_slot(
+                raw_pull_args(out_root),
+                runner=runner,
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIsNone(slot_path)
+        self.assertIn(
+            "raw slot artifact attestation/harness-result.json is missing",
+            errors,
+        )
+
+    def test_kagemusha_android_raw_puller_rejects_harness_challenge_mismatch(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            temp_path = Path(temp)
+            out_root = temp_path / "raw"
+            mismatched_harness = {
+                "alias": "android-keystore-alias",
+                "attestation_security_level": "STRONG_BOX",
+                "keymaster_security_level": "STRONG_BOX",
+                "strongbox_attestation": True,
+                "challenge_hex": "00",
+                "chain_length": 4,
+            }
+            tar_bytes = raw_slot_tar_bytes(
+                "pixel6",
+                omit_files={"attestation/harness-result.json"},
+                extra_files={
+                    "pixel6/attestation/harness-result.json": json.dumps(
+                        mismatched_harness,
+                        sort_keys=True,
+                    ).encode("utf-8")
+                    + b"\n",
+                },
+            )
+            runner = fake_raw_pull_runner(tar_bytes, "pixel6")
+
+            status, slot_path, errors = raw_puller.pull_raw_slot(
+                raw_pull_args(out_root),
+                runner=runner,
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIsNone(slot_path)
+        self.assertIn(
+            "attestation/harness-result.json challenge_hex must match attestation/challenge.hex",
+            errors,
+        )
 
     def test_kagemusha_android_raw_puller_refuses_existing_slot_before_adb_tar(
         self,
@@ -1611,6 +1787,205 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertIn(
             "raw slot tar member pixel6/collision/child parent directory could not be created",
             errors,
+        )
+
+    def test_kagemusha_android_raw_puller_rejects_noncanonical_harness_strings(
+        self,
+    ) -> None:
+        harness = {
+            "alias": " android-keystore-alias ",
+            "attestation_security_level": " strong_box ",
+            "keymaster_security_level": "strongbox",
+            "strongbox_attestation": True,
+            "challenge_hex": "01 02 03 04",
+            "chain_length": 4,
+        }
+        with tempfile.TemporaryDirectory() as temp:
+            out_root = Path(temp) / "raw"
+            tar_bytes = raw_slot_tar_bytes(
+                "pixel6",
+                omit_files={"attestation/harness-result.json"},
+                extra_files={
+                    "pixel6/attestation/harness-result.json": json.dumps(
+                        harness,
+                        sort_keys=True,
+                    ).encode("utf-8")
+                    + b"\n",
+                },
+            )
+
+            status, slot_path, errors = raw_puller.pull_raw_slot(
+                raw_pull_args(out_root),
+                runner=fake_raw_pull_runner(tar_bytes, "pixel6"),
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIsNone(slot_path)
+        self.assertIn(
+            "attestation/harness-result.json alias must not have surrounding whitespace",
+            errors,
+        )
+        self.assertIn(
+            "attestation/harness-result.json attestation_security_level must be STRONGBOX",
+            errors,
+        )
+        self.assertIn(
+            "attestation/harness-result.json keymaster_security_level must be STRONGBOX",
+            errors,
+        )
+        self.assertIn(
+            "attestation/harness-result.json challenge_hex must be lowercase hexadecimal without whitespace",
+            errors,
+        )
+
+    def test_kagemusha_android_raw_puller_rejects_harness_chain_length_mismatch(
+        self,
+    ) -> None:
+        harness = {
+            "alias": "android-keystore-alias",
+            "attestation_security_level": "STRONG_BOX",
+            "keymaster_security_level": "STRONG_BOX",
+            "strongbox_attestation": True,
+            "challenge_hex": "01020304",
+            "chain_length": 3,
+        }
+        with tempfile.TemporaryDirectory() as temp:
+            out_root = Path(temp) / "raw"
+            tar_bytes = raw_slot_tar_bytes(
+                "pixel6",
+                omit_files={"attestation/harness-result.json"},
+                extra_files={
+                    "pixel6/attestation/harness-result.json": json.dumps(
+                        harness,
+                        sort_keys=True,
+                    ).encode("utf-8")
+                    + b"\n",
+                },
+            )
+
+            status, slot_path, errors = raw_puller.pull_raw_slot(
+                raw_pull_args(out_root),
+                runner=fake_raw_pull_runner(tar_bytes, "pixel6"),
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIsNone(slot_path)
+        self.assertIn(
+            "attestation/harness-result.json chain_length must match "
+            "attestation/keymint-certificate-chain.pem certificate count",
+            errors,
+        )
+
+    def test_kagemusha_android_raw_puller_rejects_malformed_harness_result(
+        self,
+    ) -> None:
+        harness = {
+            "alias": "android-keystore-alias",
+            "attestation_security_level": "TEE",
+            "keymaster_security_level": "SOFTWARE",
+            "strongbox_attestation": False,
+            "challenge_hex": "01020304",
+            "chain_length": 1,
+            "unexpected": "field",
+        }
+        with tempfile.TemporaryDirectory() as temp:
+            out_root = Path(temp) / "raw"
+            tar_bytes = raw_slot_tar_bytes(
+                "pixel6",
+                omit_files={"attestation/harness-result.json"},
+                extra_files={
+                    "pixel6/attestation/harness-result.json": json.dumps(
+                        harness,
+                        sort_keys=True,
+                    ).encode("utf-8")
+                    + b"\n",
+                },
+            )
+
+            status, slot_path, errors = raw_puller.pull_raw_slot(
+                raw_pull_args(out_root),
+                runner=fake_raw_pull_runner(tar_bytes, "pixel6"),
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIsNone(slot_path)
+        self.assertIn(
+            "attestation/harness-result.json contains unexpected field unexpected",
+            errors,
+        )
+        self.assertIn(
+            "attestation/harness-result.json attestation_security_level must be STRONGBOX",
+            errors,
+        )
+        self.assertIn(
+            "attestation/harness-result.json keymaster_security_level must be STRONGBOX",
+            errors,
+        )
+        self.assertIn(
+            "attestation/harness-result.json strongbox_attestation must be true",
+            errors,
+        )
+        self.assertIn(
+            "attestation/harness-result.json chain_length must be at least 2",
+            errors,
+        )
+
+    def test_scan_slot_rejects_missing_attestation_harness_result(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            signer = create_test_signer(root / "keys")
+            slot = create_slot(
+                root,
+                "pixel6",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+                signer,
+            )
+            (slot / "attestation" / "harness-result.json").unlink()
+            rewrite_sha256sum(slot)
+
+            report = device_lab.scan_slot(
+                slot,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys=trusted_signers_for(signer),
+            )
+
+        self.assertEqual(report["status"], "error")
+        self.assertIn("missing attestation/harness-result.json", report["errors"])
+        self.assertIn(
+            "signed evidence artifact required slot artifact is missing "
+            "attestation/harness-result.json",
+            report["errors"],
+        )
+
+    def test_scan_slot_rejects_attestation_harness_challenge_mismatch(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            signer = create_test_signer(root / "keys")
+            slot = create_slot(
+                root,
+                "pixel6",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+                signer,
+            )
+            harness_path = slot / "attestation" / "harness-result.json"
+            harness = json.loads(harness_path.read_text(encoding="utf-8"))
+            harness["challenge_hex"] = "00"
+            write_json(harness_path, harness)
+            resign_signed_evidence_artifacts(slot, signer)
+
+            report = device_lab.scan_slot(
+                slot,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys=trusted_signers_for(signer),
+            )
+
+        self.assertEqual(report["status"], "error")
+        self.assertIn(
+            "attestation/harness-result.json challenge_hex digest must match "
+            "slot.json attestation_challenge_sha256",
+            report["errors"],
         )
 
     def test_scan_slot_rejects_sha256_drift(self) -> None:

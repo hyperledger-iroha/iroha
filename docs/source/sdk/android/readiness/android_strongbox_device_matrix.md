@@ -43,7 +43,8 @@ Production release criteria:
   The d2d payment transcript is bound by `slot.json` with a D2D payment
   transcript path and SHA-256, and that path must stay under `handoff/`.
   Each production slot must also keep `telemetry/telemetry.json`,
-  `telemetry/status.ndjson`, `attestation/result.json`,
+  `telemetry/status.ndjson`, `attestation/harness-result.json`,
+  `attestation/result.json`,
   `attestation/report.json`, `queue/pending_queue.json`, and
   `logs/runtime.log`; signed evidence rejects refreshed manifests that omit any
   of those base artifacts. Those required base artifacts must be non-empty and
@@ -177,7 +178,7 @@ Production release criteria:
   `org.hyperledger.iroha.sdk.offline.wallet.lab`, not the oversized androidTest
   package. It generates a StrongBox-backed Android Keystore key with a slot
   challenge, exports `attestation/keymint-certificate-chain.pem` plus
-  `attestation/result.json`, and writes pullable D2D, wallet-integrity,
+  `attestation/harness-result.json` and `attestation/result.json`, and writes pullable D2D, wallet-integrity,
   telemetry, queue, and runtime-log artifacts under the app files directory at
   `kagemusha-device-lab/<slot-id>`. It also writes
   `kagemusha-device-lab/latest-slot.txt` so the host can locate the newest raw
@@ -192,9 +193,16 @@ Production release criteria:
   slot with `adb exec-out ... tar`, refuses to overwrite an existing local raw
   slot, and rejects symlink, hardlink, special-file, traversal, duplicate,
   oversized, and slot-mismatched tar members before the raw artifacts can be
-  assembled into signed production evidence.
+  assembled into signed production evidence. A raw pull is not assembly-ready
+  unless it contains `attestation/harness-result.json`; the puller verifies that
+  the harness challenge and `chain_length` match the pulled challenge and PEM
+  certificate count before the host verifier report renderer consumes that file
+  with the pulled certificate chain and challenge to produce
+  `attestation/report.json`. Harness strings must be canonical: aliases cannot
+  carry surrounding whitespace, StrongBox levels must use exact accepted labels,
+  and `challenge_hex` must be lowercase hexadecimal without whitespace.
 - Assemble a production slot from completed attached-device artifacts with
-  `python3 scripts/kagemusha_android_device_lab_slot.py --slot-root artifacts/android/device_lab --slot-id <slot-id> --device-family "<standard-family>" --attestation-result <result.json> --attestation-report <report.json> --attestation-certificate-chain <chain.pem> --offline-wallet-apk <offline-wallet-release.apk> --d2d-payment-transcript <d2d-payment.json> --wallet-integrity-transcript <integrity.json> --telemetry-json <telemetry.json> --status-ndjson <status.ndjson> --pending-queue-json <pending_queue.json> --runtime-log <runtime.log> --private-key <runtime-only-lab-private-key.pem> --public-key <lab-public-key.pem> --signer-key-id <lab-signer-id>`.
+  `python3 scripts/kagemusha_android_device_lab_slot.py --slot-root artifacts/android/device_lab --slot-id <slot-id> --device-family "<standard-family>" --attestation-result <result.json> --attestation-harness-result <harness-result.json> --attestation-report <report.json> --attestation-certificate-chain <chain.pem> --offline-wallet-apk <offline-wallet-release.apk> --d2d-payment-transcript <d2d-payment.json> --wallet-integrity-transcript <integrity.json> --telemetry-json <telemetry.json> --status-ndjson <status.ndjson> --pending-queue-json <pending_queue.json> --runtime-log <runtime.log> --private-key <runtime-only-lab-private-key.pem> --public-key <lab-public-key.pem> --signer-key-id <lab-signer-id>`.
   The assembler reads the attached device identity from ADB unless explicit
   device fingerprint and OS build overrides are supplied, refuses to overwrite
   an existing slot directory, and requires signing inputs by default; unsigned

@@ -171,7 +171,8 @@ under checked-in `fixtures/iso20022/` artifacts fail before manifest loading,
 and archived `profile_catalog.path` values under those artifacts replay as
 `xsd.repository_profile_catalog` blockers. The local `--allow-reviewed-xsd-gaps`
 diagnostic mode can only downgrade reviewed corpus warnings, not make repository
-fixtures production evidence.
+fixtures production evidence or suppress an unreviewed profile-catalog-only
+schema gap.
 Operator evidence verification now rejects canary summaries whose
 `config_path` still points at checked-in
 `fixtures/iso20022/operator_canary/` runbook templates, and final readiness
@@ -3473,7 +3474,8 @@ redistributable schemas, and official trust/revocation bundles.
   Compact canary stage names must also be unique, limited to the production
   stages, and ordered as rail/notary/verify. Local readiness overrides are now
   bound to matching evidence: `--allow-reviewed-xsd-gaps` requires at least one
-  reviewed XSD warning, and `--allow-canary-stage-receipts-only` requires an
+  reviewed XSD warning beyond an unreviewed profile-version gap, and
+  `--allow-canary-stage-receipts-only` requires an
   evidence summary with canary-stage-only receipt policy or missing direct
   receipt archive verification.
 - Completed 2026-06-04: hardened live securities lifecycle profile admission
