@@ -16066,7 +16066,7 @@ pub fn prove_stark_fri_zk_ace_open_verify_envelope(
     let envelope_bytes = crate::zk_stark::prove_stark_fri_zk_ace_air_envelope_bytes(
         params,
         "IROHA-STARK-ZK-ACE-AIR-V1".to_owned(),
-        env_circuit_id,
+        circuit_id.to_owned(),
         air_public_digest,
         public_inputs,
         witness,
@@ -16099,9 +16099,9 @@ mod zk_ace_stark_prover_tests {
         domain::DomainId,
         proof::{VerifyingKeyBox, VerifyingKeyId},
         zk::{
-            ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER, ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND,
-            ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID, ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG,
-            ZkAcePublicInputsV1, ZkAceWitnessV1,
+            OpenVerifyEnvelope, StarkFriOpenProofV1, ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER,
+            ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND, ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID,
+            ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG, ZkAcePublicInputsV1, ZkAceWitnessV1,
         },
     };
 
@@ -16199,6 +16199,49 @@ mod zk_ace_stark_prover_tests {
         assert!(
             err.contains("below production floor"),
             "unexpected weak VK rejection: {err}"
+        );
+    }
+
+    #[test]
+    fn zk_ace_stark_prover_emits_canonical_native_air_circuit_id() {
+        let payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
+            version: 1,
+            circuit_id: ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID.to_owned(),
+            n_log2: crate::zk_stark::ZK_ACE_STARK_FRI_V1_N_LOG2,
+            blowup_log2: crate::zk_stark::ZK_ACE_STARK_FRI_V1_BLOWUP_LOG2,
+            fold_arity: 2,
+            queries: crate::zk_stark::ZK_ACE_STARK_FRI_V1_QUERIES,
+            merkle_arity: 2,
+            hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
+        };
+        let vk_box = VerifyingKeyBox::new(
+            ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND.into(),
+            norito::to_bytes(&payload).expect("encode canonical ZK-ACE STARK VK"),
+        );
+        let (public_inputs, witness) = public_inputs_and_witness();
+        let proof = prove_stark_fri_zk_ace_open_verify_envelope(
+            ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND,
+            ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID,
+            &vk_box,
+            &public_inputs,
+            &witness,
+        )
+        .expect("build valid ZK-ACE STARK proof");
+        let envelope: OpenVerifyEnvelope =
+            norito::decode_from_bytes(&proof.bytes).expect("decode ZK-ACE OpenVerifyEnvelope");
+        let open: StarkFriOpenProofV1 =
+            norito::decode_from_bytes(&envelope.proof_bytes).expect("decode STARK wrapper");
+        let native: crate::zk_stark::StarkVerifyEnvelopeV1 =
+            norito::decode_from_bytes(&open.envelope_bytes).expect("decode native ZK-ACE AIR");
+        let air = native.proof.air.expect("ZK-ACE proof carries native AIR");
+
+        assert_eq!(air.circuit_id, ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID);
+        assert!(
+            crate::zk_stark::verify_stark_fri_zk_ace_envelope_with_limits(
+                &open.envelope_bytes,
+                &crate::zk_stark::StarkVerifierLimits::default(),
+                &public_inputs,
+            )
         );
     }
 }

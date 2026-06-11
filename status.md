@@ -2,6 +2,22 @@
 
 Last updated: 2026-06-11
 
+## 2026-06-11 ZK-ACE and Soracloud fixture regression fixes
+
+- Restored ZK-ACE STARK proof generation by keeping the native AIR circuit id
+  canonical (`zk_ace_pq_authorization_v0`) while the outer verifier metadata
+  continues to use backend-normalized matching. Added a regression that decodes
+  the generated native AIR and verifies it with the ZK-ACE AIR verifier.
+- Refreshed the Soracloud BFV full-bootstrap material fixture digests after the
+  public-input schema changed, and enabled the STARK sample guardrails in the
+  BFV-native-AIR rejection test so it reaches the intended transcript-label
+  validation path.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --features zk-stark soracloud_bfv_operation_vectors -- --nocapture`
+  - `cargo test -p iroha_core --features zk-stark soracloud_fhe_full_bootstrap_material_proof_rejects_bfv_native_air_without_context -- --nocapture`
+  - `cargo test -p iroha_core --features zk-stark zk_ace -- --nocapture`
+
 ## 2026-06-11 Governance ZK default test fixture alignment
 
 - Updated the default-feature governance ZK tests to use the production-shaped
