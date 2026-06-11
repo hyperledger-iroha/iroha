@@ -11196,8 +11196,8 @@ export const buildEvmSccpProofRequest = (input) => {
           "destinationBindingHash",
           32,
         ),
-        ...publicSignalWordBytes,
         ...proverArtifactRequestBytes,
+        ...publicSignalWordBytes,
       ),
     ),
   );
@@ -30960,7 +30960,7 @@ const normalizeTonSourceStateProofRequestForWrapping = (request) => {
 export function wrapTonSccpSourceStateVerificationProof(proofBytes, request) {
   const proofRequest = normalizeTonSourceStateProofRequestForWrapping(request);
   const proof = copyBytes(toBytes(proofBytes, "proofBytes"));
-  requireNonZeroProofBytes(proof, "proofBytes");
+  requireSourceStateProofBytes(proof, "proofBytes");
   return immutableSourceStateVerificationProof({
     version: 1,
     proofFamily: SCCP_STARK_FRI_PROOF_FAMILY_V1,

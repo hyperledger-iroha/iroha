@@ -1998,33 +1998,48 @@ def test_release_readiness_report_guards_ethereum_native_receipt_finality_gate_i
     report = load_report_module()
     assert report._ethereum_native_receipt_finality_gate_inventory_errors() == []
 
-    sparse_source = tmp_path / "EvmSccpProver.kt"
-    sparse_source.write_text(
-        "beaconFinality.beaconSlot is required for receiptProof\n",
-        encoding="utf-8",
-    )
-    errors = report._ethereum_native_receipt_finality_gate_inventory_errors(
+    cases = (
         (
+            "EvmSccpProver.kt",
             (
-                sparse_source,
-                (
-                    "beaconFinality.beaconSlot is required for receiptProof",
-                    "beaconFinality.syncCommitteeRoot is required for receiptProof",
-                ),
+                "beaconFinality.beaconSlot is required for receiptProof",
+                "beaconFinality.syncCommitteeRoot is required for receiptProof",
             ),
-        )
+            "beaconFinality.syncCommitteeRoot is required for receiptProof",
+        ),
+        (
+            "SccpEvmProver.swift",
+            (
+                "guard let beaconSlotInput = try Self.strictFirstPresent(",
+                "guard let finalizedRootInput = try Self.strictFirstPresent(",
+            ),
+            "guard let finalizedRootInput = try Self.strictFirstPresent(",
+        ),
+        (
+            "EthereumMainnetSccp.cs",
+            (
+                "BeaconSlot = NormalizeUnsignedInteger(",
+                "BeaconFinalizedRoot = NormalizeRpcHex(",
+            ),
+            "BeaconFinalizedRoot = NormalizeRpcHex(",
+        ),
     )
+    for index, (filename, required_markers, removed_marker) in enumerate(cases):
+        sparse_source = tmp_path / f"{index}_{filename}"
+        sparse_source.write_text(
+            "\n".join(marker for marker in required_markers if marker != removed_marker),
+            encoding="utf-8",
+        )
+        errors = report._ethereum_native_receipt_finality_gate_inventory_errors(
+            ((sparse_source, required_markers),)
+        )
 
-    assert any(
-        "Ethereum mainnet native receipt finality source inventory" in error
-        and str(sparse_source) in error
-        and (
-            "missing marker: beaconFinality.syncCommitteeRoot "
-            "is required for receiptProof"
+        assert any(
+            "Ethereum mainnet native receipt finality source inventory" in error
+            and str(sparse_source) in error
+            and f"missing marker: {removed_marker}" in error
+            for error in errors
         )
-        in error
-        for error in errors
-    )
 
 
 def test_release_readiness_report_guards_ethereum_beacon_rest_finalized_header_shape_gate_inventory(
@@ -3106,33 +3121,37 @@ def test_release_readiness_report_guards_ethereum_receipt_source_event_context_g
     report = load_report_module()
     assert report._ethereum_receipt_source_event_context_gate_inventory_errors() == []
 
-    sparse_test = tmp_path / "sccp_evm_receipt_proof_evidence_test.py"
-    sparse_test.write_text(
-        "test_collect_receipt_proof_rejects_source_event_missing_context_fields\n",
-        encoding="utf-8",
-    )
-    errors = report._ethereum_receipt_source_event_context_gate_inventory_errors(
+    cases = (
         (
+            "sccp_evm_receipt_proof_evidence_test.py",
             (
-                sparse_test,
-                (
-                    "test_collect_receipt_proof_rejects_source_event_missing_context_fields",
-                    'for field in ("transactionHash", "blockHash", "blockNumber")',
-                ),
+                "test_collect_receipt_proof_rejects_source_event_missing_context_fields",
+                'for field in ("transactionHash", "blockHash", "blockNumber")',
             ),
-        )
+            'for field in ("transactionHash", "blockHash", "blockNumber")',
+        ),
+        (
+            "lib.rs",
+            ("EVM source receipts must not contain duplicate matching SCCP logs",),
+            "EVM source receipts must not contain duplicate matching SCCP logs",
+        ),
     )
+    for index, (filename, required_markers, removed_marker) in enumerate(cases):
+        sparse_source = tmp_path / f"{index}_{filename}"
+        sparse_source.write_text(
+            "\n".join(marker for marker in required_markers if marker != removed_marker),
+            encoding="utf-8",
+        )
+        errors = report._ethereum_receipt_source_event_context_gate_inventory_errors(
+            ((sparse_source, required_markers),)
+        )
 
-    assert any(
-        "Ethereum mainnet source-event context SDK test inventory" in error
-        and str(sparse_test) in error
-        and (
-            'missing marker: for field in ("transactionHash", "blockHash", '
-            '"blockNumber")'
+        assert any(
+            "Ethereum mainnet source-event context SDK test inventory" in error
+            and str(sparse_source) in error
+            and f"missing marker: {removed_marker}" in error
+            for error in errors
         )
-        in error
-        for error in errors
-    )
 
 
 def test_release_readiness_report_guards_ethereum_receipt_source_event_mode_gate_inventory(
@@ -3143,33 +3162,40 @@ def test_release_readiness_report_guards_ethereum_receipt_source_event_mode_gate
     report = load_report_module()
     assert report._ethereum_receipt_source_event_mode_gate_inventory_errors() == []
 
-    sparse_test = tmp_path / "sccp_evm_receipt_proof_evidence_test.py"
-    sparse_test.write_text(
-        "test_collect_receipt_proof_requires_explicit_receipt_only_mode_without_source_bridge\n",
-        encoding="utf-8",
-    )
-    errors = report._ethereum_receipt_source_event_mode_gate_inventory_errors(
+    cases = (
         (
+            "sccp_evm_receipt_proof_evidence_test.py",
             (
-                sparse_test,
-                (
-                    "test_collect_receipt_proof_requires_explicit_receipt_only_mode_without_source_bridge",
-                    "test_collect_receipt_proof_allows_explicit_receipt_only_mode",
-                ),
+                "test_collect_receipt_proof_requires_explicit_receipt_only_mode_without_source_bridge",
+                "test_collect_receipt_proof_allows_explicit_receipt_only_mode",
             ),
-        )
+            "test_collect_receipt_proof_allows_explicit_receipt_only_mode",
+        ),
+        (
+            "sccp_evm_receipt_proof_evidence.py",
+            (
+                "allow_receipt_only_evidence: bool = False",
+                "source_bridge_address is required for SCCP source-event evidence",
+            ),
+            "source_bridge_address is required for SCCP source-event evidence",
+        ),
     )
+    for index, (filename, required_markers, removed_marker) in enumerate(cases):
+        sparse_source = tmp_path / f"{index}_{filename}"
+        sparse_source.write_text(
+            "\n".join(marker for marker in required_markers if marker != removed_marker),
+            encoding="utf-8",
+        )
+        errors = report._ethereum_receipt_source_event_mode_gate_inventory_errors(
+            ((sparse_source, required_markers),)
+        )
 
-    assert any(
-        "Ethereum mainnet source-event evidence mode SDK test inventory" in error
-        and str(sparse_test) in error
-        and (
-            "missing marker: "
-            "test_collect_receipt_proof_allows_explicit_receipt_only_mode"
+        assert any(
+            "Ethereum mainnet source-event evidence mode SDK test inventory" in error
+            and str(sparse_source) in error
+            and f"missing marker: {removed_marker}" in error
+            for error in errors
         )
-        in error
-        for error in errors
-    )
 
 
 def test_release_readiness_report_guards_ethereum_receipt_source_event_zero_digest_gate_inventory(
@@ -3180,29 +3206,40 @@ def test_release_readiness_report_guards_ethereum_receipt_source_event_zero_dige
     report = load_report_module()
     assert report._ethereum_receipt_source_event_zero_digest_gate_inventory_errors() == []
 
-    sparse_test = tmp_path / "sccp_evm_receipt_proof_evidence_test.py"
-    sparse_test.write_text(
-        "test_collect_receipt_proof_rejects_zero_source_event_digest\n",
-        encoding="utf-8",
-    )
-    errors = report._ethereum_receipt_source_event_zero_digest_gate_inventory_errors(
+    cases = (
         (
+            "sccp_evm_receipt_proof_evidence_test.py",
             (
-                sparse_test,
-                (
-                    "test_collect_receipt_proof_rejects_zero_source_event_digest",
-                    "zero source event digest was accepted",
-                ),
+                "test_collect_receipt_proof_rejects_zero_source_event_digest",
+                "zero source event digest was accepted",
             ),
+            "zero source event digest was accepted",
+        ),
+        (
+            "sccp_evm_receipt_proof_evidence.py",
+            (
+                'method=f"receipt.logs[{index}].topics[1]"',
+                'raise RuntimeError(f"{method} returned zero data")',
+            ),
+            'raise RuntimeError(f"{method} returned zero data")',
+        ),
+    )
+    for index, (filename, required_markers, removed_marker) in enumerate(cases):
+        sparse_source = tmp_path / f"{index}_{filename}"
+        sparse_source.write_text(
+            "\n".join(marker for marker in required_markers if marker != removed_marker),
+            encoding="utf-8",
         )
-    )
+        errors = report._ethereum_receipt_source_event_zero_digest_gate_inventory_errors(
+            ((sparse_source, required_markers),)
+        )
 
-    assert any(
-        "Ethereum mainnet source-event zero digest SDK test inventory" in error
-        and str(sparse_test) in error
-        and "missing marker: zero source event digest was accepted" in error
-        for error in errors
-    )
+        assert any(
+            "Ethereum mainnet source-event zero digest SDK test inventory" in error
+            and str(sparse_source) in error
+            and f"missing marker: {removed_marker}" in error
+            for error in errors
+        )
 
 
 def test_release_readiness_report_guards_ethereum_receipt_rpc_duplicate_json_gate_inventory(
@@ -3213,33 +3250,41 @@ def test_release_readiness_report_guards_ethereum_receipt_rpc_duplicate_json_gat
     report = load_report_module()
     assert report._ethereum_receipt_rpc_duplicate_json_gate_inventory_errors() == []
 
-    sparse_test = tmp_path / "sccp_evm_receipt_proof_evidence_test.py"
-    sparse_test.write_text(
-        "test_collect_receipt_proof_rejects_duplicate_json_rpc_result_keys\n",
-        encoding="utf-8",
-    )
-    errors = report._ethereum_receipt_rpc_duplicate_json_gate_inventory_errors(
+    cases = (
         (
+            "sccp_evm_receipt_proof_evidence_test.py",
             (
-                sparse_test,
-                (
-                    "test_collect_receipt_proof_rejects_duplicate_json_rpc_result_keys",
-                    "test_collect_receipt_proof_rejects_duplicate_json_receipt_fields",
-                ),
+                "test_collect_receipt_proof_rejects_duplicate_json_rpc_result_keys",
+                "test_collect_receipt_proof_rejects_duplicate_json_receipt_fields",
             ),
-        )
+            "test_collect_receipt_proof_rejects_duplicate_json_receipt_fields",
+        ),
+        (
+            "sccp_evm_receipt_proof_evidence.py",
+            (
+                "_json_object_without_duplicate_keys",
+                "JSON-RPC returned duplicate JSON key",
+                "object_pairs_hook=_json_object_without_duplicate_keys",
+            ),
+            "object_pairs_hook=_json_object_without_duplicate_keys",
+        ),
     )
+    for index, (filename, required_markers, removed_marker) in enumerate(cases):
+        sparse_source = tmp_path / f"{index}_{filename}"
+        sparse_source.write_text(
+            "\n".join(marker for marker in required_markers if marker != removed_marker),
+            encoding="utf-8",
+        )
+        errors = report._ethereum_receipt_rpc_duplicate_json_gate_inventory_errors(
+            ((sparse_source, required_markers),)
+        )
 
-    assert any(
-        "Ethereum mainnet receipt RPC duplicate JSON SDK test inventory" in error
-        and str(sparse_test) in error
-        and (
-            "missing marker: "
-            "test_collect_receipt_proof_rejects_duplicate_json_receipt_fields"
+        assert any(
+            "Ethereum mainnet receipt RPC duplicate JSON SDK test inventory" in error
+            and str(sparse_source) in error
+            and f"missing marker: {removed_marker}" in error
+            for error in errors
         )
-        in error
-        for error in errors
-    )
 
 
 def test_release_readiness_report_guards_ethereum_receipt_block_transaction_hash_gate_inventory(
@@ -3250,33 +3295,49 @@ def test_release_readiness_report_guards_ethereum_receipt_block_transaction_hash
     report = load_report_module()
     assert report._ethereum_receipt_block_transaction_hash_gate_inventory_errors() == []
 
-    sparse_test = tmp_path / "sccp_evm_receipt_proof_evidence_test.py"
-    sparse_test.write_text(
-        "test_receipt_trie_builder_rejects_duplicate_transaction_hashes\n",
-        encoding="utf-8",
-    )
-    errors = report._ethereum_receipt_block_transaction_hash_gate_inventory_errors(
+    cases = (
         (
+            "sccp_evm_receipt_proof_evidence_test.py",
             (
-                sparse_test,
-                (
-                    "test_receipt_trie_builder_rejects_duplicate_transaction_hashes",
-                    'receipts[1]["transactionHash"] = receipts[0]["transactionHash"]',
-                ),
+                "test_receipt_trie_builder_rejects_duplicate_transaction_hashes",
+                'receipts[1]["transactionHash"] = receipts[0]["transactionHash"]',
             ),
-        )
+            'receipts[1]["transactionHash"] = receipts[0]["transactionHash"]',
+        ),
+        (
+            "sccp_evm_receipt_proof_evidence.py",
+            (
+                "seen_transaction_hashes: set[bytes] = set()",
+                "block receipt transactionHash values must be unique",
+            ),
+            "block receipt transactionHash values must be unique",
+        ),
+        (
+            "sccp.js",
+            (
+                "const seenTransactionHashes = new Set();",
+                "block receipt transactionHash values must be unique",
+            ),
+            "const seenTransactionHashes = new Set();",
+        ),
     )
+    for index, (filename, required_markers, removed_marker) in enumerate(cases):
+        sparse_source = tmp_path / f"{index}_{filename}"
+        sparse_source.write_text(
+            "\n".join(marker for marker in required_markers if marker != removed_marker),
+            encoding="utf-8",
+        )
+        errors = report._ethereum_receipt_block_transaction_hash_gate_inventory_errors(
+            ((sparse_source, required_markers),)
+        )
 
-    assert any(
-        "Ethereum mainnet block receipt transactionHash SDK test inventory" in error
-        and str(sparse_test) in error
-        and (
-            'missing marker: receipts[1]["transactionHash"] = '
-            'receipts[0]["transactionHash"]'
+        assert any(
+            "Ethereum mainnet block receipt transactionHash SDK test inventory"
+            in error
+            and str(sparse_source) in error
+            and f"missing marker: {removed_marker}" in error
+            for error in errors
         )
-        in error
-        for error in errors
-    )
 
 
 def test_release_readiness_report_guards_ethereum_js_receipt_admission_guard_gate_inventory(
@@ -3324,33 +3385,48 @@ def test_release_readiness_report_guards_ethereum_sdk_receipt_metadata_guard_gat
     report = load_report_module()
     assert report._ethereum_sdk_receipt_metadata_guard_gate_inventory_errors() == []
 
-    sparse_source = tmp_path / "SourceSccpProofHashes.kt"
-    sparse_source.write_text(
-        "typed receipt type must fit one byte below 0x80\n",
-        encoding="utf-8",
-    )
-    errors = report._ethereum_sdk_receipt_metadata_guard_gate_inventory_errors(
+    cases = (
         (
+            "SourceSccpProofHashes.kt",
             (
-                sparse_source,
-                (
-                    "typed receipt type must fit one byte below 0x80",
-                    "typed receipt type is not supported for Ethereum mainnet receipt proofs",
-                ),
+                "typed receipt type must fit one byte below 0x80",
+                "typed receipt type is not supported for Ethereum mainnet receipt proofs",
             ),
-        )
+            "typed receipt type is not supported for Ethereum mainnet receipt proofs",
+        ),
+        (
+            "sccp.js",
+            (
+                "eth_getBlockReceipts target receipt RLP must match receipt",
+                "typed receipt type is not supported for Ethereum mainnet receipt proofs",
+            ),
+            "eth_getBlockReceipts target receipt RLP must match receipt",
+        ),
+        (
+            "SccpEvmProver.swift",
+            (
+                '"blockReceipts.receiptRlp"',
+                "canonicalEvmReceiptRlp(currentReceipt)",
+            ),
+            "canonicalEvmReceiptRlp(currentReceipt)",
+        ),
     )
+    for index, (filename, required_markers, removed_marker) in enumerate(cases):
+        sparse_source = tmp_path / f"{index}_{filename}"
+        sparse_source.write_text(
+            "\n".join(marker for marker in required_markers if marker != removed_marker),
+            encoding="utf-8",
+        )
+        errors = report._ethereum_sdk_receipt_metadata_guard_gate_inventory_errors(
+            ((sparse_source, required_markers),)
+        )
 
-    assert any(
-        "Ethereum mainnet SDK receipt metadata source inventory" in error
-        and str(sparse_source) in error
-        and (
-            "missing marker: typed receipt type is not supported "
-            "for Ethereum mainnet receipt proofs"
+        assert any(
+            "Ethereum mainnet SDK receipt metadata source inventory" in error
+            and str(sparse_source) in error
+            and f"missing marker: {removed_marker}" in error
+            for error in errors
         )
-        in error
-        for error in errors
-    )
 
 
 def test_release_readiness_report_guards_ethereum_noncanonical_chain_id_gate_inventory(
@@ -3563,29 +3639,36 @@ def test_release_readiness_report_guards_ethereum_evm_source_adapter_deployment_
     required_markers = verifier.ETHEREUM_EVM_SOURCE_ADAPTER_DEPLOYMENT_GATE_MARKERS[
         0
     ][1]
-    removed_marker = "wrong_config_deployment.source_bridge_config_hash[0] ^= 0x01;"
-    sparse_source = tmp_path / "lib.rs"
-    sparse_source.write_text(
-        "\n".join(marker for marker in required_markers if marker != removed_marker),
-        encoding="utf-8",
-    )
-
-    errors = report._ethereum_evm_source_adapter_deployment_gate_inventory_errors(
+    for index, removed_marker in enumerate(
         (
-            (
-                sparse_source,
-                required_markers,
-            ),
+            "wrong_config_deployment.source_bridge_config_hash[0] ^= 0x01;",
+            "source adapter deployment metadata must keep adapter VK and receipt hashes separated",
+            "BSC facade must reject replayed deployment receipts",
+            "ETH facade must reject replayed deployment receipts",
         )
-    )
+    ):
+        sparse_source = tmp_path / f"lib_{index}.rs"
+        sparse_source.write_text(
+            "\n".join(marker for marker in required_markers if marker != removed_marker),
+            encoding="utf-8",
+        )
 
-    assert any(
-        "Ethereum mainnet EVM source-adapter deployment gate source inventory"
-        in error
-        and str(sparse_source) in error
-        and removed_marker in error
-        for error in errors
-    )
+        errors = report._ethereum_evm_source_adapter_deployment_gate_inventory_errors(
+            (
+                (
+                    sparse_source,
+                    required_markers,
+                ),
+            )
+        )
+
+        assert any(
+            "Ethereum mainnet EVM source-adapter deployment gate source inventory"
+            in error
+            and str(sparse_source) in error
+            and removed_marker in error
+            for error in errors
+        )
 
 
 def test_release_readiness_report_guards_contract_smoke_eth_mainnet_network_id_gate_inventory(
@@ -4166,6 +4249,202 @@ def test_release_readiness_report_guards_sccp_proof_request_bundle_gate_inventor
         "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/"
         "SccpMessageProofBundles.java"
     ) in inventory_paths
+    inventory_by_path = dict(verifier.SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS)
+    javascript_impl_markers = inventory_by_path["javascript/iroha_js/src/sccp.js"]
+    assert (
+        "export function wrapTonSccpSourceStateVerificationProof(proofBytes, request) {\n"
+        "  const proofRequest = normalizeTonSourceStateProofRequestForWrapping(request);\n"
+        "  const proof = copyBytes(toBytes(proofBytes, \"proofBytes\"));\n"
+        "  requireSourceStateProofBytes(proof, \"proofBytes\");"
+        in javascript_impl_markers
+    )
+    javascript_dist_markers = inventory_by_path["javascript/iroha_js/dist/sccp.js"]
+    assert (
+        "export function wrapTonSccpSourceStateVerificationProof(proofBytes, request) {\n"
+        "  const proofRequest = normalizeTonSourceStateProofRequestForWrapping(request);\n"
+        "  const proof = copyBytes(toBytes(proofBytes, \"proofBytes\"));\n"
+        "  requireSourceStateProofBytes(proof, \"proofBytes\");"
+        in javascript_dist_markers
+    )
+    javascript_test_markers = inventory_by_path[
+        "javascript/iroha_js/test/sccpSolanaProver.test.js"
+    ]
+    assert "oversizedTonSourceStateProofBytes" in javascript_test_markers
+    assert "oversizedTonCallbackProver" in javascript_test_markers
+    javascript_package_dist_markers = inventory_by_path[
+        "javascript/iroha_js/test/package_dist.test.js"
+    ]
+    assert (
+        "package dist entrypoint enforces TON source-state proof cap"
+        in javascript_package_dist_markers
+    )
+    assert (
+        "oversizedTonDistSourceStateProofBytes"
+        in javascript_package_dist_markers
+    )
+    assert "oversizedTonDistCallbackProver" in javascript_package_dist_markers
+    javascript_package_root_markers = inventory_by_path[
+        "javascript/iroha_js/test/sccpPackageExports.test.js"
+    ]
+    assert (
+        "published package root enforces TON source-state proof cap"
+        in javascript_package_root_markers
+    )
+    assert (
+        "samplePackageRootTonShardStateSourceStateInput"
+        in javascript_package_root_markers
+    )
+    assert (
+        "oversizedTonPackageRootSourceStateProofBytes"
+        in javascript_package_root_markers
+    )
+    assert (
+        "oversizedTonPackageRootCallbackProver"
+        in javascript_package_root_markers
+    )
+    javascript_bsc_test_markers = inventory_by_path[
+        "javascript/iroha_js/test/sccpBscMainnet.test.js"
+    ]
+    assert "tamperedBscBase64ProofResult" in javascript_bsc_test_markers
+    assert (
+        "sdk.buildBscCalldata({ proofResult: tamperedBscBase64ProofResult })"
+        in javascript_bsc_test_markers
+    )
+    javascript_eth_test_markers = inventory_by_path[
+        "javascript/iroha_js/test/sccpEthereumMainnet.test.js"
+    ]
+    assert "tamperedEthereumBase64ProofResult" in javascript_eth_test_markers
+    assert (
+        "sdk.buildEthereumCalldata({ proofResult: tamperedEthereumBase64ProofResult })"
+        in javascript_eth_test_markers
+    )
+    python_impl_markers = inventory_by_path["python/iroha_torii_client/sccp.py"]
+    assert "def wrap_ton_sccp_source_state_verification_proof" in python_impl_markers
+    assert "_require_source_state_proof_bytes(proof)" in python_impl_markers
+    python_test_markers = inventory_by_path[
+        "python/iroha_torii_client/tests/sccp_test.py"
+    ]
+    assert (
+        "def test_ton_source_state_prover_wraps_shard_and_full_light_audit_role_proofs"
+        in python_test_markers
+    )
+    assert (
+        'oversized_proof_bytes = b"\\x01" * (SCCP_SOURCE_STATE_MAX_PROOF_BYTES + 1)'
+        in python_test_markers
+    )
+    assert (
+        "prove=lambda _request, _options: oversized_proof_bytes"
+        in python_test_markers
+    )
+    assert (
+        "def test_package_root_ton_source_state_cap_uses_public_exports"
+        in python_test_markers
+    )
+    assert (
+        "oversized_package_root_ton_source_state_proof"
+        in python_test_markers
+    )
+    assert "def sample_token_add_bundle_fixture" in python_test_markers
+    assert "lowercase_required_eip55_recipient" in python_test_markers
+    assert "lowercase_required_eip55_sender" in python_test_markers
+    assert "nul_prefixed_symbol_bundle" in python_test_markers
+    assert "tampered_bsc_base64_proof_result" in python_test_markers
+    assert "build_bsc_mainnet_sccp_destination_submission" in python_test_markers
+    assert "tampered_ethereum_base64_proof_result" in python_test_markers
+    assert "build_ethereum_calldata" in python_test_markers
+    assert (
+        "proofResult\\.proofBase64 must match proofResult\\.proofBytes"
+        in python_test_markers
+    )
+    kotlin_ton_impl_markers = inventory_by_path[
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/TonSccpProver.kt"
+    ]
+    assert (
+        "SOURCE_STATE_MAX_PROOF_BYTES: Int = NATIVE_RECURSIVE_MAX_PROOF_BYTES"
+        in kotlin_ton_impl_markers
+    )
+    assert "proofBytes.size <= SOURCE_STATE_MAX_PROOF_BYTES" in kotlin_ton_impl_markers
+    kotlin_ton_test_markers = inventory_by_path[
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/TonSccpProverTest.kt"
+    ]
+    assert (
+        "oversizedSourceStateProofBytes = ByteArray(SccpTon.SOURCE_STATE_MAX_PROOF_BYTES + 1)"
+        in kotlin_ton_test_markers
+    )
+    assert "oversizedCallbackProver" in kotlin_ton_test_markers
+    java_ton_impl_markers = inventory_by_path[
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/TonSccpProver.java"
+    ]
+    assert (
+        "SOURCE_STATE_MAX_PROOF_BYTES = NATIVE_RECURSIVE_MAX_PROOF_BYTES"
+        in java_ton_impl_markers
+    )
+    assert (
+        "normalizedProofBytes.length > SOURCE_STATE_MAX_PROOF_BYTES"
+        in java_ton_impl_markers
+    )
+    java_ton_test_markers = inventory_by_path[
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/TonSccpProverTests.java"
+    ]
+    assert "TonSccpProver.SOURCE_STATE_MAX_PROOF_BYTES + 1" in java_ton_test_markers
+    assert "oversizedCallbackProver" in java_ton_test_markers
+    kotlin_evm_test_markers = inventory_by_path[
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/EvmSccpProverTest.kt"
+    ]
+    assert "tamperedBscBase64ProofResultError" in kotlin_evm_test_markers
+    assert "tamperedEthereumBase64ProofResultError" in kotlin_evm_test_markers
+    assert "SccpBsc.buildSubmission" in kotlin_evm_test_markers
+    assert "buildEthereumCalldata" in kotlin_evm_test_markers
+    java_evm_test_markers = inventory_by_path[
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/EvmSccpProverTests.java"
+    ]
+    assert "tamperedBscBase64ProofResult" in java_evm_test_markers
+    assert (
+        "Ethereum mainnet calldata helper must reject tampered proofBase64"
+        in java_evm_test_markers
+    )
+    assert "BscSccpProver.buildSubmission" in java_evm_test_markers
+    assert 'evmResultWithProofBase64(artifactBoundResult, "AAAA")' in java_evm_test_markers
+    dotnet_eth_test_markers = inventory_by_path[
+        "csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpEthereumMainnetTests.cs"
+    ]
+    assert "OutboundCallbackAndSubmissionSnapshotsRejectMutation" in dotnet_eth_test_markers
+    assert "EthereumMainnetSccp.BuildEthereumCalldata" in dotnet_eth_test_markers
+    assert (
+        "ProofBase64 = Convert.ToBase64String(mutatedProofBytes)"
+        in dotnet_eth_test_markers
+    )
+    dotnet_bsc_test_markers = inventory_by_path[
+        "csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpBscMainnetTests.cs"
+    ]
+    assert "OutboundCallbackAndSubmissionSnapshotsRejectMutation" in dotnet_bsc_test_markers
+    assert "BscMainnetSccp.BuildBscCalldata" in dotnet_bsc_test_markers
+    assert (
+        "ProofBase64 = Convert.ToBase64String(mutatedProofBytes)"
+        in dotnet_bsc_test_markers
+    )
+    swift_ton_impl_markers = inventory_by_path[
+        "IrohaSwift/Sources/IrohaSwift/SccpTonProver.swift"
+    ]
+    assert (
+        "proof.proofBytes.count <= sccpSourceStateMaxProofBytes"
+        in swift_ton_impl_markers
+    )
+    assert "proofBytes.count <= sccpSourceStateMaxProofBytes" in swift_ton_impl_markers
+    swift_ton_test_markers = inventory_by_path[
+        "IrohaSwift/Tests/IrohaSwiftTests/SccpSolanaProverTests.swift"
+    ]
+    assert "oversizedTonSourceStateProofBytes" in swift_ton_test_markers
+    assert "sccpSourceStateMaxProofBytes + 1" in swift_ton_test_markers
+    assert "oversizedTonCallbackProver" in swift_ton_test_markers
+    assert "tamperedBscBase64ProofResult" in swift_ton_test_markers
+    assert "tamperedEthereumBase64ProofResult" in swift_ton_test_markers
+    assert (
+        "buildBscMainnetSccpDestinationSubmission(EvmSccpSubmissionInput("
+        in swift_ton_test_markers
+    )
+    assert "buildEthereumCalldata(EvmSccpSubmissionInput(" in swift_ton_test_markers
+    assert 'invalidPublicInputs("proofResult.proofBase64")' in swift_ton_test_markers
 
     sparse_gate = tmp_path / "sccp_test.py"
     sparse_gate.write_text(
@@ -17742,6 +18021,9 @@ def test_release_readiness_guards_ethereum_outbound_precallback_sdk_tests() -> N
             "destinationBindingHash must match destinationBinding",
             "outbound_prover_called = False",
             "assert not outbound_prover_called",
+            "proof_artifact_hash",
+            "proofResult proofArtifactHash and provingKeyHash must be supplied together",
+            "proofResult proofArtifactHash and provingKeyHash must match request",
         ),
         ROOT
         / "IrohaSwift"

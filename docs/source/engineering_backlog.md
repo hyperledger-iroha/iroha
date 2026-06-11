@@ -1,6 +1,6 @@
 # Engineering Backlog (Detailed Open Work)
 
-Last updated: 2026-06-10
+Last updated: 2026-06-11
 
 The public roadmap lives in [`../../roadmap.md`](../../roadmap.md). Completed
 history lives in [`../../status.md`](../../status.md). This file should only
@@ -11,6 +11,8 @@ track detailed unfinished engineering work.
 The active SCCP launch scope is Ethereum, BSC, Solana, TON, and TRON.
 Retired runtime-network families outside that launch scope are not supported for now.
 SCCP will not support Sub&#115;trate/Pol&#107;adot networks for now.
+That exclusion is intentional current-launch scope, not a hidden compatibility
+lane.
 Backlog notes for unsupported network families are diagnostic only; they should
 not be treated as release blockers or advertised as production network support
 unless governance explicitly re-opens that scope.
@@ -688,8 +690,8 @@ redistributable schemas, and official trust/revocation bundles.
   helpers reject zero statement hashes before constructing or validating
   verifier-facing row openings, and Core's native BFV AIR boundary now validates
   opened public padding rows against the canonical statement, slot, and
-  bound-mode header and rejects empty/all-zero AIR roots or unauthenticated
-  optional composition-value commitments before the dedicated verifier fallback.
+  bound-mode header and rejects empty/all-zero AIR roots or auxiliary generic
+  composition-value commitments before the dedicated verifier fallback.
   Release prover input now has a typed
   `BfvFullBootstrapMaterialProofInputMaterialV1` boundary for governed
   full-bootstrap material proofs and a typed
@@ -712,11 +714,21 @@ redistributable schemas, and official trust/revocation bundles.
 	  governed material/artifact, caller-trusted reviewer id/key, and
 	  caller-pinned package digest gate used by the callable production material
 	  and batch paths, standalone release audit evidence validation rejects reused
-	  top-level artifact/profile commitments, standalone signoff/manifest
-	  validation rejects known header-only report/archive digests, public schemas
-	  advertise package-level header-only external-digest rejection plus nested
-	  audit-artifact body rejection, and the internal typed prover-input path
-	  still requires the
+	  artifact/profile/native-payload commitments plus empty/all-zero and short,
+	  long, padded, binary-decorated, case-decorated, or whitespace-prefixed
+	  placeholder native-payload digest sentinels, standalone signoff/manifest
+	  validation rejects known header-only, nested-header,
+	  whitespace-prefixed nested-header, padded zero/blank-body, and
+	  short/long/padded/binary-decorated/case-decorated/whitespace-prefixed
+	  placeholder report/archive digests,
+	  public schemas advertise package-level header-only,
+	  nested-header, whitespace-prefixed nested-header, zero-body, blank-body,
+	  padded zero/blank-body, and
+	  placeholder/case-decorated/whitespace-prefixed placeholder external-digest
+	  rejection,
+	  shared body extraction enforces
+	  nested, whitespace-prefixed nested, and full-body delayed-placeholder
+	  audit-artifact body rejection, and the internal typed prover-input path still requires the
 	  caller-supplied verifier key to match the verifier proof key embedded in the
 	  release prover package.
 	  Core typed material proof helpers now derive and validate typed input
@@ -805,9 +817,9 @@ redistributable schemas, and official trust/revocation bundles.
 		  transcript label, nonzero statement hash, statement-bound domain tag,
 		  STARK/FRI parameters, public digest binding, proof/commitment version tags,
 			  commitment/root shape, exact duplicate-free canonical opening/query count,
-			  opened row/path shape, Merkle path-to-root binding, FRI query-chain
-			  Merkle/fold validation, optional final-layer composition-value root/value
-			  authentication, AIR-to-FRI base value binding, opened public padding-row
+				  opened row/path shape, Merkle path-to-root binding, FRI query-chain
+				  Merkle/fold validation, auxiliary generic composition-value commitment
+				  rejection, AIR-to-FRI base value binding, opened public padding-row
 			  semantics, and the
 				  no-unmasked-private-row plus duplicate-free opening policies before Core
 				  accepts governed execution proof attachments; non-generic full-bootstrap native envelopes with
@@ -871,8 +883,9 @@ redistributable schemas, and official trust/revocation bundles.
 			  pairs. The release audit package now carries the external report and
 			  evidence archive bytes themselves, hashes them against the signed
 			  record, enforces bounded report/archive sizes, and rejects empty,
-			  all-zero, unheadered, header-only, zero-body, tampered, or missing
-			  audit artifacts before publication. It also carries a
+			  all-zero, unheadered, header-only, whitespace-prefixed nested-header,
+			  blank-body, sub-64-byte, zero-body, delayed placeholder-body,
+			  tampered, or missing audit artifacts before publication. It also carries a
 			  machine-checkable release audit manifest plus manifest digest that bind
 			  the approving verdict, canonical audit scope, signed record digest,
 			  evidence, artifact, evaluator-set, proof-key, prover/verifier-key,
@@ -908,9 +921,10 @@ redistributable schemas, and official trust/revocation bundles.
 				  aliasing with signed release commitments.
 					  Material and execution public-input schemas now advertise that
 					  report/archive artifacts must carry canonical v1 audit byte headers
-					  with nonempty nonzero bodies and distinct report/archive body
-					  content before packages can be hashed, signed, or consumed by
-					  audited prover wrappers.
+					  with nonempty, nonblank, nonzero, at-least-64-byte bodies and
+					  no nested canonical audit headers after leading body whitespace,
+					  plus distinct report/archive body content before packages can be
+					  hashed, signed, or consumed by audited prover wrappers.
 					  The shared explicit STARK AIR builder now self-verifies generated
 					  row/composition envelopes before returning proof bytes to BFV native
 					  AIR callers, the Soracloud release-prover handoff replays encoded
@@ -924,16 +938,21 @@ redistributable schemas, and official trust/revocation bundles.
 						  before hashing, and Core's material native AIR handoff consumes that
 						  caller-bound digest before proof emission. Core's execution native AIR
 						  handoff consumes the artifact-bound release-prover digest before proof
-						  emission as well. Execution witness material now also binds a
+						  emission as well. The material and execution native AIR proof wrappers
+						  also decode the native STARK/AIR envelope before attachment
+						  construction and reject transcript-label, circuit-id, missing-AIR-section,
+						  or public-digest/statement-hash drift before proof validation can rely on
+						  the wrapper. Execution witness material now also binds a
 						  domain-separated Galois-key-set digest, and artifact-aware witness
 						  replay rejects same-shape stale Galois-key substitutions before
 						  proof-input or release-prover package hashing can rely on them.
 					  The shared
-					  STARK/AIR verifier rejects repeated
-						  transcript-derived query indices so duplicate openings cannot reduce
-						  effective sampling. The BFV material and execution native-AIR builders
-						  retry bounded material/statement-domain query nonces when that transcript
-						  sampling collision occurs, and the material verifier accepts only
+					  STARK/AIR prover and verifier derive duplicate-free query schedules by
+						  advancing the transcript counter past repeated samples, while failing
+						  closed when a duplicate-free schedule cannot be derived, so duplicate
+						  openings cannot reduce effective sampling. The BFV material and execution native-AIR builders
+						  still retry bounded material/statement-domain query nonces for privacy-policy
+						  public-row constraints, and the material verifier accepts only
 						  nonce-bound material domain tags derived from the statement hash and
 						  caller-bound material-input digest. The ZK-ACE native AIR prover uses the
 						  same duplicate-free query validator plus encoded-envelope
@@ -949,8 +968,9 @@ redistributable schemas, and official trust/revocation bundles.
 		  Remaining production work is the audited full-bootstrap arithmetic
 		  proof-producing backend plus release-grade
 		  prover/verifier artifacts and independent audit report/archive production
-		  with canonical v1 headers and nonzero bodies for the generated circuit,
-		  not the already-shipped Core verifier, proof-key, public-schema/release-prover
+			  with canonical v1 headers, nonzero bodies, and leading-whitespace-tolerant
+			  full-body delayed-placeholder rejection for the generated circuit,
+			  not the already-shipped Core verifier, proof-key, public-schema/release-prover
 		  input, arithmetic-trace, release-prover AIR contract/artifact digest binding,
 		  AIR contract material/digest/artifact binding,
 		  proof-key evaluator artifact-set binding,
@@ -1466,7 +1486,8 @@ redistributable schemas, and official trust/revocation bundles.
   caller-controlled shapes. Bootstrap-key validation now also checks the
   declared round-refresh count before inspecting refresh ciphertext shapes, so
   malformed public refresh material cannot mask missing per-round bootstrap
-  inventory.
+  inventory, and refresh-only bootstrap transcript/proof-statement validation
+  rejects stale public-key digest metadata before governance hashes are emitted.
   The outer ciphertext-slot `RotateLeft` helper now also rejects empty slot
   lists and full-cycle step counts before applying rotation-key refresh
   material, and the exact, registered RNS, bounded-noise, and bounded RNS
@@ -2584,10 +2605,11 @@ redistributable schemas, and official trust/revocation bundles.
   public `halo2/ipa:tiny-add-public` envelope and matching registry schema
   hash, clearing the full `zk_prover_integration` target under `app_api`.
 - Completed 2026-06-10: developer-only Halo2 fallback commit/Merkle fixtures now
-  use a deterministic shifted Pow5 pair hash instead of additive placeholders
-  for commitment, nullifier, and Merkle2 relations. Focused regressions reject
-  stale additive roots for tiny Merkle2 and vote-commit Merkle2 while public
-  backend admission continues to reject legacy/developer-only labels.
+  use a deterministic shifted Pow5 pair hash instead of additive/unshifted
+  placeholders for commitment, nullifier, and Merkle2 relations. Focused
+  regressions reject stale placeholders for commit-open, anon-transfer, tiny
+  Merkle2, and vote-commit Merkle2 while public backend admission continues to
+  reject legacy/developer-only labels.
 - Fold the now-green focused ZK cleanup and adversarial negative corridor into
   the next long `cargo test --workspace` / CI validation budget.
 

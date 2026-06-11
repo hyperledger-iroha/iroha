@@ -349,6 +349,17 @@ internal object SccpMessageProofBundles {
         require(text.length == 42 && text.startsWith("0x") && text.drop(2).all { it.isDigit() || it in 'a'..'f' || it in 'A'..'F' }) {
             "$label must be a 0x-prefixed 20-byte EVM address"
         }
+        val payload = text.drop(2)
+        val checksum = keccak256(payload.lowercase().toByteArray(Charsets.UTF_8))
+        payload.forEachIndexed { index, char ->
+            if (char in '0'..'9') return@forEachIndexed
+            val checksumByte = checksum[index / 2].toInt() and 0xff
+            val checksumNibble = if (index % 2 == 0) checksumByte ushr 4 else checksumByte and 0x0f
+            val shouldBeUppercase = checksumNibble >= 8
+            require(if (shouldBeUppercase) char == char.uppercaseChar() else char == char.lowercaseChar()) {
+                "$label must be a canonical EIP-55 EVM address"
+            }
+        }
     }
 
     private fun validateTonRawAddress(text: String, label: String) {

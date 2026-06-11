@@ -82,6 +82,19 @@ mod tests {
             evidence_list_snapshot(&view),
         );
     }
+
+    #[test]
+    fn next_height_for_state_preserves_cached_monotonic_height() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
+
+        let (first, first_u64) = next_height_for_state(&mut state);
+        let (second, second_u64) = next_height_for_state(&mut state);
+
+        assert_eq!(usize::from(second), usize::from(first).saturating_add(1));
+        assert_eq!(second_u64.get(), first_u64.get().saturating_add(1));
+    }
 }
 
 fn next_test_block_height() -> NonZeroUsize {
@@ -99,7 +112,7 @@ fn next_height_for_state(state: &mut crate::state::State) -> (NonZeroUsize, NonZ
     let mut guard = map.lock().expect("state height mutex");
     let committed_height = state.committed_height();
     let entry = guard.entry(key).or_insert(committed_height);
-    if *entry != committed_height {
+    if committed_height > *entry {
         *entry = committed_height;
     }
     *entry = entry.saturating_add(1);

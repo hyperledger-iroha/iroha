@@ -380,6 +380,131 @@ public final class EvmSccpProverTests {
     }
     assert threw : "wrong EVM proof backend must be rejected";
 
+    final String canonicalEip55Recipient = "0x52908400098527886E0F7030069857D2E4169EE7";
+    final SampleBundleFixture canonicalEip55Bundle =
+        sampleBundleFixture(
+            SolanaSccpProver.DOMAIN_SORA,
+            EvmSccpProver.DOMAIN_ETH,
+            327L,
+            canonicalEip55Recipient);
+    EvmSccpProver.buildProofRequest(
+        new EvmSccpProver.ProofRequestInput(
+            canonicalEip55Bundle.publicInputs,
+            canonicalEip55Bundle.bundleBytes,
+            new byte[0],
+            repeat("56", 32),
+            repeat("78", 32),
+            EvmSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
+            SolanaSccpProver.DOMAIN_SORA));
+    final String lowercaseRequiredEip55Recipient = "0xde709f2102306220921060314715629080e2fb77";
+    final SampleBundleFixture lowercaseRequiredEip55Bundle =
+        sampleBundleFixture(
+            SolanaSccpProver.DOMAIN_SORA,
+            EvmSccpProver.DOMAIN_ETH,
+            327L,
+            lowercaseRequiredEip55Recipient);
+    EvmSccpProver.buildProofRequest(
+        new EvmSccpProver.ProofRequestInput(
+            lowercaseRequiredEip55Bundle.publicInputs,
+            lowercaseRequiredEip55Bundle.bundleBytes,
+            new byte[0],
+            repeat("56", 32),
+            repeat("78", 32),
+            EvmSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
+            SolanaSccpProver.DOMAIN_SORA));
+    final SampleBundleFixture noncanonicalEip55Bundle =
+        sampleBundleFixture(
+            SolanaSccpProver.DOMAIN_SORA,
+            EvmSccpProver.DOMAIN_ETH,
+            327L,
+            canonicalEip55Recipient.toLowerCase(java.util.Locale.ROOT));
+    threw = false;
+    try {
+      EvmSccpProver.buildProofRequest(
+          new EvmSccpProver.ProofRequestInput(
+              noncanonicalEip55Bundle.publicInputs,
+              noncanonicalEip55Bundle.bundleBytes,
+              new byte[0],
+              repeat("56", 32),
+              repeat("78", 32),
+              EvmSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
+              SolanaSccpProver.DOMAIN_SORA));
+    } catch (final IllegalArgumentException ex) {
+      threw =
+          ex.getMessage().contains("bundleBytes.payload.recipient")
+              && ex.getMessage().contains("EIP-55");
+    }
+    assert threw : "noncanonical EIP-55 EVM recipient must be rejected";
+    for (final String invalidRecipient :
+        new String[] {
+          lowercaseRequiredEip55Recipient.toUpperCase(java.util.Locale.ROOT),
+          "0X" + canonicalEip55Recipient.substring(2),
+          "0x52908400098527886E0F7030069857D2E4169EEZ"
+        }) {
+      final SampleBundleFixture invalidBundle =
+          sampleBundleFixture(
+              SolanaSccpProver.DOMAIN_SORA,
+              EvmSccpProver.DOMAIN_ETH,
+              327L,
+              invalidRecipient);
+      threw = false;
+      try {
+        EvmSccpProver.buildProofRequest(
+            new EvmSccpProver.ProofRequestInput(
+                invalidBundle.publicInputs,
+                invalidBundle.bundleBytes,
+                new byte[0],
+                repeat("56", 32),
+                repeat("78", 32),
+                EvmSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
+                SolanaSccpProver.DOMAIN_SORA));
+      } catch (final IllegalArgumentException ex) {
+        threw = ex.getMessage().contains("bundleBytes.payload.recipient");
+      }
+      assert threw : "invalid EVM recipient must be rejected";
+    }
+
+    final byte[] nulPrefixedName = new byte[32];
+    final byte[] tokenName = "Token".getBytes(StandardCharsets.UTF_8);
+    System.arraycopy(tokenName, 0, nulPrefixedName, 1, tokenName.length);
+    final SampleBundleFixture nulPrefixedNameBundle =
+        sampleTokenAddBundleFixture(nulPrefixedName, fixedTestAscii32("TOK"));
+    threw = false;
+    try {
+      EvmSccpProver.buildProofRequest(
+          new EvmSccpProver.ProofRequestInput(
+              nulPrefixedNameBundle.publicInputs,
+              nulPrefixedNameBundle.bundleBytes,
+              new byte[0],
+              repeat("56", 32),
+              repeat("78", 32),
+              EvmSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
+              SolanaSccpProver.DOMAIN_SORA));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("bundleBytes.payload.name");
+    }
+    assert threw : "NUL-prefixed TokenAdd names must be rejected";
+    final byte[] nulPrefixedSymbol = new byte[32];
+    final byte[] tokenSymbol = "TOK".getBytes(StandardCharsets.UTF_8);
+    System.arraycopy(tokenSymbol, 0, nulPrefixedSymbol, 1, tokenSymbol.length);
+    final SampleBundleFixture nulPrefixedSymbolBundle =
+        sampleTokenAddBundleFixture(fixedTestAscii32("Token"), nulPrefixedSymbol);
+    threw = false;
+    try {
+      EvmSccpProver.buildProofRequest(
+          new EvmSccpProver.ProofRequestInput(
+              nulPrefixedSymbolBundle.publicInputs,
+              nulPrefixedSymbolBundle.bundleBytes,
+              new byte[0],
+              repeat("56", 32),
+              repeat("78", 32),
+              EvmSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
+              SolanaSccpProver.DOMAIN_SORA));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("bundleBytes.payload.symbol");
+    }
+    assert threw : "NUL-prefixed TokenAdd symbols must be rejected";
+
     final SourceSccpProofs.EvmDestinationBinding bscDestinationBinding =
         SourceSccpProofs.evmDestinationBinding(
             EvmSccpProver.DOMAIN_SORA,
@@ -933,6 +1058,14 @@ public final class EvmSccpProverTests {
         : "BSC submission must target BSC";
     assert Arrays.equals(proofBytes, submission.proofBytes())
         : "BSC submission must preserve proof bytes";
+    threw = false;
+    try {
+      BscSccpProver.buildSubmission(
+          new EvmSccpProver.SubmissionInput(evmResultWithProofBase64(result, "AAAA")));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("proofBase64");
+    }
+    assert threw : "BSC submission must reject tamperedBscBase64ProofResult";
     final Object submitted =
         new BscMainnetSccp(
                 null,
@@ -2309,6 +2442,16 @@ public final class EvmSccpProverTests {
         : "Ethereum submission must target ETH";
     assert Arrays.equals(proofBytes, submission.proofBytes())
         : "Ethereum submission must preserve proof bytes";
+    threw = false;
+    try {
+      new EthereumMainnetSccp(verifiedArtifacts)
+          .buildEthereumCalldata(
+              new EvmSccpProver.SubmissionInput(
+                  evmResultWithProofBase64(artifactBoundResult, "AAAA")));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("proofBase64");
+    }
+    assert threw : "Ethereum mainnet calldata helper must reject tampered proofBase64";
     final Object submitted =
         new EthereumMainnetSccp(
                 null,
@@ -7504,11 +7647,20 @@ public final class EvmSccpProverTests {
 
   private static SampleBundleFixture sampleBundleFixture(
       final int sourceDomain, final int targetDomain, final long nonce) {
+    return sampleBundleFixture(sourceDomain, targetDomain, nonce, null);
+  }
+
+  private static SampleBundleFixture sampleBundleFixture(
+      final int sourceDomain,
+      final int targetDomain,
+      final long nonce,
+      final String recipientOverride) {
     final int recipientCodec = targetDomain == TronSccpProver.DOMAIN_TRON ? 5 : 2;
-    final String recipient =
+    final String defaultRecipient =
         targetDomain == TronSccpProver.DOMAIN_TRON
             ? "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8"
             : "0x" + repeat("11", 20);
+    final String recipient = recipientOverride == null ? defaultRecipient : recipientOverride;
     final String routeId =
         targetDomain == EvmSccpProver.DOMAIN_BSC
             ? "sora-bsc-xor"
@@ -7567,6 +7719,69 @@ public final class EvmSccpProverTests {
         new EvmSccpProver.PublicInputsInput(
             1, messageId, payloadHash, targetDomain, commitmentRoot, "19", repeat("44", 32)),
         bundle.toByteArray());
+  }
+
+  private static SampleBundleFixture sampleTokenAddBundleFixture(
+      final byte[] name, final byte[] symbol) {
+    if (name.length != 32 || symbol.length != 32) {
+      throw new IllegalArgumentException("fixed token fields must be 32 bytes");
+    }
+
+    final int targetDomain = EvmSccpProver.DOMAIN_ETH;
+    final ByteArrayOutputStream payloadBody = new ByteArrayOutputStream();
+    payloadBody.write(1);
+    writeTestU32Le(payloadBody, targetDomain);
+    writeTestU64Le(payloadBody, BigInteger.valueOf(327L));
+    writeTestRawBytes(payloadBody, hexBytes(repeat("11", 32)));
+    payloadBody.write(18);
+    writeTestRawBytes(payloadBody, name);
+    writeTestRawBytes(payloadBody, symbol);
+
+    final byte[] payloadBodyBytes = payloadBody.toByteArray();
+    final byte[] payloadBytes = concatTestBytes(new byte[] {0x03}, payloadBodyBytes);
+    final String messageId =
+        "0x" + hexLower(prefixedKeccakBytes("sccp:token:add:v1", payloadBodyBytes));
+    final String payloadHash =
+        "0x"
+            + hexLower(
+                Blake2b.digest256(
+                    concatTestBytes("sccp:payload:v1".getBytes(StandardCharsets.UTF_8), payloadBytes)));
+
+    final ByteArrayOutputStream commitment = new ByteArrayOutputStream();
+    commitment.write(1);
+    commitment.write(1);
+    writeTestU32Le(commitment, targetDomain);
+    writeTestRawBytes(commitment, hexBytes(messageId.substring(2)));
+    writeTestRawBytes(commitment, hexBytes(payloadHash.substring(2)));
+    final byte[] commitmentBytes = commitment.toByteArray();
+    final byte[] currentRoot =
+        Blake2b.digest256(
+            concatTestBytes("sccp:hub:leaf:v1".getBytes(StandardCharsets.UTF_8), commitmentBytes));
+    final String commitmentRoot = "0x" + hexLower(currentRoot);
+
+    final ByteArrayOutputStream merkleProof = new ByteArrayOutputStream();
+    writeTestU32Le(merkleProof, 0);
+
+    final ByteArrayOutputStream bundle = new ByteArrayOutputStream();
+    bundle.write(1);
+    writeTestRawBytes(bundle, currentRoot);
+    writeTestBytes(bundle, commitmentBytes);
+    writeTestBytes(bundle, merkleProof.toByteArray());
+    writeTestBytes(bundle, payloadBytes);
+    writeTestBytes(bundle, new byte[] {0x01, 0x02, 0x03});
+
+    return new SampleBundleFixture(
+        new EvmSccpProver.PublicInputsInput(
+            1, messageId, payloadHash, targetDomain, commitmentRoot, "19", repeat("44", 32)),
+        bundle.toByteArray());
+  }
+
+  private static byte[] fixedTestAscii32(final String value) {
+    final byte[] raw = value.getBytes(StandardCharsets.UTF_8);
+    if (raw.length > 32) {
+      throw new IllegalArgumentException("fixed token field is too long");
+    }
+    return Arrays.copyOf(raw, 32);
   }
 
   private static void writeTestBytes(final ByteArrayOutputStream out, final byte[] value) {

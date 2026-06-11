@@ -3550,6 +3550,14 @@ test("EthereumMainnetSccp calldata requires a wrapped Ethereum mainnet proof res
 
   assert.equal(submission.targetDomain, SCCP_DOMAIN_ETH);
   assert.equal(submission.destinationBindingHash, request.destinationBindingHash);
+  const tamperedEthereumBase64ProofResult = {
+    ...proofResult,
+    proofBase64: "AAAA",
+  };
+  assert.throws(
+    () => sdk.buildEthereumCalldata({ proofResult: tamperedEthereumBase64ProofResult }),
+    /proofResult\.proofBase64 must match proofResult\.proofBytes/u,
+  );
   assert.throws(
     () => new EthereumMainnetSccp().buildEthereumCalldata({ proofResult }),
     /verified native EVM prover artifacts/u,

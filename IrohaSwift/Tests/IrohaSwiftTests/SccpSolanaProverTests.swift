@@ -6723,6 +6723,18 @@ final class SccpSolanaProverTests: XCTestCase {
         ) { error in
             XCTAssertEqual(error as? TonSccpProverError, .allZeroProof)
         }
+        let oversizedTonSourceStateProofBytes = Data(
+            repeating: 1,
+            count: sccpSourceStateMaxProofBytes + 1
+        )
+        XCTAssertThrowsError(
+            try wrapTonSccpSourceStateVerificationProof(
+                proofBytes: oversizedTonSourceStateProofBytes,
+                request: shardRequest
+            )
+        ) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("proofBytes"))
+        }
         var tamperedShardTransitions = shardRequest.fastpqTransitions
         tamperedShardTransitions[0] = TonShardStateFastpqTransition(
             key: tamperedShardTransitions[0].key,
@@ -6895,6 +6907,18 @@ final class SccpSolanaProverTests: XCTestCase {
             XCTAssertEqual(error as? TonSccpProverError, .invalidField("request.fastpqTransitions"))
         }
         XCTAssertFalse(preflightCallbackInvoked)
+
+        let oversizedTonCallbackProver = TonSccpSourceStateProver(
+            shardStateProveFunction: { _ in
+                oversizedTonSourceStateProofBytes
+            }
+        )
+        do {
+            _ = try await oversizedTonCallbackProver.proveShardState(request: shardRequest)
+            XCTFail("expected oversized TON source-state callback proof to fail")
+        } catch {
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("proofBytes"))
+        }
 
         var seenTonRoles: [String] = []
         var seenTonShardCallbackRequest: TonShardStateProofRequest?
@@ -8245,6 +8269,31 @@ final class SccpSolanaProverTests: XCTestCase {
             XCTAssertEqual(error as? TonSccpProverError, .invalidField("bundleBytes.payload"))
         }
 
+        var nulPrefixedName = Data([0])
+        nulPrefixedName.append(Data("Token".utf8))
+        nulPrefixedName.append(Data(repeating: 0, count: 26))
+        let nulPrefixedNameBundle = Self.sampleTonTokenAddBundleFixture(name: nulPrefixedName)
+        XCTAssertThrowsError(try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(
+            publicInputs: nulPrefixedNameBundle.publicInputs,
+            bundleBytes: nulPrefixedNameBundle.bundleBytes,
+            sourceAdapterDeploymentHash: String(repeating: "aa", count: 32),
+            sourceAdapterDeploymentReceiptHash: String(repeating: "bb", count: 32)
+        ))) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("bundleBytes.payload.name"))
+        }
+        var nulPrefixedSymbol = Data([0])
+        nulPrefixedSymbol.append(Data("TOK".utf8))
+        nulPrefixedSymbol.append(Data(repeating: 0, count: 28))
+        let nulPrefixedSymbolBundle = Self.sampleTonTokenAddBundleFixture(symbol: nulPrefixedSymbol)
+        XCTAssertThrowsError(try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(
+            publicInputs: nulPrefixedSymbolBundle.publicInputs,
+            bundleBytes: nulPrefixedSymbolBundle.bundleBytes,
+            sourceAdapterDeploymentHash: String(repeating: "aa", count: 32),
+            sourceAdapterDeploymentReceiptHash: String(repeating: "bb", count: 32)
+        ))) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("bundleBytes.payload.symbol"))
+        }
+
         let merkleProofRange = ranges["merkleProof"]!
         var merkleProofWithTrailingByte = merkleProofRange.bytes
         merkleProofWithTrailingByte.append(0)
@@ -8332,6 +8381,55 @@ final class SccpSolanaProverTests: XCTestCase {
             bundleBytes: nonSora.bundleBytes
         )) { error in
             XCTAssertEqual(error as? TonSccpProverError, .invalidField("sourceProofBytes"))
+        }
+
+        let canonicalEip55Sender = "0x52908400098527886E0F7030069857D2E4169EE7"
+        let lowercaseRequiredEip55Sender = "0xde709f2102306220921060314715629080e2fb77"
+        let lowercaseRequiredEip55Source = Self.sampleTonBundleFixture(
+            sourceDomain: sccpDomainEthereum,
+            senderCodec: 2,
+            sender: lowercaseRequiredEip55Sender
+        )
+        XCTAssertNoThrow(try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(
+            publicInputs: lowercaseRequiredEip55Source.publicInputs,
+            bundleBytes: lowercaseRequiredEip55Source.bundleBytes,
+            sourceProofBytes: Data([9, 10]),
+            sourceAdapterDeploymentHash: String(repeating: "aa", count: 32),
+            sourceAdapterDeploymentReceiptHash: String(repeating: "bb", count: 32)
+        )))
+        let noncanonicalEip55Source = Self.sampleTonBundleFixture(
+            sourceDomain: sccpDomainEthereum,
+            senderCodec: 2,
+            sender: canonicalEip55Sender.lowercased()
+        )
+        XCTAssertThrowsError(try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(
+            publicInputs: noncanonicalEip55Source.publicInputs,
+            bundleBytes: noncanonicalEip55Source.bundleBytes,
+            sourceProofBytes: Data([9, 10]),
+            sourceAdapterDeploymentHash: String(repeating: "aa", count: 32),
+            sourceAdapterDeploymentReceiptHash: String(repeating: "bb", count: 32)
+        ))) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("bundleBytes.payload.sender"))
+        }
+        for invalidSender in [
+            lowercaseRequiredEip55Sender.uppercased(),
+            "0X" + String(canonicalEip55Sender.dropFirst(2)),
+            "0x52908400098527886E0F7030069857D2E4169EEZ",
+        ] {
+            let invalidSource = Self.sampleTonBundleFixture(
+                sourceDomain: sccpDomainEthereum,
+                senderCodec: 2,
+                sender: invalidSender
+            )
+            XCTAssertThrowsError(try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(
+                publicInputs: invalidSource.publicInputs,
+                bundleBytes: invalidSource.bundleBytes,
+                sourceProofBytes: Data([9, 10]),
+                sourceAdapterDeploymentHash: String(repeating: "aa", count: 32),
+                sourceAdapterDeploymentReceiptHash: String(repeating: "bb", count: 32)
+            ))) { error in
+                XCTAssertEqual(error as? TonSccpProverError, .invalidField("bundleBytes.payload.sender"))
+            }
         }
     }
 
@@ -9015,6 +9113,58 @@ final class SccpSolanaProverTests: XCTestCase {
             sourceProofBytes: Data([10])
         ))
         XCTAssertNotEqual(request.requestHash, shiftedSplitRequest.requestHash)
+        let canonicalEip55Recipient = "0x52908400098527886E0F7030069857D2E4169EE7"
+        let canonicalEip55Bundle = Self.sampleEvmBundleFixture(recipient: canonicalEip55Recipient)
+        XCTAssertNoThrow(try buildEvmSccpProofRequest(Self.sampleEvmProofRequestInput(
+            publicInputs: canonicalEip55Bundle.publicInputs,
+            bundleBytes: canonicalEip55Bundle.bundleBytes
+        )))
+        let lowercaseRequiredEip55Recipient = "0xde709f2102306220921060314715629080e2fb77"
+        let lowercaseRequiredEip55Bundle = Self.sampleEvmBundleFixture(recipient: lowercaseRequiredEip55Recipient)
+        XCTAssertNoThrow(try buildEvmSccpProofRequest(Self.sampleEvmProofRequestInput(
+            publicInputs: lowercaseRequiredEip55Bundle.publicInputs,
+            bundleBytes: lowercaseRequiredEip55Bundle.bundleBytes
+        )))
+        let noncanonicalEip55Bundle = Self.sampleEvmBundleFixture(recipient: canonicalEip55Recipient.lowercased())
+        XCTAssertThrowsError(try buildEvmSccpProofRequest(Self.sampleEvmProofRequestInput(
+            publicInputs: noncanonicalEip55Bundle.publicInputs,
+            bundleBytes: noncanonicalEip55Bundle.bundleBytes
+        ))) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("bundleBytes.payload.recipient"))
+        }
+        for invalidRecipient in [
+            lowercaseRequiredEip55Recipient.uppercased(),
+            "0X" + String(canonicalEip55Recipient.dropFirst(2)),
+            "0x52908400098527886E0F7030069857D2E4169EEZ",
+        ] {
+            let invalidBundle = Self.sampleEvmBundleFixture(recipient: invalidRecipient)
+            XCTAssertThrowsError(try buildEvmSccpProofRequest(Self.sampleEvmProofRequestInput(
+                publicInputs: invalidBundle.publicInputs,
+                bundleBytes: invalidBundle.bundleBytes
+            ))) { error in
+                XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("bundleBytes.payload.recipient"))
+            }
+        }
+        var nulPrefixedName = Data([0])
+        nulPrefixedName.append(Data("Token".utf8))
+        nulPrefixedName.append(Data(repeating: 0, count: 26))
+        let nulPrefixedNameBundle = Self.sampleEvmTokenAddBundleFixture(name: nulPrefixedName)
+        XCTAssertThrowsError(try buildEvmSccpProofRequest(Self.sampleEvmProofRequestInput(
+            publicInputs: nulPrefixedNameBundle.publicInputs,
+            bundleBytes: nulPrefixedNameBundle.bundleBytes
+        ))) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("bundleBytes.payload.name"))
+        }
+        var nulPrefixedSymbol = Data([0])
+        nulPrefixedSymbol.append(Data("TOK".utf8))
+        nulPrefixedSymbol.append(Data(repeating: 0, count: 28))
+        let nulPrefixedSymbolBundle = Self.sampleEvmTokenAddBundleFixture(symbol: nulPrefixedSymbol)
+        XCTAssertThrowsError(try buildEvmSccpProofRequest(Self.sampleEvmProofRequestInput(
+            publicInputs: nulPrefixedSymbolBundle.publicInputs,
+            bundleBytes: nulPrefixedSymbolBundle.bundleBytes
+        ))) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("bundleBytes.payload.symbol"))
+        }
         let artifactRequest = try buildEvmSccpProofRequest(Self.sampleEvmProofRequestInput(
             sourceProofBytes: Data([9, 10]),
             proofArtifactHash: String(repeating: "91", count: 32),
@@ -10100,6 +10250,29 @@ final class SccpSolanaProverTests: XCTestCase {
         )
         XCTAssertEqual(submission.targetDomain, sccpDomainEthereum)
         XCTAssertEqual(submission.proofBytes, proofBytes)
+        let tamperedEthereumBase64ProofResult = EvmSccpProofResult(
+            version: artifactBoundResult.version,
+            backend: artifactBoundResult.backend,
+            proofBytes: artifactBoundResult.proofBytes,
+            proofBase64: "AAAA",
+            publicInputs: artifactBoundResult.publicInputs,
+            publicSignalWords: artifactBoundResult.publicSignalWords,
+            bundleBytes: artifactBoundResult.bundleBytes,
+            sourceProofBytes: artifactBoundResult.sourceProofBytes,
+            proofContext: artifactBoundResult.proofContext,
+            statementHash: artifactBoundResult.statementHash,
+            destinationBindingHash: artifactBoundResult.destinationBindingHash,
+            proofArtifactHash: artifactBoundResult.proofArtifactHash,
+            provingKeyHash: artifactBoundResult.provingKeyHash,
+            requestHash: artifactBoundResult.requestHash,
+            envelopeHash: artifactBoundResult.envelopeHash,
+            destinationBinding: artifactBoundResult.destinationBinding
+        )
+        XCTAssertThrowsError(try submissionFacade.buildEthereumCalldata(EvmSccpSubmissionInput(
+            proofResult: tamperedEthereumBase64ProofResult
+        ))) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("proofResult.proofBase64"))
+        }
         let submitFacade = EthereumMainnetSccp(outboundSubmitFunction: { submission in
             XCTAssertEqual(submission.targetDomain, sccpDomainEthereum)
             XCTAssertEqual(submission.proofBytes, proofBytes)
@@ -12689,6 +12862,29 @@ final class SccpSolanaProverTests: XCTestCase {
         XCTAssertEqual(proofResult.destinationBindingHash, binding.hash)
         XCTAssertEqual(submission.targetDomain, sccpDomainBsc)
         XCTAssertEqual(submission.destinationBindingHash, binding.hash)
+        let tamperedBscBase64ProofResult = EvmSccpProofResult(
+            version: proofResult.version,
+            backend: proofResult.backend,
+            proofBytes: proofResult.proofBytes,
+            proofBase64: "AAAA",
+            publicInputs: proofResult.publicInputs,
+            publicSignalWords: proofResult.publicSignalWords,
+            bundleBytes: proofResult.bundleBytes,
+            sourceProofBytes: proofResult.sourceProofBytes,
+            proofContext: proofResult.proofContext,
+            statementHash: proofResult.statementHash,
+            destinationBindingHash: proofResult.destinationBindingHash,
+            proofArtifactHash: proofResult.proofArtifactHash,
+            provingKeyHash: proofResult.provingKeyHash,
+            requestHash: proofResult.requestHash,
+            envelopeHash: proofResult.envelopeHash,
+            destinationBinding: proofResult.destinationBinding
+        )
+        XCTAssertThrowsError(try buildBscMainnetSccpDestinationSubmission(EvmSccpSubmissionInput(
+            proofResult: tamperedBscBase64ProofResult
+        ))) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("proofResult.proofBase64"))
+        }
         let submitFacade = BscMainnetSccp(outboundSubmitFunction: { outboundSubmission in
             XCTAssertEqual(outboundSubmission.targetDomain, sccpDomainBsc)
             XCTAssertEqual(outboundSubmission.proofBytes, proofBytes)
@@ -14455,23 +14651,25 @@ final class SccpSolanaProverTests: XCTestCase {
         targetDomain: UInt32 = sccpDomainTon,
         nonce: UInt64 = 327,
         amount: UInt64 = 42,
+        recipient: String? = nil,
         routeId: String = "sccp-ton-proof-request",
         merkleProofSteps: [(Data, UInt8)] = [],
         finalityProof: Data = Data([0x71, 0x72])
     ) -> SampleTonBundleFixture {
         let recipientCodec: UInt8
-        let recipient: String
+        let defaultRecipient: String
         switch targetDomain {
         case sccpDomainTron:
             recipientCodec = 5
-            recipient = "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8"
+            defaultRecipient = "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8"
         case sccpDomainTon:
             recipientCodec = 4
-            recipient = "0:" + String(repeating: "12", count: 32)
+            defaultRecipient = "0:" + String(repeating: "12", count: 32)
         default:
             recipientCodec = 2
-            recipient = "0x" + String(repeating: "11", count: 20)
+            defaultRecipient = "0x" + String(repeating: "11", count: 20)
         }
+        let resolvedRecipient = recipient ?? defaultRecipient
         var payloadBody = Data()
         payloadBody.append(1)
         appendTestU32Le(sourceDomain, to: &payloadBody)
@@ -14485,7 +14683,7 @@ final class SccpSolanaProverTests: XCTestCase {
         payloadBody.append(senderCodec)
         appendTestBytes(Data(sender.utf8), to: &payloadBody)
         payloadBody.append(recipientCodec)
-        appendTestBytes(Data(recipient.utf8), to: &payloadBody)
+        appendTestBytes(Data(resolvedRecipient.utf8), to: &payloadBody)
         payloadBody.append(1)
         appendTestBytes(Data(routeId.utf8), to: &payloadBody)
 
@@ -14552,12 +14750,14 @@ final class SccpSolanaProverTests: XCTestCase {
     private static func sampleEvmBundleFixture(
         sourceDomain: UInt32 = sccpDomainSora,
         targetDomain: UInt32 = sccpDomainEthereum,
-        nonce: UInt64 = 327
+        nonce: UInt64 = 327,
+        recipient: String? = nil
     ) -> SampleEvmBundleFixture {
         let fixture = sampleTonBundleFixture(
             sourceDomain: sourceDomain,
             targetDomain: targetDomain,
             nonce: nonce,
+            recipient: recipient,
             routeId: targetDomain == sccpDomainBsc ? "sora-bsc-xor" : "sora-eth-xor",
             finalityProof: Data([0x01, 0x02, 0x03])
         )
@@ -14572,6 +14772,145 @@ final class SccpSolanaProverTests: XCTestCase {
             ),
             bundleBytes: fixture.bundleBytes
         )
+    }
+
+    private static func sampleEvmTokenAddBundleFixture(
+        targetDomain: UInt32 = sccpDomainEthereum,
+        nonce: UInt64 = 327,
+        name: Data? = nil,
+        symbol: Data? = nil,
+        finalityProof: Data = Data([0x01, 0x02, 0x03])
+    ) -> SampleEvmBundleFixture {
+        let resolvedName = name ?? fixedTestAscii32("Token")
+        let resolvedSymbol = symbol ?? fixedTestAscii32("TOK")
+        precondition(resolvedName.count == 32)
+        precondition(resolvedSymbol.count == 32)
+
+        var payloadBody = Data()
+        payloadBody.append(1)
+        appendTestU32Le(targetDomain, to: &payloadBody)
+        appendTestU64Le(nonce, to: &payloadBody)
+        payloadBody.append(Data(repeating: 0x11, count: 32))
+        payloadBody.append(18)
+        payloadBody.append(resolvedName)
+        payloadBody.append(resolvedSymbol)
+
+        var payloadBytes = Data([0x03])
+        payloadBytes.append(payloadBody)
+        var messageIdPreimage = Data("sccp:token:add:v1".utf8)
+        messageIdPreimage.append(payloadBody)
+        let messageId = "0x" + irohaKeccak256(messageIdPreimage).hexEncodedString()
+        var payloadHashPreimage = Data("sccp:payload:v1".utf8)
+        payloadHashPreimage.append(payloadBytes)
+        let payloadHash = "0x" + Blake2b.hash256(payloadHashPreimage).hexEncodedString()
+
+        var commitmentBytes = Data()
+        commitmentBytes.append(1)
+        commitmentBytes.append(1)
+        appendTestU32Le(targetDomain, to: &commitmentBytes)
+        commitmentBytes.append(Data(hexString: String(messageId.dropFirst(2)))!)
+        commitmentBytes.append(Data(hexString: String(payloadHash.dropFirst(2)))!)
+
+        var leafPreimage = Data("sccp:hub:leaf:v1".utf8)
+        leafPreimage.append(commitmentBytes)
+        let commitmentRootBytes = Blake2b.hash256(leafPreimage)
+        let commitmentRoot = "0x" + commitmentRootBytes.hexEncodedString()
+
+        var merkleProof = Data()
+        appendTestU32Le(0, to: &merkleProof)
+
+        var bundle = Data()
+        bundle.append(1)
+        bundle.append(commitmentRootBytes)
+        appendTestBytes(commitmentBytes, to: &bundle)
+        appendTestBytes(merkleProof, to: &bundle)
+        appendTestBytes(payloadBytes, to: &bundle)
+        appendTestBytes(finalityProof, to: &bundle)
+
+        return SampleEvmBundleFixture(
+            publicInputs: EvmSccpPublicInputsInput(
+                messageId: messageId,
+                payloadHash: payloadHash,
+                targetDomain: targetDomain,
+                commitmentRoot: commitmentRoot,
+                finalityHeight: 19,
+                finalityBlockHash: String(repeating: "44", count: 32)
+            ),
+            bundleBytes: bundle
+        )
+    }
+
+    private static func sampleTonTokenAddBundleFixture(
+        targetDomain: UInt32 = sccpDomainTon,
+        nonce: UInt64 = 327,
+        name: Data? = nil,
+        symbol: Data? = nil,
+        finalityProof: Data = Data([0x71, 0x72])
+    ) -> SampleTonBundleFixture {
+        let resolvedName = name ?? fixedTestAscii32("Token")
+        let resolvedSymbol = symbol ?? fixedTestAscii32("TOK")
+        precondition(resolvedName.count == 32)
+        precondition(resolvedSymbol.count == 32)
+
+        var payloadBody = Data()
+        payloadBody.append(1)
+        appendTestU32Le(targetDomain, to: &payloadBody)
+        appendTestU64Le(nonce, to: &payloadBody)
+        payloadBody.append(Data(repeating: 0x11, count: 32))
+        payloadBody.append(18)
+        payloadBody.append(resolvedName)
+        payloadBody.append(resolvedSymbol)
+
+        var payloadBytes = Data([0x03])
+        payloadBytes.append(payloadBody)
+        var messageIdPreimage = Data("sccp:token:add:v1".utf8)
+        messageIdPreimage.append(payloadBody)
+        let messageId = "0x" + irohaKeccak256(messageIdPreimage).hexEncodedString()
+        var payloadHashPreimage = Data("sccp:payload:v1".utf8)
+        payloadHashPreimage.append(payloadBytes)
+        let payloadHash = "0x" + Blake2b.hash256(payloadHashPreimage).hexEncodedString()
+
+        var commitmentBytes = Data()
+        commitmentBytes.append(1)
+        commitmentBytes.append(1)
+        appendTestU32Le(targetDomain, to: &commitmentBytes)
+        commitmentBytes.append(Data(hexString: String(messageId.dropFirst(2)))!)
+        commitmentBytes.append(Data(hexString: String(payloadHash.dropFirst(2)))!)
+
+        var leafPreimage = Data("sccp:hub:leaf:v1".utf8)
+        leafPreimage.append(commitmentBytes)
+        let commitmentRootBytes = Blake2b.hash256(leafPreimage)
+        let commitmentRoot = "0x" + commitmentRootBytes.hexEncodedString()
+
+        var merkleProof = Data()
+        appendTestU32Le(0, to: &merkleProof)
+
+        var bundle = Data()
+        bundle.append(1)
+        bundle.append(commitmentRootBytes)
+        appendTestBytes(commitmentBytes, to: &bundle)
+        appendTestBytes(merkleProof, to: &bundle)
+        appendTestBytes(payloadBytes, to: &bundle)
+        appendTestBytes(finalityProof, to: &bundle)
+
+        return SampleTonBundleFixture(
+            publicInputs: TonSccpPublicInputsInput(
+                messageId: messageId,
+                payloadHash: payloadHash,
+                targetDomain: targetDomain,
+                commitmentRoot: commitmentRoot,
+                finalityHeight: 19,
+                finalityBlockHash: String(repeating: "aa", count: 32)
+            ),
+            bundleBytes: bundle
+        )
+    }
+
+    private static func fixedTestAscii32(_ text: String) -> Data {
+        var out = Data(text.utf8)
+        precondition(out.count <= 32)
+        out.append(Data(repeating: 0, count: 32 - out.count))
+        return out
     }
 
     private static func sampleTronBundleFixture(

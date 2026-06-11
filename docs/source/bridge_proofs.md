@@ -15,6 +15,8 @@ The active SCCP surface is limited to Ethereum, BSC, Solana, TON, and TRON.
 Retired runtime-network families outside that launch scope are not supported
 for now.
 SCCP will not support Sub&#115;trate/Pol&#107;adot networks for now.
+That exclusion is intentional current-launch scope, not a hidden compatibility
+lane.
 Torii public SCCP discovery, proof manifests, route readiness, SDK helpers, and
 operator scripts must advertise only those lanes. Unsupported domain ids fail at
 the absent-manifest/backend boundary rather than routing through diagnostic

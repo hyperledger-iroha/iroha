@@ -187,10 +187,12 @@ import {
   buildTonShardStateProofRequest,
   buildTonSccpFullLightClientAuditProofRequest,
   buildTonSccpFullLightClientAuditProofRequests,
+  TonSccpSourceStateProver,
   buildTronSccpProofRequest,
   buildTronSccpSubmission,
   tronSccpDestinationBinding,
   wrapTonSccpProofResult,
+  wrapTonSccpSourceStateVerificationProof,
   wrapTronSccpProofResult,
   wrapSolanaSccpProofResult,
   preferredKagemushaOfflineSpendMode,
@@ -4602,6 +4604,84 @@ test("package dist entrypoint exports Solana account opening helpers", () => {
   assert.equal(typeof tonSccpFullLightClientAuditOpenVerifySchemaDescriptor, "function");
   assert.equal(typeof buildTonSccpFullLightClientAuditProofRequest, "function");
   assert.equal(typeof buildTonSccpFullLightClientAuditProofRequests, "function");
+});
+
+const sampleDistTonShardStateSourceStateInput = () => ({
+  version: 1,
+  sourceDomain: SCCP_DOMAIN_TON,
+  masterchainSeqno: 19n,
+  masterchainWorkchainId: -1,
+  masterchainShard: 0x8000000000000000n,
+  masterchainBlockHash: `0x${"aa".repeat(32)}`,
+  masterchainFileHash: `0x${"a5".repeat(32)}`,
+  validatorSetHash: `0x${"b1".repeat(32)}`,
+  masterchainConfigRoot:
+    "0x5bf87008e0e76085d6db977b53a89329de49a4eed8fd1ff90d8c78f096ef05af",
+  masterchainConfigProofHash: `0x${"b2".repeat(32)}`,
+  shardWorkchainId: 0,
+  shardShard: 0x8000000000000000n,
+  shardSeqno: 7n,
+  shardBlockHash: `0x${"bb".repeat(32)}`,
+  shardFileHash: `0x${"bc".repeat(32)}`,
+  shardStateRoot:
+    "0x12a960855fea2f529c336d7325b1cca784f0f0b1a52ae149d02d046a2499e270",
+  transactionRoot:
+    "0x5a75fc0633903343b684ec73076c5a48cf6b453fc73aa316c2a6de900669e419",
+  transactionLt: 7n,
+  shardStateDictionaryRoot:
+    "0x049a63ecefc78dc0cd468ebf47e0385807d790a2ca8e0dca5cbbeb0714567fd3",
+  shardStateDictionaryKeyBitLen: 256,
+  shardStateDictionaryKey: Uint8Array.from([17, ...Array(31).fill(0)]),
+  masterchainSignatureHash: `0x${"c1".repeat(32)}`,
+  shardProofHash:
+    "0x32d8b496320e6a1ce5ccf671f2bd6f0d09cb53afed8c123b86cb9327b77c88cf",
+  shardStateProofBoc: Buffer.from(
+    "b5ee9c720101060100aa00035b9023afe2ffffff110000000000000000000000000000000007000000010000000b000000000000000c000000122001020500000101c00301d37fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff84400000000000000000000000000000000000000000000000000000000000000005a75fc0633903343b684ec73076c5a48cf6b453fc73aa316c2a6de900669e419000000000000000780400000000",
+    "hex",
+  ),
+  shardStateDictionaryProofBoc: Buffer.from(
+    "b5ee9c72010103010073000101c00101d37fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff84400000000000000000000000000000000000000000000000000000000000000005a75fc0633903343b684ec73076c5a48cf6b453fc73aa316c2a6de900669e41900000000000000078020000",
+    "hex",
+  ),
+  configDictionaryProofBoc: Buffer.from(
+    "b5ee9c72010106010091000101c00101117fffffff80000008a002012b120000000100000002000200020000000000000003c00302087fff00000405005b14e3a049e28444444444444444444444444444444444444444444444444444444444444444400000000000000060005b14e3a049e288888888888888888888888888888888888888888888888888888888888888000000000000000a0",
+    "hex",
+  ),
+  validatorSetTransitionProofs: [],
+  sourceStateVerifierHash: `0x${"d4".repeat(32)}`,
+  sourceTrustAnchorHash: `0x${"d5".repeat(32)}`,
+  consensusVerifierHash: `0x${"d6".repeat(32)}`,
+  messageInclusionVerifierHash: `0x${"d7".repeat(32)}`,
+  finalityPolicyHash: `0x${"d8".repeat(32)}`,
+});
+
+test("package dist entrypoint enforces TON source-state proof cap", async () => {
+  const request = buildTonShardStateProofRequest(
+    sampleDistTonShardStateSourceStateInput(),
+  );
+  const oversizedTonDistSourceStateProofBytes = new Uint8Array(
+    SCCP_SOURCE_STATE_MAX_PROOF_BYTES + 1,
+  ).fill(1);
+  assert.throws(
+    () =>
+      wrapTonSccpSourceStateVerificationProof(
+        oversizedTonDistSourceStateProofBytes,
+        request,
+      ),
+    /proofBytes must be at most/u,
+  );
+  const oversizedTonDistCallbackProver = new TonSccpSourceStateProver({
+    prove() {
+      return oversizedTonDistSourceStateProofBytes;
+    },
+  });
+  await assert.rejects(
+    () =>
+      oversizedTonDistCallbackProver.proveShardState(
+        sampleDistTonShardStateSourceStateInput(),
+      ),
+    /proofBytes must be at most/u,
+  );
 });
 
 test("package dist entrypoint exports Solana account data helpers", () => {

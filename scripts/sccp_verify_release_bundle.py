@@ -1219,6 +1219,9 @@ ETHEREUM_OUTBOUND_PRECALLBACK_SDK_TEST_MARKERS = (
             "destinationBindingHash must match destinationBinding",
             "outbound_prover_called = False",
             "assert not outbound_prover_called",
+            "proof_artifact_hash",
+            "proofResult proofArtifactHash and provingKeyHash must be supplied together",
+            "proofResult proofArtifactHash and provingKeyHash must match request",
         ),
     ),
     (
@@ -1845,6 +1848,12 @@ ETHEREUM_RECEIPT_SOURCE_EVENT_CONTEXT_MARKERS = (
         (
             "test_collect_receipt_proof_rejects_source_event_missing_context_fields",
             'for field in ("transactionHash", "blockHash", "blockNumber")',
+        ),
+    ),
+    (
+        "crates/iroha_sccp/src/lib.rs",
+        (
+            "EVM source receipts must not contain duplicate matching SCCP logs",
         ),
     ),
     (
@@ -3891,9 +3900,14 @@ ETHEREUM_EVM_SOURCE_ADAPTER_DEPLOYMENT_GATE_MARKERS = (
             "deployment.source_bridge_network_id == material.source_bridge_network_id",
             "deployment.source_bridge_config_hash == material.source_bridge_config_hash",
             "sccp_source_bridge_config_hash_is_production_ready(material)",
+            "sccp_source_adapter_engine_deployment_role_hashes_are_separated(&deployment)",
+            "source adapter deployment receipts must not reuse source verifier role hashes",
+            "source adapter deployment metadata must keep adapter VK and receipt hashes separated",
             "wrong_network_deployment.source_bridge_network_id = sccp_bsc_mainnet_network_id_word_v1();",
             "wrong_config_deployment.source_bridge_config_hash[0] ^= 0x01;",
             "wrong_emitter_deployment.source_bridge_emitter_address = [0x99; 20].to_vec();",
+            "BSC facade must reject replayed deployment receipts",
+            "ETH facade must reject replayed deployment receipts",
         ),
     ),
     (
@@ -5022,6 +5036,10 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "toBytes(sourceProofBytes, \"sourceProofBytes\").length === 0",
             "sourceProofBytes required for non-SORA source bundle",
             "bundleBytes.sourceDomain must match sourceDomain",
+            "export function wrapTonSccpSourceStateVerificationProof(proofBytes, request) {\n"
+            "  const proofRequest = normalizeTonSourceStateProofRequestForWrapping(request);\n"
+            "  const proof = copyBytes(toBytes(proofBytes, \"proofBytes\"));\n"
+            "  requireSourceStateProofBytes(proof, \"proofBytes\");",
         ),
     ),
     (
@@ -5034,6 +5052,10 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "toBytes(sourceProofBytes, \"sourceProofBytes\").length === 0",
             "sourceProofBytes required for non-SORA source bundle",
             "bundleBytes.sourceDomain must match sourceDomain",
+            "export function wrapTonSccpSourceStateVerificationProof(proofBytes, request) {\n"
+            "  const proofRequest = normalizeTonSourceStateProofRequestForWrapping(request);\n"
+            "  const proof = copyBytes(toBytes(proofBytes, \"proofBytes\"));\n"
+            "  requireSourceStateProofBytes(proof, \"proofBytes\");",
         ),
     ),
     (
@@ -5045,6 +5067,8 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "rejects non-empty all-zero source proof bytes in SCCP proof requests",
             "bundleBytes must match publicInputs",
             "bundleBytes\\.sourceDomain must match sourceDomain",
+            "oversizedTonSourceStateProofBytes",
+            "oversizedTonCallbackProver",
         ),
     ),
     (
@@ -5053,7 +5077,35 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "sampleEvmFamilyProofBundleFixture",
             "package dist entrypoint exports SCCP TRON Groth16 helpers",
             "package dist entrypoint exports SCCP EVM-family Groth16 helpers",
+            "package dist entrypoint enforces TON source-state proof cap",
             "canonicalSccpMessageProofBundleBytes",
+            "oversizedTonDistSourceStateProofBytes",
+            "oversizedTonDistCallbackProver",
+        ),
+    ),
+    (
+        "javascript/iroha_js/test/sccpPackageExports.test.js",
+        (
+            "published package root enforces TON source-state proof cap",
+            "samplePackageRootTonShardStateSourceStateInput",
+            "oversizedTonPackageRootSourceStateProofBytes",
+            "oversizedTonPackageRootCallbackProver",
+        ),
+    ),
+    (
+        "javascript/iroha_js/test/sccpBscMainnet.test.js",
+        (
+            "tamperedBscBase64ProofResult",
+            "sdk.buildBscCalldata({ proofResult: tamperedBscBase64ProofResult })",
+            "proofResult\\.proofBase64 must match proofResult\\.proofBytes",
+        ),
+    ),
+    (
+        "javascript/iroha_js/test/sccpEthereumMainnet.test.js",
+        (
+            "tamperedEthereumBase64ProofResult",
+            "sdk.buildEthereumCalldata({ proofResult: tamperedEthereumBase64ProofResult })",
+            "proofResult\\.proofBase64 must match proofResult\\.proofBytes",
         ),
     ),
     (
@@ -5066,6 +5118,8 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "def build_evm_sccp_proof_request",
             "def build_tron_sccp_proof_request",
             "bundleBytes.sourceDomain must match sourceDomain",
+            "def wrap_ton_sccp_source_state_verification_proof",
+            "_require_source_state_proof_bytes(proof)",
         ),
     ),
     (
@@ -5085,6 +5139,20 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             'match="bundleBytes must not be all zero"',
             "wrap_evm_sccp_proof_result",
             "wrap_tron_sccp_proof_result",
+            "def test_package_root_ton_source_state_cap_uses_public_exports",
+            "oversized_package_root_ton_source_state_proof",
+            "def test_ton_source_state_prover_wraps_shard_and_full_light_audit_role_proofs",
+            'oversized_proof_bytes = b"\\x01" * (SCCP_SOURCE_STATE_MAX_PROOF_BYTES + 1)',
+            "prove=lambda _request, _options: oversized_proof_bytes",
+            "def sample_token_add_bundle_fixture",
+            "lowercase_required_eip55_recipient",
+            "lowercase_required_eip55_sender",
+            "nul_prefixed_symbol_bundle",
+            "tampered_bsc_base64_proof_result",
+            "build_bsc_mainnet_sccp_destination_submission",
+            "tampered_ethereum_base64_proof_result",
+            "build_ethereum_calldata",
+            "proofResult\\.proofBase64 must match proofResult\\.proofBytes",
         ),
     ),
     (
@@ -5093,6 +5161,12 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "private fun requireSccpProofRequestBundleMatchesPublicInputs",
             "summary.sourceDomain == SccpSolana.DOMAIN_SORA || sourceProofBytes.isNotEmpty()",
             "sourceProofBytes required for non-SORA source bundle",
+            "validateCanonicalEvmHexAddress(decodeCanonicalUtf8Bytes(raw, label), label)",
+            "$label must be a canonical EIP-55 EVM address",
+            "raw.indexOf(0.toByte())",
+            "SOURCE_STATE_MAX_PROOF_BYTES: Int = NATIVE_RECURSIVE_MAX_PROOF_BYTES",
+            "proof.proofBytes.size <= SOURCE_STATE_MAX_PROOF_BYTES",
+            "proofBytes.size <= SOURCE_STATE_MAX_PROOF_BYTES",
         ),
     ),
     (
@@ -5101,6 +5175,13 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "sourceProofBytes required for non-SORA",
             "strippedSourceProof",
             "proofRequestHashMatchesCrossSdkVector",
+            "nulPrefixedNameBundle",
+            "sampleTonTokenAddBundleFixture",
+            "canonicalEip55Sender",
+            "bundleBytes.payload.sender",
+            "oversizedSourceStateProofBytes = ByteArray(SccpTon.SOURCE_STATE_MAX_PROOF_BYTES + 1)",
+            "oversizedCallbackProver",
+            "proofBytes must be at most",
         ),
     ),
     (
@@ -5109,6 +5190,12 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "private static SccpBundleSummary requireSccpProofRequestBundleMatchesPublicInputs",
             "summary.sourceDomain != SolanaSccpProver.DOMAIN_SORA && sourceProofBytes.length == 0",
             "sourceProofBytes required for non-SORA source bundle",
+            "validateCanonicalEvmHexAddress(decodeCanonicalUtf8Bytes(raw, label), label)",
+            "must be a canonical EIP-55 EVM address",
+            "raw[index] == 0",
+            "SOURCE_STATE_MAX_PROOF_BYTES = NATIVE_RECURSIVE_MAX_PROOF_BYTES",
+            "proof.proofBytes().length > SOURCE_STATE_MAX_PROOF_BYTES",
+            "normalizedProofBytes.length > SOURCE_STATE_MAX_PROOF_BYTES",
         ),
     ),
     (
@@ -5117,6 +5204,13 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "sourceProofBytes required for non-SORA source bundle",
             "TON proof-result submissions must reject stripped non-SORA source proofs",
             "proofRequestHashMatchesCrossSdkVector",
+            "nulPrefixedNameBundle",
+            "sampleTonTokenAddBundleFixture",
+            "canonicalEip55Sender",
+            "bundleBytes.payload.sender",
+            "oversizedSourceStateProofBytes",
+            "TonSccpProver.SOURCE_STATE_MAX_PROOF_BYTES + 1",
+            "oversizedCallbackProver",
         ),
     ),
     (
@@ -5126,6 +5220,9 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "func decodeSccpMessageProofBundleSummary",
             "summary.sourceDomain == sccpDomainSora || !sourceProofBytes.isEmpty",
             "SccpMessageProofBundleError.missingSourceProof",
+            "validateCanonicalSccpBundleEvmHexAddress",
+            "irohaKeccak256(Data(lowercasePayload))",
+            "raw.firstIndex(of: 0)",
         ),
     ),
     (
@@ -5151,6 +5248,12 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "func decodeCanonicalTonSccpMessageProofBundleSummary",
             "summary.sourceDomain == sccpDomainSora || !sourceProofBytes.isEmpty",
             "throw TonSccpProverError.invalidField(\"sourceProofBytes\")",
+            "tonFixedAsciiFieldIsNonEmpty",
+            "raw.firstIndex(of: 0)",
+            "tonValidateCanonicalEvmHexAddress",
+            "irohaKeccak256(Data(lowercasePayload))",
+            "proof.proofBytes.count <= sccpSourceStateMaxProofBytes",
+            "proofBytes.count <= sccpSourceStateMaxProofBytes",
         ),
     ),
     (
@@ -5164,6 +5267,18 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "strippedSourceProofResult",
             "func testTonProofRequestHashMatchesCrossSdkVector",
             "func testSccpProofRequestsRejectAllZeroSourceProofBytes",
+            "canonicalEip55Recipient",
+            "canonicalEip55Sender",
+            "nulPrefixedNameBundle",
+            "sampleEvmTokenAddBundleFixture",
+            "oversizedTonSourceStateProofBytes",
+            "sccpSourceStateMaxProofBytes + 1",
+            "oversizedTonCallbackProver",
+            "tamperedBscBase64ProofResult",
+            "tamperedEthereumBase64ProofResult",
+            "buildBscMainnetSccpDestinationSubmission(EvmSccpSubmissionInput(",
+            "buildEthereumCalldata(EvmSccpSubmissionInput(",
+            'invalidPublicInputs("proofResult.proofBase64")',
         ),
     ),
     (
@@ -5173,6 +5288,8 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "internal fun requireMatchesPublicInputs",
             "summary.sourceDomain == SccpSourceProofs.DOMAIN_SORA || sourceProofBytes.isNotEmpty()",
             "sourceProofBytes required for non-SORA source bundle",
+            "$label must be a canonical EIP-55 EVM address",
+            "raw.indexOf(0.toByte())",
         ),
     ),
     (
@@ -5198,6 +5315,14 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "publicInputs: EvmSccpPublicInputsInput = samplePublicInputs()",
             "hexWord(publicInputs.messageId.removePrefix(\"0x\"))",
             "proofResult.copy(sourceProofBytes = byteArrayOf(9, 11))",
+            "canonicalEip55Recipient",
+            "nulPrefixedNameBundle",
+            "sampleTokenAddBundleFixture",
+            "tamperedBscBase64ProofResultError",
+            "tamperedEthereumBase64ProofResultError",
+            "SccpBsc.buildSubmission",
+            "buildEthereumCalldata",
+            "proofBase64",
         ),
     ),
     (
@@ -5216,6 +5341,8 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "static BundleSummary requireMatchesPublicInputs",
             "summary.sourceDomain != SourceSccpProofs.DOMAIN_SORA && sourceProofBytes.length == 0",
             "sourceProofBytes required for non-SORA source bundle",
+            "must be a canonical EIP-55 EVM address",
+            "raw[index] == 0",
         ),
     ),
     (
@@ -5233,6 +5360,14 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "sampleGroth16ProofBytes(request.publicInputs())",
             "hexWord(stripHex(publicInputs.messageId()))",
             "evmResultWithSourceProofBytes(proofResult, new byte[] {9, 11})",
+            "canonicalEip55Recipient",
+            "nulPrefixedNameBundle",
+            "sampleTokenAddBundleFixture",
+            "tamperedBscBase64ProofResult",
+            "Ethereum mainnet calldata helper must reject tampered proofBase64",
+            "BscSccpProver.buildSubmission",
+            "evmResultWithProofBase64(artifactBoundResult, \"AAAA\")",
+            "proofBase64",
         ),
     ),
     (
@@ -5242,6 +5377,22 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "sampleGroth16ProofWords(samplePublicInputs(), TronSccpProver.DOMAIN_SORA)",
             "hexWord(stripHex(publicInputs.messageId()))",
             "tronResultWithSourceProofBytes(proofResult, new byte[] {9, 11})",
+        ),
+    ),
+    (
+        "csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpEthereumMainnetTests.cs",
+        (
+            "OutboundCallbackAndSubmissionSnapshotsRejectMutation",
+            "EthereumMainnetSccp.BuildEthereumCalldata",
+            "ProofBase64 = Convert.ToBase64String(mutatedProofBytes)",
+        ),
+    ),
+    (
+        "csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpBscMainnetTests.cs",
+        (
+            "OutboundCallbackAndSubmissionSnapshotsRejectMutation",
+            "BscMainnetSccp.BuildBscCalldata",
+            "ProofBase64 = Convert.ToBase64String(mutatedProofBytes)",
         ),
     ),
     (

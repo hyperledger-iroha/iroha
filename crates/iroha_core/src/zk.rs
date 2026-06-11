@@ -71087,11 +71087,11 @@ mod tests {
         use halo2_proofs::{dev::MockProver, halo2curves::pasta::Fp as Scalar};
 
         let circuit = crate::zk::pasta_tiny::CommitOpen::default();
-        let commitment = crate::zk::pasta_tiny::poseidon_pair(Scalar::from(7), Scalar::from(11));
+        let commitment = crate::zk::pasta_tiny::poseidon_pair(Scalar::from(11), Scalar::from(31));
         let prover = MockProver::run(5, &circuit, vec![vec![commitment]]).expect("mock prover");
         prover.assert_satisfied();
 
-        let additive_placeholder_commitment = Scalar::from(7 + 11);
+        let additive_placeholder_commitment = Scalar::from(11 + 31);
         let stale = MockProver::run(5, &circuit, vec![vec![additive_placeholder_commitment]])
             .expect("mock prover");
         assert!(
