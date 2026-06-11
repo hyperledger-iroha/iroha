@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-06-10
+Last updated: 2026-06-11
 
 ## 2026-06-10 Sumeragi malformed RBC hydration validation follow-up
 
@@ -26,6 +26,146 @@ Last updated: 2026-06-10
   carried chunk-digest or chunk-root metadata. The payload-hydration TLA gate now
   models those digest/root mismatch cases with two additional expected-failure
   configs, bringing `rbc-payload-hydration` to `9` mutations.
+- Tightened `apply_hydrated_payload(...)` itself so local hydration treats any
+  zero observed chunk count from the encoded payload as an invalid layout and
+  only reports `all_chunks_present` for a positive, exactly complete chunk
+  shape.
+- Added an actor-level `hydrate_rbc_session_from_block(...)` regression that
+  starts from over-counted live session metadata, hydrates from authoritative
+  local payload bytes, and verifies both the live session and status summary are
+  recounted back to the positive complete chunk shape.
+- Hardened RBC payload-bundle construction so invalid, zero-total, and
+  over-counted sessions cannot emit INIT/chunk rebroadcast bundles. Targeted
+  payload rescue now also tries local hydration for those malformed live shapes
+  before deciding whether a payload bundle is available.
+- Extended the malformed chunk-shape guard beyond counters alone: outbound
+  helper paths now reject sessions whose received counter disagrees with the
+  populated chunk slots, whose chunk slot vector no longer matches
+  `total_chunks`, or whose cached digest vector length drifted from the
+  advertised chunk count.
+- Added targeted-repair coverage for malformed cached session counters with a
+  trusted local block body: the actor may rebuild the INIT/body companion from
+  local block bytes, but it must not rebroadcast cached chunks or READY evidence
+  from the malformed session.
+- Applied the same invalid-shape guard to `rebuild_rbc_init(...)`, preventing
+  missing-INIT repair responses from rebuilding RBC INIT metadata for invalid,
+  zero-total, or over-counted sessions.
+- Hardened cached-session INIT companions so `rebuild_rbc_init(...)` and RBC
+  payload-bundle construction now re-check the cached leader signature against
+  the roster-derived leader index and block header hash before emitting INIT;
+  wrong-index or wrong-signer cached metadata stays local and is not repackaged
+  into outbound repair traffic.
+- Hardened exact-body RBC INIT rebuilds the same way: when repair reconstructs
+  INIT from trusted local block bytes, the selected leader-indexed block
+  signature is verified against the roster-derived leader key before the INIT is
+  emitted, and a wrong-signer signature now fails closed.
+- Hardened roster-hint `BlockCreated` frontier metadata rebuilds so they only
+  accept a block signature that verifies as the roster-derived leader for the
+  slot. The final frontier metadata now reuses the verified RBC INIT leader
+  signature instead of reselecting a proposer-indexed or first block signature.
+- Tightened DA/RBC availability gating to use the same malformed chunk-shape
+  boundary as the outbound repair helpers. Sessions with counter-complete but
+  missing chunk slots, malformed digest-vector length, zero-total layout, or
+  over-counted chunks now remain availability-unresolved until repaired or
+  timed out, including through the lossy reschedule decision snapshot.
+- Tightened complete-delivery and delivered-payload match predicates so
+  payload-complete bytes with malformed chunk metadata no longer satisfy
+  authoritative delivery evidence. This keeps repair suppression, validation
+  priority, backlog, and telemetry paths, including authoritative fallback-byte
+  accounting, from treating malformed sessions as complete just because
+  concatenated bytes hash to the advertised payload.
+- Tightened the same complete-delivery boundary for chunk-root evidence:
+  payload-complete delivered sessions now also require any cached expected chunk
+  root to match the computed chunk root before availability, validation
+  priority, or telemetry paths may treat the session as complete.
+- Extended malformed chunk-shape detection to compare cached expected chunk
+  digests against populated chunk slots, so digest vectors with the right length
+  but wrong contents now fail the same availability and delivered-payload
+  boundaries as missing slots or malformed digest-vector lengths.
+- Added a self-consistency check between cached expected chunk digests and the
+  cached expected chunk root. Sessions whose digest list hashes to a different
+  root now fail closed before RBC INIT/chunk bundles, READY, DELIVER, or READY
+  rebroadcast bundles can reuse the impossible metadata; READY/DELIVER emission
+  invalidates those sessions and clears pending repair state instead of
+  deferring forever.
+- Tightened the same digest/root self-consistency boundary at
+  `RbcSession::new_with_layout(...)` so sessions constructed from contradictory
+  metadata start invalid even before a sender tries to reuse them for RBC
+  progress. Persisted recovery now preserves that constructor-detected invalid
+  bit for incomplete recovered sessions instead of overwriting it with the stored
+  invalid flag.
+- Tightened `apply_hydrated_payload(...)` completion reporting so hostile
+  payload-hash, chunk-digest, or chunk-root mismatches can still be diagnosed and
+  invalidated, but no longer report `all_chunks_present` as availability
+  progress after the session has been poisoned.
+- Persisted RBC sessions now carry lane and dataspace allocation ownership,
+  including TEU totals, so restart recovery preserves lane-local DA/RBC backlog
+  and committed-accounting state instead of relying on transient status-summary
+  adoption. Disk recovery rejects internally inconsistent allocation metadata
+  such as duplicate lanes, duplicate dataspaces, missing counterpart metadata,
+  unknown dataspace lanes, zero-count ownership, or lane/dataspace sums that do
+  not match the advertised chunk ownership.
+- Hardened the old-snapshot compatibility fallback that adopts lane/dataspace
+  allocations from persisted RBC status summaries. Status snapshot recovery now
+  drops inconsistent lane/dataspace backlog metadata, and in-memory adoption
+  refuses malformed summary allocations instead of seeding recovered sessions
+  with impossible ownership totals. Backlog rows whose pending chunk counts
+  exceed their allocated chunk totals are rejected on the same path.
+- Persisted RBC store validation now checks any advertised chunk digest vector
+  against the expected and computed chunk roots before requiring a complete
+  retained chunk set, so incomplete poisoned snapshots are deleted instead of
+  reloading as repairable sessions. Direct persisted-session reconstruction also
+  rejects snapshots whose explicit expected and computed chunk roots conflict.
+- In-memory RBC status updates now apply the same impossible-counter and
+  allocation-shape guard used for persisted status recovery. A malformed
+  replacement removes any stale summary for the same session key instead of
+  leaving old delivered-payload evidence visible to later checks.
+- Malformed RBC INIT regression coverage now reaches the intended digest-count
+  and digest-root mismatch branches, keeps header-hash mismatch covered
+  explicitly, and covers invalid leader signatures plus invalid layout metadata
+  as separate adversarial cases. Rejected INITs now have explicit assertions
+  that they leave no live session, session-roster cache entry, or vote-roster
+  cache entry behind.
+- Local authoritative payload predicates now verify the local block bytes
+  against the session's advertised RBC chunk metadata on a cloned hydration
+  probe before they can bypass missing chunks. This preserves the intended
+  pending-block/stub positive paths but prevents inbound DELIVER evidence from
+  recording raw delivery when the payload hash matches locally while the
+  advertised chunk root or digest layout contradicts the deterministic local
+  chunking.
+- Delivered-payload byte telemetry now uses the same cloned hydration probe
+  before accepting local authoritative fallback bytes for incomplete RBC
+  sessions. Wrong advertised chunk roots, digest vectors, or layouts can no
+  longer report delivered-byte metrics or consume the once-only telemetry marker
+  solely because the local block payload hash matches.
+- Fixed targeted READY-stall rescue for locally authoritative Kura-backed
+  sessions: when local block bytes are available but the session still has
+  malformed or missing chunks, the actor may directly resend the verified INIT
+  and chunks to peers missing READY without refreshing the broad payload subset
+  cooldown. RBC-only sessions still wait for READY quorum or delivery before
+  taking that targeted payload path.
+- Applied the invalid-shape guard at the READY/DELIVER helper boundary as well:
+  local READY signing, local DELIVER signing, and READY rebroadcast bundle
+  construction now reject invalid, zero-total, and over-counted sessions before
+  repackaging local state into outbound consensus traffic.
+- Updated the invalid-session READY emission regression so it constructs a
+  well-formed payload-backed session before injecting duplicate-sender evidence;
+  zero-total fixtures now only exercise malformed-shape repair or rejection
+  paths.
+- Hardened authoritative stub-session insertion so recovery paths cannot create
+  an RBC session for an empty payload length; the helper now returns an explicit
+  empty-payload error and leaves the live session map unchanged.
+- Tightened the same stub-session boundary so it rechecks the session key
+  against the signed block header/hash and recomputes the block payload bytes
+  before trusting the caller-supplied payload length or hash; mismatches return
+  explicit errors without retaining a live session.
+- Tightened local RBC session metadata seeding so BlockCreated payload seeding,
+  authoritative stub insertion, metadata backfill, and post-seed pending-block
+  repair only cache a leader signature that verifies against the roster-derived
+  leader key. Local payload hydration now backfills verified block metadata from
+  a matching pending block before applying payload bytes, preserving the
+  positive authoritative-stub path while keeping wrong-signer metadata from
+  rebuilding outbound INIT.
 - Hardened `recover_block_from_rbc_session(...)` so it no longer falls back to
   raw count-complete chunk bytes when the RBC session is missing authoritative
   payload metadata. Block materialization now goes through the same verified
@@ -67,12 +207,108 @@ Last updated: 2026-06-10
   - `cargo test -p iroha_core hydrated_payload_ --lib -- --nocapture`
     (`12` tests passed; emitted the pre-existing unrelated `soracloud.rs`
     warnings)
+  - `cargo test -p iroha_core hydrate_rbc_session_from_block_recounts_overcounted_session --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core rbc_payload_bundle_rejects_invalid_or_malformed_chunk_shape --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core rbc_payload_bundle --lib -- --nocapture`
+    (`3` tests passed)
+  - `cargo test -p iroha_core rebuild_rbc_init_rejects_invalid_or_malformed_chunk_shape --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core rebuild_rbc_init --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core missing_init --lib -- --nocapture`
+    (`3` tests passed)
+  - `cargo test -p iroha_core fetch_pending_block_keeps_rbc_transport_rebuildable_when_da_enabled --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core frontier_block_created_from_proposal_rejects_noncanonical_payload_hint_even_with_roster_hint --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core frontier_block_created_from_proposal --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core frontier_block_created_for_wire --lib -- --nocapture`
+    (`4` tests passed)
+  - `cargo test -p iroha_core frontier_block_created_for_local_proposal_wire_uses_roster_verified_leader_signature --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core rbc_session_availability_incomplete_requires_complete_delivered_ready_evidence --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core rbc_session_delivered_payload_matches_requires_complete_chunks --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core complete_delivery --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core delivered_payload --lib -- --nocapture`
+    (`12` tests passed)
+  - `cargo test -p iroha_core hydrated_payload --lib -- --nocapture`
+    (`12` tests passed)
+  - `cargo test -p iroha_core rbc_session_new --lib -- --nocapture`
+    (`3` tests passed)
+  - `cargo test -p iroha_core rbc_session_from_persisted --lib -- --nocapture`
+    (`4` tests passed)
+  - `cargo test -p iroha_core rbc_session_from_persisted_rejects_malformed_allocations --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core rbc_session_persists_allocations_across_roundtrip --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core inconsistent_allocation_metadata_is_rejected_and_deleted --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core rbc_session_rejects_inconsistent_summary_allocations --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core persisted_snapshot_drops_inconsistent_allocation_metadata --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core allocation --lib -- --nocapture`
+    (`9` tests passed)
+  - `cargo test -p iroha_core persisted --lib -- --nocapture`
+    (`48` tests passed)
+  - `cargo test -p iroha_core rbc_status --lib -- --nocapture`
+    (`20` tests passed; includes an existing poisoned-lock recovery test that
+    prints an intentional panic before succeeding)
+  - `cargo test -p iroha_core rbc_store --lib -- --nocapture`
+    (`50` tests passed; includes an existing poisoned-lock recovery test that
+    prints an intentional panic before succeeding)
+  - `cargo test -p iroha_core rbc_payload_matches --lib -- --nocapture`
+    (`6` tests passed)
+  - `cargo test -p iroha_core payload_available_for_da --lib -- --nocapture`
+    (`4` tests passed)
+  - `cargo test -p iroha_core rbc_availability_reschedule_formal_gate_matrix --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core rbc_availability --lib -- --nocapture`
+    (`4` tests passed)
+  - `cargo test -p iroha_core malformed_chunk_shape --lib -- --nocapture`
+    (`4` tests passed)
+  - `cargo test -p iroha_core maybe_emit_rbc_ready_marks_invalid_and_clears_pending_on_chunk_root_mismatch --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core handle_rbc_init --lib -- --nocapture`
+    (`23` tests passed)
+  - `cargo test -p iroha_core rbc_ready_and_deliver_helpers_reject_invalid_or_malformed_chunk_shape --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core rescue_rbc_missing_ready_peers_uses_exact_body_for_malformed_session --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core rescue_rbc_missing_ready_peers --lib -- --nocapture`
+    (`7` tests passed)
+  - `cargo test -p iroha_core rbc_ready_bundle --lib -- --nocapture`
+    (`2` tests passed)
+  - `cargo test -p iroha_core maybe_emit_rbc_ready_skips_invalid_session --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core rbc_ready --lib -- --nocapture`
+    (`61` tests passed)
+  - `cargo test -p iroha_core rbc_deliver --lib -- --nocapture`
+    (`59` tests passed)
+  - `cargo test -p iroha_core rbc_session_record_ready_accepts_distinct_senders_after_deliver --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core insert_stub_rbc_session_rejects_empty_payload_len --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core insert_stub_rbc_session --lib -- --nocapture`
+    (`4` tests passed)
+  - `cargo test -p iroha_core insert_stub_rbc_session_does_not_cache_unverified_leader_signature --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core block_created_drops_empty_payload --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core stub_session --lib -- --nocapture`
+    (`2` tests passed)
+  - `cargo test -p iroha_core known_authoritative_stub --lib -- --nocapture`
+    (`1` test passed)
   - `cargo test -p iroha_core zero_total --lib -- --nocapture`
-    (`8` tests passed; emitted the pre-existing unrelated `soracloud.rs`
-    warnings)
+    (`11` tests passed)
   - `cargo test -p iroha_core overcounted --lib -- --nocapture`
-    (`6` tests passed; emitted the pre-existing unrelated `soracloud.rs`
-    warnings)
+    (`8` tests passed)
   - `cargo test -p iroha_core rbc_backlog --lib -- --nocapture`
     (`15` tests passed; emitted the pre-existing unrelated `soracloud.rs`
     warnings)
@@ -80,14 +316,31 @@ Last updated: 2026-06-10
     (`16` tests passed; emitted the pre-existing unrelated `soracloud.rs`
     warnings)
   - `cargo test -p iroha_core rebroadcast_stalled_rbc_payloads --lib -- --nocapture`
-    (`20` tests passed; emitted the pre-existing unrelated `soracloud.rs`
-    warnings)
+    (`20` tests passed)
   - `cargo test -p iroha_core maybe_emit_rbc_deliver --lib -- --nocapture`
     (`13` tests passed; emitted the pre-existing unrelated `soracloud.rs`
     warnings)
   - `cargo test -p iroha_core maybe_emit_rbc_deliver_hydrates --lib -- --nocapture`
     (`2` tests passed; emitted the pre-existing unrelated `soracloud.rs`
     warnings)
+  - `cargo test -p iroha_core handle_rbc_init_rejects --lib -- --nocapture`
+    (`11` tests passed)
+  - `cargo test -p iroha_core handle_rbc_deliver_rejects_missing_chunks_when_local_payload_conflicts_with_chunk_root --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core handle_rbc_deliver_accepts_missing_chunks_when_da_enabled --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core known_authoritative --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core maybe_emit_rbc_ready_hydrates_stub_session_from_pending_block --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core authoritative_payload --lib -- --nocapture`
+    (`6` tests passed)
+  - `cargo test -p iroha_core delivered_payload_metrics --lib -- --nocapture`
+    (`8` tests passed)
+  - `cargo test -p iroha_core --features telemetry authoritative_payload_bytes_for_telemetry --lib -- --nocapture`
+    (`5` tests passed)
+  - `cargo test -p iroha_core --features telemetry handle_rbc_deliver_records_payload_bytes_from_authoritative_local_payload --lib -- --nocapture`
+    (`2` tests passed)
   - `cargo test -p iroha_torii --features telemetry --test torii_sumeragi_telemetry sumeragi_rbc -- --nocapture`
     (`6` tests passed; emitted the pre-existing unrelated `soracloud.rs`
     warning)
@@ -156601,11 +156854,11 @@ Last updated: 2026-06-10
 
 - `crates/iroha_core/src/sumeragi/main_loop/tests.rs` now adds three more direct guard/fallback tests in the same quorum-target / frontier-wire slice so the remaining conservative-degrade branches are covered without relying on larger end-to-end fixtures.
 - Added `quorum_retransmit_targets_fall_back_to_full_fanout_when_signer_mapping_fails`, which proves invalid signer-to-peer mapping degrades to full retransmit fanout instead of dropping recovery traffic.
-- Added `frontier_block_created_for_local_proposal_wire_falls_back_to_first_block_signature`, which proves the local proposal wire helper still emits enriched frontier metadata when the proposal’s proposer index does not match any signature on the block.
+- Added `frontier_block_created_for_local_proposal_wire_uses_roster_verified_leader_signature`, which proves the local proposal wire helper still emits enriched frontier metadata from the roster-verified leader signature when the proposal’s proposer index does not match any signature on the block.
 - Added `frontier_block_created_for_wire_returns_plain_block_without_frontier_metadata`, which proves the generic wire helper degrades to a plain `BlockCreated` when neither proposal cache nor authoritative frontier metadata is available.
 - Focused validation for this addendum:
   - `cargo test -p iroha_core --lib quorum_retransmit_targets_fall_back_to_full_fanout_when_signer_mapping_fails -- --nocapture`
-  - `cargo test -p iroha_core --lib frontier_block_created_for_local_proposal_wire_falls_back_to_first_block_signature -- --nocapture`
+  - `cargo test -p iroha_core --lib frontier_block_created_for_local_proposal_wire_uses_roster_verified_leader_signature -- --nocapture`
   - `cargo test -p iroha_core --lib frontier_block_created_for_wire_returns_plain_block_without_frontier_metadata -- --nocapture`
   - `cargo test -p iroha_core --lib frontier_block_created_for_proposal_wire_falls_back_to_authoritative_frontier_cache -- --nocapture`
   - `cargo test -p iroha_core --lib frontier_block_created_for_local_proposal_wire_uses_live_roster_when_derived_roster_unavailable -- --nocapture`

@@ -148,6 +148,10 @@ pub(super) struct RbcSeedWorkerHandle {
 #[derive(Debug)]
 pub(super) enum RbcError {
     TransactionPayloadTooLarge { len: usize },
+    EmptyPayload,
+    StubBlockMismatch,
+    StubPayloadLengthMismatch { expected: usize, observed: usize },
+    StubPayloadHashMismatch { expected: Hash, observed: Hash },
     ChunkSizeOverflow { chunk_size: usize },
     ChunkCountOverflow { count: usize },
     ChunkCountExceedsCap { count: u32, cap: u32 },
@@ -166,6 +170,16 @@ impl std::fmt::Display for RbcError {
                     "transaction payload length {len} exceeds addressable range"
                 )
             }
+            Self::EmptyPayload => write!(f, "RBC payload must not be empty"),
+            Self::StubBlockMismatch => write!(f, "RBC stub block metadata does not match session"),
+            Self::StubPayloadLengthMismatch { expected, observed } => write!(
+                f,
+                "RBC stub payload length mismatch: expected {expected}, observed {observed}"
+            ),
+            Self::StubPayloadHashMismatch { expected, observed } => write!(
+                f,
+                "RBC stub payload hash mismatch: expected {expected}, observed {observed}"
+            ),
             Self::ChunkSizeOverflow { chunk_size } => {
                 write!(
                     f,
@@ -558,6 +572,12 @@ pub(super) fn apply_hydrated_payload(
         return outcome;
     };
     outcome.observed_chunks = Some(chunk_count);
+    if chunk_count == 0 {
+        session.invalid = true;
+        outcome.updated = true;
+        outcome.layout_mismatch = true;
+        return outcome;
+    }
     let expected_chunks = session.total_chunks();
     if expected_chunks == 0 {
         let Ok(capacity) = usize::try_from(chunk_count) else {
@@ -616,10 +636,9 @@ pub(super) fn apply_hydrated_payload(
         outcome.updated = true;
     }
 
-    let all_chunks_present = session.total_chunks() == 0
-        || (session.total_chunks() != 0 && session.received_chunks() == session.total_chunks());
-    if all_chunks_present {
-        outcome.all_chunks_present = true;
+    let all_chunks_present_by_counter =
+        session.total_chunks() != 0 && session.received_chunks() == session.total_chunks();
+    if all_chunks_present_by_counter {
         let observed_root = outcome.observed_chunk_root.or_else(|| session.chunk_root());
         if let Some(observed_root) = observed_root {
             if let Some(expected_root) = session.expected_chunk_root {
@@ -633,6 +652,9 @@ pub(super) fn apply_hydrated_payload(
             }
         }
     }
+    outcome.all_chunks_present = all_chunks_present_by_counter
+        && !session.is_invalid()
+        && !rbc_session_has_invalid_chunk_shape(session);
 
     if outcome.payload_hash_mismatch || outcome.chunk_root_mismatch || outcome.chunk_digest_mismatch
     {
@@ -2032,34 +2054,27 @@ impl Actor {
         }
 
         session.block_header = Some(block.header());
-        let roster = self.rbc_roster_for_session(key);
+        let mut roster = self.rbc_roster_for_session(key);
+        if roster.is_empty() {
+            roster = self.ensure_rbc_session_roster(key);
+        }
         if !roster.is_empty() {
-            let mut topology = super::network_topology::Topology::new(roster.clone());
-            match self.leader_index_for(&mut topology, key.1, key.2) {
-                Ok(leader_index) => {
-                    let leader_index = u64::try_from(leader_index).unwrap_or(u64::MAX);
-                    if let Some(signature) = block
-                        .signatures()
-                        .find(|signature| signature.index() == leader_index)
-                    {
-                        session.leader_signature = Some(signature.clone());
-                    } else {
-                        debug!(
-                            height = key.1,
-                            view = key.2,
-                            expected = leader_index,
-                            "leader signature missing while seeding RBC session"
-                        );
-                    }
-                }
-                Err(err) => {
-                    debug!(
-                        height = key.1,
-                        view = key.2,
-                        ?err,
-                        "failed to derive leader index while seeding RBC session"
-                    );
-                }
+            if let Some(signature) = block.signatures().find(|signature| {
+                self.rbc_leader_signature_matches_roster(
+                    &roster,
+                    key.1,
+                    key.2,
+                    block.header(),
+                    signature,
+                )
+            }) {
+                session.leader_signature = Some(signature.clone());
+            } else {
+                debug!(
+                    height = key.1,
+                    view = key.2,
+                    "verified leader signature missing while seeding RBC session"
+                );
             }
         }
 
@@ -2081,7 +2096,7 @@ impl Actor {
         if should_rebroadcast {
             if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() {
                 let roster = self.rbc_session_roster(key);
-                if let Some((init, chunks)) = Self::rbc_payload_bundle(key, &session, &roster) {
+                if let Some((init, chunks)) = self.rbc_payload_bundle(key, &session, &roster) {
                     self.rebroadcast_rbc_payload_bundle(
                         key,
                         init,
@@ -2246,6 +2261,32 @@ impl Actor {
         if self.subsystems.da_rbc.rbc.sessions.contains_key(&key) {
             return Ok(false);
         }
+        let block_header = block.header();
+        if block.hash() != key.0 || block_header.height().get() != key.1 {
+            return Err(RbcError::StubBlockMismatch.into());
+        }
+        if block_header.view_change_index() != key.2 {
+            return Err(RbcError::StubBlockMismatch.into());
+        }
+        if payload_len == 0 {
+            return Err(RbcError::EmptyPayload.into());
+        }
+        let payload_bytes = super::proposals::block_payload_bytes(block);
+        if payload_len != payload_bytes.len() {
+            return Err(RbcError::StubPayloadLengthMismatch {
+                expected: payload_bytes.len(),
+                observed: payload_len,
+            }
+            .into());
+        }
+        let expected_payload_hash = Hash::new(&payload_bytes);
+        if payload_hash != expected_payload_hash {
+            return Err(RbcError::StubPayloadHashMismatch {
+                expected: expected_payload_hash,
+                observed: payload_hash,
+            }
+            .into());
+        }
 
         let chunking = RbcChunkingSpec::from_config(&self.config.rbc);
         let layout = chunking
@@ -2276,38 +2317,28 @@ impl Actor {
         )
         .map_err(RbcError::from)?;
         session.block_header = Some(block.header());
-        let roster = self.rbc_roster_for_session(key);
-        if !roster.is_empty() {
-            let mut topology = super::network_topology::Topology::new(roster.clone());
-            match self.leader_index_for(&mut topology, key.1, key.2) {
-                Ok(leader_index) => {
-                    let leader_index = u64::try_from(leader_index).unwrap_or(u64::MAX);
-                    if let Some(signature) = block
-                        .signatures()
-                        .find(|signature| signature.index() == leader_index)
-                    {
-                        session.leader_signature = Some(signature.clone());
-                    } else {
-                        debug!(
-                            height = key.1,
-                            view = key.2,
-                            expected = leader_index,
-                            "leader signature missing while inserting stub RBC session"
-                        );
-                    }
-                }
-                Err(err) => {
-                    debug!(
-                        height = key.1,
-                        view = key.2,
-                        ?err,
-                        "failed to derive leader index while inserting stub RBC session"
-                    );
-                }
-            }
+        let mut roster = self.rbc_roster_for_session(key);
+        if roster.is_empty() {
+            roster = self.ensure_rbc_session_roster(key);
         }
-        if session.leader_signature.is_none() {
-            session.leader_signature = block.signatures().next().cloned();
+        if !roster.is_empty() {
+            if let Some(signature) = block.signatures().find(|signature| {
+                self.rbc_leader_signature_matches_roster(
+                    &roster,
+                    key.1,
+                    key.2,
+                    block.header(),
+                    signature,
+                )
+            }) {
+                session.leader_signature = Some(signature.clone());
+            } else {
+                debug!(
+                    height = key.1,
+                    view = key.2,
+                    "verified leader signature missing while inserting stub RBC session"
+                );
+            }
         }
         self.subsystems.da_rbc.rbc.sessions.insert(key, session);
         if roster.is_empty() {
@@ -2335,27 +2366,19 @@ impl Actor {
         let leader_signature = if roster.is_empty() {
             None
         } else {
-            let mut topology = super::network_topology::Topology::new(roster);
-            match self.leader_index_for(&mut topology, key.1, key.2) {
-                Ok(leader_index) => {
-                    let leader_index = u64::try_from(leader_index).unwrap_or(u64::MAX);
-                    block
-                        .signatures()
-                        .find(|signature| signature.index() == leader_index)
-                        .cloned()
-                }
-                Err(err) => {
-                    debug!(
-                        height = key.1,
-                        view = key.2,
-                        ?err,
-                        "failed to derive leader index while hydrating RBC metadata from BlockCreated"
-                    );
-                    None
-                }
-            }
-        }
-        .or_else(|| block.signatures().next().cloned());
+            block
+                .signatures()
+                .find(|signature| {
+                    self.rbc_leader_signature_matches_roster(
+                        &roster,
+                        key.1,
+                        key.2,
+                        block.header(),
+                        signature,
+                    )
+                })
+                .cloned()
+        };
 
         let mut changed = false;
         if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get_mut(&key) {
@@ -2510,6 +2533,15 @@ impl Actor {
         };
         if height != key.1 || view != key.2 {
             return Ok(false);
+        }
+        if let Some(block) = self
+            .pending
+            .pending_blocks
+            .get(&key.0)
+            .filter(|pending| pending.height == key.1 && pending.view == key.2)
+            .map(|pending| pending.block.clone())
+        {
+            self.populate_rbc_session_metadata_from_block(key, &block);
         }
         self.hydrate_rbc_session_from_block(key, &payload_bytes, payload_hash, sender)?;
         Ok(true)
@@ -7210,35 +7242,24 @@ impl Actor {
                             if session.leader_signature.is_none() {
                                 let roster = self.rbc_roster_for_session(key);
                                 if !roster.is_empty() {
-                                    let mut topology =
-                                        super::network_topology::Topology::new(roster);
-                                    match self.leader_index_for(&mut topology, key.1, key.2) {
-                                        Ok(leader_index) => {
-                                            let leader_index =
-                                                u64::try_from(leader_index).unwrap_or(u64::MAX);
-                                            if let Some(signature) = pending
-                                                .block
-                                                .signatures()
-                                                .find(|signature| signature.index() == leader_index)
-                                            {
-                                                session.leader_signature = Some(signature.clone());
-                                            } else {
-                                                debug!(
-                                                    height = key.1,
-                                                    view = key.2,
-                                                    expected = leader_index,
-                                                    "leader signature missing after RBC seed"
-                                                );
-                                            }
-                                        }
-                                        Err(err) => {
-                                            debug!(
-                                                height = key.1,
-                                                view = key.2,
-                                                ?err,
-                                                "failed to derive leader index after RBC seed"
-                                            );
-                                        }
+                                    if let Some(signature) =
+                                        pending.block.signatures().find(|signature| {
+                                            self.rbc_leader_signature_matches_roster(
+                                                &roster,
+                                                key.1,
+                                                key.2,
+                                                pending.block.header(),
+                                                signature,
+                                            )
+                                        })
+                                    {
+                                        session.leader_signature = Some(signature.clone());
+                                    } else {
+                                        debug!(
+                                            height = key.1,
+                                            view = key.2,
+                                            "verified leader signature missing after RBC seed"
+                                        );
                                     }
                                 }
                             }

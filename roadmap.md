@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-06-10
+Last updated: 2026-06-11
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 The detailed engineering backlog lives in
@@ -10748,18 +10748,35 @@ fixture corridor into broader release validation.
   of re-entering the live state as `Delivered`, and lane/dataspace backlog
   accounting keeps their missing chunk pressure visible until complete verified
   payload bytes are present again. Positive-chunk incomplete records are still
-  retained for repair continuity. Committed-block cleanup now keeps retained RBC
-  summaries observable without synthesizing delivered status unless a matching
-  local payload and positive chunk shape back the summary. Live RBC complete
-  payload matches now also hash the reconstructed chunk bytes before satisfying
-  DA availability or suppressing payload hydration, and summary-only RBC status
-  rows no longer count as DA payload proof without byte-carrying live/recovered
-  session evidence. Delivered payload-byte telemetry also refuses complete chunk
-  sets whose reconstructed bytes do not match the advertised payload hash, so
-  mismatched payload material cannot consume or report delivered-byte metrics;
-  complete chunk sets without an advertised payload hash now follow the same
-  nonterminal/unreported path, including restart recovery of `delivered=true`
-  persisted sessions.
+  retained for repair continuity. Recovered RBC sessions now persist
+  lane/dataspace allocation ownership, including TEU totals, and both direct
+  session recovery plus the old status-summary adoption fallback reject
+  inconsistent lane/dataspace sums or over-pending backlog rows before they can
+  seed lane-local accounting. Direct disk validation also rejects incomplete
+  digest vectors whose root contradicts the expected or computed chunk root
+  before they can reload as repairable snapshots, and direct reconstruction
+  rejects persisted sessions whose explicit expected and computed roots
+  conflict. In-memory RBC status updates now reject the same impossible counters
+  and inconsistent allocation rows as persisted status recovery, clearing stale
+  same-key summaries instead of preserving old delivered-payload proof. RBC INIT
+  rejection coverage now also pins digest-count, digest-root, header-hash, and
+  invalid leader-signature/layout failures as no-cache paths, so malformed INITs
+  cannot leave session-roster or vote-roster evidence behind. Local
+  authoritative payload shortcuts now also hydrate-probe a cloned session before
+  satisfying missing-chunk progress, so a matching local payload hash cannot
+  accept READY/DELIVER progress when the advertised RBC chunk root, digest
+  vector, or layout contradicts deterministic local chunking.
+  Committed-block cleanup now keeps retained RBC summaries observable without
+  synthesizing delivered status unless a matching local payload and positive
+  chunk shape back the summary. Live RBC complete payload matches now also hash
+  the reconstructed chunk bytes before satisfying DA availability or suppressing
+  payload hydration, and summary-only RBC status rows no longer count as DA
+  payload proof without byte-carrying live/recovered session evidence. Delivered
+  payload-byte telemetry also refuses complete chunk sets whose reconstructed
+  bytes do not match the advertised payload hash, so mismatched payload material
+  cannot consume or report delivered-byte metrics; complete chunk sets without an
+  advertised payload hash now follow the same nonterminal/unreported path,
+  including restart recovery of `delivered=true` persisted sessions.
   RS16 layout payload-size metadata alone is no longer accepted as
   authoritative delivered-byte fallback evidence; incomplete delivered sessions
   must have local block payload bytes tied to the same height, view, and payload
@@ -10813,8 +10830,11 @@ fixture corridor into broader release validation.
 	  metrics or consume the once-only telemetry marker. The delivered-payload byte
 	  TLA gate now also covers invalid-session, missing-hash, invalid-shape, and
 	  payload-mismatch fallback rejection, and the actor-level local-payload
-	  telemetry fallback now uses the same invalid-shape guard before status,
-	  cleanup, or DELIVER emission can record bytes.
+	  telemetry fallback now uses the same invalid-shape and cloned
+	  hydration-probe chunk-metadata guard before status, cleanup, or DELIVER
+	  emission can record bytes; matching local payload hashes alone no longer
+	  satisfy delivered-byte telemetry when advertised roots, digest vectors, or
+	  layouts contradict deterministic local chunking.
 	  Live maintenance now carries that invalid-shape invariant through READY and
 	  DELIVER emission, rebroadcast scheduling, and operator backlog accounting:
 	  malformed zero-total or over-counted sessions first try local-payload

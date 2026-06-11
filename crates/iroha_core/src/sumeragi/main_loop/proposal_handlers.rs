@@ -1743,9 +1743,16 @@ impl Actor {
                     .or_else(|| session.chunk_root())?;
                 let leader_signature = block
                     .signatures()
-                    .find(|signature| signature.index() == u64::from(proposal.header.proposer))
-                    .cloned()
-                    .or_else(|| block.signatures().next().cloned())?;
+                    .find(|signature| {
+                        self.rbc_leader_signature_matches_roster(
+                            &roster,
+                            key.1,
+                            key.2,
+                            block.header(),
+                            signature,
+                        )
+                    })
+                    .cloned()?;
                 Some(RbcInit {
                     block_hash: key.0,
                     height: key.1,
@@ -1799,26 +1806,6 @@ impl Actor {
             );
             return None;
         }
-        let leader_signature = block
-            .signatures()
-            .find(|signature| signature.index() == u64::from(proposal.header.proposer))
-            .cloned()
-            .or_else(|| {
-                let signature = (rebuilt_init.leader_signature.index()
-                    == u64::from(proposal.header.proposer))
-                .then(|| rebuilt_init.leader_signature.clone())
-                .or_else(|| block.signatures().next().cloned());
-                if signature.is_some() {
-                    debug!(
-                        height = header.height().get(),
-                        view = header.view_change_index(),
-                        block = %block.hash(),
-                        proposer = proposal.header.proposer,
-                        "falling back to first block signature while building frontier BlockCreated manifest"
-                    );
-                }
-                signature
-            })?;
         let frontier = super::message::BlockCreatedFrontierInfo {
             highest_qc: proposal.header.highest_qc,
             payload_hash,
@@ -1828,7 +1815,7 @@ impl Actor {
             total_chunks: rebuilt_init.total_chunks,
             chunk_digests: rebuilt_init.chunk_digests,
             chunk_root: rebuilt_init.chunk_root,
-            leader_signature,
+            leader_signature: rebuilt_init.leader_signature,
         };
         Some(super::message::BlockCreated::with_frontier(
             block.clone(),
