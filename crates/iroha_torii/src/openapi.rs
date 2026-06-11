@@ -664,7 +664,7 @@ fn offline_paths() -> Map {
         Value::Object(json_get_operation(
             "Offline",
             "Report Offline feature readiness.",
-            "Returns readiness signals for the SDK-backed Kagemusha ABI-7 bearer-cash runtime.",
+            "Returns readiness signals for the SDK-backed recursive compact Kagemusha native bridge runtime.",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
@@ -674,7 +674,7 @@ fn offline_paths() -> Map {
         Value::Object(json_get_operation(
             "Offline",
             "Report Offline V2 feature readiness.",
-            "Returns readiness signals for the SDK-backed Kagemusha ABI-7 bearer-cash runtime.",
+            "Returns readiness signals for the SDK-backed recursive compact Kagemusha native bridge runtime.",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),

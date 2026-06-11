@@ -308,7 +308,7 @@ class OfflineNoteTest {
             "checked_prefold_v1",
             KagemushaRecursiveSpendProver.preferredMode(false).wireName,
         )
-        assertEquals(6, KagemushaRecursiveSpendProver.REQUIRED_BRIDGE_ABI_VERSION)
+        assertEquals(6, KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION)
         assertEquals(
             "kagemusha-recursive-aggregation-v1",
             KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
@@ -327,7 +327,7 @@ class OfflineNoteTest {
         assertTrue(
             KagemushaRecursiveSpendProver.detectNativeAvailability(
                 loadLibrary = {},
-                bridgeAbiVersion = { 6 },
+                nativeBridgeAbiVersionProbe = { 6 },
                 probeSymbol = {
                     KagemushaRecursiveSpendProver.expectIllegalArgumentProbe {
                         throw IllegalArgumentException("empty archive probe")
@@ -338,42 +338,42 @@ class OfflineNoteTest {
         assertFalse(
             KagemushaRecursiveSpendProver.detectNativeAvailability(
                 loadLibrary = {},
-                bridgeAbiVersion = { 6 },
+                nativeBridgeAbiVersionProbe = { 6 },
                 probeSymbol = { false },
             ),
         )
         assertFalse(
             KagemushaRecursiveSpendProver.detectNativeAvailability(
                 loadLibrary = {},
-                bridgeAbiVersion = { 5 },
+                nativeBridgeAbiVersionProbe = { 5 },
                 probeSymbol = { true },
             ),
         )
         assertFalse(
             KagemushaRecursiveSpendProver.detectNativeAvailability(
                 loadLibrary = {},
-                bridgeAbiVersion = { throw IllegalArgumentException("broken ABI probe") },
+                nativeBridgeAbiVersionProbe = { throw IllegalArgumentException("broken ABI probe") },
                 probeSymbol = { error("probe must not run") },
             ),
         )
         assertFalse(
             KagemushaRecursiveSpendProver.detectNativeAvailability(
                 loadLibrary = { throw UnsatisfiedLinkError("missing library") },
-                bridgeAbiVersion = { 6 },
+                nativeBridgeAbiVersionProbe = { 6 },
                 probeSymbol = { true },
             ),
         )
         assertFalse(
             KagemushaRecursiveSpendProver.detectNativeAvailability(
                 loadLibrary = {},
-                bridgeAbiVersion = { 6 },
+                nativeBridgeAbiVersionProbe = { 6 },
                 probeSymbol = { throw UnsatisfiedLinkError("missing recursive spend symbol") },
             ),
         )
         assertFalse(
             KagemushaRecursiveSpendProver.detectNativeAvailability(
                 loadLibrary = {},
-                bridgeAbiVersion = { 6 },
+                nativeBridgeAbiVersionProbe = { 6 },
                 probeSymbol = { throw SecurityException("native bridge denied") },
             ),
         )

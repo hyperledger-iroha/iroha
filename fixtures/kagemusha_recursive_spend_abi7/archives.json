@@ -1,7 +1,7 @@
 {
   "schema": "iroha.kagemusha.recursive_spend.abi7.archive_fixtures.v1",
   "fixture_kind": "native_bridge_norito_archives",
-  "bridge_abi_version": 7,
+  "native_bridge_abi_version": 7,
   "archives": [
     {
       "name": "append_bundle",

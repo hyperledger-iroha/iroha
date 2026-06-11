@@ -21,7 +21,7 @@ class KagemushaRecursiveSpendProverTest {
 
     @Test
     fun exposesStableModesAndCircuitIds() {
-        assertEquals(6, KagemushaRecursiveSpendProver.REQUIRED_BRIDGE_ABI_VERSION)
+        assertEquals(6, KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION)
         assertEquals(
             "kagemusha-recursive-aggregation-v1",
             KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
@@ -540,7 +540,7 @@ class KagemushaRecursiveSpendProverTest {
             KagemushaRecursiveSpendProver.Mode.CHECKED_PREFOLD_V1,
             KagemushaRecursiveSpendProver.preferredMode(false),
         )
-        assertEquals(7, KagemushaRecursiveCompactPaymentTokenProver.REQUIRED_BRIDGE_ABI_VERSION)
+        assertEquals(7, KagemushaRecursiveCompactPaymentTokenProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION)
         assertEquals(
             "kagemusha-recursive-compact-v1",
             KagemushaRecursiveCompactPaymentTokenProver.RECURSIVE_COMPACT_CIRCUIT_ID_V1,
@@ -955,6 +955,26 @@ class KagemushaRecursiveSpendProverTest {
                     KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND,
                     appendVerifierKey,
                     appendProvingKeyArchive,
+                )
+            }.message,
+        )
+        val whitespaceCidVerifierKey = lineageVerifierKey(
+            " ${KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1} ",
+            0xa5.toByte(),
+        )
+        val whitespaceCidProvingKeyArchive = lineageProvingKeyArchive(
+            KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+            whitespaceCidVerifierKey,
+            0xa6.toByte(),
+        )
+        assertEquals(
+            "lineage_verifier_key",
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
+                    2,
+                    KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND,
+                    whitespaceCidVerifierKey,
+                    whitespaceCidProvingKeyArchive,
                 )
             }.message,
         )
@@ -1525,7 +1545,7 @@ class KagemushaRecursiveSpendProverTest {
         assertContains(manifest, "\"schema\": \"iroha.kagemusha.recursive_spend.abi6.fixture_manifest.v1\"")
         assertContains(
             manifest,
-            "\"bridge_abi_version\": ${KagemushaRecursiveSpendProver.REQUIRED_BRIDGE_ABI_VERSION}",
+            "\"native_bridge_abi_version\": ${KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION}",
         )
         assertContains(manifest, "\"operation_count\": 9")
         assertContains(
@@ -1909,85 +1929,85 @@ class KagemushaRecursiveSpendProverTest {
         assertTrue(
             KagemushaRecursiveSpendProver.detectNativeAvailability(
                 loadLibrary = {},
-                bridgeAbiVersion = { 6 },
+                nativeBridgeAbiVersionProbe = { 6 },
                 probeSymbol = { true },
             ),
         )
         assertTrue(
             KagemushaRecursiveSpendProver.detectNativeAvailability(
                 loadLibrary = {},
-                bridgeAbiVersion = { 7 },
+                nativeBridgeAbiVersionProbe = { 7 },
                 probeSymbol = { true },
             ),
         )
         assertFalse(
             KagemushaRecursiveSpendProver.detectNativeAvailability(
                 loadLibrary = {},
-                bridgeAbiVersion = { 6 },
+                nativeBridgeAbiVersionProbe = { 6 },
                 probeSymbol = { true },
-                requiredBridgeAbiVersion = 7,
+                requiredNativeBridgeAbiVersion = 7,
             ),
         )
         assertFalse(
             KagemushaRecursiveSpendProver.detectNativeAvailability(
                 loadLibrary = {},
-                bridgeAbiVersion = { 5 },
+                nativeBridgeAbiVersionProbe = { 5 },
                 probeSymbol = { true },
             ),
         )
         assertFalse(
             KagemushaRecursiveSpendProver.detectNativeAvailability(
                 loadLibrary = {},
-                bridgeAbiVersion = { 6 },
+                nativeBridgeAbiVersionProbe = { 6 },
                 probeSymbol = { false },
             ),
         )
         assertFalse(
             KagemushaRecursiveSpendProver.detectNativeAvailability(
                 loadLibrary = { throw UnsatisfiedLinkError("missing bridge") },
-                bridgeAbiVersion = { 6 },
+                nativeBridgeAbiVersionProbe = { 6 },
                 probeSymbol = { true },
             ),
         )
         assertFalse(
             KagemushaRecursiveSpendProver.detectNativeAvailability(
                 loadLibrary = {},
-                bridgeAbiVersion = { throw UnsatisfiedLinkError("missing abi symbol") },
+                nativeBridgeAbiVersionProbe = { throw UnsatisfiedLinkError("missing abi symbol") },
                 probeSymbol = { true },
             ),
         )
         assertFalse(
             KagemushaRecursiveSpendProver.detectNativeAvailability(
                 loadLibrary = {},
-                bridgeAbiVersion = { 6 },
+                nativeBridgeAbiVersionProbe = { 6 },
                 probeSymbol = { throw UnsatisfiedLinkError("missing recursive symbol") },
             ),
         )
         assertFalse(
             KagemushaRecursiveSpendProver.detectNativeAvailability(
                 loadLibrary = { throw IllegalArgumentException("bad bridge load") },
-                bridgeAbiVersion = { 6 },
+                nativeBridgeAbiVersionProbe = { 6 },
                 probeSymbol = { true },
             ),
         )
         assertFalse(
             KagemushaRecursiveSpendProver.detectNativeAvailability(
                 loadLibrary = {},
-                bridgeAbiVersion = { throw IllegalArgumentException("bad abi probe") },
+                nativeBridgeAbiVersionProbe = { throw IllegalArgumentException("bad abi probe") },
                 probeSymbol = { true },
             ),
         )
         assertFalse(
             KagemushaRecursiveSpendProver.detectNativeAvailability(
                 loadLibrary = {},
-                bridgeAbiVersion = { 6 },
+                nativeBridgeAbiVersionProbe = { 6 },
                 probeSymbol = { throw IllegalArgumentException("bad malformed probe") },
             ),
         )
         assertFalse(
             KagemushaRecursiveSpendProver.detectNativeAvailability(
                 loadLibrary = {},
-                bridgeAbiVersion = { 6 },
+                nativeBridgeAbiVersionProbe = { 6 },
                 probeSymbol = { throw IllegalStateException("bad malformed probe") },
             ),
         )

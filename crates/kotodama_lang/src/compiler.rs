@@ -775,9 +775,10 @@ mod tests {
     use super::{
         AUTHORITY_ACCOUNT_KEY, Compiler, CompilerMode, CompilerOptions, ContractFeature,
         DEFAULT_MAX_CYCLES, GLOBAL_WILDCARD_KEY, HINT_SKIP_CONTRACT_CALL_TARGET,
-        HINT_SKIP_LITERAL_TRIGGER_SPEC_DECODE, NFT_COARSE_KEY, WIDE_IMM_MAX, emit_addi,
-        emit_load64, emit_store64, patch_pointer_literal_stub, pointer_type_for_kind,
-        reserve_pointer_literal_stub, retain_taira_supported_access_key, stack_slot_offset_bytes,
+        HINT_SKIP_DYNAMIC_STATE_PATH, HINT_SKIP_LITERAL_TRIGGER_SPEC_DECODE, HINT_SKIP_OPAQUE_ISI,
+        NFT_COARSE_KEY, WIDE_IMM_MAX, emit_addi, emit_load64, emit_store64,
+        patch_pointer_literal_stub, pointer_type_for_kind, reserve_pointer_literal_stub,
+        retain_taira_supported_access_key, stack_slot_offset_bytes,
     };
     use crate::{ast::ContractMeta, ir, parser::parse, semantic::analyze};
     use crate::{encoding, instruction, metadata::ProgramMetadata, pointer_abi::PointerType};
@@ -8655,19 +8656,30 @@ seiyaku Test {
     }
 
     #[test]
-    fn production_rejects_incomplete_access_hints() {
+    fn production_accepts_dynamic_state_path_access_fallback() {
         let src = r#"
 seiyaku Test {
-  kotoage fn register() permission(Admin) {
-    register_peer(json("{}"));
+  kotoage fn read(path: Name) {
+    let _x = state_get(path);
   }
 }
 "#;
         let compiler = Compiler::new();
-        let err = compiler
+        let (_bytes, manifest) = compiler
             .compile_source_with_manifest(src)
-            .expect_err("production should reject incomplete access metadata");
-        assert!(err.contains("E_ACCESS_INCOMPLETE"));
+            .expect("dynamic state fallback should be deployable in production");
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        let read = entrypoints
+            .iter()
+            .find(|entry| entry.name == "read")
+            .expect("read entrypoint");
+        assert_taira_supported_access_keys(&read.read_keys);
+        assert_taira_supported_access_keys(&read.write_keys);
+        assert_eq!(read.access_hints_complete, Some(false));
+        assert_eq!(
+            read.access_hints_skipped,
+            vec![HINT_SKIP_DYNAMIC_STATE_PATH.to_string()]
+        );
     }
 
     #[test]
@@ -8711,6 +8723,33 @@ seiyaku Test {
         assert_eq!(
             relay.access_hints_skipped,
             vec![HINT_SKIP_CONTRACT_CALL_TARGET.to_string()]
+        );
+    }
+
+    #[test]
+    fn production_accepts_opaque_isi_access_fallback() {
+        let src = r#"
+seiyaku Test {
+  kotoage fn register() permission(Admin) {
+    register_peer(json("{}"));
+  }
+}
+"#;
+        let compiler = Compiler::new();
+        let (_bytes, manifest) = compiler
+            .compile_source_with_manifest(src)
+            .expect("opaque ISI fallback should be deployable in production");
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        let register = entrypoints
+            .iter()
+            .find(|entry| entry.name == "register")
+            .expect("register entrypoint");
+        assert_taira_supported_access_keys(&register.read_keys);
+        assert_taira_supported_access_keys(&register.write_keys);
+        assert_eq!(register.access_hints_complete, Some(false));
+        assert_eq!(
+            register.access_hints_skipped,
+            vec![HINT_SKIP_OPAQUE_ISI.to_string()]
         );
     }
 

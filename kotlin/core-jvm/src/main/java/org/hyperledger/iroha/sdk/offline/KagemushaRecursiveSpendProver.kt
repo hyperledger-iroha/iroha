@@ -14,8 +14,8 @@ class KagemushaRecursiveSpendProver private constructor() {
     }
 
     companion object {
-        const val REQUIRED_BRIDGE_ABI_VERSION: Int = 6
-        const val RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION: Int = 7
+        const val REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 6
+        const val RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 7
         const val RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 =
             "kagemusha-recursive-aggregation-v1"
         const val RECURSIVE_COMPACT_CIRCUIT_ID_V1 =
@@ -294,7 +294,7 @@ class KagemushaRecursiveSpendProver private constructor() {
                         ) {
                             "lineage_verifier_key"
                         }
-                        val decoded = payload.toString(Charsets.UTF_8).trim()
+                        val decoded = payload.toString(Charsets.UTF_8)
                         require(decoded.isNotEmpty()) {
                             "lineage_verifier_key"
                         }
@@ -825,7 +825,7 @@ class KagemushaRecursiveSpendProver private constructor() {
         private fun loadLibrary(): Boolean =
             detectNativeAvailability(
                 loadLibrary = { System.loadLibrary(LIBRARY_NAME) },
-                bridgeAbiVersion = { nativeBridgeAbiVersion() },
+                nativeBridgeAbiVersionProbe = { nativeBridgeAbiVersion() },
                 probeSymbol = { probeRequiredNativeSymbols() },
             )
 
@@ -861,9 +861,9 @@ class KagemushaRecursiveSpendProver private constructor() {
 
         internal fun detectNativeAvailability(
             loadLibrary: () -> Unit,
-            bridgeAbiVersion: () -> Int,
+            nativeBridgeAbiVersionProbe: () -> Int,
             probeSymbol: () -> Boolean,
-            requiredBridgeAbiVersion: Int = REQUIRED_BRIDGE_ABI_VERSION,
+            requiredNativeBridgeAbiVersion: Int = REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
         ): Boolean {
             try {
                 loadLibrary()
@@ -873,13 +873,13 @@ class KagemushaRecursiveSpendProver private constructor() {
                 return false
             }
             val abiVersion = try {
-                bridgeAbiVersion()
+                nativeBridgeAbiVersionProbe()
             } catch (_: UnsatisfiedLinkError) {
                 return false
             } catch (_: RuntimeException) {
                 return false
             }
-            if (abiVersion < requiredBridgeAbiVersion) {
+            if (abiVersion < requiredNativeBridgeAbiVersion) {
                 return false
             }
             return try {

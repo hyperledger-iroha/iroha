@@ -774,11 +774,11 @@ def check_abi6_reserved_lineage(repo_root: Path) -> dict[str, Any]:
     manifest, blockers = _load_json(manifest_path)
     if manifest is not None:
         details["schema"] = manifest.get("schema")
-        details["bridge_abi_version"] = manifest.get("bridge_abi_version")
+        details["native_bridge_abi_version"] = manifest.get("native_bridge_abi_version")
         details["operation_count"] = manifest.get("operation_count")
         if manifest.get("schema") != "iroha.kagemusha.recursive_spend.abi6.fixture_manifest.v1":
             blockers.append(blocker("abi6_manifest_schema", "ABI-6 manifest schema mismatch"))
-        if manifest.get("bridge_abi_version") != 6:
+        if manifest.get("native_bridge_abi_version") != 6:
             blockers.append(
                 blocker("abi6_manifest_bridge_version", "ABI-6 manifest must advertise bridge ABI 6")
             )

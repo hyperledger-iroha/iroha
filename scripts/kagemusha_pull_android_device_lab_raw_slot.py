@@ -375,11 +375,15 @@ def _validate_harness_result(
         errors.append("attestation/harness-result.json alias must be a non-empty string")
     elif alias != alias.strip():
         errors.append("attestation/harness-result.json alias must not have surrounding whitespace")
+    elif device_lab._contains_control_character(alias):
+        errors.append("attestation/harness-result.json alias must not contain control characters")
     elif device_lab.SECRET_RE.search(alias):
         errors.append("attestation/harness-result.json alias must not contain secret-looking material")
     for key in ("attestation_security_level", "keymaster_security_level"):
         level = harness.get(key)
-        if not isinstance(level, str) or level not in device_lab.STRONGBOX_LEVELS:
+        if isinstance(level, str) and device_lab._contains_control_character(level):
+            errors.append(f"attestation/harness-result.json {key} must not contain control characters")
+        elif not isinstance(level, str) or level not in device_lab.STRONGBOX_LEVELS:
             errors.append(f"attestation/harness-result.json {key} must be STRONGBOX")
     if harness.get("strongbox_attestation") is not True:
         errors.append("attestation/harness-result.json strongbox_attestation must be true")
@@ -398,6 +402,9 @@ def _validate_harness_result(
     challenge_hex = harness.get("challenge_hex")
     if not isinstance(challenge_hex, str) or not challenge_hex.strip():
         errors.append("attestation/harness-result.json challenge_hex must be a non-empty string")
+        return
+    if device_lab._contains_control_character(challenge_hex):
+        errors.append("attestation/harness-result.json challenge_hex must not contain control characters")
         return
     normalized = "".join(challenge_hex.split()).lower()
     if challenge_hex != normalized:

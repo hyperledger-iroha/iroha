@@ -3740,7 +3740,7 @@ def check_shared_fixture_manifest():
     }
     if manifest.get("schema") != "iroha.kagemusha.recursive_spend.abi6.fixture_manifest.v1":
         fail(f"{SHARED_FIXTURE_PATH} has the wrong schema")
-    if manifest.get("bridge_abi_version") != 6:
+    if manifest.get("native_bridge_abi_version") != 6:
         fail(f"{SHARED_FIXTURE_PATH} must pin bridge ABI 6")
     archive_fixture = manifest.get("archive_fixture", {})
     if archive_fixture.get("path") != SHARED_ARCHIVE_FIXTURE_PATH:
@@ -3837,7 +3837,7 @@ def check_shared_archive_fixture_manifest():
     manifest = shared_archive_fixture_manifest()
     if manifest.get("schema") != "iroha.kagemusha.recursive_spend.abi6.archive_fixtures.v1":
         fail(f"{SHARED_ARCHIVE_FIXTURE_PATH} has the wrong schema")
-    if manifest.get("bridge_abi_version") != 6:
+    if manifest.get("native_bridge_abi_version") != 6:
         fail(f"{SHARED_ARCHIVE_FIXTURE_PATH} must pin bridge ABI 6")
     archives = manifest.get("archives")
     if not isinstance(archives, list):

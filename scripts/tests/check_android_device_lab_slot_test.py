@@ -4103,6 +4103,34 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertIsNone(slot_path)
         self.assertIn("telemetry/telemetry.json slot_id must match slot id", errors)
 
+    def test_kagemusha_android_raw_puller_rejects_whitespace_normalized_telemetry_slot(
+        self,
+    ) -> None:
+        telemetry = json.loads(raw_slot_artifacts("pixel6")["telemetry/telemetry.json"])
+        telemetry["slot_id"] = " pixel6 "
+        with tempfile.TemporaryDirectory() as temp:
+            out_root = Path(temp) / "raw"
+            tar_bytes = raw_slot_tar_bytes(
+                "pixel6",
+                omit_files={"telemetry/telemetry.json"},
+                extra_files={
+                    "pixel6/telemetry/telemetry.json": json.dumps(
+                        telemetry,
+                        sort_keys=True,
+                    ).encode("utf-8")
+                    + b"\n",
+                },
+            )
+
+            status, slot_path, errors = raw_puller.pull_raw_slot(
+                raw_pull_args(out_root),
+                runner=fake_raw_pull_runner(tar_bytes, "pixel6"),
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIsNone(slot_path)
+        self.assertIn("telemetry/telemetry.json slot_id must match slot id", errors)
+
     def test_kagemusha_android_raw_puller_rejects_d2d_online_handoff(self) -> None:
         d2d = json.loads(raw_slot_artifacts("pixel6")["handoff/d2d-payment.json"])
         d2d["transport_offline"] = False
@@ -4288,6 +4316,44 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             "attestation/harness-result.json challenge_hex must be lowercase hexadecimal without whitespace",
             errors,
         )
+
+    def test_kagemusha_android_raw_puller_rejects_control_harness_strings(
+        self,
+    ) -> None:
+        harness = {
+            "alias": "android-keystore-alias\x1b[31m",
+            "attestation_security_level": "STRONG_BOX",
+            "keymaster_security_level": "STRONG_BOX",
+            "strongbox_attestation": True,
+            "challenge_hex": "01020304",
+            "chain_length": 4,
+        }
+        with tempfile.TemporaryDirectory() as temp:
+            out_root = Path(temp) / "raw"
+            tar_bytes = raw_slot_tar_bytes(
+                "pixel6",
+                omit_files={"attestation/harness-result.json"},
+                extra_files={
+                    "pixel6/attestation/harness-result.json": json.dumps(
+                        harness,
+                        sort_keys=True,
+                    ).encode("utf-8")
+                    + b"\n",
+                },
+            )
+
+            status, slot_path, errors = raw_puller.pull_raw_slot(
+                raw_pull_args(out_root),
+                runner=fake_raw_pull_runner(tar_bytes, "pixel6"),
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIsNone(slot_path)
+        self.assertIn(
+            "attestation/harness-result.json alias must not contain control characters",
+            errors,
+        )
+        self.assertNotIn("\x1b", "\n".join(errors))
 
     def test_kagemusha_android_raw_puller_rejects_harness_chain_length_mismatch(
         self,
@@ -4524,6 +4590,37 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             "attestation/harness-result.json challenge_hex must be lowercase hexadecimal without whitespace",
             report["errors"],
         )
+
+    def test_scan_slot_rejects_control_attestation_harness_strings(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            signer = create_test_signer(root / "keys")
+            slot = create_slot(
+                root,
+                "pixel6",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+                signer,
+            )
+            harness_path = slot / "attestation" / "harness-result.json"
+            harness = json.loads(harness_path.read_text(encoding="utf-8"))
+            harness["alias"] = "android-keystore-alias\x1b[31m"
+            write_json(harness_path, harness)
+            resign_signed_evidence_artifacts(slot, signer)
+
+            report = device_lab.scan_slot(
+                slot,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys=trusted_signers_for(signer),
+            )
+
+        self.assertEqual(report["status"], "error")
+        self.assertIn(
+            "attestation/harness-result.json alias must not contain control characters",
+            report["errors"],
+        )
+        self.assertNotIn("\x1b", "\n".join(report["errors"]))
 
     def test_scan_slot_rejects_sha256_drift(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -5566,6 +5663,31 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertNotIn("[device-lab] slot a: ok", rendered)
         self.assertNotIn("Traceback", rendered)
 
+    def test_explicit_slot_id_rejects_control_character_before_path_join(self) -> None:
+        unsafe_slot_id = "slot-a\x1b[31m"
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "slots"
+            create_slot(root, unsafe_slot_id)
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                status = device_lab.main(
+                    [
+                        "--root",
+                        str(root),
+                        "--slot",
+                        unsafe_slot_id,
+                        "--require-slot",
+                    ]
+                )
+
+        self.assertEqual(status, 1)
+        rendered = stdout.getvalue() + stderr.getvalue()
+        self.assertIn("slot id 0 must not contain control characters", rendered)
+        self.assertNotIn(unsafe_slot_id, rendered)
+        self.assertNotIn("\x1b", rendered)
+        self.assertNotIn("Traceback", rendered)
+
     def test_explicit_secret_looking_slot_id_is_not_echoed(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / "slots"
@@ -5623,6 +5745,103 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertNotIn("token=supersecret", rendered)
         self.assertNotIn("token=supersecret", summary_text)
         self.assertNotIn("Traceback", rendered)
+
+    def test_discovered_whitespace_slot_directory_is_rejected_before_metadata(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "slots"
+            slot = create_slot(root, "slot a")
+            summary_path = Path(temp) / "summary.json"
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                status = device_lab.main(
+                    [
+                        "--root",
+                        str(root),
+                        "--require-slot",
+                        "--json-out",
+                        str(summary_path),
+                    ]
+            )
+            rendered = stdout.getvalue() + stderr.getvalue()
+            summary_text = summary_path.read_text(encoding="utf-8")
+            slot_still_exists = slot.exists()
+
+        self.assertEqual(status, 1)
+        self.assertIn("slot directory name must not contain whitespace", rendered)
+        self.assertIn("slot directory name must not contain whitespace", summary_text)
+        self.assertNotIn("[device-lab] slot a: ok", rendered)
+        self.assertNotIn("Traceback", rendered)
+        self.assertTrue(slot_still_exists)
+
+    def test_discovered_control_slot_directory_is_rejected_without_echo(
+        self,
+    ) -> None:
+        unsafe_slot_name = "slot-a\x1b[31m"
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "slots"
+            slot = create_slot(root, unsafe_slot_name)
+            summary_path = Path(temp) / "summary.json"
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                status = device_lab.main(
+                    [
+                        "--root",
+                        str(root),
+                        "--require-slot",
+                        "--json-out",
+                        str(summary_path),
+                    ]
+                )
+            rendered = stdout.getvalue() + stderr.getvalue()
+            summary_text = summary_path.read_text(encoding="utf-8")
+            slot_still_exists = slot.exists()
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "slot directory name must not contain control characters",
+            rendered,
+        )
+        self.assertIn(
+            "slot directory name must not contain control characters",
+            summary_text,
+        )
+        self.assertIn("<unsafe-slot-name>", rendered)
+        self.assertIn("<unsafe-slot-name>", summary_text)
+        self.assertNotIn(unsafe_slot_name, rendered)
+        self.assertNotIn(unsafe_slot_name, summary_text)
+        self.assertNotIn("\x1b", rendered)
+        self.assertNotIn("\x1b", summary_text)
+        self.assertNotIn("Traceback", rendered)
+        self.assertTrue(slot_still_exists)
+
+    def test_scan_slot_rejects_control_slot_directory_before_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            slot = create_slot(Path(temp), "slot-a\x1b[31m")
+
+            report = device_lab.scan_slot(slot)
+
+        self.assertEqual(report["status"], "error")
+        self.assertEqual(report["slot"], "<unsafe-slot-name>")
+        self.assertEqual(
+            report["errors"],
+            ["slot directory name must not contain control characters"],
+        )
+
+    def test_scan_slot_rejects_newline_slot_directory_before_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            slot = create_slot(Path(temp), "slot-a\n")
+
+            report = device_lab.scan_slot(slot)
+
+        self.assertEqual(report["status"], "error")
+        self.assertEqual(
+            report["errors"],
+            ["slot directory name must not contain whitespace"],
+        )
 
     def test_scan_slot_redacts_secret_looking_manifest_paths(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -8094,6 +8313,101 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             report["errors"],
         )
 
+    def test_production_metadata_rejects_whitespace_normalized_signed_evidence_path(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            signer = create_test_signer(Path(temp))
+            trusted = trusted_signers_for(signer)
+            slot = create_slot(
+                Path(temp),
+                "pixel8",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                signer,
+            )
+            metadata_path = slot / "slot.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata["signed_evidence_artifact_path"] = (
+                " evidence/signed-evidence.json "
+            )
+            write_json(metadata_path, metadata)
+            rewrite_sha256sum(slot)
+
+            report = device_lab.scan_slot(
+                slot,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys=trusted,
+            )
+
+        self.assertEqual(report["status"], "error")
+        self.assertIn(
+            "slot.json signed_evidence_artifact_path must not contain surrounding whitespace",
+            report["errors"],
+        )
+
+    def test_production_metadata_rejects_control_signed_evidence_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            signer = create_test_signer(Path(temp))
+            trusted = trusted_signers_for(signer)
+            slot = create_slot(
+                Path(temp),
+                "pixel8",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                signer,
+            )
+            metadata_path = slot / "slot.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata["signed_evidence_artifact_path"] = (
+                "evidence/signed-evidence.json\x1b[31m"
+            )
+            write_json(metadata_path, metadata)
+            rewrite_sha256sum(slot)
+
+            report = device_lab.scan_slot(
+                slot,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys=trusted,
+            )
+
+        self.assertEqual(report["status"], "error")
+        self.assertIn(
+            "slot.json signed_evidence_artifact_path must not contain control characters",
+            report["errors"],
+        )
+        self.assertNotIn("\x1b", "\n".join(report["errors"]))
+
+    def test_production_metadata_rejects_whitespace_normalized_signed_evidence_digest(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            signer = create_test_signer(Path(temp))
+            trusted = trusted_signers_for(signer)
+            slot = create_slot(
+                Path(temp),
+                "pixel8",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                signer,
+            )
+            metadata_path = slot / "slot.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata["signed_evidence_artifact_sha256"] = (
+                f" {metadata['signed_evidence_artifact_sha256']} "
+            )
+            write_json(metadata_path, metadata)
+            rewrite_sha256sum(slot)
+
+            report = device_lab.scan_slot(
+                slot,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys=trusted,
+            )
+
+        self.assertEqual(report["status"], "error")
+        self.assertIn(
+            "slot.json signed_evidence_artifact_sha256 must not contain surrounding whitespace",
+            report["errors"],
+        )
+
     def test_production_metadata_rejects_signed_evidence_artifact_outside_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             signer = create_test_signer(Path(temp))
@@ -9087,6 +9401,61 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             report["errors"],
         )
 
+    def test_production_metadata_rejects_whitespace_normalized_attestation_slot_alias(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            signer = create_test_signer(Path(temp))
+            trusted = trusted_signers_for(signer)
+            slot = create_slot(
+                Path(temp),
+                "pixel8",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                signer,
+            )
+            attestation_path = slot / "attestation" / "result.json"
+            attestation = json.loads(attestation_path.read_text(encoding="utf-8"))
+            attestation["slot"] = f" {slot.name} "
+            write_json(attestation_path, attestation)
+            resign_signed_evidence_artifacts(slot, signer)
+
+            report = device_lab.scan_slot(
+                slot,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys=trusted,
+            )
+
+        self.assertEqual(report["status"], "error")
+        self.assertIn(
+            "attestation/result.json slot must not contain surrounding whitespace",
+            report["errors"],
+        )
+
+    def test_production_metadata_rejects_noncanonical_attestation_status(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            signer = create_test_signer(Path(temp))
+            trusted = trusted_signers_for(signer)
+            slot = create_slot(
+                Path(temp),
+                "pixel8",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                signer,
+            )
+            attestation_path = slot / "attestation" / "result.json"
+            attestation = json.loads(attestation_path.read_text(encoding="utf-8"))
+            attestation["status"] = "OK"
+            write_json(attestation_path, attestation)
+            resign_signed_evidence_artifacts(slot, signer)
+
+            report = device_lab.scan_slot(
+                slot,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys=trusted,
+            )
+
+        self.assertEqual(report["status"], "error")
+        self.assertIn("attestation/result.json status must be ok or passed", report["errors"])
+
     def test_production_metadata_rejects_attestation_result_without_strongbox(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             signer = create_test_signer(Path(temp))
@@ -9114,6 +9483,36 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertEqual(report["status"], "error")
         self.assertIn(
             "attestation/result.json must report STRONGBOX security level",
+            report["errors"],
+        )
+
+    def test_production_metadata_rejects_whitespace_normalized_attestation_strongbox_level(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            signer = create_test_signer(Path(temp))
+            trusted = trusted_signers_for(signer)
+            slot = create_slot(
+                Path(temp),
+                "pixel8",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                signer,
+            )
+            attestation_path = slot / "attestation" / "result.json"
+            attestation = json.loads(attestation_path.read_text(encoding="utf-8"))
+            attestation["keymint_security_level"] = " STRONGBOX "
+            write_json(attestation_path, attestation)
+            resign_signed_evidence_artifacts(slot, signer)
+
+            report = device_lab.scan_slot(
+                slot,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys=trusted,
+            )
+
+        self.assertEqual(report["status"], "error")
+        self.assertIn(
+            "attestation/result.json keymint_security_level must not contain surrounding whitespace",
             report["errors"],
         )
 
@@ -9167,6 +9566,38 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             report["errors"],
         )
 
+    def test_production_metadata_rejects_whitespace_normalized_attestation_report_binding(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            signer = create_test_signer(Path(temp))
+            trusted = trusted_signers_for(signer)
+            slot = create_slot(
+                Path(temp),
+                "pixel8",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                signer,
+            )
+            report_path = slot / "attestation" / "report.json"
+            attestation_report = json.loads(report_path.read_text(encoding="utf-8"))
+            attestation_report["device_fingerprint"] = (
+                f" {attestation_report['device_fingerprint']} "
+            )
+            write_json(report_path, attestation_report)
+            resign_signed_evidence_artifacts(slot, signer)
+
+            report = device_lab.scan_slot(
+                slot,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys=trusted,
+            )
+
+        self.assertEqual(report["status"], "error")
+        self.assertIn(
+            "attestation/report.json device_fingerprint must not contain surrounding whitespace",
+            report["errors"],
+        )
+
     def test_production_metadata_rejects_attestation_report_without_strongbox(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             signer = create_test_signer(Path(temp))
@@ -9192,6 +9623,37 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertEqual(report["status"], "error")
         self.assertIn(
             "attestation/report.json verification.keymint_security_level must be STRONGBOX",
+            report["errors"],
+        )
+
+    def test_production_metadata_rejects_whitespace_normalized_attestation_report_strongbox(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            signer = create_test_signer(Path(temp))
+            trusted = trusted_signers_for(signer)
+            slot = create_slot(
+                Path(temp),
+                "pixel8",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                signer,
+            )
+            report_path = slot / "attestation" / "report.json"
+            attestation_report = json.loads(report_path.read_text(encoding="utf-8"))
+            attestation_report["verification"]["keymint_security_level"] = " STRONGBOX "
+            write_json(report_path, attestation_report)
+            resign_signed_evidence_artifacts(slot, signer)
+
+            report = device_lab.scan_slot(
+                slot,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys=trusted,
+            )
+
+        self.assertEqual(report["status"], "error")
+        self.assertIn(
+            "attestation/report.json verification.keymint_security_level "
+            "must not contain surrounding whitespace",
             report["errors"],
         )
 
@@ -9270,6 +9732,36 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         )
         self.assertIn(
             "attestation/report.json verification.keymaster_security_level must be STRONGBOX",
+            report["errors"],
+        )
+
+    def test_production_metadata_rejects_noncanonical_attestation_report_status(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            signer = create_test_signer(Path(temp))
+            trusted = trusted_signers_for(signer)
+            slot = create_slot(
+                Path(temp),
+                "pixel8",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                signer,
+            )
+            report_path = slot / "attestation" / "report.json"
+            attestation_report = json.loads(report_path.read_text(encoding="utf-8"))
+            attestation_report["verification"]["status"] = "OK"
+            write_json(report_path, attestation_report)
+            resign_signed_evidence_artifacts(slot, signer)
+
+            report = device_lab.scan_slot(
+                slot,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys=trusted,
+            )
+
+        self.assertEqual(report["status"], "error")
+        self.assertIn(
+            "attestation/report.json verification.status must be ok or passed",
             report["errors"],
         )
 
@@ -9649,9 +10141,15 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             )
 
     def test_production_metadata_rejects_noncanonical_signed_evidence_timestamp(self) -> None:
-        for timestamp in (
-            "2026-06-06T00:00:00+00:00",
-            " 2026-06-06T00:00:00Z ",
+        for timestamp, expected_error in (
+            (
+                "2026-06-06T00:00:00+00:00",
+                "signed evidence artifact signed_at_utc must be canonical UTC YYYY-MM-DDTHH:MM:SSZ",
+            ),
+            (
+                " 2026-06-06T00:00:00Z ",
+                "signed evidence artifact signed_at_utc must not contain surrounding whitespace",
+            ),
         ):
             with self.subTest(timestamp=timestamp):
                 with tempfile.TemporaryDirectory() as temp:
@@ -9676,10 +10174,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                     )
 
                 self.assertEqual(report["status"], "error")
-                self.assertIn(
-                    "signed evidence artifact signed_at_utc must be canonical UTC YYYY-MM-DDTHH:MM:SSZ",
-                    report["errors"],
-                )
+                self.assertIn(expected_error, report["errors"])
 
     def test_production_metadata_rejects_signed_evidence_schema_drift(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -9732,6 +10227,102 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertEqual(report["status"], "error")
         self.assertIn(
             "signed evidence artifact device_family must match slot.json device_family",
+            report["errors"],
+        )
+
+    def test_production_metadata_rejects_whitespace_normalized_signed_evidence_slot_field(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            signer = create_test_signer(Path(temp))
+            trusted = trusted_signers_for(signer)
+            slot = create_slot(
+                Path(temp),
+                "pixel8",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                signer,
+            )
+            metadata = json.loads((slot / "slot.json").read_text(encoding="utf-8"))
+            mutate_signed_evidence(
+                slot,
+                lambda evidence: evidence.__setitem__(
+                    "device_family",
+                    f" {metadata['device_family']} ",
+                ),
+            )
+
+            report = device_lab.scan_slot(
+                slot,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys=trusted,
+            )
+
+        self.assertEqual(report["status"], "error")
+        self.assertIn(
+            "signed evidence artifact device_family must not contain surrounding whitespace",
+            report["errors"],
+        )
+
+    def test_production_metadata_rejects_control_signed_evidence_slot_field(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            signer = create_test_signer(Path(temp))
+            trusted = trusted_signers_for(signer)
+            slot = create_slot(
+                Path(temp),
+                "pixel8",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                signer,
+            )
+            metadata = json.loads((slot / "slot.json").read_text(encoding="utf-8"))
+            mutate_signed_evidence(
+                slot,
+                lambda evidence: evidence.__setitem__(
+                    "device_family",
+                    f"{metadata['device_family']}\x1b[31m",
+                ),
+            )
+
+            report = device_lab.scan_slot(
+                slot,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys=trusted,
+            )
+
+        self.assertEqual(report["status"], "error")
+        self.assertIn(
+            "signed evidence artifact device_family must not contain control characters",
+            report["errors"],
+        )
+        self.assertNotIn("\x1b", "\n".join(report["errors"]))
+
+    def test_production_metadata_rejects_whitespace_normalized_signed_evidence_algorithm(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            signer = create_test_signer(Path(temp))
+            trusted = trusted_signers_for(signer)
+            slot = create_slot(
+                Path(temp),
+                "pixel8",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                signer,
+            )
+            mutate_signed_evidence(
+                slot,
+                lambda evidence: evidence.__setitem__("signature_algorithm", " ed25519 "),
+            )
+
+            report = device_lab.scan_slot(
+                slot,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys=trusted,
+            )
+
+        self.assertEqual(report["status"], "error")
+        self.assertIn(
+            "signed evidence artifact signature_algorithm must not contain surrounding whitespace",
             report["errors"],
         )
 

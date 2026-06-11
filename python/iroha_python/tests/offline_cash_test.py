@@ -125,11 +125,11 @@ def test_offline_cash_snapshot_requires_cached_issuer_key() -> None:
         asset_definition_id="pkr#sbp",
         offline_payments_enabled=True,
         issuer_public_key_base64="issuer-key",
-        bridge_abi_version=7,
+        native_bridge_abi_version=7,
         created_at_ms=100,
         expires_at_ms=1000,
     )
-    snapshot.require_usable_for_offline_exchange(now_ms=999, required_bridge_abi_version=7)
+    snapshot.require_usable_for_offline_exchange(now_ms=999, required_native_bridge_abi_version=7)
 
     missing_key = OfflineCashConfigurationSnapshot(
         chain_id="00000042",
@@ -146,10 +146,10 @@ def test_offline_cash_snapshot_requires_cached_issuer_key() -> None:
         asset_definition_id="pkr#sbp",
         offline_payments_enabled=False,
         issuer_public_key_base64="issuer-key",
-        bridge_abi_version=7,
+        native_bridge_abi_version=7,
     )
     with pytest.raises(OfflineCashConfigurationSnapshotError) as error:
-        disabled.require_usable_for_offline_exchange(now_ms=200, required_bridge_abi_version=7)
+        disabled.require_usable_for_offline_exchange(now_ms=200, required_native_bridge_abi_version=7)
     assert error.value.code == "offline_payments_disabled"
 
     stale_abi = OfflineCashConfigurationSnapshot(
@@ -157,15 +157,15 @@ def test_offline_cash_snapshot_requires_cached_issuer_key() -> None:
         asset_definition_id="pkr#sbp",
         offline_payments_enabled=True,
         issuer_public_key_base64="issuer-key",
-        bridge_abi_version=6,
+        native_bridge_abi_version=6,
     )
     with pytest.raises(OfflineCashConfigurationSnapshotError) as error:
-        stale_abi.require_usable_for_offline_exchange(now_ms=200, required_bridge_abi_version=7)
-    assert error.value.code == "unsupported_bridge_abi"
+        stale_abi.require_usable_for_offline_exchange(now_ms=200, required_native_bridge_abi_version=7)
+    assert error.value.code == "unsupported_native_bridge_abi"
 
     expired = snapshot
     with pytest.raises(OfflineCashConfigurationSnapshotError) as error:
-        expired.require_usable_for_offline_exchange(now_ms=1000, required_bridge_abi_version=7)
+        expired.require_usable_for_offline_exchange(now_ms=1000, required_native_bridge_abi_version=7)
     assert error.value.code == "expired"
 
 

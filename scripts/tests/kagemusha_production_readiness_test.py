@@ -5872,7 +5872,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             repo = Path(temp) / "repo"
             manifest = {
                 "schema": "iroha.kagemusha.recursive_spend.abi6.fixture_manifest.v1",
-                "bridge_abi_version": 6,
+                "native_bridge_abi_version": 6,
                 "operation_count": 8,
                 "operations": [{"symbol": symbol} for symbol in readiness.ABI6_OPERATION_SYMBOLS],
                 "limits": readiness.EXPECTED_ABI6_LIMITS,
@@ -5899,7 +5899,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 repo = Path(temp) / "repo"
                 manifest = {
                     "schema": "iroha.kagemusha.recursive_spend.abi6.fixture_manifest.v1",
-                    "bridge_abi_version": 6,
+                    "native_bridge_abi_version": 6,
                     "operation_count": len(readiness.ABI6_OPERATION_SYMBOLS),
                     "operations": [
                         {"symbol": symbol} for symbol in readiness.ABI6_OPERATION_SYMBOLS
@@ -5938,7 +5938,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             external_manifest = root / "external-manifest.json"
             manifest = {
                 "schema": "iroha.kagemusha.recursive_spend.abi6.fixture_manifest.v1",
-                "bridge_abi_version": 6,
+                "native_bridge_abi_version": 6,
                 "operation_count": len(readiness.ABI6_OPERATION_SYMBOLS),
                 "operations": [
                     {"symbol": symbol} for symbol in readiness.ABI6_OPERATION_SYMBOLS
@@ -5982,7 +5982,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             external_manifest = root / "external-manifest.json"
             manifest = {
                 "schema": "iroha.kagemusha.recursive_spend.abi6.fixture_manifest.v1",
-                "bridge_abi_version": 6,
+                "native_bridge_abi_version": 6,
                 "operation_count": len(readiness.ABI6_OPERATION_SYMBOLS),
                 "operations": [
                     {"symbol": symbol} for symbol in readiness.ABI6_OPERATION_SYMBOLS
@@ -6048,7 +6048,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             replacement_manifest = root / "replacement-manifest.json"
             manifest = {
                 "schema": "iroha.kagemusha.recursive_spend.abi6.fixture_manifest.v1",
-                "bridge_abi_version": 6,
+                "native_bridge_abi_version": 6,
                 "operation_count": len(readiness.ABI6_OPERATION_SYMBOLS),
                 "operations": [
                     {"symbol": symbol} for symbol in readiness.ABI6_OPERATION_SYMBOLS
@@ -6105,7 +6105,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             repo = real_parent / "repo"
             manifest = {
                 "schema": "iroha.kagemusha.recursive_spend.abi6.fixture_manifest.v1",
-                "bridge_abi_version": 6,
+                "native_bridge_abi_version": 6,
                 "operation_count": len(readiness.ABI6_OPERATION_SYMBOLS),
                 "operations": [
                     {"symbol": symbol} for symbol in readiness.ABI6_OPERATION_SYMBOLS
@@ -6142,7 +6142,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             external_manifest = root / "external-manifest.json"
             manifest = {
                 "schema": "iroha.kagemusha.recursive_spend.abi6.fixture_manifest.v1",
-                "bridge_abi_version": 6,
+                "native_bridge_abi_version": 6,
                 "operation_count": len(readiness.ABI6_OPERATION_SYMBOLS),
                 "operations": [
                     {"symbol": symbol} for symbol in readiness.ABI6_OPERATION_SYMBOLS

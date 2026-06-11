@@ -91,11 +91,11 @@ test("offline cash configuration snapshot requires cached issuer key and ABI", (
         assetDefinitionId: "pkr#sbp",
         offlinePaymentsEnabled: true,
         issuerPublicKeyBase64: "issuer-key",
-        bridgeAbiVersion: 7,
+        nativeBridgeAbiVersion: 7,
         createdAtMs: 100,
         expiresAtMs: 1_000,
       },
-      { nowMs: 999, requiredBridgeAbiVersion: 7 },
+      { nowMs: 999, requiredNativeBridgeAbiVersion: 7 },
     ),
     true,
   );
@@ -107,7 +107,7 @@ test("offline cash configuration snapshot requires cached issuer key and ABI", (
         assetDefinitionId: "pkr#sbp",
         offlinePaymentsEnabled: true,
         issuerPublicKeyBase64: " ",
-        bridgeAbiVersion: 7,
+        nativeBridgeAbiVersion: 7,
         createdAtMs: 100,
       }),
     error =>
@@ -122,7 +122,7 @@ test("offline cash configuration snapshot requires cached issuer key and ABI", (
         assetDefinitionId: "pkr#sbp",
         offlinePaymentsEnabled: false,
         issuerPublicKeyBase64: "issuer-key",
-        bridgeAbiVersion: 7,
+        nativeBridgeAbiVersion: 7,
       }),
     error =>
       error instanceof OfflineCashConfigurationSnapshotError &&
@@ -136,7 +136,7 @@ test("offline cash configuration snapshot requires cached issuer key and ABI", (
         assetDefinitionId: "pkr#sbp",
         offlinePaymentsEnabled: "false",
         issuerPublicKeyBase64: "issuer-key",
-        bridgeAbiVersion: 7,
+        nativeBridgeAbiVersion: 7,
       }),
     error =>
       error instanceof OfflineCashConfigurationSnapshotError &&
@@ -151,13 +151,13 @@ test("offline cash configuration snapshot requires cached issuer key and ABI", (
           assetDefinitionId: "pkr#sbp",
           offlinePaymentsEnabled: true,
           issuerPublicKeyBase64: "issuer-key",
-          bridgeAbiVersion: 6,
+          nativeBridgeAbiVersion: 6,
         },
-        { nowMs: 200, requiredBridgeAbiVersion: 7 },
+        { nowMs: 200, requiredNativeBridgeAbiVersion: 7 },
       ),
     error =>
       error instanceof OfflineCashConfigurationSnapshotError &&
-      error.code === "unsupported_bridge_abi",
+      error.code === "unsupported_native_bridge_abi",
   );
 
   assert.throws(
@@ -168,9 +168,9 @@ test("offline cash configuration snapshot requires cached issuer key and ABI", (
           assetDefinitionId: "pkr#sbp",
           offlinePaymentsEnabled: true,
           issuerPublicKeyBase64: "issuer-key",
-          bridgeAbiVersion: "7",
+          nativeBridgeAbiVersion: "7",
         },
-        { nowMs: 200, requiredBridgeAbiVersion: 7 },
+        { nowMs: 200, requiredNativeBridgeAbiVersion: 7 },
       ),
     error =>
       error instanceof OfflineCashConfigurationSnapshotError && error.code === "malformed_snapshot",
@@ -184,9 +184,9 @@ test("offline cash configuration snapshot requires cached issuer key and ABI", (
           assetDefinitionId: "pkr#sbp",
           offlinePaymentsEnabled: true,
           issuerPublicKeyBase64: "issuer-key",
-          bridgeAbiVersion: 7,
+          nativeBridgeAbiVersion: 7,
         },
-        { nowMs: 200, requiredBridgeAbiVersion: "7" },
+        { nowMs: 200, requiredNativeBridgeAbiVersion: "7" },
       ),
     error =>
       error instanceof OfflineCashConfigurationSnapshotError && error.code === "malformed_snapshot",
@@ -200,10 +200,10 @@ test("offline cash configuration snapshot requires cached issuer key and ABI", (
           assetDefinitionId: "pkr#sbp",
           offlinePaymentsEnabled: true,
           issuerPublicKeyBase64: "issuer-key",
-          bridgeAbiVersion: 7,
+          nativeBridgeAbiVersion: 7,
           expiresAtMs: 1_000,
         },
-        { nowMs: 1_000, requiredBridgeAbiVersion: 7 },
+        { nowMs: 1_000, requiredNativeBridgeAbiVersion: 7 },
       ),
     error => error instanceof OfflineCashConfigurationSnapshotError && error.code === "expired",
   );
@@ -216,10 +216,10 @@ test("offline cash configuration snapshot requires cached issuer key and ABI", (
           assetDefinitionId: "pkr#sbp",
           offlinePaymentsEnabled: true,
           issuerPublicKeyBase64: "issuer-key",
-          bridgeAbiVersion: 7,
+          nativeBridgeAbiVersion: 7,
           expiresAtMs: "1000",
         },
-        { nowMs: 999, requiredBridgeAbiVersion: 7 },
+        { nowMs: 999, requiredNativeBridgeAbiVersion: 7 },
       ),
     error =>
       error instanceof OfflineCashConfigurationSnapshotError && error.code === "malformed_snapshot",

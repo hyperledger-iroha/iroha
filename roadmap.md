@@ -63,6 +63,10 @@ and completed history lives in [`status.md`](./status.md).
     `invalidUtf8CircuitArchive` so the C# parser rejects non-canonical,
     address-space oversized, u64-overflowing compact lengths and invalid UTF-8
     lineage archive circuit fields on Windows.
+  - Add the Windows C# negative that a whitespace-padded `CID1` circuit id in
+    the lineage verifier key rejects as `lineage_verifier_key` before native
+    bridge dispatch, even when the proving-key archive commits to that padded
+    verifier key.
   - Privacy VeRange planned-helper quarantine: remove or hide the C# public
     `BuildVeRangeProofV1`, `buildVeRangeProofV1`, `VerifyVeRangeProofV1`, and
     `verifyVeRangeProofV1` aliases once the Windows C# SDK test lane can verify
@@ -128,9 +132,10 @@ and completed history lives in [`status.md`](./status.md).
   case normalization. Raw identity strings must be trim-stable, SDK/policy
   digests must be canonical lowercase SHA-256 hex, and raw security levels must
   remain exact `STRONGBOX`. Queue, telemetry, D2D handoff, and wallet integrity
-  JSON artifacts are now parsed as slot-bound strict JSON before assembly; D2D
-  must remain offline-offline and wallet integrity must prove key rotation plus
-  rollback rejection. Raw status NDJSON must not contain failure statuses or
+  JSON artifacts are now parsed as slot-bound strict JSON with exact slot-id
+  bindings before assembly; D2D must remain offline-offline and wallet
+  integrity must prove key rotation plus rollback rejection. Raw status NDJSON
+  must not contain failure statuses or
   mismatched slot bindings, and runtime logs must contain the completion marker
   without build/test/panic/traceback/fatal failure markers. Raw pull summaries
   now reject non-finite or oversized JSON before temp-file creation and fsync
@@ -1449,7 +1454,8 @@ and completed history lives in [`status.md`](./status.md).
 	  fsynced temp-file writes with atomic replace, identity-bound temporary
 	  cleanup on failed writes, and opened-file identity-bound readback
 	  verification capped at 16 MiB,
-	  discovered slot-name rejection/redaction before artifact traversal or summary serialization,
+	  discovered slot-name whitespace/control rejection and unsafe-name
+	  redaction before artifact traversal or summary serialization,
 	  a signed-slot assembler that consumes completed attached-device
 	  attestation, verifier-report, certificate-chain, release APK, D2D handoff,
 	  wallet-integrity, telemetry, queue, status, and runtime-log artifacts,
@@ -5924,11 +5930,11 @@ and completed history lives in [`status.md`](./status.md).
   Swift, Kotlin/JVM, Java Android, JavaScript,
   Python, and C# now also expose stable constants for the semantic
   v1 and reserved lineage circuit ids. Swift, JavaScript/Node, Python, and C#
-  now expose the recursive-spend minimum bridge ABI-6 requirement beside those
+  now expose the recursive-spend minimum native bridge ABI-6 requirement beside those
   constants while accepting additive ABI-7 bridge advertisements; Swift
   bridge-loader tests pin packaged artifacts to at least ABI 6, the Node NAPI
   host exports `connectNoritoBridgeAbiVersion`, and the Python PyO3 extension
-  exports `kagemusha_recursive_spend_bridge_abi_version`. The SDK surfaces also
+  exports `kagemusha_recursive_spend_native_bridge_abi_version`. The SDK surfaces also
   expose a common preferred offline spend-mode selector: `recursive_spend_v1`
   when the ABI-6-or-later recursive spend surface is available and
   `checked_prefold_v1` as the compatibility fallback; Kotlin/JVM and Java

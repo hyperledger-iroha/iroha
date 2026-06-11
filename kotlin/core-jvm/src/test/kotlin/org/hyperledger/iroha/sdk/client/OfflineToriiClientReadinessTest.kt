@@ -15,11 +15,11 @@ class OfflineToriiClientReadinessTest {
             """
             {
               "offline_telemetry": true,
-              "offline_kagemusha_abi7": true,
-              "offline_kagemusha_abi7_mode": "recursive_compact_v1",
-              "offline_kagemusha_abi7_bridge_abi_version": 7,
-              "offline_kagemusha_abi7_circuit_id": "kagemusha-recursive-compact-v1",
-              "offline_kagemusha_abi7_artifacts": true
+              "offline_kagemusha_recursive_compact_available": true,
+              "offline_kagemusha_recursive_compact_mode": "recursive_compact_v1",
+              "offline_kagemusha_recursive_compact_required_native_bridge_abi_version": 7,
+              "offline_kagemusha_recursive_compact_circuit_id": "kagemusha-recursive-compact-v1",
+              "offline_kagemusha_recursive_compact_artifacts_available": true
             }
             """.trimIndent(),
         )
@@ -40,11 +40,11 @@ class OfflineToriiClientReadinessTest {
         assertEquals(false, readiness.offlineFountainQr)
         assertEquals(false, readiness.offlineSyncOptional)
         assertEquals(true, readiness.offlineTelemetry)
-        assertEquals(true, readiness.offlineKagemushaAbi7)
-        assertEquals("recursive_compact_v1", readiness.offlineKagemushaAbi7Mode)
-        assertEquals(7, readiness.offlineKagemushaAbi7BridgeAbiVersion)
-        assertEquals("kagemusha-recursive-compact-v1", readiness.offlineKagemushaAbi7CircuitId)
-        assertEquals(true, readiness.offlineKagemushaAbi7Artifacts)
+        assertEquals(true, readiness.offlineKagemushaRecursiveCompactAvailable)
+        assertEquals("recursive_compact_v1", readiness.offlineKagemushaRecursiveCompactMode)
+        assertEquals(7, readiness.offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion)
+        assertEquals("kagemusha-recursive-compact-v1", readiness.offlineKagemushaRecursiveCompactCircuitId)
+        assertEquals(true, readiness.offlineKagemushaRecursiveCompactArtifactsAvailable)
     }
 
     private class CapturingExecutor(

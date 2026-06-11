@@ -1,7 +1,7 @@
 {
   "schema": "iroha.kagemusha.recursive_spend.abi6.archive_fixtures.v1",
   "fixture_kind": "norito_archives",
-  "bridge_abi_version": 6,
+  "native_bridge_abi_version": 6,
   "request_archive_fields": [
     {
       "norito_type": "KagemushaRecursiveSpendInitRequestV1",

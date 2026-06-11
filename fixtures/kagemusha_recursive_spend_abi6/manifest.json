@@ -5,7 +5,7 @@
     "path": "fixtures/kagemusha_recursive_spend_abi6/archives.json",
     "schema": "iroha.kagemusha.recursive_spend.abi6.archive_fixtures.v1"
   },
-  "bridge_abi_version": 6,
+  "native_bridge_abi_version": 6,
   "operation_count": 9,
   "proof_circuit_ids": {
     "recursive_aggregation": "kagemusha-recursive-aggregation-v1",

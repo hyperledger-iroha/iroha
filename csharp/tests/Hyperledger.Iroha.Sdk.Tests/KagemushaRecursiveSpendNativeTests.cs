@@ -158,8 +158,8 @@ public sealed class KagemushaRecursiveSpendNativeTests
         Assert.Equal(
             "checked_prefold_v1",
             KagemushaOfflineSpendMode.CheckedPrefoldV1.WireName());
-        Assert.Equal(6u, KagemushaRecursiveSpendNative.RequiredBridgeAbiVersion);
-        Assert.Equal(7u, KagemushaRecursiveSpendNative.RecursiveCompactRequiredBridgeAbiVersion);
+        Assert.Equal(6u, KagemushaRecursiveSpendNative.RequiredNativeBridgeAbiVersion);
+        Assert.Equal(7u, KagemushaRecursiveSpendNative.RecursiveCompactRequiredNativeBridgeAbiVersion);
         Assert.Equal(
             "kagemusha-recursive-compact-v1",
             KagemushaRecursiveSpendNative.RecursiveCompactCircuitIdV1);
@@ -1067,8 +1067,8 @@ public sealed class KagemushaRecursiveSpendNativeTests
             "iroha.kagemusha.recursive_spend.abi6.fixture_manifest.v1",
             root.GetProperty("schema").GetString());
         Assert.Equal(
-            KagemushaRecursiveSpendNative.RequiredBridgeAbiVersion,
-            (uint)root.GetProperty("bridge_abi_version").GetInt32());
+            KagemushaRecursiveSpendNative.RequiredNativeBridgeAbiVersion,
+            (uint)root.GetProperty("native_bridge_abi_version").GetInt32());
         Assert.Equal(9, root.GetProperty("operation_count").GetInt32());
 
         var circuitIds = root.GetProperty("proof_circuit_ids");

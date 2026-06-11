@@ -335,8 +335,8 @@ public final class TransactionBuilderTests {
         : "Snapshot must expose offline payments flag";
     assert "issuer-key".equals(identifiedSnapshot.issuerPublicKeyBase64())
         : "Snapshot must expose issuer public key";
-    assert Integer.valueOf(7).equals(identifiedSnapshot.bridgeAbiVersion())
-        : "Snapshot must expose bridge ABI version";
+    assert Integer.valueOf(7).equals(identifiedSnapshot.nativeBridgeAbiVersion())
+        : "Snapshot must expose native bridge ABI version";
     assert "artifact-set".equals(identifiedSnapshot.artifactSetId())
         : "Snapshot must expose artifact set id";
     assert "kagemusha-v1".equals(identifiedSnapshot.circuitId())
@@ -359,7 +359,7 @@ public final class TransactionBuilderTests {
         new OfflineCashLifecycle.ConfigurationSnapshot(true, "issuer-key", 6, null),
         200L,
         7,
-        "unsupported_bridge_abi");
+        "unsupported_native_bridge_abi");
     assertSnapshotRejected(
         new OfflineCashLifecycle.ConfigurationSnapshot(true, "issuer-key", 7, 1_000L),
         1_000L,
@@ -776,10 +776,10 @@ public final class TransactionBuilderTests {
   private static void assertSnapshotRejected(
       final OfflineCashLifecycle.ConfigurationSnapshot snapshot,
       final long nowMs,
-      final Integer requiredBridgeAbiVersion,
+      final Integer requiredNativeBridgeAbiVersion,
       final String expectedCode) {
     try {
-      snapshot.requireUsableForOfflineExchange(nowMs, requiredBridgeAbiVersion);
+      snapshot.requireUsableForOfflineExchange(nowMs, requiredNativeBridgeAbiVersion);
     } catch (final OfflineCashLifecycle.ConfigurationSnapshotException expected) {
       assert expectedCode.equals(expected.code())
           : "Expected snapshot rejection code " + expectedCode + ", got " + expected.code();

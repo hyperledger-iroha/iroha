@@ -4,7 +4,7 @@ public enum OfflineCashConfigurationSnapshotError: Error, Equatable, LocalizedEr
     case offlinePaymentsDisabled
     case missingIssuerPublicKey
     case expired(expiresAtMs: UInt64, nowMs: UInt64)
-    case unsupportedBridgeAbi(required: UInt32, actual: UInt32?)
+    case unsupportedNativeBridgeAbi(required: UInt32, actual: UInt32?)
 
     public var errorDescription: String? {
         switch self {
@@ -14,8 +14,8 @@ public enum OfflineCashConfigurationSnapshotError: Error, Equatable, LocalizedEr
             return "Offline cash requires a cached issuer public key before offline exchange."
         case let .expired(expiresAtMs, nowMs):
             return "Offline cash configuration snapshot expired at \(expiresAtMs), current time is \(nowMs)."
-        case let .unsupportedBridgeAbi(required, actual):
-            return "Offline cash requires bridge ABI \(required), cached ABI is \(actual.map(String.init) ?? "missing")."
+        case let .unsupportedNativeBridgeAbi(required, actual):
+            return "Offline cash requires native bridge ABI \(required), cached ABI is \(actual.map(String.init) ?? "missing")."
         }
     }
 }
@@ -25,7 +25,7 @@ public struct OfflineCashConfigurationSnapshot: Codable, Equatable, Sendable {
     public let assetDefinitionId: String
     public let offlinePaymentsEnabled: Bool
     public let issuerPublicKeyBase64: String?
-    public let bridgeAbiVersion: UInt32?
+    public let nativeBridgeAbiVersion: UInt32?
     public let artifactSetId: String?
     public let circuitId: String?
     public let createdAtMs: UInt64
@@ -36,7 +36,7 @@ public struct OfflineCashConfigurationSnapshot: Codable, Equatable, Sendable {
         assetDefinitionId: String,
         offlinePaymentsEnabled: Bool,
         issuerPublicKeyBase64: String?,
-        bridgeAbiVersion: UInt32? = nil,
+        nativeBridgeAbiVersion: UInt32? = nil,
         artifactSetId: String? = nil,
         circuitId: String? = nil,
         createdAtMs: UInt64,
@@ -46,7 +46,7 @@ public struct OfflineCashConfigurationSnapshot: Codable, Equatable, Sendable {
         self.assetDefinitionId = assetDefinitionId
         self.offlinePaymentsEnabled = offlinePaymentsEnabled
         self.issuerPublicKeyBase64 = issuerPublicKeyBase64
-        self.bridgeAbiVersion = bridgeAbiVersion
+        self.nativeBridgeAbiVersion = nativeBridgeAbiVersion
         self.artifactSetId = artifactSetId
         self.circuitId = circuitId
         self.createdAtMs = createdAtMs
@@ -55,7 +55,7 @@ public struct OfflineCashConfigurationSnapshot: Codable, Equatable, Sendable {
 
     public func requireUsableForOfflineExchange(
         nowMs: UInt64,
-        requiredBridgeAbiVersion: UInt32? = nil
+        requiredNativeBridgeAbiVersion: UInt32? = nil
     ) throws {
         guard offlinePaymentsEnabled else {
             throw OfflineCashConfigurationSnapshotError.offlinePaymentsDisabled
@@ -66,11 +66,11 @@ public struct OfflineCashConfigurationSnapshot: Codable, Equatable, Sendable {
         if let expiresAtMs, expiresAtMs <= nowMs {
             throw OfflineCashConfigurationSnapshotError.expired(expiresAtMs: expiresAtMs, nowMs: nowMs)
         }
-        if let requiredBridgeAbiVersion,
-           bridgeAbiVersion.map({ $0 >= requiredBridgeAbiVersion }) != true {
-            throw OfflineCashConfigurationSnapshotError.unsupportedBridgeAbi(
-                required: requiredBridgeAbiVersion,
-                actual: bridgeAbiVersion
+        if let requiredNativeBridgeAbiVersion,
+           nativeBridgeAbiVersion.map({ $0 >= requiredNativeBridgeAbiVersion }) != true {
+            throw OfflineCashConfigurationSnapshotError.unsupportedNativeBridgeAbi(
+                required: requiredNativeBridgeAbiVersion,
+                actual: nativeBridgeAbiVersion
             )
         }
     }

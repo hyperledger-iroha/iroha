@@ -88,6 +88,14 @@ backend verifier rejects a proof when a supplied verifier-key envelope carries a
 `CID1` value that normalizes to a different circuit than the proof envelope.
 This keeps Kagemusha ledger state, duplicate-nullifier protection, routing, gas,
 and confidential-policy admission aligned with production shielded transfers.
+Gas metering follows the online boundary. Offline-offline Kagemusha transfers
+do not burn chain gas, and `KagemushaTransfer` contributes zero confidential
+gas when inspected by the chain meter. Online-to-offline top-ups and
+offline-to-online redemptions remain chain transactions and are metered; the
+recursive redemption path charges the final redeem proof, every top-up anchor
+nullifier, recursive proof bytes/public inputs, and any chain-submitted lineage
+witness material including hop proof attachments, previous recursive proofs,
+and Pallas open-envelope archives.
 Kagemusha transfer admission also rejects any byte-identical overlap between
 consumed input nullifiers and newly created output commitments before proof
 decoding, preserving the nullifier/commitment domain separation at the ledger
@@ -1373,7 +1381,7 @@ verifier metadata for every private hop before compact proof generation.
 The Python SDK exposes the same record-backed compact-token prover through the
 native PyO3 extension, so Python wallets no longer need to drop to the C bridge
 to exercise the production Kagemusha path.
-Bridge ABI 7 keeps the recursive compact-token entry point
+Native bridge ABI 7 keeps the recursive compact-token entry point
 `connect_norito_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes`.
 The ABI-7 recursive compact-token symbols now route one-hop
 `kagemusha-recursive-compact-v1` compact proving when the native proof bundle
@@ -1795,7 +1803,7 @@ The dedicated `Kagemusha Payload Benchmark` workflow runs
 `ci/check_kagemusha_recursive_spend_payload_bench.sh` on relevant Kagemusha
 payload, accumulator, and proof-surface changes and uploads the reduced-sample
 Criterion summary.
-Bridge ABI 6 also retains
+Native bridge ABI 6 also retains
 `connect_norito_kagemusha_prove_verified_recursive_aggregation_proof_bundle_with_records_and_pallas_open_envelopes`.
 That proof-carrying entry point accepts the same record-backed bundle plus a
 Norito archive of proof-derived Pallas opening envelopes, enforces active
@@ -1863,7 +1871,7 @@ recursive-spend Kagemusha provers as available only when the loaded bridge
 returns the expected Kagemusha rejection without output bytes, and the Swift
 recursive-spend wrapper refuses to select `recursive_spend_v1` unless the full
 ABI-6-or-later surface passes that probe.
-Bridge ABI 7 exposes fail-closed reserved symbols for
+Native bridge ABI 7 exposes fail-closed reserved symbols for
 `connect_norito_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes`
 plus
 `connect_norito_kagemusha_verify_recursive_compact_payment_token` for the
@@ -1980,8 +1988,8 @@ capability checks.
 JavaScript/Node and Python now require an ABI-6-or-later native version probe
 before reporting recursive spend as available or selecting `recursive_spend_v1`;
 the Node NAPI host exports `connectNoritoBridgeAbiVersion`, while the Python
-PyO3 extension exports `kagemusha_recursive_spend_bridge_abi_version`.
-Kotlin/JVM and Java Android also call the bridge ABI-version JNI probe and
+PyO3 extension exports `kagemusha_recursive_spend_native_bridge_abi_version`.
+Kotlin/JVM and Java Android also call the native bridge ABI-version JNI probe and
 probe the verify plus both lineage-witness JNI symbols before reporting
 recursive spend as available or defaulting to `recursive_spend_v1`. C#
 publishes the same ABI-6-or-later requirement and probes verify plus both

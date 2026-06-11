@@ -10,8 +10,8 @@ import java.util.Arrays;
 
 /** Native recursive Kagemusha spend ABI-6 bridge. */
 public final class KagemushaRecursiveSpendProver {
-  public static final int REQUIRED_BRIDGE_ABI_VERSION = 6;
-  public static final int RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION = 7;
+  public static final int REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 6;
+  public static final int RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 7;
   public static final String RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 =
       "kagemusha-recursive-aggregation-v1";
   public static final String RECURSIVE_COMPACT_CIRCUIT_ID_V1 =
@@ -249,7 +249,7 @@ public final class KagemushaRecursiveSpendProver {
         if (circuitId != null || payload.length == 0 || !isPrintableAscii(payload)) {
           throw new IllegalArgumentException("lineage_verifier_key");
         }
-        final String decoded = new String(payload, StandardCharsets.UTF_8).trim();
+        final String decoded = new String(payload, StandardCharsets.UTF_8);
         if (decoded.isEmpty()) {
           throw new IllegalArgumentException("lineage_verifier_key");
         }
@@ -829,17 +829,17 @@ public final class KagemushaRecursiveSpendProver {
 
   static boolean detectNativeAvailability(
       final NativeProbe loadLibrary,
-      final NativeAbiVersionProbe bridgeAbiVersion,
+      final NativeAbiVersionProbe nativeBridgeAbiVersionProbe,
       final NativeSymbolProbe probeSymbol) {
     return detectNativeAvailability(
-        loadLibrary, bridgeAbiVersion, probeSymbol, REQUIRED_BRIDGE_ABI_VERSION);
+        loadLibrary, nativeBridgeAbiVersionProbe, probeSymbol, REQUIRED_NATIVE_BRIDGE_ABI_VERSION);
   }
 
   static boolean detectNativeAvailability(
       final NativeProbe loadLibrary,
-      final NativeAbiVersionProbe bridgeAbiVersion,
+      final NativeAbiVersionProbe nativeBridgeAbiVersionProbe,
       final NativeSymbolProbe probeSymbol,
-      final int requiredBridgeAbiVersion) {
+      final int requiredNativeBridgeAbiVersion) {
     try {
       loadLibrary.run();
     } catch (final UnsatisfiedLinkError | SecurityException error) {
@@ -849,13 +849,13 @@ public final class KagemushaRecursiveSpendProver {
     }
     final int abiVersion;
     try {
-      abiVersion = bridgeAbiVersion.run();
+      abiVersion = nativeBridgeAbiVersionProbe.run();
     } catch (final UnsatisfiedLinkError | SecurityException error) {
       return false;
     } catch (final RuntimeException error) {
       return false;
     }
-    if (abiVersion < requiredBridgeAbiVersion) {
+    if (abiVersion < requiredNativeBridgeAbiVersion) {
       return false;
     }
     try {

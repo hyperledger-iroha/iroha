@@ -156,7 +156,7 @@ RELEASE_BUNDLE_ALLOWED_SECTION_KEYS: dict[str, frozenset[str]] = {
         (
             "manifest_path",
             "schema",
-            "bridge_abi_version",
+            "native_bridge_abi_version",
             "operation_count",
             "limits",
             "modes",
@@ -190,7 +190,7 @@ SUMMARY_ALLOWED_SECTION_KEYS: dict[str, frozenset[str]] = {
         (
             "manifest_path",
             "schema",
-            "bridge_abi_version",
+            "native_bridge_abi_version",
             "operation_count",
             "limits",
             "modes",
@@ -1114,7 +1114,7 @@ def _compare_validated_sections(
     for field in (
         "manifest_path",
         "schema",
-        "bridge_abi_version",
+        "native_bridge_abi_version",
         "operation_count",
         "limits",
         "modes",
@@ -2001,7 +2001,7 @@ def _check_release_bundle_section_shapes(
                         field=field,
                     )
                 )
-        for field in ("bridge_abi_version", "operation_count"):
+        for field in ("native_bridge_abi_version", "operation_count"):
             value = abi6.get(field)
             if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
                 blockers.append(
@@ -2549,7 +2549,7 @@ def build_release_bundle(
         "abi6_reserved_lineage": {
             "manifest_path": abi6.get("manifest_path"),
             "schema": abi6.get("schema"),
-            "bridge_abi_version": abi6.get("bridge_abi_version"),
+            "native_bridge_abi_version": abi6.get("native_bridge_abi_version"),
             "operation_count": abi6.get("operation_count"),
             "limits": abi6.get("limits", {}),
             "modes": abi6.get("modes", {}),
