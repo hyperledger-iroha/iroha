@@ -214,7 +214,8 @@ and completed history lives in [`status.md`](./status.md).
   nonempty nonzero bodies, rejects blank or sub-64-byte audit artifact bodies,
   rejects canonical nested audit headers even after leading body whitespace,
   rejects placeholder-style audit artifact bodies across the full bounded body
-  and copied report/archive bodies, and requires
+  and copied report/archive bodies, including edge-whitespace-decorated copies,
+  and requires
   caller-supplied trusted reviewer id/key validation before publication. The
   same package now carries a machine-checkable release audit manifest and
   manifest digest that
@@ -222,11 +223,23 @@ and completed history lives in [`status.md`](./status.md).
   evidence, artifact, evaluator-set, proof-key, prover/verifier-key,
   native-circuit, and report/archive commitment binding, and reviewer id/key
 	  agreement before publication. The crypto release-audit validator now offers a
-	  single governed-artifacts/trusted-reviewer/caller-pinned-digest gate, and
-	  Core's audited material and execution prover wrappers require that gate before
-	  native BFV proof attachments are emitted, including copied report/archive body
-	  rejection plus refresh transcript public-key digest validation at the wrapper
-	  boundary; execution witness material also carries a domain-separated
+	  single governed-artifacts/trusted-reviewer/caller-pinned-digest gate that
+	  rejects zero or known placeholder pinned package digests before comparison, and
+	  preflights caller-supplied reviewer id/key inputs before package or artifact
+	  validation can mask malformed trust configuration. Standalone release-audit
+	  signoff, record, and manifest trusted-reviewer validators now share that
+	  caller trust-anchor preflight before stale signed objects are parsed, and
+	  signoff payload construction preflights reviewer id/key plus external
+	  report/archive digests before stale evidence can mask malformed operator
+	  inputs. Release-audit record and package construction now reject malformed
+	  reviewer ids before evidence derivation or audit-byte validation, and
+	  package construction now shares the report/archive byte-pair preflight so
+	  edge-whitespace-normalized copied audit bodies fail before evidence
+	  derivation or record signing.
+		  Core's audited material and execution prover wrappers require that gate before
+		  native BFV proof attachments are emitted, including copied report/archive body
+		  rejection after edge-whitespace normalization plus refresh transcript
+		  public-key digest validation at the wrapper boundary; execution witness material also carries a domain-separated
 	  Galois-key-set digest so artifact-aware replay rejects same-shape stale
 	  automorphism key substitutions before proof-input or release-prover package
 	  hashing; lower-level typed material/prover-input helpers stay internal, and
@@ -242,8 +255,8 @@ and completed history lives in [`status.md`](./status.md).
 	  validation now also rejects reused artifact/profile/native-payload commitments
 	  plus empty/all-zero and short, long, padded, binary-decorated,
 	  case-decorated, or whitespace-prefixed placeholder native-payload digest sentinels,
-	  standalone signoff/manifest validation rejects external audit digest aliasing
-	  with signed release commitments plus known header-only, nested-header,
+	  standalone record construction plus signoff/manifest validation rejects
+	  external audit digest aliasing with signed release commitments plus known header-only, nested-header,
 	  whitespace-prefixed nested-header, padded zero/blank-body, and
 	  short/long/padded/binary-decorated/case-decorated/whitespace-prefixed
 	  placeholder report/archive digests, and
@@ -276,9 +289,16 @@ and completed history lives in [`status.md`](./status.md).
 	  the wrapper. The
 	  shared STARK/AIR
 			  prover and verifier now derive duplicate-free query schedules by
-			  transcript-bound sampling without replacement, while failing closed
-			  when a duplicate-free schedule cannot exist, so duplicate openings
-			  cannot reduce effective sampling. The BFV material and
+			  bound-specific transcript rejection sampling without replacement,
+					  require noncanonical transcript labels, malformed domain tags,
+					  and malformed AIR or verifier-key circuit ids to fail closed before query replay or envelope verification,
+					  keep caller-provided verifier limits from relaxing canonical
+					  STARK structure and envelope-byte caps, and reject
+					  blowup/domain parameter pairs where `blowup_log2` exceeds
+					  `n_log2` before proof synthesis, verifier-key admission, or
+					  envelope verification,
+			  while failing closed when a duplicate-free schedule cannot exist, so
+			  duplicate openings cannot reduce effective sampling. The BFV material and
 		  execution native-AIR builders still retry bounded statement/material-domain
 		  query nonces for privacy-policy public-row constraints before returning
 		  duplicate-free proof envelopes. The ZK-ACE native AIR prover now routes
@@ -379,14 +399,17 @@ and completed history lives in [`status.md`](./status.md).
   `GRADLE_OPTS` heap corridor (`-Xmx6g` for Gradle and the Kotlin daemon) before
   invoking Gradle, while operator-provided `GRADLE_OPTS` still override those
   defaults. This keeps SCCP SDK validation from producing local memory false
-  negatives before tests run.
+  negatives before tests run. The corridor runner must also reject empty
+  `--log-dir` values so local release rehearsals cannot silently skip strict
+  phase transcript collection.
 - SCCP release-bundle corridor schema must classify unknown corridor root
   fields and corridor `phases`/`evidence_artifacts` keys before semantic phase
   lookup, manifest artifact ownership, transcript inspection, or Markdown
   invariant checks. Safe ASCII operator names may remain readable in
   diagnostics, but padded, control-character, whitespace, Markdown-unsafe,
   malformed, or Unicode-confusable keys must be category-only blockers. The
-	  bundle builder must also require the canonical corridor root shape and
+	  bundle builder must also require the canonical corridor root shape,
+	  classify malformed copied corridor root fields before render, require
 	  canonical corridor blocker lists, reject malformed copied phase-map keys,
 	  reject invalid copied phase statuses, and require hashed evidence artifacts
 	  for copied passed phases before `--allow-not-ready` diagnostics can render or
@@ -405,6 +428,14 @@ and completed history lives in [`status.md`](./status.md).
 	  artifacts. Copied embedded evidence must also recompute from the copied TOML
 	  evidence input artifacts before rendering, so root-level summary drift cannot
 	  publish before the strict bundle verifier compares the final JSON files.
+	  The strict verifier must also reject duplicate integer entries in copied
+	  all-lanes domain lists, including `supported_launch_domains` and
+	  `unsupported_launch_domains`, before relying only on launch-scope set
+	  comparison diagnostics. Copied all-lanes summary, lane, and `records`
+	  unknown field names must use the same public-field classifier before
+	  bundle rendering, so padded, control-character, whitespace,
+	  Markdown-unsafe, or Unicode-confusable names cannot leak raw public
+	  diagnostics.
 	  Copied embedded evidence must also classify nested
 	  `source_record_hashes`, `source_adapter_gate.audit_hashes`,
   `evm_live_metadata`, `destination_binding`, `route_allowlist`, and
@@ -509,8 +540,9 @@ and completed history lives in [`status.md`](./status.md).
   classify malformed ids before duplicate, drift, or Markdown-presence checks.
   Release-checklist root and item unknown fields must also use structured
   malformed-name diagnostics, preserving safe operator field names while
-  blocking raw malformed public key echoes. The bundle builder must reject
-	  unknown release-checklist root or item fields, malformed item ids/titles,
+  blocking raw malformed public key echoes. The bundle builder must classify
+	  malformed copied release-checklist root/item unknown fields before render,
+	  reject unknown release-checklist root or item fields, malformed item ids/titles,
 	  duplicate item ids, non-exact ready booleans, and noncanonical or non-empty
 	  ready-item blockers before `--allow-not-ready` diagnostics can render or write
 	  public artifacts. Copied readiness-report release checklists must also
@@ -579,7 +611,24 @@ and completed history lives in [`status.md`](./status.md).
   readiness source-inventory gate: lane/backend inventory, per-SDK helper
   inventory, verifier-owned surface recomputation, and corridor-phase binding
   must remain required before published bundle readiness can pass. Public
-  `sdk_helper_symbols_by_sdk` map keys must be schema-classified before
+  `user_prover_submission_surfaces[].lanes` labels must be schema-classified
+  before lane inventory, backend, helper, or Markdown-presence checks, so
+  padded, control-character, whitespace, Markdown-unsafe, malformed, or
+  non-ASCII/confusable lane labels cannot leak raw public diagnostics.
+  `user_prover_submission_surfaces[].proof_backend` values must use the same
+  classification before backend mismatch or Markdown-presence checks, preserving
+  readable safe unknown backend diagnostics while suppressing hostile backend
+  ids.
+  `user_prover_submission_surfaces[].on_chain_submission` text must match the
+  verifier-owned lane submission text before Markdown-presence checks, so copied
+  operator text or hostile submission labels cannot leak raw public diagnostics.
+  Default and per-SDK helper symbols must be schema-classified before helper
+  string derivation, helper inventory, UI-hook matching, or Markdown-presence
+  checks, so table-breaking or confusable helper names become category-only
+  blockers. If a copied report corrupts the per-SDK helper map or any helper
+  entry, readiness Markdown must render an invalid-marker cell instead of
+  falling back to raw `sdk_helpers` text or rendering the raw helper.
+  Public `sdk_helper_symbols_by_sdk` map keys must be schema-classified before
   unknown-SDK, helper-list, or Markdown-presence diagnostics, so malformed
   padded, control-character, whitespace, Markdown-unsafe, and
   non-ASCII/confusable SDK keys cannot leak raw public diagnostics.
@@ -1079,7 +1128,17 @@ and completed history lives in [`status.md`](./status.md).
   source inventory to a production gate: public SDK parsers, artifact
   verifiers, self-tests, browser distribution guards, and adversarial native
   prover manifest coverage must remain pinned in the JSON report and published
-  bundle evidence.
+  bundle evidence. JavaScript native artifact verifier diagnostics must keep
+  the field-qualified `nativeProverArtifacts.sdk` rejection for missing or
+  padded SDK ids, BSC mainnet/testnet forged descriptor regressions must prove
+  plain spread descriptors cannot reach self-test or prover callbacks, and
+  bundle-verifier sparse fixtures must prove those markers remain enforced.
+  Native EVM release bundles must also keep role-specific artifact byte floors:
+  64 KiB for proof/proving material, 128 bytes for verifier/support fixtures,
+  and 1024 bytes for SDK implementation artifacts. Public Swift, Kotlin,
+  Java/Android, and .NET native EVM artifact verifiers must enforce those same
+  floors with hash-consistent below-floor negative tests so mobile or .NET
+  callers cannot approve bundles the release gate rejects.
 - SCCP release readiness reports now also promote the native EVM Groth16 prover
   bundle schema to a production gate: manifest schema checks, readiness summary
   schema checks, artifact hash/path binding, and bundled-manifest drift
@@ -1164,7 +1223,17 @@ and completed history lives in [`status.md`](./status.md).
 - SCCP corridor phase evidence must also stay source-unique: downloaded
   `--phase-evidence-dir` logs and explicit `--phase-evidence` assignments
   cannot set the same phase twice, so release reports and bundles cannot
-  silently replace one hashed phase transcript with another.
+  silently replace one hashed phase transcript with another. `--phase-result`
+  and `--phase-evidence` phase names, plus `--phase-result` status values,
+  must also reject padded or whitespace spellings instead of trim-normalizing
+  them into canonical corridor phases or statuses, and phase names must reject
+  Markdown-unsafe or malformed values before diagnostics can echo them. Unknown
+  phase names and unknown phase-result statuses must use category-only
+  diagnostics instead of echoing operator-supplied Markdown-unsafe text, and
+  duplicate phase-evidence diagnostics must redact local evidence paths as
+  `<path>`. Missing
+  `--phase-evidence-dir` logs must report the standard checked layouts without
+  echoing the operator-supplied directory.
 - Keep Kagemusha offline-offline payments production-routed through the
   Reserved-lineage recursive spend path. Production packaging now has a
   portable Norito `KagemushaRecursiveSpendLineageKeyArtifactsV1` artifact for
@@ -1822,8 +1891,9 @@ and completed history lives in [`status.md`](./status.md).
   `native_prover_self_test_artifact` hashes before reporting artifact
   readiness. Those SDKs parse the parity and self-test fixture bytes locally,
   carry the normalized vectors in the verified descriptor, and reject
-  hash-consistent proof-artifact, proving-key, verifier-key, or implementation
-  payloads smaller than `256` bytes before reporting artifact readiness. They
+  hash-consistent proof-artifact/proving-key payloads below `64 KiB`,
+  verifier/support fixture payloads below `128` bytes, or implementation
+  payloads below `1024` bytes before reporting artifact readiness. They
   also reject hash-consistent local payloads that still contain forbidden WASM,
   `snarkjs`, or remote-prover dependency markers; release/readiness inventories
   and package-dist tests pin those verifier APIs across the same
@@ -1887,9 +1957,10 @@ and completed history lives in [`status.md`](./status.md).
   bundle generation, and strict bundle verification now also scan those payload
   bytes for forbidden WASM, `snarkjs`, and remote-prover dependency markers, so
   hash-consistent payloads that still reference `proof.wasm` or remote prover
-  endpoints remain blocked; they also reject proof-artifact, proving-key,
-  verifier-key, and per-SDK implementation payload files smaller than `256`
-  bytes even when the manifest hashes are self-consistent. The native prover
+  endpoints remain blocked; they also reject proof-artifact/proving-key
+  payloads below `64 KiB`, verifier/support fixture payloads below `128`
+  bytes, and per-SDK implementation payloads below `1024` bytes even when the
+  manifest hashes are self-consistent. The native prover
   bundle's proof-artifact, proving-key, verifier-key, destination-binding, and
   per-SDK implementation hashes are role-separated as well, so one manifest hash
   cannot stand in for another. Bundle `audit_hashes` now must be a named evidence
@@ -1933,12 +2004,14 @@ and completed history lives in [`status.md`](./status.md).
 	  including escaped-key aliases in the string parser paths, so product apps
 	  get the same signed-manifest and fixture semantics as the release tooling.
 	  Readiness and strict bundle verification now also reject non-empty native
-	  prover payload artifacts smaller than `256` bytes, so hash-consistent label
-	  strings cannot stand in for audited proof, proving-key, verifier-key, or
-	  per-SDK implementation payloads. The JS/browser product verifier now
-	  enforces the same size floor on app-loaded local proof, proving-key,
-	  verifier-key, and JavaScript implementation bytes before accepting a
-	  manifest-bound native prover descriptor.
+	  prover proof/proving payloads below `64 KiB`, verifier/support fixture
+	  payloads below `128` bytes, and implementation payloads below `1024`
+	  bytes, so hash-consistent label strings cannot stand in for audited proof,
+	  proving-key, verifier-key, parity/self-test, or per-SDK implementation
+	  payloads. The JS/browser product verifier now enforces the same role floors
+	  on app-loaded local proof, proving-key, verifier-key, support fixture, and
+	  JavaScript implementation bytes before accepting a manifest-bound native
+	  prover descriptor.
 	  The remaining SDK gap is still implementing and shipping the actual audited
 	  browser/native Groth16 circuit/prover artifacts rather than app-linked local
 	  prover callbacks.
@@ -4203,6 +4276,11 @@ and completed history lives in [`status.md`](./status.md).
 	  RBC DELIVER delivery-entry commit-evidence Byzantine commit-vote boundary,
 	  RBC DELIVER delivery-entry commit-evidence residual gate partition,
 	  RBC DELIVER delivery-entry commit-evidence complete handoff,
+	  RBC DELIVER delivery-entry commit-evidence continuation-state seed,
+	  RBC DELIVER delivery-entry commit-evidence pending action-surface seed,
+	  RBC DELIVER delivery-entry commit-evidence pending timer-surface seed,
+	  RBC DELIVER delivery-entry commit-evidence pending counter-frame seed,
+	  RBC DELIVER delivery-entry commit-evidence pending complete wait-state seed,
 	  RBC DELIVER commit-evidence branch handoff,
 	  RBC delivered-pending commit-evidence wait-state handoff,
 	  RBC delivered-pending commit-vote preservation handoff,
@@ -9779,8 +9857,9 @@ or ABI behavior.
 	  material digest for governed prover inventories. The data-model refresh
 	  transcript wrapper can derive the same full-bootstrap material statement for
 	  manifest callers, and execution policies now require bootstrap-capable
-	  bundles to bind exactly one bootstrap statement class: zero-refresh for
-	  `RefreshOnlyV1`, or full material for `FullBootstrapV1`. Full-bootstrap
+		  bundles to bind exactly one bootstrap statement class: exact or
+		  bounded-noise zero-refresh for `RefreshOnlyV1`, or full material for
+		  `FullBootstrapV1`. Full-bootstrap
 	  refresh transcript digesting omits deterministic zero-refresh bootstrap
 	  transcript seeds, and Core rejects missing, mismatched, stale, or cross-mode
 	  policy statement bindings before execution. The data model now also exposes a
@@ -10144,7 +10223,8 @@ or ABI behavior.
 								  attempted. Core proof-emitting material and execution helpers are now
 								  internal, so the callable production material and batch paths validate a
 								  release audit package against governed material, concrete artifacts, the
-								  caller-trusted reviewer id/key, and caller-pinned package digest; the
+								  caller-trusted reviewer id/key, and caller-pinned package digest, including
+								  zero and known placeholder pinned-digest rejection; the
 								  internal typed prover-input path still requires the caller-supplied
 								  verifier key to match the verifier proof key embedded in the release
 								  prover package. Core now canonicalizes governed

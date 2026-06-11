@@ -1021,6 +1021,7 @@ test("BscMainnetSccp keeps the easy outbound path BSC-only", () => {
 
 test("BSC testnet destination helpers bind outbound proofs to chain id 97", () => {
   const testnetBinding = bscTestnetSccpDestinationBinding(sampleDestinationBindingInput());
+  const sdk = new BscTestnetSccp();
   assert.equal(SCCP_BSC_TESTNET_EVM_CHAIN_ID, 97);
   assert.equal(testnetBinding.sourceDomain, SCCP_DOMAIN_SORA);
   assert.equal(testnetBinding.targetDomain, SCCP_DOMAIN_BSC);
@@ -1197,6 +1198,20 @@ test("BscTestnetSccp validates native prover bundles and binds artifact hashes",
     );
   assert.equal(verifiedFromBundle.implementationHash, fixture.implementationHash);
   assert.equal(verifiedFromBundle.nativeProverBundle.chain, "bsc-testnet");
+  await assert.rejects(
+    () =>
+      verifyBscTestnetNativeEvmProverArtifactsFromBundle(
+        {
+          nativeProverBundle: JSON.stringify(fixture.bundle),
+          sdk: " javascript ",
+          artifactResolver(path) {
+            return artifactBytesByPath.get(path);
+          },
+        },
+        { destinationBinding: fixture.destinationBinding },
+      ),
+    /nativeProverArtifacts\.sdk must be a non-empty canonical string/u,
+  );
 
   const selfTestResult = await runBscTestnetNativeProverSelfTest({
     nativeProverArtifacts: verifiedFromBundle,
@@ -1499,6 +1514,106 @@ test("BscMainnetSccp calldata requires a wrapped BSC mainnet proof result", () =
       }),
     /chain id 56|destinationBinding/u,
   );
+});
+
+test("BSC native prover artifact descriptors must be verifier-owned before callbacks run", async () => {
+  const unverifiedDescriptorMessage =
+    /nativeProverArtifacts must be returned by the local native EVM prover artifact byte verifier/u;
+  const mainnetFixture = sampleVerifiedBscMainnetNativeEvmProverFixture();
+  const testnetFixture = sampleVerifiedBscTestnetNativeEvmProverFixture();
+
+  assert.throws(
+    () =>
+      new BscMainnetSccp({
+        nativeProverArtifacts: { ...mainnetFixture.nativeProverArtifacts },
+      }),
+    unverifiedDescriptorMessage,
+  );
+  assert.throws(
+    () =>
+      new BscTestnetSccp({
+        nativeProverArtifacts: { ...testnetFixture.nativeProverArtifacts },
+      }),
+    unverifiedDescriptorMessage,
+  );
+
+  let mainnetSelfTestCalled = false;
+  let mainnetProverCalled = false;
+  const mainnetSdk = new BscMainnetSccp({
+    nativeProverArtifacts: mainnetFixture.nativeProverArtifacts,
+    nativeProverSelfTest(context) {
+      mainnetSelfTestCalled = true;
+      return context.expectedResult;
+    },
+    outboundProver: {
+      async prove(request) {
+        mainnetProverCalled = true;
+        return wrapBscMainnetSccpDestinationProofResult(
+          groth16ProofBytes(request.publicInputs),
+          request,
+        );
+      },
+    },
+  });
+  await assert.rejects(
+    () =>
+      mainnetSdk.runNativeProverSelfTest({
+        nativeProverArtifacts: { ...mainnetFixture.nativeProverArtifacts },
+      }),
+    unverifiedDescriptorMessage,
+  );
+  await assert.rejects(
+    () =>
+      mainnetSdk.proveOutboundToBsc(
+        sampleOutboundInput(
+          SCCP_DOMAIN_BSC,
+          destinationBindingInputFromBinding(mainnetFixture.destinationBinding),
+        ),
+        { nativeProverArtifacts: { ...mainnetFixture.nativeProverArtifacts } },
+      ),
+    unverifiedDescriptorMessage,
+  );
+  assert.equal(mainnetSelfTestCalled, false);
+  assert.equal(mainnetProverCalled, false);
+
+  let testnetSelfTestCalled = false;
+  let testnetProverCalled = false;
+  const testnetSdk = new BscTestnetSccp({
+    nativeProverArtifacts: testnetFixture.nativeProverArtifacts,
+    nativeProverSelfTest(context) {
+      testnetSelfTestCalled = true;
+      return context.expectedResult;
+    },
+    outboundProver: {
+      async prove(request) {
+        testnetProverCalled = true;
+        return wrapBscTestnetSccpDestinationProofResult(
+          groth16ProofBytes(request.publicInputs),
+          request,
+        );
+      },
+    },
+  });
+  await assert.rejects(
+    () =>
+      testnetSdk.runNativeProverSelfTest({
+        nativeProverArtifacts: { ...testnetFixture.nativeProverArtifacts },
+      }),
+    unverifiedDescriptorMessage,
+  );
+  await assert.rejects(
+    () =>
+      testnetSdk.proveOutboundToBsc(
+        sampleBscTestnetOutboundInput(
+          SCCP_DOMAIN_BSC,
+          destinationBindingInputFromBinding(testnetFixture.destinationBinding),
+        ),
+        { nativeProverArtifacts: { ...testnetFixture.nativeProverArtifacts } },
+      ),
+    unverifiedDescriptorMessage,
+  );
+  assert.equal(testnetSelfTestCalled, false);
+  assert.equal(testnetProverCalled, false);
 });
 
 test("BscMainnetSccp binds custom outbound proof results to the requested proof", async () => {

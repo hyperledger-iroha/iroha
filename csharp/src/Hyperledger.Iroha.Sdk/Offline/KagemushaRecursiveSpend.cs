@@ -841,13 +841,13 @@ public static class KagemushaRecursiveSpendNative
             {
                 throw new ArgumentException("lineage_proving_key_archive");
             }
-            var value = BinaryPrimitives.ReadUInt64LittleEndian(buffer.AsSpan(offset, 8));
-            if (value > int.MaxValue)
+            var fixedLength = BinaryPrimitives.ReadUInt64LittleEndian(buffer.AsSpan(offset, 8));
+            if (fixedLength > int.MaxValue)
             {
                 throw new ArgumentException("lineage_proving_key_archive");
             }
             offset += 8;
-            return (int)value;
+            return (int)fixedLength;
         }
 
         ulong value = 0;

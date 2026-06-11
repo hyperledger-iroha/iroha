@@ -547,10 +547,10 @@ public sealed class SccpEthereumMainnetTests
     private static string Sha256Hex(byte[] value) =>
         "0x" + Convert.ToHexString(SHA256.HashData(value)).ToLowerInvariant();
 
-    private static byte[] NativeEvmProverArtifactBytes(string label)
+    private static byte[] NativeEvmProverArtifactBytes(string label, int size = 64 * 1024)
     {
         var labelBytes = Encoding.UTF8.GetBytes(label);
-        var bytes = new byte[256];
+        var bytes = new byte[size];
         for (var index = 0; index < bytes.Length; index++)
         {
             bytes[index] = (byte)((index * 37 + labelBytes.Length * 11) & 0xff);
@@ -4131,6 +4131,75 @@ public sealed class SccpEthereumMainnetTests
             verifierKey: "artifacts/eth-mainnet/verifier-key.bin",
             crossSdkFixtureParityArtifact: "artifacts/eth-mainnet/cross-sdk-fixture-parity.json",
             nativeProverSelfTestArtifact: "artifacts/eth-mainnet/native-prover-self-test.json");
+        (
+            EthereumMainnetNativeEvmProverBundle Bundle,
+            byte[] ParityFixtureBytes,
+            byte[] SelfTestFixtureBytes
+        ) HashConsistentNativeEvmProverBundle(
+            byte[]? proofArtifactBytesOverride = null,
+            byte[]? provingKeyBytesOverride = null,
+            byte[]? verifierKeyBytesOverride = null,
+            byte[]? implementationBytesOverride = null,
+            byte[]? crossSdkFixtureParityBytesOverride = null,
+            byte[]? nativeProverSelfTestBytesOverride = null)
+        {
+            var selectedProofArtifactBytes = proofArtifactBytesOverride ?? proofArtifactBytes;
+            var selectedProvingKeyBytes = provingKeyBytesOverride ?? provingKeyBytes;
+            var selectedVerifierKeyBytes = verifierKeyBytesOverride ?? verifierKeyBytes;
+            var selectedImplementationBytes = implementationBytesOverride ?? implementationBytes;
+            var selectedProofArtifactHash = Sha256Hex(selectedProofArtifactBytes);
+            var selectedProvingKeyHash = Sha256Hex(selectedProvingKeyBytes);
+            var selectedVerifierKeyHash = Sha256Hex(selectedVerifierKeyBytes);
+            var selectedImplementationHash = Sha256Hex(selectedImplementationBytes);
+            var draftBundle = new EthereumMainnetNativeEvmProverBundle(
+                selectedProofArtifactHash,
+                selectedProvingKeyHash,
+                selectedVerifierKeyHash,
+                artifactBinding.BindingHash,
+                EthereumMainnetSccp.EthNativeEvmProverRequiredImplementationsV1
+                    .OrderBy(entry => entry.Key, StringComparer.Ordinal)
+                    .Select((entry, index) => new EthereumMainnetNativeEvmProverBundleSdkArtifact(
+                        entry.Key,
+                        entry.Value,
+                        selectedProofArtifactHash,
+                        selectedProvingKeyHash,
+                        entry.Key == "dotnet"
+                            ? selectedImplementationHash
+                            : "0x" + string.Concat(Enumerable.Repeat((index + 1).ToString("x2"), 32)),
+                        implementationArtifact: $"artifacts/eth-mainnet/{entry.Key}-implementation.bin"))
+                    .ToArray(),
+                SampleNativeAuditHashes(),
+                expectedDestinationBindingHash: artifactBinding.BindingHash,
+                proofArtifact: "artifacts/eth-mainnet/proof-artifact.bin",
+                provingKey: "artifacts/eth-mainnet/proving-key.bin",
+                verifierKey: "artifacts/eth-mainnet/verifier-key.bin",
+                crossSdkFixtureParityArtifact: "artifacts/eth-mainnet/cross-sdk-fixture-parity.json",
+                nativeProverSelfTestArtifact: "artifacts/eth-mainnet/native-prover-self-test.json");
+            var selectedParityFixtureBytes = crossSdkFixtureParityBytesOverride
+                ?? Encoding.UTF8.GetBytes(SampleNativeEvmProverParityFixtureJson(draftBundle));
+            var selectedSelfTestFixtureBytes = nativeProverSelfTestBytesOverride
+                ?? Encoding.UTF8.GetBytes(SampleNativeEvmProverSelfTestFixtureJson(draftBundle));
+            var selectedAuditHashes = SampleNativeAuditHashes()
+                .ToDictionary(entry => entry.Key, entry => entry.Value, StringComparer.Ordinal);
+            selectedAuditHashes["cross_sdk_fixture_parity"] = Sha256Hex(selectedParityFixtureBytes);
+            selectedAuditHashes["native_prover_self_test"] = Sha256Hex(selectedSelfTestFixtureBytes);
+            return (
+                new EthereumMainnetNativeEvmProverBundle(
+                    selectedProofArtifactHash,
+                    selectedProvingKeyHash,
+                    selectedVerifierKeyHash,
+                    artifactBinding.BindingHash,
+                    draftBundle.NativeSdkArtifacts,
+                    selectedAuditHashes,
+                    expectedDestinationBindingHash: artifactBinding.BindingHash,
+                    proofArtifact: "artifacts/eth-mainnet/proof-artifact.bin",
+                    provingKey: "artifacts/eth-mainnet/proving-key.bin",
+                    verifierKey: "artifacts/eth-mainnet/verifier-key.bin",
+                    crossSdkFixtureParityArtifact: "artifacts/eth-mainnet/cross-sdk-fixture-parity.json",
+                    nativeProverSelfTestArtifact: "artifacts/eth-mainnet/native-prover-self-test.json"),
+                selectedParityFixtureBytes,
+                selectedSelfTestFixtureBytes);
+        }
         var verifiedArtifacts = verifiedBundle.VerifiedArtifacts(
             proofArtifactBytes,
             provingKeyBytes,
@@ -4384,7 +4453,7 @@ public sealed class SccpEthereumMainnetTests
             tinyAuditHashes,
             expectedDestinationBindingHash: artifactBinding.BindingHash);
         Assert.Contains(
-            "proofArtifactBytes must be at least 256 bytes",
+            "proofArtifactBytes must be at least 65536 bytes",
             Assert.Throws<ArgumentException>(
                 () => tinyBundle.VerifiedArtifacts(
                     tinyProofArtifactBytes,
@@ -4394,6 +4463,76 @@ public sealed class SccpEthereumMainnetTests
                     implementationBytes,
                     tinyParityFixtureBytes,
                     tinySelfTestFixtureBytes)).Message);
+        var tinyProvingKeyBytes = new byte[] { 8, 9, 10, 11 };
+        var tinyProvingKeyFixture = HashConsistentNativeEvmProverBundle(
+            provingKeyBytesOverride: tinyProvingKeyBytes);
+        Assert.Contains(
+            "provingKeyBytes must be at least 65536 bytes",
+            Assert.Throws<ArgumentException>(
+                () => tinyProvingKeyFixture.Bundle.VerifiedArtifacts(
+                    proofArtifactBytes,
+                    tinyProvingKeyBytes,
+                    verifierKeyBytes,
+                    "dotnet",
+                    implementationBytes,
+                    tinyProvingKeyFixture.ParityFixtureBytes,
+                    tinyProvingKeyFixture.SelfTestFixtureBytes)).Message);
+        var tinyVerifierKeyBytes = new byte[] { 12, 13, 14, 15 };
+        var tinyVerifierKeyFixture = HashConsistentNativeEvmProverBundle(
+            verifierKeyBytesOverride: tinyVerifierKeyBytes);
+        Assert.Contains(
+            "verifierKeyBytes must be at least 128 bytes",
+            Assert.Throws<ArgumentException>(
+                () => tinyVerifierKeyFixture.Bundle.VerifiedArtifacts(
+                    proofArtifactBytes,
+                    provingKeyBytes,
+                    tinyVerifierKeyBytes,
+                    "dotnet",
+                    implementationBytes,
+                    tinyVerifierKeyFixture.ParityFixtureBytes,
+                    tinyVerifierKeyFixture.SelfTestFixtureBytes)).Message);
+        var tinyParityFixtureBytesForFloor = Encoding.UTF8.GetBytes("{}");
+        var tinyParityFixture = HashConsistentNativeEvmProverBundle(
+            crossSdkFixtureParityBytesOverride: tinyParityFixtureBytesForFloor);
+        Assert.Contains(
+            "crossSdkFixtureParityBytes must be at least 128 bytes",
+            Assert.Throws<ArgumentException>(
+                () => tinyParityFixture.Bundle.VerifiedArtifacts(
+                    proofArtifactBytes,
+                    provingKeyBytes,
+                    verifierKeyBytes,
+                    "dotnet",
+                    implementationBytes,
+                    tinyParityFixtureBytesForFloor,
+                    tinyParityFixture.SelfTestFixtureBytes)).Message);
+        var tinySelfTestFixtureBytesForFloor = Encoding.UTF8.GetBytes("{}");
+        var tinySelfTestFixture = HashConsistentNativeEvmProverBundle(
+            nativeProverSelfTestBytesOverride: tinySelfTestFixtureBytesForFloor);
+        Assert.Contains(
+            "nativeProverSelfTestBytes must be at least 128 bytes",
+            Assert.Throws<ArgumentException>(
+                () => tinySelfTestFixture.Bundle.VerifiedArtifacts(
+                    proofArtifactBytes,
+                    provingKeyBytes,
+                    verifierKeyBytes,
+                    "dotnet",
+                    implementationBytes,
+                    tinySelfTestFixture.ParityFixtureBytes,
+                    tinySelfTestFixtureBytesForFloor)).Message);
+        var tinyImplementationBytes = new byte[] { 16, 17, 18, 19 };
+        var tinyImplementationFixture = HashConsistentNativeEvmProverBundle(
+            implementationBytesOverride: tinyImplementationBytes);
+        Assert.Contains(
+            "implementationBytes must be at least 1024 bytes",
+            Assert.Throws<ArgumentException>(
+                () => tinyImplementationFixture.Bundle.VerifiedArtifacts(
+                    proofArtifactBytes,
+                    provingKeyBytes,
+                    verifierKeyBytes,
+                    "dotnet",
+                    tinyImplementationBytes,
+                    tinyImplementationFixture.ParityFixtureBytes,
+                    tinyImplementationFixture.SelfTestFixtureBytes)).Message);
         Assert.Contains(
             "sdk must be a non-empty string",
             Assert.Throws<ArgumentException>(

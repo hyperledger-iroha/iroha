@@ -5261,6 +5261,63 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
   const selfTestFixtureBytes = Buffer.from(JSON.stringify(selfTestFixture), "utf8");
   const selfTestFixtureHash = sha256Hex(selfTestFixtureBytes);
   nativeProverBundle.audit_hashes.native_prover_self_test = selfTestFixtureHash;
+  const hashConsistentNativeProverBundle = ({
+    proofArtifactBytes: selectedProofArtifactBytes = proofArtifactBytes,
+    provingKeyBytes: selectedProvingKeyBytes = provingKeyBytes,
+    verifierKeyBytes: selectedVerifierKeyBytes = verifierKeyBytes,
+    implementationBytes: selectedImplementationBytes = implementationBytes,
+    crossSdkFixtureParityBytes: overrideParityFixtureBytes,
+    nativeProverSelfTestBytes: overrideSelfTestFixtureBytes,
+  } = {}) => {
+    const selectedProofArtifactHash = sha256Hex(selectedProofArtifactBytes);
+    const selectedProvingKeyHash = sha256Hex(selectedProvingKeyBytes);
+    const selectedVerifierKeyHash = sha256Hex(selectedVerifierKeyBytes);
+    const selectedImplementationHash = sha256Hex(selectedImplementationBytes);
+    const selectedBundle = {
+      ...nativeProverBundle,
+      proof_artifact_hash: selectedProofArtifactHash,
+      proving_key_hash: selectedProvingKeyHash,
+      verifier_key_hash: selectedVerifierKeyHash,
+      native_sdk_artifacts: nativeProverBundle.native_sdk_artifacts.map((artifact, index) => ({
+        ...artifact,
+        prover_artifact_hash: selectedProofArtifactHash,
+        proving_key_hash: selectedProvingKeyHash,
+        implementation_hash: artifact.sdk === "javascript"
+          ? selectedImplementationHash
+          : `0x${(index + 1).toString(16).padStart(2, "0").repeat(32)}`,
+      })),
+    };
+    const selectedParityFixtureBytes =
+      overrideParityFixtureBytes ?? Buffer.from(
+        JSON.stringify({
+          ...parityFixture,
+          proof_artifact_hash: selectedProofArtifactHash,
+          proving_key_hash: selectedProvingKeyHash,
+          verifier_key_hash: selectedVerifierKeyHash,
+        }),
+        "utf8",
+      );
+    const selectedSelfTestFixtureBytes =
+      overrideSelfTestFixtureBytes ?? Buffer.from(
+        JSON.stringify({
+          ...selfTestFixture,
+          proof_artifact_hash: selectedProofArtifactHash,
+          proving_key_hash: selectedProvingKeyHash,
+          verifier_key_hash: selectedVerifierKeyHash,
+        }),
+        "utf8",
+      );
+    selectedBundle.audit_hashes = {
+      ...nativeProverBundle.audit_hashes,
+      cross_sdk_fixture_parity: sha256Hex(selectedParityFixtureBytes),
+      native_prover_self_test: sha256Hex(selectedSelfTestFixtureBytes),
+    };
+    return {
+      bundle: selectedBundle,
+      parityFixtureBytes: selectedParityFixtureBytes,
+      selfTestFixtureBytes: selectedSelfTestFixtureBytes,
+    };
+  };
   assert.equal(
     validateEthereumMainnetNativeEvmProverBundle(nativeProverBundle, {
       destinationBinding: ethereumMainnetBinding,
@@ -5375,6 +5432,20 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     )).implementationHash,
     implementationHash,
   );
+  await assert.rejects(
+    () =>
+      verifyEthereumMainnetNativeEvmProverArtifactsFromBundle(
+        {
+          nativeProverBundle,
+          sdk: " javascript ",
+          artifactResolver(path) {
+            return nativeArtifactBytes.get(path);
+          },
+        },
+        { destinationBinding: ethereumMainnetBinding },
+      ),
+    /nativeProverArtifacts\.sdk must be a non-empty canonical string/u,
+  );
   let factoryRequest;
   const factorySdk = await EthereumMainnetSccp.fromNativeProverBundle({
     destinationBinding: ethereumMainnetBinding,
@@ -5445,6 +5516,111 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
         { destinationBinding: ethereumMainnetBinding },
       ),
     /proofArtifactBytes must be at least 65536 bytes/u,
+  );
+  const tinyProvingKeyBytes = Buffer.from("tiny package proving key\n", "utf8");
+  const tinyProvingKeyBundle = hashConsistentNativeProverBundle({
+    provingKeyBytes: tinyProvingKeyBytes,
+  });
+  assert.throws(
+    () =>
+      verifyEthereumMainnetNativeEvmProverArtifacts(
+        {
+          nativeProverBundle: tinyProvingKeyBundle.bundle,
+          proofArtifactBytes,
+          provingKeyBytes: tinyProvingKeyBytes,
+          verifierKeyBytes,
+          crossSdkFixtureParityBytes: tinyProvingKeyBundle.parityFixtureBytes,
+          nativeProverSelfTestBytes: tinyProvingKeyBundle.selfTestFixtureBytes,
+          sdk: "javascript",
+          implementationBytes,
+        },
+        { destinationBinding: ethereumMainnetBinding },
+      ),
+    /provingKeyBytes must be at least 65536 bytes/u,
+  );
+  const tinyVerifierKeyBytes = Buffer.from("tiny package verifier key\n", "utf8");
+  const tinyVerifierKeyBundle = hashConsistentNativeProverBundle({
+    verifierKeyBytes: tinyVerifierKeyBytes,
+  });
+  assert.throws(
+    () =>
+      verifyEthereumMainnetNativeEvmProverArtifacts(
+        {
+          nativeProverBundle: tinyVerifierKeyBundle.bundle,
+          proofArtifactBytes,
+          provingKeyBytes,
+          verifierKeyBytes: tinyVerifierKeyBytes,
+          crossSdkFixtureParityBytes: tinyVerifierKeyBundle.parityFixtureBytes,
+          nativeProverSelfTestBytes: tinyVerifierKeyBundle.selfTestFixtureBytes,
+          sdk: "javascript",
+          implementationBytes,
+        },
+        { destinationBinding: ethereumMainnetBinding },
+      ),
+    /verifierKeyBytes must be at least 128 bytes/u,
+  );
+  const tinyParityFixtureBytesForFloor = Buffer.from("{}", "utf8");
+  const tinyParityBundle = hashConsistentNativeProverBundle({
+    crossSdkFixtureParityBytes: tinyParityFixtureBytesForFloor,
+  });
+  assert.throws(
+    () =>
+      verifyEthereumMainnetNativeEvmProverArtifacts(
+        {
+          nativeProverBundle: tinyParityBundle.bundle,
+          proofArtifactBytes,
+          provingKeyBytes,
+          verifierKeyBytes,
+          crossSdkFixtureParityBytes: tinyParityFixtureBytesForFloor,
+          nativeProverSelfTestBytes: tinyParityBundle.selfTestFixtureBytes,
+          sdk: "javascript",
+          implementationBytes,
+        },
+        { destinationBinding: ethereumMainnetBinding },
+      ),
+    /crossSdkFixtureParityBytes must be at least 128 bytes/u,
+  );
+  const tinySelfTestFixtureBytesForFloor = Buffer.from("{}", "utf8");
+  const tinySelfTestBundle = hashConsistentNativeProverBundle({
+    nativeProverSelfTestBytes: tinySelfTestFixtureBytesForFloor,
+  });
+  assert.throws(
+    () =>
+      verifyEthereumMainnetNativeEvmProverArtifacts(
+        {
+          nativeProverBundle: tinySelfTestBundle.bundle,
+          proofArtifactBytes,
+          provingKeyBytes,
+          verifierKeyBytes,
+          crossSdkFixtureParityBytes: tinySelfTestBundle.parityFixtureBytes,
+          nativeProverSelfTestBytes: tinySelfTestFixtureBytesForFloor,
+          sdk: "javascript",
+          implementationBytes,
+        },
+        { destinationBinding: ethereumMainnetBinding },
+      ),
+    /nativeProverSelfTestBytes must be at least 128 bytes/u,
+  );
+  const tinyImplementationBytes = Buffer.from("tiny package implementation\n", "utf8");
+  const tinyImplementationBundle = hashConsistentNativeProverBundle({
+    implementationBytes: tinyImplementationBytes,
+  });
+  assert.throws(
+    () =>
+      verifyEthereumMainnetNativeEvmProverArtifacts(
+        {
+          nativeProverBundle: tinyImplementationBundle.bundle,
+          proofArtifactBytes,
+          provingKeyBytes,
+          verifierKeyBytes,
+          crossSdkFixtureParityBytes: tinyImplementationBundle.parityFixtureBytes,
+          nativeProverSelfTestBytes: tinyImplementationBundle.selfTestFixtureBytes,
+          sdk: "javascript",
+          implementationBytes: tinyImplementationBytes,
+        },
+        { destinationBinding: ethereumMainnetBinding },
+      ),
+    /implementationBytes must be at least 1024 bytes/u,
   );
   assert.throws(
     () =>

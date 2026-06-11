@@ -641,6 +641,28 @@ def test_sccp_production_corridor_log_dir_dry_run_is_explicit(tmp_path: Path) ->
     assert "tee \"$LOG_DIR/$phase.log\"" in script
 
 
+@pytest.mark.parametrize(
+    "args",
+    (
+        ("--log-dir", ""),
+        ("--log-dir=",),
+    ),
+)
+def test_sccp_production_corridor_rejects_empty_log_dir(args: tuple[str, ...]) -> None:
+    """Release evidence collection must not silently drop an empty log directory."""
+
+    completed = subprocess.run(
+        ["bash", str(SCRIPT), "--dry-run", *args, "--phase", "js-sdk"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert "--log-dir requires a directory." in completed.stderr
+    assert "==> SCCP production corridor: js-sdk" not in completed.stdout
+
+
 def test_sccp_production_corridor_dry_run_skips_mobile_toolchain_resolution() -> None:
     """Dry-run mode must not fail just because Java or Android SDKs are unavailable."""
 

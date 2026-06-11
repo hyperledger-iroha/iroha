@@ -3989,6 +3989,58 @@ test("EthereumMainnetSccp verifies native prover artifact bytes against manifest
   const verifierKeyHash = sha256Hex(verifierKeyBytes);
   const implementationHash = sha256Hex(implementationBytes);
   const input = sampleOutboundInput(SCCP_DOMAIN_ETH, { verifierKeyHash });
+  const hashConsistentNativeEvmProverBundle = ({
+    proofArtifactBytes: selectedProofArtifactBytes = proofArtifactBytes,
+    provingKeyBytes: selectedProvingKeyBytes = provingKeyBytes,
+    verifierKeyBytes: selectedVerifierKeyBytes = verifierKeyBytes,
+    implementationBytes: selectedImplementationBytes = implementationBytes,
+    crossSdkFixtureParityBytes: selectedParityFixtureBytes,
+    nativeProverSelfTestBytes: selectedSelfTestFixtureBytes,
+  } = {}) => {
+    const selectedProofArtifactHash = sha256Hex(selectedProofArtifactBytes);
+    const selectedProvingKeyHash = sha256Hex(selectedProvingKeyBytes);
+    const selectedVerifierKeyHash = sha256Hex(selectedVerifierKeyBytes);
+    const selectedImplementationHash = sha256Hex(selectedImplementationBytes);
+    const draftBundle = sampleNativeEvmProverBundle(
+      input.destinationBinding.bindingHash,
+      {
+        proof_artifact_hash: selectedProofArtifactHash,
+        proving_key_hash: selectedProvingKeyHash,
+        verifier_key_hash: selectedVerifierKeyHash,
+        native_sdk_artifacts: Object.entries(
+          SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1,
+        ).map(([sdk, implementation], index) => ({
+          sdk,
+          implementation,
+          prover_artifact_hash: selectedProofArtifactHash,
+          proving_key_hash: selectedProvingKeyHash,
+          implementation_artifact: `artifacts/eth-mainnet/${sdk}-implementation.bin`,
+          implementation_hash: sdk === "javascript"
+            ? selectedImplementationHash
+            : hex32((index + 1).toString(16).padStart(2, "0")),
+        })),
+      },
+    );
+    const parityFixtureBytesForBundle =
+      selectedParityFixtureBytes ?? sampleNativeEvmProverParityFixtureBytes(draftBundle);
+    const selfTestFixtureBytesForBundle =
+      selectedSelfTestFixtureBytes ?? sampleNativeEvmProverSelfTestFixtureBytes(draftBundle);
+    return {
+      bundle: sampleNativeEvmProverBundle(input.destinationBinding.bindingHash, {
+        proof_artifact_hash: selectedProofArtifactHash,
+        proving_key_hash: selectedProvingKeyHash,
+        verifier_key_hash: selectedVerifierKeyHash,
+        native_sdk_artifacts: draftBundle.native_sdk_artifacts,
+        audit_hashes: {
+          ...draftBundle.audit_hashes,
+          cross_sdk_fixture_parity: sha256Hex(parityFixtureBytesForBundle),
+          native_prover_self_test: sha256Hex(selfTestFixtureBytesForBundle),
+        },
+      }),
+      parityFixtureBytes: parityFixtureBytesForBundle,
+      selfTestFixtureBytes: selfTestFixtureBytesForBundle,
+    };
+  };
   const { bundle, parityFixtureBytes, parityFixtureHash, selfTestFixtureBytes, selfTestFixtureHash } =
     sampleNativeEvmProverBundleWithFixtureBytes(input.destinationBinding.bindingHash, {
     proof_artifact_hash: proofArtifactHash,
@@ -4074,7 +4126,7 @@ test("EthereumMainnetSccp verifies native prover artifact bytes against manifest
         },
         { destinationBinding: input.destinationBinding },
       ),
-    /sdk must be a non-empty canonical string/u,
+    /nativeProverArtifacts\.sdk must be a non-empty canonical string/u,
   );
   let helperSawOptions = false;
   const helperSelfTestResult = await runEthereumMainnetNativeProverSelfTest(
@@ -4346,7 +4398,7 @@ test("EthereumMainnetSccp verifies native prover artifact bytes against manifest
         },
         { destinationBinding: input.destinationBinding },
       ),
-    /sdk must be a non-empty canonical string/u,
+    /nativeProverArtifacts\.sdk must be a non-empty canonical string/u,
   );
   assert.throws(
     () =>
@@ -4363,7 +4415,7 @@ test("EthereumMainnetSccp verifies native prover artifact bytes against manifest
         },
         { destinationBinding: input.destinationBinding },
       ),
-    /sdk must be a non-empty canonical string/u,
+    /nativeProverArtifacts\.sdk must be a non-empty canonical string/u,
   );
   assert.throws(
     () =>
@@ -4461,6 +4513,111 @@ test("EthereumMainnetSccp verifies native prover artifact bytes against manifest
         { destinationBinding: input.destinationBinding },
       ),
     /proofArtifactBytes must be at least 65536 bytes/u,
+  );
+  const tinyProvingKeyBytes = Buffer.from("tiny native proving key\n", "utf8");
+  const tinyProvingKeyBundle = hashConsistentNativeEvmProverBundle({
+    provingKeyBytes: tinyProvingKeyBytes,
+  });
+  assert.throws(
+    () =>
+      verifyEthereumMainnetNativeEvmProverArtifacts(
+        {
+          nativeProverBundle: tinyProvingKeyBundle.bundle,
+          proofArtifactBytes,
+          provingKeyBytes: tinyProvingKeyBytes,
+          verifierKeyBytes,
+          crossSdkFixtureParityBytes: tinyProvingKeyBundle.parityFixtureBytes,
+          nativeProverSelfTestBytes: tinyProvingKeyBundle.selfTestFixtureBytes,
+          sdk: "javascript",
+          implementationBytes,
+        },
+        { destinationBinding: input.destinationBinding },
+      ),
+    /provingKeyBytes must be at least 65536 bytes/u,
+  );
+  const tinyVerifierKeyBytes = Buffer.from("tiny native verifier key\n", "utf8");
+  const tinyVerifierKeyBundle = hashConsistentNativeEvmProverBundle({
+    verifierKeyBytes: tinyVerifierKeyBytes,
+  });
+  assert.throws(
+    () =>
+      verifyEthereumMainnetNativeEvmProverArtifacts(
+        {
+          nativeProverBundle: tinyVerifierKeyBundle.bundle,
+          proofArtifactBytes,
+          provingKeyBytes,
+          verifierKeyBytes: tinyVerifierKeyBytes,
+          crossSdkFixtureParityBytes: tinyVerifierKeyBundle.parityFixtureBytes,
+          nativeProverSelfTestBytes: tinyVerifierKeyBundle.selfTestFixtureBytes,
+          sdk: "javascript",
+          implementationBytes,
+        },
+        { destinationBinding: input.destinationBinding },
+      ),
+    /verifierKeyBytes must be at least 128 bytes/u,
+  );
+  const tinyParitySupportFixtureBytes = Buffer.from("{}", "utf8");
+  const tinyParitySupportBundle = hashConsistentNativeEvmProverBundle({
+    crossSdkFixtureParityBytes: tinyParitySupportFixtureBytes,
+  });
+  assert.throws(
+    () =>
+      verifyEthereumMainnetNativeEvmProverArtifacts(
+        {
+          nativeProverBundle: tinyParitySupportBundle.bundle,
+          proofArtifactBytes,
+          provingKeyBytes,
+          verifierKeyBytes,
+          crossSdkFixtureParityBytes: tinyParitySupportFixtureBytes,
+          nativeProverSelfTestBytes: tinyParitySupportBundle.selfTestFixtureBytes,
+          sdk: "javascript",
+          implementationBytes,
+        },
+        { destinationBinding: input.destinationBinding },
+      ),
+    /crossSdkFixtureParityBytes must be at least 128 bytes/u,
+  );
+  const tinySelfTestSupportFixtureBytes = Buffer.from("{}", "utf8");
+  const tinySelfTestSupportBundle = hashConsistentNativeEvmProverBundle({
+    nativeProverSelfTestBytes: tinySelfTestSupportFixtureBytes,
+  });
+  assert.throws(
+    () =>
+      verifyEthereumMainnetNativeEvmProverArtifacts(
+        {
+          nativeProverBundle: tinySelfTestSupportBundle.bundle,
+          proofArtifactBytes,
+          provingKeyBytes,
+          verifierKeyBytes,
+          crossSdkFixtureParityBytes: tinySelfTestSupportBundle.parityFixtureBytes,
+          nativeProverSelfTestBytes: tinySelfTestSupportFixtureBytes,
+          sdk: "javascript",
+          implementationBytes,
+        },
+        { destinationBinding: input.destinationBinding },
+      ),
+    /nativeProverSelfTestBytes must be at least 128 bytes/u,
+  );
+  const tinyImplementationBytes = Buffer.from("tiny native js implementation\n", "utf8");
+  const tinyImplementationBundle = hashConsistentNativeEvmProverBundle({
+    implementationBytes: tinyImplementationBytes,
+  });
+  assert.throws(
+    () =>
+      verifyEthereumMainnetNativeEvmProverArtifacts(
+        {
+          nativeProverBundle: tinyImplementationBundle.bundle,
+          proofArtifactBytes,
+          provingKeyBytes,
+          verifierKeyBytes,
+          crossSdkFixtureParityBytes: tinyImplementationBundle.parityFixtureBytes,
+          nativeProverSelfTestBytes: tinyImplementationBundle.selfTestFixtureBytes,
+          sdk: "javascript",
+          implementationBytes: tinyImplementationBytes,
+        },
+        { destinationBinding: input.destinationBinding },
+      ),
+    /implementationBytes must be at least 1024 bytes/u,
   );
   assert.throws(
     () =>

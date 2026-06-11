@@ -36,7 +36,11 @@ public let sccpEthNativeEvmProverRequiredAuditHashesV1: [String] = [
 ]
 /// Hash algorithm used for native EVM prover bundle artifact bytes.
 public let sccpNativeEvmProverArtifactHashAlgorithmV1 = "sha256"
-private let sccpNativeEvmProverMinArtifactBytesV1 = 256
+private let sccpNativeEvmProverMinSupportArtifactBytesV1 = 128
+private let sccpNativeEvmProverMinImplementationBytesV1 = 1024
+private let sccpNativeEvmProverMinProofArtifactBytesV1 = 64 * 1024
+private let sccpNativeEvmProverMinProvingKeyBytesV1 = 64 * 1024
+private let sccpNativeEvmProverMinVerifierKeyBytesV1 = 128
 /// Canonical byte length of the static BN254 Groth16 ABI proof tuple.
 public let sccpGroth16Bn254ProofAbiByteLengthV1 = 384
 /// EVM-family contract-call envelope encoding used by SCCP verifier submissions.
@@ -2440,15 +2444,26 @@ public extension EthereumMainnetNativeEvmProverBundle {
         }
         try sccpNativeEvmProverRequireProductionArtifactSize(
             proofArtifactBytes,
-            field: "proofArtifactBytes"
+            field: "proofArtifactBytes",
+            minBytes: sccpNativeEvmProverMinProofArtifactBytesV1
         )
         try sccpNativeEvmProverRequireProductionArtifactSize(
             provingKeyBytes,
-            field: "provingKeyBytes"
+            field: "provingKeyBytes",
+            minBytes: sccpNativeEvmProverMinProvingKeyBytesV1
         )
         try sccpNativeEvmProverRequireProductionArtifactSize(
             verifierKeyBytes,
-            field: "verifierKeyBytes"
+            field: "verifierKeyBytes",
+            minBytes: sccpNativeEvmProverMinVerifierKeyBytesV1
+        )
+        try sccpNativeEvmProverRequireProductionArtifactSize(
+            crossSdkFixtureParityBytes,
+            field: "crossSdkFixtureParityBytes"
+        )
+        try sccpNativeEvmProverRequireProductionArtifactSize(
+            nativeProverSelfTestBytes,
+            field: "nativeProverSelfTestBytes"
         )
         try sccpNativeEvmProverRejectForbiddenArtifactMarkers(
             proofArtifactBytes,
@@ -2494,7 +2509,8 @@ public extension EthereumMainnetNativeEvmProverBundle {
         }
         try sccpNativeEvmProverRequireProductionArtifactSize(
             implementationBytes,
-            field: "implementationBytes"
+            field: "implementationBytes",
+            minBytes: sccpNativeEvmProverMinImplementationBytesV1
         )
         try sccpNativeEvmProverRejectForbiddenArtifactMarkers(
             implementationBytes,
@@ -2563,9 +2579,10 @@ private func sccpNativeEvmProverArtifactSha256Hex(_ data: Data) -> String {
 
 private func sccpNativeEvmProverRequireProductionArtifactSize(
     _ data: Data,
-    field: String
+    field: String,
+    minBytes: Int = sccpNativeEvmProverMinSupportArtifactBytesV1
 ) throws {
-    guard data.count >= sccpNativeEvmProverMinArtifactBytesV1 else {
+    guard data.count >= minBytes else {
         throw EvmSccpProverError.invalidPublicInputs("\(field).minBytes")
     }
 }

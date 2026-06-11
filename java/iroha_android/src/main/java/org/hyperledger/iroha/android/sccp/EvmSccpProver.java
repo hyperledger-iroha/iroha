@@ -54,7 +54,11 @@ public final class EvmSccpProver {
               "native_prover_self_test",
               "no_wasm_no_remote_scan"));
   public static final String NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1 = "sha256";
-  private static final int NATIVE_EVM_PROVER_MIN_ARTIFACT_BYTES_V1 = 256;
+  private static final int NATIVE_EVM_PROVER_MIN_SUPPORT_ARTIFACT_BYTES_V1 = 128;
+  private static final int NATIVE_EVM_PROVER_MIN_IMPLEMENTATION_BYTES_V1 = 1024;
+  private static final int NATIVE_EVM_PROVER_MIN_PROOF_ARTIFACT_BYTES_V1 = 64 * 1024;
+  private static final int NATIVE_EVM_PROVER_MIN_PROVING_KEY_BYTES_V1 = 64 * 1024;
+  private static final int NATIVE_EVM_PROVER_MIN_VERIFIER_KEY_BYTES_V1 = 128;
   public static final int GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1 = 384;
   public static final int SOURCE_STATE_MAX_PROOF_BYTES = 2 * 1024 * 1024;
   public static final String CONTRACT_CALL_ABI_TUPLE_V1 = "abi_tuple_v1";
@@ -1162,9 +1166,15 @@ public final class EvmSccpProver {
 
   private static void requireNativeEvmProverProductionArtifactSize(
       final byte[] bytes, final String field) {
-    if (bytes.length < NATIVE_EVM_PROVER_MIN_ARTIFACT_BYTES_V1) {
+    requireNativeEvmProverProductionArtifactSize(
+        bytes, field, NATIVE_EVM_PROVER_MIN_SUPPORT_ARTIFACT_BYTES_V1);
+  }
+
+  private static void requireNativeEvmProverProductionArtifactSize(
+      final byte[] bytes, final String field, final int minBytes) {
+    if (bytes.length < minBytes) {
       throw new IllegalArgumentException(
-          field + " must be at least " + NATIVE_EVM_PROVER_MIN_ARTIFACT_BYTES_V1 + " bytes");
+          field + " must be at least " + minBytes + " bytes");
     }
   }
 
@@ -1797,9 +1807,18 @@ public final class EvmSccpProver {
         throw new IllegalArgumentException(
             "nativeProverSelfTestBytes sha256 must match nativeProverBundle.auditHashes.native_prover_self_test");
       }
-      requireNativeEvmProverProductionArtifactSize(proofArtifactBytes, "proofArtifactBytes");
-      requireNativeEvmProverProductionArtifactSize(provingKeyBytes, "provingKeyBytes");
-      requireNativeEvmProverProductionArtifactSize(verifierKeyBytes, "verifierKeyBytes");
+      requireNativeEvmProverProductionArtifactSize(
+          proofArtifactBytes,
+          "proofArtifactBytes",
+          NATIVE_EVM_PROVER_MIN_PROOF_ARTIFACT_BYTES_V1);
+      requireNativeEvmProverProductionArtifactSize(
+          provingKeyBytes, "provingKeyBytes", NATIVE_EVM_PROVER_MIN_PROVING_KEY_BYTES_V1);
+      requireNativeEvmProverProductionArtifactSize(
+          verifierKeyBytes, "verifierKeyBytes", NATIVE_EVM_PROVER_MIN_VERIFIER_KEY_BYTES_V1);
+      requireNativeEvmProverProductionArtifactSize(
+          crossSdkFixtureParityBytes, "crossSdkFixtureParityBytes");
+      requireNativeEvmProverProductionArtifactSize(
+          nativeProverSelfTestBytes, "nativeProverSelfTestBytes");
       rejectNativeEvmProverForbiddenArtifactMarkers(proofArtifactBytes, "proofArtifactBytes");
       rejectNativeEvmProverForbiddenArtifactMarkers(provingKeyBytes, "provingKeyBytes");
       rejectNativeEvmProverForbiddenArtifactMarkers(verifierKeyBytes, "verifierKeyBytes");
@@ -1837,7 +1856,10 @@ public final class EvmSccpProver {
         throw new IllegalArgumentException(
             "implementationBytes sha256 must match nativeProverBundle implementationHash");
       }
-      requireNativeEvmProverProductionArtifactSize(implementationBytes, "implementationBytes");
+      requireNativeEvmProverProductionArtifactSize(
+          implementationBytes,
+          "implementationBytes",
+          NATIVE_EVM_PROVER_MIN_IMPLEMENTATION_BYTES_V1);
       rejectNativeEvmProverForbiddenArtifactMarkers(implementationBytes, "implementationBytes");
       final String implementation = artifact.implementation();
       return new EthereumMainnetNativeEvmProverArtifacts(

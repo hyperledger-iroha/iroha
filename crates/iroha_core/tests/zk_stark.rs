@@ -671,10 +671,8 @@ fn build_sample_air_envelope_poseidon2() -> StarkVerifyEnvelopeV1 {
     build_sample_air_envelope_with_domain_tag("fastpq:v1:fri".to_string(), STARK_HASH_POSEIDON2_V1)
 }
 
-fn build_sample_air_composition_envelope_with_domain_tag(
-    domain_tag: String,
-) -> StarkVerifyEnvelopeV1 {
-    let aux_terms = vec![
+fn sample_composition_terms() -> Vec<StarkCompositionTermV1> {
+    vec![
         StarkCompositionTermV1 {
             wire_index: 0,
             value: 11,
@@ -685,13 +683,18 @@ fn build_sample_air_composition_envelope_with_domain_tag(
             value: 17,
             coeff: 5,
         },
-    ];
+    ]
+}
+
+fn build_sample_air_composition_envelope_with_domain_tag(
+    domain_tag: String,
+) -> StarkVerifyEnvelopeV1 {
     let bytes = prove_stark_fri_composition_envelope_bytes(
         sample_air_params(domain_tag, STARK_HASH_SHA256_V1),
         "TEST-STARK".to_string(),
         7,
         2,
-        aux_terms,
+        sample_composition_terms(),
     )
     .expect("build sample AIR composition envelope");
     norito::decode_from_bytes(&bytes).expect("decode sample AIR composition envelope")
@@ -2000,8 +2003,10 @@ fn stark_envelope_respects_limits() {
         "default limits should accept the sample envelope"
     );
 
+    let default_limits = StarkVerifierLimits::default();
+
     // Apply a stricter domain-tag limit to force rejection.
-    let mut tight_limits = StarkVerifierLimits::default();
+    let mut tight_limits = default_limits;
     tight_limits.max_domain_tag_len = 4;
 
     let mut env_bad_tag = env.clone();
@@ -2017,6 +2022,63 @@ fn stark_envelope_respects_limits() {
     assert!(
         !verify_stark_fri_envelope_with_limits(&bytes, &tight_limits),
         "envelope larger than allowed byte budget must fail"
+    );
+
+    let mut relaxed_limits = default_limits;
+    relaxed_limits.max_domain_tag_len = default_limits.max_domain_tag_len + 1;
+    relaxed_limits.max_transcript_label_len = default_limits.max_transcript_label_len + 1;
+    relaxed_limits.max_envelope_bytes = default_limits.max_envelope_bytes + 1;
+
+    let oversized_envelope_bytes = vec![0_u8; default_limits.max_envelope_bytes + 1];
+    assert!(
+        !verify_stark_fri_envelope_with_limits(&oversized_envelope_bytes, &relaxed_limits),
+        "raised public limits must not relax the native encoded-envelope byte cap"
+    );
+
+    let over_canonical_domain_tag = "d".repeat(default_limits.max_domain_tag_len + 1);
+    let err = prove_stark_fri_composition_envelope_bytes(
+        sample_air_params(over_canonical_domain_tag.clone(), STARK_HASH_SHA256_V1),
+        "TEST-STARK".to_string(),
+        7,
+        2,
+        sample_composition_terms(),
+    )
+    .expect_err("public STARK prover must reject over-canonical domain tags");
+    assert!(
+        err.contains("domain tag"),
+        "domain-tag rejection should be explicit, got: {err}"
+    );
+
+    let over_canonical_transcript_label = "T".repeat(default_limits.max_transcript_label_len + 1);
+    let err = prove_stark_fri_composition_envelope_bytes(
+        sample_air_params("fastpq:v1:fri".to_string(), STARK_HASH_SHA256_V1),
+        over_canonical_transcript_label.clone(),
+        7,
+        2,
+        sample_composition_terms(),
+    )
+    .expect_err("public STARK prover must reject over-canonical transcript labels");
+    assert!(
+        err.contains("transcript label"),
+        "transcript-label rejection should be explicit, got: {err}"
+    );
+
+    let mut env_over_canonical_tag = env.clone();
+    env_over_canonical_tag.params.domain_tag = over_canonical_domain_tag;
+    let bytes_over_canonical_tag =
+        norito::to_bytes(&env_over_canonical_tag).expect("encode over-canonical domain tag");
+    assert!(
+        !verify_stark_fri_envelope_with_limits(&bytes_over_canonical_tag, &relaxed_limits),
+        "raised public limits must not relax the canonical domain-tag cap"
+    );
+
+    let mut env_over_canonical_label = env;
+    env_over_canonical_label.transcript_label = over_canonical_transcript_label;
+    let bytes_over_canonical_label = norito::to_bytes(&env_over_canonical_label)
+        .expect("encode over-canonical transcript label");
+    assert!(
+        !verify_stark_fri_envelope_with_limits(&bytes_over_canonical_label, &relaxed_limits),
+        "raised public limits must not relax the canonical transcript-label cap"
     );
 }
 
