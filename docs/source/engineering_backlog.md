@@ -948,9 +948,9 @@ redistributable schemas, and official trust/revocation bundles.
 						  proof-input or release-prover package hashing can rely on them.
 					  The shared
 					  STARK/AIR prover and verifier derive duplicate-free query schedules by
-						  advancing the transcript counter past repeated samples, while failing
-						  closed when a duplicate-free schedule cannot be derived, so duplicate
-						  openings cannot reduce effective sampling. The BFV material and execution native-AIR builders
+						  transcript-bound sampling without replacement, while failing closed
+						  when a duplicate-free schedule cannot exist, so duplicate openings
+						  cannot reduce effective sampling. The BFV material and execution native-AIR builders
 						  still retry bounded material/statement-domain query nonces for privacy-policy
 						  public-row constraints, and the material verifier accepts only
 						  nonce-bound material domain tags derived from the statement hash and

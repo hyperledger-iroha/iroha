@@ -453,7 +453,11 @@ public enum KagemushaRecursiveSpendProver {
             }
             let byte = buffer[buffer.index(buffer.startIndex, offsetBy: cursor)]
             cursor += 1
-            value |= UInt64(byte & 0x7f) << shift
+            let chunk = UInt64(byte & 0x7f)
+            if shift >= 63 && chunk > 1 {
+                throw KagemushaRecursiveSpendProverError.invalidLineageKeyArtifact("lineage_proving_key_archive")
+            }
+            value |= chunk << shift
             if (byte & 0x80) == 0 {
                 let encodedLength = cursor - offset
                 if encodedLength > 1 && value < (UInt64(1) << UInt64(7 * (encodedLength - 1))) {
@@ -486,17 +490,15 @@ public enum KagemushaRecursiveSpendProver {
     }
 
     private static func decodeNoritoByteVec(_ payload: Data) throws -> Data {
-        guard let length = readUInt64LE(payload, at: 0),
-              length <= UInt64(Int.max)
-        else {
+        guard let length = readUInt64LE(payload, at: 0) else {
             throw KagemushaRecursiveSpendProverError.invalidLineageKeyArtifact("lineage_proving_key_archive")
         }
-        let end = 8 + Int(length)
-        guard end == payload.count else {
+        let available = payload.count - 8
+        guard length == UInt64(available) else {
             throw KagemushaRecursiveSpendProverError.invalidLineageKeyArtifact("lineage_proving_key_archive")
         }
         let startIndex = payload.index(payload.startIndex, offsetBy: 8)
-        let endIndex = payload.index(payload.startIndex, offsetBy: end)
+        let endIndex = payload.index(payload.startIndex, offsetBy: payload.count)
         return Data(payload[startIndex..<endIndex])
     }
 

@@ -1225,6 +1225,65 @@ ETHEREUM_OUTBOUND_PRECALLBACK_SDK_TEST_MARKERS = (
         ),
     ),
     (
+        "javascript/iroha_js/src/sccp.js",
+        (
+            "const proverArtifactRequestBytes =",
+            "hexToBytes(proofArtifactHash, \"proofArtifactHash\", 32)",
+            "...proverArtifactRequestBytes,\n        ...publicSignalWordBytes,",
+            "proofResult proofArtifactHash and provingKeyHash must match request",
+        ),
+    ),
+    (
+        "javascript/iroha_js/dist/sccp.js",
+        (
+            "const proverArtifactRequestBytes =",
+            "hexToBytes(proofArtifactHash, \"proofArtifactHash\", 32)",
+            "...proverArtifactRequestBytes,\n        ...publicSignalWordBytes,",
+            "proofResult proofArtifactHash and provingKeyHash must match request",
+        ),
+    ),
+    (
+        "python/iroha_torii_client/sccp.py",
+        (
+            "def _normalize_optional_groth16_prover_artifacts(",
+            'prover_artifacts = _normalize_optional_groth16_prover_artifacts(\n        value,\n        "proof request",\n    )',
+            'prover_artifacts["proof_artifact_hash"]',
+            "proofResult proofArtifactHash and provingKeyHash must match request",
+        ),
+    ),
+    (
+        "IrohaSwift/Sources/IrohaSwift/SccpEvmProver.swift",
+        (
+            "let proverArtifacts = try normalizeOptionalEvmGroth16ProverArtifacts(",
+            "if let proverArtifacts {\n        try preimage.append(evmBytesFromHex32(proverArtifacts.proofArtifactHash",
+            "for signal in publicSignalWords {",
+        ),
+    ),
+    (
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/EvmSccpProver.kt",
+        (
+            "val proverArtifacts = normalizeOptionalGroth16ProverArtifacts(",
+            'preimage.write(hex32Bytes(proverArtifacts.proofArtifactHash, "proofArtifactHash"))',
+            'publicSignalWords.forEach { preimage.write(hex32Bytes(it, "publicSignalWords")) }',
+        ),
+    ),
+    (
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/EvmSccpProver.java",
+        (
+            "final Groth16ProverArtifacts proverArtifacts =",
+            'write(preimage, hex32Bytes(proverArtifacts.proofArtifactHash(), "proofArtifactHash"))',
+            "for (final String signal : publicSignalWords) {",
+        ),
+    ),
+    (
+        "csharp/src/Hyperledger.Iroha.Sdk/Sccp/EthereumMainnetSccp.cs",
+        (
+            "var proverArtifacts = NormalizeOptionalGroth16ProverArtifacts(proofArtifactHash, provingKeyHash);",
+            "payload.Write(HexToBytes(proverArtifacts.ProofArtifactHash, 32));",
+            "foreach (var word in publicSignalWords)",
+        ),
+    ),
+    (
         "IrohaSwift/Tests/IrohaSwiftTests/SccpSolanaProverTests.swift",
         (
             "Ethereum outbound prover callback must not see BSC requests",
@@ -5657,6 +5716,7 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             'value.contains(":")',
             "forbiddenPathMarkers",
             "implementationBytes are required",
+            "local native EVM prover artifact byte verifier",
             "nativeProverArtifacts must bind sdk implementation and implementationHash",
             "nativeProverArtifacts verifierKeyHash must match nativeProverBundle",
             "nativeProverBundle.verifierKeyHash must match destinationBinding",

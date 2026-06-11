@@ -572,6 +572,44 @@ public sealed class KagemushaRecursiveSpendNativeTests
                     KagemushaRecursiveSpendNative.RecursiveAggregationProofBackend,
                     initVerifierKey,
                     overlongVersionLengthArchive)).Message);
+        var oversizedTerminalCompactLengthArchive = KagemushaNoritoFrameFromSchemaHash(
+            KagemushaLineageProvingKeyArchiveSchemaHash,
+            KagemushaOversizedTerminalCompactLength()
+                .Concat(new byte[] { 1, 0 })
+                .Concat(KagemushaNoritoField(KagemushaNoritoString(
+                    KagemushaRecursiveSpendNative.RecursiveSpendLineageOneHopProofCircuitIdV1)))
+                .Concat(KagemushaNoritoField(KagemushaVerifierKeyCommitment(initVerifierKey)))
+                .Concat(KagemushaNoritoField(KagemushaNoritoByteVec(
+                    Enumerable.Repeat((byte)0xb0, 64).ToArray())))
+                .ToArray(),
+            KagemushaNoritoCompactLenFlag);
+        Assert.Contains(
+            "lineage_proving_key_archive",
+            Assert.Throws<ArgumentException>(
+                () => KagemushaRecursiveSpendNative.LineageKeyArtifactsForInit(
+                    128,
+                    KagemushaRecursiveSpendNative.RecursiveAggregationProofBackend,
+                    initVerifierKey,
+                    oversizedTerminalCompactLengthArchive)).Message);
+        var hugeCanonicalCompactLengthArchive = KagemushaNoritoFrameFromSchemaHash(
+            KagemushaLineageProvingKeyArchiveSchemaHash,
+            KagemushaHugeCanonicalCompactLength()
+                .Concat(new byte[] { 1, 0 })
+                .Concat(KagemushaNoritoField(KagemushaNoritoString(
+                    KagemushaRecursiveSpendNative.RecursiveSpendLineageOneHopProofCircuitIdV1)))
+                .Concat(KagemushaNoritoField(KagemushaVerifierKeyCommitment(initVerifierKey)))
+                .Concat(KagemushaNoritoField(KagemushaNoritoByteVec(
+                    Enumerable.Repeat((byte)0xb1, 64).ToArray())))
+                .ToArray(),
+            KagemushaNoritoCompactLenFlag);
+        Assert.Contains(
+            "lineage_proving_key_archive",
+            Assert.Throws<ArgumentException>(
+                () => KagemushaRecursiveSpendNative.LineageKeyArtifactsForInit(
+                    128,
+                    KagemushaRecursiveSpendNative.RecursiveAggregationProofBackend,
+                    initVerifierKey,
+                    hugeCanonicalCompactLengthArchive)).Message);
         var overlongCircuitStringArchive = KagemushaNoritoFrameFromSchemaHash(
             KagemushaLineageProvingKeyArchiveSchemaHash,
             KagemushaNoritoField(new byte[] { 1, 0 })
@@ -2053,6 +2091,20 @@ public sealed class KagemushaRecursiveSpendNativeTests
         }
 
         return new byte[] { (byte)(value | 0x80), 0x00 };
+    }
+
+    private static byte[] KagemushaOversizedTerminalCompactLength()
+    {
+        return Enumerable.Repeat((byte)0x80, 9)
+            .Concat(new byte[] { 0x02 })
+            .ToArray();
+    }
+
+    private static byte[] KagemushaHugeCanonicalCompactLength()
+    {
+        return Enumerable.Repeat((byte)0x80, 9)
+            .Concat(new byte[] { 0x01 })
+            .ToArray();
     }
 
     private static byte[] KagemushaNoritoField(byte[] payload, byte flags = KagemushaNoritoCompactLenFlag)

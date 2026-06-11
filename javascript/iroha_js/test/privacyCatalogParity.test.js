@@ -3521,6 +3521,40 @@ test("privacy algorithm JS catalogs reject chain-mismatched evidence", () => {
   }
 });
 
+test("privacy algorithm JS catalogs reject invalid requested evidence chains", () => {
+  const evidenceChainId = "boi-localnet-4p";
+  const invalidRequests = [
+    ["mock camel-case chain", { chainId: "mock-privacy-4peer-chain" }],
+    ["mock snake-case chain", { chain_id: "mock-privacy-4peer-chain" }],
+    ["disallowed characters", { chainId: "boi-localnet-4p*" }],
+  ];
+  for (const [label, getDescriptor] of [
+    ["src", getSrcPrivacyAlgorithmDescriptor],
+    ["dist", getDistPrivacyAlgorithmDescriptor],
+  ]) {
+    const target = getDescriptor("zk-ace-pq-authorization-v0");
+    const manifest = {
+      version: PRIVACY_PRODUCTION_EVIDENCE_REGISTRY_VERSION,
+      rows: [
+        productionEvidenceRow(target, {
+          chainId: evidenceChainId,
+          localnetRunId: "boi-localnet-4peer-run-2026-06-09",
+        }),
+      ],
+    };
+    for (const [caseName, options] of invalidRequests) {
+      const descriptor = getDescriptor("zk-ace-pq-authorization-v0", manifest, options);
+      assert.equal(
+        descriptor.productionReady,
+        false,
+        `${label} must reject ${caseName} requested chain evidence`,
+      );
+      assert.equal(descriptor.productionGate.ready, false);
+      assert.deepEqual(descriptor.plannedSdkEntrypoints, []);
+    }
+  }
+});
+
 test("privacy algorithm JS catalogs reject mock chain evidence even when requested", () => {
   const chainId = "mock-privacy-4peer-chain";
   for (const [label, getDescriptor] of [

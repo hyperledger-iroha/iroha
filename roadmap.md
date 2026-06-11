@@ -55,10 +55,14 @@ and completed history lives in [`status.md`](./status.md).
   - Confirm the pass includes `KagemushaRecursiveSpendNativeTests`,
     `PrivacyNativeTests`, and `TransactionBuilderTests`.
   - Confirm `KagemushaRecursiveSpendNativeTests` exercises
-    `KagemushaOverlongCompactLength`, `overlongVersionLengthArchive`,
-    `overlongCircuitStringArchive`, and `invalidUtf8CircuitArchive` so the C#
-    parser rejects non-canonical compact lengths and invalid UTF-8 lineage
-    archive circuit fields on Windows.
+    `KagemushaOverlongCompactLength`,
+    `KagemushaOversizedTerminalCompactLength`,
+    `KagemushaHugeCanonicalCompactLength`,
+    `overlongVersionLengthArchive`, `oversizedTerminalCompactLengthArchive`,
+    `hugeCanonicalCompactLengthArchive`, `overlongCircuitStringArchive`, and
+    `invalidUtf8CircuitArchive` so the C# parser rejects non-canonical,
+    address-space oversized, u64-overflowing compact lengths and invalid UTF-8
+    lineage archive circuit fields on Windows.
   - Re-run `ci/check_kagemusha_recursive_spend_sdk_parity.sh` after recording
     the Windows evidence so C# SDK parity status can be cleared explicitly.
 - Kagemusha JVM SDK validation must keep the focused runner aligned with the
@@ -173,9 +177,10 @@ and completed history lives in [`status.md`](./status.md).
   `artifacts/kagemusha`.
 - Continue reducing local/CI compile memory after the WSL cargo-test hardening
   and Kagemusha record-bound compact preflight isolation: plain default tests no
-  longer run the heavy ABI-7 recursive compact record-bound Pallas proof matrix,
-  but `iroha_data_model` still has a single stripped-debuginfo compile phase
-  that can peak around `10 GiB` RSS. Future work should split or simplify that
+  longer run the heavy ABI-7 recursive compact record-bound Pallas proof matrix
+  or the oversized private Sumeragi main-loop unit-test harness.
+  `iroha_data_model` still has a single stripped-debuginfo compile phase that
+  can peak around `10.5 GiB` RSS, so future work should split or simplify that
   compile surface rather than reintroducing broad Cargo parallelism or
   one-file-one-binary integration-test discovery.
 - Native asset locks are now first-class ISIs for escrow-style conditional
@@ -269,11 +274,11 @@ and completed history lives in [`status.md`](./status.md).
 	  construction and reject transcript-label, circuit-id, missing-AIR-section,
 	  or public-digest/statement-hash drift before proof validation can rely on
 	  the wrapper. The
-		  shared STARK/AIR
+	  shared STARK/AIR
 			  prover and verifier now derive duplicate-free query schedules by
-			  advancing the transcript counter past repeated samples, while failing
-			  closed when a duplicate-free schedule cannot be derived, so duplicate
-			  openings cannot reduce effective sampling. The BFV material and
+			  transcript-bound sampling without replacement, while failing closed
+			  when a duplicate-free schedule cannot exist, so duplicate openings
+			  cannot reduce effective sampling. The BFV material and
 		  execution native-AIR builders still retry bounded statement/material-domain
 		  query nonces for privacy-policy public-row constraints before returning
 		  duplicate-free proof envelopes. The ZK-ACE native AIR prover now routes
@@ -719,12 +724,18 @@ and completed history lives in [`status.md`](./status.md).
   receipts, source-event drift, hash-only proof bypasses, mutable evidence
   aliases, oversized proof bytes, finality mismatches, weak sync-committee
   evidence, and wrong-domain receipt transcripts before inbound source proofs
-  are accepted.
+  are accepted. The readiness inventory now removes representative Ethereum
+  inbound markers directly across JavaScript, Python implementation/tests,
+  Swift, Kotlin/JVM, Java Android, and C# so the generator gate cannot pass with
+  only one SDK's adversarial coverage intact.
 - SCCP release readiness now treats BSC inbound adversarial coverage as a
   production gate: public SDK regressions must continue rejecting hash-only
   proof bypasses, receipt-proof metadata drift, source-event digest drift,
   malformed source logs, and missing source-event validation before BSC inbound
-  source proofs are accepted.
+  source proofs are accepted. The readiness inventory now removes representative
+  BSC inbound markers directly across JavaScript, Python, Kotlin/JVM, Swift,
+  Java Android, and C# so the generator gate cannot pass with only one SDK's
+  adversarial coverage intact.
 - SCCP TRON TAIRA XOR route-config generation now rejects production-ready
   route manifests that still carry `disabledReason` or `disabled_reason`, and
   rejects contradictory disabled-reason aliases before a governed Torii overlay
@@ -900,11 +911,17 @@ and completed history lives in [`status.md`](./status.md).
   a production gate: public SDK regressions must continue rejecting foreign-lane
   outbound requests, forged destination bindings, missing or partial
   proof-artifact hashes, zero proof-artifact hashes, and callback-visible proof
-  material before outbound prover callbacks can run.
+  material before outbound prover callbacks can run. The source inventory also
+  pins implementation-side native Groth16 artifact normalization and request
+  hash preimage ordering across JavaScript, Python, Swift, Kotlin/JVM, Java
+  Android, and C# so proof artifact bytes cannot drift behind public signal
+  words without failing readiness and bundle verification.
 - SCCP release readiness now treats Ethereum outbound provider validation as a
   production gate: public SDK and facade regressions must continue validating
   app-supplied Ethereum mainnet execution providers before outbound submitter
-  callbacks can run.
+  callbacks can run. The readiness and bundle-verifier inventory tests now
+  remove validate-before-submit markers directly across JavaScript source/dist,
+  Python implementation/tests, Swift, Kotlin/JVM, Java Android, and C#.
 - SCCP release readiness now treats Ethereum local-admission coverage as a
   production gate: public SDK regressions must continue rejecting mutated proof
   bytes, all-zero proof/public-input/bundle/envelope bytes, empty envelopes,
@@ -956,7 +973,10 @@ and completed history lives in [`status.md`](./status.md).
 - SCCP release readiness now treats Ethereum JavaScript receipt admission as a
   production gate: browser proof regressions must continue rejecting receipt
   metadata drift, missing beacon finality, typed receipts, and mutable prover
-  callback evidence before local proving can run.
+  callback evidence before local proving can run. The release-readiness
+  inventory test now removes the beacon-finality, immutable-callback, and
+  browser finality-regression markers directly, matching the bundle verifier's
+  marker checks.
 - SCCP release readiness now treats Ethereum SDK receipt metadata binding as a
   production gate: public SDK regressions must continue rejecting
   block-receipt metadata drift and typed receipts before receipt proof builders
@@ -1076,7 +1096,9 @@ and completed history lives in [`status.md`](./status.md).
   data-collection source inventory to a production gate, so app-owned execution
   and Beacon provider reads, provider markers, and no Torii proxy/embedded
   HTTP-client fallbacks stay pinned across public SDKs before active Ethereum
-  launch evidence can pass.
+  launch evidence can pass. The readiness and bundle-verifier inventory tests
+  now exercise every configured SDK region directly, including JavaScript
+  source/dist, Python, Swift, Kotlin/JVM, Java Android, and C#.
 - SCCP release readiness reports now also promote the Ethereum native
   receipt-finality source inventory to a production gate, so Swift, Kotlin/JVM,
   Java Android, and .NET receipt-proof builders must keep finalized-header root,
@@ -1233,8 +1255,8 @@ and completed history lives in [`status.md`](./status.md).
   parse the canonical `KagemushaRecursiveSpendLineageKeyArtifactsV1` archive
   fields and reject stale schemas, unsupported flags, byte-smuggled bindings,
   wrong versions, empty proving keys, trailing payloads, non-canonical compact
-  Norito length encodings, and invalid UTF-8 circuit family fields before native
-  loading. Swift,
+  Norito length encodings, u64-overflowing terminal compact length bytes, and
+  invalid UTF-8 circuit family fields before native loading. Swift,
   Kotlin/JVM, Java Android, JavaScript/Node, Python, and C# compact-token,
   recursive aggregation,
   recursive compact, and recursive spend validators also reject over-cap caller
@@ -11124,18 +11146,35 @@ fixture corridor into broader release validation.
   of re-entering the live state as `Delivered`, and lane/dataspace backlog
   accounting keeps their missing chunk pressure visible until complete verified
   payload bytes are present again. Positive-chunk incomplete records are still
-  retained for repair continuity. Committed-block cleanup now keeps retained RBC
-  summaries observable without synthesizing delivered status unless a matching
-  local payload and positive chunk shape back the summary. Live RBC complete
-  payload matches now also hash the reconstructed chunk bytes before satisfying
-  DA availability or suppressing payload hydration, and summary-only RBC status
-  rows no longer count as DA payload proof without byte-carrying live/recovered
-  session evidence. Delivered payload-byte telemetry also refuses complete chunk
-  sets whose reconstructed bytes do not match the advertised payload hash, so
-  mismatched payload material cannot consume or report delivered-byte metrics;
-  complete chunk sets without an advertised payload hash now follow the same
-  nonterminal/unreported path, including restart recovery of `delivered=true`
-  persisted sessions.
+  retained for repair continuity. Recovered RBC sessions now persist
+  lane/dataspace allocation ownership, including TEU totals, and both direct
+  session recovery plus the old status-summary adoption fallback reject
+  inconsistent lane/dataspace sums or over-pending backlog rows before they can
+  seed lane-local accounting. Direct disk validation also rejects incomplete
+  digest vectors whose root contradicts the expected or computed chunk root
+  before they can reload as repairable snapshots, and direct reconstruction
+  rejects persisted sessions whose explicit expected and computed roots
+  conflict. In-memory RBC status updates now reject the same impossible counters
+  and inconsistent allocation rows as persisted status recovery, clearing stale
+  same-key summaries instead of preserving old delivered-payload proof. RBC INIT
+  rejection coverage now also pins digest-count, digest-root, header-hash, and
+  invalid leader-signature/layout failures as no-cache paths, so malformed INITs
+  cannot leave session-roster or vote-roster evidence behind. Local
+  authoritative payload shortcuts now also hydrate-probe a cloned session before
+  satisfying missing-chunk progress, so a matching local payload hash cannot
+  accept READY/DELIVER progress when the advertised RBC chunk root, digest
+  vector, or layout contradicts deterministic local chunking.
+  Committed-block cleanup now keeps retained RBC summaries observable without
+  synthesizing delivered status unless a matching local payload and positive
+  chunk shape back the summary. Live RBC complete payload matches now also hash
+  the reconstructed chunk bytes before satisfying DA availability or suppressing
+  payload hydration, and summary-only RBC status rows no longer count as DA
+  payload proof without byte-carrying live/recovered session evidence. Delivered
+  payload-byte telemetry also refuses complete chunk sets whose reconstructed
+  bytes do not match the advertised payload hash, so mismatched payload material
+  cannot consume or report delivered-byte metrics; complete chunk sets without an
+  advertised payload hash now follow the same nonterminal/unreported path,
+  including restart recovery of `delivered=true` persisted sessions.
   RS16 layout payload-size metadata alone is no longer accepted as
   authoritative delivered-byte fallback evidence; incomplete delivered sessions
   must have local block payload bytes tied to the same height, view, and payload
@@ -11189,8 +11228,11 @@ fixture corridor into broader release validation.
 	  metrics or consume the once-only telemetry marker. The delivered-payload byte
 	  TLA gate now also covers invalid-session, missing-hash, invalid-shape, and
 	  payload-mismatch fallback rejection, and the actor-level local-payload
-	  telemetry fallback now uses the same invalid-shape guard before status,
-	  cleanup, or DELIVER emission can record bytes.
+	  telemetry fallback now uses the same invalid-shape and cloned
+	  hydration-probe chunk-metadata guard before status, cleanup, or DELIVER
+	  emission can record bytes; matching local payload hashes alone no longer
+	  satisfy delivered-byte telemetry when advertised roots, digest vectors, or
+	  layouts contradict deterministic local chunking.
 	  Live maintenance now carries that invalid-shape invariant through READY and
 	  DELIVER emission, rebroadcast scheduling, and operator backlog accounting:
 	  malformed zero-total or over-counted sessions first try local-payload

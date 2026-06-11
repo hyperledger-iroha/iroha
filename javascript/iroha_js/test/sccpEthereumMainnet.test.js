@@ -4101,7 +4101,7 @@ test("EthereumMainnetSccp verifies native prover artifact bytes against manifest
           return verified.nativeProverSelfTest.sdkResults.javascript;
         },
       }),
-    /nativeProverArtifacts\.sdk must be a non-empty canonical string/u,
+    /nativeProverArtifacts must be returned by the local native EVM prover artifact byte verifier/u,
   );
   assert.equal(paddedSelfTestHookCalled, false);
   assert.deepEqual(resolvedArtifacts, [
@@ -4194,15 +4194,30 @@ test("EthereumMainnetSccp verifies native prover artifact bytes against manifest
     () => new EthereumMainnetSccp().runNativeProverSelfTest(),
     /verified native EVM prover artifacts/u,
   );
+  const unverifiedDescriptorMessage =
+    /nativeProverArtifacts must be returned by the local native EVM prover artifact byte verifier/u;
+  let forgedDescriptorSelfTestCalled = false;
+  assert.throws(
+    () =>
+      new EthereumMainnetSccp({
+        destinationBinding: input.destinationBinding,
+        nativeProverArtifacts: { ...verified },
+        nativeProverSelfTest() {
+          forgedDescriptorSelfTestCalled = true;
+          return verified.nativeProverSelfTest.sdkResults.javascript;
+        },
+      }),
+    unverifiedDescriptorMessage,
+  );
+  assert.equal(forgedDescriptorSelfTestCalled, false);
   const { implementationHash: _implementationHash, ...missingImplementationHash } = verified;
-  const missingImplementationHashMessage = "nativeProverArtifacts.implementationHash is required";
   assert.throws(
     () =>
       new EthereumMainnetSccp({
         destinationBinding: input.destinationBinding,
         nativeProverArtifacts: missingImplementationHash,
       }),
-    (error) => error.message.includes(missingImplementationHashMessage),
+    unverifiedDescriptorMessage,
   );
   assert.throws(
     () =>
@@ -4213,7 +4228,7 @@ test("EthereumMainnetSccp verifies native prover artifact bytes against manifest
           sdk: " javascript ",
         },
       }),
-    /nativeProverArtifacts\.sdk must be a non-empty canonical string/u,
+    unverifiedDescriptorMessage,
   );
   assert.throws(
     () =>
@@ -4224,7 +4239,7 @@ test("EthereumMainnetSccp verifies native prover artifact bytes against manifest
           verifierKeyHash: hex32("ef"),
         },
       }),
-    /nativeProverArtifacts verifierKeyHash must match nativeProverBundle/u,
+    unverifiedDescriptorMessage,
   );
   let artifactBoundRequest;
   const artifactBoundSdk = new EthereumMainnetSccp({

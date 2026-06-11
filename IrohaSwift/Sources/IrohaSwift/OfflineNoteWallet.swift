@@ -1816,12 +1816,8 @@ public final class OfflineNoteWallet {
         )
         let audit = try draft.replacingRecursiveProof(proofProvider.proveAudit(draft))
         try audit.validateProofBinding()
-        try requireTrustedAuditCertificates(audit)
-        guard try proofVerifier.verifyAudit(audit) else {
-            throw OfflineNoteWalletError.proofVerificationFailed
-        }
         let outputBearerAuditTrail = try bearerAuditTrail(forInputs: selected, appending: audit)
-        try bearerCashPolicy.validateAuditTrail(outputBearerAuditTrail, terminalAudit: audit)
+        try validateBearerAuditTrail(outputBearerAuditTrail, terminalAudit: audit)
         try store.mutateNotes { notes in
             for note in selected {
                 guard notes[note.noteCommitmentHex]?.state == .spendable else {
@@ -2097,7 +2093,6 @@ public final class OfflineNoteWallet {
         else {
             throw OfflineNotePaymentTokenCodecError.tokenIdMismatch
         }
-        try requireTrustedAuditCertificates(paymentToken.audit)
         try validateBearerAuditTrail(paymentToken.bearerAuditTrail, terminalAudit: paymentToken.audit)
     }
 
@@ -2113,6 +2108,8 @@ public final class OfflineNoteWallet {
         var nullifiers = Set<String>()
         var outputs = Set<String>()
         var outputProducerIndex: [String: Int] = [:]
+        var priorOutputClaimsByCommitment: [String: OfflineNoteIssuedClaim] = [:]
+        var outputCertificateHashes = Set<String>()
         for (index, audit) in audits.enumerated() {
             for output in audit.outputCommitments {
                 let key = output.hexLowercased()
@@ -2143,23 +2140,46 @@ public final class OfflineNoteWallet {
                     throw OfflineNotePaymentTokenCodecError.invalidField("bearer_audit_trail[\(index)].input_claims")
                 }
             }
-            try requireTrustedAuditCertificates(audit)
+            try requireTrustedAuditCertificates(
+                audit,
+                priorOutputClaimsByCommitment: priorOutputClaimsByCommitment,
+                outputCertificateHashes: &outputCertificateHashes
+            )
             guard try proofVerifier.verifyAudit(audit) else {
                 throw OfflineNoteWalletError.proofVerificationFailed
+            }
+            for output in audit.outputClaims {
+                let issuedOutput = try OfflineNoteIssuedClaim.fromAuditOutput(output)
+                priorOutputClaimsByCommitment[issuedOutput.noteCommitment.hexLowercased()] = issuedOutput
             }
         }
     }
 
-    private func requireTrustedAuditCertificates(_ audit: OfflineNoteAuditBundle) throws {
-        try requireTrustedEitherCertificate(audit.senderKeyCertificate, expectedAccountId: nil)
+    private func requireTrustedAuditCertificates(
+        _ audit: OfflineNoteAuditBundle,
+        priorOutputClaimsByCommitment: [String: OfflineNoteIssuedClaim],
+        outputCertificateHashes: inout Set<String>
+    ) throws {
         let senderHash = try audit.senderKeyCertificate.payloadHash()
         for claim in audit.inputClaims {
             guard claim.keyCertificatePayloadHash == senderHash else {
                 throw OfflineNoteWalletError.certificateVerificationFailed
             }
-            try requireTrustedEitherCertificate(audit.senderKeyCertificate, expectedAccountId: assetAccount(from: claim.assetId))
+            if let priorOutput = priorOutputClaimsByCommitment[claim.noteCommitment.hexLowercased()] {
+                guard priorOutput == claim else {
+                    throw OfflineNoteWalletError.certificateVerificationFailed
+                }
+                try requireTrustedOwnerCertificate(
+                    audit.senderKeyCertificate,
+                    expectedAccountId: assetAccount(from: claim.assetId)
+                )
+            } else {
+                try requireTrustedIssuerCertificate(
+                    audit.senderKeyCertificate,
+                    expectedAccountId: assetAccount(from: claim.assetId)
+                )
+            }
         }
-        var outputCertificateHashes = Set<String>()
         for output in audit.outputClaims {
             // Chain (#5589) requires P2P audit OUTPUT key certs to be owner-self-signed.
             let certificateHash = try output.keyCertificate.payloadHash().hexLowercased()
@@ -2195,18 +2215,6 @@ public final class OfflineNoteWallet {
     ) throws {
         try requireMatchingAccount(certificate, expectedAccountId: expectedAccountId)
         guard try certificateVerifier.verifyOwnerCertificate(certificate) else {
-            throw OfflineNoteWalletError.certificateVerificationFailed
-        }
-    }
-
-    private func requireTrustedEitherCertificate(
-        _ certificate: OfflineNoteKeyCertificate,
-        expectedAccountId: String? = nil
-    ) throws {
-        try requireMatchingAccount(certificate, expectedAccountId: expectedAccountId)
-        let trusted = try certificateVerifier.verifyIssuerCertificate(certificate)
-            || certificateVerifier.verifyOwnerCertificate(certificate)
-        guard trusted else {
             throw OfflineNoteWalletError.certificateVerificationFailed
         }
     }

@@ -2,12 +2,13 @@
 
 Last updated: 2026-06-11
 
-## 2026-06-11 Core audited prover public-key digest preflight coverage
+## 2026-06-11 Core audited prover governed public-key digest preflight coverage
 
 - Added audited full-bootstrap material and execution release-prover regressions
-  for `FullBootstrapV1` evaluation-key bundles that omit the governed bootstrap
-  public-key digest. Both wrappers now prove this malformed context fails before
-  release-package validation or native proof generation can proceed.
+  for `FullBootstrapV1` evaluation-key bundles that omit or stale the governed
+  bootstrap public-key digest metadata. Both wrappers now prove these malformed
+  contexts fail before release-package validation or native proof generation can
+  proceed, including the refreshed-transcript public-key digest mismatch path.
 - Validation:
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-native-air-candidate CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark audited_prover_rejects_malformed_evaluation_key_context --lib -- --nocapture`
     (`2` passed, `7565` filtered out)
@@ -16,7 +17,7 @@ Last updated: 2026-06-11
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-native-air-candidate CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --lib --features zk-stark -- -D warnings`
   - `git diff --check -- crates/iroha_core/src/smartcontracts/isi/soracloud.rs status.md`
   - `git diff --name-only -- Cargo.lock '**/Cargo.lock'` (no output)
-  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_core/src/smartcontracts/isi/soracloud.rs status.md`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_core/src/smartcontracts/isi/soracloud.rs crates/iroha_core/src/zk_stark.rs status.md`
     (no output)
   - `git diff -- crates/iroha_core/src/smartcontracts/isi/soracloud.rs status.md | rg -n 'dbg!|println!|eprintln!'`
     (no output)
@@ -1028,6 +1029,100 @@ Last updated: 2026-06-11
     (`5` passed, `870` deselected)
   - `git diff --check -- python/iroha_torii_client/sccp.py python/iroha_torii_client/tests/sccp_test.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py javascript/iroha_js/src/sccp.js javascript/iroha_js/dist/sccp.js`
 
+## 2026-06-11 SCCP EVM artifact request source-inventory pins
+
+- Extended the Ethereum outbound pre-callback release inventory from test-only
+  markers to implementation source markers across JavaScript source/dist,
+  Python, Swift, Kotlin/JVM, Java Android, and C#. The inventory now pins
+  native Groth16 artifact normalization plus the request-hash preimage order
+  that places prover artifact bytes before public signal words.
+- Added adversarial readiness and published-bundle tests that prove a sparse
+  implementation marker is insufficient unless the SDK-specific artifact
+  binding marker is present. The sparse-file regressions now remove one
+  implementation marker each from JavaScript, Python, Swift, Kotlin/JVM, Java
+  Android, and C#.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_ethereum_outbound_precallback_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_ethereum_outbound_precallback_sdk_tests`
+    (`2` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py -k 'ethereum_outbound_precallback'`
+    (`5` passed, `870` deselected)
+
+## 2026-06-11 SCCP Ethereum JS receipt-admission inventory
+
+- Strengthened SCCP release readiness source inventory tests for the Ethereum
+  JavaScript receipt-admission gate. The readiness test now removes
+  beacon-finality, immutable prover callback, and browser finality-regression
+  markers directly, matching the bundle verifier coverage so production release
+  evidence cannot rely on a single beacon-finality marker while typed-receipt or
+  immutable-callback guards disappear.
+- Validation:
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_ethereum_outbound_precallback_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_ethereum_outbound_precallback_sdk_tests pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_ethereum_js_receipt_admission_guard_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_ethereum_js_receipt_admission_artifacts`
+    (`4` passed)
+
+## 2026-06-11 SCCP BSC inbound adversarial readiness inventory
+
+- Strengthened the BSC inbound adversarial readiness source-inventory test so
+  it now removes representative markers across JavaScript, Python, Kotlin/JVM,
+  Swift, Java Android, and C#. The generator-side gate now directly proves that
+  hash-only proof rejection, receipt metadata binding, source-event digest
+  binding, malformed source-log rejection, and missing-source-event rejection
+  stay pinned across public SDK surfaces.
+- Validation:
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_bsc_inbound_adversarial_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_bsc_inbound_adversarial_sdk_tests`
+    (`2` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py -k 'bsc_inbound_adversarial'`
+    (`4` passed, `871` deselected)
+
+## 2026-06-11 SCCP Ethereum inbound adversarial readiness inventory
+
+- Strengthened the Ethereum inbound adversarial readiness source-inventory test
+  so it now removes representative markers across JavaScript, Python
+  implementation/tests, Swift, Kotlin/JVM, Java Android, and C#. The
+  generator-side gate now directly proves failed-receipt rejection, finality
+  binding, immutable callback evidence, wrong-domain transcript rejection,
+  missing finality branch rejection, and consensus-bound evidence snapshot
+  coverage stay pinned across public SDK surfaces.
+- Validation:
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_ethereum_inbound_adversarial_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_ethereum_inbound_adversarial_sdk_tests`
+    (`2` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py -k 'ethereum_inbound_adversarial'`
+    (`5` passed, `870` deselected)
+
+## 2026-06-11 SCCP Ethereum no-proxy data-collection inventory
+
+- Strengthened the Ethereum no-proxy data-collection readiness and
+  bundle-verifier source-inventory tests so they now generate sparse regions for
+  every configured SDK surface: JavaScript source/dist, Python, Swift,
+  Kotlin/JVM, Java Android, and C#. Each sparse region preserves the chain-id and
+  receipt reads, removes the block/finality reads, and injects a forbidden
+  `Torii.proxy.fetch` fallback, proving provider-marker and no-proxy diagnostics
+  remain enforced across public SDKs.
+- Validation:
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_ethereum_data_collection_no_proxy_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_ethereum_data_collection_no_proxy`
+    (`2` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py -k 'ethereum_data_collection_no_proxy'`
+    (`4` passed, `871` deselected)
+
+## 2026-06-11 SCCP Ethereum outbound provider validation inventory
+
+- Strengthened the Ethereum outbound provider-validation readiness and
+  bundle-verifier source-inventory tests so they now remove validate-before-submit
+  markers across JavaScript source/dist, Python implementation/tests, Swift,
+  Kotlin/JVM, Java Android, and C#. The release gate now directly proves
+  configured mainnet execution providers are validated before outbound submitter
+  callbacks can run across public SDK surfaces.
+- Validation:
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_ethereum_outbound_provider_validation_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_ethereum_outbound_provider_validation`
+    (`2` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py -k 'outbound_provider_validation'`
+    (`4` passed, `871` deselected)
+
 ## 2026-06-11 SCCP Ethereum zero-digest and duplicate-JSON inventory
 
 - Strengthened SCCP release readiness and bundle-verifier source inventory tests
@@ -1483,6 +1578,80 @@ Last updated: 2026-06-11
   - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
   - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py -k 'source_material_role_validation'`
     (`3` passed, `872` deselected)
+## 2026-06-11 Soracloud STARK query schedule and fixture refresh
+
+- Fixed STARK/FRI proof synthesis and verification to sample query indices
+  without replacement from the transcript, preserving duplicate-free query
+  validation while avoiding deterministic repeated-index failures for
+  production-floor Soracloud fixtures.
+- Refreshed the shared Soracloud BFV full-bootstrap material fixture hashes for
+  the current material schema/proof-key outputs, and adjusted the audited
+  material-prover header-only report regression to assert the crypto-layer
+  signing rejection directly.
+- Validation:
+  - `cargo test -j 1 -p iroha_core --lib --features zk-stark air_prover_rejects_more_queries_than_domain -- --nocapture`
+  - `cargo test -j 1 -p iroha_core --lib --features zk-stark mutate_soracloud_state_accepts_registered_fhe_input_admission_proof -- --nocapture`
+  - `cargo test -j 1 -p iroha_core --lib --features zk-stark soracloud_bfv_operation_vectors -- --nocapture`
+  - `cargo test -j 1 -p iroha_core --lib --features zk-stark soracloud_fhe_full_bootstrap_material_proof_rejects_generic -- --nocapture`
+  - `cargo test -j 1 -p iroha_core --lib --features zk-stark soracloud_fhe_full_bootstrap_execution_proof_rejects_generic -- --nocapture`
+  - `cargo test -j 1 -p iroha_core --lib --features zk-stark soracloud_fhe_full_bootstrap_material_audited_prover_rejects_untrusted_or_stale_package -- --nocapture`
+  - `cargo test -j 1 -p iroha_core --lib --features zk-stark soracloud_fhe_full_bootstrap_stark_proof_finalizer_binds_circuit_and_hashes -- --nocapture`
+  - `cargo test -j 1 -p iroha_core --lib --features zk-stark synthesized_field_values_envelope_has_replayable_query_shape -- --nocapture`
+  - `cargo test -j 1 -p iroha_core --lib --features zk-stark zk_ace_air_prover_rejects_repeated_query_schedule -- --nocapture`
+  - `cargo fmt --all`
+  - `git diff --check`
+
+## 2026-06-10 WSL cargo-test memory hardening
+
+- Root-caused the WSL crash during `cargo test` to compile-time RSS spikes, not
+  test execution: `iroha_data_model` reached about `10 GiB` RSS and
+  `iroha_core --lib --test` reached about `9.5 GiB` RSS in a serialized
+  `cargo test -p iroha_core --lib --no-run -j1` repro.
+- Made the workspace-inherited `iroha_data_model` dependency carry only the JSON
+  feature. Crates must now request heavier data-model features explicitly, and
+  `iroha_p2p` no longer re-enables the data-model default feature set.
+- Kept the 197k-line private Sumeragi main-loop unit-test harness available but
+  moved it behind `iroha_core`'s explicit `sumeragi-main-loop-tests` feature, so
+  plain local `cargo test` no longer compiles that oversized harness by default.
+- Validation: `/usr/bin/time -v cargo test -p iroha_core --lib --no-run -j1
+  --message-format=short` completed in 7m58s after the final hardening patch.
+  Maximum RSS was `11,206,596 KiB` (~10.7 GiB), still dominated by
+  `iroha_data_model`; `iroha_core --lib --test` was observed around `7.9 GiB`
+  after the private Sumeragi harness was gated out.
+
+## 2026-06-10 Privacy production evidence hash canonicalization
+
+- Hardened Python and JavaScript privacy production-evidence catalogs so all
+  hash-addressed evidence URIs use exact lowercase SHA-256 forms (`sha256:`,
+  `urn:sha256:`, or `hash://sha256/` with 64 lowercase hex characters).
+  Uppercase prefixes or digest nibbles no longer pass by lowercasing during
+  validation.
+- Mirrored the JavaScript source change into committed dist output so package
+  consumers and BOI ingestion see the same fail-closed behavior.
+- Hardened the native connect bridge, JavaScript host, and Python Rust binding
+  production-evidence validators to reject uppercase SHA-256 evidence hashes,
+  aligning review, gate, SDK parity, fuzz/perf, and 4-peer localnet evidence
+  with the BOI renderer's lowercase production-gate contract.
+- Added Python, JavaScript, and native adversarial coverage for uppercase
+  review artifact hashes in addition to malformed hashes and uppercase review
+  signatures.
+- Validation:
+  - `PYTHONPATH=python/iroha_python/src /private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-sdk-guard-venv/bin/python -m pytest -q python/iroha_python/tests/privacy_catalog_test.py -k "internal_review_evidence or mock_chain"`
+    (`25` tests passed)
+  - `PYTHONPATH=python/iroha_python/src /private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-sdk-guard-venv/bin/python -m pytest -q python/iroha_python/tests/privacy_catalog_test.py`
+    (`751` tests passed)
+  - `node --test --test-reporter=spec javascript/iroha_js/test/privacyCatalogParity.test.js --test-name-pattern "malformed internal review evidence|mock chain"`
+    (`19` tests passed)
+  - `node --test --test-reporter=spec javascript/iroha_js/test/privacyCatalogParity.test.js`
+    (`19` tests passed)
+  - `cargo test -p connect_norito_bridge privacy_production_evidence -- --nocapture`
+    (`4` focused tests passed)
+  - `cargo test -p iroha_js_host privacy_production_evidence -- --nocapture`
+    (`4` focused tests passed)
+  - `cargo test -p iroha_python_rs privacy_production_evidence -- --nocapture`
+    (`4` focused tests passed)
+  - `bash ci/check_privacy_sdk_guard.sh`
+    (`1160` Python catalog tests passed after the release native SDK build)
 
 ## 2026-06-10 SCCP source-adapter deployment verifier replay guard
 
@@ -3660,6 +3829,146 @@ Last updated: 2026-06-11
   carried chunk-digest or chunk-root metadata. The payload-hydration TLA gate now
   models those digest/root mismatch cases with two additional expected-failure
   configs, bringing `rbc-payload-hydration` to `9` mutations.
+- Tightened `apply_hydrated_payload(...)` itself so local hydration treats any
+  zero observed chunk count from the encoded payload as an invalid layout and
+  only reports `all_chunks_present` for a positive, exactly complete chunk
+  shape.
+- Added an actor-level `hydrate_rbc_session_from_block(...)` regression that
+  starts from over-counted live session metadata, hydrates from authoritative
+  local payload bytes, and verifies both the live session and status summary are
+  recounted back to the positive complete chunk shape.
+- Hardened RBC payload-bundle construction so invalid, zero-total, and
+  over-counted sessions cannot emit INIT/chunk rebroadcast bundles. Targeted
+  payload rescue now also tries local hydration for those malformed live shapes
+  before deciding whether a payload bundle is available.
+- Extended the malformed chunk-shape guard beyond counters alone: outbound
+  helper paths now reject sessions whose received counter disagrees with the
+  populated chunk slots, whose chunk slot vector no longer matches
+  `total_chunks`, or whose cached digest vector length drifted from the
+  advertised chunk count.
+- Added targeted-repair coverage for malformed cached session counters with a
+  trusted local block body: the actor may rebuild the INIT/body companion from
+  local block bytes, but it must not rebroadcast cached chunks or READY evidence
+  from the malformed session.
+- Applied the same invalid-shape guard to `rebuild_rbc_init(...)`, preventing
+  missing-INIT repair responses from rebuilding RBC INIT metadata for invalid,
+  zero-total, or over-counted sessions.
+- Hardened cached-session INIT companions so `rebuild_rbc_init(...)` and RBC
+  payload-bundle construction now re-check the cached leader signature against
+  the roster-derived leader index and block header hash before emitting INIT;
+  wrong-index or wrong-signer cached metadata stays local and is not repackaged
+  into outbound repair traffic.
+- Hardened exact-body RBC INIT rebuilds the same way: when repair reconstructs
+  INIT from trusted local block bytes, the selected leader-indexed block
+  signature is verified against the roster-derived leader key before the INIT is
+  emitted, and a wrong-signer signature now fails closed.
+- Hardened roster-hint `BlockCreated` frontier metadata rebuilds so they only
+  accept a block signature that verifies as the roster-derived leader for the
+  slot. The final frontier metadata now reuses the verified RBC INIT leader
+  signature instead of reselecting a proposer-indexed or first block signature.
+- Tightened DA/RBC availability gating to use the same malformed chunk-shape
+  boundary as the outbound repair helpers. Sessions with counter-complete but
+  missing chunk slots, malformed digest-vector length, zero-total layout, or
+  over-counted chunks now remain availability-unresolved until repaired or
+  timed out, including through the lossy reschedule decision snapshot.
+- Tightened complete-delivery and delivered-payload match predicates so
+  payload-complete bytes with malformed chunk metadata no longer satisfy
+  authoritative delivery evidence. This keeps repair suppression, validation
+  priority, backlog, and telemetry paths, including authoritative fallback-byte
+  accounting, from treating malformed sessions as complete just because
+  concatenated bytes hash to the advertised payload.
+- Tightened the same complete-delivery boundary for chunk-root evidence:
+  payload-complete delivered sessions now also require any cached expected chunk
+  root to match the computed chunk root before availability, validation
+  priority, or telemetry paths may treat the session as complete.
+- Extended malformed chunk-shape detection to compare cached expected chunk
+  digests against populated chunk slots, so digest vectors with the right length
+  but wrong contents now fail the same availability and delivered-payload
+  boundaries as missing slots or malformed digest-vector lengths.
+- Added a self-consistency check between cached expected chunk digests and the
+  cached expected chunk root. Sessions whose digest list hashes to a different
+  root now fail closed before RBC INIT/chunk bundles, READY, DELIVER, or READY
+  rebroadcast bundles can reuse the impossible metadata; READY/DELIVER emission
+  invalidates those sessions and clears pending repair state instead of
+  deferring forever.
+- Tightened the same digest/root self-consistency boundary at
+  `RbcSession::new_with_layout(...)` so sessions constructed from contradictory
+  metadata start invalid even before a sender tries to reuse them for RBC
+  progress. Persisted recovery now preserves that constructor-detected invalid
+  bit for incomplete recovered sessions instead of overwriting it with the stored
+  invalid flag.
+- Tightened `apply_hydrated_payload(...)` completion reporting so hostile
+  payload-hash, chunk-digest, or chunk-root mismatches can still be diagnosed and
+  invalidated, but no longer report `all_chunks_present` as availability
+  progress after the session has been poisoned.
+- Persisted RBC sessions now carry lane and dataspace allocation ownership,
+  including TEU totals, so restart recovery preserves lane-local DA/RBC backlog
+  and committed-accounting state instead of relying on transient status-summary
+  adoption. Disk recovery rejects internally inconsistent allocation metadata
+  such as duplicate lanes, duplicate dataspaces, missing counterpart metadata,
+  unknown dataspace lanes, zero-count ownership, or lane/dataspace sums that do
+  not match the advertised chunk ownership.
+- Hardened the old-snapshot compatibility fallback that adopts lane/dataspace
+  allocations from persisted RBC status summaries. Status snapshot recovery now
+  drops inconsistent lane/dataspace backlog metadata, and in-memory adoption
+  refuses malformed summary allocations instead of seeding recovered sessions
+  with impossible ownership totals. Backlog rows whose pending chunk counts
+  exceed their allocated chunk totals are rejected on the same path.
+- Persisted RBC store validation now checks any advertised chunk digest vector
+  against the expected and computed chunk roots before requiring a complete
+  retained chunk set, so incomplete poisoned snapshots are deleted instead of
+  reloading as repairable sessions. Direct persisted-session reconstruction also
+  rejects snapshots whose explicit expected and computed chunk roots conflict.
+- In-memory RBC status updates now apply the same impossible-counter and
+  allocation-shape guard used for persisted status recovery. A malformed
+  replacement removes any stale summary for the same session key instead of
+  leaving old delivered-payload evidence visible to later checks.
+- Malformed RBC INIT regression coverage now reaches the intended digest-count
+  and digest-root mismatch branches, keeps header-hash mismatch covered
+  explicitly, and covers invalid leader signatures plus invalid layout metadata
+  as separate adversarial cases. Rejected INITs now have explicit assertions
+  that they leave no live session, session-roster cache entry, or vote-roster
+  cache entry behind.
+- Local authoritative payload predicates now verify the local block bytes
+  against the session's advertised RBC chunk metadata on a cloned hydration
+  probe before they can bypass missing chunks. This preserves the intended
+  pending-block/stub positive paths but prevents inbound DELIVER evidence from
+  recording raw delivery when the payload hash matches locally while the
+  advertised chunk root or digest layout contradicts the deterministic local
+  chunking.
+- Delivered-payload byte telemetry now uses the same cloned hydration probe
+  before accepting local authoritative fallback bytes for incomplete RBC
+  sessions. Wrong advertised chunk roots, digest vectors, or layouts can no
+  longer report delivered-byte metrics or consume the once-only telemetry marker
+  solely because the local block payload hash matches.
+- Fixed targeted READY-stall rescue for locally authoritative Kura-backed
+  sessions: when local block bytes are available but the session still has
+  malformed or missing chunks, the actor may directly resend the verified INIT
+  and chunks to peers missing READY without refreshing the broad payload subset
+  cooldown. RBC-only sessions still wait for READY quorum or delivery before
+  taking that targeted payload path.
+- Applied the invalid-shape guard at the READY/DELIVER helper boundary as well:
+  local READY signing, local DELIVER signing, and READY rebroadcast bundle
+  construction now reject invalid, zero-total, and over-counted sessions before
+  repackaging local state into outbound consensus traffic.
+- Updated the invalid-session READY emission regression so it constructs a
+  well-formed payload-backed session before injecting duplicate-sender evidence;
+  zero-total fixtures now only exercise malformed-shape repair or rejection
+  paths.
+- Hardened authoritative stub-session insertion so recovery paths cannot create
+  an RBC session for an empty payload length; the helper now returns an explicit
+  empty-payload error and leaves the live session map unchanged.
+- Tightened the same stub-session boundary so it rechecks the session key
+  against the signed block header/hash and recomputes the block payload bytes
+  before trusting the caller-supplied payload length or hash; mismatches return
+  explicit errors without retaining a live session.
+- Tightened local RBC session metadata seeding so BlockCreated payload seeding,
+  authoritative stub insertion, metadata backfill, and post-seed pending-block
+  repair only cache a leader signature that verifies against the roster-derived
+  leader key. Local payload hydration now backfills verified block metadata from
+  a matching pending block before applying payload bytes, preserving the
+  positive authoritative-stub path while keeping wrong-signer metadata from
+  rebuilding outbound INIT.
 - Hardened `recover_block_from_rbc_session(...)` so it no longer falls back to
   raw count-complete chunk bytes when the RBC session is missing authoritative
   payload metadata. Block materialization now goes through the same verified
@@ -3701,12 +4010,108 @@ Last updated: 2026-06-11
   - `cargo test -p iroha_core hydrated_payload_ --lib -- --nocapture`
     (`12` tests passed; emitted the pre-existing unrelated `soracloud.rs`
     warnings)
+  - `cargo test -p iroha_core hydrate_rbc_session_from_block_recounts_overcounted_session --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core rbc_payload_bundle_rejects_invalid_or_malformed_chunk_shape --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core rbc_payload_bundle --lib -- --nocapture`
+    (`3` tests passed)
+  - `cargo test -p iroha_core rebuild_rbc_init_rejects_invalid_or_malformed_chunk_shape --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core rebuild_rbc_init --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core missing_init --lib -- --nocapture`
+    (`3` tests passed)
+  - `cargo test -p iroha_core fetch_pending_block_keeps_rbc_transport_rebuildable_when_da_enabled --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core frontier_block_created_from_proposal_rejects_noncanonical_payload_hint_even_with_roster_hint --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core frontier_block_created_from_proposal --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core frontier_block_created_for_wire --lib -- --nocapture`
+    (`4` tests passed)
+  - `cargo test -p iroha_core frontier_block_created_for_local_proposal_wire_uses_roster_verified_leader_signature --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core rbc_session_availability_incomplete_requires_complete_delivered_ready_evidence --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core rbc_session_delivered_payload_matches_requires_complete_chunks --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core complete_delivery --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core delivered_payload --lib -- --nocapture`
+    (`12` tests passed)
+  - `cargo test -p iroha_core hydrated_payload --lib -- --nocapture`
+    (`12` tests passed)
+  - `cargo test -p iroha_core rbc_session_new --lib -- --nocapture`
+    (`3` tests passed)
+  - `cargo test -p iroha_core rbc_session_from_persisted --lib -- --nocapture`
+    (`4` tests passed)
+  - `cargo test -p iroha_core rbc_session_from_persisted_rejects_malformed_allocations --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core rbc_session_persists_allocations_across_roundtrip --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core inconsistent_allocation_metadata_is_rejected_and_deleted --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core rbc_session_rejects_inconsistent_summary_allocations --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core persisted_snapshot_drops_inconsistent_allocation_metadata --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core allocation --lib -- --nocapture`
+    (`9` tests passed)
+  - `cargo test -p iroha_core persisted --lib -- --nocapture`
+    (`48` tests passed)
+  - `cargo test -p iroha_core rbc_status --lib -- --nocapture`
+    (`20` tests passed; includes an existing poisoned-lock recovery test that
+    prints an intentional panic before succeeding)
+  - `cargo test -p iroha_core rbc_store --lib -- --nocapture`
+    (`50` tests passed; includes an existing poisoned-lock recovery test that
+    prints an intentional panic before succeeding)
+  - `cargo test -p iroha_core rbc_payload_matches --lib -- --nocapture`
+    (`6` tests passed)
+  - `cargo test -p iroha_core payload_available_for_da --lib -- --nocapture`
+    (`4` tests passed)
+  - `cargo test -p iroha_core rbc_availability_reschedule_formal_gate_matrix --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core rbc_availability --lib -- --nocapture`
+    (`4` tests passed)
+  - `cargo test -p iroha_core malformed_chunk_shape --lib -- --nocapture`
+    (`4` tests passed)
+  - `cargo test -p iroha_core maybe_emit_rbc_ready_marks_invalid_and_clears_pending_on_chunk_root_mismatch --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core handle_rbc_init --lib -- --nocapture`
+    (`23` tests passed)
+  - `cargo test -p iroha_core rbc_ready_and_deliver_helpers_reject_invalid_or_malformed_chunk_shape --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core rescue_rbc_missing_ready_peers_uses_exact_body_for_malformed_session --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core rescue_rbc_missing_ready_peers --lib -- --nocapture`
+    (`7` tests passed)
+  - `cargo test -p iroha_core rbc_ready_bundle --lib -- --nocapture`
+    (`2` tests passed)
+  - `cargo test -p iroha_core maybe_emit_rbc_ready_skips_invalid_session --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core rbc_ready --lib -- --nocapture`
+    (`61` tests passed)
+  - `cargo test -p iroha_core rbc_deliver --lib -- --nocapture`
+    (`59` tests passed)
+  - `cargo test -p iroha_core rbc_session_record_ready_accepts_distinct_senders_after_deliver --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core insert_stub_rbc_session_rejects_empty_payload_len --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core insert_stub_rbc_session --lib -- --nocapture`
+    (`4` tests passed)
+  - `cargo test -p iroha_core insert_stub_rbc_session_does_not_cache_unverified_leader_signature --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core block_created_drops_empty_payload --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core stub_session --lib -- --nocapture`
+    (`2` tests passed)
+  - `cargo test -p iroha_core known_authoritative_stub --lib -- --nocapture`
+    (`1` test passed)
   - `cargo test -p iroha_core zero_total --lib -- --nocapture`
-    (`8` tests passed; emitted the pre-existing unrelated `soracloud.rs`
-    warnings)
+    (`11` tests passed)
   - `cargo test -p iroha_core overcounted --lib -- --nocapture`
-    (`6` tests passed; emitted the pre-existing unrelated `soracloud.rs`
-    warnings)
+    (`8` tests passed)
   - `cargo test -p iroha_core rbc_backlog --lib -- --nocapture`
     (`15` tests passed; emitted the pre-existing unrelated `soracloud.rs`
     warnings)
@@ -3714,18 +4119,34 @@ Last updated: 2026-06-11
     (`16` tests passed; emitted the pre-existing unrelated `soracloud.rs`
     warnings)
   - `cargo test -p iroha_core rebroadcast_stalled_rbc_payloads --lib -- --nocapture`
-    (`20` tests passed; emitted the pre-existing unrelated `soracloud.rs`
-    warnings)
+    (`20` tests passed)
   - `cargo test -p iroha_core maybe_emit_rbc_deliver --lib -- --nocapture`
     (`13` tests passed; emitted the pre-existing unrelated `soracloud.rs`
     warnings)
   - `cargo test -p iroha_core maybe_emit_rbc_deliver_hydrates --lib -- --nocapture`
     (`2` tests passed; emitted the pre-existing unrelated `soracloud.rs`
     warnings)
+  - `cargo test -p iroha_core handle_rbc_init_rejects --lib -- --nocapture`
+    (`11` tests passed)
+  - `cargo test -p iroha_core handle_rbc_deliver_rejects_missing_chunks_when_local_payload_conflicts_with_chunk_root --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core handle_rbc_deliver_accepts_missing_chunks_when_da_enabled --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core known_authoritative --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core maybe_emit_rbc_ready_hydrates_stub_session_from_pending_block --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core authoritative_payload --lib -- --nocapture`
+    (`6` tests passed)
+  - `cargo test -p iroha_core delivered_payload_metrics --lib -- --nocapture`
+    (`8` tests passed)
+  - `cargo test -p iroha_core --features telemetry authoritative_payload_bytes_for_telemetry --lib -- --nocapture`
+    (`5` tests passed)
+  - `cargo test -p iroha_core --features telemetry handle_rbc_deliver_records_payload_bytes_from_authoritative_local_payload --lib -- --nocapture`
+    (`2` tests passed)
   - `cargo test -p iroha_torii --features telemetry --test torii_sumeragi_telemetry sumeragi_rbc -- --nocapture`
     (`6` tests passed; emitted the pre-existing unrelated `soracloud.rs`
     warning)
-
 ## 2026-06-10 Kagemusha all-SDK lineage archive canonical length hardening
 
 - Mirrored canonical compact Norito length rejection from Python and
@@ -3733,18 +4154,30 @@ Last updated: 2026-06-11
   proving-key archive parsers. Kotlin/JVM and Java Android additionally bound
   accepted compact length encodings to the 5-byte range needed for the
   `Int`-bounded archive lengths before applying the canonical-threshold check.
-- Added Swift, Kotlin/JVM, Java Android, and C# adversarial lineage
-  key-artifact coverage for an overlong version field length, an overlong
-  nested circuit-family string length, and invalid UTF-8 in the parsed circuit
-  family while the archive byte-smuggles the expected circuit id through
-  proving-key bytes.
+- Added Swift, Kotlin/JVM, Java Android, JavaScript/Node, Python, and C#
+  adversarial lineage key-artifact coverage for an overlong version field
+  length, a 10-byte terminal compact length that exceeds the supported length
+  space, a huge but canonical 10-byte compact length that exceeds each SDK's
+  addressable archive bounds, an overlong nested circuit-family string length,
+  and invalid UTF-8 in the parsed circuit family while the archive byte-smuggles
+  the expected circuit id through proving-key bytes.
+- Hardened the Swift compact-length reader to reject an oversized terminal
+  varint chunk before shifting, matching the existing C#, Kotlin/JVM, and Java
+  Android overflow guards.
+- Hardened the Python and JavaScript/Node compact-length readers to reject the
+  same oversized terminal varint chunk explicitly instead of relying on later
+  archive-size bounds; mirrored the JavaScript guard into browser source and
+  committed dist files.
 - Extended the recursive Kagemusha SDK parity guard and documentation so the
-  non-canonical compact-length and invalid-UTF-8 lineage archive contract is
-  pinned across Swift, Kotlin/JVM, Java Android, JavaScript/Node, Python, and C#.
+  non-canonical compact-length, address-space oversized canonical
+  compact-length, u64-overflowing compact-length, and invalid-UTF-8 lineage
+  archive contract is pinned across Swift, Kotlin/JVM, Java Android,
+  JavaScript/Node, Python, and C#.
 - Local C# runtime validation remains a Windows-machine follow-up because this
   macOS host has no `dotnet` binary; the source and parity guards now pin the
   new C# parser/test markers.
 - Validation:
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/kagemusha.py python/iroha_python/tests/kagemusha_test.py`
   - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh ci/check_kagemusha_recursive_spend_csharp_sdk.sh ci/check_kagemusha_recursive_spend_policy.sh`
   - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
   - `swift test --filter KagemushaRecursiveSpendProverTests/testLineageKeyArtifactPackagesValidateReleaseProfiles`
@@ -3752,6 +4185,10 @@ Last updated: 2026-06-11
   - `swift test --filter KagemushaRecursiveSpendProverTests`
     (`18` tests passed)
   - `ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=python/iroha_python/src:python/norito_py/src:python /tmp/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q python/iroha_python/tests/kagemusha_test.py -k lineage_key_artifacts`
+    (`1` focused test passed)
+  - `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=python/iroha_python/src:python/norito_py/src:python /tmp/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q python/iroha_python/tests/kagemusha_test.py`
+    (`44` tests passed)
   - `KAGEMUSHA_RECURSIVE_SPEND_JVM_JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
   - `ci/check_kagemusha_recursive_spend_policy.sh`
   - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
@@ -3762,6 +4199,8 @@ Last updated: 2026-06-11
   - `python3 scripts/kagemusha_production_readiness.py --repo-root . --min-signed-at-utc '' --min-lineage-proof-evidence-at-utc '' --min-compact-key-evidence-at-utc ''`
     (still blocked by `lineage_proof_evidence_missing`,
     `compact_key_evidence_missing`, and `android_device_lab_root_missing`)
+  - `ci/check_kagemusha_recursive_spend_csharp_sdk.sh` (expected preflight
+    failure: `dotnet` was not found on this macOS host)
   - `git diff --check` on the touched SDK, parity, roadmap, docs, and status
     files
 
@@ -4746,6 +5185,7 @@ Last updated: 2026-06-11
   - `python3 scripts/kagemusha_android_device_lab_slot.py --slot-root target/kagemusha-android-device-lab-harness-v1 --slot-id google-pixel-6-6a-physical-1781077370103 --device-family "Google Pixel 6 / 6a" --serial 19181FDF600918 --attestation-result target/kagemusha-android-raw-harness-v1/google-pixel-6-6a-physical-1781077370103/attestation/result.json --attestation-harness-result target/kagemusha-android-raw-harness-v1/google-pixel-6-6a-physical-1781077370103/attestation/harness-result.json --attestation-report target/kagemusha-android-raw-harness-v1/google-pixel-6-6a-physical-1781077370103/attestation/report.json --attestation-certificate-chain target/kagemusha-android-raw-harness-v1/google-pixel-6-6a-physical-1781077370103/attestation/keymint-certificate-chain.pem --offline-wallet-apk kotlin/offline-wallet-lab-app/build/outputs/apk/release/offline-wallet-lab-app-release.apk --d2d-payment-transcript target/kagemusha-android-raw-harness-v1/google-pixel-6-6a-physical-1781077370103/handoff/d2d-payment.json --wallet-integrity-transcript target/kagemusha-android-raw-harness-v1/google-pixel-6-6a-physical-1781077370103/wallet/integrity.json --telemetry-json target/kagemusha-android-raw-harness-v1/google-pixel-6-6a-physical-1781077370103/telemetry/telemetry.json --status-ndjson target/kagemusha-android-raw-harness-v1/google-pixel-6-6a-physical-1781077370103/telemetry/status.ndjson --pending-queue-json target/kagemusha-android-raw-harness-v1/google-pixel-6-6a-physical-1781077370103/queue/pending_queue.json --runtime-log target/kagemusha-android-raw-harness-v1/google-pixel-6-6a-physical-1781077370103/logs/runtime.log --private-key target/kagemusha-android-lab-keys/lab-private.pem --public-key target/kagemusha-android-lab-keys/lab-public.pem --signer-key-id android-lab-release-signer-v1`
   - `python3 scripts/check_android_device_lab_slot.py --root target/kagemusha-android-device-lab-harness-v1 --slot google-pixel-6-6a-physical-1781077370103 --require-slot --require-kagemusha-production-evidence --trusted-signer-public-key target/kagemusha-android-lab-keys/lab-public.pem --json-out target/kagemusha-android-device-lab-harness-v1-validation.json`
   - `python3 scripts/kagemusha_production_readiness.py --repo-root . --device-lab-root target/kagemusha-android-device-lab-harness-v1 --slot google-pixel-6-6a-physical-1781077370103 --trusted-signer-public-key target/kagemusha-android-lab-keys/lab-public.pem --summary-out target/kagemusha-readiness-summary-current.json`
+
 ## 2026-06-10 SCCP not-ready bundle checklist pre-render gate
 
 - Tightened the release-bundle builder's pre-render checklist validation so a
@@ -159900,11 +160340,11 @@ Last updated: 2026-06-11
 
 - `crates/iroha_core/src/sumeragi/main_loop/tests.rs` now adds three more direct guard/fallback tests in the same quorum-target / frontier-wire slice so the remaining conservative-degrade branches are covered without relying on larger end-to-end fixtures.
 - Added `quorum_retransmit_targets_fall_back_to_full_fanout_when_signer_mapping_fails`, which proves invalid signer-to-peer mapping degrades to full retransmit fanout instead of dropping recovery traffic.
-- Added `frontier_block_created_for_local_proposal_wire_falls_back_to_first_block_signature`, which proves the local proposal wire helper still emits enriched frontier metadata when the proposal’s proposer index does not match any signature on the block.
+- Added `frontier_block_created_for_local_proposal_wire_uses_roster_verified_leader_signature`, which proves the local proposal wire helper still emits enriched frontier metadata from the roster-verified leader signature when the proposal’s proposer index does not match any signature on the block.
 - Added `frontier_block_created_for_wire_returns_plain_block_without_frontier_metadata`, which proves the generic wire helper degrades to a plain `BlockCreated` when neither proposal cache nor authoritative frontier metadata is available.
 - Focused validation for this addendum:
   - `cargo test -p iroha_core --lib quorum_retransmit_targets_fall_back_to_full_fanout_when_signer_mapping_fails -- --nocapture`
-  - `cargo test -p iroha_core --lib frontier_block_created_for_local_proposal_wire_falls_back_to_first_block_signature -- --nocapture`
+  - `cargo test -p iroha_core --lib frontier_block_created_for_local_proposal_wire_uses_roster_verified_leader_signature -- --nocapture`
   - `cargo test -p iroha_core --lib frontier_block_created_for_wire_returns_plain_block_without_frontier_metadata -- --nocapture`
   - `cargo test -p iroha_core --lib frontier_block_created_for_proposal_wire_falls_back_to_authoritative_frontier_cache -- --nocapture`
   - `cargo test -p iroha_core --lib frontier_block_created_for_local_proposal_wire_uses_live_roster_when_derived_roster_unavailable -- --nocapture`

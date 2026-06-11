@@ -26889,6 +26889,11 @@ def test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory(
     )
     assert any(
         "native SCCP no-WASM readiness SDK test inventory" in error
+        and "missing marker: local native EVM prover artifact byte verifier" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
         and (
             "missing marker: nativeProverArtifacts verifierKeyHash must match nativeProverBundle"
             in error
@@ -27609,29 +27614,31 @@ def test_release_bundle_verifier_guards_ethereum_data_collection_no_proxy(
     verifier = load_verify_helpers()
     assert verifier._ethereum_data_collection_no_proxy_inventory_errors() == []
 
-    sparse_sdk = tmp_path / "sccp.js"
-    sparse_sdk.write_text(
-        "  async validateExecutionProviderMainnet() {\n"
-        "    await provider.request({ method: \"eth_chainId\" });\n"
-        "    await provider.request({ method: \"eth_getTransactionReceipt\" });\n"
-        "    return Torii.proxy.fallback();\n"
-        "  }\n"
-        "  async submitInboundToIroha() {}\n",
-        encoding="utf-8",
-    )
-    verifier.ETHEREUM_DATA_COLLECTION_REGIONS = {
-        "js-sdk": (
-            sparse_sdk,
-            "  async validateExecutionProviderMainnet",
-            "  async submitInboundToIroha",
-            (
-                "eth_chainId",
-                "eth_getTransactionReceipt",
-                "eth_getBlockByHash",
-                "collectFinalityEvidence",
+    regions = {}
+    for sdk, (_path, start_marker, end_marker, required_markers) in (
+        verifier.ETHEREUM_DATA_COLLECTION_REGIONS.items()
+    ):
+        sparse_sdk = tmp_path / f"{sdk}.txt"
+        sparse_sdk.write_text(
+            "\n".join(
+                (
+                    start_marker,
+                    required_markers[0],
+                    required_markers[1],
+                    "return Torii.proxy.fetch();",
+                    end_marker,
+                    "",
+                )
             ),
+            encoding="utf-8",
         )
-    }
+        regions[sdk] = (
+            sparse_sdk,
+            start_marker,
+            end_marker,
+            required_markers,
+        )
+    verifier.ETHEREUM_DATA_COLLECTION_REGIONS = regions
 
     bundle_dir = tmp_path / "bundle"
     bundle_dir.mkdir()
@@ -27639,26 +27646,32 @@ def test_release_bundle_verifier_guards_ethereum_data_collection_no_proxy(
     verified = verifier.verify_bundle(output_dir)
 
     assert verified["verified"] is False
-    assert any(
-        "Ethereum mainnet js-sdk data collection source" in error
-        and "missing provider marker: eth_getBlockByHash" in error
-        for error in verified["errors"]
-    )
-    assert any(
-        "Ethereum mainnet js-sdk data collection source" in error
-        and "missing provider marker: collectFinalityEvidence" in error
-        for error in verified["errors"]
-    )
-    assert any(
-        "Ethereum mainnet js-sdk data collection source" in error
-        and "contains forbidden Torii" in error
-        for error in verified["errors"]
-    )
-    assert any(
-        "Ethereum mainnet js-sdk data collection source" in error
-        and "contains forbidden proxy" in error
-        for error in verified["errors"]
-    )
+    for sdk, (_sparse_sdk, _start, _end, required_markers) in regions.items():
+        assert any(
+            f"Ethereum mainnet {sdk} data collection source" in error
+            and f"missing provider marker: {required_markers[2]}" in error
+            for error in verified["errors"]
+        )
+        assert any(
+            f"Ethereum mainnet {sdk} data collection source" in error
+            and f"missing provider marker: {required_markers[3]}" in error
+            for error in verified["errors"]
+        )
+        assert any(
+            f"Ethereum mainnet {sdk} data collection source" in error
+            and "contains forbidden Torii" in error
+            for error in verified["errors"]
+        )
+        assert any(
+            f"Ethereum mainnet {sdk} data collection source" in error
+            and "contains forbidden proxy" in error
+            for error in verified["errors"]
+        )
+        assert any(
+            f"Ethereum mainnet {sdk} data collection source" in error
+            and "contains forbidden embedded HTTP client" in error
+            for error in verified["errors"]
+        )
 
 
 def test_release_bundle_verifier_guards_bsc_inbound_adversarial_sdk_tests(
@@ -28211,6 +28224,53 @@ def test_release_bundle_verifier_guards_ethereum_outbound_precallback_sdk_tests(
         "Ethereum outbound prover callback must not see BSC requests\n",
         encoding="utf-8",
     )
+    implementation_cases = (
+        (
+            "sccp.js",
+            "const proverArtifactRequestBytes =",
+            "...proverArtifactRequestBytes,\n        ...publicSignalWordBytes,",
+        ),
+        (
+            "sccp.py",
+            "def _normalize_optional_groth16_prover_artifacts(",
+            'prover_artifacts["proof_artifact_hash"]',
+        ),
+        (
+            "SccpEvmProver.swift",
+            "let proverArtifacts = try normalizeOptionalEvmGroth16ProverArtifacts(",
+            "if let proverArtifacts {\n        try preimage.append(evmBytesFromHex32(proverArtifacts.proofArtifactHash",
+        ),
+        (
+            "EvmSccpProver.kt",
+            "val proverArtifacts = normalizeOptionalGroth16ProverArtifacts(",
+            'preimage.write(hex32Bytes(proverArtifacts.proofArtifactHash, "proofArtifactHash"))',
+        ),
+        (
+            "EvmSccpProver.java",
+            "final Groth16ProverArtifacts proverArtifacts =",
+            'write(preimage, hex32Bytes(proverArtifacts.proofArtifactHash(), "proofArtifactHash"))',
+        ),
+        (
+            "EthereumMainnetSccp.cs",
+            "var proverArtifacts = NormalizeOptionalGroth16ProverArtifacts(proofArtifactHash, provingKeyHash);",
+            "payload.Write(HexToBytes(proverArtifacts.ProofArtifactHash, 32));",
+        ),
+    )
+    implementation_entries = []
+    for index, (filename, present_marker, removed_marker) in enumerate(
+        implementation_cases
+    ):
+        sparse_impl = tmp_path / f"{index}_{filename}"
+        sparse_impl.write_text(present_marker + "\n", encoding="utf-8")
+        implementation_entries.append(
+            (
+                sparse_impl,
+                (
+                    present_marker,
+                    removed_marker,
+                ),
+            )
+        )
     verifier.ETHEREUM_OUTBOUND_PRECALLBACK_SDK_TEST_MARKERS = (
         (
             sparse_js_test,
@@ -28219,6 +28279,7 @@ def test_release_bundle_verifier_guards_ethereum_outbound_precallback_sdk_tests(
                 "assert.equal(outboundProverCalled, false)",
             ),
         ),
+        *implementation_entries,
         (
             sparse_test,
             (
@@ -28242,6 +28303,12 @@ def test_release_bundle_verifier_guards_ethereum_outbound_precallback_sdk_tests(
         )
         for error in verified["errors"]
     )
+    for _, _, removed_marker in implementation_cases:
+        assert any(
+            "Ethereum mainnet outbound pre-callback SDK test inventory" in error
+            and f"missing marker: {removed_marker}" in error
+            for error in verified["errors"]
+        )
 
 
 def test_release_bundle_verifier_guards_ethereum_local_admission_sdk_tests(
@@ -28295,17 +28362,60 @@ def test_release_bundle_verifier_guards_ethereum_outbound_provider_validation(
     verifier = load_verify_helpers()
     assert verifier._ethereum_outbound_provider_validation_inventory_errors() == []
 
-    sparse_sdk = tmp_path / "sccp.js"
-    sparse_sdk.write_text("let providerValidated = false;\n", encoding="utf-8")
-    verifier.ETHEREUM_OUTBOUND_PROVIDER_VALIDATION_MARKERS = (
+    cases = (
         (
-            sparse_sdk,
-            (
-                "let providerValidated = false;",
-                "await this.validateExecutionProviderMainnet({ executionProvider: provider });",
-            ),
+            "sccp.js",
+            "let providerValidated = false;",
+            "await this.validateExecutionProviderMainnet({ executionProvider: provider });",
+        ),
+        (
+            "sccp.dist.js",
+            "let providerValidated = false;",
+            'if (typeof submit === "function")',
+        ),
+        (
+            "sccp.py",
+            'provider = options.get("execution_provider", self.execution_provider)',
+            "await self.validate_execution_provider_mainnet(provider)",
+        ),
+        (
+            "sccp_test.py",
+            "guarded_submit_called = False",
+            "assert guarded_submit_called is False",
+        ),
+        (
+            "SccpEvmProver.swift",
+            "if let executionProvider {",
+            "_ = try await validateExecutionProviderMainnet(executionProvider)",
+        ),
+        (
+            "EvmSccpProver.kt",
+            "executionProvider?.let { validateExecutionProviderMainnet(it) }",
+            "return submitter.submit(buildEthereumCalldata(input))",
+        ),
+        (
+            "EthereumMainnetSccp.java",
+            "if (executionProvider != null) {",
+            "validateExecutionProviderMainnet(executionProvider);",
+        ),
+        (
+            "EthereumMainnetSccp.cs",
+            "IEthereumMainnetExecutionProvider? executionProvider",
+            "ValidateExecutionProviderMainnetAsync(",
         ),
     )
+    verifier.ETHEREUM_OUTBOUND_PROVIDER_VALIDATION_MARKERS = tuple(
+        (
+            (tmp_path / f"{index}_{filename}"),
+            (
+                present_marker,
+                removed_marker,
+            ),
+        )
+        for index, (filename, present_marker, removed_marker) in enumerate(cases)
+    )
+    for sparse_sdk, markers in verifier.ETHEREUM_OUTBOUND_PROVIDER_VALIDATION_MARKERS:
+        sparse_sdk.write_text(markers[0] + "\n", encoding="utf-8")
 
     bundle_dir = tmp_path / "bundle"
     bundle_dir.mkdir()
@@ -28313,15 +28423,12 @@ def test_release_bundle_verifier_guards_ethereum_outbound_provider_validation(
     verified = verifier.verify_bundle(output_dir)
 
     assert verified["verified"] is False
-    assert any(
-        "Ethereum mainnet outbound provider validation source inventory" in error
-        and (
-            "missing marker: await this.validateExecutionProviderMainnet"
-            "({ executionProvider: provider });"
+    for _filename, _present_marker, removed_marker in cases:
+        assert any(
+            "Ethereum mainnet outbound provider validation source inventory" in error
+            and f"missing marker: {removed_marker}" in error
+            for error in verified["errors"]
         )
-        in error
-        for error in verified["errors"]
-    )
 
 
 def test_release_bundle_verifier_guards_ethereum_receipt_root_zero_sdk_tests(

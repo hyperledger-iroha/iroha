@@ -453,6 +453,7 @@ pub(super) fn contiguous_frontier_vote_backed_fast_resend_window(
 #[derive(Clone, Copy, Debug)]
 struct RbcAvailabilityRescheduleSession {
     invalid: bool,
+    malformed_chunk_shape: bool,
     delivered: bool,
     complete_delivery: bool,
     total_chunks: u32,
@@ -489,11 +490,11 @@ fn rbc_availability_unresolved_for_reschedule_decision(
         return false;
     }
     let ready_quorum = session.ready_signatures >= session.required_ready;
+    if session.malformed_chunk_shape {
+        return true;
+    }
     if session.complete_delivery {
         return !ready_quorum;
-    }
-    if session.total_chunks == 0 || session.received_chunks > session.total_chunks {
-        return true;
     }
     let missing_chunks =
         session.total_chunks != 0 && session.received_chunks < session.total_chunks;
@@ -779,6 +780,7 @@ impl Actor {
             .get(&key)
             .map(|session| RbcAvailabilityRescheduleSession {
                 invalid: session.is_invalid(),
+                malformed_chunk_shape: rbc_session_has_invalid_chunk_shape(session),
                 delivered: session.delivered,
                 complete_delivery: rbc_session_has_complete_delivery(session),
                 total_chunks: session.total_chunks(),
@@ -3966,6 +3968,7 @@ mod tests {
     ) -> Option<RbcAvailabilityRescheduleSession> {
         Some(RbcAvailabilityRescheduleSession {
             invalid,
+            malformed_chunk_shape: total_chunks == 0 || received_chunks > total_chunks,
             delivered,
             complete_delivery: delivered && total_chunks != 0 && received_chunks == total_chunks,
             total_chunks,
@@ -3980,6 +3983,7 @@ mod tests {
     ) -> Option<RbcAvailabilityRescheduleSession> {
         Some(RbcAvailabilityRescheduleSession {
             invalid: false,
+            malformed_chunk_shape: false,
             delivered: true,
             complete_delivery: false,
             total_chunks: 4,
@@ -4112,6 +4116,25 @@ mod tests {
                 pending_entry: false,
                 session: rbc_availability_session(false, true, 4, 4, 3),
                 expected_unresolved: false,
+            },
+            Case {
+                name: "MalformedCompleteReady",
+                da_enabled: true,
+                stall_age_ms: 0,
+                availability_timeout_ms: 100,
+                local_payload_available: false,
+                pending_entry: false,
+                session: Some(RbcAvailabilityRescheduleSession {
+                    invalid: false,
+                    malformed_chunk_shape: true,
+                    delivered: true,
+                    complete_delivery: true,
+                    total_chunks: 4,
+                    received_chunks: 4,
+                    ready_signatures: 3,
+                    required_ready: 3,
+                }),
+                expected_unresolved: true,
             },
             Case {
                 name: "DeliveredCountCompleteUnverifiedReady",

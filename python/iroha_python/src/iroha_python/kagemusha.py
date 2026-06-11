@@ -548,7 +548,10 @@ def _kagemusha_read_norito_length(
             raise ValueError("lineage_proving_key_archive")
         byte = buffer[cursor]
         cursor += 1
-        value |= (byte & 0x7F) << shift
+        chunk = byte & 0x7F
+        if shift >= 63 and chunk > 1:
+            raise ValueError("lineage_proving_key_archive")
+        value |= chunk << shift
         if not byte & 0x80:
             encoded_len = cursor - offset
             if encoded_len > 1 and value < (1 << (7 * (encoded_len - 1))):

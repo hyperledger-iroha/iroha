@@ -404,6 +404,7 @@ pub fn load_npos_collector_config_from_world(
 /// Resolve VRF epoch parameters from on-chain `SumeragiNposParameters` when available,
 /// falling back to the local configuration otherwise.
 #[cfg(test)]
+#[cfg_attr(not(feature = "sumeragi-main-loop-tests"), allow(dead_code))]
 pub(crate) fn load_npos_epoch_params(
     view: &StateView<'_>,
     config: &SumeragiConfig,

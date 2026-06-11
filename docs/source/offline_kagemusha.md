@@ -239,9 +239,12 @@ Python, and C# now also parse the
 canonical `KagemushaRecursiveSpendLineageKeyArtifactsV1` proving-key archive
 fields and reject byte-smuggled circuit ids or verifier-key commitments, stale
 schema hashes, unsupported archive flags, wrong archive versions, empty proving
-keys, trailing payloads, non-canonical compact Norito length encodings, and
-invalid UTF-8 circuit family fields before native bridge loading, so overlong
-varints cannot smuggle otherwise valid lineage metadata through the SDK guard.
+keys, trailing payloads, non-canonical compact Norito length encodings,
+canonical compact lengths above each SDK's addressable archive bounds, compact
+length encodings whose terminal byte would overflow the u64 length space, and
+invalid UTF-8 circuit family fields before native bridge loading, so overlong,
+over-cap, or overflowing varints cannot smuggle otherwise valid lineage metadata
+through the SDK guard.
 
 Release tooling can produce the portable Norito packages with:
 

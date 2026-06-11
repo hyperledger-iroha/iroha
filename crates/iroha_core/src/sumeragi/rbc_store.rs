@@ -1083,6 +1083,12 @@ pub(super) struct PersistedSession {
     /// Commit topology snapshot captured when this RBC session started.
     #[norito(default)]
     pub(crate) session_roster: Vec<PeerId>,
+    /// Per-lane ownership allocation captured when the RBC payload was produced.
+    #[norito(default)]
+    pub(crate) lane_allocations: Vec<PersistedLaneAllocation>,
+    /// Per-dataspace ownership allocation captured when the RBC payload was produced.
+    #[norito(default)]
+    pub(crate) dataspace_allocations: Vec<PersistedDataspaceAllocation>,
 }
 
 impl PersistedSession {
@@ -1128,6 +1134,27 @@ pub(super) struct PersistedChunk {
 pub(super) struct PersistedReady {
     pub(crate) sender: u32,
     pub(crate) signature: Vec<u8>,
+}
+
+/// Persisted per-lane RBC payload ownership allocation.
+#[derive(Clone, Copy, Debug, Encode, Decode, PartialEq, Eq)]
+pub(super) struct PersistedLaneAllocation {
+    pub(crate) lane_id: u32,
+    pub(crate) tx_count: u64,
+    pub(crate) rbc_bytes_total: u64,
+    pub(crate) teu_total: u64,
+    pub(crate) total_chunks: u32,
+}
+
+/// Persisted per-dataspace RBC payload ownership allocation.
+#[derive(Clone, Copy, Debug, Encode, Decode, PartialEq, Eq)]
+pub(super) struct PersistedDataspaceAllocation {
+    pub(crate) lane_id: u32,
+    pub(crate) dataspace_id: u64,
+    pub(crate) tx_count: u64,
+    pub(crate) rbc_bytes_total: u64,
+    pub(crate) teu_total: u64,
+    pub(crate) total_chunks: u32,
 }
 
 fn ms_to_system_time(ms: u64) -> Option<SystemTime> {
@@ -1192,7 +1219,88 @@ fn persisted_payload_bytes(
     }
 }
 
+pub(super) fn validate_allocations(session: &PersistedSession) -> Result<(), &'static str> {
+    if session.lane_allocations.is_empty() && session.dataspace_allocations.is_empty() {
+        return Ok(());
+    }
+    if session.total_chunks == 0 {
+        return Err("allocation metadata with zero chunks");
+    }
+    if session.lane_allocations.is_empty() || session.dataspace_allocations.is_empty() {
+        return Err("incomplete allocation metadata");
+    }
+
+    let mut lane_totals: BTreeMap<u32, (u64, u64, u64, u64)> = BTreeMap::new();
+    let mut lane_chunk_sum = 0u64;
+    for alloc in &session.lane_allocations {
+        if alloc.tx_count == 0 {
+            return Err("zero lane allocation transaction count");
+        }
+        if lane_totals
+            .insert(
+                alloc.lane_id,
+                (
+                    alloc.tx_count,
+                    u64::from(alloc.total_chunks),
+                    alloc.rbc_bytes_total,
+                    alloc.teu_total,
+                ),
+            )
+            .is_some()
+        {
+            return Err("duplicate lane allocation");
+        }
+        lane_chunk_sum = lane_chunk_sum
+            .checked_add(u64::from(alloc.total_chunks))
+            .ok_or("lane allocation chunk sum overflow")?;
+    }
+    if lane_chunk_sum != u64::from(session.total_chunks) {
+        return Err("lane allocation chunk sum mismatch");
+    }
+
+    let mut dataspace_seen = BTreeSet::new();
+    let mut dataspace_sums: BTreeMap<u32, (u64, u64, u64, u64)> = BTreeMap::new();
+    for alloc in &session.dataspace_allocations {
+        if alloc.tx_count == 0 {
+            return Err("zero dataspace allocation transaction count");
+        }
+        if !lane_totals.contains_key(&alloc.lane_id) {
+            return Err("dataspace allocation references unknown lane");
+        }
+        if !dataspace_seen.insert((alloc.lane_id, alloc.dataspace_id)) {
+            return Err("duplicate dataspace allocation");
+        }
+        let entry = dataspace_sums.entry(alloc.lane_id).or_insert((0, 0, 0, 0));
+        entry.0 = entry
+            .0
+            .checked_add(alloc.tx_count)
+            .ok_or("dataspace allocation transaction sum overflow")?;
+        entry.1 = entry
+            .1
+            .checked_add(u64::from(alloc.total_chunks))
+            .ok_or("dataspace allocation chunk sum overflow")?;
+        entry.2 = entry
+            .2
+            .checked_add(alloc.rbc_bytes_total)
+            .ok_or("dataspace allocation byte sum overflow")?;
+        entry.3 = entry
+            .3
+            .checked_add(alloc.teu_total)
+            .ok_or("dataspace allocation TEU sum overflow")?;
+    }
+
+    for (lane_id, expected) in lane_totals {
+        if dataspace_sums.get(&lane_id).copied().unwrap_or_default() != expected {
+            return Err("dataspace allocation sum mismatch");
+        }
+    }
+
+    Ok(())
+}
+
 fn validate_chunks(session: &PersistedSession) -> Result<(), &'static str> {
+    validate_allocations(session)?;
+
     let expected = session.total_chunks as usize;
     if expected == 0 {
         if !session.chunk_digests.is_empty() {
@@ -1206,6 +1314,22 @@ fn validate_chunks(session: &PersistedSession) -> Result<(), &'static str> {
     }
     if !session.chunk_digests.is_empty() && session.chunk_digests.len() != expected {
         return Err("chunk digest count mismatch");
+    }
+    if !session.chunk_digests.is_empty() {
+        let tree = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(session.chunk_digests.clone());
+        let Some(root) = tree.root().map(Hash::from) else {
+            return Err("failed to compute chunk root");
+        };
+        if let Some(expected_root) = &session.expected_chunk_root {
+            if expected_root != &root {
+                return Err("chunk root mismatch");
+            }
+        }
+        if let Some(computed_root) = &session.computed_chunk_root {
+            if computed_root != &root {
+                return Err("computed chunk root mismatch");
+            }
+        }
     }
     if session.chunks.len() > expected {
         return Err("too many chunks");
@@ -1367,6 +1491,8 @@ mod tests {
             chunks: Vec::new(),
             last_updated_ms: 0,
             session_roster: Vec::new(),
+            lane_allocations: Vec::new(),
+            dataspace_allocations: Vec::new(),
         }
     }
 
@@ -1428,6 +1554,37 @@ mod tests {
         let mut session = RbcSession::test_new(1, None, None, 0);
         session.test_note_chunk(0, vec![byte; len], 0);
         session.to_persisted(key, chain_hash, manifest, &[])
+    }
+
+    #[test]
+    fn inconsistent_allocation_metadata_is_rejected_and_deleted() {
+        let key = session_key(0x8A);
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let mut persisted = persisted_single_chunk_session(key, chain_hash, &manifest, 0x44, 4);
+        persisted.lane_allocations = vec![PersistedLaneAllocation {
+            lane_id: 7,
+            tx_count: 1,
+            rbc_bytes_total: 4,
+            teu_total: 1,
+            total_chunks: 1,
+        }];
+        persisted.dataspace_allocations = vec![PersistedDataspaceAllocation {
+            lane_id: 7,
+            dataspace_id: 42,
+            tx_count: 1,
+            rbc_bytes_total: 4,
+            teu_total: 1,
+            total_chunks: 0,
+        }];
+
+        assert_persisted_session_rejected_and_deleted(
+            "dataspace allocation must sum to its lane allocation",
+            key,
+            persisted,
+            chain_hash,
+            manifest,
+        );
     }
 
     #[test]
@@ -1513,6 +1670,8 @@ mod tests {
             chunks: Vec::new(),
             last_updated_ms: 0,
             session_roster: Vec::new(),
+            lane_allocations: Vec::new(),
+            dataspace_allocations: Vec::new(),
         };
         let mut encoded = to_bytes(&persisted).expect("encode persisted session");
         assert!(encoded.len() > 8);
@@ -2037,6 +2196,40 @@ mod tests {
             .expect("load persisted sessions");
         assert!(load.sessions.is_empty(), "invalid root should be dropped");
         assert!(!path.exists(), "store should delete invalid session files");
+    }
+
+    #[test]
+    fn incomplete_persisted_session_with_digest_root_mismatch_is_dropped() {
+        let key = session_key(12);
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let roster = vec![test_peer_id(1)];
+
+        let chunk0 = vec![0x41; 4];
+        let chunk1_digest = [0x42; 32];
+        let mut session = RbcSession::test_new(2, None, None, 0);
+        session.test_note_chunk(0, chunk0.clone(), 0);
+
+        let mut chunk0_digest = [0u8; 32];
+        chunk0_digest.copy_from_slice(&Sha256::digest(&chunk0));
+        let chunk_digests = vec![chunk0_digest, chunk1_digest];
+        let tree = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(chunk_digests.clone());
+        let expected_root = tree.root().map(Hash::from).expect("chunk root");
+        let mut mismatched_root = *expected_root.as_ref();
+        mismatched_root[0] ^= 0xFF;
+
+        let mut persisted = session.to_persisted(key, chain_hash, &manifest, &roster);
+        assert_eq!(persisted.chunks.len(), 1);
+        persisted.chunk_digests = chunk_digests;
+        persisted.expected_chunk_root = Some(Hash::prehashed(mismatched_root));
+
+        assert_persisted_session_rejected_and_deleted(
+            "incomplete digest/root mismatch",
+            key,
+            persisted,
+            chain_hash,
+            manifest,
+        );
     }
 
     #[test]
