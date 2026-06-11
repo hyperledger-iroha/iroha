@@ -2070,7 +2070,7 @@ def _artifact_row_errors(row: Any, label: str) -> list[str]:
     if errors:
         return errors
     require_bundle_relative_path = label.startswith("bundled report.")
-    errors.extend(_unknown_report_field_errors(artifact, label, ARTIFACT_FIELDS))
+    errors.extend(_unknown_public_field_errors(artifact, label, ARTIFACT_FIELDS))
     _require_report_fields(artifact, label, ARTIFACT_FIELDS, errors)
     artifact_path = artifact.get("path")
     if not isinstance(artifact_path, str) or not artifact_path:

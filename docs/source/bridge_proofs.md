@@ -2772,9 +2772,9 @@ manifest/report artifact table, manifest artifact-order drift from the bundle bu
 attachment order, and missing, malformed, unbound, lane-mismatched, or extra-field
 per-lane cryptographic evidence rows.
 The release-bundle builder applies the same malformed-name classification to
-copied release-checklist root/item fields and corridor root fields before
-Markdown rendering, so hostile local labels become category-only blockers
-instead of raw diagnostics.
+copied report-artifact rows, release-checklist root/item fields, and corridor
+root fields before Markdown rendering, so hostile local labels become
+category-only blockers instead of raw diagnostics.
 Release-readiness and bundle verification pin the copied input-provenance schema
 as required source inventory, so canonical copied input paths, unique
 input/input-artifact provenance, `evidence/NN-*.toml` layout, and recomputation

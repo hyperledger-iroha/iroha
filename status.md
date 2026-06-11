@@ -2,6 +2,17 @@
 
 Last updated: 2026-06-11
 
+## 2026-06-11 SCCP copied artifact field-name hardening
+
+- Tightened the release-bundle builder so copied `input_artifacts` row fields
+  use the public unknown-field classifier before Markdown rendering. Safe
+  operator fields stay readable, while padded, control-character, whitespace,
+  Markdown-unsafe, and Unicode-confusable names become category-only blockers.
+- Extended copied-artifact pre-render coverage with hostile field names,
+  including a `secret-token` marker, and pinned the classifier usage in the
+  release manifest artifact-set/order source inventory.
+- Validation: pending.
+
 ## 2026-06-11 STARK AIR opening root parameter preflight
 
 - Tightened the native STARK/AIR opening-root replay helper so it validates the

@@ -3017,6 +3017,8 @@ def test_release_bundle_rejects_malformed_copied_report_before_render(
     evidence = tmp_path / "evidence.toml"
     evidence.write_text("[zk]\n", encoding="utf-8")
     output_dir = tmp_path / "bundle"
+    markdown_field = "operator|secret-token"
+    confusable_field = "operat\u043er_artifact_note"
 
     class FakeReportModule:
         def __init__(self) -> None:
@@ -3297,6 +3299,11 @@ def test_release_bundle_rejects_malformed_copied_artifacts_before_render(
                         "bytes": True,
                         "sha256": "A" * 64,
                         "operator_attestation": "reviewed outside evidence",
+                        " operator_artifact_note ": "padded local claim",
+                        "operator\nartifact_note": "control local claim",
+                        "operator artifact_note": "whitespace local claim",
+                        markdown_field: "markdown local claim",
+                        confusable_field: "confusable local claim",
                     }
                 ]
                 corridor = report["corridor"]
@@ -3337,6 +3344,28 @@ def test_release_bundle_rejects_malformed_copied_artifacts_before_render(
         "bundled report.input_artifacts[0] contains unknown field: "
         "operator_attestation"
     ) in captured.err
+    assert (
+        "bundled report.input_artifacts[0] contains unknown field name with "
+        "surrounding whitespace"
+    ) in captured.err
+    assert (
+        "bundled report.input_artifacts[0] contains unknown field name with "
+        "control character"
+    ) in captured.err
+    assert (
+        "bundled report.input_artifacts[0] contains unknown field name with "
+        "whitespace"
+    ) in captured.err
+    assert (
+        "bundled report.input_artifacts[0] contains unknown field name with "
+        "Markdown-unsafe character"
+    ) in captured.err
+    assert (
+        "bundled report.input_artifacts[0] contains unknown field name with "
+        "non-ASCII character"
+    ) in captured.err
+    assert markdown_field not in captured.err
+    assert confusable_field not in captured.err
     assert (
         "bundled report.input_artifacts[0] path must not contain surrounding "
         "whitespace"

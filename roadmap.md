@@ -473,10 +473,10 @@ and completed history lives in [`status.md`](./status.md).
   manifest order, or Markdown table checks. Safe ASCII operator names may remain
   readable, while padded, control-character, whitespace, Markdown-unsafe,
   malformed, or Unicode-confusable keys must be category-only blockers. The
-  bundle builder must reject copied report-artifact rows with unknown fields,
-  malformed bundle-relative path text, non-integer byte counts, or noncanonical
-  SHA-256 text before `--allow-not-ready` diagnostics can render or write public
-  artifacts.
+  bundle builder must classify copied report-artifact row field names and reject
+  copied report-artifact rows with unknown fields, malformed bundle-relative
+  path text, non-integer byte counts, or noncanonical SHA-256 text before
+  `--allow-not-ready` diagnostics can render or write public artifacts.
 - SCCP cryptographic-evidence public rows must classify unknown row field names
   before lane binding, route-canary binding, Markdown checks, or source-adapter
   audit semantics. Safe ASCII operator names may remain readable, while

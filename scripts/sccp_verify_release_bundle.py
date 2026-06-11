@@ -7135,6 +7135,7 @@ SCCP_RELEASE_MANIFEST_ARTIFACT_SET_ORDER_MARKERS = (
         (
             "ARTIFACT_FIELDS",
             "def _artifact_row_errors(",
+            "_unknown_public_field_errors(artifact, label, ARTIFACT_FIELDS)",
             "bytes must be a non-negative integer",
             "sha256 must be a canonical SHA-256 hex string",
             "def _bundled_artifact_integrity_errors(",
@@ -7195,6 +7196,7 @@ SCCP_RELEASE_MANIFEST_ARTIFACT_SET_ORDER_MARKERS = (
             "def test_release_bundle_verifier_rejects_manifest_artifact_order_drift",
             "def test_release_bundle_verifier_rejects_malformed_artifact_fields",
             "def test_release_bundle_rejects_malformed_copied_artifacts_before_render",
+            "operator|secret-token",
             "def test_release_bundle_rejects_copied_artifact_hash_drift_before_render",
             "def test_release_bundle_rejects_manifest_drift_before_write",
         ),
