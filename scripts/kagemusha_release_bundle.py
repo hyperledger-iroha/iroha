@@ -1555,11 +1555,19 @@ def _bundle_evidence_paths(bundle: dict[str, Any]) -> set[str]:
     return paths
 
 
-def _cleanup_temp_output(path: Path) -> list[dict[str, Any]]:
+def _cleanup_temp_output(
+    path: Path,
+    expected_identity: tuple[int, int] | None,
+) -> list[dict[str, Any]]:
+    if expected_identity is None:
+        return [
+            _blocker(
+                "kagemusha_release_bundle_out_invalid",
+                "--out temporary file metadata could not be read",
+            )
+        ]
     try:
-        path.unlink()
-    except FileNotFoundError:
-        return []
+        parent_fd = os.open(path.parent, _directory_open_flags())
     except OSError:
         return [
             _blocker(
@@ -1567,6 +1575,81 @@ def _cleanup_temp_output(path: Path) -> list[dict[str, Any]]:
                 "--out temporary file could not be removed",
             )
         ]
+    try:
+        try:
+            temp_stat = os.stat(
+                path.name,
+                dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            return []
+        except OSError:
+            return [
+                _blocker(
+                    "kagemusha_release_bundle_out_invalid",
+                    "--out temporary file could not be removed",
+                )
+            ]
+        if (
+            not stat.S_ISREG(temp_stat.st_mode)
+            or _file_identity(temp_stat) != expected_identity
+        ):
+            return [
+                _blocker(
+                    "kagemusha_release_bundle_out_invalid",
+                    "--out temporary file changed before cleanup",
+                )
+            ]
+        try:
+            os.unlink(path.name, dir_fd=parent_fd)
+        except FileNotFoundError:
+            return []
+        except OSError:
+            return [
+                _blocker(
+                    "kagemusha_release_bundle_out_invalid",
+                    "--out temporary file could not be removed",
+                )
+            ]
+    finally:
+        os.close(parent_fd)
+    return []
+
+
+def _file_identity(file_stat: os.stat_result) -> tuple[int, int]:
+    return file_stat.st_dev, file_stat.st_ino
+
+
+def _directory_open_flags() -> int:
+    flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        flags |= os.O_DIRECTORY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    return flags
+
+
+def _sync_output_parent(
+    parent: Path,
+    *,
+    expected_identity: tuple[int, int] | None,
+) -> list[dict[str, Any]]:
+    try:
+        parent_fd = os.open(parent, _directory_open_flags())
+    except OSError:
+        return [_release_bundle_out_blocker("--out parent directory could not be synced")]
+    try:
+        parent_stat = os.fstat(parent_fd)
+        if not stat.S_ISDIR(parent_stat.st_mode):
+            return [_release_bundle_out_blocker("--out parent directory could not be synced")]
+        if expected_identity is not None and _file_identity(parent_stat) != expected_identity:
+            return [_release_bundle_out_blocker("--out parent directory changed before sync")]
+        os.fsync(parent_fd)
+    except OSError:
+        return [_release_bundle_out_blocker("--out parent directory could not be synced")]
+    finally:
+        os.close(parent_fd)
     return []
 
 
@@ -2682,6 +2765,13 @@ def write_release_bundle(path: Path, bundle: dict[str, Any], bundle_root: Path) 
     output_blockers = _validate_output_path(path, bundle_root)
     if output_blockers:
         return output_blockers
+    try:
+        parent_stat = path.parent.lstat()
+    except OSError:
+        return [_release_bundle_out_blocker("--out parent directory metadata could not be read")]
+    if stat.S_ISLNK(parent_stat.st_mode) or not stat.S_ISDIR(parent_stat.st_mode):
+        return [_release_bundle_out_blocker("--out parent directory could not be synced")]
+    parent_identity = _file_identity(parent_stat)
     relative_path, relative_blockers = _relative_to_bundle(path, bundle_root, "--out")
     if relative_blockers:
         return relative_blockers
@@ -2713,6 +2803,7 @@ def write_release_bundle(path: Path, bundle: dict[str, Any], bundle_root: Path) 
             )
         ]
     tmp_path: Path | None = None
+    tmp_identity: tuple[int, int] | None = None
     write_blockers: list[dict[str, Any]] = []
     try:
         with tempfile.NamedTemporaryFile(
@@ -2724,6 +2815,7 @@ def write_release_bundle(path: Path, bundle: dict[str, Any], bundle_root: Path) 
             delete=False,
         ) as handle:
             tmp_path = Path(handle.name)
+            tmp_identity = _file_identity(os.fstat(handle.fileno()))
             handle.write(manifest_text)
             handle.flush()
             os.fsync(handle.fileno())
@@ -2751,22 +2843,15 @@ def write_release_bundle(path: Path, bundle: dict[str, Any], bundle_root: Path) 
         )
     finally:
         if tmp_path is not None:
-            write_blockers.extend(_cleanup_temp_output(tmp_path))
+            write_blockers.extend(_cleanup_temp_output(tmp_path, tmp_identity))
     if write_blockers:
         return write_blockers
     output_blockers = _validate_output_path(path, bundle_root)
     if output_blockers:
         return output_blockers
-    try:
-        parent_fd = os.open(path.parent, os.O_RDONLY)
-    except OSError:
-        return [_release_bundle_out_blocker("--out parent directory could not be synced")]
-    try:
-        os.fsync(parent_fd)
-    except OSError:
-        return [_release_bundle_out_blocker("--out parent directory could not be synced")]
-    finally:
-        os.close(parent_fd)
+    sync_blockers = _sync_output_parent(path.parent, expected_identity=parent_identity)
+    if sync_blockers:
+        return sync_blockers
     try:
         expected_stat = path.lstat()
     except (FileNotFoundError, OSError):

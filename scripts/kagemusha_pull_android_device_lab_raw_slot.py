@@ -45,6 +45,17 @@ RAW_SLOT_REQUIRED_PATHS: tuple[str, ...] = (
     "queue/pending_queue.json",
     "logs/runtime.log",
 )
+RAW_SLOT_ALLOWED_PATHS: frozenset[str] = frozenset(RAW_SLOT_REQUIRED_PATHS)
+RAW_SLOT_ALLOWED_DIRECTORIES: frozenset[str] = frozenset(
+    {
+        "attestation",
+        "handoff",
+        "wallet",
+        "telemetry",
+        "queue",
+        "logs",
+    }
+)
 HARNESS_RESULT_ALLOWED_FIELDS: frozenset[str] = frozenset(
     {
         "alias",
@@ -54,6 +65,46 @@ HARNESS_RESULT_ALLOWED_FIELDS: frozenset[str] = frozenset(
         "challenge_hex",
         "chain_length",
     }
+)
+RAW_RESULT_ALLOWED_FIELDS: frozenset[str] = frozenset(
+    {
+        "slot",
+        "slot_id",
+        "status",
+        "device_fingerprint",
+        "os_build_id",
+        "app_package_name",
+        "app_signing_certificate_sha256",
+        "attestation_challenge_sha256",
+        "attestation_certificate_chain_path",
+        "attestation_certificate_chain_sha256",
+        "offline_wallet_policy_sha256",
+        "attestation_security_level",
+        "keymaster_security_level",
+        "keymint_security_level",
+        "strongbox_attestation",
+        "physical_device_attestation",
+    }
+)
+RAW_RESULT_STRING_FIELDS: tuple[str, ...] = (
+    "device_fingerprint",
+    "os_build_id",
+    "app_package_name",
+)
+RAW_RESULT_APP_SIGNING_DIGEST_FIELD = "app_signing_certificate_sha256"
+RAW_RESULT_CHALLENGE_DIGEST_FIELD = "attestation_challenge_sha256"
+RAW_RESULT_CHAIN_DIGEST_FIELD = "attestation_certificate_chain_sha256"
+RAW_RESULT_POLICY_DIGEST_FIELD = "offline_wallet_policy_sha256"
+RAW_RESULT_SHA256_FIELDS: tuple[str, ...] = (
+    RAW_RESULT_APP_SIGNING_DIGEST_FIELD,
+    RAW_RESULT_CHALLENGE_DIGEST_FIELD,
+    RAW_RESULT_CHAIN_DIGEST_FIELD,
+    RAW_RESULT_POLICY_DIGEST_FIELD,
+)
+RAW_RESULT_STRONGBOX_FIELDS: tuple[str, ...] = (
+    "attestation_security_level",
+    "keymaster_security_level",
+    "keymint_security_level",
 )
 ADB_LATEST_SLOT_COMMAND_HELP = (
     "adb shell run-as <package> cat files/kagemusha-device-lab/latest-slot.txt"
@@ -101,10 +152,216 @@ def _pem_certificate_count(chain_text: str) -> int:
     return chain_text.count("-----BEGIN CERTIFICATE-----")
 
 
+def _validate_sha256_hex(value: object, label: str, errors: list[str]) -> str | None:
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(char not in "0123456789abcdef" for char in value)
+    ):
+        errors.append(f"{label} must be a lowercase SHA-256 hex digest")
+        return None
+    return value
+
+
+def _validate_raw_result_string(
+    result: dict[str, Any],
+    field: str,
+    errors: list[str],
+) -> str | None:
+    value = result.get(field)
+    label = f"attestation/result.json {field}"
+    if not isinstance(value, str) or not value:
+        errors.append(f"{label} must be a non-empty string")
+        return None
+    if value != value.strip():
+        errors.append(f"{label} must not have surrounding whitespace")
+        return None
+    if device_lab.SECRET_RE.search(value):
+        errors.append(f"{label} must not contain secret-looking material")
+        return None
+    return value
+
+
+def _validate_raw_json_slot_id(
+    payload: dict[str, Any],
+    label: str,
+    slot_id: str,
+    errors: list[str],
+) -> None:
+    if payload.get("slot_id") != slot_id:
+        errors.append(f"{label} slot_id must match slot id")
+
+
+def _validate_raw_json_schema(
+    payload: dict[str, Any],
+    label: str,
+    expected_schema: str,
+    errors: list[str],
+) -> None:
+    if payload.get("schema") != expected_schema:
+        errors.append(f"{label} schema must be {expected_schema}")
+
+
+def _validate_raw_json_true(
+    payload: dict[str, Any],
+    label: str,
+    field: str,
+    errors: list[str],
+) -> None:
+    if payload.get(field) is not True:
+        errors.append(f"{label} {field} must be true")
+
+
+def _validate_raw_json_artifacts(slot_path: Path, slot_id: str, errors: list[str]) -> None:
+    queue = device_lab._load_json(
+        slot_path / "queue" / "pending_queue.json",
+        "queue/pending_queue.json",
+        errors,
+    )
+    if queue is not None:
+        _validate_raw_json_slot_id(queue, "queue/pending_queue.json", slot_id, errors)
+        if not isinstance(queue.get("pending_transactions"), list):
+            errors.append("queue/pending_queue.json pending_transactions must be an array")
+
+    telemetry = device_lab._load_json(
+        slot_path / "telemetry" / "telemetry.json",
+        "telemetry/telemetry.json",
+        errors,
+    )
+    if telemetry is not None:
+        if telemetry.get("schema_version") != 1:
+            errors.append("telemetry/telemetry.json schema_version must be 1")
+        _validate_raw_json_slot_id(telemetry, "telemetry/telemetry.json", slot_id, errors)
+        suite = telemetry.get("suite")
+        if not isinstance(suite, str) or "kagemusha" not in suite.lower():
+            errors.append("telemetry/telemetry.json suite must identify a Kagemusha device-lab run")
+
+    d2d = device_lab._load_json(
+        slot_path / "handoff" / "d2d-payment.json",
+        "handoff/d2d-payment.json",
+        errors,
+    )
+    if d2d is not None:
+        _validate_raw_json_schema(
+            d2d,
+            "handoff/d2d-payment.json",
+            device_lab.D2D_PAYMENT_TRANSCRIPT_SCHEMA,
+            errors,
+        )
+        _validate_raw_json_slot_id(d2d, "handoff/d2d-payment.json", slot_id, errors)
+        if d2d.get("payload_schema") != device_lab.D2D_PAYMENT_PAYLOAD_SCHEMA:
+            errors.append(
+                "handoff/d2d-payment.json payload_schema must be "
+                f"{device_lab.D2D_PAYMENT_PAYLOAD_SCHEMA}"
+            )
+        transport = d2d.get("transport")
+        if transport not in device_lab.D2D_PAYMENT_TRANSPORTS:
+            errors.append("handoff/d2d-payment.json transport must be an accepted offline transport")
+        for field in (
+            "transport_offline",
+            "payer_wallet_offline",
+            "payee_wallet_offline",
+            "one_use_key_consumed",
+            "receiver_redeem_accepted",
+            "double_spend_rejected",
+        ):
+            _validate_raw_json_true(d2d, "handoff/d2d-payment.json", field, errors)
+
+    wallet = device_lab._load_json(
+        slot_path / "wallet" / "integrity.json",
+        "wallet/integrity.json",
+        errors,
+    )
+    if wallet is not None:
+        _validate_raw_json_schema(
+            wallet,
+            "wallet/integrity.json",
+            device_lab.WALLET_INTEGRITY_TRANSCRIPT_SCHEMA,
+            errors,
+        )
+        _validate_raw_json_slot_id(wallet, "wallet/integrity.json", slot_id, errors)
+        if wallet.get("keymint_security_level") != "STRONGBOX":
+            errors.append("wallet/integrity.json keymint_security_level must be STRONGBOX")
+        for field in (
+            "one_use_key_rotation_passed",
+            "old_key_invalidated",
+            "rollback_rejection_passed",
+            "stale_snapshot_rejected",
+            "active_wallet_state_preserved_after_reject",
+        ):
+            _validate_raw_json_true(wallet, "wallet/integrity.json", field, errors)
+
+
+def _validate_raw_status_ndjson(status_text: str, slot_id: str, errors: list[str]) -> None:
+    saw_record = False
+    saw_ok = False
+    for line_no, raw_line in enumerate(status_text.splitlines(), start=1):
+        if not raw_line.strip():
+            continue
+        saw_record = True
+        try:
+            status_event = device_lab._loads_json_without_duplicate_keys(raw_line)
+        except json.JSONDecodeError:
+            errors.append(f"telemetry/status.ndjson line {line_no} must be JSON")
+            continue
+        except device_lab.DuplicateJsonKeyError as exc:
+            errors.append(
+                "telemetry/status.ndjson line "
+                f"{line_no} contains duplicate JSON object key {device_lab._display_path(exc.key)}"
+            )
+            continue
+        except device_lab.NonFiniteJsonConstantError as exc:
+            errors.append(
+                f"telemetry/status.ndjson line {line_no} contains non-finite constant {exc.constant}"
+            )
+            continue
+        if not isinstance(status_event, dict):
+            errors.append(f"telemetry/status.ndjson line {line_no} must be a JSON object")
+            continue
+        status = status_event.get("status")
+        if not isinstance(status, str) or not status.strip():
+            errors.append(f"telemetry/status.ndjson line {line_no} status must be a non-empty string")
+            continue
+        slot_value = status_event.get("slot_id")
+        if slot_value is not None and slot_value != slot_id:
+            errors.append(f"telemetry/status.ndjson line {line_no} slot_id must match slot id")
+        normalized = status.strip().lower()
+        if normalized == "ok":
+            saw_ok = True
+        elif normalized in device_lab.KAGEMUSHA_STATUS_FAILURE_VALUES:
+            errors.append(f"telemetry/status.ndjson line {line_no} status must not be {status!r}")
+    if not saw_record:
+        errors.append("telemetry/status.ndjson must contain at least one JSON status record")
+    elif not saw_ok:
+        errors.append("telemetry/status.ndjson must contain at least one ok status")
+
+
+def _validate_challenge_hex_file(
+    challenge_text: str,
+    errors: list[str],
+) -> tuple[str | None, bytes | None]:
+    if not challenge_text.endswith("\n") or challenge_text.count("\n") != 1:
+        errors.append(
+            "attestation/challenge.hex must be canonical lowercase hexadecimal plus trailing newline"
+        )
+        return None, None
+    challenge_hex = challenge_text[:-1]
+    if (
+        not challenge_hex
+        or len(challenge_hex) % 2 != 0
+        or any(char not in "0123456789abcdef" for char in challenge_hex)
+    ):
+        errors.append(
+            "attestation/challenge.hex must be canonical lowercase hexadecimal plus trailing newline"
+        )
+        return None, None
+    return challenge_hex, bytes.fromhex(challenge_hex)
+
+
 def _validate_harness_result(
     *,
     harness: dict[str, Any],
-    challenge_text: str | None,
+    challenge_hex_file: str | None,
     chain_text: str | None,
     errors: list[str],
 ) -> None:
@@ -154,7 +411,7 @@ def _validate_harness_result(
     except ValueError:
         errors.append("attestation/harness-result.json challenge_hex must be hex")
         return
-    if challenge_text is not None and normalized != challenge_text.strip().lower():
+    if challenge_hex_file is not None and normalized != challenge_hex_file:
         errors.append("attestation/harness-result.json challenge_hex must match attestation/challenge.hex")
 
 
@@ -200,11 +457,15 @@ def _run_latest_slot_query(
         detail = _safe_detail(str(result.stderr))
         suffix = f": {detail}" if detail else ""
         return None, [f"failed to read latest raw slot from attached device{suffix}"]
-    lines = [line.strip() for line in result.stdout.replace("\r", "\n").splitlines()]
-    lines = [line for line in lines if line]
-    if len(lines) != 1:
-        return None, ["latest-slot.txt must contain exactly one slot id"]
-    return lines[0], []
+    latest_text = str(result.stdout)
+    if (
+        not latest_text.endswith("\n")
+        or latest_text.count("\n") != 1
+        or latest_text[:-1].strip() != latest_text[:-1]
+        or not latest_text[:-1]
+    ):
+        return None, ["latest-slot.txt must be canonical and contain exactly one slot id"]
+    return latest_text[:-1], []
 
 
 def _run_raw_slot_tar_pull(
@@ -356,7 +617,10 @@ def extract_raw_slot_tar(
                 continue
             seen.add(relative)
             if member.isdir():
-                (destination_root / relative).mkdir(parents=True, exist_ok=True)
+                try:
+                    (destination_root / relative).mkdir(parents=True, exist_ok=True)
+                except OSError:
+                    errors.append(f"raw slot tar directory {relative} could not be created")
                 continue
             if member.issym() or member.islnk():
                 errors.append(
@@ -457,9 +721,14 @@ def _validate_raw_slot_files(slot_path: Path, slot_id: str, root_latest: Path) -
             errors.append(f"raw slot artifact {relative} must not be a symlink")
             continue
         if stat.S_ISDIR(mode):
+            if relative not in RAW_SLOT_ALLOWED_DIRECTORIES:
+                errors.append(f"raw slot artifact {relative} is not an allowed path")
             continue
         if not stat.S_ISREG(mode):
             errors.append(f"raw slot artifact {relative} must be a regular file")
+            continue
+        if relative not in RAW_SLOT_ALLOWED_PATHS:
+            errors.append(f"raw slot artifact {relative} is not an allowed path")
             continue
         try:
             link_count = path.stat().st_nlink
@@ -485,14 +754,21 @@ def _validate_raw_slot_files(slot_path: Path, slot_id: str, root_latest: Path) -
             errors.append(f"raw slot artifact {relative} is missing")
 
     latest_text = _read_text_file(root_latest, "latest-slot.txt", errors)
-    if latest_text is not None and latest_text.strip() != slot_id:
-        errors.append("latest-slot.txt must match slot id")
+    if latest_text is not None and latest_text != f"{slot_id}\n":
+        errors.append("latest-slot.txt must be canonical and match slot id")
 
     challenge_text = _read_text_file(
         slot_path / "attestation" / "challenge.hex",
         "attestation/challenge.hex",
         errors,
     )
+    challenge_hex_file: str | None = None
+    challenge_bytes: bytes | None = None
+    if challenge_text is not None:
+        challenge_hex_file, challenge_bytes = _validate_challenge_hex_file(
+            challenge_text,
+            errors,
+        )
     chain_text = _read_text_file(
         slot_path / "attestation" / "keymint-certificate-chain.pem",
         "attestation/keymint-certificate-chain.pem",
@@ -506,16 +782,21 @@ def _validate_raw_slot_files(slot_path: Path, slot_id: str, root_latest: Path) -
     if harness is not None:
         _validate_harness_result(
             harness=dict(harness),
-            challenge_text=challenge_text,
+            challenge_hex_file=challenge_hex_file,
             chain_text=chain_text,
             errors=errors,
         )
 
     result = device_lab._load_json(slot_path / "attestation" / "result.json", "attestation result", errors)
     if result is not None:
+        for field in sorted(set(result) - RAW_RESULT_ALLOWED_FIELDS):
+            errors.append(
+                "attestation/result.json contains unexpected field "
+                f"{device_lab._display_path(field)}"
+            )
         if result.get("slot_id") != slot_id:
             errors.append("attestation/result.json slot_id must match slot id")
-        if result.get("slot") not in (None, slot_id):
+        if result.get("slot") != slot_id:
             errors.append("attestation/result.json slot must match slot id")
         if result.get("status") != "ok":
             errors.append("attestation/result.json status must be ok")
@@ -523,29 +804,37 @@ def _validate_raw_slot_files(slot_path: Path, slot_id: str, root_latest: Path) -
             errors.append("attestation/result.json strongbox_attestation must be true")
         if result.get("physical_device_attestation") is not True:
             errors.append("attestation/result.json physical_device_attestation must be true")
+        for field in RAW_RESULT_STRING_FIELDS:
+            _validate_raw_result_string(result, field, errors)
+        for field in RAW_RESULT_STRONGBOX_FIELDS:
+            if result.get(field) != "STRONGBOX":
+                errors.append(f"attestation/result.json {field} must be STRONGBOX")
         chain_path = result.get("attestation_certificate_chain_path")
         if chain_path != "attestation/keymint-certificate-chain.pem":
             errors.append(
                 "attestation/result.json attestation_certificate_chain_path must be "
                 "attestation/keymint-certificate-chain.pem"
             )
-        chain_digest = result.get("attestation_certificate_chain_sha256")
+        raw_digests: dict[str, str | None] = {}
+        for field in RAW_RESULT_SHA256_FIELDS:
+            raw_digests[field] = _validate_sha256_hex(
+                result.get(field),
+                f"attestation/result.json {field}",
+                errors,
+            )
+        chain_digest = raw_digests[RAW_RESULT_CHAIN_DIGEST_FIELD]
         chain_file = slot_path / "attestation" / "keymint-certificate-chain.pem"
-        if isinstance(chain_digest, str) and chain_file.exists():
+        if chain_digest is not None and chain_file.exists():
             digest = hashlib.sha256(chain_file.read_bytes()).hexdigest()
             if chain_digest != digest:
                 errors.append("attestation/result.json certificate-chain SHA-256 mismatch")
-        challenge_digest = result.get("attestation_challenge_sha256")
-        if challenge_text is not None:
-            challenge_hex = challenge_text.strip().lower()
-            try:
-                challenge = bytes.fromhex(challenge_hex)
-            except ValueError:
-                errors.append("attestation/challenge.hex must be lowercase hexadecimal")
-                challenge = b""
-            if challenge and isinstance(challenge_digest, str):
-                if hashlib.sha256(challenge).hexdigest() != challenge_digest:
+        challenge_digest = raw_digests[RAW_RESULT_CHALLENGE_DIGEST_FIELD]
+        if challenge_bytes is not None and challenge_digest is not None:
+            if challenge_bytes:
+                if hashlib.sha256(challenge_bytes).hexdigest() != challenge_digest:
                     errors.append("attestation/result.json attestation challenge SHA-256 mismatch")
+
+    _validate_raw_json_artifacts(slot_path, slot_id, errors)
 
     status_text = _read_text_file(
         slot_path / "telemetry" / "status.ndjson",
@@ -553,27 +842,19 @@ def _validate_raw_slot_files(slot_path: Path, slot_id: str, root_latest: Path) -
         errors,
     )
     if status_text is not None:
-        has_ok = False
-        for line_no, raw_line in enumerate(status_text.splitlines(), start=1):
-            if not raw_line.strip():
-                continue
-            try:
-                status_event = json.loads(raw_line)
-            except json.JSONDecodeError:
-                errors.append(f"telemetry/status.ndjson line {line_no} must be JSON")
-                continue
-            if status_event.get("status") == "ok":
-                has_ok = True
-        if not has_ok:
-            errors.append("telemetry/status.ndjson must contain at least one ok status")
+        _validate_raw_status_ndjson(status_text, slot_id, errors)
 
     runtime_text = _read_text_file(
         slot_path / "logs" / "runtime.log",
         "logs/runtime.log",
         errors,
     )
-    if runtime_text is not None and device_lab.KAGEMUSHA_RUNTIME_LOG_COMPLETE_MARKER not in runtime_text:
-        errors.append("logs/runtime.log must contain Kagemusha device-lab completion marker")
+    if runtime_text is not None:
+        if device_lab.KAGEMUSHA_RUNTIME_LOG_COMPLETE_MARKER not in runtime_text:
+            errors.append("logs/runtime.log must contain Kagemusha device-lab completion marker")
+        for marker in device_lab.KAGEMUSHA_RUNTIME_LOG_FAILURE_MARKERS:
+            if marker in runtime_text:
+                errors.append(f"logs/runtime.log must not contain failure marker {marker}")
 
     return errors
 
@@ -602,25 +883,64 @@ def _write_latest_slot(root: Path, slot_id: str) -> list[str]:
     errors = device_lab.validate_summary_output_path(latest_path, "raw latest-slot output")
     if errors:
         return errors
+    try:
+        root_stat = root.lstat()
+    except OSError:
+        return ["raw latest-slot output parent directory metadata could not be read"]
+    if stat.S_ISLNK(root_stat.st_mode) or not stat.S_ISDIR(root_stat.st_mode):
+        return ["raw latest-slot output parent must be a directory"]
+    root_identity = _file_identity(root_stat)
     fd, temp_name = tempfile.mkstemp(prefix=".latest-slot.", suffix=".tmp", dir=root)
     temp_path = Path(temp_name)
+    encoded = (slot_id + "\n").encode("utf-8")
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as output:
-            output.write(slot_id + "\n")
+        with os.fdopen(fd, "wb") as output:
+            output.write(encoded)
             output.flush()
             os.fsync(output.fileno())
         os.replace(temp_path, latest_path)
-        with latest_path.open("rb") as readback:
-            if readback.read() != (slot_id + "\n").encode("utf-8"):
-                return ["raw latest-slot output readback mismatch"]
         try:
-            dir_fd = os.open(root, os.O_RDONLY)
+            expected_stat = latest_path.lstat()
         except OSError:
-            return ["raw latest-slot output parent directory could not be synced"]
+            return ["raw latest-slot output could not be read back after writing"]
+        if stat.S_ISLNK(expected_stat.st_mode):
+            return ["raw latest-slot output must not be a symlink after writing"]
+        if not stat.S_ISREG(expected_stat.st_mode):
+            return ["raw latest-slot output must be a regular file after writing"]
+        if expected_stat.st_nlink > 1:
+            return ["raw latest-slot output must not be hardlinked after writing"]
+        if expected_stat.st_size > len(encoded):
+            return ["raw latest-slot output readback mismatch"]
+        expected_identity = _file_identity(expected_stat)
         try:
-            os.fsync(dir_fd)
-        finally:
-            os.close(dir_fd)
+            with latest_path.open("rb") as readback_handle:
+                open_stat = os.fstat(readback_handle.fileno())
+                if _file_identity(open_stat) != expected_identity:
+                    return ["raw latest-slot output changed while being read back"]
+                if not stat.S_ISREG(open_stat.st_mode):
+                    return ["raw latest-slot output must be a regular file after writing"]
+                if open_stat.st_nlink > 1:
+                    return ["raw latest-slot output must not be hardlinked after writing"]
+                if open_stat.st_size > len(encoded):
+                    return ["raw latest-slot output readback mismatch"]
+                readback = readback_handle.read(len(encoded) + 1)
+        except OSError:
+            return ["raw latest-slot output could not be read back after writing"]
+        try:
+            final_stat = latest_path.lstat()
+        except OSError:
+            return ["raw latest-slot output could not be read back after writing"]
+        if _file_identity(final_stat) != expected_identity:
+            return ["raw latest-slot output changed while being read back"]
+        if readback != encoded:
+            return ["raw latest-slot output readback mismatch"]
+        sync_errors = _sync_directory(
+            root,
+            "raw latest-slot output parent directory could not be synced",
+            expected_identity=root_identity,
+        )
+        if sync_errors:
+            return sync_errors
     except OSError:
         return ["raw latest-slot output could not be written"]
     finally:
@@ -632,17 +952,83 @@ def _write_summary(path: Path, payload: dict[str, Any]) -> list[str]:
     errors = device_lab.validate_summary_output_path(path, "raw pull summary output")
     if errors:
         return errors
+    try:
+        parent_stat = path.parent.lstat()
+    except OSError:
+        return ["raw pull summary output parent directory metadata could not be read"]
+    if stat.S_ISLNK(parent_stat.st_mode) or not stat.S_ISDIR(parent_stat.st_mode):
+        return ["raw pull summary output parent directory could not be synced"]
+    parent_identity = _file_identity(parent_stat)
+    try:
+        encoded = _json_dumps(payload).encode("utf-8")
+    except ValueError:
+        return ["raw pull summary output is not strict JSON"]
+    if len(encoded) > device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES:
+        return [
+            "raw pull summary output must be no more than "
+            f"{device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES} bytes"
+        ]
     fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
     temp_path = Path(temp_name)
-    encoded = _json_dumps(payload).encode("utf-8")
     try:
         with os.fdopen(fd, "wb") as output:
             output.write(encoded)
             output.flush()
             os.fsync(output.fileno())
         os.replace(temp_path, path)
-        if path.read_bytes() != encoded:
+        try:
+            expected_stat = path.lstat()
+        except OSError:
+            return ["raw pull summary output could not be read back after writing"]
+        if stat.S_ISLNK(expected_stat.st_mode):
+            return ["raw pull summary output must not be a symlink after writing"]
+        if not stat.S_ISREG(expected_stat.st_mode):
+            return ["raw pull summary output must be a regular file after writing"]
+        if expected_stat.st_nlink > 1:
+            return ["raw pull summary output must not be hardlinked after writing"]
+        if expected_stat.st_size > device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES:
+            return [
+                "raw pull summary output must be no more than "
+                f"{device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES} bytes"
+            ]
+        expected_identity = _file_identity(expected_stat)
+        try:
+            with path.open("rb") as readback_handle:
+                open_stat = os.fstat(readback_handle.fileno())
+                if _file_identity(open_stat) != expected_identity:
+                    return ["raw pull summary output changed while being read back"]
+                if not stat.S_ISREG(open_stat.st_mode):
+                    return ["raw pull summary output must be a regular file after writing"]
+                if open_stat.st_nlink > 1:
+                    return ["raw pull summary output must not be hardlinked after writing"]
+                if open_stat.st_size > device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES:
+                    return [
+                        "raw pull summary output must be no more than "
+                        f"{device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES} bytes"
+                    ]
+                readback = readback_handle.read(device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES + 1)
+        except OSError:
+            return ["raw pull summary output could not be read back after writing"]
+        if len(readback) > device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES:
+            return [
+                "raw pull summary output must be no more than "
+                f"{device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES} bytes"
+            ]
+        try:
+            final_stat = path.lstat()
+        except OSError:
+            return ["raw pull summary output could not be read back after writing"]
+        if _file_identity(final_stat) != expected_identity:
+            return ["raw pull summary output changed while being read back"]
+        if readback != encoded:
             return ["raw pull summary output readback mismatch"]
+        sync_errors = _sync_directory(
+            path.parent,
+            "raw pull summary output parent directory could not be synced",
+            expected_identity=parent_identity,
+        )
+        if sync_errors:
+            return sync_errors
     except OSError:
         return ["raw pull summary output could not be written"]
     finally:
@@ -650,13 +1036,424 @@ def _write_summary(path: Path, payload: dict[str, Any]) -> list[str]:
     return []
 
 
-def _raw_artifact_digests(slot_path: Path) -> dict[str, str]:
+def _raw_artifact_digest(slot_path: Path, relative: str) -> tuple[str | None, list[str]]:
+    path = slot_path / relative
+    label = f"raw artifact digest {relative}"
+    try:
+        expected_stat = path.lstat()
+    except FileNotFoundError:
+        return None, [f"{label} is missing"]
+    except OSError:
+        return None, [f"{label} metadata could not be read"]
+    if stat.S_ISLNK(expected_stat.st_mode):
+        return None, [f"{label} must not be a symlink"]
+    if not stat.S_ISREG(expected_stat.st_mode):
+        return None, [f"{label} must be a regular file"]
+    try:
+        if path.stat().st_nlink > 1:
+            return None, [f"{label} must not be hardlinked"]
+    except OSError:
+        return None, [f"{label} hardlink metadata could not be read"]
+
+    digest = hashlib.sha256()
+    expected_identity = (expected_stat.st_dev, expected_stat.st_ino)
+    try:
+        with path.open("rb") as handle:
+            open_stat = os.fstat(handle.fileno())
+            open_identity = (open_stat.st_dev, open_stat.st_ino)
+            path_stat = path.lstat()
+            path_identity = (path_stat.st_dev, path_stat.st_ino)
+            if open_identity != expected_identity or path_identity != expected_identity:
+                return None, [f"{label} changed while being read"]
+            if stat.S_ISLNK(path_stat.st_mode):
+                return None, [f"{label} must not be a symlink"]
+            if not stat.S_ISREG(open_stat.st_mode) or not stat.S_ISREG(path_stat.st_mode):
+                return None, [f"{label} must be a regular file"]
+            if open_stat.st_nlink > 1:
+                return None, [f"{label} must not be hardlinked"]
+            if open_stat.st_size > MAX_RAW_SLOT_FILE_BYTES:
+                return None, [f"{label} must not exceed {MAX_RAW_SLOT_FILE_BYTES} bytes"]
+            size = 0
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                size += len(chunk)
+                if size > MAX_RAW_SLOT_FILE_BYTES:
+                    return None, [f"{label} must not exceed {MAX_RAW_SLOT_FILE_BYTES} bytes"]
+                digest.update(chunk)
+            final_stat = path.lstat()
+            if (final_stat.st_dev, final_stat.st_ino) != expected_identity:
+                return None, [f"{label} changed while being read"]
+    except OSError:
+        return None, [f"{label} could not be read"]
+    return digest.hexdigest(), []
+
+
+def _raw_artifact_digests(slot_path: Path) -> tuple[dict[str, str], list[str]]:
     digests: dict[str, str] = {}
+    errors: list[str] = []
     for relative in RAW_SLOT_REQUIRED_PATHS:
-        path = slot_path / relative
-        if path.is_file():
-            digests[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
-    return digests
+        digest, digest_errors = _raw_artifact_digest(slot_path, relative)
+        if digest_errors:
+            errors.extend(digest_errors)
+            continue
+        assert digest is not None
+        digests[relative] = digest
+    if set(digests) != set(RAW_SLOT_REQUIRED_PATHS):
+        errors.append("raw artifact digest inventory must include every required artifact")
+    return digests, errors
+
+
+def _file_identity(file_stat: os.stat_result) -> tuple[int, int]:
+    return file_stat.st_dev, file_stat.st_ino
+
+
+def _directory_open_flags() -> int:
+    flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        flags |= os.O_DIRECTORY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    return flags
+
+
+def _sync_directory(
+    path: Path,
+    error: str,
+    *,
+    expected_identity: tuple[int, int] | None = None,
+) -> list[str]:
+    try:
+        dir_fd = os.open(path, _directory_open_flags())
+    except OSError:
+        return [error]
+    try:
+        if expected_identity is not None:
+            try:
+                open_stat = os.fstat(dir_fd)
+            except OSError:
+                return [error]
+            if _file_identity(open_stat) != expected_identity:
+                return [error]
+        os.fsync(dir_fd)
+    except OSError:
+        return [error]
+    finally:
+        os.close(dir_fd)
+    return []
+
+
+def _slot_entry_identity(
+    path: Path,
+    parent_path: Path,
+    parent_identity: tuple[int, int],
+) -> tuple[tuple[int, int] | None, list[str]]:
+    try:
+        parent_fd = os.open(parent_path, _directory_open_flags())
+    except OSError:
+        return None, ["raw output root directory metadata could not be read"]
+    try:
+        try:
+            parent_stat = os.fstat(parent_fd)
+        except OSError:
+            return None, ["raw output root directory metadata could not be read"]
+        if _file_identity(parent_stat) != parent_identity:
+            return None, ["raw output root directory changed during install"]
+        try:
+            path_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+        except OSError:
+            return None, ["raw slot directory metadata could not be read"]
+    finally:
+        os.close(parent_fd)
+    if stat.S_ISLNK(path_stat.st_mode) or not stat.S_ISDIR(path_stat.st_mode):
+        return None, ["raw slot directory changed during install"]
+    return _file_identity(path_stat), []
+
+
+def _created_slot_identity_errors(
+    path: Path,
+    expected_identity: tuple[int, int],
+    parent_path: Path,
+    parent_identity: tuple[int, int],
+) -> list[str]:
+    actual_identity, errors = _slot_entry_identity(path, parent_path, parent_identity)
+    if errors:
+        return errors
+    if actual_identity != expected_identity:
+        return ["raw slot directory changed during install"]
+    return []
+
+
+def _remove_created_slot(
+    path: Path,
+    expected_identity: tuple[int, int],
+    parent_path: Path,
+    parent_identity: tuple[int, int],
+) -> None:
+    try:
+        parent_fd = os.open(parent_path, _directory_open_flags())
+    except OSError:
+        return
+    try:
+        try:
+            parent_stat = os.fstat(parent_fd)
+        except OSError:
+            return
+        if _file_identity(parent_stat) != parent_identity:
+            return
+        try:
+            path_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+        except OSError:
+            return
+        if (
+            not stat.S_ISLNK(path_stat.st_mode)
+            and stat.S_ISDIR(path_stat.st_mode)
+            and _file_identity(path_stat) == expected_identity
+        ):
+            shutil.rmtree(path.name, ignore_errors=True, dir_fd=parent_fd)
+    finally:
+        os.close(parent_fd)
+
+
+def _cleanup_temp_parent(
+    temp_parent: Path,
+    *,
+    expected_identity: tuple[int, int],
+) -> None:
+    try:
+        parent_fd = os.open(temp_parent.parent, _directory_open_flags())
+    except OSError:
+        return
+    try:
+        try:
+            temp_parent_stat = os.stat(
+                temp_parent.name,
+                dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+        except OSError:
+            return
+        if (
+            not stat.S_ISDIR(temp_parent_stat.st_mode)
+            or _file_identity(temp_parent_stat) != expected_identity
+        ):
+            return
+        shutil.rmtree(temp_parent.name, ignore_errors=True, dir_fd=parent_fd)
+    finally:
+        os.close(parent_fd)
+
+
+def _open_verified_directory(
+    path: Path,
+    error: str,
+    *,
+    expected_identity: tuple[int, int] | None = None,
+) -> tuple[int | None, tuple[int, int] | None, list[str]]:
+    try:
+        dir_fd = os.open(path, _directory_open_flags())
+    except OSError:
+        return None, None, [error]
+    try:
+        try:
+            dir_stat = os.fstat(dir_fd)
+        except OSError:
+            os.close(dir_fd)
+            return None, None, [error]
+        if not stat.S_ISDIR(dir_stat.st_mode):
+            os.close(dir_fd)
+            return None, None, [error]
+        identity = _file_identity(dir_stat)
+        if expected_identity is not None and identity != expected_identity:
+            os.close(dir_fd)
+            return None, None, [error]
+        return dir_fd, identity, []
+    except Exception:
+        os.close(dir_fd)
+        raise
+
+
+def _remove_empty_stage_slot(
+    stage_slot: Path,
+    *,
+    expected_identity: tuple[int, int],
+) -> list[str]:
+    try:
+        parent_fd = os.open(stage_slot.parent, _directory_open_flags())
+    except OSError:
+        return ["raw slot directory could not be installed"]
+    try:
+        try:
+            stage_stat = os.stat(
+                stage_slot.name,
+                dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+        except OSError:
+            return ["raw slot directory could not be installed"]
+        if (
+            not stat.S_ISDIR(stage_stat.st_mode)
+            or _file_identity(stage_stat) != expected_identity
+        ):
+            return ["raw slot directory could not be installed"]
+        try:
+            os.rmdir(stage_slot.name, dir_fd=parent_fd)
+        except OSError:
+            return ["raw slot directory could not be installed"]
+    finally:
+        os.close(parent_fd)
+    return []
+
+
+def _install_validated_slot(
+    stage_slot: Path,
+    final_slot: Path,
+    output_root: Path,
+) -> list[str]:
+    try:
+        output_root_stat = output_root.lstat()
+    except OSError:
+        return ["raw output root directory metadata could not be read"]
+    if stat.S_ISLNK(output_root_stat.st_mode) or not stat.S_ISDIR(output_root_stat.st_mode):
+        return ["raw output root directory changed during install"]
+    output_root_identity = _file_identity(output_root_stat)
+
+    try:
+        final_slot.lstat()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        return ["raw slot directory metadata could not be read"]
+    else:
+        return ["slot directory already exists; refuse to overwrite raw evidence"]
+
+    try:
+        final_slot.mkdir(mode=0o700)
+    except FileExistsError:
+        return ["slot directory already exists; refuse to overwrite raw evidence"]
+    except OSError:
+        return ["raw slot directory could not be installed"]
+
+    final_slot_identity, identity_errors = _slot_entry_identity(
+        final_slot,
+        output_root,
+        output_root_identity,
+    )
+    if identity_errors:
+        return identity_errors
+    assert final_slot_identity is not None
+
+    installed = False
+    try:
+        stage_fd, stage_slot_identity, stage_errors = _open_verified_directory(
+            stage_slot,
+            "raw slot directory could not be installed",
+        )
+        if stage_errors:
+            return stage_errors
+        assert stage_fd is not None
+        assert stage_slot_identity is not None
+        try:
+            try:
+                child_names = os.listdir(stage_fd)
+            except OSError:
+                return ["raw slot directory could not be installed"]
+
+            seen_top_level: set[str] = set()
+            for child_name in child_names:
+                if child_name in seen_top_level:
+                    return ["raw slot directory could not be installed"]
+                seen_top_level.add(child_name)
+                if child_name not in RAW_SLOT_ALLOWED_DIRECTORIES:
+                    return [
+                        "raw slot install source contains unexpected top-level entry "
+                        f"{child_name}"
+                    ]
+                try:
+                    child_mode = os.stat(
+                        child_name,
+                        dir_fd=stage_fd,
+                        follow_symlinks=False,
+                    ).st_mode
+                except OSError:
+                    return ["raw slot directory could not be installed"]
+                if stat.S_ISLNK(child_mode) or not stat.S_ISDIR(child_mode):
+                    return [
+                        "raw slot install source contains unexpected top-level entry "
+                        f"{child_name}"
+                    ]
+
+            if seen_top_level != set(RAW_SLOT_ALLOWED_DIRECTORIES):
+                return ["raw slot directory could not be installed"]
+
+            final_fd, _final_identity, final_errors = _open_verified_directory(
+                final_slot,
+                "raw slot directory changed during install",
+                expected_identity=final_slot_identity,
+            )
+            if final_errors:
+                return final_errors
+            assert final_fd is not None
+            try:
+                for child_name in child_names:
+                    identity_errors = _created_slot_identity_errors(
+                        final_slot,
+                        final_slot_identity,
+                        output_root,
+                        output_root_identity,
+                    )
+                    if identity_errors:
+                        return identity_errors
+                    try:
+                        os.rename(
+                            child_name,
+                            child_name,
+                            src_dir_fd=stage_fd,
+                            dst_dir_fd=final_fd,
+                        )
+                    except OSError:
+                        return ["raw slot directory could not be installed"]
+            finally:
+                os.close(final_fd)
+        finally:
+            os.close(stage_fd)
+
+        stage_remove_errors = _remove_empty_stage_slot(
+            stage_slot,
+            expected_identity=stage_slot_identity,
+        )
+        if stage_remove_errors:
+            return stage_remove_errors
+
+        identity_errors = _created_slot_identity_errors(
+            final_slot,
+            final_slot_identity,
+            output_root,
+            output_root_identity,
+        )
+        if identity_errors:
+            return identity_errors
+        sync_errors = _sync_directory(
+            final_slot,
+            "raw slot directory could not be synced",
+            expected_identity=final_slot_identity,
+        )
+        if sync_errors:
+            return sync_errors
+        sync_errors = _sync_directory(
+            output_root,
+            "raw slot directory parent could not be synced",
+            expected_identity=output_root_identity,
+        )
+        if sync_errors:
+            return sync_errors
+        installed = True
+    finally:
+        if not installed:
+            _remove_created_slot(
+                final_slot,
+                final_slot_identity,
+                output_root,
+                output_root_identity,
+            )
+    return []
 
 
 def pull_raw_slot(
@@ -726,6 +1523,10 @@ def pull_raw_slot(
 
     temp_parent = Path(tempfile.mkdtemp(prefix=f".{slot_id}.", dir=output_root))
     try:
+        temp_parent_identity = _file_identity(temp_parent.lstat())
+    except OSError:
+        return 1, None, ["raw pull temporary directory metadata could not be read"]
+    try:
         extract_errors = extract_raw_slot_tar(tar_bytes, temp_parent, slot_id)
         if extract_errors:
             return 1, None, extract_errors
@@ -737,17 +1538,19 @@ def pull_raw_slot(
         )
         if validate_errors:
             return 1, None, validate_errors
-        try:
-            stage_slot.rename(final_slot)
-        except OSError:
-            return 1, None, ["raw slot directory could not be installed"]
+        install_errors = _install_validated_slot(stage_slot, final_slot, output_root)
+        if install_errors:
+            return 1, None, install_errors
     finally:
-        shutil.rmtree(temp_parent, ignore_errors=True)
+        _cleanup_temp_parent(temp_parent, expected_identity=temp_parent_identity)
 
     latest_errors = _write_latest_slot(output_root, slot_id)
     if latest_errors:
         return 1, final_slot, latest_errors
     if args.summary_out is not None:
+        artifact_digests, artifact_digest_errors = _raw_artifact_digests(final_slot)
+        if artifact_digest_errors:
+            return 1, final_slot, artifact_digest_errors
         summary = {
             "schema": RAW_PULL_SUMMARY_SCHEMA,
             "pulled_at_utc": dt.datetime.now(dt.timezone.utc)
@@ -760,7 +1563,7 @@ def pull_raw_slot(
             "device_lab_root": args.device_lab_root,
             "output_root": str(output_root),
             "slot_path": str(final_slot),
-            "artifact_sha256": _raw_artifact_digests(final_slot),
+            "artifact_sha256": artifact_digests,
         }
         summary_errors = _write_summary(args.summary_out, summary)
         if summary_errors:

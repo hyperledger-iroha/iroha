@@ -121,6 +121,43 @@ def _validate_json_output_parent(
     return True, []
 
 
+def _file_identity(file_stat: os.stat_result) -> tuple[int, int]:
+    return file_stat.st_dev, file_stat.st_ino
+
+
+def _directory_open_flags() -> int:
+    flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        flags |= os.O_DIRECTORY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    return flags
+
+
+def _sync_output_parent(
+    parent: Path,
+    label: str,
+    *,
+    expected_identity: tuple[int, int] | None,
+) -> list[str]:
+    try:
+        parent_fd = os.open(parent, _directory_open_flags())
+    except OSError:
+        return [f"{label} parent directory could not be synced"]
+    try:
+        parent_stat = os.fstat(parent_fd)
+        if not stat.S_ISDIR(parent_stat.st_mode):
+            return [f"{label} parent directory could not be synced"]
+        if expected_identity is not None and _file_identity(parent_stat) != expected_identity:
+            return [f"{label} parent directory changed before sync"]
+        os.fsync(parent_fd)
+    except OSError:
+        return [f"{label} parent directory could not be synced"]
+    finally:
+        os.close(parent_fd)
+    return []
+
+
 def _validate_existing_json_output_path(path: Path, label: str) -> list[str]:
     """Validate a signer-controlled output immediately before reading it back."""
 
@@ -313,9 +350,17 @@ def _write_text_atomic(
     errors = _validate_json_output_path(path, label)
     if errors:
         return errors
+    try:
+        parent_stat = path.parent.lstat()
+    except OSError:
+        return [f"{label} parent directory metadata could not be read"]
+    if stat.S_ISLNK(parent_stat.st_mode) or not stat.S_ISDIR(parent_stat.st_mode):
+        return [f"{label} parent directory could not be synced"]
+    parent_identity = _file_identity(parent_stat)
     if len(text.encode("utf-8")) > byte_limit:
         return [f"{label} must be no more than {byte_limit} bytes"]
     tmp_path: Path | None = None
+    tmp_identity: tuple[int, int] | None = None
     write_errors: list[str] = []
     try:
         with tempfile.NamedTemporaryFile(
@@ -327,6 +372,7 @@ def _write_text_atomic(
             delete=False,
         ) as handle:
             tmp_path = Path(handle.name)
+            tmp_identity = _file_identity(os.fstat(handle.fileno()))
             handle.write(text)
             handle.flush()
             os.fsync(handle.fileno())
@@ -340,22 +386,19 @@ def _write_text_atomic(
         write_errors.append(f"{label} could not be written")
     finally:
         if tmp_path is not None:
-            write_errors.extend(_cleanup_temp_output(tmp_path, label))
+            write_errors.extend(_cleanup_temp_output(tmp_path, label, tmp_identity))
     if write_errors:
         return write_errors
     errors = _validate_existing_json_output_path(path, label)
     if errors:
         return errors
-    try:
-        parent_fd = os.open(path.parent, os.O_RDONLY)
-    except OSError:
-        return [f"{label} parent directory could not be synced"]
-    try:
-        os.fsync(parent_fd)
-    except OSError:
-        return [f"{label} parent directory could not be synced"]
-    finally:
-        os.close(parent_fd)
+    sync_errors = _sync_output_parent(
+        path.parent,
+        label,
+        expected_identity=parent_identity,
+    )
+    if sync_errors:
+        return sync_errors
     errors = _validate_existing_json_output_path(path, label)
     if errors:
         return errors
@@ -386,13 +429,41 @@ def _write_text_atomic(
     return []
 
 
-def _cleanup_temp_output(path: Path, label: str) -> list[str]:
+def _cleanup_temp_output(
+    path: Path,
+    label: str,
+    expected_identity: tuple[int, int] | None,
+) -> list[str]:
+    if expected_identity is None:
+        return [f"{label} temporary file metadata could not be read"]
     try:
-        path.unlink()
-    except FileNotFoundError:
-        return []
+        parent_fd = os.open(path.parent, _directory_open_flags())
     except OSError:
         return [f"{label} temporary file could not be removed"]
+    try:
+        try:
+            temp_stat = os.stat(
+                path.name,
+                dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            return []
+        except OSError:
+            return [f"{label} temporary file could not be removed"]
+        if (
+            not stat.S_ISREG(temp_stat.st_mode)
+            or _file_identity(temp_stat) != expected_identity
+        ):
+            return [f"{label} temporary file changed before cleanup"]
+        try:
+            os.unlink(path.name, dir_fd=parent_fd)
+        except FileNotFoundError:
+            return []
+        except OSError:
+            return [f"{label} temporary file could not be removed"]
+    finally:
+        os.close(parent_fd)
     return []
 
 

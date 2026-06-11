@@ -1,4 +1,4 @@
-"""ZK-AMS recursive anonymous admission SDK dev-fixture helpers."""
+"""ZK-AMS recursive anonymous admission SDK helpers."""
 
 from __future__ import annotations
 
@@ -37,11 +37,15 @@ __all__ = [
     "ZK_AMS_DOMAIN_SEPARATOR",
     "build_zk_ams_admission_batch",
     "build_zk_ams_admission_proof_envelope",
+    "build_zk_ams_admission_batch_proof_v0",
     "build_zk_ams_admission_dev_proof_fixture",
+    "verify_zk_ams_admission_batch_proof_v0",
     "verify_zk_ams_admission_proof_locally",
     "buildZkAmsAdmissionBatch",
     "buildZkAmsAdmissionProofEnvelope",
+    "buildZkAmsAdmissionBatchProofV0",
     "buildZkAmsAdmissionDevProofFixture",
+    "verifyZkAmsAdmissionBatchProofV0",
     "verifyZkAmsAdmissionProofLocally",
 ]
 
@@ -554,6 +558,34 @@ def build_zk_ams_admission_proof_envelope(options: Mapping[str, Any]) -> bytes:
     )
 
 
+def build_zk_ams_admission_batch_proof_v0(options: Mapping[str, Any]) -> bytes:
+    """Build canonical production ZK-AMS recursive admission proof bytes."""
+
+    source = _require_mapping(options, "zkAmsAdmissionBatchProofV0")
+    _reject_unknown_fields(source, _PROOF_FIELDS, "zkAmsAdmissionBatchProofV0")
+    parts = _normalize_admission_proof_parts(
+        source,
+        "zkAmsAdmissionBatchProofV0",
+        require_proof_bytes=True,
+    )
+    if parts["proof_bytes"].startswith(ZK_AMS_DEV_PROOF_PREFIX):
+        raise ValueError(
+            "zkAmsAdmissionBatchProofV0.proofBytes must not contain a dev fixture proof"
+        )
+    return build_privacy_proof_envelope(
+        {
+            "backend": parts["backend"],
+            "circuitId": parts["circuit_id"],
+            "vkHash": parts["vk_hash"],
+            "publicInputs": parts["public_input_bytes"],
+            "proofBytes": parts["proof_bytes"],
+            "aux": source.get("aux", b""),
+            "maxProofBytes": parts["max_proof_bytes"],
+            "maxPublicInputBytes": parts["max_public_input_bytes"],
+        }
+    )
+
+
 def _dev_proof_bytes(
     *,
     circuit_id: str,
@@ -815,7 +847,80 @@ def verify_zk_ams_admission_proof_locally(options: Any) -> dict[str, Any]:
     }
 
 
+def verify_zk_ams_admission_batch_proof_v0(options: Any) -> dict[str, Any]:
+    """Verify production ZK-AMS recursive admission proof envelope structure."""
+
+    if isinstance(options, Mapping):
+        source = options
+    else:
+        source = {"envelope": options}
+    _reject_unknown_fields(
+        source,
+        _BATCH_FIELDS
+        | {
+            "envelope",
+            "proofEnvelope",
+            "proof_envelope",
+            "bytes",
+            "maxProofBytes",
+            "max_proof_bytes",
+            "maxPublicInputBytes",
+            "max_public_input_bytes",
+            "version",
+        },
+        "zkAmsAdmissionBatchProofV0",
+    )
+    _envelope_key, envelope_value = _read_single_alias(
+        source,
+        ("envelope", "proofEnvelope", "proof_envelope", "bytes"),
+        "zkAmsAdmissionBatchProofV0.envelope",
+        "proof envelope",
+    )
+    decoded = decode_privacy_proof_envelope(envelope_value)
+    if decoded["backend"] != "Stark":
+        raise ValueError("zkAmsAdmissionBatchProofV0.envelope.backend must be Stark")
+    circuit_id = _normalize_circuit_id(
+        decoded["circuit_id"],
+        "zkAmsAdmissionBatchProofV0.envelope.circuitId",
+    )
+    vk_hash = _fixed_bytes(
+        decoded["vk_hash"],
+        "zkAmsAdmissionBatchProofV0.envelope.vkHash",
+        32,
+        nonzero=True,
+    )
+    public_inputs = _parse_public_inputs(
+        decoded["public_inputs"],
+        "zkAmsAdmissionBatchProofV0.publicInputs",
+    )
+    _ensure_verification_expectations(
+        source,
+        public_inputs,
+        "zkAmsAdmissionBatchProofV0",
+    )
+    if decoded["proof_bytes"].startswith(ZK_AMS_DEV_PROOF_PREFIX):
+        raise ValueError(
+            "zkAmsAdmissionBatchProofV0 proof bytes must not contain a ZK-AMS dev fixture"
+        )
+    return {
+        "ok": True,
+        "production": True,
+        "kind": "zk-ams-recursive-admission-v0",
+        "backend": "Stark",
+        "circuit_id": circuit_id,
+        "verifier_key_hash": vk_hash.hex(),
+        "public_inputs": public_inputs,
+        "public_input_bytes": len(decoded["public_inputs"]),
+        "proof_bytes": len(decoded["proof_bytes"]),
+        "aux_bytes": len(decoded["aux"]),
+        "admission_batch_root": public_inputs["admission_batch_root"],
+        "batch_size": len(public_inputs["admission_nullifiers"]),
+    }
+
+
 buildZkAmsAdmissionBatch = build_zk_ams_admission_batch
 buildZkAmsAdmissionProofEnvelope = build_zk_ams_admission_proof_envelope
+buildZkAmsAdmissionBatchProofV0 = build_zk_ams_admission_batch_proof_v0
 buildZkAmsAdmissionDevProofFixture = build_zk_ams_admission_dev_proof_fixture
+verifyZkAmsAdmissionBatchProofV0 = verify_zk_ams_admission_batch_proof_v0
 verifyZkAmsAdmissionProofLocally = verify_zk_ams_admission_proof_locally

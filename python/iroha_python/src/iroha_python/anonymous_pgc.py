@@ -1,4 +1,4 @@
-"""Anonymous PGC SDK dev-fixture helpers."""
+"""Anonymous PGC SDK helper and proof-envelope builders."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from .verange import (
     _canonical_json_bytes,
     _fixed_bytes,
     _normalize_backend,
+    _optional_aux_value,
     _positive_u32,
     _read_single_alias,
     _reject_unknown_fields,
@@ -41,9 +42,17 @@ __all__ = [
     "ANONYMOUS_PGC_CIRCUIT_ID",
     "ANONYMOUS_PGC_DOMAIN_SEPARATOR",
     "build_anonymous_pgc_receiver_set",
+    "build_anonymous_pgc_account_commitment_instruction",
+    "build_anonymous_pgc_k_out_of_n_proof_v1",
+    "verify_anonymous_pgc_k_out_of_n_proof_v1",
+    "build_anonymous_pgc_transfer_instruction",
     "build_anonymous_pgc_dev_proof_fixture",
     "verify_anonymous_pgc_dev_proof_locally",
     "buildAnonymousPgcReceiverSet",
+    "buildAnonymousPgcAccountCommitmentInstruction",
+    "buildAnonymousPgcKOutOfNProofV1",
+    "verifyAnonymousPgcKOutOfNProofV1",
+    "buildAnonymousPgcTransferInstruction",
     "buildAnonymousPgcDevProofFixture",
     "verifyAnonymousPgcDevProofLocally",
 ]
@@ -766,6 +775,96 @@ def _dev_proof_bytes(
     return ANONYMOUS_PGC_DEV_PROOF_PREFIX + digest.digest()
 
 
+def _anonymous_pgc_proof_allowed_fields() -> set[str]:
+    return {
+        "backend",
+        "backendTag",
+        "backend_tag",
+        "circuitId",
+        "circuit_id",
+        "vkHash",
+        "vk_hash",
+        "verifierKeyHash",
+        "verifyingKeyHash",
+        "receiverSet",
+        "receiver_set",
+        "version",
+        "threshold",
+        "k",
+        "receivers",
+        "anonymitySetRoot",
+        "anonymity_set_root",
+        "txDigest",
+        "tx_digest",
+        "payloadDigest",
+        "payload_digest",
+        "payload",
+        "payloadBytes",
+        "payload_bytes",
+        "payloadJson",
+        "payload_json",
+        "balanceCommitments",
+        "balance_commitments",
+        "linkTag",
+        "link_tag",
+        "rangeCommitments",
+        "range_commitments",
+        "chainId",
+        "chain_id",
+        "domainSeparator",
+        "domain_separator",
+        "proofBytes",
+        "proof_bytes",
+        "proof",
+        "aux",
+        "maxProofBytes",
+        "max_proof_bytes",
+        "maxPublicInputBytes",
+        "max_public_input_bytes",
+        "maxPayloadBytes",
+        "max_payload_bytes",
+    }
+
+
+def build_anonymous_pgc_k_out_of_n_proof_v1(options: Mapping[str, Any]) -> bytes:
+    """Build a production Anonymous PGC proof envelope from prover output."""
+
+    source = _require_mapping(options, "anonymousPgcKOutOfNProofV1")
+    _reject_unknown_fields(
+        source,
+        _anonymous_pgc_proof_allowed_fields(),
+        "anonymousPgcKOutOfNProofV1",
+    )
+    parts = _normalize_proof_parts(
+        source,
+        "anonymousPgcKOutOfNProofV1",
+        require_proof_bytes=True,
+    )
+    proof_bytes = parts["proof_bytes"]
+    if proof_bytes.startswith(ANONYMOUS_PGC_DEV_PROOF_PREFIX):
+        raise ValueError(
+            "anonymousPgcKOutOfNProofV1.proofBytes must not contain an Anonymous PGC dev fixture"
+        )
+    aux = _bounded_bytes(
+        _optional_aux_value(source, "anonymousPgcKOutOfNProofV1"),
+        "anonymousPgcKOutOfNProofV1.aux",
+        max_bytes=64 * 1024,
+        allow_empty=True,
+    )
+    return build_privacy_proof_envelope(
+        {
+            "backend": parts["backend"],
+            "circuitId": parts["circuit_id"],
+            "vkHash": parts["vk_hash"],
+            "publicInputs": parts["public_input_bytes"],
+            "proofBytes": proof_bytes,
+            "aux": aux,
+            "maxProofBytes": parts["max_proof_bytes"],
+            "maxPublicInputBytes": parts["max_public_input_bytes"],
+        }
+    )
+
+
 def build_anonymous_pgc_dev_proof_fixture(options: Mapping[str, Any]) -> dict[str, Any]:
     """Build a deterministic Anonymous PGC dev fixture.
 
@@ -856,6 +955,91 @@ def build_anonymous_pgc_dev_proof_fixture(options: Mapping[str, Any]) -> dict[st
         "publicInputBytes": parts["public_input_bytes"],
         "envelope": envelope,
     }
+
+
+def _instruction_digest(payload: Mapping[str, Any], domain: bytes) -> str:
+    digest = hashlib.sha256()
+    digest.update(domain)
+    digest.update(b"\x00")
+    digest.update(_canonical_json_bytes(payload, "anonymousPgcInstruction"))
+    return digest.hexdigest()
+
+
+def build_anonymous_pgc_account_commitment_instruction(
+    options: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Build a typed Anonymous PGC account-commitment instruction model."""
+
+    source = _require_mapping(options, "anonymousPgcAccountCommitmentInstruction")
+    _reject_unknown_fields(
+        source,
+        {
+            "accountCommitment",
+            "account_commitment",
+            "anonymitySetRoot",
+            "anonymity_set_root",
+            "chainId",
+            "chain_id",
+            "domainSeparator",
+            "domain_separator",
+        },
+        "anonymousPgcAccountCommitmentInstruction",
+    )
+    _commitment_key, commitment_value = _read_single_alias(
+        source,
+        ("accountCommitment", "account_commitment"),
+        "anonymousPgcAccountCommitmentInstruction.accountCommitment",
+        "account commitment",
+    )
+    _root_key, root_value = _read_single_alias(
+        source,
+        ("anonymitySetRoot", "anonymity_set_root"),
+        "anonymousPgcAccountCommitmentInstruction.anonymitySetRoot",
+        "anonymity-set root",
+    )
+    _chain_key, chain_value = _read_single_alias(
+        source,
+        ("chainId", "chain_id"),
+        "anonymousPgcAccountCommitmentInstruction.chainId",
+        "chain id",
+    )
+    _domain_key, domain_value = _read_single_alias(
+        source,
+        ("domainSeparator", "domain_separator"),
+        "anonymousPgcAccountCommitmentInstruction.domainSeparator",
+        "domain separator",
+    )
+    payload = {
+        "kind": "zk::RegisterAnonymousPgcAccountCommitment",
+        "version": 1,
+        "account_commitment": _fixed_bytes(
+            commitment_value,
+            "anonymousPgcAccountCommitmentInstruction.accountCommitment",
+            32,
+            nonzero=True,
+        ).hex(),
+        "anonymity_set_root": _fixed_bytes(
+            root_value,
+            "anonymousPgcAccountCommitmentInstruction.anonymitySetRoot",
+            32,
+            nonzero=True,
+        ).hex(),
+        "chain_id": _require_non_blank_string(
+            chain_value,
+            "anonymousPgcAccountCommitmentInstruction.chainId",
+        ),
+        "domain_separator": _require_non_blank_string(
+            ANONYMOUS_PGC_DOMAIN_SEPARATOR
+            if domain_value is _MISSING
+            else domain_value,
+            "anonymousPgcAccountCommitmentInstruction.domainSeparator",
+        ),
+    }
+    payload["instruction_digest"] = _instruction_digest(
+        payload,
+        b"iroha:anonymous-pgc:account-commitment-instruction:v1",
+    )
+    return payload
 
 
 def _parse_public_inputs(value: bytes, context: str) -> dict[str, Any]:
@@ -988,6 +1172,102 @@ def _ensure_verification_expectations(
             )
 
 
+def verify_anonymous_pgc_k_out_of_n_proof_v1(options: Any) -> dict[str, Any]:
+    """Validate a production Anonymous PGC proof envelope binding."""
+
+    if isinstance(options, Mapping):
+        source = options
+    else:
+        source = {"envelope": options}
+    _reject_unknown_fields(
+        source,
+        {
+            "envelope",
+            "proofEnvelope",
+            "proof_envelope",
+            "bytes",
+            "receiverSet",
+            "receiver_set",
+            "version",
+            "threshold",
+            "k",
+            "receivers",
+            "anonymitySetRoot",
+            "anonymity_set_root",
+            "txDigest",
+            "tx_digest",
+            "payloadDigest",
+            "payload_digest",
+            "payload",
+            "payloadBytes",
+            "payload_bytes",
+            "payloadJson",
+            "payload_json",
+            "balanceCommitments",
+            "balance_commitments",
+            "linkTag",
+            "link_tag",
+            "rangeCommitments",
+            "range_commitments",
+            "chainId",
+            "chain_id",
+            "domainSeparator",
+            "domain_separator",
+            "maxPayloadBytes",
+            "max_payload_bytes",
+        },
+        "anonymousPgcKOutOfNProofV1Verification",
+    )
+    _envelope_key, envelope_value = _read_single_alias(
+        source,
+        ("envelope", "proofEnvelope", "proof_envelope", "bytes"),
+        "anonymousPgcKOutOfNProofV1Verification.envelope",
+        "proof envelope",
+    )
+    decoded = decode_privacy_proof_envelope(envelope_value)
+    if decoded["backend"] != "Stark":
+        raise ValueError(
+            "anonymousPgcKOutOfNProofV1Verification.envelope.backend must be Stark"
+        )
+    circuit_id = _normalize_circuit_id(
+        decoded["circuit_id"],
+        "anonymousPgcKOutOfNProofV1Verification.envelope.circuitId",
+    )
+    vk_hash = _fixed_bytes(
+        decoded["vk_hash"],
+        "anonymousPgcKOutOfNProofV1Verification.envelope.vkHash",
+        32,
+        nonzero=True,
+    )
+    public_inputs = _parse_public_inputs(
+        decoded["public_inputs"],
+        "anonymousPgcKOutOfNProofV1Verification.publicInputs",
+    )
+    _ensure_verification_expectations(
+        source,
+        public_inputs,
+        "anonymousPgcKOutOfNProofV1Verification",
+    )
+    if decoded["proof_bytes"].startswith(ANONYMOUS_PGC_DEV_PROOF_PREFIX):
+        raise ValueError(
+            "anonymousPgcKOutOfNProofV1Verification proof bytes must not contain an Anonymous PGC dev fixture"
+        )
+    return {
+        "ok": True,
+        "production": True,
+        "kind": "anonymous-pgc-k-out-of-n-v1",
+        "backend": ANONYMOUS_PGC_BACKEND,
+        "circuit_id": circuit_id,
+        "verifier_key_hash": vk_hash.hex(),
+        "public_inputs": public_inputs,
+        "public_input_bytes": len(decoded["public_inputs"]),
+        "proof_bytes": len(decoded["proof_bytes"]),
+        "aux_bytes": len(decoded["aux"]),
+        "receiver_count": public_inputs["receiver_count"],
+        "receiver_threshold": public_inputs["receiver_threshold"],
+    }
+
+
 def verify_anonymous_pgc_dev_proof_locally(options: Any) -> dict[str, Any]:
     """Verify a deterministic Anonymous PGC dev fixture envelope locally."""
 
@@ -1089,6 +1369,84 @@ def verify_anonymous_pgc_dev_proof_locally(options: Any) -> dict[str, Any]:
     }
 
 
+def build_anonymous_pgc_transfer_instruction(options: Mapping[str, Any]) -> dict[str, Any]:
+    """Build a typed Anonymous PGC transfer instruction model."""
+
+    source = _require_mapping(options, "anonymousPgcTransferInstruction")
+    _reject_unknown_fields(
+        source,
+        {
+            "proofEnvelope",
+            "proof_envelope",
+            "envelope",
+            "bytes",
+            "receiverSet",
+            "receiver_set",
+            "payload",
+            "payloadBytes",
+            "payload_bytes",
+            "payloadJson",
+            "payload_json",
+            "txDigest",
+            "tx_digest",
+            "payloadDigest",
+            "payload_digest",
+            "anonymitySetRoot",
+            "anonymity_set_root",
+            "balanceCommitments",
+            "balance_commitments",
+            "linkTag",
+            "link_tag",
+            "rangeCommitments",
+            "range_commitments",
+            "chainId",
+            "chain_id",
+            "domainSeparator",
+            "domain_separator",
+        },
+        "anonymousPgcTransferInstruction",
+    )
+    verified = verify_anonymous_pgc_k_out_of_n_proof_v1(source)
+    public_inputs = verified["public_inputs"]
+    _envelope_key, envelope_value = _read_single_alias(
+        source,
+        ("proofEnvelope", "proof_envelope", "envelope", "bytes"),
+        "anonymousPgcTransferInstruction.proofEnvelope",
+        "proof envelope",
+    )
+    envelope = _bounded_bytes(
+        envelope_value,
+        "anonymousPgcTransferInstruction.proofEnvelope",
+        max_bytes=DEFAULT_PRIVACY_MAX_PROOF_BYTES,
+    )
+    payload = {
+        "kind": "zk::SubmitAnonymousPgcTransfer",
+        "version": 1,
+        "proof_envelope": envelope,
+        "anonymity_set_root": public_inputs["anonymity_set_root"],
+        "tx_digest": public_inputs["tx_digest"],
+        "receiver_set_commitment": public_inputs["receiver_set_commitment"],
+        "receiver_threshold": public_inputs["receiver_threshold"],
+        "receiver_count": public_inputs["receiver_count"],
+        "link_tag": public_inputs["link_tag"],
+        "chain_id": public_inputs["chain_id"],
+        "domain_separator": public_inputs["domain_separator"],
+    }
+    digest_payload = {key: value for key, value in payload.items() if key != "proof_envelope"}
+    digest_payload["proof_envelope_sha256"] = hashlib.sha256(envelope).hexdigest()
+    payload["instruction_digest"] = _instruction_digest(
+        digest_payload,
+        b"iroha:anonymous-pgc:transfer-instruction:v1",
+    )
+    return payload
+
+
 buildAnonymousPgcReceiverSet = build_anonymous_pgc_receiver_set
+buildAnonymousPgcAccountCommitmentInstruction = (
+    build_anonymous_pgc_account_commitment_instruction
+)
+buildAnonymousPgcKOutOfNProofV1 = build_anonymous_pgc_k_out_of_n_proof_v1
+verifyAnonymousPgcKOutOfNProofV1 = verify_anonymous_pgc_k_out_of_n_proof_v1
+buildAnonymousPgcTransferInstruction = build_anonymous_pgc_transfer_instruction
 buildAnonymousPgcDevProofFixture = build_anonymous_pgc_dev_proof_fixture
 verifyAnonymousPgcDevProofLocally = verify_anonymous_pgc_dev_proof_locally

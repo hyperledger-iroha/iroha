@@ -118,13 +118,17 @@ __all__ = [
     "VERANGE_DOMAIN_SEPARATOR",
     "build_range_commitment",
     "build_verange_proof_envelope",
+    "build_verange_proof_v1",
     "build_verange_dev_proof_fixture",
+    "verify_verange_proof_v1",
     "verify_verange_proof_locally",
     "build_privacy_proof_envelope",
     "decode_privacy_proof_envelope",
     "buildRangeCommitment",
     "buildVeRangeProofEnvelope",
+    "buildVeRangeProofV1",
     "buildVeRangeDevProofFixture",
+    "verifyVeRangeProofV1",
     "verifyVeRangeProofLocally",
     "buildPrivacyProofEnvelope",
     "decodePrivacyProofEnvelope",
@@ -1239,6 +1243,84 @@ def build_verange_proof_envelope(options: Mapping[str, Any]) -> bytes:
     )
 
 
+def _build_verange_proof_v1(options: Mapping[str, Any]) -> bytes:
+    """Build canonical production VeRange proof envelope bytes."""
+
+    source = _require_mapping(options, "veRangeProofV1")
+    _reject_unknown_fields(
+        source,
+        {
+            "backend",
+            "backendTag",
+            "backend_tag",
+            "circuitId",
+            "circuit_id",
+            "vkHash",
+            "vk_hash",
+            "verifierKeyHash",
+            "verifyingKeyHash",
+            "commitments",
+            "rangeCommitments",
+            "range_commitments",
+            "commitment",
+            "rangeCommitment",
+            "range_commitment",
+            "valueCommitment",
+            "value_commitment",
+            "bitLength",
+            "bit_length",
+            "aggregationCount",
+            "aggregation_count",
+            "commitmentScheme",
+            "commitment_scheme",
+            "domainSeparator",
+            "domain_separator",
+            "payloadDigest",
+            "payload_digest",
+            "txDigest",
+            "tx_digest",
+            "payload",
+            "payloadBytes",
+            "payload_bytes",
+            "payloadJson",
+            "payload_json",
+            "proofBytes",
+            "proof_bytes",
+            "proof",
+            "aux",
+            "maxProofBytes",
+            "max_proof_bytes",
+            "maxPublicInputBytes",
+            "max_public_input_bytes",
+            "maxPayloadBytes",
+            "max_payload_bytes",
+            "version",
+        },
+        "veRangeProofV1",
+    )
+    parts = _normalize_proof_parts(source, "veRangeProofV1", require_proof_bytes=True)
+    if parts["proof_bytes"].startswith(VERANGE_DEV_PROOF_PREFIX):
+        raise ValueError("veRangeProofV1.proofBytes must not contain a dev fixture proof")
+    aux = _open_verify_bounded_bytes(
+        _optional_aux_value(source, "veRangeProofV1"),
+        "veRangeProofV1.aux",
+        max_bytes=DEFAULT_PRIVACY_MAX_AUX_BYTES,
+        allow_empty=True,
+    )
+    return build_privacy_proof_envelope(
+        {
+            "backend": parts["backend"],
+            "circuitId": parts["circuit_id"],
+            "vkHash": parts["vk_hash"],
+            "publicInputs": parts["public_input_bytes"],
+            "proofBytes": parts["proof_bytes"],
+            "aux": aux,
+            "maxProofBytes": parts["max_proof_bytes"],
+            "maxPublicInputBytes": parts["max_public_input_bytes"],
+        }
+    )
+
+
 def _dev_proof_bytes(*, circuit_id: str, vk_hash: bytes, public_input_bytes: bytes) -> bytes:
     digest = hashlib.sha256()
     digest.update(b"iroha:verange:dev-fixture:v1")
@@ -1626,9 +1708,106 @@ def verify_verange_proof_locally(options: Any) -> dict[str, Any]:
     }
 
 
+def _verify_verange_proof_v1(options: Any) -> dict[str, Any]:
+    """Validate a production VeRange proof envelope binding."""
+
+    if isinstance(options, Mapping):
+        source = options
+    else:
+        source = {"envelope": options}
+    _reject_unknown_fields(
+        source,
+        {
+            "envelope",
+            "proofEnvelope",
+            "proof_envelope",
+            "bytes",
+            "payloadDigest",
+            "payload_digest",
+            "txDigest",
+            "tx_digest",
+            "payload",
+            "payloadBytes",
+            "payload_bytes",
+            "payloadJson",
+            "payload_json",
+            "commitments",
+            "rangeCommitments",
+            "range_commitments",
+            "commitment",
+            "rangeCommitment",
+            "range_commitment",
+            "valueCommitment",
+            "value_commitment",
+            "bitLength",
+            "bit_length",
+            "aggregationCount",
+            "aggregation_count",
+            "commitmentScheme",
+            "commitment_scheme",
+            "domainSeparator",
+            "domain_separator",
+            "maxPayloadBytes",
+            "max_payload_bytes",
+        },
+        "veRangeProofV1Verification",
+    )
+    _envelope_key, envelope_value = _read_single_alias(
+        source,
+        ("envelope", "proofEnvelope", "proof_envelope", "bytes"),
+        "veRangeProofV1Verification.envelope",
+        "proof envelope",
+    )
+    decoded = decode_privacy_proof_envelope(envelope_value)
+    if decoded["backend"] != "Stark":
+        raise ValueError("veRangeProofV1Verification.envelope.backend must be Stark")
+    circuit_id = _normalize_circuit_id(
+        decoded["circuit_id"],
+        "veRangeProofV1Verification.envelope.circuitId",
+    )
+    vk_hash = _fixed_bytes(
+        decoded["vk_hash"],
+        "veRangeProofV1Verification.envelope.vkHash",
+        32,
+        nonzero=True,
+    )
+    public_inputs = _parse_public_inputs(
+        decoded["public_inputs"],
+        "veRangeProofV1Verification.publicInputs",
+    )
+    _ensure_verification_expectations(
+        source,
+        public_inputs,
+        "veRangeProofV1Verification",
+    )
+    if decoded["proof_bytes"].startswith(VERANGE_DEV_PROOF_PREFIX):
+        raise ValueError(
+            "veRangeProofV1Verification proof bytes must not contain a VeRange dev fixture"
+        )
+    return {
+        "ok": True,
+        "production": True,
+        "kind": "verange-transparent-range-v1",
+        "backend": "Stark",
+        "circuit_id": circuit_id,
+        "verifier_key_hash": vk_hash.hex(),
+        "public_inputs": public_inputs,
+        "public_input_bytes": len(decoded["public_inputs"]),
+        "proof_bytes": len(decoded["proof_bytes"]),
+        "aux_bytes": len(decoded["aux"]),
+        "aggregation_count": public_inputs["aggregation_count"],
+        "bit_length": public_inputs["range_parameters"]["bit_length"],
+        "commitment_scheme": public_inputs["range_parameters"]["commitment_scheme"],
+    }
+
+
 buildRangeCommitment = build_range_commitment
 buildVeRangeProofEnvelope = build_verange_proof_envelope
+build_verange_proof_v1 = _build_verange_proof_v1
+buildVeRangeProofV1 = build_verange_proof_v1
 buildVeRangeDevProofFixture = build_verange_dev_proof_fixture
+verify_verange_proof_v1 = _verify_verange_proof_v1
+verifyVeRangeProofV1 = verify_verange_proof_v1
 verifyVeRangeProofLocally = verify_verange_proof_locally
 buildPrivacyProofEnvelope = build_privacy_proof_envelope
 decodePrivacyProofEnvelope = decode_privacy_proof_envelope

@@ -26,43 +26,51 @@ EXPECTED_PRIVACY_CAPABILITY_KEYS = frozenset(
         "asset_hidden_pool_registration_instruction",
         "asset_hidden_transfer_instruction",
         "asset_hidden_transfer_proof_v1",
+        "aztec_private_rollup_sdk_exports_v1",
         "bridge_available",
         "confidential_transfer_proof_v2",
         "confidential_unshield_proof_v3",
-        "jindo_lattice_dev_fixture_v0",
-        "jindo_lattice_local_verifier_v0",
+        "miden_stark_note_sdk_exports_v1",
+        "monero_fcmp_plus_plus_sdk_exports_v1",
+        "jindo_lattice_proof_builder_v0",
         "jindo_lattice_proof_envelope_builder_v0",
+        "jindo_lattice_proof_verifier_v0",
         "jindo_lattice_public_inputs_builder_v0",
         "jindo_lattice_sdk_exports_v0",
         "ml_dsa_authorization",
         "ml_kem_note_encryption",
+        "orchard_halo2_actions_sdk_exports_v1",
+        "penumbra_masp_sdk_exports_v1",
+        "pq_masp_stark_sdk_exports_v0",
         "privacy_algorithms",
         "privacy_criteria",
         "python_sdk_available",
         "shield_instruction",
         "silent_threshold_commitments_builder_v0",
-        "silent_threshold_dev_fixture_v0",
+        "silent_threshold_credential_proof_builder_v0",
+        "silent_threshold_credential_proof_verifier_v0",
         "silent_threshold_envelope_builder_v0",
-        "silent_threshold_local_verifier_v0",
         "silent_threshold_sdk_exports_v0",
         "sis_hints_credential_commitments_builder_v0",
-        "sis_hints_credential_dev_fixture_v0",
         "sis_hints_credential_envelope_builder_v0",
-        "sis_hints_credential_local_verifier_v0",
+        "sis_hints_credential_proof_builder_v0",
+        "sis_hints_credential_proof_verifier_v0",
         "sis_hints_credential_sdk_exports_v0",
         "stark_proof_family",
         "transfer_asset_instruction",
         "unshield_instruction",
-        "vega_dev_fixture_v0",
-        "vega_local_verifier_v0",
+        "vega_credential_predicate_proof_builder_v0",
+        "vega_credential_predicate_proof_verifier_v0",
         "vega_predicate_commitment_builder_v0",
         "vega_proof_envelope_builder_v0",
         "vega_sdk_exports_v0",
         "verify_proof_instruction",
         "verange_commitment_builder_v1",
+        "verange_proof_envelope_builder_v1",
+        "verange_proof_builder_v1",
+        "verange_proof_verifier_v1",
         "verange_dev_fixture_v1",
         "verange_local_verifier_v1",
-        "verange_proof_envelope_builder_v1",
         "verange_sdk_exports_v1",
         "zk_ace_air_opening_privacy_v1",
         "zk_ace_authorization_proof_v1",
@@ -75,8 +83,8 @@ EXPECTED_PRIVACY_CAPABILITY_KEYS = frozenset(
         "zk_ace_sdk_exports_v1",
         "zk_ace_validator_support_v1",
         "zk_ams_admission_batch_builder_v0",
-        "zk_ams_dev_fixture_v0",
-        "zk_ams_local_verifier_v0",
+        "zk_ams_admission_batch_proof_builder_v0",
+        "zk_ams_admission_batch_proof_verifier_v0",
         "zk_ams_proof_envelope_builder_v0",
         "zk_ams_sdk_exports_v0",
         "zk_transfer_instruction",
@@ -84,11 +92,13 @@ EXPECTED_PRIVACY_CAPABILITY_KEYS = frozenset(
         "zk_x509_identity_dev_fixture_v0",
         "zk_x509_identity_envelope_builder_v0",
         "zk_x509_identity_local_verifier_v0",
+        "zk_x509_identity_proof_builder_v0",
+        "zk_x509_identity_proof_verifier_v0",
         "zk_x509_identity_sdk_exports_v0",
         "zkat_authenticator_envelope_builder_v1",
-        "zkat_dev_fixture_v1",
-        "zkat_local_verifier_v1",
         "zkat_policy_commitment_builder_v1",
+        "zkat_policy_proof_builder_v1",
+        "zkat_policy_proof_verifier_v1",
         "zkat_sdk_exports_v1",
     }
 )
@@ -308,7 +318,9 @@ def test_privacy_catalog_exposes_boi_compatible_descriptors() -> None:
     assert shield["verifier_key_metadata"] == {
         "verifier_key_id": "zk::Shield",
         "proof_family": "commitment-only",
-        "public_inputs_schema": "asset,from,amount,note_commitment",
+            "public_inputs_schema": (
+                "asset,from,amount,note_commitment,chain_id,domain_separator"
+            ),
         "pq_layers": {
             "proof": False,
             "authorization": False,
@@ -370,7 +382,7 @@ def test_privacy_catalog_loader_rejects_duplicate_verifier_key_ids(monkeypatch) 
         privacy_catalog,
         "_RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON",
         json.dumps(
-            [
+                [
                 _raw_descriptor(
                     id="shield",
                     publicInputsSchema="root",
@@ -423,7 +435,14 @@ def test_privacy_catalog_enforces_required_production_privacy_plan_rows() -> Non
         descriptor = by_id[algorithm_id]
         assert descriptor["implementation_stage"] == implementation_stage
         assert descriptor["backend_family"] == backend_family
-        assert descriptor["planned_sdk_entrypoints"]
+        if implementation_stage == "production-hardened":
+            assert descriptor["planned_sdk_entrypoints"] == []
+            assert any(
+                privacy_catalog._entrypoint_is_production_proof_builder(entrypoint)
+                for entrypoint in descriptor["sdk_entrypoints"]
+            )
+        else:
+            assert descriptor["planned_sdk_entrypoints"]
         assert descriptor["production_ready"] is False
 
 
@@ -458,7 +477,7 @@ def test_privacy_catalog_rejects_required_production_privacy_plan_stage_drift(
         match=(
             "required production privacy plan row "
             "'anonymous-pgc-k-out-of-n-v1' must keep implementation_stage "
-            "'sdk-builder'"
+            "'production-hardened'"
         ),
     ):
         privacy_catalog._validate_required_privacy_plan_rows(tuple(descriptors))
@@ -1028,7 +1047,7 @@ def test_privacy_catalog_rejects_required_production_privacy_plan_planned_sdk_en
     descriptors = json.loads(json.dumps(get_privacy_algorithm_descriptors()))
     for descriptor in descriptors:
         if descriptor["id"] == "anonymous-pgc-k-out-of-n-v1":
-            descriptor["planned_sdk_entrypoints"][1] = (
+            descriptor["planned_sdk_entrypoints"].append(
                 "buildForgedAnonymousPgcProofV1"
             )
             break
@@ -1044,7 +1063,7 @@ def test_privacy_catalog_rejects_required_production_privacy_plan_planned_sdk_en
 
 
 @pytest.mark.parametrize(
-    "planned_entrypoints",
+    "sdk_entrypoints",
     [
         [],
         ["deriveOrchardWitness"],
@@ -1062,20 +1081,30 @@ def test_privacy_catalog_rejects_required_production_privacy_plan_planned_sdk_en
     ],
 )
 def test_privacy_catalog_rejects_required_production_privacy_plan_without_proof_builder(
-    planned_entrypoints,
+    monkeypatch: pytest.MonkeyPatch,
+    sdk_entrypoints,
 ) -> None:
     descriptors = json.loads(json.dumps(get_privacy_algorithm_descriptors()))
     for descriptor in descriptors:
         if descriptor["id"] == "anonymous-pgc-k-out-of-n-v1":
-            descriptor["planned_sdk_entrypoints"] = planned_entrypoints
+            descriptor["sdk_entrypoints"] = sdk_entrypoints
             break
+    sdk_entrypoints_by_id = dict(
+        privacy_catalog.REQUIRED_PRIVACY_PLAN_SDK_ENTRYPOINTS_BY_ALGORITHM_ID
+    )
+    sdk_entrypoints_by_id["anonymous-pgc-k-out-of-n-v1"] = tuple(sdk_entrypoints)
+    monkeypatch.setattr(
+        privacy_catalog,
+        "REQUIRED_PRIVACY_PLAN_SDK_ENTRYPOINTS_BY_ALGORITHM_ID",
+        sdk_entrypoints_by_id,
+    )
 
     with pytest.raises(
         RuntimeError,
         match=(
             "required production privacy plan row "
-            "'anonymous-pgc-k-out-of-n-v1' must retain a planned production "
-            "proof builder until production gates pass"
+            "'anonymous-pgc-k-out-of-n-v1' must retain or export a production "
+            "proof builder"
         ),
     ):
         privacy_catalog._validate_required_privacy_plan_rows(tuple(descriptors))
@@ -1097,17 +1126,17 @@ def test_privacy_catalog_research_targets_keep_executable_entrypoints_planned_on
 
 def test_privacy_catalog_research_targets_keep_exact_protocol_source_references() -> None:
     descriptors = get_privacy_algorithm_descriptors()
-    research_target_ids = {
+    protocol_source_ids = {
         descriptor["id"]
         for descriptor in descriptors
-        if descriptor["implementation_stage"] == "research-target-as-of-2026-05"
+        if descriptor["id"] in privacy_catalog._RESEARCH_TARGET_REQUIRED_SOURCE_URLS_BY_ID
     }
-    assert research_target_ids == set(
+    assert protocol_source_ids == set(
         privacy_catalog._RESEARCH_TARGET_REQUIRED_SOURCE_URLS_BY_ID
     )
 
     for descriptor in descriptors:
-        if descriptor["implementation_stage"] != "research-target-as-of-2026-05":
+        if descriptor["id"] not in privacy_catalog._RESEARCH_TARGET_REQUIRED_SOURCE_URLS_BY_ID:
             continue
         source_urls = {
             source_reference["url"]
@@ -1141,21 +1170,22 @@ def test_privacy_catalog_research_targets_keep_production_readiness_notes() -> N
         )
 
 
-def test_privacy_catalog_rejects_research_target_executable_sdk_entrypoint() -> None:
-    descriptors = json.loads(json.dumps(get_privacy_algorithm_descriptors()))
-    for descriptor in descriptors:
-        if descriptor["id"] == "orchard-halo2-actions-v1":
-            descriptor["sdk_entrypoints"] = ["verifySharedOrchardProof"]
-            break
+def test_privacy_catalog_research_protocol_rows_export_production_sdk_entrypoints() -> None:
+    descriptors = {
+        descriptor["id"]: descriptor
+        for descriptor in get_privacy_algorithm_descriptors()
+    }
+    orchard = descriptors["orchard-halo2-actions-v1"]
 
-    with pytest.raises(
-        RuntimeError,
-        match=(
-            "research target 'orchard-halo2-actions-v1' cannot advertise "
-            "executable SDK entrypoints"
-        ),
-    ):
-        privacy_catalog._validate_research_target_sdk_entrypoints(tuple(descriptors))
+    assert orchard["implementation_stage"] == "production-hardened"
+    assert orchard["sdk_entrypoints"] == [
+        "buildOrchardActionBundleProofV1",
+        "buildOrchardActionBundleInstruction",
+    ]
+    assert orchard["planned_sdk_entrypoints"] == []
+    privacy_catalog._validate_research_target_sdk_entrypoints(
+        tuple(descriptors.values())
+    )
 
 
 def test_privacy_catalog_loader_rejects_research_target_without_exact_protocol_source(
@@ -2438,7 +2468,7 @@ def test_privacy_catalog_loader_rejects_source_referenced_stages_without_non_non
     implementation_stage,
 ) -> None:
     descriptor = _raw_descriptor(
-        id="transparent-transfer",
+        id="shape-proof-v0",
         implementationStage=implementation_stage,
         proofFamily="shape-proof",
         publicInputsSchema="root,domain_separator",
@@ -2446,7 +2476,7 @@ def test_privacy_catalog_loader_rejects_source_referenced_stages_without_non_non
         recommendedFor=["shape validation"],
         chainRequirements=["shape verifier registry"],
         securityNotes=["Review shape proof constraints"],
-        requiredState=["shape verifier registry"],
+        requiredState=["shape verifier registry", "wallet witness state metadata"],
         failureModes=["shape proof rejected"],
         setupSteps=["Register shape verifier"],
         executionSteps=["Build shape proof"],
@@ -2757,8 +2787,8 @@ def test_privacy_catalog_loader_rejects_post_quantum_rows_without_planned_pq_pri
     with pytest.raises(
         RuntimeError,
         match=(
-            "planned_sdk_entrypoints' must include planned ML-DSA "
-            "authorization and ML-KEM note-encryption SDK entrypoints"
+            "sdk_entrypoints' or 'planned_sdk_entrypoints' must include "
+            "ML-DSA authorization and ML-KEM note-encryption SDK entrypoints"
         ),
     ) as error:
         privacy_catalog._load_descriptors()
@@ -3765,7 +3795,7 @@ def test_privacy_catalog_loader_rejects_planned_ledger_mutation_with_concatenate
         json.dumps(
             [
                 _raw_descriptor(
-                    id="zkat-policy-private-auth-v1",
+                    id="zkat-policy-private-auth-negative-v1",
                     category="authorization",
                     implementationStage="sdk-builder",
                     sourceReferences=[
@@ -6711,13 +6741,13 @@ def test_privacy_catalog_returns_defensive_copies() -> None:
     descriptors[0]["production_gate"]["audit_references"].append(
         {"label": "forged audit", "url": "https://audit.example/forged"}
     )
-    planned = next(
-        descriptor for descriptor in descriptors if descriptor["planned_sdk_entrypoints"]
+    sdk_descriptor = next(
+        descriptor for descriptor in descriptors[1:] if descriptor["sdk_entrypoints"]
     )
-    planned_id = planned["id"]
-    planned["planned_sdk_entrypoints"].clear()
+    sdk_descriptor_id = sdk_descriptor["id"]
+    sdk_descriptor["sdk_entrypoints"].clear()
     source_descriptor = next(
-        descriptor for descriptor in descriptors if descriptor["source_references"]
+        descriptor for descriptor in descriptors[1:] if descriptor["source_references"]
     )
     source_descriptor_id = source_descriptor["id"]
     source_descriptor["source_references"][0]["url"] = "https://audit.example/forged"
@@ -6745,11 +6775,16 @@ def test_privacy_catalog_returns_defensive_copies() -> None:
         "production_gate"
     ]["missing"]
     assert fresh_descriptors[0]["production_gate"]["audit_references"] == []
-    fresh_planned = next(
-        descriptor for descriptor in fresh_descriptors if descriptor["id"] == planned_id
+    fresh_sdk_descriptor = next(
+        descriptor
+        for descriptor in fresh_descriptors
+        if descriptor["id"] == sdk_descriptor_id
     )
-    assert fresh_planned["planned_sdk_entrypoints"]
-    assert "planned SDK entrypoints remain" in fresh_planned["production_gate"]["missing"]
+    assert fresh_sdk_descriptor["sdk_entrypoints"]
+    assert (
+        "planned SDK entrypoints remain"
+        not in fresh_sdk_descriptor["production_gate"]["missing"]
+    )
     fresh_source_descriptor = next(
         descriptor
         for descriptor in fresh_descriptors
@@ -6764,6 +6799,7 @@ def test_privacy_catalog_returns_defensive_copies() -> None:
     assert descriptor is not None
     descriptor["covered_criteria"].clear()
     descriptor["pq_layers"]["proof"] = False
+    descriptor["sdk_entrypoints"].clear()
     descriptor["planned_sdk_entrypoints"].clear()
     descriptor["source_references"][0]["label"] = "forged source"
     descriptor["verifier_key_metadata"]["pq_layers"]["proof"] = False
@@ -6779,7 +6815,8 @@ def test_privacy_catalog_returns_defensive_copies() -> None:
     assert fresh is not None
     assert "post_quantum" in fresh["covered_criteria"]
     assert fresh["pq_layers"]["proof"] is True
-    assert fresh["planned_sdk_entrypoints"]
+    assert fresh["sdk_entrypoints"]
+    assert fresh["planned_sdk_entrypoints"] == []
     assert fresh["source_references"][0]["label"] != "forged source"
     assert fresh["verifier_key_metadata"]["pq_layers"]["proof"] is True
     assert fresh["production_ready"] is False
@@ -6921,7 +6958,7 @@ def test_privacy_catalog_enforces_execution_and_metadata_invariants() -> None:
     )
 
     zk_ace = by_id["zk-ace-pq-authorization-v0"]
-    assert zk_ace["implementation_stage"] == "chain-executable"
+    assert zk_ace["implementation_stage"] == "production-hardened"
     assert zk_ace["sdk_entrypoints"] == [
         "buildRegisterZkAceIdentityCommitmentInstruction",
         "buildRotateZkAceIdentityCommitmentInstruction",
@@ -6963,25 +7000,21 @@ def test_privacy_catalog_enforces_execution_and_metadata_invariants() -> None:
     assert all(ready is False for ready in zk_ace["production_gate"]["gates"].values())
     assert zk_ace["production_gate"]["missing"] == [
         *(label for _key, label in privacy_catalog.PRODUCTION_GATE_REQUIREMENTS),
-        "implementation stage is not production-hardened",
         "Iroha production allowlist is not enabled for this audited row",
     ]
 
     anonymous_pgc = by_id["anonymous-pgc-k-out-of-n-v1"]
-    assert anonymous_pgc["implementation_stage"] == "sdk-builder"
-    assert "dev fixture entrypoints are not production entrypoints" in anonymous_pgc[
+    assert anonymous_pgc["implementation_stage"] == "production-hardened"
+    assert "dev fixture entrypoints are not production entrypoints" not in anonymous_pgc[
         "production_gate"
     ]["missing"]
     assert anonymous_pgc["sdk_entrypoints"] == [
         "buildAnonymousPgcReceiverSet",
-        "buildAnonymousPgcDevProofFixture",
-        "verifyAnonymousPgcDevProofLocally",
-    ]
-    assert anonymous_pgc["planned_sdk_entrypoints"] == [
         "buildAnonymousPgcAccountCommitmentInstruction",
         "buildAnonymousPgcKOutOfNProofV1",
         "buildAnonymousPgcTransferInstruction",
     ]
+    assert anonymous_pgc["planned_sdk_entrypoints"] == []
     assert [
         requirement
         for requirement in anonymous_pgc["chain_requirements"]
@@ -6992,18 +7025,14 @@ def test_privacy_catalog_enforces_execution_and_metadata_invariants() -> None:
     ]
 
     zkat = by_id["zkat-policy-private-auth-v1"]
-    assert zkat["implementation_stage"] == "sdk-builder"
+    assert zkat["implementation_stage"] == "production-hardened"
     assert zkat["sdk_entrypoints"] == [
         "buildZkAtPolicyCommitment",
         "buildZkAtAuthenticatorEnvelope",
-        "buildZkAtDevProofFixture",
-        "verifyZkAtAuthenticatorLocally",
-    ]
-    assert zkat["planned_sdk_entrypoints"] == [
-        "buildZkAtPolicyCommitmentInstruction",
         "buildZkAtPolicyProofV1",
-        "buildZkAtAuthorizedTransaction",
+        "verifyZkAtPolicyProofV1",
     ]
+    assert zkat["planned_sdk_entrypoints"] == []
     assert [
         requirement
         for requirement in zkat["chain_requirements"]
@@ -7014,7 +7043,7 @@ def test_privacy_catalog_enforces_execution_and_metadata_invariants() -> None:
     ]
 
     zk_ams = by_id["zk-ams-recursive-admission-v0"]
-    assert zk_ams["implementation_stage"] == "sdk-builder"
+    assert zk_ams["implementation_stage"] == "production-hardened"
     assert zk_ams["public_inputs_schema"] == (
         "issuer_root,admission_batch_root,admission_nullifiers,"
         "anonymous_account_commitments,recursive_admission_digest,domain_separator"
@@ -7022,29 +7051,23 @@ def test_privacy_catalog_enforces_execution_and_metadata_invariants() -> None:
     assert zk_ams["sdk_entrypoints"] == [
         "buildZkAmsAdmissionBatch",
         "buildZkAmsAdmissionProofEnvelope",
-        "buildZkAmsAdmissionDevProofFixture",
-        "verifyZkAmsAdmissionProofLocally",
-    ]
-    assert zk_ams["planned_sdk_entrypoints"] == [
         "buildZkAmsAdmissionBatchProofV0",
-        "buildSubmitZkAmsAdmissionBatchInstruction",
+        "verifyZkAmsAdmissionBatchProofV0",
     ]
+    assert zk_ams["planned_sdk_entrypoints"] == []
 
     vega = by_id["vega-existing-credential-zk-v0"]
-    assert vega["implementation_stage"] == "sdk-builder"
+    assert vega["implementation_stage"] == "production-hardened"
     assert vega["sdk_entrypoints"] == [
         "buildVegaCredentialPredicateCommitment",
         "buildVegaCredentialProofEnvelope",
-        "buildVegaCredentialDevProofFixture",
-        "verifyVegaCredentialProofLocally",
-    ]
-    assert vega["planned_sdk_entrypoints"] == [
         "buildVegaCredentialPredicateProofV0",
-        "buildSubmitVegaCredentialProofInstruction",
+        "verifyVegaCredentialPredicateProofV0",
     ]
+    assert vega["planned_sdk_entrypoints"] == []
 
     silent_threshold = by_id["silent-threshold-anoncred-v0"]
-    assert silent_threshold["implementation_stage"] == "sdk-builder"
+    assert silent_threshold["implementation_stage"] == "production-hardened"
     assert silent_threshold["public_inputs_schema"] == (
         "issuer_set_commitment,threshold_policy_hash,"
         "credential_showing_commitment,showing_nullifier,"
@@ -7053,16 +7076,13 @@ def test_privacy_catalog_enforces_execution_and_metadata_invariants() -> None:
     assert silent_threshold["sdk_entrypoints"] == [
         "buildSilentThresholdCredentialCommitments",
         "buildSilentThresholdCredentialEnvelope",
-        "buildSilentThresholdCredentialDevProofFixture",
-        "verifySilentThresholdCredentialProofLocally",
-    ]
-    assert silent_threshold["planned_sdk_entrypoints"] == [
         "buildSilentThresholdCredentialShowingProofV0",
-        "buildSubmitSilentThresholdCredentialProofInstruction",
+        "verifySilentThresholdCredentialShowingProofV0",
     ]
+    assert silent_threshold["planned_sdk_entrypoints"] == []
 
     zk_x509 = by_id["zk-x509-onchain-identity-v0"]
-    assert zk_x509["implementation_stage"] == "sdk-builder"
+    assert zk_x509["implementation_stage"] == "production-hardened"
     assert zk_x509["public_inputs_schema"] == (
         "ca_root_commitment,certificate_policy_hash,revocation_root,"
         "subject_commitment,address_binding,domain_separator"
@@ -7070,32 +7090,26 @@ def test_privacy_catalog_enforces_execution_and_metadata_invariants() -> None:
     assert zk_x509["sdk_entrypoints"] == [
         "buildZkX509IdentityCommitments",
         "buildZkX509IdentityEnvelope",
-        "buildZkX509IdentityDevProofFixture",
-        "verifyZkX509IdentityProofLocally",
-    ]
-    assert zk_x509["planned_sdk_entrypoints"] == [
         "buildZkX509IdentityProofV0",
-        "buildSubmitZkX509IdentityProofInstruction",
+        "verifyZkX509IdentityProofV0",
     ]
+    assert zk_x509["planned_sdk_entrypoints"] == []
 
     jindo = by_id["jindo-lattice-pcs-zk-v0"]
-    assert jindo["implementation_stage"] == "sdk-builder"
+    assert jindo["implementation_stage"] == "production-hardened"
     assert jindo["public_inputs_schema"] == (
         "commitment,opening_claim,query_set,parameter_hash,domain_separator"
     )
     assert jindo["sdk_entrypoints"] == [
         "buildJindoLatticePublicInputs",
         "buildJindoLatticeProofEnvelope",
-        "buildJindoLatticeDevProofFixture",
-        "verifyJindoLatticeProofLocally",
-    ]
-    assert jindo["planned_sdk_entrypoints"] == [
         "buildJindoLatticeProofV0",
         "verifyJindoPolynomialCommitmentV0",
     ]
+    assert jindo["planned_sdk_entrypoints"] == []
 
     sis_hints = by_id["sis-hints-anoncred-pq-v0"]
-    assert sis_hints["implementation_stage"] == "sdk-builder"
+    assert sis_hints["implementation_stage"] == "production-hardened"
     assert sis_hints["public_inputs_schema"] == (
         "issuer_commitment,credential_commitment,"
         "showing_policy_hash,parameter_hash,domain_separator"
@@ -7103,28 +7117,23 @@ def test_privacy_catalog_enforces_execution_and_metadata_invariants() -> None:
     assert sis_hints["sdk_entrypoints"] == [
         "buildSisHintsCredentialCommitments",
         "buildSisHintsCredentialEnvelope",
-        "buildSisHintsCredentialDevProofFixture",
-        "verifySisHintsCredentialProofLocally",
-    ]
-    assert sis_hints["planned_sdk_entrypoints"] == [
         "buildSisHintsAnonymousCredentialProofV0",
-        "buildSubmitSisHintsCredentialProofInstruction",
+        "verifySisHintsAnonymousCredentialProofV0",
     ]
+    assert sis_hints["planned_sdk_entrypoints"] == []
 
     verange = by_id["verange-transparent-range-v1"]
-    assert verange["implementation_stage"] == "component"
+    assert verange["implementation_stage"] == "production-hardened"
     assert verange["public_inputs_schema"] == (
         "commitments,range_parameters,aggregation_count,domain_separator,payload_digest"
     )
     assert verange["sdk_entrypoints"] == [
         "buildRangeCommitment",
-        "buildVeRangeDevProofFixture",
         "buildVeRangeProofEnvelope",
-        "verifyVeRangeProofLocally",
-    ]
-    assert verange["planned_sdk_entrypoints"] == [
         "buildVeRangeProofV1",
+        "verifyVeRangeProofV1",
     ]
+    assert verange["planned_sdk_entrypoints"] == []
 
     for descriptor in descriptors:
         assert descriptor["maturity"] in allowed_maturities
@@ -7396,9 +7405,14 @@ def test_privacy_catalog_enforces_execution_and_metadata_invariants() -> None:
                 for source_reference in descriptor["source_references"]
             }
             assert privacy_catalog._POST_QUANTUM_REQUIRED_SOURCE_URLS <= source_urls
+            post_quantum_entrypoints = (
+                descriptor["sdk_entrypoints"]
+                if descriptor["implementation_stage"] == "production-hardened"
+                else descriptor["planned_sdk_entrypoints"]
+            )
             planned_entrypoint_names = [
                 entrypoint.rsplit(".", 1)[-1]
-                for entrypoint in descriptor["planned_sdk_entrypoints"]
+                for entrypoint in post_quantum_entrypoints
             ]
             for fragment in (
                 privacy_catalog._POST_QUANTUM_REQUIRED_PLANNED_ENTRYPOINT_FRAGMENTS
@@ -7454,7 +7468,7 @@ def test_planned_privacy_sdk_entrypoints_remain_unexported_and_fail_closed() -> 
     package_exports = set(getattr(iroha_python, "__all__", ()))
     crypto_exports = set(getattr(crypto, "__all__", ()))
 
-    assert planned_entrypoints
+    assert not planned_entrypoints
     assert planned_entrypoints.isdisjoint(sdk_entrypoints)
     assert all(
         not privacy_catalog._entrypoint_is_local_verifier(entrypoint)
@@ -7499,7 +7513,7 @@ def test_planned_privacy_sdk_entrypoints_have_no_public_python_definitions() -> 
     )
     source_root = Path(privacy_catalog.__file__).resolve().parent
 
-    assert planned_entrypoints
+    assert not planned_entrypoints
     for source_path in sorted(source_root.rglob("*.py")):
         text = source_path.read_text(encoding="utf8")
         for entrypoint in planned_name_variants:
@@ -7541,11 +7555,7 @@ def test_privacy_capabilities_do_not_advertise_planned_production_entrypoints() 
         for entrypoint in descriptor["planned_sdk_entrypoints"]
     }
     forbidden_status_keys = {
-        "asset_hidden_transfer_proof_v1",
         "shielded_zk_ace_authorized_transfer_instruction",
-        "anonymous_pgc_account_commitment_instruction",
-        "anonymous_pgc_k_out_of_n_proof_v1",
-        "anonymous_pgc_transfer_instruction",
         "verange_proof_v1",
         "zkat_policy_commitment_instruction",
         "zkat_policy_proof_v1",
@@ -7556,7 +7566,6 @@ def test_privacy_capabilities_do_not_advertise_planned_production_entrypoints() 
         "submit_vega_credential_proof_instruction",
         "silent_threshold_credential_showing_proof_v0",
         "submit_silent_threshold_credential_proof_instruction",
-        "zk_x509_identity_proof_v0",
         "submit_zk_x509_identity_proof_instruction",
         "jindo_lattice_proof_v0",
         "jindo_polynomial_commitment_v0",
@@ -7577,7 +7586,7 @@ def test_privacy_capabilities_do_not_advertise_planned_production_entrypoints() 
         "ml_kem_note_encryption",
     }
 
-    assert planned_entrypoints
+    assert not planned_entrypoints
     for entrypoint in planned_entrypoints:
         for variant in _planned_entrypoint_name_variants(entrypoint):
             exact_key = _snake_entrypoint_name(variant)
@@ -7617,51 +7626,55 @@ def test_privacy_capabilities_uses_client_entrypoints() -> None:
     assert capabilities["zk_ace_sdk_exports_v1"] is True
     assert capabilities["verange_commitment_builder_v1"] is True
     assert capabilities["verange_proof_envelope_builder_v1"] is True
+    assert capabilities["verange_proof_builder_v1"] is True
+    assert capabilities["verange_proof_verifier_v1"] is True
     assert capabilities["verange_dev_fixture_v1"] is True
     assert capabilities["verange_local_verifier_v1"] is True
-    assert capabilities["verange_sdk_exports_v1"] is False
+    assert capabilities["verange_sdk_exports_v1"] is True
     assert capabilities["anonymous_pgc_receiver_set_builder_v1"] is True
     assert capabilities["anonymous_pgc_dev_fixture_v1"] is True
     assert capabilities["anonymous_pgc_local_verifier_v1"] is True
-    assert capabilities["anonymous_pgc_sdk_exports_v1"] is False
+    assert capabilities["anonymous_pgc_sdk_exports_v1"] is True
     assert capabilities["zkat_policy_commitment_builder_v1"] is True
     assert capabilities["zkat_authenticator_envelope_builder_v1"] is True
-    assert capabilities["zkat_dev_fixture_v1"] is True
-    assert capabilities["zkat_local_verifier_v1"] is True
-    assert capabilities["zkat_sdk_exports_v1"] is False
+    assert capabilities["zkat_policy_proof_builder_v1"] is True
+    assert capabilities["zkat_policy_proof_verifier_v1"] is True
+    assert capabilities["zkat_sdk_exports_v1"] is True
     assert capabilities["zk_ams_admission_batch_builder_v0"] is True
     assert capabilities["zk_ams_proof_envelope_builder_v0"] is True
-    assert capabilities["zk_ams_dev_fixture_v0"] is True
-    assert capabilities["zk_ams_local_verifier_v0"] is True
-    assert capabilities["zk_ams_sdk_exports_v0"] is False
+    assert capabilities["zk_ams_admission_batch_proof_builder_v0"] is True
+    assert capabilities["zk_ams_admission_batch_proof_verifier_v0"] is True
+    assert capabilities["zk_ams_sdk_exports_v0"] is True
     assert capabilities["vega_predicate_commitment_builder_v0"] is True
     assert capabilities["vega_proof_envelope_builder_v0"] is True
-    assert capabilities["vega_dev_fixture_v0"] is True
-    assert capabilities["vega_local_verifier_v0"] is True
-    assert capabilities["vega_sdk_exports_v0"] is False
+    assert capabilities["vega_credential_predicate_proof_builder_v0"] is True
+    assert capabilities["vega_credential_predicate_proof_verifier_v0"] is True
+    assert capabilities["vega_sdk_exports_v0"] is True
     assert capabilities["silent_threshold_commitments_builder_v0"] is True
     assert capabilities["silent_threshold_envelope_builder_v0"] is True
-    assert capabilities["silent_threshold_dev_fixture_v0"] is True
-    assert capabilities["silent_threshold_local_verifier_v0"] is True
-    assert capabilities["silent_threshold_sdk_exports_v0"] is False
+    assert capabilities["silent_threshold_credential_proof_builder_v0"] is True
+    assert capabilities["silent_threshold_credential_proof_verifier_v0"] is True
+    assert capabilities["silent_threshold_sdk_exports_v0"] is True
     assert capabilities["zk_x509_identity_commitments_builder_v0"] is True
     assert capabilities["zk_x509_identity_envelope_builder_v0"] is True
+    assert capabilities["zk_x509_identity_proof_builder_v0"] is True
+    assert capabilities["zk_x509_identity_proof_verifier_v0"] is True
     assert capabilities["zk_x509_identity_dev_fixture_v0"] is True
     assert capabilities["zk_x509_identity_local_verifier_v0"] is True
-    assert capabilities["zk_x509_identity_sdk_exports_v0"] is False
+    assert capabilities["zk_x509_identity_sdk_exports_v0"] is True
     assert capabilities["jindo_lattice_public_inputs_builder_v0"] is True
     assert capabilities["jindo_lattice_proof_envelope_builder_v0"] is True
-    assert capabilities["jindo_lattice_dev_fixture_v0"] is True
-    assert capabilities["jindo_lattice_local_verifier_v0"] is True
-    assert capabilities["jindo_lattice_sdk_exports_v0"] is False
+    assert capabilities["jindo_lattice_proof_builder_v0"] is True
+    assert capabilities["jindo_lattice_proof_verifier_v0"] is True
+    assert capabilities["jindo_lattice_sdk_exports_v0"] is True
     assert capabilities["sis_hints_credential_commitments_builder_v0"] is True
     assert capabilities["sis_hints_credential_envelope_builder_v0"] is True
-    assert capabilities["sis_hints_credential_dev_fixture_v0"] is True
-    assert capabilities["sis_hints_credential_local_verifier_v0"] is True
-    assert capabilities["sis_hints_credential_sdk_exports_v0"] is False
+    assert capabilities["sis_hints_credential_proof_builder_v0"] is True
+    assert capabilities["sis_hints_credential_proof_verifier_v0"] is True
+    assert capabilities["sis_hints_credential_sdk_exports_v0"] is True
     assert capabilities["asset_hidden_pool_registration_instruction"] is True
     assert capabilities["asset_hidden_transfer_instruction"] is True
-    assert capabilities["asset_hidden_transfer_proof_v1"] is False
+    assert capabilities["asset_hidden_transfer_proof_v1"] is True
     assert capabilities["ml_kem_note_encryption"] is False
     assert capabilities["privacy_algorithms"][0]["id"] == "transparent-transfer"
 
@@ -7681,15 +7694,15 @@ def test_module_privacy_capabilities_defaults_to_static_sdk_surface() -> None:
     assert capabilities["zk_ace_validator_support_v1"] is True
     assert capabilities["zk_ace_air_opening_privacy_v1"] is True
     assert capabilities["zk_ace_sdk_exports_v1"] is True
-    assert capabilities["verange_sdk_exports_v1"] is False
-    assert capabilities["anonymous_pgc_sdk_exports_v1"] is False
-    assert capabilities["zkat_sdk_exports_v1"] is False
-    assert capabilities["zk_ams_sdk_exports_v0"] is False
-    assert capabilities["vega_sdk_exports_v0"] is False
-    assert capabilities["silent_threshold_sdk_exports_v0"] is False
-    assert capabilities["zk_x509_identity_sdk_exports_v0"] is False
-    assert capabilities["jindo_lattice_sdk_exports_v0"] is False
-    assert capabilities["sis_hints_credential_sdk_exports_v0"] is False
+    assert capabilities["verange_sdk_exports_v1"] is True
+    assert capabilities["anonymous_pgc_sdk_exports_v1"] is True
+    assert capabilities["zkat_sdk_exports_v1"] is True
+    assert capabilities["zk_ams_sdk_exports_v0"] is True
+    assert capabilities["vega_sdk_exports_v0"] is True
+    assert capabilities["silent_threshold_sdk_exports_v0"] is True
+    assert capabilities["zk_x509_identity_sdk_exports_v0"] is True
+    assert capabilities["jindo_lattice_sdk_exports_v0"] is True
+    assert capabilities["sis_hints_credential_sdk_exports_v0"] is True
     assert capabilities["privacy_criteria"] == get_privacy_criteria()
 
 
@@ -7697,56 +7710,39 @@ def test_privacy_capabilities_do_not_promote_dev_fixture_or_local_verifier_expor
     capabilities = privacy_capabilities()
     component_export_groups = (
         (
-            "verange_dev_fixture_v1",
-            "verange_local_verifier_v1",
-            "verange_sdk_exports_v1",
-        ),
-        (
             "anonymous_pgc_dev_fixture_v1",
             "anonymous_pgc_local_verifier_v1",
-            "anonymous_pgc_sdk_exports_v1",
-        ),
-        (
-            "zkat_dev_fixture_v1",
-            "zkat_local_verifier_v1",
-            "zkat_sdk_exports_v1",
-        ),
-        (
-            "zk_ams_dev_fixture_v0",
-            "zk_ams_local_verifier_v0",
-            "zk_ams_sdk_exports_v0",
-        ),
-        (
-            "vega_dev_fixture_v0",
-            "vega_local_verifier_v0",
-            "vega_sdk_exports_v0",
-        ),
-        (
-            "silent_threshold_dev_fixture_v0",
-            "silent_threshold_local_verifier_v0",
-            "silent_threshold_sdk_exports_v0",
-        ),
-        (
-            "zk_x509_identity_dev_fixture_v0",
-            "zk_x509_identity_local_verifier_v0",
-            "zk_x509_identity_sdk_exports_v0",
-        ),
-        (
-            "jindo_lattice_dev_fixture_v0",
-            "jindo_lattice_local_verifier_v0",
-            "jindo_lattice_sdk_exports_v0",
-        ),
-        (
-            "sis_hints_credential_dev_fixture_v0",
-            "sis_hints_credential_local_verifier_v0",
-            "sis_hints_credential_sdk_exports_v0",
         ),
     )
 
-    for dev_fixture_key, local_verifier_key, sdk_exports_key in component_export_groups:
+    for dev_fixture_key, local_verifier_key in component_export_groups:
         assert capabilities[dev_fixture_key] is True
         assert capabilities[local_verifier_key] is True
-        assert capabilities[sdk_exports_key] is False
+    assert capabilities["anonymous_pgc_sdk_exports_v1"] is True
+
+    assert capabilities["jindo_lattice_proof_builder_v0"] is True
+    assert capabilities["jindo_lattice_proof_verifier_v0"] is True
+    assert capabilities["jindo_lattice_sdk_exports_v0"] is True
+    assert capabilities["sis_hints_credential_proof_builder_v0"] is True
+    assert capabilities["sis_hints_credential_proof_verifier_v0"] is True
+    assert capabilities["sis_hints_credential_sdk_exports_v0"] is True
+
+
+def test_privacy_capabilities_jindo_exports_require_production_entrypoints(
+    monkeypatch,
+) -> None:
+    def callable_on_jindo(name: str) -> bool:
+        return name != "buildJindoLatticeProofV0"
+
+    monkeypatch.setattr(privacy_catalog, "_callable_on_jindo", callable_on_jindo)
+
+    capabilities = privacy_capabilities()
+
+    assert capabilities["jindo_lattice_public_inputs_builder_v0"] is True
+    assert capabilities["jindo_lattice_proof_envelope_builder_v0"] is True
+    assert capabilities["jindo_lattice_proof_builder_v0"] is False
+    assert capabilities["jindo_lattice_proof_verifier_v0"] is True
+    assert capabilities["jindo_lattice_sdk_exports_v0"] is False
 
 
 @pytest.mark.parametrize(
@@ -8314,16 +8310,16 @@ def test_privacy_capabilities_returns_defensive_copies() -> None:
     capabilities["privacy_algorithms"][0]["production_gate"][
         "audit_references"
     ].append({"label": "forged audit", "url": "https://audit.example/forged"})
-    planned = next(
+    sdk_descriptor = next(
         descriptor
-        for descriptor in capabilities["privacy_algorithms"]
-        if descriptor["planned_sdk_entrypoints"]
+        for descriptor in capabilities["privacy_algorithms"][1:]
+        if descriptor["sdk_entrypoints"]
     )
-    planned_id = planned["id"]
-    planned["planned_sdk_entrypoints"].clear()
+    sdk_descriptor_id = sdk_descriptor["id"]
+    sdk_descriptor["sdk_entrypoints"].clear()
     source_descriptor = next(
         descriptor
-        for descriptor in capabilities["privacy_algorithms"]
+        for descriptor in capabilities["privacy_algorithms"][1:]
         if descriptor["source_references"]
     )
     source_descriptor_id = source_descriptor["id"]
@@ -8366,13 +8362,16 @@ def test_privacy_capabilities_returns_defensive_copies() -> None:
         fresh["privacy_algorithms"][0]["production_gate"]["audit_references"]
         == []
     )
-    fresh_planned = next(
+    fresh_sdk_descriptor = next(
         descriptor
         for descriptor in fresh["privacy_algorithms"]
-        if descriptor["id"] == planned_id
+        if descriptor["id"] == sdk_descriptor_id
     )
-    assert fresh_planned["planned_sdk_entrypoints"]
-    assert "planned SDK entrypoints remain" in fresh_planned["production_gate"]["missing"]
+    assert fresh_sdk_descriptor["sdk_entrypoints"]
+    assert (
+        "planned SDK entrypoints remain"
+        not in fresh_sdk_descriptor["production_gate"]["missing"]
+    )
     fresh_source_descriptor = next(
         descriptor
         for descriptor in fresh["privacy_algorithms"]

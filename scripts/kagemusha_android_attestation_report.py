@@ -334,13 +334,41 @@ def build_report(args: argparse.Namespace) -> tuple[dict[str, Any] | None, list[
     )
 
 
-def _cleanup_temp_output(path: Path, label: str) -> list[str]:
+def _cleanup_temp_output(
+    path: Path,
+    label: str,
+    expected_identity: tuple[int, int] | None,
+) -> list[str]:
+    if expected_identity is None:
+        return [f"{label} temporary file metadata could not be read"]
     try:
-        path.unlink()
-    except FileNotFoundError:
-        return []
+        parent_fd = os.open(path.parent, device_lab._directory_open_flags())
     except OSError:
         return [f"{label} temporary file could not be removed"]
+    try:
+        try:
+            temp_stat = os.stat(
+                path.name,
+                dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            return []
+        except OSError:
+            return [f"{label} temporary file could not be removed"]
+        if (
+            not stat.S_ISREG(temp_stat.st_mode)
+            or device_lab._file_identity(temp_stat) != expected_identity
+        ):
+            return [f"{label} temporary file changed before cleanup"]
+        try:
+            os.unlink(path.name, dir_fd=parent_fd)
+        except FileNotFoundError:
+            return []
+        except OSError:
+            return [f"{label} temporary file could not be removed"]
+    finally:
+        os.close(parent_fd)
     return []
 
 
@@ -352,6 +380,13 @@ def write_report(path: Path, payload: dict[str, Any]) -> list[str]:
     if errors:
         return errors
     try:
+        parent_stat = path.parent.lstat()
+    except OSError:
+        return [f"{label} parent directory metadata could not be read"]
+    if stat.S_ISLNK(parent_stat.st_mode) or not stat.S_ISDIR(parent_stat.st_mode):
+        return [f"{label} parent directory could not be synced"]
+    parent_identity = device_lab._file_identity(parent_stat)
+    try:
         text = _json_dumps(payload)
     except ValueError:
         return [f"{label} is not strict JSON"]
@@ -362,6 +397,7 @@ def write_report(path: Path, payload: dict[str, Any]) -> list[str]:
         ]
 
     tmp_path: Path | None = None
+    tmp_identity: tuple[int, int] | None = None
     write_errors: list[str] = []
     try:
         with tempfile.NamedTemporaryFile(
@@ -373,6 +409,7 @@ def write_report(path: Path, payload: dict[str, Any]) -> list[str]:
             delete=False,
         ) as handle:
             tmp_path = Path(handle.name)
+            tmp_identity = device_lab._file_identity(os.fstat(handle.fileno()))
             handle.write(text)
             handle.flush()
             os.fsync(handle.fileno())
@@ -386,23 +423,20 @@ def write_report(path: Path, payload: dict[str, Any]) -> list[str]:
         write_errors.append(f"{label} could not be written")
     finally:
         if tmp_path is not None:
-            write_errors.extend(_cleanup_temp_output(tmp_path, label))
+            write_errors.extend(_cleanup_temp_output(tmp_path, label, tmp_identity))
     if write_errors:
         return write_errors
 
     errors = device_lab.validate_summary_output_path(path, label)
     if errors:
         return errors
-    try:
-        parent_fd = os.open(path.parent, os.O_RDONLY)
-    except OSError:
-        return [f"{label} parent directory could not be synced"]
-    try:
-        os.fsync(parent_fd)
-    except OSError:
-        return [f"{label} parent directory could not be synced"]
-    finally:
-        os.close(parent_fd)
+    sync_errors = device_lab._sync_summary_output_parent(
+        path.parent,
+        label,
+        expected_identity=parent_identity,
+    )
+    if sync_errors:
+        return sync_errors
     errors = device_lab.validate_summary_output_path(path, label)
     if errors:
         return errors

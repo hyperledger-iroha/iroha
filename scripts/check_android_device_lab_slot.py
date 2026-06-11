@@ -3757,6 +3757,43 @@ def _validate_summary_output_parent(
     return True, []
 
 
+def _file_identity(file_stat: os.stat_result) -> tuple[int, int]:
+    return file_stat.st_dev, file_stat.st_ino
+
+
+def _directory_open_flags() -> int:
+    flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        flags |= os.O_DIRECTORY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    return flags
+
+
+def _sync_summary_output_parent(
+    parent: Path,
+    label: str,
+    *,
+    expected_identity: tuple[int, int] | None,
+) -> list[str]:
+    try:
+        parent_fd = os.open(parent, _directory_open_flags())
+    except OSError:
+        return [f"{label} parent directory could not be synced"]
+    try:
+        parent_stat = os.fstat(parent_fd)
+        if not stat.S_ISDIR(parent_stat.st_mode):
+            return [f"{label} parent directory could not be synced"]
+        if expected_identity is not None and _file_identity(parent_stat) != expected_identity:
+            return [f"{label} parent directory changed before sync"]
+        os.fsync(parent_fd)
+    except OSError:
+        return [f"{label} parent directory could not be synced"]
+    finally:
+        os.close(parent_fd)
+    return []
+
+
 def _read_summary_output_text(
     path: Path,
     expected_stat: os.stat_result,
@@ -3816,6 +3853,13 @@ def write_summary(path: Path, summary: dict) -> list[str]:
     if errors:
         return errors
     try:
+        parent_stat = path.parent.lstat()
+    except OSError:
+        return ["--json-out parent directory metadata could not be read"]
+    if stat.S_ISLNK(parent_stat.st_mode) or not stat.S_ISDIR(parent_stat.st_mode):
+        return ["--json-out parent directory could not be synced"]
+    parent_identity = _file_identity(parent_stat)
+    try:
         summary_text = json.dumps(summary, indent=2, allow_nan=False) + "\n"
     except ValueError:
         return ["--json-out summary is not strict JSON"]
@@ -3825,6 +3869,7 @@ def write_summary(path: Path, summary: dict) -> list[str]:
             f"{MAX_ANDROID_DEVICE_LAB_JSON_BYTES} bytes"
         ]
     tmp_path: Path | None = None
+    tmp_identity: tuple[int, int] | None = None
     write_errors: list[str] = []
     try:
         with tempfile.NamedTemporaryFile(
@@ -3836,6 +3881,7 @@ def write_summary(path: Path, summary: dict) -> list[str]:
             delete=False,
         ) as handle:
             tmp_path = Path(handle.name)
+            tmp_identity = _file_identity(os.fstat(handle.fileno()))
             handle.write(summary_text)
             handle.flush()
             os.fsync(handle.fileno())
@@ -3849,22 +3895,19 @@ def write_summary(path: Path, summary: dict) -> list[str]:
         write_errors.append("--json-out could not be written")
     finally:
         if tmp_path is not None:
-            write_errors.extend(_cleanup_summary_output(tmp_path))
+            write_errors.extend(_cleanup_summary_output(tmp_path, tmp_identity))
     if write_errors:
         return write_errors
     errors = validate_summary_output_path(path, "--json-out")
     if errors:
         return errors
-    try:
-        parent_fd = os.open(path.parent, os.O_RDONLY)
-    except OSError:
-        return ["--json-out parent directory could not be synced"]
-    try:
-        os.fsync(parent_fd)
-    except OSError:
-        return ["--json-out parent directory could not be synced"]
-    finally:
-        os.close(parent_fd)
+    sync_errors = _sync_summary_output_parent(
+        path.parent,
+        "--json-out",
+        expected_identity=parent_identity,
+    )
+    if sync_errors:
+        return sync_errors
     errors = validate_summary_output_path(path, "--json-out")
     if errors:
         return errors
@@ -3890,13 +3933,40 @@ def write_summary(path: Path, summary: dict) -> list[str]:
     return []
 
 
-def _cleanup_summary_output(path: Path) -> list[str]:
+def _cleanup_summary_output(
+    path: Path,
+    expected_identity: tuple[int, int] | None,
+) -> list[str]:
+    if expected_identity is None:
+        return ["--json-out temporary file metadata could not be read"]
     try:
-        path.unlink()
-    except FileNotFoundError:
-        return []
+        parent_fd = os.open(path.parent, _directory_open_flags())
     except OSError:
         return ["--json-out temporary file could not be removed"]
+    try:
+        try:
+            temp_stat = os.stat(
+                path.name,
+                dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            return []
+        except OSError:
+            return ["--json-out temporary file could not be removed"]
+        if (
+            not stat.S_ISREG(temp_stat.st_mode)
+            or _file_identity(temp_stat) != expected_identity
+        ):
+            return ["--json-out temporary file changed before cleanup"]
+        try:
+            os.unlink(path.name, dir_fd=parent_fd)
+        except FileNotFoundError:
+            return []
+        except OSError:
+            return ["--json-out temporary file could not be removed"]
+    finally:
+        os.close(parent_fd)
     return []
 
 

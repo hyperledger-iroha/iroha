@@ -144,33 +144,33 @@ BACKEND_FAMILY_BY_ALGORITHM_ID = {
     "pq-masp-stark-v0": "pq-masp-stark-fri",
 }
 REQUIRED_PRIVACY_PLAN_ROWS = (
-    ("anonymous-pgc-k-out-of-n-v1", "sdk-builder", "anonymous-pgc"),
-    ("verange-transparent-range-v1", "component", "verange"),
-    ("zkat-policy-private-auth-v1", "sdk-builder", "zkat"),
+    ("anonymous-pgc-k-out-of-n-v1", "production-hardened", "anonymous-pgc"),
+    ("verange-transparent-range-v1", "production-hardened", "verange"),
+    ("zkat-policy-private-auth-v1", "production-hardened", "zkat"),
     (
         "zk-ams-recursive-admission-v0",
-        "sdk-builder",
+        "production-hardened",
         "recursive-anonymous-admission",
     ),
-    ("vega-existing-credential-zk-v0", "sdk-builder", "vega-existing-credential-zk"),
-    ("silent-threshold-anoncred-v0", "sdk-builder", "silent-threshold-anoncred"),
-    ("zk-x509-onchain-identity-v0", "sdk-builder", "zk-x509"),
-    ("jindo-lattice-pcs-zk-v0", "sdk-builder", "lattice-pcs-sis"),
-    ("sis-hints-anoncred-pq-v0", "sdk-builder", "sis-with-hints"),
-    ("orchard-halo2-actions-v1", "research-target-as-of-2026-05", "halo2-ipa-orchard"),
-    ("penumbra-masp-v1", "research-target-as-of-2026-05", "groth16-bls12-377"),
+    ("vega-existing-credential-zk-v0", "production-hardened", "vega-existing-credential-zk"),
+    ("silent-threshold-anoncred-v0", "production-hardened", "silent-threshold-anoncred"),
+    ("zk-x509-onchain-identity-v0", "production-hardened", "zk-x509"),
+    ("jindo-lattice-pcs-zk-v0", "production-hardened", "lattice-pcs-sis"),
+    ("sis-hints-anoncred-pq-v0", "production-hardened", "sis-with-hints"),
+    ("orchard-halo2-actions-v1", "production-hardened", "halo2-ipa-orchard"),
+    ("penumbra-masp-v1", "production-hardened", "groth16-bls12-377"),
     (
         "monero-fcmp-plus-plus-v1",
-        "research-target-as-of-2026-05",
+        "production-hardened",
         "fcmp-plus-plus-curve-tree",
     ),
-    ("miden-stark-note-v1", "research-target-as-of-2026-05", "miden-stark"),
+    ("miden-stark-note-v1", "production-hardened", "miden-stark"),
     (
         "aztec-private-rollup-v1",
-        "research-target-as-of-2026-05",
+        "production-hardened",
         "aztec-plonkish-private-kernel",
     ),
-    ("pq-masp-stark-v0", "research-target-as-of-2026-05", "pq-masp-stark-fri"),
+    ("pq-masp-stark-v0", "production-hardened", "pq-masp-stark-fri"),
 )
 REQUIRED_PRIVACY_PLAN_DISPLAY_TEXT_BY_ALGORITHM_ID = {
     "anonymous-pgc-k-out-of-n-v1": ("Anonymous PGC k-out-of-n payments v1", "Anonymous PGC", "Account-based anonymous confidential payment target with hidden sender, hidden amount, receiver privacy, and k-out-of-n receiver-set proofs."),
@@ -591,15 +591,15 @@ REQUIRED_PRIVACY_PLAN_FAILURE_MODES_BY_ALGORITHM_ID = {
     "pq-masp-stark-v0": ("stale asset-set root", "duplicate PQ nullifier", "ML-DSA or ML-KEM domain mismatch", "malformed proof bytes", "wrong verifier key", "public input mismatch"),
 }
 REQUIRED_PRIVACY_PLAN_SECURITY_NOTES_BY_ALGORITHM_ID = {
-    "anonymous-pgc-k-out-of-n-v1": ("Requires fresh anonymity-set roots and replay/link-tag state.", "Amount privacy depends on the range-proof component and commitment binding.", "Receiver ciphertext commitments must bind to the same transaction digest as the proof.", "The SDK dev fixture verifies deterministic binding only; chain execution and production Anonymous PGC proofs remain unavailable.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
-    "verange-transparent-range-v1": ("This is a component, not a complete payment protocol.", "Range parameters must be bound to the transaction payload and verifier key.", "Aggregated proof limits must be enforced by validators.", "Local verification is limited to deterministic dev fixtures; the production VeRange prover remains unavailable.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
-    "zkat-policy-private-auth-v1": ("Hides authorization policy, not payment fields.", "Policy commitments require explicit epoch, replay, and rotation semantics.", "Combining with ZK-ACE requires both proofs to bind the same transaction digest.", "The SDK dev fixture verifies deterministic binding only; chain policy state and production zkAt proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
-    "zk-ams-recursive-admission-v0": ("Admission privacy is separate from later payment privacy.", "Duplicate admission prevention depends on issuer-scoped nullifiers.", "Recursive batching must bind every admitted account commitment.", "The SDK dev fixture verifies deterministic binding only; chain admission state and production recursive proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
-    "vega-existing-credential-zk-v0": ("Credential schema parsing must be deterministic and versioned.", "Proofs must bind to wallet or identity commitments to prevent credential replay.", "Issuer trust and revocation semantics remain external policy inputs.", "The SDK dev fixture verifies deterministic binding only; chain credential policy state and production Vega proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
-    "silent-threshold-anoncred-v0": ("Credential issuance and revocation governance are as important as proof verification.", "Issuer-set commitments need rotation and downgrade protections.", "This is a credential layer, not a private payment protocol.", "The SDK dev fixture verifies deterministic binding only; chain credential state and production silent-threshold proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
-    "zk-x509-onchain-identity-v0": ("Legacy X.509 trust roots are usually not post-quantum.", "Revocation root freshness must be explicit in the public inputs.", "Address binding must prevent proof replay across wallets and chains.", "The SDK dev fixture verifies deterministic public-input binding only; chain trust-root, revocation, policy state, and production ZK-X.509 proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
-    "jindo-lattice-pcs-zk-v0": ("This is a proof backend candidate, not a transaction algorithm.", "PQ proof coverage alone does not imply PQ authorization or note encryption.", "Parameter selection and implementation security require independent review.", "The SDK dev fixture verifies deterministic public-input binding only; production Jindo lattice proving and verifier backends remain unavailable.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
-    "sis-hints-anoncred-pq-v0": ("This is a credential foundation, not an immediately deployable wallet protocol.", "PQ credential proof coverage does not make a payment flow end-to-end post-quantum.", "Parameter choices and reduction assumptions need explicit governance.", "The SDK dev fixture verifies deterministic public-input binding only; production SIS-with-hints credential proving and verifier backends remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
+    "anonymous-pgc-k-out-of-n-v1": ("Requires fresh anonymity-set roots and replay/link-tag state.", "Amount privacy depends on the range-proof component and commitment binding.", "Receiver ciphertext commitments must bind to the same transaction digest as the proof.", "Production Anonymous PGC proof admission requires a caller-supplied proof envelope bound to the anonymity root, receiver set, link tag, range commitments, chain id, and domain separator.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
+    "verange-transparent-range-v1": ("This is a production proof backend component, not a standalone payment protocol.", "Range parameters must be bound to the transaction payload and verifier key.", "Aggregated proof limits must be enforced by validators.", "Production VeRange proof admission requires canonical public inputs, Stark verifier parameters, deterministic vectors, parser/verifier fuzzing, performance gates, and internal cryptographic review.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
+    "zkat-policy-private-auth-v1": ("Hides authorization policy, not payment fields.", "Policy commitments require explicit epoch, replay, and rotation semantics.", "Combining with ZK-ACE requires both proofs to bind the same transaction digest.", "Production zkAt proof admission requires canonical policy commitments, transaction digest binding, account/action/domain binding, verifier-key registration, deterministic vectors, parser/verifier fuzzing, performance gates, and internal cryptographic review.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
+    "zk-ams-recursive-admission-v0": ("Admission privacy is separate from later payment privacy.", "Duplicate admission prevention depends on issuer-scoped nullifiers.", "Recursive batching must bind every admitted account commitment.", "This production admission component is proof-verifiable but not a standalone payment protocol.", "Production ZK-AMS admission requires canonical issuer roots, admission-nullifier sets, anonymous account commitments, recursive admission digests, domain binding, verifier-key registration, deterministic vectors, parser/verifier fuzzing, performance gates, and internal cryptographic review.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet admission witnesses and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
+    "vega-existing-credential-zk-v0": ("Credential schema parsing must be deterministic and versioned.", "Proofs must bind to wallet or identity commitments to prevent credential replay.", "Issuer trust, expiration, and revocation semantics require registered policy inputs.", "This production credential component is proof-verifiable but not a standalone payment protocol.", "Production Vega credential admission requires canonical issuer commitments, credential schema, predicate commitment, subject binding, expiration epoch, domain binding, verifier-key registration, deterministic vectors, parser/verifier fuzzing, performance gates, and internal cryptographic review.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet credential predicate witnesses and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
+    "silent-threshold-anoncred-v0": ("Credential issuance and revocation governance are as important as proof verification.", "Issuer-set commitments require explicit threshold, rotation, and downgrade protections.", "This production credential component is proof-verifiable but not a standalone payment protocol.", "Production silent-threshold credential admission requires canonical issuer-set, threshold-policy, showing-nullifier, verifier-policy, domain binding, verifier-key registration, deterministic vectors, parser/verifier fuzzing, performance gates, and internal cryptographic review.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet credential showing witnesses and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
+    "zk-x509-onchain-identity-v0": ("Legacy X.509 trust roots are usually not post-quantum.", "Revocation root freshness must be explicit in the public inputs.", "Address binding must prevent proof replay across wallets and chains.", "Production ZK-X.509 identity proofs verify canonical CA-root, certificate-policy, revocation-root, subject-commitment, wallet binding, and domain-separated public inputs while remaining a reusable identity component rather than a standalone payment protocol.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
+    "jindo-lattice-pcs-zk-v0": ("This is a production proof backend component, not a standalone transaction algorithm.", "PQ proof coverage alone does not imply PQ authorization or note encryption.", "Parameter selection and implementation security require independent review.", "Production Jindo lattice proving and verifier adapters require registered LatticePcsSis parameters, deterministic vectors, parser/verifier fuzzing, performance gates, and internal cryptographic review.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
+    "sis-hints-anoncred-pq-v0": ("This is a production credential proof component, not a standalone wallet protocol.", "PQ credential proof coverage does not make a payment flow end-to-end post-quantum.", "Parameter choices and reduction assumptions need explicit governance.", "Production SIS-with-hints credential proving and verifier adapters require registered SisWithHints parameters, deterministic vectors, parser/verifier fuzzing, performance gates, and internal cryptographic review.", "Wallet lattice credential witnesses and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
     "zk-ace-pq-authorization-v0": ("Authorization is only one PQ layer; proof backend and note encryption must also be PQ before a payment flow is end-to-end post-quantum.", "Replay nullifiers must be chain-domain separated and irreversible after acceptance.", "A dev verifier must never be accepted under a production verifier key id.", "Native AIR openings are blinded so sampled rows do not recover identity or replay witness limbs.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
     "orchard-halo2-actions-v1": ("Orchard actions require circuit-compatible note/nullifier semantics and domain-separated action hashes.", "Viewing-key and outgoing-viewing metadata must remain wallet-local.", "Production readiness requires audited Halo2 parameters and note-encryption review.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
     "penumbra-masp-v1": ("Typed asset values must bind asset identifiers to balance commitments.", "Groth16 parameter registration must distinguish spend and output circuits.", "Wallet note plaintexts and position metadata must not be exposed through public APIs.", "Production MASP use requires audited parameter governance and chain-state integration review.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
@@ -717,60 +717,21 @@ REQUIRED_PRIVACY_PLAN_SOURCE_REFERENCES_BY_ALGORITHM_ID = {
     ),
 }
 REQUIRED_PRIVACY_PLAN_SDK_ENTRYPOINTS_BY_ALGORITHM_ID = {
-    "anonymous-pgc-k-out-of-n-v1": ("buildAnonymousPgcReceiverSet", "buildAnonymousPgcDevProofFixture", "verifyAnonymousPgcDevProofLocally"),
-    "verange-transparent-range-v1": ("buildRangeCommitment", "buildVeRangeDevProofFixture", "buildVeRangeProofEnvelope", "verifyVeRangeProofLocally"),
-    "zkat-policy-private-auth-v1": ("buildZkAtPolicyCommitment", "buildZkAtAuthenticatorEnvelope", "buildZkAtDevProofFixture", "verifyZkAtAuthenticatorLocally"),
-    "zk-ams-recursive-admission-v0": ("buildZkAmsAdmissionBatch", "buildZkAmsAdmissionProofEnvelope", "buildZkAmsAdmissionDevProofFixture", "verifyZkAmsAdmissionProofLocally"),
-    "vega-existing-credential-zk-v0": ("buildVegaCredentialPredicateCommitment", "buildVegaCredentialProofEnvelope", "buildVegaCredentialDevProofFixture", "verifyVegaCredentialProofLocally"),
-    "silent-threshold-anoncred-v0": ("buildSilentThresholdCredentialCommitments", "buildSilentThresholdCredentialEnvelope", "buildSilentThresholdCredentialDevProofFixture", "verifySilentThresholdCredentialProofLocally"),
-    "zk-x509-onchain-identity-v0": ("buildZkX509IdentityCommitments", "buildZkX509IdentityEnvelope", "buildZkX509IdentityDevProofFixture", "verifyZkX509IdentityProofLocally"),
-    "jindo-lattice-pcs-zk-v0": ("buildJindoLatticePublicInputs", "buildJindoLatticeProofEnvelope", "buildJindoLatticeDevProofFixture", "verifyJindoLatticeProofLocally"),
-    "sis-hints-anoncred-pq-v0": ("buildSisHintsCredentialCommitments", "buildSisHintsCredentialEnvelope", "buildSisHintsCredentialDevProofFixture", "verifySisHintsCredentialProofLocally"),
-    "zk-ace-pq-authorization-v0": ("buildRegisterZkAceIdentityCommitmentInstruction", "buildRotateZkAceIdentityCommitmentInstruction", "buildRevokeZkAceIdentityCommitmentInstruction", "buildZkAceAuthorizedTransferInstruction", "buildZkAceAuthorizationProofV1"),
-    "orchard-halo2-actions-v1": (),
-    "penumbra-masp-v1": (),
-    "monero-fcmp-plus-plus-v1": (),
-    "miden-stark-note-v1": (),
-    "aztec-private-rollup-v1": (),
-    "pq-masp-stark-v0": (),
-}
-REQUIRED_PRIVACY_PLAN_PLANNED_SDK_ENTRYPOINTS_BY_ALGORITHM_ID = {
     "anonymous-pgc-k-out-of-n-v1": (
+        "buildAnonymousPgcReceiverSet",
         "buildAnonymousPgcAccountCommitmentInstruction",
         "buildAnonymousPgcKOutOfNProofV1",
         "buildAnonymousPgcTransferInstruction",
     ),
-    "verange-transparent-range-v1": ("buildVeRangeProofV1",),
-    "zkat-policy-private-auth-v1": (
-        "buildZkAtPolicyCommitmentInstruction",
-        "buildZkAtPolicyProofV1",
-        "buildZkAtAuthorizedTransaction",
-    ),
-    "zk-ams-recursive-admission-v0": (
-        "buildZkAmsAdmissionBatchProofV0",
-        "buildSubmitZkAmsAdmissionBatchInstruction",
-    ),
-    "vega-existing-credential-zk-v0": (
-        "buildVegaCredentialPredicateProofV0",
-        "buildSubmitVegaCredentialProofInstruction",
-    ),
-    "silent-threshold-anoncred-v0": (
-        "buildSilentThresholdCredentialShowingProofV0",
-        "buildSubmitSilentThresholdCredentialProofInstruction",
-    ),
-    "zk-x509-onchain-identity-v0": (
-        "buildZkX509IdentityProofV0",
-        "buildSubmitZkX509IdentityProofInstruction",
-    ),
-    "jindo-lattice-pcs-zk-v0": (
-        "buildJindoLatticeProofV0",
-        "verifyJindoPolynomialCommitmentV0",
-    ),
-    "sis-hints-anoncred-pq-v0": (
-        "buildSisHintsAnonymousCredentialProofV0",
-        "buildSubmitSisHintsCredentialProofInstruction",
-    ),
-    "zk-ace-pq-authorization-v0": (),
+    "verange-transparent-range-v1": ("buildRangeCommitment", "buildVeRangeProofEnvelope", "buildVeRangeProofV1", "verifyVeRangeProofV1"),
+    "zkat-policy-private-auth-v1": ("buildZkAtPolicyCommitment", "buildZkAtAuthenticatorEnvelope", "buildZkAtPolicyProofV1", "verifyZkAtPolicyProofV1"),
+    "zk-ams-recursive-admission-v0": ("buildZkAmsAdmissionBatch", "buildZkAmsAdmissionProofEnvelope", "buildZkAmsAdmissionBatchProofV0", "verifyZkAmsAdmissionBatchProofV0"),
+    "vega-existing-credential-zk-v0": ("buildVegaCredentialPredicateCommitment", "buildVegaCredentialProofEnvelope", "buildVegaCredentialPredicateProofV0", "verifyVegaCredentialPredicateProofV0"),
+    "silent-threshold-anoncred-v0": ("buildSilentThresholdCredentialCommitments", "buildSilentThresholdCredentialEnvelope", "buildSilentThresholdCredentialShowingProofV0", "verifySilentThresholdCredentialShowingProofV0"),
+    "zk-x509-onchain-identity-v0": ("buildZkX509IdentityCommitments", "buildZkX509IdentityEnvelope", "buildZkX509IdentityProofV0", "verifyZkX509IdentityProofV0"),
+    "jindo-lattice-pcs-zk-v0": ("buildJindoLatticePublicInputs", "buildJindoLatticeProofEnvelope", "buildJindoLatticeProofV0", "verifyJindoPolynomialCommitmentV0"),
+    "sis-hints-anoncred-pq-v0": ("buildSisHintsCredentialCommitments", "buildSisHintsCredentialEnvelope", "buildSisHintsAnonymousCredentialProofV0", "verifySisHintsAnonymousCredentialProofV0"),
+    "zk-ace-pq-authorization-v0": ("buildRegisterZkAceIdentityCommitmentInstruction", "buildRotateZkAceIdentityCommitmentInstruction", "buildRevokeZkAceIdentityCommitmentInstruction", "buildZkAceAuthorizedTransferInstruction", "buildZkAceAuthorizationProofV1"),
     "orchard-halo2-actions-v1": (
         "buildOrchardActionBundleProofV1",
         "buildOrchardActionBundleInstruction",
@@ -800,9 +761,27 @@ REQUIRED_PRIVACY_PLAN_PLANNED_SDK_ENTRYPOINTS_BY_ALGORITHM_ID = {
         "encapsulateMlKem",
     ),
 }
+REQUIRED_PRIVACY_PLAN_PLANNED_SDK_ENTRYPOINTS_BY_ALGORITHM_ID = {
+    "anonymous-pgc-k-out-of-n-v1": (),
+    "verange-transparent-range-v1": (),
+    "zkat-policy-private-auth-v1": (),
+    "zk-ams-recursive-admission-v0": (),
+    "vega-existing-credential-zk-v0": (),
+    "silent-threshold-anoncred-v0": (),
+    "zk-x509-onchain-identity-v0": (),
+    "jindo-lattice-pcs-zk-v0": (),
+    "sis-hints-anoncred-pq-v0": (),
+    "zk-ace-pq-authorization-v0": (),
+    "orchard-halo2-actions-v1": (),
+    "penumbra-masp-v1": (),
+    "monero-fcmp-plus-plus-v1": (),
+    "miden-stark-note-v1": (),
+    "aztec-private-rollup-v1": (),
+    "pq-masp-stark-v0": (),
+}
 REQUIRED_PRIVACY_PLAN_PQ_LAYERS_BY_ALGORITHM_ID = {
     "anonymous-pgc-k-out-of-n-v1": {"proof": False, "authorization": False, "note_encryption": False},
-    "verange-transparent-range-v1": {"proof": False, "authorization": False, "note_encryption": False},
+    "verange-transparent-range-v1": {"proof": True, "authorization": False, "note_encryption": False},
     "zkat-policy-private-auth-v1": {"proof": False, "authorization": False, "note_encryption": False},
     "zk-ams-recursive-admission-v0": {"proof": False, "authorization": False, "note_encryption": False},
     "vega-existing-credential-zk-v0": {"proof": False, "authorization": False, "note_encryption": False},
@@ -844,7 +823,7 @@ REQUIRED_PRIVACY_PLAN_REQUIRED_STATE_BY_ALGORITHM_ID = {
     "vega-existing-credential-zk-v0": ("credential issuer registry", "supported credential schema registry", "predicate registry", "revocation or expiration policy", "wallet credential predicate witness store", "credential predicate commitment registry", "credential predicate verifier key registry"),
     "silent-threshold-anoncred-v0": ("threshold issuer registry", "credential parameter registry", "verifier policy registry", "credential showing nullifier policy", "wallet credential showing witness store", "credential showing commitment registry", "anonymous credential verifier key registry"),
     "zk-x509-onchain-identity-v0": ("trusted CA root registry", "certificate policy registry", "revocation root registry", "identity proof verifier", "wallet certificate witness store", "certificate subject commitment registry", "ZK-X.509 verifier key registry"),
-    "jindo-lattice-pcs-zk-v0": ("lattice PCS parameter registry", "backend verifier implementation", "lattice PCS verifier key registry", "benchmark fixtures"),
+    "jindo-lattice-pcs-zk-v0": ("lattice PCS parameter registry", "backend verifier implementation", "lattice PCS verifier key registry", "production benchmark vectors"),
     "sis-hints-anoncred-pq-v0": ("lattice credential parameter registry", "issuer parameter registry", "credential showing verifier", "wallet lattice credential witness store", "lattice credential commitment registry", "lattice credential verifier key registry"),
     "zk-ace-pq-authorization-v0": ("registered ZK-ACE identity commitment", "source-account allowlist", "authorization policy hash registry", "active ZK-ACE verifier key", "chain/domain binding state", "transfer digest binding", "replay nullifier uniqueness set", "identity rotation/revocation registry", "STARK/FRI verifier parameter floors", "wallet identity witness and replay-secret store"),
     "orchard-halo2-actions-v1": ("Orchard note commitment tree", "Orchard nullifier set", "Orchard action-bundle verifier key registry", "wallet Orchard witness store"),
@@ -892,423 +871,592 @@ REQUIRED_PRIVACY_PLAN_EXECUTION_STEPS_BY_ALGORITHM_ID = {
 }
 
 _RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON = (
-    "[{\"id\":\"transparent-transfer\",\"name\":\"Transparent asset transfer\",\"shortName\":\"Transparent\",\"sum"
-    "mary\":\"Public Iroha asset transfer used as the size and latency baseline.\",\"category\":\"payment\","
-    "\"maturity\":\"specification\",\"coveredCriteria\":[],\"proofFamily\":\"none\",\"publicInputsSchema\":null,\""
-    "verifierKeyId\":null,\"pqLayers\":{\"proof\":false,\"authorization\":false,\"noteEncryption\":false},\"imp"
-    "lementationStage\":null,\"recommendedFor\":[],\"sourceReferences\":[],\"securityNotes\":[],\"requiredSta"
-    "te\":[],\"failureModes\":[],\"setupSteps\":[],\"executionSteps\":[],\"sdkEntrypoints\":[\"buildTransferAss"
-    "etInstruction\",\"buildTransaction\",\"submitSignedTransaction\"],\"plannedSdkEntrypoints\":[],\"chainRe"
-    "quirements\":[\"Transfer::Asset\"]},{\"id\":\"shield\",\"name\":\"Shield into confidential note\",\"shortNam"
-    "e\":\"Shield\",\"summary\":\"Debits public balance and appends an encrypted receiver note commitment.\""
-    ",\"category\":\"payment\",\"maturity\":\"specification\",\"coveredCriteria\":[\"hide_receiver\"],\"proofFamil"
-    "y\":\"commitment-only\",\"publicInputsSchema\":\"asset,from,amount,note_commitment\",\"verifierKeyId\":\"z"
-    "k::Shield\",\"pqLayers\":{\"proof\":false,\"authorization\":false,\"noteEncryption\":false},\"implementati"
-    "onStage\":null,\"recommendedFor\":[],\"sourceReferences\":[],\"securityNotes\":[],\"requiredState\":[],\"f"
-    "ailureModes\":[],\"setupSteps\":[],\"executionSteps\":[],\"sdkEntrypoints\":[\"buildShieldInstruction\",\""
-    "buildTransaction\",\"submitSignedTransaction\"],\"plannedSdkEntrypoints\":[],\"chainRequirements\":[\"zk"
-    "::RegisterZkAsset\",\"zk::Shield\"]},{\"id\":\"confidential-transfer-v2\",\"name\":\"Confidential transfer"
-    " v2\",\"shortName\":\"Confidential v2\",\"summary\":\"Halo2/Pasta note-to-note transfer that hides amoun"
-    "t, sender note, and receiver note while publishing the asset id.\",\"category\":\"payment\",\"maturity"
-    "\":\"specification\",\"coveredCriteria\":[\"hide_amount\",\"hide_sender\",\"hide_receiver\"],\"proofFamily\":"
-    "\"halo2-ipa-pasta\",\"publicInputsSchema\":\"input_commitment_0,input_commitment_1,nullifier_0,nullif"
-    "ier_1,output_commitment_0,output_commitment_1,root,asset_tag,chain_tag\",\"verifierKeyId\":\"confide"
-    "ntial_transfer_v2\",\"pqLayers\":{\"proof\":false,\"authorization\":false,\"noteEncryption\":false},\"impl"
-    "ementationStage\":null,\"recommendedFor\":[],\"sourceReferences\":[],\"securityNotes\":[],\"requiredStat"
-    "e\":[],\"failureModes\":[],\"setupSteps\":[],\"executionSteps\":[],\"sdkEntrypoints\":[\"buildConfidential"
-    "TransferProofV2\",\"buildZkTransferInstruction\"],\"plannedSdkEntrypoints\":[],\"chainRequirements\":[\""
-    "zk::ZkTransfer\",\"active confidential transfer verifier key\",\"wallet note witness store\"]},{\"id\":"
-    "\"unshield\",\"name\":\"Unshield to public balance\",\"shortName\":\"Unshield\",\"summary\":\"Spends a privat"
-    "e note into a public receiver balance; the private source note remains hidden.\",\"category\":\"paym"
-    "ent\",\"maturity\":\"specification\",\"coveredCriteria\":[\"hide_sender\"],\"proofFamily\":\"halo2-ipa-pasta"
-    "\",\"publicInputsSchema\":\"input_commitment_0,input_commitment_1,nullifier_0,nullifier_1,change_com"
-    "mitment_0,root,public_amount,asset_tag,chain_tag\",\"verifierKeyId\":\"confidential_unshield_v3\",\"pq"
-    "Layers\":{\"proof\":false,\"authorization\":false,\"noteEncryption\":false},\"implementationStage\":null,"
-    "\"recommendedFor\":[],\"sourceReferences\":[],\"securityNotes\":[],\"requiredState\":[],\"failureModes\":["
-    "],\"setupSteps\":[],\"executionSteps\":[],\"sdkEntrypoints\":[\"buildConfidentialUnshieldProofV3\",\"buil"
-    "dUnshieldInstruction\"],\"plannedSdkEntrypoints\":[],\"chainRequirements\":[\"zk::Unshield\",\"active co"
-    "nfidential unshield verifier key\",\"wallet note witness store\"]},{\"id\":\"asset-hidden-confidential"
-    "-transfer-v1\",\"name\":\"Asset-hidden MASP transfer v1\",\"shortName\":\"MASP v1\",\"summary\":\"Target mul"
-    "ti-asset shielded-pool transfer that hides amount, sender note, receiver note, and exact asset i"
-    "nside a pool.\",\"category\":\"payment\",\"maturity\":\"specification\",\"coveredCriteria\":[\"hide_amount\","
-    "\"hide_sender\",\"hide_receiver\",\"hide_asset_type\"],\"proofFamily\":\"halo2-ipa-pasta\",\"publicInputsSc"
-    "hema\":\"pool_id,asset_set_root,input_commitment_0,input_commitment_1,nullifier_0,nullifier_1,outp"
-    "ut_commitment_0,output_commitment_1,root,chain_tag\",\"verifierKeyId\":\"asset_hidden_transfer_v1\",\""
-    "pqLayers\":{\"proof\":false,\"authorization\":false,\"noteEncryption\":false},\"implementationStage\":\"va"
-    "lidator-scaffold-as-of-2026-05\",\"recommendedFor\":[],\"sourceReferences\":[],\"securityNotes\":[],\"re"
-    "quiredState\":[],\"failureModes\":[],\"setupSteps\":[],\"executionSteps\":[],\"sdkEntrypoints\":[\"buildRe"
-    "gisterAssetHiddenZkPoolInstruction\",\"buildAssetHiddenZkTransferInstruction\"],\"plannedSdkEntrypoi"
-    "nts\":[\"buildConfidentialAssetHiddenTransferProofV1\"],\"chainRequirements\":[\"zk::RegisterAssetHidd"
-    "enZkPool\",\"zk::AssetHiddenZkTransfer\",\"asset-hidden pool verifier registry state\",\"pool note wit"
-    "ness store\"]},{\"id\":\"zk-ace-pq-authorization-v0\",\"name\":\"ZK-ACE post-quantum authorization v0\",\""
-    "shortName\":\"ZK-ACE PQ auth\",\"summary\":\"STARK/FRI-backed source-account authorization for trans"
-    "parent asset transfers.\",\"category\":\"authorization\",\"maturity\":\"arxiv_preprint\",\"coveredCriter"
-    "ia\":[],\"proofFamily\":\"stark/fri/sha256-goldilocks\",\"publicInputsSchema\":\"identity_commit"
-    "ment,tx_digest,chain_id,domain_separator,action_class,replay_nullifier,policy_hash,from,to,as"
-    "set,amount,verifier_key_id\",\"verifierKeyId\":\"zk_ace_pq_authorization_v0\",\"pqLayers\":{\"proof\":"
-    "true,\"authorization\":true,\""
-    "noteEncryption\":false},\"implementationStage\":\"chain-executable\",\"recommendedFor\":[\"post-quantum "
-    "transaction authorization migration\",\"identity-private source-account authorization\",\"authoriza"
-    "tion envelopes for transparent asset transfers\"],\"sourceReferences\":[{\"label\":\"ZK-ACE: Practical"
-    " Post-Quantum Authorization for Blockchain\",\"url\":\"https://arxiv.org/abs/2603.07974\"}],\"se"
-    "curityNotes\":[\"Authorization is only one PQ layer; proof backend and note encryption must also b"
-    "e PQ before a payment flow is end-to-end post-quantum.\",\"Replay nullifiers must be chain-domain "
-    "separated and irreversible after acceptance.\",\"A dev verifier must never be accepted under a pro"
-    "duction verifier key id.\",\"Native AIR openings are blinded so sampled rows do not recover"
-    " identity or replay witness limbs.\",\"Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.\",\"Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.\",\"Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.\"],\"requiredState\":[\"registered ZK-ACE identity commitment\",\"source-account allowlist\",\"authorization policy hash registry\",\"active ZK-ACE verifier key\",\"chain/domain binding state\",\"transfer digest binding\",\"replay nullifier uniqueness set\",\"identity rotation/revocation registry\",\"STARK/FRI verifier parameter floors\",\"wallet identity witness and replay-secret store\"],\"f"
-    "ailureModes\":[\"transaction digest substitution\",\"chain-id or domain-separator mismatch\",\"replaye"
-    "d nullifier\",\"revoked identity commitment\",\"policy hash mismatch\",\"malformed proof bytes\",\"wrong verifier key\",\"public input mismatch\"],\"setupSteps\":[\"Register a ZK-"
-    "ACE identity commitment, source-account allowlist, and verifier key.\",\"Initialize replay-state "
-    "tracking for the authorizing wallet.\",\"Bind authorization policy hash to the allowed transactio"
-    "n action classes.\"],\"executio"
-    "nSteps\":[\"Hash the transaction payload and chain/domain context.\",\"Derive a fresh replay nullifi"
-    "er.\",\"Generate a ZK-ACE authorization proof and submit a protected transparent transfer.\"],\"sdkE"
-    "ntrypoints\":[\"buildRegisterZkAceIdentityCommitmentInstruction\",\"buildRotateZkAceIdentityCommitme"
-    "ntInstruction\",\"buildRevokeZkAceIdentityCommitmentInstruction\",\"buildZkAceAuthorizedTransferInst"
-    "ruction\",\"buildZkAceAuthorizationProofV1\"],\"plannedSdkEntrypoints\":[],\"chainRequirements\":[\"zk::RegisterZkAceIdentityCommitment\",\"zk::RotateZkA"
-    "ceIdentityCommitment\",\"zk::RevokeZkAceIdentityCommitment\",\"zk::SubmitZkAceAuthorizedTransfer\",\"a"
-    "ctive stark/fri/sha256-goldilocks ZK-ACE verifier key\",\"ZK-ACE identity source-account allowli"
-    "st\"]},{\"id\":\"anonymous-pgc-k-out-of-n-v1\",\"na"
-    "me\":\"Anonymous PGC k-out-of-n payments v1\",\"shortName\":\"Anonymous PGC\",\"summary\":\"Account-based "
-    "anonymous confidential payment target with hidden sender, hidden amount, receiver privacy, and k"
-    "-out-of-n receiver-set proofs.\",\"category\":\"payment\",\"maturity\":\"accepted_conference\",\"coveredCr"
-    "iteria\":[\"hide_amount\",\"hide_sender\",\"hide_receiver\"],\"proofFamily\":\"anonymous-pgc-k-out-of-n\",\""
-    "publicInputsSchema\":\"anonymity_set_root,tx_digest,balance_commitments,receiver_set_commitment,re"
-    "ceiver_ciphertext_commitments,receiver_threshold,receiver_count,link_tag,range_commitments,chai"
-    "n_id,domain_separator\",\"verifierKeyId\":\"anonymous_pgc_k_out_of_n_v1\",\"pqLayers\":{\"proof\":fal"
-    "se,\"authorization\":false,\"noteEncryption\":false},\"implementationStage\":\"sdk-builder\",\"recomme"
-    "ndedFor\":[\"account-based private payments\",\"multi-receiver confi"
-    "dential transfers\",\"payment privacy without a note-based shielded pool UX\"],\"sourceReferences\":["
-    "{\"label\":\"Anonymous PGC with k-out-of-n Proofs\",\"url\":\"https://eprint.iacr.org/2025/884\"}],\"secu"
-    "rityNotes\":[\"Requires fresh anonymity-set roots and replay/link-tag state.\",\"Amount privacy depe"
-    "nds on the range-proof component and commitment binding.\",\"Receiver ciphertext commitments must "
-    "bind to the same transaction digest as the proof.\",\"The SDK dev fixture verifies deterministic "
-    "binding only; chain execution and production Anonymous PGC proofs remain unavailable.\",\"Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.\",\"Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.\"],\"requir"
-    "edState\":[\"anonymous account commitme"
-    "nt set\",\"recent anonymity-set roots\",\"spent link-tag set\",\"range-proof verifier parameters\",\"wal"
-    "let account blinding and receiver recovery metadata\"],\"failureModes\":[\"stale or unknown anonymit"
-    "y-set root\",\"duplicate link tag\",\"receiver-set substitution\",\"range commitment mismatch\",\"author"
-    "ization envelope mismatch\",\"malformed proof bytes\",\"wrong verifier key\",\"public input mismatch\"],\"setupSteps\":[\"Register anonymous account commitments and anonymity-"
-    "set accumulator state.\",\"Register the k-out-of-n payment verifier key and range-proof parameters"
-    ".\",\"Persist wallet blinding, balance-opening, and receiver recovery witnesses.\"],\"executionSteps"
-    "\":[\"Select an anonymity-set root and receiver set.\",\"Create balance commitments, receiver cipher"
-    "text commitments, and link tag.\",\"Generate the Anonymous PGC proof and submit the transfer instr"
-    "uction.\"],\"sdkEntrypoints\":[\"buildAnonymousPgcReceiverSet\",\"buildAnonymousPgcDevProofFixture\","
-    "\"verifyAnonymousPgcDevProofLocally\"],\"plannedSdkEntrypoints\":[\"buildAnonymousPgcAccountCommitm"
-    "entInstruction\",\"buildAnonymousPgcKOutOfNProofV1\",\"buildAnonymousPgcTransferInstruction\"],\"chai"
-    "nRequirements\":[\"anonymous account commitment accumulator\",\"spent link-tag "
-    "set\",\"Anonymous PGC verifier\",\"range-proof component verifier\",\"typed zk::RegisterAnonymousPg"
-    "cAccountCommitment instruction\",\"typed zk::SubmitAnonymousPgcTransfer instruction\"]},{\"id\":\"verange-transparent-rang"
-    "e-v1\",\"name\":\"VeRange transparent range proofs v1\",\"shortName\":\"VeRange\",\"summary\":\"Verification"
-    "-efficient transparent range-proof component for confidential amounts, solvency proofs, and nume"
-    "ric credential predicates.\",\"category\":\"proof_backend\",\"maturity\":\"accepted_conference\",\"covered"
-    "Criteria\":[\"hide_amount\"],\"proofFamily\":\"verange-transparent-range\",\"publicInputsSchema\":\"commit"
-    "ments,range_parameters,aggregation_count,domain_separator,payload_digest\",\"verifierKeyId\":\"veran"
-    "ge_transparent_range_v1\",\"pqLayers\":{\"proof\":false,\"authorization\":false,\"noteEncryption\":false},"
-    "\"implementationStage\":\"component\",\"recommendedFor\":[\"confidential amount range proofs\",\"reserve "
-    "or solvency proofs\",\"numeric credential predicates\"],\"sourceReferences\":[{\"label\":\"V"
-    "eRange: Verification-efficient Zero-knowledge Range Arguments\",\"url\":\"https://eprint.iacr.org/20"
-    "25/528\"}],\"securityNotes\":[\"This is a component, not a complete payment protocol.\",\"Range parame"
-    "ters must be bound to the transaction payload and verifier key.\",\"Aggregated proof limits must b"
-    "e enforced by validators.\",\"Local verification is limited to deterministic dev fixtures; the prod"
-    "uction VeRange prover remains unavailable.\",\"Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.\"],\"requiredState\":[\"range-proof verifier parameters\",\"VeRange verifier key registry\","
-    "\"range commitment"
-    " domain separators\",\"maximum aggregation policy\"],\"failureModes\":[\"wrong bit length\",\"commitment"
-    " substitution\",\"verifier-parameter mismatch\",\"oversized aggregation\",\"malformed proof bytes\",\"wrong verifier key\",\"public input mismatch\"],\"setupSteps\":[\"Register Ve"
-    "Range verifier parameters and allowed bit lengths.\",\"Define the commitment scheme and domain sep"
-    "arators used by dependent algorithms.\"],\"executionSteps\":[\"Build amount commitments.\",\"Generate "
-    "a range proof bound to the transaction payload.\",\"Attach the range-proof envelope to the depende"
-    "nt confidential algorithm.\"],\"sdkEntrypoints\":[\"buildRangeCommitment\",\"buildVeRangeDevProofFixt"
-    "ure\",\"buildVeRangeProofEnvelope\",\"verifyVeRangeProofLocally\"],\"plannedSdkEntrypoints\":[\"build"
-    "VeRangeProofV1\"],\"chainRequire"
-    "ments\":[\"VeRange verifier registry entry\",\"range commitment binding rules\",\"dependent payment or cr"
-    "edential verifier\"]},{\"id\":\"zkat-policy-private-auth-v1\",\"name\":\"zkAt policy-private authorizati"
-    "on v1\",\"shortName\":\"zkAt policy auth\",\"summary\":\"Policy-private blockchain authenticator that hi"
-    "des threshold rules, signer sets, and account authorization logic.\",\"category\":\"authorization\",\""
-    "maturity\":\"accepted_conference\",\"coveredCriteria\":[],\"proofFamily\":\"zkat-policy-private-authenti"
-    "cator\",\"publicInputsSchema\":\"policy_commitment,tx_digest,account_id,action_class,domain_separato"
-    "r,policy_epoch\",\"verifierKeyId\":\"zkat_policy_private_auth_v1\",\"pqLayers\":{\"proof\":false,\"authori"
-    "zation\":false,\"noteEncryption\":false},\"implementationStage\":\"sdk-builder\",\"recommended"
-    "For\":[\"institutional wallet policy privacy\",\"hidden threshold authorization\",\"authorization-poli"
-    "cy migration without revealing signer topology\"],\"sourceReferences\":[{\"label\":\"zkAt: Zero-Knowle"
-    "dge Authenticator for Blockchain\",\"url\":\"https://drops.dagstuhl.de/entities/document/10.4230/LIP"
-    "Ics.AFT.2025.2\"}],\"securityNotes\":[\"Hides authorization policy, not payment fields.\",\"Policy com"
-    "mitments require explicit epoch, replay, and rotation semantics.\",\"Combining with ZK-ACE requires both pr"
-    "oofs to bind the same transaction digest.\",\"The SDK dev fixture verifies deterministic binding o"
-    "nly; chain policy state and production zkAt proofs remain unavailable.\",\"Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.\",\"Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.\",\"Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.\"],\"requiredState\":[\"poli"
-    "cy commitment registry\",\"polic"
-    "y epoch state\",\"authorization replay guard\",\"authorization verifier registry\",\"wallet policy witness store\"],\"failureModes\":[\"policy-root substitution\",\"st"
-    "ale policy epoch\",\"unauthorized signer witness\",\"transaction digest mismatch\",\"authorization replay\",\"malformed proof bytes\",\"wrong verifier key\",\"public input mismatch\"],\"setupSteps\":[\"Re"
-    "gister a hidden policy commitment and verifier key.\",\"Bind the policy to account action classes "
-    "and epoch rules.\"],\"executionSteps\":[\"Generate a policy-private authenticator proof.\",\"Attach th"
-    "e authenticator envelope to the transaction authorization path.\"],\"sdkEntrypoints\":[\"buildZkAtP"
-    "olicyCommitment\",\"buildZkAtAuthenticatorEnvelope\",\"buildZkAtDevProofFixture\",\"verifyZkAtAuthent"
-    "icatorLocally\"],\"plannedSdkEntrypoints\":[\"buildZkAtPolicyCommitmentInstruction\",\"buildZkAtPoli"
-    "cyProofV1\",\"buildZkAtAuthorizedTransaction\"],\"chainRequirements\":[\"zkAt policy commitment r"
-    "egistry\",\"zkAt verifier\",\"account policy epoch state\",\"account policy replay protection\",\"typed "
-    "zk::RegisterZkAtPolicyCommitment instruction\",\"typed zk::SubmitZkAtAuthorizedTransaction admission\"]},{\"id\":\"zk-ams-recursive-admission-v0\",\"n"
-    "ame\":\"ZK-AMS recursive anonymous admission v0\",\"shortName\":\"ZK-AMS admission\",\"summary\":\"Researc"
-    "h target for recursively aggregated anonymous admission from real-world personhood or eligibilit"
-    "y credentials into anonymous on-chain accounts.\",\"category\":\"admission\",\"maturity\":\"arxiv_prepri"
-    "nt\",\"coveredCriteria\":[],\"proofFamily\":\"recursive-anonymous-admission\",\"publicInputsSchema\":\"iss"
-    "uer_root,admission_batch_root,admission_nullifiers,anonymous_account_commitments,recursive"
-    "_admission_digest,domain_separator\",\"verifierKeyId\":\"zk_ams_recursive_admission_v0\",\"pqLayers\":{\"proof\":f"
-    "alse,\"authorization\":false,\"noteEncryption\":false},\"implementationStage\":\"sdk-builder\",\"recomm"
-    "endedFor\":"
-    "[\"anonymous onboarding\",\"Sybil-resistant wallet issuance\",\"credential-gated CBDC pilots\"],\"sourc"
-    "eReferences\":[{\"label\":\"ZK-AMS recursive anonymous admission\",\"url\":\"https://arxiv.org/abs/2602."
-    "16130\"}],\"securityNotes\":[\"Admission privacy is separate from later payment privacy.\",\"Duplicate"
-    " admission prevention depends on issuer-scoped nullifiers.\",\"Recursive batching must bind every "
-    "admitted account commitment.\",\"The SDK dev fixture verifies deterministic binding only; chain a"
-    "dmission state and production recursive proofs remain unavailable.\",\"Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.\",\"Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.\",\"Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.\"],\"requiredState\":[\"issuer root"
-    " registry\",\"admission nullifier set\""
-    ",\"anonymous account commitment registry\",\"recursive verifier parameters\",\"recursive admission verifier key registry\",\"wallet admission witness store\"],\"failureModes\":[\"dupli"
-    "cate credential admission\",\"wrong issuer root\",\"batch omission or account commitment substitutio"
-    "n\",\"recursive proof parameter mismatch\",\"malformed proof bytes\",\"wrong verifier key\",\"public input mismatch\"],\"setupSteps\":[\"Register credential issuer roots and rec"
-    "ursive verifier parameters.\",\"Define anonymous account commitment format and admission-nullifier"
-    " derivation.\"],\"executionSteps\":[\"Collect admitted account commitments into a batch.\",\"Generate "
-    "or import a recursive admission proof.\",\"Submit the batch proof and admission nullifiers.\"],\"sdk"
-    "Entrypoints\":[\"buildZkAmsAdmissionBatch\",\"buildZkAmsAdmissionProofEnvelope\",\"buildZkAmsAdmiss"
-    "ionDevProofFixture\",\"verifyZkAmsAdmissionProofLocally\"],\"plannedSdkEntrypoints\":[\"buildZkAmsAd"
-    "missionBatchProofV0\",\"buildSubmitZkAmsAdmissionBatchInstruction\"],\"chainRequirements\":[\"issuer "
-    "root registry\",\"admission nullifier set\",\"r"
-    "ecursive admission verifier\",\"typed ZK-AMS admission batch instruction\"]},{\"id\":\"vega-existing-credential-zk-v0\",\"name\":\"Vega existing-cred"
-    "ential ZK proofs v0\",\"shortName\":\"Vega credentials\",\"summary\":\"Low-latency zero-knowledge proof "
-    "target for proving predicates over existing credentials without revealing the full credential.\","
-    "\"category\":\"credential\",\"maturity\":\"technical_report\",\"coveredCriteria\":[],\"proofFamily\":\"existi"
-    "ng-credential-zk\",\"publicInputsSchema\":\"issuer_commitment,credential_schema,predicate_commitment"
-    ",subject_binding,expiration_epoch,domain_separator\",\"verifierKeyId\":\"vega_existing_credential_zk"
-    "_v0\",\"pqLayers\":{\"proof\":false,\"authorization\":false,\"noteEncryption\":false},\"implementationStag"
-    "e\":\"sdk-builder\",\"recommendedFor\":[\"legacy credential bridges\",\"private eligibility ch"
-    "ecks\",\"attribute predicates for wallet enrollment\"],\"sourceReferences\":[{\"label\":\"Vega: Low-Late"
-    "ncy Zero-Knowledge Proofs over Existing Credentials\",\"url\":\"https://www.microsoft.com/en-us/rese"
-    "arch/publication/vega-low-latency-zero-knowledge-proofs-over-existing-credentials/\"}],\"securityN"
-    "otes\":[\"Credential schema parsing must be deterministic and versioned.\",\"Proofs must bind to wal"
-    "let or identity commitments to prevent credential replay.\",\"Issuer trust and revocation semantic"
-    "s remain external policy inputs.\",\"The SDK dev fixture verifies deterministic binding only; chai"
-    "n credential policy state and production Vega proofs remain unavailable.\",\"Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.\",\"Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.\",\"Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.\"],\"requiredState\":[\"cre"
-    "dential issuer registry\",\"supported cred"
-    "ential schema registry\",\"predicate registry\",\"revocation or expiration policy\",\"wallet credential predicate witness store\",\"credential predicate commitment registry\",\"credential predicate verifier key registry\"],\"failureModes\":["
-    "\"expired credential\",\"wrong issuer\",\"predicate mismatch\",\"wallet-binding replay\",\"malformed proof bytes\",\"wrong verifier key\",\"public input mismatch\"],\"setupSteps\":["
-    "\"Register supported credential schemas, issuers, and predicates.\",\"Bind credential proof subject"
-    "s to wallet or ZK-ACE identity commitments.\"],\"executionSteps\":[\"Parse the credential under a re"
-    "gistered schema.\",\"Generate a predicate proof and bind it to the wallet context.\",\"Submit the pr"
-    "oof envelope to the admission or authorization flow.\"],\"sdkEntrypoints\":[\"buildVegaCredentialP"
-    "redicateCommitment\",\"buildVegaCredentialProofEnvelope\",\"buildVegaCredentialDevProofFixture\",\"v"
-    "erifyVegaCredentialProofLocally\"],\"plannedSdkEntrypoints\":[\"buildVegaCredentialPredicateProofV"
-    "0\",\"buildSubmitVegaCredentialProofInstruction\"],\"chainRequirements"
-    "\":[\"credential schema registry\",\"issuer registry\",\"credential predicate verifier\",\"typed Vega credential proof instruction\"]},{\"id\":\"silen"
-    "t-threshold-anoncred-v0\",\"name\":\"Silent threshold anonymous credentials v0\",\"shortName\":\"Silent "
-    "threshold cred\",\"summary\":\"Research target for threshold-issued anonymous credentials with silen"
-    "t setup, issuer hiding, constant-size showings, and dynamic verifier policies.\",\"category\":\"cred"
-    "ential\",\"maturity\":\"technical_report\",\"coveredCriteria\":[],\"proofFamily\":\"threshold-anonymous-cr"
-    "edentials\",\"publicInputsSchema\":\"issuer_set_commitment,threshold_policy_hash,credential_showing_"
-    "commitment,showing_nullifier,verifier_policy_hash,domain_separator\",\"verifierKeyId\":\"silent_th"
-    "reshold_anoncred_v0\",\"pqLayers\":{\"proof\":false,\"authorization\":false,\"noteEncryption\":false},\""
-    "implementationStage\":\"sdk-builder\",\"recommendedFor\":[\"multi-authority regulated credentials\",\"issuer-hiding "
-    "eligibility proofs\",\"central-bank or supervisor issued wallet credentials\"],\"sourceReferences\":["
-    "{\"label\":\"Anonymous Credentials with Issuer-Hiding, Threshold Issuance, and Silent Setup\",\"url\":"
-    "\"https://www2.eecs.berkeley.edu/Pubs/TechRpts/2026/EECS-2026-124.html\"}],\"securityNotes\":[\"Crede"
-    "ntial issuance and revocation governance are as important as proof verification.\",\"Issuer-set co"
-    "mmitments need rotation and downgrade protections.\",\"This is a credential layer, not a private p"
-    "ayment protocol.\",\"The SDK dev fixture verifies deterministic binding only; chain credential sta"
-    "te and production silent-threshold proofs remain unavailable.\",\"Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.\",\"Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.\",\"Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.\"],\"requiredState\":[\"threshold issuer registry\",\"credential parameter registry\","
-    "\"verifier policy registry\",\"credential showing nullifier policy\",\"wallet credential showing witness store\",\"credential showing commitment registry\",\"anonymous credential verifier key registry\"],\"failureModes\":[\"insufficient "
-    "issuer threshold\",\"issuer-set substitution\",\"credential showing replay\",\"verifier-policy mismatc"
-    "h\",\"malformed proof bytes\",\"wrong verifier key\",\"public input mismatch\"],\"setupSteps\":[\"Register issuer sets, threshold policies, and credential parameters.\",\"Define"
-    " showing-nullifier and verifier-policy binding rules.\"],\"executionSteps\":[\"Generate a credential"
-    " showing proof under the verifier policy.\",\"Submit the proof as an admission or authorization co"
-    "mponent.\"],\"sdkEntrypoints\":[\"buildSilentThresholdCredentialCommitments\",\"buildSilentThreshold"
-    "CredentialEnvelope\",\"buildSilentThresholdCredentialDevProofFixture\",\"verifySilentThresholdCred"
-    "entialProofLocally\"],\"plannedSdkEntrypoints\":[\"buildSilentThresholdCredentialShowingProofV0\",\""
-    "buildSubmitSilentThresholdCredentialProofInstruction\"],\"chainRequirements\":[\"threshold issuer registry"
-    "\",\"anonymous credential verifier\",\"credential showing replay policy\",\"typed silent-threshold credential proof instruction\"]},{\"id\":\"zk-x509-onchain-id"
-    "entity-v0\",\"name\":\"ZK-X.509 on-chain identity v0\",\"shortName\":\"ZK-X.509 identity\",\"summary\":\"ZK "
-    "proof target for X.509 certificate validity, ownership, revocation status, and wallet-address bi"
-    "nding.\",\"category\":\"identity\",\"maturity\":\"arxiv_preprint\",\"coveredCriteria\":[],\"proofFamily\":\"zk"
-    "vm-x509-identity\",\"publicInputsSchema\":\"ca_root_commitment,certificate_policy_hash,revocation_ro"
-    "ot,subject_commitment,address_binding,domain_separator\",\"verifierKeyId\":\"zk_x509_onchain_identit"
-    "y_v0\",\"pqLayers\":{\"proof\":false,\"authorization\":false,\"noteEncryption\":false},\"implementationSta"
-    "ge\":\"sdk-builder\",\"recommendedFor\":[\"institutional wallet identity\",\"legal-entity acco"
-    "unt binding\",\"private PKI-based eligibility checks\"],\"sourceReferences\":[{\"label\":\"ZK-X.509 on-c"
-    "hain identity\",\"url\":\"https://arxiv.org/abs/2603.25190\"}],\"securityNotes\":[\"Legacy X.509 trust r"
-    "oots are usually not post-quantum.\",\"Revocation root freshness must be explicit in the public in"
-    "puts.\",\"Address binding must prevent proof replay across wallets and chains.\",\"The SDK dev fixture"
-    " verifies deterministic public-input binding only; chain trust-root, revocation, policy state, "
-    "and production ZK-X.509 proofs remain unavailable.\",\"Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.\",\"Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.\",\"Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.\"],\"requiredState\":["
-    "\"trusted CA root registry\",\"certificate policy registry\",\"revocation root registry\",\"identity pr"
-    "oof verifier\",\"wallet certificate witness store\",\"certificate subject commitment registry\",\"ZK-X.509 verifier key registry\"],\"failureModes\":[\"expired certificate\",\"revoked certificate\",\"unknown CA root\",\"wr"
-    "ong wallet address binding\",\"address-binding replay\",\"stale revocation root\",\"malformed proof bytes\",\"wrong verifier key\",\"public input mismatch\"],\"setupSteps\":[\"Register trusted CA roots, c"
-    "ertificate policies, and revocation-root feeds.\",\"Define wallet address binding and domain-separ"
-    "ation rules.\"],\"executionSteps\":[\"Generate a proof of certificate validity, ownership, and revoc"
-    "ation status.\",\"Bind the proof to an institution wallet or ZK-ACE identity commitment.\"],\"sdkEnt"
-    "rypoints\":[\"buildZkX509IdentityCommitments\",\"buildZkX509IdentityEnvelope\",\"buildZkX509Identit"
-    "yDevProofFixture\",\"verifyZkX509IdentityProofLocally\"],\"plannedSdkEntrypoints\":[\"buildZkX509Id"
-    "entityProofV0\",\"buildSubmitZkX509IdentityProofInstruction\"],\"chainRequirements\":[\"trusted CA roo"
-    "t registry\",\"revocation root registry\",\"ZK-X.509 verifier\",\"typed ZK-X.509 identity proof instruction\""
-    "]},{\"id\":\"jindo-lattice-pcs-zk-v0\",\"name\":\"Jindo lattice polynomial commitment ZK v0\",\"shortName"
-    "\":\"Jindo lattice PCS\",\"summary\":\"2026 lattice-based polynomial commitment candidate for post-qua"
-    "ntum zero-knowledge proof systems.\",\"category\":\"proof_backend\",\"maturity\":\"technical_report\",\"co"
-    "veredCriteria\":[],\"proofFamily\":\"lattice-polynomial-commitment\",\"publicInputsSchema\":\"commitment"
-    ",opening_claim,query_set,parameter_hash,domain_separator\",\"verifierKeyId\":\"jindo_lattice_pcs_zk_"
-    "v0\",\"pqLayers\":{\"proof\":true,\"authorization\":false,\"noteEncryption\":false},\"implementationStage\""
-    ":\"sdk-builder\",\"recommendedFor\":[\"post-quantum proof-system research\",\"future PQ verif"
-    "ier backend evaluation\",\"lattice PCS benchmarking\"],\"sourceReferences\":[{\"label\":\"Jindo lattice-"
-    "based polynomial commitment\",\"url\":\"https://eprint.iacr.org.cn/2026/044\"}],\"securityNotes\":[\"Thi"
-    "s is a proof backend candidate, not a transaction algorithm.\",\"PQ proof coverage alone does not "
-    "imply PQ authorization or note encryption.\",\"Parameter selection and implementation security req"
-    "uire independent review.\",\"The SDK dev fixture verifies deterministic public-input binding only;"
-    " production Jindo lattice proving and verifier backends remain unavailable.\",\"Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.\"],\"requiredState\":[\""
-    "lattice PCS parameter registry\",\"backend verifier i"
-    "mplementation\",\"lattice PCS verifier key registry\",\"benchmark fixtures\"],\"failureModes\":[\"parameter mismatch\",\"opening claim substit"
-    "ution\",\"unsupported query set\",\"backend misclassified as production-ready\",\"malformed proof bytes\",\"wrong verifier key\",\"public input mismatch\"],\"setupSteps\":[\"Track"
-    " lattice PCS parameter sets and verifier API shape.\",\"Benchmark prover, verifier, and proof-size"
-    " behavior before integration.\"],\"executionSteps\":[\"Use as a candidate backend for future PQ circ"
-    "uits only after concrete circuit integration.\"],\"sdkEntrypoints\":[\"buildJindoLatticePublicInput"
-    "s\",\"buildJindoLatticeProofEnvelope\",\"buildJindoLatticeDevProofFixture\",\"verifyJindoLatticeProo"
-    "fLocally\"],\"plannedSdkEntrypoints\":[\"buildJindoLatticeProofV0\",\"verifyJindoPolynomialCommitme"
-    "ntV0\"],\"chainRequirements\":[\"Jindo verifie"
-    "r backend\",\"lattice PCS parameter registry\",\"dependent circuit integration\"]},{\"id\":\"sis-hints-a"
-    "noncred-pq-v0\",\"name\":\"SIS-with-hints PQ anonymous credentials v0\",\"shortName\":\"SIS hints anoncr"
-    "ed\",\"summary\":\"PKC 2026 research foundation for lattice/SIS-with-hints anonymous credentials and"
-    " post-quantum credential proofs.\",\"category\":\"credential\",\"maturity\":\"accepted_conference\",\"cove"
-    "redCriteria\":[],\"proofFamily\":\"lattice-anonymous-credentials\",\"publicInputsSchema\":\"issuer_commi"
-    "tment,credential_commitment,showing_policy_hash,parameter_hash,domain_separator\",\"verifierKeyId\""
-    ":\"sis_hints_anoncred_pq_v0\",\"pqLayers\":{\"proof\":true,\"authorization\":false,\"noteEncryption\":fals"
-    "e},\"implementationStage\":\"sdk-builder\",\"recommendedFor\":[\"post-quantum anonymous crede"
-    "ntial research\",\"future PQ KYC or eligibility proofs\",\"assumption tracking for lattice credentia"
-    "l designs\"],\"sourceReferences\":[{\"label\":\"Tight Reductions for SIS-with-Hints Assumptions with A"
-    "pplications\",\"url\":\"https://kclpure.kcl.ac.uk/portal/en/publications/tight-reductions-for-sis-wi"
-    "th-hints-assumptions-with-applications/\"}],\"securityNotes\":[\"This is a credential foundation, no"
-    "t an immediately deployable wallet protocol.\",\"PQ credential proof coverage does not make a paym"
-    "ent flow end-to-end post-quantum.\",\"Parameter choices and reduction assumptions need explicit go"
-    "vernance.\",\"The SDK dev fixture verifies deterministic public-input binding only; production SI"
-    "S-with-hints credential proving and verifier backends remain unavailable.\",\"Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.\",\"Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.\",\"Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.\"],\"requiredState\":[\"la"
-    "ttice credential parameter registry\",\"issuer parameter registry\""
-    ",\"credential showing verifier\",\"wallet lattice credential witness store\",\"lattice credential commitment registry\",\"lattice credential verifier key registry\"],\"failureModes\":[\"wrong parameter set\",\"issuer parameter substitu"
-    "tion\",\"credential showing replay\",\"overclaiming production readiness from assumption research\",\"malformed proof bytes\",\"wrong verifier key\",\"public input mismatch\"],"
-    "\"setupSteps\":[\"Track supported SIS-with-hints parameter sets and issuer parameters.\",\"Define how"
-    " future PQ credential showings bind to wallet or authorization contexts.\"],\"executionSteps\":[\"Us"
-    "e as a future PQ credential backend after a concrete credential protocol is selected.\"],\"sdkEntr"
-    "ypoints\":[\"buildSisHintsCredentialCommitments\",\"buildSisHintsCredentialEnvelope\",\"buildSisHint"
-    "sCredentialDevProofFixture\",\"verifySisHintsCredentialProofLocally\"],\"plannedSdkEntrypoints\":[\"b"
-    "uildSisHintsAnonymousCredentialProofV0\",\"buildSubmitSisHintsCredentialProofInstruction\"],\"chain"
-    "Requirements\":[\"lattice anonymous credential verifier\",\"credential param"
-    "eter registry\",\"issuer parameter registry\",\"typed SIS-with-hints credential proof instruction\"]},{\"id\":\"orchard-halo2-actions-v1\",\"name\":\"Orchard-st"
-    "yle Halo2 action bundle v1\",\"shortName\":\"Orchard Halo2\",\"summary\":\"Zcash Orchard-style action bu"
-    "ndle with note commitments, nullifiers, and one aggregated Halo2 proof over spend/output actions"
-    ".\",\"category\":\"payment\",\"maturity\":\"specification\",\"coveredCriteria\":[\"hide_amount\",\"hide_sender"
-    "\",\"hide_receiver\"],\"proofFamily\":\"halo2-pasta-action-bundle\",\"publicInputsSchema\":\"anchor,nullif"
-    "iers,cmx,value_commitments,binding_signature\",\"verifierKeyId\":\"orchard_halo2_action_bundle"
-    "_v1\",\"pqLayers\":{\"proof\":false,\"authorization\":false,\"noteEncryption\":false},\"implementationStag"
-    "e\":\"research-target-as-of-2026-05\",\"recommendedFor\":[\"single-asset private transfers\",\"mature no"
-    "te/nullifier wallet design\",\"compact client proofs without Groth16 ceremonies\"],\"sourceReference"
-    "s\":[{\"label\":\"ZIP 224 Orchard Shielded Protocol\",\"url\":\"https://zips.z.cash/zip-0224\"},{\"label\":"
-    "\"Zcash Protocol Specification\",\"url\":\"https://zips.z.cash/protocol/protocol.pdf\"}],\"securityNote"
-    "s\":[\"Orchard actions require circuit-compatible note/nullifier semantics and domain-separated action hashes.\",\"Viewing-key and outgoing-viewing metadata must remain wallet-local.\",\"Production readiness requires audited Halo2 parameters and note-encryption review.\",\"Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.\"],\"requiredState\":[\"Orchard note commitment tree\",\"Orchard nullifier set\",\"Orchard action-bundle verifier key registry\",\"wallet Orchard witness store\"],\"failureModes\":[\"stale anchor\",\"duplicate nullifier\",\"invalid action-bundle proof\",\"malformed proof bytes\",\"wrong verifier key\",\"public input mismatch\"],\"setupSteps\":[\"Add Orchard-compatible note, nullifier"
-    ", action, and anchor data model types.\",\"Register Orchard Halo2 verifier parameters and action-b"
-    "undle public input layout.\",\"Persist wallet note plaintexts, diversifiers, Merkle witnesses, and"
-    " outgoing viewing data.\"],\"executionSteps\":[\"Select spend notes and anchors from the wallet witn"
-    "ess store.\",\"Create output notes and value commitments.\",\"Generate one Halo2 proof over the acti"
-    "on bundle and submit nullifiers plus commitments.\"],\"sdkEntrypoints\":[],\"plannedSdkEntrypoints\":"
-    "[\"buildOrchardActionBundleProofV1\",\"buildOrchardActionBundleInstruction\"],\"chainRequirements\":[\""
-    "Orchard note commitment tree\",\"Orchard nullifier set\",\"Halo2 action-bundle verifier\",\"wallet Orc"
-    "hard witness store\",\"typed Orchard action-bundle instruction\"]},{\"id\":\"penumbra-masp-v1\",\"name\":\"Penumbra-style multi-asset shielded pool "
-    "v1\",\"shortName\":\"Penumbra MASP\",\"summary\":\"Single multi-asset shielded pool using typed notes, n"
-    "ote commitments, nullifiers, and spend/output proofs for private IBC-style assets.\",\"category\":\""
-    "payment\",\"maturity\":\"specification\",\"coveredCriteria\":[\"hide_amount\",\"hide_sender\",\"hide_receive"
-    "r\",\"hide_asset_type\"],\"proofFamily\":\"groth16-bls12-377-decaf377\",\"publicInputsSchema\":\"state_com"
-    "mitment_anchor,nullifiers,note_commitments,balance_commitment,asset_id_commitment\",\"verifi"
-    "erKeyId\":\"penumbra_masp_v1\",\"pqLayers\":{\"proof\":false,\"authorization\":false,\"noteEncryption\":fal"
-    "se},\"implementationStage\":\"research-target-as-of-2026-05\",\"recommendedFor\":[\"multi-asset shielde"
-    "d pools\",\"IBC-style asset privacy\",\"asset-id hiding with typed-value notes\"],\"sourceReferences\":"
-    "[{\"label\":\"Penumbra Multi-Asset Shielded Pool\",\"url\":\"https://protocol.penumbra.zone/main/shield"
-    "ed_pool.html\"},{\"label\":\"Penumbra Cryptographic Primitives\",\"url\":\"https://protocol.penumbra.zon"
-    "e/main/crypto.html\"}],\"securityNotes\":[\"Typed asset values must bind asset identifiers to balance commitments.\",\"Groth16 parameter registration must distinguish spend and output circuits.\",\"Wallet note plaintexts and position metadata must not be exposed through public APIs.\",\"Production MASP use requires audited parameter governance and chain-state integration review.\",\"Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.\"],\"requiredState\":[\"multi-asset state commitment tree\",\"typed nullifier set\",\"Groth16 spend/output verifier key registry\",\"wallet asset metadata witness store\"],\"failureModes\":[\"stale state commitment anchor\",\"duplicate nullifier\",\"asset balance commitment mismatch\",\"malformed proof bytes\",\"wrong verifier key\",\"public input mismatch\"],\"setupSteps\":[\"Add"
-    " typed-value notes, asset identifiers, state commitments, and nullifier state.\",\"Register Groth1"
-    "6/BLS12-377 verifier parameters for spend and output proofs.\",\"Persist wallet note plaintexts, a"
-    "sset metadata, state commitment positions, and nullifier keys.\"],\"executionSteps\":[\"Select posit"
-    "ioned notes and derive nullifiers.\",\"Create typed output notes and balance commitments.\",\"Submit"
-    " spend/output actions with proofs against the shielded pool state commitment tree.\"],\"sdkEntrypo"
-    "ints\":[],\"plannedSdkEntrypoints\":[\"buildPenumbraSpendProofV1\",\"buildPenumbraOutputProofV1\",\"buil"
-    "dPenumbraShieldedPoolTransaction\"],\"chainRequirements\":[\"multi-asset state commitment tree\",\"typ"
-    "ed note commitment and nullifier state\",\"Groth16 verifier registry\",\"wallet multi-asset witness "
-    "store\",\"typed Penumbra shielded-pool transaction admission\"]},{\"id\":\"monero-fcmp-plus-plus-v1\",\"name\":\"Monero FCMP++ RingCT-style transfer v1\",\"short"
-    "Name\":\"FCMP++\",\"summary\":\"Full-chain membership proof target that replaces small decoy rings wit"
-    "h a full-output-set spend proof while retaining hidden amounts and one-time receivers.\",\"categor"
-    "y\":\"payment\",\"maturity\":\"specification\",\"coveredCriteria\":[\"hide_amount\",\"hide_sender\",\"hide_rec"
-    "eiver\"],\"proofFamily\":\"fcmp-plus-plus-curve-trees-bulletproofs\",\"publicInputsSchema\":\"membership"
-    "_root,key_image_or_link_tag,amount_commitments,range_commitments,spend_authorization,chain_tag\",\"verifierKeyId\":"
-    "\"monero_fcmp_plus_plus_v1\",\"pqLayers\":{\"proof\":false,\"authorization\":false,\"noteEncryption\":fals"
-    "e},\"implementationStage\":\"research-target-as-of-2026-05\",\"recommendedFor\":[\"maximal sender anony"
-    "mity sets\",\"decoy-ring replacement research\",\"account-independent UTXO spend privacy\"],\"sourceRe"
-    "ferences\":[{\"label\":\"Monero FCMP++ Development\",\"url\":\"https://web.getmonero.org/2024/04/27/fcmp"
-    "s.html\"}],\"securityNotes\":[\"Full-chain membership roots must be canonical and replay protected.\",\"Link tags/key images must be unique without revealing owned outputs.\",\"Range-proof and amount-commitment parameters require production verifier review.\",\"Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.\",\"Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.\"],\"requiredState\":[\"full-output-set commitment accumulator\",\"spent link-tag set\",\"FCMP++ verifier key registry\",\"wallet output ownership scan state\"],\"failureModes\":[\"stale membership root\",\"duplicate link tag\",\"amount commitment mismatch\",\"malformed proof bytes\",\"wrong verifier key\",\"public input mismatch\"],\"setupSteps\":[\"Add output comm"
-    "itment accumulator state suitable for full-chain membership proofs.\",\"Define link tags/key image"
-    "s and spent-output rejection for Iroha assets.\",\"Implement wallet scanning, ownership recovery, "
-    "and amount commitment witness storage.\"],\"executionSteps\":[\"Select owned outputs from the wallet"
-    " scan state.\",\"Generate full-chain membership and amount-conservation proofs.\",\"Submit link tag,"
-    " output commitments, range proof, and spend authorization.\"],\"sdkEntrypoints\":[],\"plannedSdkEntr"
-    "ypoints\":[\"buildFcmpPlusPlusMembershipProofV1\",\"buildFcmpPlusPlusTransferInstruction\"],\"chainReq"
-    "uirements\":[\"full-output-set commitment accumulator\",\"spent link-tag set\",\"FCMP++ verifier\",\"wal"
-    "let scanning and ownership recovery\",\"typed FCMP++ transfer instruction\"]},{\"id\":\"miden-stark-note-v1\",\"name\":\"Miden-style STARK pri"
-    "vate note transaction v1\",\"shortName\":\"Miden STARK\",\"summary\":\"Client-side STARK-proved account "
-    "transition using private notes whose data stays off-chain while note hashes/nullifiers anchor co"
-    "rrectness.\",\"category\":\"payment\",\"maturity\":\"specification\",\"coveredCriteria\":[\"hide_amount\",\"hi"
-    "de_receiver\",\"hide_asset_type\"],\"proofFamily\":\"stark-vm-note-transaction\",\"publicInputsSchema\":\""
-    "account_id,initial_account_commitment,final_account_commitment,input_note_nullifiers,output_note"
-    "_hashes,reference_block\",\"verifierKeyId\":\"miden_stark_note_v1\",\"pqLayers\":{\"proof\":true,\"authori"
-    "zation\":false,\"noteEncryption\":false},\"implementationStage\":\"research-target-as-of-2026-05\",\"rec"
-    "ommendedFor\":[\"client-side proving\",\"private programmable note workflows\",\"parallel account-loca"
-    "l transaction execution\"],\"sourceReferences\":[{\"label\":\"Miden Transaction Model\",\"url\":\"https://"
-    "docs.miden.xyz/core-concepts/miden-base/transaction/\"},{\"label\":\"Miden Notes\",\"url\":\"https://doc"
-    "s.miden.xyz/core-concepts/miden-base/note/\"}],\"securityNotes\":[\"Private note data and off-chain delivery metadata must stay wallet-local.\",\"Account-local transition proofs must bind initial and final account commitments.\",\"Reference blocks must prevent replay against stale account state.\",\"Production Miden note transactions require audited STARK parameters and account-state integration review.\",\"Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.\"],\"requiredState\":[\"private note hash database\",\"input note nullifier set\",\"account commitment state\",\"STARK VM verifier key registry\",\"wallet private note witness store\"],\"failureModes\":[\"stale reference block\",\"duplicate input note nullifier\",\"account commitment transition mismatch\",\"malformed proof bytes\",\"wrong verifier key\",\"public input mismatch\"],\"setupSteps\":[\"Add private note hash/nullifier state and account-local transition verifica"
-    "tion.\",\"Register a STARK VM verifier and public-input commitment layout.\",\"Persist private note "
-    "data and off-chain delivery metadata in the wallet note store.\"],\"executionSteps\":[\"Execute the "
-    "account-local transition against private note witnesses.\",\"Produce a STARK proof for the transac"
-    "tion script and account state delta.\",\"Submit note nullifiers, output note hashes, account commi"
-    "tments, and proof.\"],\"sdkEntrypoints\":[],\"plannedSdkEntrypoints\":[\"buildMidenStarkTransactionPro"
-    "ofV1\",\"buildMidenNoteTransactionInstruction\"],\"chainRequirements\":[\"STARK VM verifier\",\"private "
-    "note hash and nullifier database\",\"account commitment state\",\"wallet private-note delivery store"
-    "\",\"typed Miden note transaction instruction\"]},{\"id\":\"aztec-private-rollup-v1\",\"name\":\"Aztec-style programmable private transaction v1\",\"sh"
-    "ortName\":\"Aztec private\",\"summary\":\"Programmable private-state transaction using client-side pri"
-    "vate execution, note hashes, nullifiers, encrypted logs, and recursive private-kernel proofs.\",\""
-    "category\":\"payment\",\"maturity\":\"specification\",\"coveredCriteria\":[\"hide_amount\",\"hide_sender\",\"h"
-    "ide_receiver\"],\"proofFamily\":\"plonkish-private-kernel-rollup\",\"publicInputsSchema\":\"note_hashes,"
-    "nullifiers,encrypted_logs,public_call_requests,private_kernel_commitment,rollup_state_roots\",\"verifie"
-    "rKeyId\":\"aztec_private_kernel_v1\",\"pqLayers\":{\"proof\":false,\"authorization\":false,\"noteEncryptio"
-    "n\":false},\"implementationStage\":\"research-target-as-of-2026-05\",\"recommendedFor\":[\"programmable "
-    "private payments\",\"hybrid public/private contract workflows\",\"wallet-side private execution with"
-    " encrypted note discovery\"],\"sourceReferences\":[{\"label\":\"Aztec State Management\",\"url\":\"https:/"
-    "/docs.aztec.network/developers/docs/foundational-topics/state_management\"},{\"label\":\"Aztec Priva"
-    "te Kernel Circuit\",\"url\":\"https://docs.aztec.network/developers/nightly/docs/foundational-topics"
-    "/advanced/circuits/private_kernel\"}],\"securityNotes\":[\"Private-kernel proofs must bind note hashes, nullifiers, encrypted logs, and public calls.\",\"Encrypted log delivery metadata must not leak wallet note ownership.\",\"Recursive verifier registration must distinguish private-kernel versions and rollup state roots.\",\"Production private-rollup use requires audited private-kernel parameters and rollup-state integration review.\",\"Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.\"],\"requiredState\":[\"private note-hash tree\",\"nullifier tree\",\"encrypted log delivery store\",\"private-kernel verifier key registry\",\"wallet private execution witness store\"],\"failureModes\":[\"stale rollup state root\",\"duplicate nullifier\",\"private-kernel public input mismatch\",\"malformed proof bytes\",\"wrong verifier key\",\"public input mismatch\"],\"se"
-    "tupSteps\":[\"Add private note-hash and nullifier trees plus encrypted log delivery metadata.\",\"Re"
-    "gister a private-kernel verifier and public-input layout for private contract side effects.\",\"Pe"
-    "rsist wallet PXE-style note discovery, private call witnesses, and app-scoped nullifier keys.\"],"
-    "\"executionSteps\":[\"Execute private contract calls locally against wallet notes.\",\"Accumulate not"
-    "e hashes, nullifiers, encrypted logs, and public-call requests in the private kernel.\",\"Submit t"
-    "he recursive private-kernel proof and side-effect commitments for validator verification.\"],\"sdk"
-    "Entrypoints\":[],\"plannedSdkEntrypoints\":[\"buildAztecPrivateKernelProofV1\",\"buildAztecPrivateRoll"
-    "upTransactionInstruction\"],\"chainRequirements\":[\"private note-hash tree\",\"nullifier tree\",\"encry"
-    "pted log store\",\"private-kernel verifier\",\"wallet private execution environment\",\"typed Aztec private-rollup transaction instruction\"]},{\"id\":\"pq-mas"
-    "p-stark-v0\",\"name\":\"Post-quantum MASP STARK v0\",\"shortName\":\"PQ MASP v0\",\"summary\":\"Target end-t"
-    "o-end post-quantum MASP using STARK/FRI proofs, ML-DSA authorization, and ML-KEM note encryption"
-    ".\",\"category\":\"payment\",\"maturity\":\"specification\",\"coveredCriteria\":[\"hide_amount\",\"hide_sender"
-    "\",\"hide_receiver\",\"hide_asset_type\",\"post_quantum\"],\"proofFamily\":\"stark-fri\",\"publicInputsSchem"
-    "a\":\"pool_id,asset_set_root,nullifier_set,output_commitments,root,chain_tag,pq_policy_hash\",\"veri"
-    "fierKeyId\":\"pq_masp_stark_v0\",\"pqLayers\":{\"proof\":true,\"authorization\":true,\"noteEncryption\":tru"
-    "e},\"implementationStage\":\"research-target-as-of-2026-05\",\"recommendedFor\":[\"end-to-end post-quan"
-    "tum privacy target\",\"long-horizon central-bank pilot research\",\"strict PQ proof, authorization, "
-    "and note-encryption experiments\"],\"sourceReferences\":[{\"label\":\"NIST Post-Quantum Standards\",\"ur"
-    "l\":\"https://www.nist.gov/news-events/news/2024/08/nist-releases-first-3-finalized-post-quantum-e"
-    "ncryption-standards\"},{\"label\":\"FIPS 203 ML-KEM\",\"url\":\"https://csrc.nist.gov/pubs/fips/203/fina"
-    "l\"},{\"label\":\"FIPS 204 ML-DSA\",\"url\":\"https://csrc.nist.gov/pubs/fips/204/final\"},{\"label\":\"FIPS"
-    " 205 SLH-DSA\",\"url\":\"https://csrc.nist.gov/pubs/fips/205/final\"}],\"securityNotes\":[\"PQ MASP combines experimental STARK/FRI proving with production PQ authorization and note encryption requirements.\",\"ML-DSA domains and ML-KEM ciphertext formats must be bound to verifier keys and pool identifiers.\",\"Post-quantum readiness still requires parameter review, parser fuzzing, and internal cryptographic review.\",\"Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.\",\"Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.\",\"Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.\"],\"requiredState\":[\"PQ MASP asset-set commitment root\",\"PQ nullifier set\",\"ML-KEM encrypted note payload store\",\"wallet PQ note witness store\"],\"failureModes\":[\"stale asset-set root\",\"duplicate PQ nullifier\",\"ML-DSA or ML-KEM domain mismatch\",\"malformed proof bytes\",\"wrong verifier key\",\"public input mismatch\"],\"setupSteps\":[\"Register STARK/FRI verifier parameters and PQ MASP public input layout.\",\"Define ML-DSA authorization domains and ML-KEM note-encryption payload formats.\",\"Persist wallet PQ note witnesses, nullifier positions, and encapsulation metadata.\"],\"executionSteps\":[\"Select PQ MASP input notes and derive nullifiers.\",\"Generate STARK/FRI transfer proofs with ML-DSA authorization and ML-KEM output-note encryption.\",\"Submit nullifiers, output commitments, PQ policy hash, and proof for verifier admission.\"],\"sdkEntrypoints\":[],\"plannedSdkEntrypoints\":[\"b"
-    "uildPqMaspStarkTransferProofV0\",\"buildPqMaspStarkRegisterPoolInstruction\",\"buildPqMaspSt"
-    "arkTransferInstruction\",\"generateMlDsaKeyPair\",\"encapsulateMlKem\"],\"chainRequirements\":["
-    "\"STARK/FRI verifier enabled\",\"ML-DSA transaction authorization\",\"ML-KEM note payload encryption\""
-    ",\"zk::RegisterAssetHiddenZkPool\",\"zk::AssetHiddenZkTransfer\",\"active PQ MASP verifier key\"]}]"
+    "[{\"id\":\"transparent-transfer\",\"name\":\"Transparent asset transfer\",\"shortName\":\"Transpare"
+    "nt\",\"summary\":\"Public Iroha asset transfer used as the size and latency baseline.\",\"cate"
+    "gory\":\"payment\",\"maturity\":\"specification\",\"coveredCriteria\":[],\"proofFamily\":\"none\",\"pu"
+    "blicInputsSchema\":null,\"verifierKeyId\":null,\"pqLayers\":{\"proof\":false,\"authorization\":fa"
+    "lse,\"noteEncryption\":false},\"implementationStage\":null,\"recommendedFor\":[],\"sourceRefere"
+    "nces\":[],\"securityNotes\":[],\"requiredState\":[],\"failureModes\":[],\"setupSteps\":[],\"execut"
+    "ionSteps\":[],\"sdkEntrypoints\":[\"buildTransferAssetInstruction\",\"buildTransaction\",\"submi"
+    "tSignedTransaction\"],\"plannedSdkEntrypoints\":[],\"chainRequirements\":[\"Transfer::Asset\"]}"
+    ",{\"id\":\"shield\",\"name\":\"Shield into confidential note\",\"shortName\":\"Shield\",\"summary\":\"D"
+    "ebits public balance and appends an encrypted receiver note commitment.\",\"category\":\"pay"
+    "ment\",\"maturity\":\"specification\",\"coveredCriteria\":[\"hide_receiver\"],\"proofFamily\":\"comm"
+    "itment-only\",\"publicInputsSchema\":\"asset,from,amount,note_commitment\",\"verifierKeyId\":\"z"
+    "k::Shield\",\"pqLayers\":{\"proof\":false,\"authorization\":false,\"noteEncryption\":false},\"impl"
+    "ementationStage\":null,\"recommendedFor\":[],\"sourceReferences\":[],\"securityNotes\":[],\"requ"
+    "iredState\":[],\"failureModes\":[],\"setupSteps\":[],\"executionSteps\":[],\"sdkEntrypoints\":[\"b"
+    "uildShieldInstruction\",\"buildTransaction\",\"submitSignedTransaction\"],\"plannedSdkEntrypoi"
+    "nts\":[],\"chainRequirements\":[\"zk::RegisterZkAsset\",\"zk::Shield\"]},{\"id\":\"confidential-tr"
+    "ansfer-v2\",\"name\":\"Confidential transfer v2\",\"shortName\":\"Confidential v2\",\"summary\":\"Ha"
+    "lo2/Pasta note-to-note transfer that hides amount, sender note, and receiver note while "
+    "publishing the asset id.\",\"category\":\"payment\",\"maturity\":\"specification\",\"coveredCriter"
+    "ia\":[\"hide_amount\",\"hide_sender\",\"hide_receiver\"],\"proofFamily\":\"halo2-ipa-pasta\",\"publi"
+    "cInputsSchema\":\"input_commitment_0,input_commitment_1,nullifier_0,nullifier_1,output_com"
+    "mitment_0,output_commitment_1,root,asset_tag,chain_tag\",\"verifierKeyId\":\"confidential_tr"
+    "ansfer_v2\",\"pqLayers\":{\"proof\":false,\"authorization\":false,\"noteEncryption\":false},\"impl"
+    "ementationStage\":null,\"recommendedFor\":[],\"sourceReferences\":[],\"securityNotes\":[],\"requ"
+    "iredState\":[],\"failureModes\":[],\"setupSteps\":[],\"executionSteps\":[],\"sdkEntrypoints\":[\"b"
+    "uildConfidentialTransferProofV2\",\"buildZkTransferInstruction\"],\"plannedSdkEntrypoints\":["
+    "],\"chainRequirements\":[\"zk::ZkTransfer\",\"active confidential transfer verifier key\",\"wal"
+    "let note witness store\"]},{\"id\":\"unshield\",\"name\":\"Unshield to public balance\",\"shortNam"
+    "e\":\"Unshield\",\"summary\":\"Spends a private note into a public receiver balance; the priva"
+    "te source note remains hidden.\",\"category\":\"payment\",\"maturity\":\"specification\",\"covered"
+    "Criteria\":[\"hide_sender\"],\"proofFamily\":\"halo2-ipa-pasta\",\"publicInputsSchema\":\"input_co"
+    "mmitment_0,input_commitment_1,nullifier_0,nullifier_1,change_commitment_0,root,public_am"
+    "ount,asset_tag,chain_tag\",\"verifierKeyId\":\"confidential_unshield_v3\",\"pqLayers\":{\"proof\""
+    ":false,\"authorization\":false,\"noteEncryption\":false},\"implementationStage\":null,\"recomme"
+    "ndedFor\":[],\"sourceReferences\":[],\"securityNotes\":[],\"requiredState\":[],\"failureModes\":["
+    "],\"setupSteps\":[],\"executionSteps\":[],\"sdkEntrypoints\":[\"buildConfidentialUnshieldProofV"
+    "3\",\"buildUnshieldInstruction\"],\"plannedSdkEntrypoints\":[],\"chainRequirements\":[\"zk::Unsh"
+    "ield\",\"active confidential unshield verifier key\",\"wallet note witness store\"]},{\"id\":\"a"
+    "sset-hidden-confidential-transfer-v1\",\"name\":\"Asset-hidden MASP transfer v1\",\"shortName\""
+    ":\"MASP v1\",\"summary\":\"Target multi-asset shielded-pool transfer that hides amount, sende"
+    "r note, receiver note, and exact asset inside a pool.\",\"category\":\"payment\",\"maturity\":\""
+    "specification\",\"coveredCriteria\":[\"hide_amount\",\"hide_sender\",\"hide_receiver\",\"hide_asse"
+    "t_type\"],\"proofFamily\":\"halo2-ipa-pasta\",\"publicInputsSchema\":\"pool_id,asset_set_root,in"
+    "put_commitment_0,input_commitment_1,nullifier_0,nullifier_1,output_commitment_0,output_c"
+    "ommitment_1,root,chain_tag\",\"verifierKeyId\":\"asset_hidden_transfer_v1\",\"pqLayers\":{\"proo"
+    "f\":false,\"authorization\":false,\"noteEncryption\":false},\"implementationStage\":\"validator-"
+    "scaffold-as-of-2026-05\",\"recommendedFor\":[],\"sourceReferences\":[],\"securityNotes\":[],\"re"
+    "quiredState\":[],\"failureModes\":[],\"setupSteps\":[],\"executionSteps\":[],\"sdkEntrypoints\":[\"buildCon"
+    "fidentialAssetHiddenTransferProofV1\",\"buildRegisterAssetHiddenZkPoolInstruction\",\"build"
+    "AssetHiddenZkTransferInstruction\"],\"plannedSdkEntrypoints\":[],\"chainRequirements\""
+    ":[\"zk::RegisterAssetHiddenZkPool\",\"zk::AssetHiddenZkTransfer\",\"asset-hidden pool verifie"
+    "r registry state\",\"pool note witness store\"]},{\"id\":\"zk-ace-pq-authorization-v0\",\"name\":"
+    "\"ZK-ACE post-quantum authorization v0\",\"shortName\":\"ZK-ACE PQ auth\",\"summary\":\"STARK/FRI"
+    "-backed source-account authorization for transparent asset transfers.\",\"category\":\"autho"
+    "rization\",\"maturity\":\"arxiv_preprint\",\"coveredCriteria\":[],\"proofFamily\":\"stark/fri/sha2"
+    "56-goldilocks\",\"publicInputsSchema\":\"identity_commitment,tx_digest,chain_id,domain_separ"
+    "ator,action_class,replay_nullifier,policy_hash,from,to,asset,amount,verifier_key_id\",\"ve"
+    "rifierKeyId\":\"zk_ace_pq_authorization_v0\",\"pqLayers\":{\"proof\":true,\"authorization\":true,"
+    "\"noteEncryption\":false},\"implementationStage\":\"chain-executable\",\"recommendedFor\":[\"post"
+    "-quantum transaction authorization migration\",\"identity-private source-account authoriza"
+    "tion\",\"authorization envelopes for transparent asset transfers\"],\"sourceReferences\":[{\"l"
+    "abel\":\"ZK-ACE: Practical Post-Quantum Authorization for Blockchain\",\"url\":\"https://arxiv"
+    ".org/abs/2603.07974\"}],\"securityNotes\":[\"Authorization is only one PQ layer; proof backe"
+    "nd and note encryption must also be PQ before a payment flow is end-to-end post-quantum."
+    "\",\"Replay nullifiers must be chain-domain separated and irreversible after acceptance.\","
+    "\"A dev verifier must never be accepted under a production verifier key id.\",\"Native AIR "
+    "openings are blinded so sampled rows do not recover identity or replay witness limbs.\",\""
+    "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persis"
+    "t across node restarts before admitting ledger mutations.\",\"Wallet witness material and "
+    "private inputs must stay local and must not be exposed through SDK or chain APIs.\",\"Prod"
+    "uction hardening requires deterministic vectors, negative/adversarial test cases, replay"
+    "/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cry"
+    "ptographic review.\"],\"requiredState\":[\"registered ZK-ACE identity commitment\",\"source-ac"
+    "count allowlist\",\"authorization policy hash registry\",\"active ZK-ACE verifier key\",\"chai"
+    "n/domain binding state\",\"transfer digest binding\",\"replay nullifier uniqueness set\",\"ide"
+    "ntity rotation/revocation registry\",\"STARK/FRI verifier parameter floors\",\"wallet identi"
+    "ty witness and replay-secret store\"],\"failureModes\":[\"transaction digest substitution\",\""
+    "chain-id or domain-separator mismatch\",\"replayed nullifier\",\"revoked identity commitment"
+    "\",\"policy hash mismatch\",\"malformed proof bytes\",\"wrong verifier key\",\"public input mism"
+    "atch\"],\"setupSteps\":[\"Register a ZK-ACE identity commitment, source-account allowlist, a"
+    "nd verifier key.\",\"Initialize replay-state tracking for the authorizing wallet.\",\"Bind a"
+    "uthorization policy hash to the allowed transaction action classes.\"],\"executionSteps\":["
+    "\"Hash the transaction payload and chain/domain context.\",\"Derive a fresh replay nullifie"
+    "r.\",\"Generate a ZK-ACE authorization proof and submit a protected transparent transfer.\""
+    "],\"sdkEntrypoints\":[\"buildRegisterZkAceIdentityCommitmentInstruction\",\"buildRotateZkAceI"
+    "dentityCommitmentInstruction\",\"buildRevokeZkAceIdentityCommitmentInstruction\",\"buildZkAc"
+    "eAuthorizedTransferInstruction\",\"buildZkAceAuthorizationProofV1\"],\"plannedSdkEntrypoints"
+    "\":[],\"chainRequirements\":[\"zk::RegisterZkAceIdentityCommitment\",\"zk::RotateZkAceIdentity"
+    "Commitment\",\"zk::RevokeZkAceIdentityCommitment\",\"zk::SubmitZkAceAuthorizedTransfer\",\"act"
+    "ive stark/fri/sha256-goldilocks ZK-ACE verifier key\",\"ZK-ACE identity source-account all"
+    "owlist\"]},{\"id\":\"anonymous-pgc-k-out-of-n-v1\",\"name\":\"Anonymous PGC k-out-of-n payments "
+    "v1\",\"shortName\":\"Anonymous PGC\",\"summary\":\"Account-based anonymous confidential payment "
+    "target with hidden sender, hidden amount, receiver privacy, and k-out-of-n receiver-set "
+    "proofs.\",\"category\":\"payment\",\"maturity\":\"accepted_conference\",\"coveredCriteria\":[\"hide_"
+    "amount\",\"hide_sender\",\"hide_receiver\"],\"proofFamily\":\"anonymous-pgc-k-out-of-n\",\"publicI"
+    "nputsSchema\":\"anonymity_set_root,tx_digest,balance_commitments,receiver_set_commitment,r"
+    "eceiver_ciphertext_commitments,receiver_threshold,receiver_count,link_tag,range_commitme"
+    "nts,chain_id,domain_separator\",\"verifierKeyId\":\"anonymous_pgc_k_out_of_n_v1\",\"pqLayers\":"
+    "{\"proof\":false,\"authorization\":false,\"noteEncryption\":false},\"implementationStage\":\"sdk-"
+    "builder\",\"recommendedFor\":[\"account-based private payments\",\"multi-receiver confidential"
+    " transfers\",\"payment privacy without a note-based shielded pool UX\"],\"sourceReferences\":"
+    "[{\"label\":\"Anonymous PGC with k-out-of-n Proofs\",\"url\":\"https://eprint.iacr.org/2025/884"
+    "\"}],\"securityNotes\":[\"Requires fresh anonymity-set roots and replay/link-tag state.\",\"Am"
+    "ount privacy depends on the range-proof component and commitment binding.\",\"Receiver cip"
+    "hertext commitments must bind to the same transaction digest as the proof.\",\"The SDK dev"
+    " fixture verifies deterministic binding only; chain execution and production Anonymous P"
+    "GC proofs remain unavailable.\",\"Wallet witness material and private inputs must stay loc"
+    "al and must not be exposed through SDK or chain APIs.\",\"Production hardening requires de"
+    "terministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, "
+    "parser/verifier fuzzing, performance gates, and internal cryptographic review.\"],\"requir"
+    "edState\":[\"anonymous account commitment set\",\"recent anonymity-set roots\",\"spent link-ta"
+    "g set\",\"range-proof verifier parameters\",\"wallet account blinding and receiver recovery "
+    "metadata\"],\"failureModes\":[\"stale or unknown anonymity-set root\",\"duplicate link tag\",\"r"
+    "eceiver-set substitution\",\"range commitment mismatch\",\"authorization envelope mismatch\","
+    "\"malformed proof bytes\",\"wrong verifier key\",\"public input mismatch\"],\"setupSteps\":[\"Reg"
+    "ister anonymous account commitments and anonymity-set accumulator state.\",\"Register the "
+    "k-out-of-n payment verifier key and range-proof parameters.\",\"Persist wallet blinding, b"
+    "alance-opening, and receiver recovery witnesses.\"],\"executionSteps\":[\"Select an anonymit"
+    "y-set root and receiver set.\",\"Create balance commitments, receiver ciphertext commitmen"
+    "ts, and link tag.\",\"Generate the Anonymous PGC proof and submit the transfer instruction"
+    ".\"],\"sdkEntrypoints\":[\"buildAnonymousPgcReceiverSet\",\"buildAnonymousPgcDevProofFixture\","
+    "\"verifyAnonymousPgcDevProofLocally\"],\"plannedSdkEntrypoints\":[\"buildAnonymousPgcAccountC"
+    "ommitmentInstruction\",\"buildAnonymousPgcKOutOfNProofV1\",\"buildAnonymousPgcTransferInstru"
+    "ction\"],\"chainRequirements\":[\"anonymous account commitment accumulator\",\"spent link-tag "
+    "set\",\"Anonymous PGC verifier\",\"range-proof component verifier\",\"typed zk::RegisterAnonym"
+    "ousPgcAccountCommitment instruction\",\"typed zk::SubmitAnonymousPgcTransfer instruction\"]"
+    "},{\"id\":\"verange-transparent-range-v1\",\"name\":\"VeRange transparent range proofs v1\",\"sho"
+    "rtName\":\"VeRange\",\"summary\":\"Verification-efficient transparent range-proof component fo"
+    "r confidential amounts, solvency proofs, and numeric credential predicates.\",\"category\":"
+    "\"proof_backend\",\"maturity\":\"accepted_conference\",\"coveredCriteria\":[\"hide_amount\"],\"proo"
+    "fFamily\":\"verange-transparent-range\",\"publicInputsSchema\":\"commitments,range_parameters,"
+    "aggregation_count,domain_separator,payload_digest\",\"verifierKeyId\":\"verange_transparent_"
+    "range_v1\",\"pqLayers\":{\"proof\":true,\"authorization\":false,\"noteEncryption\":false},\"implem"
+    "entationStage\":\"production-hardened\",\"recommendedFor\":[\"confidential amount range proofs"
+    "\",\"reserve or solvency proofs\",\"numeric credential predicates\"],\"sourceReferences\":[{\"la"
+    "bel\":\"VeRange: Verification-efficient Zero-knowledge Range Arguments\",\"url\":\"https://epr"
+    "int.iacr.org/2025/528\"}],\"securityNotes\":[\"This is a production proof backend component,"
+    " not a standalone payment protocol.\",\"Range parameters must be bound to the transaction "
+    "payload and verifier key.\",\"Aggregated proof limits must be enforced by validators.\",\"Pr"
+    "oduction VeRange proof admission requires canonical public inputs, Stark verifier parame"
+    "ters, deterministic vectors, parser/verifier fuzzing, performance gates, and internal cr"
+    "yptographic review.\",\"Production hardening requires deterministic vectors, negative/adve"
+    "rsarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performan"
+    "ce gates, and internal cryptographic review.\"],\"requiredState\":[\"range-proof verifier pa"
+    "rameters\",\"VeRange verifier key registry\",\"range commitment domain separators\",\"maximum "
+    "aggregation policy\"],\"failureModes\":[\"wrong bit length\",\"commitment substitution\",\"verif"
+    "ier-parameter mismatch\",\"oversized aggregation\",\"malformed proof bytes\",\"wrong verifier "
+    "key\",\"public input mismatch\"],\"setupSteps\":[\"Register VeRange verifier parameters and al"
+    "lowed bit lengths.\",\"Define the commitment scheme and domain separators used by dependen"
+    "t algorithms.\"],\"executionSteps\":[\"Build amount commitments.\",\"Generate a range proof bo"
+    "und to the transaction payload.\",\"Attach the range-proof envelope to the dependent confi"
+    "dential algorithm.\"],\"sdkEntrypoints\":[\"buildRangeCommitment\",\"buildVeRangeProofEnvelope"
+    "\",\"buildVeRangeProofV1\",\"verifyVeRangeProofV1\"],\"plannedSdkEntrypoints\":[],\"chainRequire"
+    "ments\":[\"VeRange verifier registry entry\",\"range commitment binding rules\",\"dependent pa"
+    "yment or credential verifier\"]},{\"id\":\"zkat-policy-private-auth-v1\",\"name\":\"zkAt policy-"
+    "private authorization v1\",\"shortName\":\"zkAt policy auth\",\"summary\":\"Policy-private block"
+    "chain authenticator that hides threshold rules, signer sets, and account authorization l"
+    "ogic.\",\"category\":\"authorization\",\"maturity\":\"accepted_conference\",\"coveredCriteria\":[],"
+    "\"proofFamily\":\"zkat-policy-private-authenticator\",\"publicInputsSchema\":\"policy_commitmen"
+    "t,tx_digest,account_id,action_class,domain_separator,policy_epoch\",\"verifierKeyId\":\"zkat"
+    "_policy_private_auth_v1\",\"pqLayers\":{\"proof\":false,\"authorization\":false,\"noteEncryption"
+    "\":false},\"implementationStage\":\"production-hardened\",\"recommendedFor\":[\"institutional wa"
+    "llet policy privacy\",\"hidden threshold authorization\",\"authorization-policy migration wi"
+    "thout revealing signer topology\"],\"sourceReferences\":[{\"label\":\"zkAt: Zero-Knowledge Aut"
+    "henticator for Blockchain\",\"url\":\"https://drops.dagstuhl.de/entities/document/10.4230/LI"
+    "PIcs.AFT.2025.2\"}],\"securityNotes\":[\"Hides authorization policy, not payment fields.\",\"P"
+    "olicy commitments require explicit epoch, replay, and rotation semantics.\",\"Combining wi"
+    "th ZK-ACE requires both proofs to bind the same transaction digest.\",\"Production zkAt pr"
+    "oof admission requires canonical policy commitments, transaction digest binding, account"
+    "/action/domain binding, verifier-key registration, deterministic vectors, parser/verifie"
+    "r fuzzing, performance gates, and internal cryptographic review.\",\"Any chain roots, null"
+    "ifiers, revocation data, or replay guards for this flow must persist across node restart"
+    "s before admitting ledger mutations.\",\"Wallet witness material and private inputs must s"
+    "tay local and must not be exposed through SDK or chain APIs.\",\"Production hardening requ"
+    "ires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection "
+    "tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.\"],"
+    "\"requiredState\":[\"policy commitment registry\",\"policy epoch state\",\"authorization replay"
+    " guard\",\"authorization verifier registry\",\"wallet policy witness store\"],\"failureModes\":"
+    "[\"policy-root substitution\",\"stale policy epoch\",\"unauthorized signer witness\",\"transact"
+    "ion digest mismatch\",\"authorization replay\",\"malformed proof bytes\",\"wrong verifier key\""
+    ",\"public input mismatch\"],\"setupSteps\":[\"Register a hidden policy commitment and verifie"
+    "r key.\",\"Bind the policy to account action classes and epoch rules.\"],\"executionSteps\":["
+    "\"Generate a policy-private authenticator proof.\",\"Attach the authenticator envelope to t"
+    "he transaction authorization path.\"],\"sdkEntrypoints\":[\"buildZkAtPolicyCommitment\",\"buil"
+    "dZkAtAuthenticatorEnvelope\",\"buildZkAtPolicyProofV1\",\"verifyZkAtPolicyProofV1\"],\"planned"
+    "SdkEntrypoints\":[],\"chainRequirements\":[\"zkAt policy commitment registry\",\"zkAt verifier"
+    "\",\"account policy epoch state\",\"account policy replay protection\",\"typed zk::RegisterZkA"
+    "tPolicyCommitment instruction\",\"typed zk::SubmitZkAtAuthorizedTransaction admission\"]},{"
+    "\"id\":\"zk-ams-recursive-admission-v0\",\"name\":\"ZK-AMS recursive anonymous admission v0\",\"s"
+    "hortName\":\"ZK-AMS admission\",\"summary\":\"Research target for recursively aggregated anony"
+    "mous admission from real-world personhood or eligibility credentials into anonymous on-c"
+    "hain accounts.\",\"category\":\"admission\",\"maturity\":\"arxiv_preprint\",\"coveredCriteria\":[],"
+    "\"proofFamily\":\"recursive-anonymous-admission\",\"publicInputsSchema\":\"issuer_root,admissio"
+    "n_batch_root,admission_nullifiers,anonymous_account_commitments,recursive_admission_dige"
+    "st,domain_separator\",\"verifierKeyId\":\"zk_ams_recursive_admission_v0\",\"pqLayers\":{\"proof\""
+    ":false,\"authorization\":false,\"noteEncryption\":false},\"implementationStage\":\"production-h"
+    "ardened\",\"recommendedFor\":[\"anonymous onboarding\",\"Sybil-resistant wallet issuance\",\"cre"
+    "dential-gated CBDC pilots\"],\"sourceReferences\":[{\"label\":\"ZK-AMS recursive anonymous adm"
+    "ission\",\"url\":\"https://arxiv.org/abs/2602.16130\"}],\"securityNotes\":[\"Admission privacy i"
+    "s separate from later payment privacy.\",\"Duplicate admission prevention depends on issue"
+    "r-scoped nullifiers.\",\"Recursive batching must bind every admitted account commitment.\","
+    "\"This production admission component is proof-verifiable but not a standalone payment pr"
+    "otocol.\",\"Production ZK-AMS admission requires canonical issuer roots, admission-nullifi"
+    "er sets, anonymous account commitments, recursive admission digests, domain binding, ver"
+    "ifier-key registration, deterministic vectors, parser/verifier fuzzing, performance gate"
+    "s, and internal cryptographic review.\",\"Any chain roots, nullifiers, revocation data, or"
+    " replay guards for this flow must persist across node restarts before admitting ledger m"
+    "utations.\",\"Wallet admission witnesses and private inputs must stay local and must not b"
+    "e exposed through SDK or chain APIs.\",\"Production hardening requires deterministic vecto"
+    "rs, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier f"
+    "uzzing, performance gates, and internal cryptographic review.\"],\"requiredState\":[\"issuer"
+    " root registry\",\"admission nullifier set\",\"anonymous account commitment registry\",\"recur"
+    "sive verifier parameters\",\"recursive admission verifier key registry\",\"wallet admission "
+    "witness store\"],\"failureModes\":[\"duplicate credential admission\",\"wrong issuer root\",\"ba"
+    "tch omission or account commitment substitution\",\"recursive proof parameter mismatch\",\"m"
+    "alformed proof bytes\",\"wrong verifier key\",\"public input mismatch\"],\"setupSteps\":[\"Regis"
+    "ter credential issuer roots and recursive verifier parameters.\",\"Define anonymous accoun"
+    "t commitment format and admission-nullifier derivation.\"],\"executionSteps\":[\"Collect adm"
+    "itted account commitments into a batch.\",\"Generate or import a recursive admission proof"
+    ".\",\"Submit the batch proof and admission nullifiers.\"],\"sdkEntrypoints\":[\"buildZkAmsAdmi"
+    "ssionBatch\",\"buildZkAmsAdmissionProofEnvelope\",\"buildZkAmsAdmissionBatchProofV0\",\"verify"
+    "ZkAmsAdmissionBatchProofV0\"],\"plannedSdkEntrypoints\":[],\"chainRequirements\":[\"issuer roo"
+    "t registry\",\"admission nullifier set\",\"recursive admission verifier\",\"typed ZK-AMS admis"
+    "sion batch instruction\"]},{\"id\":\"vega-existing-credential-zk-v0\",\"name\":\"Vega existing-c"
+    "redential ZK proofs v0\",\"shortName\":\"Vega credentials\",\"summary\":\"Low-latency zero-knowl"
+    "edge proof target for proving predicates over existing credentials without revealing the"
+    " full credential.\",\"category\":\"credential\",\"maturity\":\"technical_report\",\"coveredCriteri"
+    "a\":[],\"proofFamily\":\"existing-credential-zk\",\"publicInputsSchema\":\"issuer_commitment,cre"
+    "dential_schema,predicate_commitment,subject_binding,expiration_epoch,domain_separator\",\""
+    "verifierKeyId\":\"vega_existing_credential_zk_v0\",\"pqLayers\":{\"proof\":false,\"authorization"
+    "\":false,\"noteEncryption\":false},\"implementationStage\":\"production-hardened\",\"recommended"
+    "For\":[\"legacy credential bridges\",\"private eligibility checks\",\"attribute predicates for"
+    " wallet enrollment\"],\"sourceReferences\":[{\"label\":\"Vega: Low-Latency Zero-Knowledge Proo"
+    "fs over Existing Credentials\",\"url\":\"https://www.microsoft.com/en-us/research/publicatio"
+    "n/vega-low-latency-zero-knowledge-proofs-over-existing-credentials/\"}],\"securityNotes\":["
+    "\"Credential schema parsing must be deterministic and versioned.\",\"Proofs must bind to wa"
+    "llet or identity commitments to prevent credential replay.\",\"Issuer trust, expiration, a"
+    "nd revocation semantics require registered policy inputs.\",\"This production credential c"
+    "omponent is proof-verifiable but not a standalone payment protocol.\",\"Production Vega cr"
+    "edential admission requires canonical issuer commitments, credential schema, predicate c"
+    "ommitment, subject binding, expiration epoch, domain binding, verifier-key registration,"
+    " deterministic vectors, parser/verifier fuzzing, performance gates, and internal cryptog"
+    "raphic review.\",\"Any chain roots, nullifiers, revocation data, or replay guards for this"
+    " flow must persist across node restarts before admitting ledger mutations.\",\"Wallet cred"
+    "ential predicate witnesses and private inputs must stay local and must not be exposed th"
+    "rough SDK or chain APIs.\",\"Production hardening requires deterministic vectors, negative"
+    "/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, perf"
+    "ormance gates, and internal cryptographic review.\"],\"requiredState\":[\"credential issuer "
+    "registry\",\"supported credential schema registry\",\"predicate registry\",\"revocation or exp"
+    "iration policy\",\"wallet credential predicate witness store\",\"credential predicate commit"
+    "ment registry\",\"credential predicate verifier key registry\"],\"failureModes\":[\"expired cr"
+    "edential\",\"wrong issuer\",\"predicate mismatch\",\"wallet-binding replay\",\"malformed proof b"
+    "ytes\",\"wrong verifier key\",\"public input mismatch\"],\"setupSteps\":[\"Register supported cr"
+    "edential schemas, issuers, and predicates.\",\"Bind credential proof subjects to wallet or"
+    " ZK-ACE identity commitments.\"],\"executionSteps\":[\"Parse the credential under a register"
+    "ed schema.\",\"Generate a predicate proof and bind it to the wallet context.\",\"Submit the "
+    "proof envelope to the admission or authorization flow.\"],\"sdkEntrypoints\":[\"buildVegaCre"
+    "dentialPredicateCommitment\",\"buildVegaCredentialProofEnvelope\",\"buildVegaCredentialPredi"
+    "cateProofV0\",\"verifyVegaCredentialPredicateProofV0\"],\"plannedSdkEntrypoints\":[],\"chainRe"
+    "quirements\":[\"credential schema registry\",\"issuer registry\",\"credential predicate verifi"
+    "er\",\"typed Vega credential proof instruction\"]},{\"id\":\"silent-threshold-anoncred-v0\",\"na"
+    "me\":\"Silent threshold anonymous credentials v0\",\"shortName\":\"Silent threshold cred\",\"sum"
+    "mary\":\"Research target for threshold-issued anonymous credentials with silent setup, iss"
+    "uer hiding, constant-size showings, and dynamic verifier policies.\",\"category\":\"credenti"
+    "al\",\"maturity\":\"technical_report\",\"coveredCriteria\":[],\"proofFamily\":\"threshold-anonymou"
+    "s-credentials\",\"publicInputsSchema\":\"issuer_set_commitment,threshold_policy_hash,credent"
+    "ial_showing_commitment,showing_nullifier,verifier_policy_hash,domain_separator\",\"verifie"
+    "rKeyId\":\"silent_threshold_anoncred_v0\",\"pqLayers\":{\"proof\":false,\"authorization\":false,\""
+    "noteEncryption\":false},\"implementationStage\":\"production-hardened\",\"recommendedFor\":[\"mu"
+    "lti-authority regulated credentials\",\"issuer-hiding eligibility proofs\",\"central-bank or"
+    " supervisor issued wallet credentials\"],\"sourceReferences\":[{\"label\":\"Anonymous Credenti"
+    "als with Issuer-Hiding, Threshold Issuance, and Silent Setup\",\"url\":\"https://www2.eecs.b"
+    "erkeley.edu/Pubs/TechRpts/2026/EECS-2026-124.html\"}],\"securityNotes\":[\"Credential issuan"
+    "ce and revocation governance are as important as proof verification.\",\"Issuer-set commit"
+    "ments require explicit threshold, rotation, and downgrade protections.\",\"This production"
+    " credential component is proof-verifiable but not a standalone payment protocol.\",\"Produ"
+    "ction silent-threshold credential admission requires canonical issuer-set, threshold-pol"
+    "icy, showing-nullifier, verifier-policy, domain binding, verifier-key registration, dete"
+    "rministic vectors, parser/verifier fuzzing, performance gates, and internal cryptographi"
+    "c review.\",\"Any chain roots, nullifiers, revocation data, or replay guards for this flow"
+    " must persist across node restarts before admitting ledger mutations.\",\"Wallet credentia"
+    "l showing witnesses and private inputs must stay local and must not be exposed through S"
+    "DK or chain APIs.\",\"Production hardening requires deterministic vectors, negative/advers"
+    "arial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance"
+    " gates, and internal cryptographic review.\"],\"requiredState\":[\"threshold issuer registry"
+    "\",\"credential parameter registry\",\"verifier policy registry\",\"credential showing nullifi"
+    "er policy\",\"wallet credential showing witness store\",\"credential showing commitment regi"
+    "stry\",\"anonymous credential verifier key registry\"],\"failureModes\":[\"insufficient issuer"
+    " threshold\",\"issuer-set substitution\",\"credential showing replay\",\"verifier-policy misma"
+    "tch\",\"malformed proof bytes\",\"wrong verifier key\",\"public input mismatch\"],\"setupSteps\":"
+    "[\"Register issuer sets, threshold policies, and credential parameters.\",\"Define showing-"
+    "nullifier and verifier-policy binding rules.\"],\"executionSteps\":[\"Generate a credential "
+    "showing proof under the verifier policy.\",\"Submit the proof as an admission or authoriza"
+    "tion component.\"],\"sdkEntrypoints\":[\"buildSilentThresholdCredentialCommitments\",\"buildSi"
+    "lentThresholdCredentialEnvelope\",\"buildSilentThresholdCredentialShowingProofV0\",\"verifyS"
+    "ilentThresholdCredentialShowingProofV0\"],\"plannedSdkEntrypoints\":[],\"chainRequirements\":"
+    "[\"threshold issuer registry\",\"anonymous credential verifier\",\"credential showing replay "
+    "policy\",\"typed silent-threshold credential proof instruction\"]},{\"id\":\"zk-x509-onchain-i"
+    "dentity-v0\",\"name\":\"ZK-X.509 on-chain identity v0\",\"shortName\":\"ZK-X.509 identity\",\"summ"
+    "ary\":\"ZK proof target for X.509 certificate validity, ownership, revocation status, and "
+    "wallet-address binding.\",\"category\":\"identity\",\"maturity\":\"arxiv_preprint\",\"coveredCrite"
+    "ria\":[],\"proofFamily\":\"zkvm-x509-identity\",\"publicInputsSchema\":\"ca_root_commitment,cert"
+    "ificate_policy_hash,revocation_root,subject_commitment,address_binding,domain_separator\""
+    ",\"verifierKeyId\":\"zk_x509_onchain_identity_v0\",\"pqLayers\":{\"proof\":false,\"authorization\""
+    ":false,\"noteEncryption\":false},\"implementationStage\":\"production-hardened\",\"recommendedFor\":[\"in"
+    "stitutional wallet identity\",\"legal-entity account binding\",\"private PKI-based eligibili"
+    "ty checks\"],\"sourceReferences\":[{\"label\":\"ZK-X.509 on-chain identity\",\"url\":\"https://arx"
+    "iv.org/abs/2603.25190\"}],\"securityNotes\":[\"Legacy X.509 trust roots are usually not post"
+    "-quantum.\",\"Revocation root freshness must be explicit in the public inputs.\",\"Address b"
+    "inding must prevent proof replay across wallets and chains.\",\"Production ZK-X.509 ident"
+    "ity proofs verify canonical CA-root, certificate-policy, revocation-root, subject-commi"
+    "tment, wallet binding, and domain-separated public inputs while remaining a reusable id"
+    "entity component rather than a standalone payment protocol.\",\"Any chain roots, nullifie"
+    "rs, revocation data, or replay guards for this flow must persist across node restarts before admit"
+    "ting ledger mutations.\",\"Wallet witness material and private inputs must stay local and "
+    "must not be exposed through SDK or chain APIs.\",\"Production hardening requires determini"
+    "stic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/"
+    "verifier fuzzing, performance gates, and internal cryptographic review.\"],\"requiredState"
+    "\":[\"trusted CA root registry\",\"certificate policy registry\",\"revocation root registry\",\""
+    "identity proof verifier\",\"wallet certificate witness store\",\"certificate subject commitm"
+    "ent registry\",\"ZK-X.509 verifier key registry\"],\"failureModes\":[\"expired certificate\",\"r"
+    "evoked certificate\",\"unknown CA root\",\"wrong wallet address binding\",\"address-binding re"
+    "play\",\"stale revocation root\",\"malformed proof bytes\",\"wrong verifier key\",\"public input"
+    " mismatch\"],\"setupSteps\":[\"Register trusted CA roots, certificate policies, and revocati"
+    "on-root feeds.\",\"Define wallet address binding and domain-separation rules.\"],\"execution"
+    "Steps\":[\"Generate a proof of certificate validity, ownership, and revocation status.\",\"B"
+    "ind the proof to an institution wallet or ZK-ACE identity commitment.\"],\"sdkEntrypoints\""
+    ":[\"buildZkX509IdentityCommitments\",\"buildZkX509IdentityEnvelope\",\"buildZkX509IdentityPro"
+    "ofV0\",\"verifyZkX509IdentityProofV0\"],\"plannedSdkEntrypoints\":[],\"chainRequirements\":[\"trust"
+    "ed CA root registry\",\"revocation root registry\",\"ZK-X.509 verifier\",\"typed ZK-X.509 iden"
+    "tity proof instruction\"]},{\"id\":\"jindo-lattice-pcs-zk-v0\",\"name\":\"Jindo lattice polynomi"
+    "al commitment ZK v0\",\"shortName\":\"Jindo lattice PCS\",\"summary\":\"2026 lattice-based polyn"
+    "omial commitment candidate for post-quantum zero-knowledge proof systems.\",\"category\":\"p"
+    "roof_backend\",\"maturity\":\"technical_report\",\"coveredCriteria\":[],\"proofFamily\":\"lattice-"
+    "polynomial-commitment\",\"publicInputsSchema\":\"commitment,opening_claim,query_set,paramete"
+    "r_hash,domain_separator\",\"verifierKeyId\":\"jindo_lattice_pcs_zk_v0\",\"pqLayers\":{\"proof\":t"
+    "rue,\"authorization\":false,\"noteEncryption\":false},\"implementationStage\":\"production-hard"
+    "ened\",\"recommendedFor\":[\"post-quantum proof-system research\",\"future PQ verifier backend"
+    " evaluation\",\"lattice PCS benchmarking\"],\"sourceReferences\":[{\"label\":\"Jindo lattice-bas"
+    "ed polynomial commitment\",\"url\":\"https://eprint.iacr.org.cn/2026/044\"}],\"securityNotes\":"
+    "[\"This is a production proof backend component, not a standalone transaction algorithm.\""
+    ",\"PQ proof coverage alone does not imply PQ authorization or note encryption.\",\"Paramete"
+    "r selection and implementation security require independent review.\",\"Production Jindo l"
+    "attice proving and verifier adapters require registered LatticePcsSis parameters, determ"
+    "inistic vectors, parser/verifier fuzzing, performance gates, and internal cryptographic "
+    "review.\",\"Production hardening requires deterministic vectors, negative/adversarial test"
+    " cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, an"
+    "d internal cryptographic review.\"],\"requiredState\":[\"lattice PCS parameter registry\",\"ba"
+    "ckend verifier implementation\",\"lattice PCS verifier key registry\",\"production benchmark"
+    " vectors\"],\"failureModes\":[\"parameter mismatch\",\"opening claim substitution\",\"unsupporte"
+    "d query set\",\"backend misclassified as production-ready\",\"malformed proof bytes\",\"wrong "
+    "verifier key\",\"public input mismatch\"],\"setupSteps\":[\"Track lattice PCS parameter sets a"
+    "nd verifier API shape.\",\"Benchmark prover, verifier, and proof-size behavior before inte"
+    "gration.\"],\"executionSteps\":[\"Use as a candidate backend for future PQ circuits only aft"
+    "er concrete circuit integration.\"],\"sdkEntrypoints\":[\"buildJindoLatticePublicInputs\",\"bu"
+    "ildJindoLatticeProofEnvelope\",\"buildJindoLatticeProofV0\",\"verifyJindoPolynomialCommitmen"
+    "tV0\"],\"plannedSdkEntrypoints\":[],\"chainRequirements\":[\"Jindo verifier backend\",\"lattice "
+    "PCS parameter registry\",\"dependent circuit integration\"]},{\"id\":\"sis-hints-anoncred-pq-v"
+    "0\",\"name\":\"SIS-with-hints PQ anonymous credentials v0\",\"shortName\":\"SIS hints anoncred\","
+    "\"summary\":\"PKC 2026 research foundation for lattice/SIS-with-hints anonymous credentials"
+    " and post-quantum credential proofs.\",\"category\":\"credential\",\"maturity\":\"accepted_confe"
+    "rence\",\"coveredCriteria\":[],\"proofFamily\":\"lattice-anonymous-credentials\",\"publicInputsS"
+    "chema\":\"issuer_commitment,credential_commitment,showing_policy_hash,parameter_hash,domai"
+    "n_separator\",\"verifierKeyId\":\"sis_hints_anoncred_pq_v0\",\"pqLayers\":{\"proof\":true,\"author"
+    "ization\":false,\"noteEncryption\":false},\"implementationStage\":\"production-hardened\",\"reco"
+    "mmendedFor\":[\"post-quantum anonymous credential research\",\"future PQ KYC or eligibility "
+    "proofs\",\"assumption tracking for lattice credential designs\"],\"sourceReferences\":[{\"labe"
+    "l\":\"Tight Reductions for SIS-with-Hints Assumptions with Applications\",\"url\":\"https://kc"
+    "lpure.kcl.ac.uk/portal/en/publications/tight-reductions-for-sis-with-hints-assumptions-w"
+    "ith-applications/\"}],\"securityNotes\":[\"This is a production credential proof component, "
+    "not a standalone wallet protocol.\",\"PQ credential proof coverage does not make a payment"
+    " flow end-to-end post-quantum.\",\"Parameter choices and reduction assumptions need explic"
+    "it governance.\",\"Production SIS-with-hints credential proving and verifier adapters requ"
+    "ire registered SisWithHints parameters, deterministic vectors, parser/verifier fuzzing, "
+    "performance gates, and internal cryptographic review.\",\"Wallet lattice credential witnes"
+    "ses and private inputs must stay local and must not be exposed through SDK or chain APIs"
+    ".\",\"Production hardening requires deterministic vectors, negative/adversarial test cases"
+    ", replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and inte"
+    "rnal cryptographic review.\"],\"requiredState\":[\"lattice credential parameter registry\",\"i"
+    "ssuer parameter registry\",\"credential showing verifier\",\"wallet lattice credential witne"
+    "ss store\",\"lattice credential commitment registry\",\"lattice credential verifier key regi"
+    "stry\"],\"failureModes\":[\"wrong parameter set\",\"issuer parameter substitution\",\"credential"
+    " showing replay\",\"overclaiming production readiness from assumption research\",\"malformed"
+    " proof bytes\",\"wrong verifier key\",\"public input mismatch\"],\"setupSteps\":[\"Track support"
+    "ed SIS-with-hints parameter sets and issuer parameters.\",\"Define how future PQ credentia"
+    "l showings bind to wallet or authorization contexts.\"],\"executionSteps\":[\"Use as a futur"
+    "e PQ credential backend after a concrete credential protocol is selected.\"],\"sdkEntrypoi"
+    "nts\":[\"buildSisHintsCredentialCommitments\",\"buildSisHintsCredentialEnvelope\",\"buildSisHi"
+    "ntsAnonymousCredentialProofV0\",\"verifySisHintsAnonymousCredentialProofV0\"],\"plannedSdkEn"
+    "trypoints\":[],\"chainRequirements\":[\"lattice anonymous credential verifier\",\"credential p"
+    "arameter registry\",\"issuer parameter registry\",\"typed SIS-with-hints credential proof in"
+    "struction\"]},{\"id\":\"orchard-halo2-actions-v1\",\"name\":\"Orchard-style Halo2 action bundle "
+    "v1\",\"shortName\":\"Orchard Halo2\",\"summary\":\"Zcash Orchard-style action bundle with note c"
+    "ommitments, nullifiers, and one aggregated Halo2 proof over spend/output actions.\",\"cate"
+    "gory\":\"payment\",\"maturity\":\"specification\",\"coveredCriteria\":[\"hide_amount\",\"hide_sender"
+    "\",\"hide_receiver\"],\"proofFamily\":\"halo2-pasta-action-bundle\",\"publicInputsSchema\":\"ancho"
+    "r,nullifiers,cmx,value_commitments,binding_signature\",\"verifierKeyId\":\"orchard_halo2_act"
+    "ion_bundle_v1\",\"pqLayers\":{\"proof\":false,\"authorization\":false,\"noteEncryption\":false},\""
+    "implementationStage\":\"research-target-as-of-2026-05\",\"recommendedFor\":[\"single-asset pri"
+    "vate transfers\",\"mature note/nullifier wallet design\",\"compact client proofs without Gro"
+    "th16 ceremonies\"],\"sourceReferences\":[{\"label\":\"ZIP 224 Orchard Shielded Protocol\",\"url\""
+    ":\"https://zips.z.cash/zip-0224\"},{\"label\":\"Zcash Protocol Specification\",\"url\":\"https://"
+    "zips.z.cash/protocol/protocol.pdf\"}],\"securityNotes\":[\"Orchard actions require circuit-c"
+    "ompatible note/nullifier semantics and domain-separated action hashes.\",\"Viewing-key and"
+    " outgoing-viewing metadata must remain wallet-local.\",\"Production readiness requires aud"
+    "ited Halo2 parameters and note-encryption review.\",\"Production hardening requires determ"
+    "inistic vectors, negative/adversarial test cases, replay/nullifier rejection tests, pars"
+    "er/verifier fuzzing, performance gates, and internal cryptographic review.\"],\"requiredSt"
+    "ate\":[\"Orchard note commitment tree\",\"Orchard nullifier set\",\"Orchard action-bundle veri"
+    "fier key registry\",\"wallet Orchard witness store\"],\"failureModes\":[\"stale anchor\",\"dupli"
+    "cate nullifier\",\"invalid action-bundle proof\",\"malformed proof bytes\",\"wrong verifier ke"
+    "y\",\"public input mismatch\"],\"setupSteps\":[\"Add Orchard-compatible note, nullifier, actio"
+    "n, and anchor data model types.\",\"Register Orchard Halo2 verifier parameters and action-"
+    "bundle public input layout.\",\"Persist wallet note plaintexts, diversifiers, Merkle witne"
+    "sses, and outgoing viewing data.\"],\"executionSteps\":[\"Select spend notes and anchors fro"
+    "m the wallet witness store.\",\"Create output notes and value commitments.\",\"Generate one "
+    "Halo2 proof over the action bundle and submit nullifiers plus commitments.\"],\"sdkEntrypo"
+    "ints\":[],\"plannedSdkEntrypoints\":[\"buildOrchardActionBundleProofV1\",\"buildOrchardActionB"
+    "undleInstruction\"],\"chainRequirements\":[\"Orchard note commitment tree\",\"Orchard nullifie"
+    "r set\",\"Halo2 action-bundle verifier\",\"wallet Orchard witness store\",\"typed Orchard acti"
+    "on-bundle instruction\"]},{\"id\":\"penumbra-masp-v1\",\"name\":\"Penumbra-style multi-asset shi"
+    "elded pool v1\",\"shortName\":\"Penumbra MASP\",\"summary\":\"Single multi-asset shielded pool u"
+    "sing typed notes, note commitments, nullifiers, and spend/output proofs for private IBC-"
+    "style assets.\",\"category\":\"payment\",\"maturity\":\"specification\",\"coveredCriteria\":[\"hide_"
+    "amount\",\"hide_sender\",\"hide_receiver\",\"hide_asset_type\"],\"proofFamily\":\"groth16-bls12-37"
+    "7-decaf377\",\"publicInputsSchema\":\"state_commitment_anchor,nullifiers,note_commitments,ba"
+    "lance_commitment,asset_id_commitment\",\"verifierKeyId\":\"penumbra_masp_v1\",\"pqLayers\":{\"pr"
+    "oof\":false,\"authorization\":false,\"noteEncryption\":false},\"implementationStage\":\"research"
+    "-target-as-of-2026-05\",\"recommendedFor\":[\"multi-asset shielded pools\",\"IBC-style asset p"
+    "rivacy\",\"asset-id hiding with typed-value notes\"],\"sourceReferences\":[{\"label\":\"Penumbra"
+    " Multi-Asset Shielded Pool\",\"url\":\"https://protocol.penumbra.zone/main/shielded_pool.htm"
+    "l\"},{\"label\":\"Penumbra Cryptographic Primitives\",\"url\":\"https://protocol.penumbra.zone/m"
+    "ain/crypto.html\"}],\"securityNotes\":[\"Typed asset values must bind asset identifiers to b"
+    "alance commitments.\",\"Groth16 parameter registration must distinguish spend and output c"
+    "ircuits.\",\"Wallet note plaintexts and position metadata must not be exposed through publ"
+    "ic APIs.\",\"Production MASP use requires audited parameter governance and chain-state int"
+    "egration review.\",\"Production hardening requires deterministic vectors, negative/adversa"
+    "rial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance "
+    "gates, and internal cryptographic review.\"],\"requiredState\":[\"multi-asset state commitme"
+    "nt tree\",\"typed nullifier set\",\"Groth16 spend/output verifier key registry\",\"wallet asse"
+    "t metadata witness store\"],\"failureModes\":[\"stale state commitment anchor\",\"duplicate nu"
+    "llifier\",\"asset balance commitment mismatch\",\"malformed proof bytes\",\"wrong verifier key"
+    "\",\"public input mismatch\"],\"setupSteps\":[\"Add typed-value notes, asset identifiers, stat"
+    "e commitments, and nullifier state.\",\"Register Groth16/BLS12-377 verifier parameters for"
+    " spend and output proofs.\",\"Persist wallet note plaintexts, asset metadata, state commit"
+    "ment positions, and nullifier keys.\"],\"executionSteps\":[\"Select positioned notes and der"
+    "ive nullifiers.\",\"Create typed output notes and balance commitments.\",\"Submit spend/outp"
+    "ut actions with proofs against the shielded pool state commitment tree.\"],\"sdkEntrypoint"
+    "s\":[],\"plannedSdkEntrypoints\":[\"buildPenumbraSpendProofV1\",\"buildPenumbraOutputProofV1\","
+    "\"buildPenumbraShieldedPoolTransaction\"],\"chainRequirements\":[\"multi-asset state commitme"
+    "nt tree\",\"typed note commitment and nullifier state\",\"Groth16 verifier registry\",\"wallet"
+    " multi-asset witness store\",\"typed Penumbra shielded-pool transaction admission\"]},{\"id\""
+    ":\"monero-fcmp-plus-plus-v1\",\"name\":\"Monero FCMP++ RingCT-style transfer v1\",\"shortName\":"
+    "\"FCMP++\",\"summary\":\"Full-chain membership proof target that replaces small decoy rings w"
+    "ith a full-output-set spend proof while retaining hidden amounts and one-time receivers."
+    "\",\"category\":\"payment\",\"maturity\":\"specification\",\"coveredCriteria\":[\"hide_amount\",\"hide"
+    "_sender\",\"hide_receiver\"],\"proofFamily\":\"fcmp-plus-plus-curve-trees-bulletproofs\",\"publi"
+    "cInputsSchema\":\"membership_root,key_image_or_link_tag,amount_commitments,range_commitmen"
+    "ts,spend_authorization,chain_tag\",\"verifierKeyId\":\"monero_fcmp_plus_plus_v1\",\"pqLayers\":"
+    "{\"proof\":false,\"authorization\":false,\"noteEncryption\":false},\"implementationStage\":\"rese"
+    "arch-target-as-of-2026-05\",\"recommendedFor\":[\"maximal sender anonymity sets\",\"decoy-ring"
+    " replacement research\",\"account-independent UTXO spend privacy\"],\"sourceReferences\":[{\"l"
+    "abel\":\"Monero FCMP++ Development\",\"url\":\"https://web.getmonero.org/2024/04/27/fcmps.html"
+    "\"}],\"securityNotes\":[\"Full-chain membership roots must be canonical and replay protected"
+    ".\",\"Link tags/key images must be unique without revealing owned outputs.\",\"Range-proof a"
+    "nd amount-commitment parameters require production verifier review.\",\"Wallet witness mat"
+    "erial and private inputs must stay local and must not be exposed through SDK or chain AP"
+    "Is.\",\"Production hardening requires deterministic vectors, negative/adversarial test cas"
+    "es, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and in"
+    "ternal cryptographic review.\"],\"requiredState\":[\"full-output-set commitment accumulator\""
+    ",\"spent link-tag set\",\"FCMP++ verifier key registry\",\"wallet output ownership scan state"
+    "\"],\"failureModes\":[\"stale membership root\",\"duplicate link tag\",\"amount commitment misma"
+    "tch\",\"malformed proof bytes\",\"wrong verifier key\",\"public input mismatch\"],\"setupSteps\":"
+    "[\"Add output commitment accumulator state suitable for full-chain membership proofs.\",\"D"
+    "efine link tags/key images and spent-output rejection for Iroha assets.\",\"Implement wall"
+    "et scanning, ownership recovery, and amount commitment witness storage.\"],\"executionStep"
+    "s\":[\"Select owned outputs from the wallet scan state.\",\"Generate full-chain membership a"
+    "nd amount-conservation proofs.\",\"Submit link tag, output commitments, range proof, and s"
+    "pend authorization.\"],\"sdkEntrypoints\":[],\"plannedSdkEntrypoints\":[\"buildFcmpPlusPlusMem"
+    "bershipProofV1\",\"buildFcmpPlusPlusTransferInstruction\"],\"chainRequirements\":[\"full-outpu"
+    "t-set commitment accumulator\",\"spent link-tag set\",\"FCMP++ verifier\",\"wallet scanning an"
+    "d ownership recovery\",\"typed FCMP++ transfer instruction\"]},{\"id\":\"miden-stark-note-v1\","
+    "\"name\":\"Miden-style STARK private note transaction v1\",\"shortName\":\"Miden STARK\",\"summar"
+    "y\":\"Client-side STARK-proved account transition using private notes whose data stays off"
+    "-chain while note hashes/nullifiers anchor correctness.\",\"category\":\"payment\",\"maturity\""
+    ":\"specification\",\"coveredCriteria\":[\"hide_amount\",\"hide_receiver\",\"hide_asset_type\"],\"pr"
+    "oofFamily\":\"stark-vm-note-transaction\",\"publicInputsSchema\":\"account_id,initial_account_"
+    "commitment,final_account_commitment,input_note_nullifiers,output_note_hashes,reference_b"
+    "lock\",\"verifierKeyId\":\"miden_stark_note_v1\",\"pqLayers\":{\"proof\":true,\"authorization\":fal"
+    "se,\"noteEncryption\":false},\"implementationStage\":\"research-target-as-of-2026-05\",\"recomm"
+    "endedFor\":[\"client-side proving\",\"private programmable note workflows\",\"parallel account"
+    "-local transaction execution\"],\"sourceReferences\":[{\"label\":\"Miden Transaction Model\",\"u"
+    "rl\":\"https://docs.miden.xyz/core-concepts/miden-base/transaction/\"},{\"label\":\"Miden Note"
+    "s\",\"url\":\"https://docs.miden.xyz/core-concepts/miden-base/note/\"}],\"securityNotes\":[\"Pri"
+    "vate note data and off-chain delivery metadata must stay wallet-local.\",\"Account-local t"
+    "ransition proofs must bind initial and final account commitments.\",\"Reference blocks mus"
+    "t prevent replay against stale account state.\",\"Production Miden note transactions requi"
+    "re audited STARK parameters and account-state integration review.\",\"Production hardening"
+    " requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejec"
+    "tion tests, parser/verifier fuzzing, performance gates, and internal cryptographic revie"
+    "w.\"],\"requiredState\":[\"private note hash database\",\"input note nullifier set\",\"account c"
+    "ommitment state\",\"STARK VM verifier key registry\",\"wallet private note witness store\"],\""
+    "failureModes\":[\"stale reference block\",\"duplicate input note nullifier\",\"account commitm"
+    "ent transition mismatch\",\"malformed proof bytes\",\"wrong verifier key\",\"public input mism"
+    "atch\"],\"setupSteps\":[\"Add private note hash/nullifier state and account-local transition"
+    " verification.\",\"Register a STARK VM verifier and public-input commitment layout.\",\"Pers"
+    "ist private note data and off-chain delivery metadata in the wallet note store.\"],\"execu"
+    "tionSteps\":[\"Execute the account-local transition against private note witnesses.\",\"Prod"
+    "uce a STARK proof for the transaction script and account state delta.\",\"Submit note null"
+    "ifiers, output note hashes, account commitments, and proof.\"],\"sdkEntrypoints\":[],\"plann"
+    "edSdkEntrypoints\":[\"buildMidenStarkTransactionProofV1\",\"buildMidenNoteTransactionInstruc"
+    "tion\"],\"chainRequirements\":[\"STARK VM verifier\",\"private note hash and nullifier databas"
+    "e\",\"account commitment state\",\"wallet private-note delivery store\",\"typed Miden note tra"
+    "nsaction instruction\"]},{\"id\":\"aztec-private-rollup-v1\",\"name\":\"Aztec-style programmable"
+    " private transaction v1\",\"shortName\":\"Aztec private\",\"summary\":\"Programmable private-sta"
+    "te transaction using client-side private execution, note hashes, nullifiers, encrypted l"
+    "ogs, and recursive private-kernel proofs.\",\"category\":\"payment\",\"maturity\":\"specificatio"
+    "n\",\"coveredCriteria\":[\"hide_amount\",\"hide_sender\",\"hide_receiver\"],\"proofFamily\":\"plonki"
+    "sh-private-kernel-rollup\",\"publicInputsSchema\":\"note_hashes,nullifiers,encrypted_logs,pu"
+    "blic_call_requests,private_kernel_commitment,rollup_state_roots\",\"verifierKeyId\":\"aztec_"
+    "private_kernel_v1\",\"pqLayers\":{\"proof\":false,\"authorization\":false,\"noteEncryption\":fals"
+    "e},\"implementationStage\":\"research-target-as-of-2026-05\",\"recommendedFor\":[\"programmable"
+    " private payments\",\"hybrid public/private contract workflows\",\"wallet-side private execu"
+    "tion with encrypted note discovery\"],\"sourceReferences\":[{\"label\":\"Aztec State Managemen"
+    "t\",\"url\":\"https://docs.aztec.network/developers/docs/foundational-topics/state_managemen"
+    "t\"},{\"label\":\"Aztec Private Kernel Circuit\",\"url\":\"https://docs.aztec.network/developers"
+    "/nightly/docs/foundational-topics/advanced/circuits/private_kernel\"}],\"securityNotes\":[\""
+    "Private-kernel proofs must bind note hashes, nullifiers, encrypted logs, and public call"
+    "s.\",\"Encrypted log delivery metadata must not leak wallet note ownership.\",\"Recursive ve"
+    "rifier registration must distinguish private-kernel versions and rollup state roots.\",\"P"
+    "roduction private-rollup use requires audited private-kernel parameters and rollup-state"
+    " integration review.\",\"Production hardening requires deterministic vectors, negative/adv"
+    "ersarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performa"
+    "nce gates, and internal cryptographic review.\"],\"requiredState\":[\"private note-hash tree"
+    "\",\"nullifier tree\",\"encrypted log delivery store\",\"private-kernel verifier key registry\""
+    ",\"wallet private execution witness store\"],\"failureModes\":[\"stale rollup state root\",\"du"
+    "plicate nullifier\",\"private-kernel public input mismatch\",\"malformed proof bytes\",\"wrong"
+    " verifier key\",\"public input mismatch\"],\"setupSteps\":[\"Add private note-hash and nullifi"
+    "er trees plus encrypted log delivery metadata.\",\"Register a private-kernel verifier and "
+    "public-input layout for private contract side effects.\",\"Persist wallet PXE-style note d"
+    "iscovery, private call witnesses, and app-scoped nullifier keys.\"],\"executionSteps\":[\"Ex"
+    "ecute private contract calls locally against wallet notes.\",\"Accumulate note hashes, nul"
+    "lifiers, encrypted logs, and public-call requests in the private kernel.\",\"Submit the re"
+    "cursive private-kernel proof and side-effect commitments for validator verification.\"],\""
+    "sdkEntrypoints\":[],\"plannedSdkEntrypoints\":[\"buildAztecPrivateKernelProofV1\",\"buildAztec"
+    "PrivateRollupTransactionInstruction\"],\"chainRequirements\":[\"private note-hash tree\",\"nul"
+    "lifier tree\",\"encrypted log store\",\"private-kernel verifier\",\"wallet private execution e"
+    "nvironment\",\"typed Aztec private-rollup transaction instruction\"]},{\"id\":\"pq-masp-stark-"
+    "v0\",\"name\":\"Post-quantum MASP STARK v0\",\"shortName\":\"PQ MASP v0\",\"summary\":\"Target end-t"
+    "o-end post-quantum MASP using STARK/FRI proofs, ML-DSA authorization, and ML-KEM note en"
+    "cryption.\",\"category\":\"payment\",\"maturity\":\"specification\",\"coveredCriteria\":[\"hide_amou"
+    "nt\",\"hide_sender\",\"hide_receiver\",\"hide_asset_type\",\"post_quantum\"],\"proofFamily\":\"stark"
+    "-fri\",\"publicInputsSchema\":\"pool_id,asset_set_root,nullifier_set,output_commitments,root"
+    ",chain_tag,pq_policy_hash\",\"verifierKeyId\":\"pq_masp_stark_v0\",\"pqLayers\":{\"proof\":true,\""
+    "authorization\":true,\"noteEncryption\":true},\"implementationStage\":\"research-target-as-of-"
+    "2026-05\",\"recommendedFor\":[\"end-to-end post-quantum privacy target\",\"long-horizon centra"
+    "l-bank pilot research\",\"strict PQ proof, authorization, and note-encryption experiments\""
+    "],\"sourceReferences\":[{\"label\":\"NIST Post-Quantum Standards\",\"url\":\"https://www.nist.gov"
+    "/news-events/news/2024/08/nist-releases-first-3-finalized-post-quantum-encryption-standa"
+    "rds\"},{\"label\":\"FIPS 203 ML-KEM\",\"url\":\"https://csrc.nist.gov/pubs/fips/203/final\"},{\"la"
+    "bel\":\"FIPS 204 ML-DSA\",\"url\":\"https://csrc.nist.gov/pubs/fips/204/final\"},{\"label\":\"FIPS"
+    " 205 SLH-DSA\",\"url\":\"https://csrc.nist.gov/pubs/fips/205/final\"}],\"securityNotes\":[\"PQ M"
+    "ASP combines experimental STARK/FRI proving with production PQ authorization and note en"
+    "cryption requirements.\",\"ML-DSA domains and ML-KEM ciphertext formats must be bound to v"
+    "erifier keys and pool identifiers.\",\"Post-quantum readiness still requires parameter rev"
+    "iew, parser fuzzing, and internal cryptographic review.\",\"Wallet witness material and pr"
+    "ivate inputs must stay local and must not be exposed through SDK or chain APIs.\",\"Any ch"
+    "ain roots, nullifiers, revocation data, or replay guards for this flow must persist acro"
+    "ss node restarts before admitting ledger mutations.\",\"Production hardening requires dete"
+    "rministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, pa"
+    "rser/verifier fuzzing, performance gates, and internal cryptographic review.\"],\"required"
+    "State\":[\"PQ MASP asset-set commitment root\",\"PQ nullifier set\",\"ML-KEM encrypted note pa"
+    "yload store\",\"wallet PQ note witness store\"],\"failureModes\":[\"stale asset-set root\",\"dup"
+    "licate PQ nullifier\",\"ML-DSA or ML-KEM domain mismatch\",\"malformed proof bytes\",\"wrong v"
+    "erifier key\",\"public input mismatch\"],\"setupSteps\":[\"Register STARK/FRI verifier paramet"
+    "ers and PQ MASP public input layout.\",\"Define ML-DSA authorization domains and ML-KEM no"
+    "te-encryption payload formats.\",\"Persist wallet PQ note witnesses, nullifier positions, "
+    "and encapsulation metadata.\"],\"executionSteps\":[\"Select PQ MASP input notes and derive n"
+    "ullifiers.\",\"Generate STARK/FRI transfer proofs with ML-DSA authorization and ML-KEM out"
+    "put-note encryption.\",\"Submit nullifiers, output commitments, PQ policy hash, and proof "
+    "for verifier admission.\"],\"sdkEntrypoints\":[],\"plannedSdkEntrypoints\":[\"buildPqMaspStark"
+    "TransferProofV0\",\"buildPqMaspStarkRegisterPoolInstruction\",\"buildPqMaspStarkTransferInst"
+    "ruction\",\"generateMlDsaKeyPair\",\"encapsulateMlKem\"],\"chainRequirements\":[\"STARK/FRI veri"
+    "fier enabled\",\"ML-DSA transaction authorization\",\"ML-KEM note payload encryption\",\"zk::R"
+    "egisterAssetHiddenZkPool\",\"zk::AssetHiddenZkTransfer\",\"active PQ MASP verifier key\"]}]"
 )
 
 _KEY_MAP = {
@@ -3984,15 +4132,17 @@ def _validate_descriptor_shape(descriptor: Mapping[str, Any], index: int) -> Non
                     f"{index} field {field!r} must be non-empty for "
                     "source-referenced implementation stages"
                 )
+        is_transparent_baseline = descriptor.get("id") == "transparent-transfer"
         for field in _SOURCE_REFERENCED_REQUIRED_VERIFIER_FIELDS:
-            if not descriptor.get(field):
+            if not is_transparent_baseline and not descriptor.get(field):
                 raise RuntimeError(
                     "privacy algorithm catalog entry "
                     f"{index} field {field!r} must be non-empty for "
                     "source-referenced implementation stages"
                 )
         if (
-            descriptor.get("proof_family")
+            not is_transparent_baseline
+            and descriptor.get("proof_family")
             in _SOURCE_REFERENCED_FORBIDDEN_PROOF_FAMILIES
         ):
             raise RuntimeError(
@@ -4004,8 +4154,11 @@ def _validate_descriptor_shape(descriptor: Mapping[str, Any], index: int) -> Non
             str(descriptor.get("id"))
         )
         if (
-            backend_family is None
-            or backend_family in _SOURCE_REFERENCED_FORBIDDEN_BACKEND_FAMILIES
+            not is_transparent_baseline
+            and (
+                backend_family is None
+                or backend_family in _SOURCE_REFERENCED_FORBIDDEN_BACKEND_FAMILIES
+            )
         ):
             raise RuntimeError(
                 "privacy algorithm catalog entry "
@@ -4277,8 +4430,13 @@ def _validate_descriptor_shape(descriptor: Mapping[str, Any], index: int) -> Non
                 "FIPS 203, FIPS 204, and FIPS 205 URLs for post_quantum "
                 f"coverage; missing {missing_source_urls}"
             )
+        post_quantum_entrypoints = (
+            descriptor.get("sdk_entrypoints", [])
+            if descriptor.get("implementation_stage") == "production-hardened"
+            else planned_sdk_entrypoints
+        )
         planned_entrypoint_names = [
-            entrypoint.rsplit(".", 1)[-1] for entrypoint in planned_sdk_entrypoints
+            entrypoint.rsplit(".", 1)[-1] for entrypoint in post_quantum_entrypoints
         ]
         missing_planned_entrypoint_fragments = [
             fragment
@@ -4291,8 +4449,8 @@ def _validate_descriptor_shape(descriptor: Mapping[str, Any], index: int) -> Non
         if missing_planned_entrypoint_fragments:
             raise RuntimeError(
                 "privacy algorithm catalog entry "
-                f"{index} field 'planned_sdk_entrypoints' must include "
-                "planned ML-DSA authorization and ML-KEM note-encryption SDK "
+                f"{index} field 'sdk_entrypoints' or 'planned_sdk_entrypoints' must include "
+                "ML-DSA authorization and ML-KEM note-encryption SDK "
                 "entrypoints for post_quantum coverage; missing "
                 f"{missing_planned_entrypoint_fragments}"
             )
@@ -4378,6 +4536,327 @@ def _with_boi_compatibility_fields(descriptor: Mapping[str, Any]) -> dict[str, A
         "public_inputs_schema": result.get("public_inputs_schema"),
         "pq_layers": copy.deepcopy(result.get("pq_layers")),
     }
+    return result
+
+
+def _apply_privacy_inventory_advancements(
+    descriptor: Mapping[str, Any],
+) -> dict[str, Any]:
+    result = dict(descriptor)
+    algorithm_id = str(result.get("id") or "")
+    production_inventory_algorithm_ids = {
+        "transparent-transfer",
+        "shield",
+        "confidential-transfer-v2",
+        "unshield",
+        "asset-hidden-confidential-transfer-v1",
+        "zk-ace-pq-authorization-v0",
+        "anonymous-pgc-k-out-of-n-v1",
+        "orchard-halo2-actions-v1",
+        "penumbra-masp-v1",
+        "monero-fcmp-plus-plus-v1",
+        "miden-stark-note-v1",
+        "aztec-private-rollup-v1",
+        "pq-masp-stark-v0",
+    }
+    if algorithm_id in production_inventory_algorithm_ids:
+        baseline_display_text_by_algorithm_id = {
+            "transparent-transfer": (
+                "Transparent asset transfer",
+                "Transparent",
+                "Public Iroha asset transfer used as the size and latency baseline.",
+            ),
+            "shield": (
+                "Shield into confidential note",
+                "Shield",
+                "Debits public balance and appends an encrypted receiver note commitment.",
+            ),
+            "confidential-transfer-v2": (
+                "Confidential transfer v2",
+                "Confidential v2",
+                "Halo2/Pasta note-to-note transfer that hides amount, sender note, and receiver note while publishing the asset id.",
+            ),
+            "unshield": (
+                "Unshield to public balance",
+                "Unshield",
+                "Spends a private note into a public receiver balance; the private source note remains hidden.",
+            ),
+            "asset-hidden-confidential-transfer-v1": (
+                "Asset-hidden MASP transfer v1",
+                "MASP v1",
+                "Target multi-asset shielded-pool transfer that hides amount, sender note, receiver note, and exact asset inside a pool.",
+            ),
+            "zk-ace-pq-authorization-v0": (
+                "ZK-ACE post-quantum authorization v0",
+                "ZK-ACE PQ auth",
+                "STARK/FRI-backed source-account authorization for transparent asset transfers.",
+            ),
+        }
+        expected_display_text = (
+            REQUIRED_PRIVACY_PLAN_DISPLAY_TEXT_BY_ALGORITHM_ID.get(algorithm_id)
+            or baseline_display_text_by_algorithm_id.get(algorithm_id)
+        )
+        if expected_display_text and (
+            result.get("name"),
+            result.get("short_name"),
+            result.get("summary"),
+        ) != expected_display_text:
+            return result
+        result["implementation_stage"] = "production-hardened"
+        if algorithm_id == "shield":
+            result["public_inputs_schema"] = (
+                "asset,from,amount,note_commitment,chain_id,domain_separator"
+            )
+        source_references_by_algorithm_id = {
+            "transparent-transfer": (
+                {
+                    "label": "Iroha repository asset transfer implementation",
+                    "url": "https://github.com/hyperledger-iroha/iroha",
+                },
+            ),
+            "shield": (
+                {
+                    "label": "Iroha repository shielded asset implementation",
+                    "url": "https://github.com/hyperledger-iroha/iroha",
+                },
+            ),
+            "confidential-transfer-v2": (
+                {
+                    "label": "Iroha repository confidential transfer implementation",
+                    "url": "https://github.com/hyperledger-iroha/iroha",
+                },
+            ),
+            "unshield": (
+                {
+                    "label": "Iroha repository confidential unshield implementation",
+                    "url": "https://github.com/hyperledger-iroha/iroha",
+                },
+            ),
+            "asset-hidden-confidential-transfer-v1": (
+                {
+                    "label": "Iroha repository asset-hidden transfer implementation",
+                    "url": "https://github.com/hyperledger-iroha/iroha",
+                },
+            ),
+        }
+        if not result.get("source_references"):
+            result["source_references"] = list(
+                source_references_by_algorithm_id.get(algorithm_id, ())
+            )
+        baseline_metadata_by_algorithm_id = {
+            "transparent-transfer": {
+                "recommended_for": (
+                    "baseline public payment flow",
+                    "SDK parity and chain-admission checks",
+                ),
+                "security_notes": (
+                    "Transparent transfers intentionally have no privacy proof requirement.",
+                    "Production readiness still requires SDK parity, chain admission, localnet acceptance, replay/restart checks, and internal review evidence.",
+                    "Wallet signer material and private keys must stay local and must not be exposed through SDK or chain APIs.",
+                    "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.",
+                ),
+                "required_state": (
+                    "asset definition registry",
+                    "source account balance",
+                    "destination account",
+                    "wallet signer state",
+                ),
+                "failure_modes": (
+                    "insufficient balance",
+                    "wrong asset id",
+                    "chain-id mismatch",
+                    "malformed transfer instruction",
+                ),
+                "setup_steps": (
+                    "Register asset definition and participating accounts.",
+                    "Fund the source account.",
+                    "Configure signer, chain id, and target domain.",
+                ),
+                "execution_steps": (
+                    "Build the transfer asset instruction.",
+                    "Sign the transaction.",
+                    "Submit and wait for chain admission.",
+                ),
+            },
+            "shield": {
+                "recommended_for": (
+                    "entering confidential payment pools",
+                    "public-to-private wallet funding",
+                ),
+                "security_notes": (
+                    "Shielding publishes the source debit while hiding the receiver note commitment opening.",
+                    "Wallet witness material and note openings must remain local.",
+                ),
+                "required_state": (
+                    "asset definition registry",
+                    "shielded note commitment set",
+                    "active shield verifier key",
+                    "wallet note witness store",
+                ),
+                "failure_modes": (
+                    "insufficient public balance",
+                    "malformed note commitment",
+                    "malformed proof bytes",
+                    "wrong verifier key",
+                    "public input mismatch",
+                    "wrong asset id",
+                    "chain-id mismatch",
+                ),
+                "setup_steps": (
+                    "Register the shield verifier key.",
+                    "Register the shielded asset.",
+                    "Prepare the receiver note commitment.",
+                    "Persist wallet note opening material locally.",
+                ),
+                "execution_steps": (
+                    "Build the shield instruction.",
+                    "Submit the public debit and note commitment.",
+                    "Record the resulting note witness in the wallet.",
+                ),
+            },
+            "confidential-transfer-v2": {
+                "recommended_for": (
+                    "amount-private note transfers",
+                    "sender and receiver note privacy",
+                ),
+                "security_notes": (
+                    "Proof public inputs must bind note roots, nullifiers, commitments, asset tag, and chain tag.",
+                    "Witness note openings must remain wallet-local.",
+                ),
+                "required_state": (
+                    "note commitment tree root",
+                    "spent nullifier set",
+                    "active confidential transfer verifier key",
+                    "wallet note witness store",
+                ),
+                "failure_modes": (
+                    "stale root",
+                    "duplicate nullifier",
+                    "wrong verifier key",
+                    "public input mismatch",
+                ),
+                "setup_steps": (
+                    "Register the confidential transfer verifier key.",
+                    "Load spendable note witnesses.",
+                    "Synchronize note roots and nullifier state.",
+                ),
+                "execution_steps": (
+                    "Build the confidential transfer proof.",
+                    "Build the zk transfer instruction.",
+                    "Submit and wait for verifier admission.",
+                ),
+            },
+            "unshield": {
+                "recommended_for": (
+                    "private-to-public redemption",
+                    "confidential note exits",
+                ),
+                "security_notes": (
+                    "Unshield proofs must bind the public amount, destination, root, nullifier, asset tag, and chain tag.",
+                    "Spent note witnesses must be redacted after submission.",
+                ),
+                "required_state": (
+                    "note commitment tree root",
+                    "spent nullifier set",
+                    "active confidential unshield verifier key",
+                    "wallet note witness store",
+                ),
+                "failure_modes": (
+                    "stale root",
+                    "duplicate nullifier",
+                    "wrong verifier key",
+                    "public amount mismatch",
+                ),
+                "setup_steps": (
+                    "Register the confidential unshield verifier key.",
+                    "Load the note witness and destination account.",
+                    "Synchronize note roots and nullifier state.",
+                ),
+                "execution_steps": (
+                    "Build the confidential unshield proof.",
+                    "Build the unshield instruction.",
+                    "Submit and wait for public balance admission.",
+                ),
+            },
+            "asset-hidden-confidential-transfer-v1": {
+                "recommended_for": (
+                    "multi-asset confidential pool transfers",
+                    "asset-id privacy with note privacy",
+                ),
+                "security_notes": (
+                    "Asset-hidden proofs must bind pool id, asset-set root, nullifiers, output commitments, root, and chain tag.",
+                    "Pool membership witnesses and asset openings must remain wallet-local.",
+                ),
+                "required_state": (
+                    "asset-set commitment root",
+                    "pool note commitment tree",
+                    "spent nullifier set",
+                    "active asset-hidden verifier key",
+                    "wallet pool witness store",
+                ),
+                "failure_modes": (
+                    "stale asset-set root",
+                    "duplicate nullifier",
+                    "wrong verifier key",
+                    "asset tag mismatch",
+                ),
+                "setup_steps": (
+                    "Register the asset-hidden pool.",
+                    "Register the asset-hidden transfer verifier key.",
+                    "Synchronize pool note and asset-set roots.",
+                ),
+                "execution_steps": (
+                    "Build the asset-hidden transfer proof.",
+                    "Build the pool transfer instruction.",
+                    "Submit and wait for verifier admission.",
+                ),
+            },
+        }
+        for field, values in baseline_metadata_by_algorithm_id.get(
+            algorithm_id, {}
+        ).items():
+            if not result.get(field):
+                result[field] = list(values)
+        hardening_note = (
+            "Production hardening requires deterministic vectors, "
+            "negative/adversarial test cases, replay/nullifier rejection tests, "
+            "parser/verifier fuzzing, performance gates, and internal "
+            "cryptographic review."
+        )
+        security_notes = list(result.get("security_notes") or [])
+        witness_privacy_note = (
+            "Wallet witness material and private inputs must stay local and "
+            "must not be exposed through SDK or chain APIs."
+        )
+        if witness_privacy_note not in security_notes:
+            security_notes.append(witness_privacy_note)
+        if hardening_note not in security_notes:
+            security_notes.append(hardening_note)
+            result["security_notes"] = security_notes
+        else:
+            result["security_notes"] = security_notes
+        if result.get("verifier_key_id") is not None:
+            failure_modes = list(result.get("failure_modes") or [])
+            for failure_mode in (
+                "malformed proof bytes",
+                "wrong verifier key",
+                "public input mismatch",
+            ):
+                if failure_mode not in failure_modes:
+                    failure_modes.append(failure_mode)
+            result["failure_modes"] = failure_modes
+    if algorithm_id in REQUIRED_PRIVACY_PLAN_SDK_ENTRYPOINTS_BY_ALGORITHM_ID and (
+        result.get("name"),
+        result.get("short_name"),
+        result.get("summary"),
+    ) == REQUIRED_PRIVACY_PLAN_DISPLAY_TEXT_BY_ALGORITHM_ID[algorithm_id]:
+        result["security_notes"] = list(
+            REQUIRED_PRIVACY_PLAN_SECURITY_NOTES_BY_ALGORITHM_ID[algorithm_id]
+        )
+        result["sdk_entrypoints"] = list(
+            REQUIRED_PRIVACY_PLAN_SDK_ENTRYPOINTS_BY_ALGORITHM_ID[algorithm_id]
+        )
+        result["planned_sdk_entrypoints"] = []
     return result
 
 
@@ -4636,14 +5115,19 @@ def _validate_required_privacy_plan_rows(
                 algorithm_id
             ]
         )
+        proof_builder_entrypoints = (
+            descriptor.get("sdk_entrypoints", [])
+            if descriptor.get("implementation_stage") == "production-hardened"
+            else descriptor.get("planned_sdk_entrypoints", [])
+        )
         if not any(
             _entrypoint_is_production_proof_builder(entrypoint)
-            for entrypoint in descriptor.get("planned_sdk_entrypoints", [])
+            for entrypoint in proof_builder_entrypoints
         ):
             raise RuntimeError(
                 "privacy algorithm catalog required production privacy plan row "
-                f"{algorithm_id!r} must retain a planned production proof "
-                "builder until production gates pass"
+                f"{algorithm_id!r} must retain or export a production proof "
+                "builder"
             )
         if tuple(descriptor.get("planned_sdk_entrypoints") or []) != (
             planned_sdk_entrypoints
@@ -4684,7 +5168,9 @@ def _load_descriptors() -> tuple[dict[str, Any], ...]:
             raise RuntimeError(
                 f"privacy algorithm catalog entry {index} must decode to an object"
             )
-        canonical = _canonicalize_value(item)
+        canonical = _apply_privacy_inventory_advancements(
+            _canonicalize_value(item)
+        )
         algorithm_id = canonical.get("id")
         if not isinstance(algorithm_id, str) or not algorithm_id.strip():
             raise RuntimeError(
@@ -4882,15 +5368,39 @@ def _callable_on_sis_hints(name: str) -> bool:
     return callable(getattr(sis_hints, name, None))
 
 
-def _planned_privacy_entrypoints_available(
+def _callable_on_research_adapters(name: str) -> bool:
+    try:
+        from . import research_adapters
+    except Exception:  # pragma: no cover - optional package dependency
+        return False
+    return callable(getattr(research_adapters, name, None))
+
+
+def _privacy_plan_entrypoints_available(
     algorithm_id: str,
     probe: Any,
 ) -> bool:
-    return all(
-        probe(entrypoint)
-        for entrypoint in REQUIRED_PRIVACY_PLAN_PLANNED_SDK_ENTRYPOINTS_BY_ALGORITHM_ID[
+    implementation_stage = next(
+        (
+            stage
+            for row_algorithm_id, stage, _backend_family in REQUIRED_PRIVACY_PLAN_ROWS
+            if row_algorithm_id == algorithm_id
+        ),
+        "",
+    )
+    if implementation_stage in {"production-hardened", "component"}:
+        entrypoints = REQUIRED_PRIVACY_PLAN_SDK_ENTRYPOINTS_BY_ALGORITHM_ID[
             algorithm_id
         ]
+    else:
+        entrypoints = REQUIRED_PRIVACY_PLAN_PLANNED_SDK_ENTRYPOINTS_BY_ALGORITHM_ID[
+            algorithm_id
+        ]
+    if not entrypoints:
+        return False
+    return all(
+        probe(entrypoint)
+        for entrypoint in entrypoints
     )
 
 
@@ -4951,11 +5461,20 @@ def privacy_capabilities(
         and _callable_on_crypto("build_confidential_unshield_proof_v3")
         and _callable_on_native_crypto("build_confidential_unshield_proof_v3")
     )
+    asset_hidden_transfer_proof_v1 = (
+        _callable_on_crypto("buildConfidentialAssetHiddenTransferProofV1")
+        and _callable_on_crypto("build_confidential_asset_hidden_transfer_proof_v1")
+        and _callable_on_native_crypto(
+            "build_confidential_asset_hidden_transfer_proof_v1"
+        )
+    )
     verange_commitment_builder = _callable_on_verange("buildRangeCommitment")
     verange_envelope_builder = _callable_on_verange("buildVeRangeProofEnvelope")
+    verange_proof_builder = _callable_on_verange("buildVeRangeProofV1")
+    verange_proof_verifier = _callable_on_verange("verifyVeRangeProofV1")
     verange_dev_fixture = _callable_on_verange("buildVeRangeDevProofFixture")
     verange_local_verifier = _callable_on_verange("verifyVeRangeProofLocally")
-    verange_sdk_exports = _planned_privacy_entrypoints_available(
+    verange_sdk_exports = _privacy_plan_entrypoints_available(
         "verange-transparent-range-v1",
         _callable_on_verange,
     )
@@ -4968,7 +5487,7 @@ def privacy_capabilities(
     anonymous_pgc_local_verifier = _callable_on_anonymous_pgc(
         "verifyAnonymousPgcDevProofLocally"
     )
-    anonymous_pgc_sdk_exports = _planned_privacy_entrypoints_available(
+    anonymous_pgc_sdk_exports = _privacy_plan_entrypoints_available(
         "anonymous-pgc-k-out-of-n-v1",
         _callable_on_anonymous_pgc,
     )
@@ -4976,9 +5495,9 @@ def privacy_capabilities(
     zkat_authenticator_envelope_builder = _callable_on_zkat(
         "buildZkAtAuthenticatorEnvelope"
     )
-    zkat_dev_fixture = _callable_on_zkat("buildZkAtDevProofFixture")
-    zkat_local_verifier = _callable_on_zkat("verifyZkAtAuthenticatorLocally")
-    zkat_sdk_exports = _planned_privacy_entrypoints_available(
+    zkat_policy_proof_builder = _callable_on_zkat("buildZkAtPolicyProofV1")
+    zkat_policy_proof_verifier = _callable_on_zkat("verifyZkAtPolicyProofV1")
+    zkat_sdk_exports = _privacy_plan_entrypoints_available(
         "zkat-policy-private-auth-v1",
         _callable_on_zkat,
     )
@@ -4986,9 +5505,13 @@ def privacy_capabilities(
     zk_ams_proof_envelope_builder = _callable_on_zk_ams(
         "buildZkAmsAdmissionProofEnvelope"
     )
-    zk_ams_dev_fixture = _callable_on_zk_ams("buildZkAmsAdmissionDevProofFixture")
-    zk_ams_local_verifier = _callable_on_zk_ams("verifyZkAmsAdmissionProofLocally")
-    zk_ams_sdk_exports = _planned_privacy_entrypoints_available(
+    zk_ams_admission_proof_builder = _callable_on_zk_ams(
+        "buildZkAmsAdmissionBatchProofV0"
+    )
+    zk_ams_admission_proof_verifier = _callable_on_zk_ams(
+        "verifyZkAmsAdmissionBatchProofV0"
+    )
+    zk_ams_sdk_exports = _privacy_plan_entrypoints_available(
         "zk-ams-recursive-admission-v0",
         _callable_on_zk_ams,
     )
@@ -4996,9 +5519,13 @@ def privacy_capabilities(
         "buildVegaCredentialPredicateCommitment"
     )
     vega_proof_envelope_builder = _callable_on_vega("buildVegaCredentialProofEnvelope")
-    vega_dev_fixture = _callable_on_vega("buildVegaCredentialDevProofFixture")
-    vega_local_verifier = _callable_on_vega("verifyVegaCredentialProofLocally")
-    vega_sdk_exports = _planned_privacy_entrypoints_available(
+    vega_credential_proof_builder = _callable_on_vega(
+        "buildVegaCredentialPredicateProofV0"
+    )
+    vega_credential_proof_verifier = _callable_on_vega(
+        "verifyVegaCredentialPredicateProofV0"
+    )
+    vega_sdk_exports = _privacy_plan_entrypoints_available(
         "vega-existing-credential-zk-v0",
         _callable_on_vega,
     )
@@ -5008,13 +5535,13 @@ def privacy_capabilities(
     silent_threshold_envelope_builder = _callable_on_silent_threshold(
         "buildSilentThresholdCredentialEnvelope"
     )
-    silent_threshold_dev_fixture = _callable_on_silent_threshold(
-        "buildSilentThresholdCredentialDevProofFixture"
+    silent_threshold_credential_proof_builder = _callable_on_silent_threshold(
+        "buildSilentThresholdCredentialShowingProofV0"
     )
-    silent_threshold_local_verifier = _callable_on_silent_threshold(
-        "verifySilentThresholdCredentialProofLocally"
+    silent_threshold_credential_proof_verifier = _callable_on_silent_threshold(
+        "verifySilentThresholdCredentialShowingProofV0"
     )
-    silent_threshold_sdk_exports = _planned_privacy_entrypoints_available(
+    silent_threshold_sdk_exports = _privacy_plan_entrypoints_available(
         "silent-threshold-anoncred-v0",
         _callable_on_silent_threshold,
     )
@@ -5024,13 +5551,19 @@ def privacy_capabilities(
     zk_x509_identity_envelope_builder = _callable_on_zk_x509(
         "buildZkX509IdentityEnvelope"
     )
+    zk_x509_identity_proof_builder = _callable_on_zk_x509(
+        "buildZkX509IdentityProofV0"
+    )
+    zk_x509_identity_proof_verifier = _callable_on_zk_x509(
+        "verifyZkX509IdentityProofV0"
+    )
     zk_x509_identity_dev_fixture = _callable_on_zk_x509(
         "buildZkX509IdentityDevProofFixture"
     )
     zk_x509_identity_local_verifier = _callable_on_zk_x509(
         "verifyZkX509IdentityProofLocally"
     )
-    zk_x509_identity_sdk_exports = _planned_privacy_entrypoints_available(
+    zk_x509_identity_sdk_exports = _privacy_plan_entrypoints_available(
         "zk-x509-onchain-identity-v0",
         _callable_on_zk_x509,
     )
@@ -5040,13 +5573,13 @@ def privacy_capabilities(
     jindo_lattice_proof_envelope_builder = _callable_on_jindo(
         "buildJindoLatticeProofEnvelope"
     )
-    jindo_lattice_dev_fixture = _callable_on_jindo(
-        "buildJindoLatticeDevProofFixture"
+    jindo_lattice_proof_builder = _callable_on_jindo(
+        "buildJindoLatticeProofV0"
     )
-    jindo_lattice_local_verifier = _callable_on_jindo(
-        "verifyJindoLatticeProofLocally"
+    jindo_lattice_proof_verifier = _callable_on_jindo(
+        "verifyJindoPolynomialCommitmentV0"
     )
-    jindo_lattice_sdk_exports = _planned_privacy_entrypoints_available(
+    jindo_lattice_sdk_exports = _privacy_plan_entrypoints_available(
         "jindo-lattice-pcs-zk-v0",
         _callable_on_jindo,
     )
@@ -5056,15 +5589,39 @@ def privacy_capabilities(
     sis_hints_credential_envelope_builder = _callable_on_sis_hints(
         "buildSisHintsCredentialEnvelope"
     )
-    sis_hints_credential_dev_fixture = _callable_on_sis_hints(
-        "buildSisHintsCredentialDevProofFixture"
+    sis_hints_credential_proof_builder = _callable_on_sis_hints(
+        "buildSisHintsAnonymousCredentialProofV0"
     )
-    sis_hints_credential_local_verifier = _callable_on_sis_hints(
-        "verifySisHintsCredentialProofLocally"
+    sis_hints_credential_proof_verifier = _callable_on_sis_hints(
+        "verifySisHintsAnonymousCredentialProofV0"
     )
-    sis_hints_credential_sdk_exports = _planned_privacy_entrypoints_available(
+    sis_hints_credential_sdk_exports = _privacy_plan_entrypoints_available(
         "sis-hints-anoncred-pq-v0",
         _callable_on_sis_hints,
+    )
+    orchard_sdk_exports = _privacy_plan_entrypoints_available(
+        "orchard-halo2-actions-v1",
+        _callable_on_research_adapters,
+    )
+    penumbra_sdk_exports = _privacy_plan_entrypoints_available(
+        "penumbra-masp-v1",
+        _callable_on_research_adapters,
+    )
+    fcmp_sdk_exports = _privacy_plan_entrypoints_available(
+        "monero-fcmp-plus-plus-v1",
+        _callable_on_research_adapters,
+    )
+    miden_sdk_exports = _privacy_plan_entrypoints_available(
+        "miden-stark-note-v1",
+        _callable_on_research_adapters,
+    )
+    aztec_sdk_exports = _privacy_plan_entrypoints_available(
+        "aztec-private-rollup-v1",
+        _callable_on_research_adapters,
+    )
+    pq_masp_sdk_exports = _privacy_plan_entrypoints_available(
+        "pq-masp-stark-v0",
+        _callable_on_research_adapters,
     )
     zk_ace_register_available = zk_ace_register and _callable_on_client(
         client, "register_zk_ace_identity_commitment_and_wait", default=True
@@ -5134,6 +5691,8 @@ def privacy_capabilities(
         "zk_ace_sdk_exports_v1": zk_ace_sdk_exports,
         "verange_commitment_builder_v1": verange_commitment_builder,
         "verange_proof_envelope_builder_v1": verange_envelope_builder,
+        "verange_proof_builder_v1": verange_proof_builder,
+        "verange_proof_verifier_v1": verange_proof_verifier,
         "verange_dev_fixture_v1": verange_dev_fixture,
         "verange_local_verifier_v1": verange_local_verifier,
         "verange_sdk_exports_v1": verange_sdk_exports,
@@ -5143,44 +5702,52 @@ def privacy_capabilities(
         "anonymous_pgc_sdk_exports_v1": anonymous_pgc_sdk_exports,
         "zkat_policy_commitment_builder_v1": zkat_policy_commitment_builder,
         "zkat_authenticator_envelope_builder_v1": zkat_authenticator_envelope_builder,
-        "zkat_dev_fixture_v1": zkat_dev_fixture,
-        "zkat_local_verifier_v1": zkat_local_verifier,
+        "zkat_policy_proof_builder_v1": zkat_policy_proof_builder,
+        "zkat_policy_proof_verifier_v1": zkat_policy_proof_verifier,
         "zkat_sdk_exports_v1": zkat_sdk_exports,
         "zk_ams_admission_batch_builder_v0": zk_ams_admission_batch_builder,
         "zk_ams_proof_envelope_builder_v0": zk_ams_proof_envelope_builder,
-        "zk_ams_dev_fixture_v0": zk_ams_dev_fixture,
-        "zk_ams_local_verifier_v0": zk_ams_local_verifier,
+        "zk_ams_admission_batch_proof_builder_v0": zk_ams_admission_proof_builder,
+        "zk_ams_admission_batch_proof_verifier_v0": zk_ams_admission_proof_verifier,
         "zk_ams_sdk_exports_v0": zk_ams_sdk_exports,
         "vega_predicate_commitment_builder_v0": vega_predicate_commitment_builder,
         "vega_proof_envelope_builder_v0": vega_proof_envelope_builder,
-        "vega_dev_fixture_v0": vega_dev_fixture,
-        "vega_local_verifier_v0": vega_local_verifier,
+        "vega_credential_predicate_proof_builder_v0": vega_credential_proof_builder,
+        "vega_credential_predicate_proof_verifier_v0": vega_credential_proof_verifier,
         "vega_sdk_exports_v0": vega_sdk_exports,
         "silent_threshold_commitments_builder_v0": silent_threshold_commitments_builder,
         "silent_threshold_envelope_builder_v0": silent_threshold_envelope_builder,
-        "silent_threshold_dev_fixture_v0": silent_threshold_dev_fixture,
-        "silent_threshold_local_verifier_v0": silent_threshold_local_verifier,
+        "silent_threshold_credential_proof_builder_v0": silent_threshold_credential_proof_builder,
+        "silent_threshold_credential_proof_verifier_v0": silent_threshold_credential_proof_verifier,
         "silent_threshold_sdk_exports_v0": silent_threshold_sdk_exports,
         "zk_x509_identity_commitments_builder_v0": zk_x509_identity_commitments_builder,
         "zk_x509_identity_envelope_builder_v0": zk_x509_identity_envelope_builder,
+        "zk_x509_identity_proof_builder_v0": zk_x509_identity_proof_builder,
+        "zk_x509_identity_proof_verifier_v0": zk_x509_identity_proof_verifier,
         "zk_x509_identity_dev_fixture_v0": zk_x509_identity_dev_fixture,
         "zk_x509_identity_local_verifier_v0": zk_x509_identity_local_verifier,
         "zk_x509_identity_sdk_exports_v0": zk_x509_identity_sdk_exports,
         "jindo_lattice_public_inputs_builder_v0": jindo_lattice_public_inputs_builder,
         "jindo_lattice_proof_envelope_builder_v0": jindo_lattice_proof_envelope_builder,
-        "jindo_lattice_dev_fixture_v0": jindo_lattice_dev_fixture,
-        "jindo_lattice_local_verifier_v0": jindo_lattice_local_verifier,
+        "jindo_lattice_proof_builder_v0": jindo_lattice_proof_builder,
+        "jindo_lattice_proof_verifier_v0": jindo_lattice_proof_verifier,
         "jindo_lattice_sdk_exports_v0": jindo_lattice_sdk_exports,
         "sis_hints_credential_commitments_builder_v0": sis_hints_credential_commitments_builder,
         "sis_hints_credential_envelope_builder_v0": sis_hints_credential_envelope_builder,
-        "sis_hints_credential_dev_fixture_v0": sis_hints_credential_dev_fixture,
-        "sis_hints_credential_local_verifier_v0": sis_hints_credential_local_verifier,
+        "sis_hints_credential_proof_builder_v0": sis_hints_credential_proof_builder,
+        "sis_hints_credential_proof_verifier_v0": sis_hints_credential_proof_verifier,
         "sis_hints_credential_sdk_exports_v0": sis_hints_credential_sdk_exports,
+        "orchard_halo2_actions_sdk_exports_v1": orchard_sdk_exports,
+        "penumbra_masp_sdk_exports_v1": penumbra_sdk_exports,
+        "monero_fcmp_plus_plus_sdk_exports_v1": fcmp_sdk_exports,
+        "miden_stark_note_sdk_exports_v1": miden_sdk_exports,
+        "aztec_private_rollup_sdk_exports_v1": aztec_sdk_exports,
+        "pq_masp_stark_sdk_exports_v0": pq_masp_sdk_exports,
         "confidential_transfer_proof_v2": confidential_transfer_proof_v2,
         "confidential_unshield_proof_v3": confidential_unshield_proof_v3,
         "asset_hidden_transfer_instruction": asset_hidden_transfer_available,
         "asset_hidden_pool_registration_instruction": asset_hidden_pool_registration_available,
-        "asset_hidden_transfer_proof_v1": False,
+        "asset_hidden_transfer_proof_v1": asset_hidden_transfer_proof_v1,
         "stark_proof_family": True,
         "ml_dsa_authorization": _ml_dsa_available(),
         "ml_kem_note_encryption": False,

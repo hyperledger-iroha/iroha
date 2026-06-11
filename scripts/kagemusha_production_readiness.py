@@ -3472,15 +3472,92 @@ def _read_summary_output_text(
         ]
 
 
-def _cleanup_summary_output(path: Path) -> list[dict[str, Any]]:
+def _cleanup_summary_output(
+    path: Path,
+    expected_identity: tuple[int, int] | None,
+) -> list[dict[str, Any]]:
+    if expected_identity is None:
+        return [
+            _summary_out_blocker("--summary-out temporary file metadata could not be read")
+        ]
     try:
-        path.unlink()
-    except FileNotFoundError:
-        return []
+        parent_fd = os.open(path.parent, _directory_open_flags())
     except OSError:
         return [
             _summary_out_blocker("--summary-out temporary file could not be removed")
         ]
+    try:
+        try:
+            temp_stat = os.stat(
+                path.name,
+                dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            return []
+        except OSError:
+            return [
+                _summary_out_blocker(
+                    "--summary-out temporary file could not be removed"
+                )
+            ]
+        if (
+            not stat.S_ISREG(temp_stat.st_mode)
+            or _file_identity(temp_stat) != expected_identity
+        ):
+            return [
+                _summary_out_blocker(
+                    "--summary-out temporary file changed before cleanup"
+                )
+            ]
+        try:
+            os.unlink(path.name, dir_fd=parent_fd)
+        except FileNotFoundError:
+            return []
+        except OSError:
+            return [
+                _summary_out_blocker(
+                    "--summary-out temporary file could not be removed"
+                )
+            ]
+    finally:
+        os.close(parent_fd)
+    return []
+
+
+def _file_identity(file_stat: os.stat_result) -> tuple[int, int]:
+    return file_stat.st_dev, file_stat.st_ino
+
+
+def _directory_open_flags() -> int:
+    flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        flags |= os.O_DIRECTORY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    return flags
+
+
+def _sync_summary_output_parent(
+    parent: Path,
+    *,
+    expected_identity: tuple[int, int] | None,
+) -> list[dict[str, Any]]:
+    try:
+        parent_fd = os.open(parent, _directory_open_flags())
+    except OSError:
+        return [_summary_out_blocker("--summary-out parent directory could not be synced")]
+    try:
+        parent_stat = os.fstat(parent_fd)
+        if not stat.S_ISDIR(parent_stat.st_mode):
+            return [_summary_out_blocker("--summary-out parent directory could not be synced")]
+        if expected_identity is not None and _file_identity(parent_stat) != expected_identity:
+            return [_summary_out_blocker("--summary-out parent directory changed before sync")]
+        os.fsync(parent_fd)
+    except OSError:
+        return [_summary_out_blocker("--summary-out parent directory could not be synced")]
+    finally:
+        os.close(parent_fd)
     return []
 
 
@@ -3490,6 +3567,18 @@ def write_summary(path: Path, summary: dict[str, Any]) -> list[dict[str, Any]]:
     errors = validate_summary_output_path(path)
     if errors:
         return errors
+    parent_exists, parent_errors = _validate_summary_output_parent(
+        path,
+        missing_message="--summary-out parent must be a directory",
+    )
+    if parent_errors:
+        return parent_errors
+    if not parent_exists:
+        return [_summary_out_blocker("--summary-out parent must be a directory")]
+    try:
+        parent_identity = _file_identity(path.parent.lstat())
+    except OSError:
+        return [_summary_out_blocker("--summary-out parent directory metadata could not be read")]
     try:
         summary_text = json.dumps(
             summary,
@@ -3511,6 +3600,7 @@ def write_summary(path: Path, summary: dict[str, Any]) -> list[dict[str, Any]]:
             )
         ]
     tmp_path: Path | None = None
+    tmp_identity: tuple[int, int] | None = None
     write_blockers: list[dict[str, Any]] = []
     try:
         with tempfile.NamedTemporaryFile(
@@ -3522,6 +3612,7 @@ def write_summary(path: Path, summary: dict[str, Any]) -> list[dict[str, Any]]:
             delete=False,
         ) as handle:
             tmp_path = Path(handle.name)
+            tmp_identity = _file_identity(os.fstat(handle.fileno()))
             handle.write(summary_text)
             handle.flush()
             os.fsync(handle.fileno())
@@ -3540,19 +3631,15 @@ def write_summary(path: Path, summary: dict[str, Any]) -> list[dict[str, Any]]:
         )
     finally:
         if tmp_path is not None:
-            write_blockers.extend(_cleanup_summary_output(tmp_path))
+            write_blockers.extend(_cleanup_summary_output(tmp_path, tmp_identity))
     if write_blockers:
         return write_blockers
-    try:
-        parent_fd = os.open(path.parent, os.O_RDONLY)
-    except OSError:
-        return [_summary_out_blocker("--summary-out parent directory could not be synced")]
-    try:
-        os.fsync(parent_fd)
-    except OSError:
-        return [_summary_out_blocker("--summary-out parent directory could not be synced")]
-    finally:
-        os.close(parent_fd)
+    sync_blockers = _sync_summary_output_parent(
+        path.parent,
+        expected_identity=parent_identity,
+    )
+    if sync_blockers:
+        return sync_blockers
     errors = validate_summary_output_path(path)
     if errors:
         return errors

@@ -177,6 +177,10 @@ def raw_slot_artifacts(slot_id: str = "pixel6") -> dict[str, bytes]:
     challenge = bytes.fromhex("01020304")
     app_signing = hashlib.sha256(f"{slot_id}:app-signing".encode("utf-8")).hexdigest()
     policy = hashlib.sha256(b"kagemusha-offline-wallet-policy-v1").hexdigest()
+    apk_digest = hashlib.sha256(f"{slot_id}:offline-wallet-apk".encode("utf-8")).hexdigest()
+    queue_after = hashlib.sha256(f"{slot_id}:queue-after".encode("utf-8")).hexdigest()
+    payload_digest = hashlib.sha256(f"{slot_id}:payload".encode("utf-8")).hexdigest()
+    rollback_digest = hashlib.sha256(f"{slot_id}:rollback".encode("utf-8")).hexdigest()
     result = {
         "slot": slot_id,
         "status": "ok",
@@ -212,19 +216,138 @@ def raw_slot_artifacts(slot_id: str = "pixel6") -> dict[str, bytes]:
         "attestation/keymint-certificate-chain.pem": chain,
         "attestation/result.json": json.dumps(result, sort_keys=True).encode("utf-8")
         + b"\n",
-        "handoff/d2d-payment.json": b'{"schema":"iroha.android.device_lab.kagemusha.d2d_payment.v1"}\n',
-        "wallet/integrity.json": b'{"schema":"iroha.android.device_lab.kagemusha.wallet_integrity.v1"}\n',
-        "telemetry/telemetry.json": b'{"schema_version":1}\n',
-        "telemetry/status.ndjson": b'{"status":"ok"}\n',
-        "queue/pending_queue.json": b'{"pending_transactions":[]}\n',
+        "handoff/d2d-payment.json": json.dumps(
+            {
+                "schema": "iroha.android.device_lab.kagemusha.d2d_payment.v1",
+                "slot_id": slot_id,
+                "device_family": "Google Pixel 6 / 6a",
+                "device_fingerprint": result["device_fingerprint"],
+                "os_build_id": result["os_build_id"],
+                "app_package_name": result["app_package_name"],
+                "app_signing_certificate_sha256": app_signing,
+                "attestation_challenge_sha256": result["attestation_challenge_sha256"],
+                "offline_wallet_policy_sha256": policy,
+                "offline_wallet_apk_sha256": apk_digest,
+                "transport": "nearby_offline",
+                "transport_offline": True,
+                "payer_wallet_offline": True,
+                "payee_wallet_offline": True,
+                "payload_schema": "kagemusha.recursive_spend.reserved_lineage.d2d.v1",
+                "payload_bytes": 3847,
+                "transport_session_id_sha256": hashlib.sha256(
+                    f"{slot_id}:session".encode("utf-8")
+                ).hexdigest(),
+                "payload_sha256": payload_digest,
+                "received_payload_sha256": payload_digest,
+                "receiver_ack_sha256": hashlib.sha256(
+                    f"{slot_id}:ack".encode("utf-8")
+                ).hexdigest(),
+                "one_use_key_id_sha256": hashlib.sha256(
+                    f"{slot_id}:one-use-key".encode("utf-8")
+                ).hexdigest(),
+                "payer_wallet_state_before_sha256": hashlib.sha256(
+                    f"{slot_id}:payer-before".encode("utf-8")
+                ).hexdigest(),
+                "payer_wallet_state_after_sha256": hashlib.sha256(
+                    f"{slot_id}:payer-after".encode("utf-8")
+                ).hexdigest(),
+                "payee_wallet_state_before_sha256": hashlib.sha256(
+                    f"{slot_id}:payee-before".encode("utf-8")
+                ).hexdigest(),
+                "payee_wallet_state_after_sha256": hashlib.sha256(
+                    f"{slot_id}:payee-after".encode("utf-8")
+                ).hexdigest(),
+                "queue_before_sha256": hashlib.sha256(
+                    f"{slot_id}:queue-before".encode("utf-8")
+                ).hexdigest(),
+                "queue_after_sha256": queue_after,
+                "one_use_key_consumed": True,
+                "receiver_redeem_accepted": True,
+                "double_spend_rejected": True,
+            },
+            sort_keys=True,
+        ).encode("utf-8")
+        + b"\n",
+        "wallet/integrity.json": json.dumps(
+            {
+                "schema": "iroha.android.device_lab.kagemusha.wallet_integrity.v1",
+                "slot_id": slot_id,
+                "device_family": "Google Pixel 6 / 6a",
+                "device_fingerprint": result["device_fingerprint"],
+                "os_build_id": result["os_build_id"],
+                "app_package_name": result["app_package_name"],
+                "keymint_security_level": "STRONGBOX",
+                "app_signing_certificate_sha256": app_signing,
+                "attestation_challenge_sha256": result["attestation_challenge_sha256"],
+                "attestation_certificate_chain_sha256": result[
+                    "attestation_certificate_chain_sha256"
+                ],
+                "offline_wallet_policy_sha256": policy,
+                "offline_wallet_apk_sha256": apk_digest,
+                "rotation_session_id_sha256": hashlib.sha256(
+                    f"{slot_id}:rotation".encode("utf-8")
+                ).hexdigest(),
+                "key_id_before_sha256": hashlib.sha256(
+                    f"{slot_id}:key-before".encode("utf-8")
+                ).hexdigest(),
+                "key_id_after_sha256": hashlib.sha256(
+                    f"{slot_id}:key-after".encode("utf-8")
+                ).hexdigest(),
+                "wallet_state_before_sha256": hashlib.sha256(
+                    f"{slot_id}:wallet-before".encode("utf-8")
+                ).hexdigest(),
+                "wallet_state_after_rotation_sha256": hashlib.sha256(
+                    f"{slot_id}:wallet-after".encode("utf-8")
+                ).hexdigest(),
+                "rollback_snapshot_sha256": rollback_digest,
+                "restored_snapshot_sha256": rollback_digest,
+                "one_use_key_rotation_passed": True,
+                "old_key_invalidated": True,
+                "rollback_rejection_passed": True,
+                "stale_snapshot_rejected": True,
+                "active_wallet_state_preserved_after_reject": True,
+            },
+            sort_keys=True,
+        ).encode("utf-8")
+        + b"\n",
+        "telemetry/telemetry.json": json.dumps(
+            {
+                "schema_version": 1,
+                "slot_id": slot_id,
+                "suite": "kagemusha-device-lab",
+                "device_model": "Pixel 6",
+                "device_codename": "oriole",
+                "app_package_name": result["app_package_name"],
+            },
+            sort_keys=True,
+        ).encode("utf-8")
+        + b"\n",
+        "telemetry/status.ndjson": f'{{"status":"ok","slot_id":"{slot_id}"}}\n'.encode(
+            "utf-8"
+        ),
+        "queue/pending_queue.json": json.dumps(
+            {"slot_id": slot_id, "pending_transactions": []},
+            sort_keys=True,
+        ).encode("utf-8")
+        + b"\n",
         "logs/runtime.log": b"kagemusha device-lab run complete\n",
     }
+
+
+def write_raw_stage_slot(root: Path, slot_id: str = "pixel6") -> Path:
+    stage_slot = root / slot_id
+    for relative, data in raw_slot_artifacts(slot_id).items():
+        path = stage_slot / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+    return stage_slot
 
 
 def raw_slot_tar_bytes(
     slot_id: str = "pixel6",
     *,
     latest_slot_id: str | None = None,
+    latest_slot_bytes: bytes | None = None,
     extra_files: dict[str, bytes] | None = None,
     omit_files: set[str] | None = None,
     symlinks: dict[str, str] | None = None,
@@ -249,7 +372,9 @@ def raw_slot_tar_bytes(
         add_tar_file(
             tar,
             "latest-slot.txt",
-            ((latest_slot_id or slot_id) + "\n").encode("utf-8"),
+            latest_slot_bytes
+            if latest_slot_bytes is not None
+            else ((latest_slot_id or slot_id) + "\n").encode("utf-8"),
         )
     return buffer.getvalue()
 
@@ -1386,6 +1511,324 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         )
         self.assertFalse((slot_root / "pixel6").exists())
 
+    def test_kagemusha_slot_assembler_publish_rejects_root_identity_swap(
+        self,
+    ) -> None:
+        original_open = slot_assembler.os.open
+
+        with tempfile.TemporaryDirectory() as temp:
+            wrapper = Path(temp)
+            slot_root = wrapper / "device-lab"
+            slot_root.mkdir()
+            root_identity = slot_assembler._file_identity(slot_root.lstat())
+            temp_parent = slot_root / ".pixel6.stage"
+            stage_slot = temp_parent / "pixel6"
+            stage_slot.mkdir(parents=True)
+            swapped_root = wrapper / "device-lab-swapped"
+            swapped = False
+
+            def swapping_root_open(path: Path, flags: int, *args, **kwargs):
+                nonlocal swapped
+                if Path(path) == slot_root and not swapped:
+                    slot_root.rename(swapped_root)
+                    slot_root.mkdir()
+                    swapped = True
+                return original_open(path, flags, *args, **kwargs)
+
+            with mock.patch.object(slot_assembler.os, "open", swapping_root_open):
+                errors = slot_assembler._publish_stage_slot(
+                    stage_slot=stage_slot,
+                    root=slot_root,
+                    slot_id="pixel6",
+                    expected_root_identity=root_identity,
+                    expected_temp_parent_identity=slot_assembler._file_identity(
+                        temp_parent.lstat()
+                    ),
+                    expected_stage_identity=slot_assembler._file_identity(
+                        stage_slot.lstat()
+                    ),
+                )
+            final_slot_exists = (slot_root / "pixel6").exists()
+            staged_slot_survived = (
+                swapped_root / temp_parent.name / "pixel6"
+            ).is_dir()
+
+        self.assertTrue(swapped)
+        self.assertEqual(errors, ["slot root directory changed before publish"])
+        self.assertFalse(final_slot_exists)
+        self.assertTrue(staged_slot_survived)
+
+    def test_kagemusha_slot_assembler_publish_rejects_stage_identity_swap(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            wrapper = Path(temp)
+            slot_root = wrapper / "device-lab"
+            slot_root.mkdir()
+            temp_parent = slot_root / ".pixel6.stage"
+            stage_slot = temp_parent / "pixel6"
+            stage_slot.mkdir(parents=True)
+            root_identity = slot_assembler._file_identity(slot_root.lstat())
+            temp_parent_identity = slot_assembler._file_identity(temp_parent.lstat())
+            stage_identity = slot_assembler._file_identity(stage_slot.lstat())
+            shutil.rmtree(stage_slot)
+            stage_slot.mkdir()
+
+            errors = slot_assembler._publish_stage_slot(
+                stage_slot=stage_slot,
+                root=slot_root,
+                slot_id="pixel6",
+                expected_root_identity=root_identity,
+                expected_temp_parent_identity=temp_parent_identity,
+                expected_stage_identity=stage_identity,
+            )
+
+        self.assertEqual(errors, ["staged slot directory changed before publish"])
+
+    def test_kagemusha_slot_assembler_cleanup_removes_original_temp_parent(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            temp_parent = Path(temp) / "device-lab" / ".pixel6.stage"
+            temp_parent.mkdir(parents=True)
+            (temp_parent / "marker").write_text("temporary\n", encoding="utf-8")
+            temp_parent_identity = slot_assembler._file_identity(temp_parent.lstat())
+
+            slot_assembler._cleanup_temp_parent(
+                temp_parent,
+                expected_identity=temp_parent_identity,
+            )
+            removed = not temp_parent.exists()
+
+        self.assertTrue(removed)
+
+    def test_kagemusha_slot_assembler_cleanup_preserves_swapped_temp_parent(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            wrapper = Path(temp)
+            temp_parent = wrapper / "device-lab" / ".pixel6.stage"
+            temp_parent.mkdir(parents=True)
+            temp_parent_identity = slot_assembler._file_identity(temp_parent.lstat())
+            swapped_temp_parent = wrapper / "swapped-stage"
+            temp_parent.rename(swapped_temp_parent)
+            temp_parent.mkdir()
+            (temp_parent / "victim").write_text("do not remove\n", encoding="utf-8")
+
+            slot_assembler._cleanup_temp_parent(
+                temp_parent,
+                expected_identity=temp_parent_identity,
+            )
+            victim_survived = (temp_parent / "victim").is_file()
+            original_survived = swapped_temp_parent.is_dir()
+
+        self.assertTrue(victim_survived)
+        self.assertTrue(original_survived)
+
+    def test_kagemusha_slot_assembler_json_write_rejects_parent_identity_swap(
+        self,
+    ) -> None:
+        original_open = slot_assembler.os.open
+
+        with tempfile.TemporaryDirectory() as temp:
+            wrapper = Path(temp)
+            slot_dir = wrapper / "slot"
+            output = slot_dir / "slot.json"
+            swapped_slot_dir = wrapper / "slot-swapped"
+            swapped = False
+
+            def swapping_parent_open(path: Path, flags: int, *args, **kwargs):
+                nonlocal swapped
+                if Path(path) == output.parent and not swapped:
+                    output.parent.rename(swapped_slot_dir)
+                    output.parent.mkdir()
+                    swapped = True
+                return original_open(path, flags, *args, **kwargs)
+
+            with mock.patch.object(slot_assembler.os, "open", swapping_parent_open):
+                errors = slot_assembler._write_json(
+                    output,
+                    {"schema": "test"},
+                    "slot metadata",
+                )
+            written_text = (swapped_slot_dir / output.name).read_text(encoding="utf-8")
+
+        self.assertTrue(swapped)
+        self.assertEqual(
+            errors,
+            ["slot metadata parent directory changed before sync"],
+        )
+        self.assertIn('"schema": "test"', written_text)
+
+    def test_kagemusha_slot_assembler_json_write_reports_temp_cleanup_failure(
+        self,
+    ) -> None:
+        original_unlink = slot_assembler.os.unlink
+
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "slot" / "slot.json"
+
+            def failing_replace(_source: Path, _target: Path) -> None:
+                raise OSError("simulated slot metadata replace failure")
+
+            def failing_unlink(path: str, *args, **kwargs):
+                if Path(path).name == f".{output.name}.android-slot.tmp":
+                    raise OSError("simulated slot metadata temp cleanup failure")
+                return original_unlink(path, *args, **kwargs)
+
+            with (
+                mock.patch.object(slot_assembler.os, "replace", failing_replace),
+                mock.patch.object(slot_assembler.os, "unlink", failing_unlink),
+            ):
+                errors = slot_assembler._write_json(
+                    output,
+                    {"schema": "test"},
+                    "slot metadata",
+                )
+            temp_exists = (output.parent / f".{output.name}.android-slot.tmp").exists()
+
+        self.assertEqual(
+            errors,
+            [
+                "slot metadata could not be written",
+                "slot metadata temporary output could not be removed",
+            ],
+        )
+        self.assertTrue(temp_exists)
+
+    def test_kagemusha_slot_assembler_json_temp_cleanup_preserves_swapped_file(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            temp_output = root / ".slot.json.android-slot.tmp"
+            temp_output.write_text("original\n", encoding="utf-8")
+            temp_identity = slot_assembler._file_identity(temp_output.lstat())
+            original_temp = root / "original-slot-temp"
+            temp_output.rename(original_temp)
+            temp_output.write_text("do not remove\n", encoding="utf-8")
+
+            errors = slot_assembler._cleanup_temp_output(
+                temp_output,
+                "slot metadata",
+                temp_identity,
+            )
+            replacement = temp_output.read_text(encoding="utf-8")
+            original = original_temp.read_text(encoding="utf-8")
+
+        self.assertEqual(
+            errors,
+            ["slot metadata temporary output changed before cleanup"],
+        )
+        self.assertEqual(replacement, "do not remove\n")
+        self.assertEqual(original, "original\n")
+
+    def test_kagemusha_slot_assembler_json_write_verifies_installed_bytes(
+        self,
+    ) -> None:
+        original_replace = slot_assembler.os.replace
+
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "slot" / "slot.json"
+
+            def tampering_replace(source: Path, target: Path) -> None:
+                original_replace(source, target)
+                target.write_text('{"schema":"tampered"}\n', encoding="utf-8")
+
+            with mock.patch.object(
+                slot_assembler.os,
+                "replace",
+                side_effect=tampering_replace,
+            ):
+                errors = slot_assembler._write_json(
+                    output,
+                    {"schema": "test"},
+                    "slot metadata",
+                )
+
+        self.assertEqual(errors, ["slot metadata changed after write"])
+
+    def test_kagemusha_slot_assembler_copy_rejects_parent_identity_swap(
+        self,
+    ) -> None:
+        original_open = slot_assembler.os.open
+
+        with tempfile.TemporaryDirectory() as temp:
+            wrapper = Path(temp)
+            source = wrapper / "source.apk"
+            source.write_bytes(b"source apk bytes")
+            destination = wrapper / "slot" / "evidence" / "offline-wallet-release.apk"
+            swapped_parent = wrapper / "evidence-swapped"
+            errors: list[str] = []
+            swapped = False
+
+            def swapping_parent_open(path: Path, flags: int, *args, **kwargs):
+                nonlocal swapped
+                if Path(path) == destination.parent and not swapped:
+                    destination.parent.rename(swapped_parent)
+                    destination.parent.mkdir(parents=True)
+                    swapped = True
+                return original_open(path, flags, *args, **kwargs)
+
+            with mock.patch.object(slot_assembler.os, "open", swapping_parent_open):
+                digest = slot_assembler._copy_source_file(
+                    source=source,
+                    destination=destination,
+                    label="offline wallet release APK source",
+                    errors=errors,
+                )
+            copied_bytes = (swapped_parent / destination.name).read_bytes()
+
+        self.assertTrue(swapped)
+        self.assertIsNone(digest)
+        self.assertEqual(
+            errors,
+            [
+                "offline wallet release APK source parent directory changed before sync"
+            ],
+        )
+        self.assertEqual(copied_bytes, b"source apk bytes")
+
+    def test_kagemusha_slot_assembler_copy_verifies_installed_bytes(
+        self,
+    ) -> None:
+        original_sync = slot_assembler._sync_directory
+
+        with tempfile.TemporaryDirectory() as temp:
+            wrapper = Path(temp)
+            source = wrapper / "source.apk"
+            source.write_bytes(b"source apk bytes")
+            destination = wrapper / "slot" / "evidence" / "offline-wallet-release.apk"
+            errors: list[str] = []
+
+            def tampering_sync(path: Path, label: str, *, expected_identity):
+                sync_errors = original_sync(
+                    path,
+                    label,
+                    expected_identity=expected_identity,
+                )
+                if not sync_errors:
+                    destination.write_bytes(b"tampered apk bytes")
+                return sync_errors
+
+            with mock.patch.object(
+                slot_assembler,
+                "_sync_directory",
+                side_effect=tampering_sync,
+            ):
+                digest = slot_assembler._copy_source_file(
+                    source=source,
+                    destination=destination,
+                    label="offline wallet release APK source",
+                    errors=errors,
+                )
+
+        self.assertIsNone(digest)
+        self.assertEqual(
+            errors,
+            ["offline wallet release APK source changed after write"],
+        )
+
     def test_kagemusha_slot_assembler_requires_attestation_harness_result(
         self,
     ) -> None:
@@ -1497,6 +1940,64 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                 "strongbox_attestation": True,
             },
         )
+
+    def test_kagemusha_attestation_report_writer_rejects_parent_directory_identity_swap_before_sync(
+        self,
+    ) -> None:
+        original_open = attestation_report.os.open
+
+        with tempfile.TemporaryDirectory() as temp:
+            wrapper = Path(temp)
+            root = wrapper / "attestation-report-root"
+            root.mkdir()
+            out_path = root / "report.json"
+            swapped_root = wrapper / "attestation-report-root-swapped"
+            swapped = False
+
+            def swapping_parent_open(path: Path, flags: int, *args, **kwargs):
+                nonlocal swapped
+                if Path(path) == out_path.parent and not swapped:
+                    out_path.parent.rename(swapped_root)
+                    out_path.parent.mkdir()
+                    swapped = True
+                return original_open(path, flags, *args, **kwargs)
+
+            with mock.patch.object(attestation_report.os, "open", swapping_parent_open):
+                errors = attestation_report.write_report(out_path, {"schema": "test"})
+            report_text = (swapped_root / out_path.name).read_text(encoding="utf-8")
+
+        self.assertTrue(swapped)
+        self.assertEqual(
+            errors,
+            ["attestation report output parent directory changed before sync"],
+        )
+        self.assertEqual(report_text, '{\n  "schema": "test"\n}\n')
+
+    def test_kagemusha_attestation_report_writer_temp_cleanup_rejects_swap(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            temp_path = Path(temp) / ".report.json.swap.tmp"
+            temp_path.write_text("original\n", encoding="utf-8")
+            temp_identity = device_lab._file_identity(temp_path.lstat())
+            swapped_temp = Path(temp) / "original-report-temp-file"
+            temp_path.rename(swapped_temp)
+            temp_path.write_text("do not remove\n", encoding="utf-8")
+
+            errors = attestation_report._cleanup_temp_output(
+                temp_path,
+                "attestation report output",
+                temp_identity,
+            )
+            victim_survived = temp_path.read_text(encoding="utf-8")
+            original_survived = swapped_temp.read_text(encoding="utf-8")
+
+        self.assertEqual(
+            errors,
+            ["attestation report output temporary file changed before cleanup"],
+        )
+        self.assertEqual(victim_survived, "do not remove\n")
+        self.assertEqual(original_survived, "original\n")
 
     def test_kagemusha_attestation_report_writer_requires_physical_device_assertion(
         self,
@@ -1682,10 +2183,712 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertTrue(harness_exists)
         self.assertEqual(summary["schema"], raw_puller.RAW_PULL_SUMMARY_SCHEMA)
         self.assertEqual(summary["slot_id"], "pixel6")
+        self.assertEqual(
+            set(summary["artifact_sha256"]),
+            set(raw_puller.RAW_SLOT_REQUIRED_PATHS),
+        )
         self.assertIn("attestation/harness-result.json", summary["artifact_sha256"])
         self.assertIn("attestation/result.json", summary["artifact_sha256"])
         self.assertTrue(any("cat" in call for call in runner.calls))  # type: ignore[attr-defined]
         self.assertTrue(any("exec-out" in call for call in runner.calls))  # type: ignore[attr-defined]
+
+    def test_kagemusha_android_raw_puller_install_refuses_late_existing_slot(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            temp_path = Path(temp)
+            out_root = temp_path / "raw"
+            temp_parent = out_root / ".pixel6.stage"
+            final_slot = out_root / "pixel6"
+            out_root.mkdir()
+            final_slot.mkdir()
+            stage_slot = write_raw_stage_slot(temp_parent, "pixel6")
+
+            errors = raw_puller._install_validated_slot(
+                stage_slot,
+                final_slot,
+                out_root,
+            )
+            final_slot_is_dir = final_slot.is_dir()
+
+        self.assertEqual(
+            errors,
+            ["slot directory already exists; refuse to overwrite raw evidence"],
+        )
+        self.assertTrue(final_slot_is_dir)
+
+    def test_kagemusha_android_raw_puller_install_rejects_unexpected_top_level_entry(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            temp_path = Path(temp)
+            out_root = temp_path / "raw"
+            temp_parent = out_root / ".pixel6.stage"
+            final_slot = out_root / "pixel6"
+            out_root.mkdir()
+            stage_slot = write_raw_stage_slot(temp_parent, "pixel6")
+            (stage_slot / "surprise").mkdir()
+
+            errors = raw_puller._install_validated_slot(
+                stage_slot,
+                final_slot,
+                out_root,
+            )
+            final_slot_exists = final_slot.exists()
+
+        self.assertEqual(
+            errors,
+            ["raw slot install source contains unexpected top-level entry surprise"],
+        )
+        self.assertFalse(final_slot_exists)
+
+    def test_kagemusha_android_raw_puller_install_syncs_directories_and_cleans_failure(
+        self,
+    ) -> None:
+        original_sync_directory = raw_puller._sync_directory
+        sync_calls: list[tuple[Path, str, tuple[int, int] | None]] = []
+
+        def fake_sync_directory(
+            path: Path,
+            error: str,
+            *,
+            expected_identity: tuple[int, int] | None = None,
+        ) -> list[str]:
+            sync_calls.append((path, error, expected_identity))
+            if error == "raw slot directory parent could not be synced":
+                return [error]
+            return []
+
+        with tempfile.TemporaryDirectory() as temp:
+            temp_path = Path(temp)
+            out_root = temp_path / "raw"
+            temp_parent = out_root / ".pixel6.stage"
+            final_slot = out_root / "pixel6"
+            out_root.mkdir()
+            stage_slot = write_raw_stage_slot(temp_parent, "pixel6")
+            raw_puller._sync_directory = fake_sync_directory
+            try:
+                errors = raw_puller._install_validated_slot(
+                    stage_slot,
+                    final_slot,
+                    out_root,
+                )
+            finally:
+                raw_puller._sync_directory = original_sync_directory
+            final_slot_exists = final_slot.exists()
+
+        self.assertEqual(errors, ["raw slot directory parent could not be synced"])
+        self.assertIsNotNone(sync_calls[0][2])
+        self.assertIsNotNone(sync_calls[1][2])
+        self.assertEqual(
+            [(path, error) for path, error, _identity in sync_calls],
+            [
+                (final_slot, "raw slot directory could not be synced"),
+                (out_root, "raw slot directory parent could not be synced"),
+            ],
+        )
+        self.assertFalse(final_slot_exists)
+
+    def test_kagemusha_android_raw_puller_install_rejects_destination_identity_swap(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            parent = Path(temp)
+            parent_identity = raw_puller._file_identity(parent.lstat())
+            final_slot = parent / "pixel6"
+            final_slot.mkdir()
+            original_identity, identity_errors = raw_puller._slot_entry_identity(
+                final_slot,
+                parent,
+                parent_identity,
+            )
+            self.assertEqual(identity_errors, [])
+            assert original_identity is not None
+            final_slot.rmdir()
+            final_slot.mkdir()
+
+            errors = raw_puller._created_slot_identity_errors(
+                final_slot,
+                original_identity,
+                parent,
+                parent_identity,
+            )
+
+        self.assertEqual(errors, ["raw slot directory changed during install"])
+
+    def test_kagemusha_android_raw_puller_install_rejects_output_root_identity_swap(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            output_root = Path(temp) / "raw"
+            output_root.mkdir()
+            original_identity = raw_puller._file_identity(output_root.lstat())
+            output_root.rmdir()
+            output_root.mkdir()
+
+            errors = raw_puller._sync_directory(
+                output_root,
+                "raw slot directory parent could not be synced",
+                expected_identity=original_identity,
+            )
+
+        self.assertEqual(errors, ["raw slot directory parent could not be synced"])
+
+    def test_kagemusha_android_raw_puller_install_rejects_parent_identity_before_slot_stat(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            parent = Path(temp) / "raw"
+            parent.mkdir()
+            original_identity = raw_puller._file_identity(parent.lstat())
+            final_slot = parent / "pixel6"
+            final_slot.mkdir()
+            final_identity = raw_puller._file_identity(final_slot.lstat())
+            final_slot.rmdir()
+            parent.rmdir()
+            parent.mkdir()
+            (parent / "pixel6").mkdir()
+
+            errors = raw_puller._created_slot_identity_errors(
+                parent / "pixel6",
+                final_identity,
+                parent,
+                original_identity,
+            )
+
+        self.assertEqual(errors, ["raw output root directory changed during install"])
+
+    def test_kagemusha_android_raw_puller_install_cleanup_preserves_swapped_destination(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            parent = Path(temp)
+            parent_identity = raw_puller._file_identity(parent.lstat())
+            final_slot = parent / "pixel6"
+            final_slot.mkdir()
+            original_identity = raw_puller._file_identity(final_slot.lstat())
+            final_slot.rmdir()
+            final_slot.mkdir()
+
+            raw_puller._remove_created_slot(
+                final_slot,
+                original_identity,
+                parent,
+                parent_identity,
+            )
+            final_slot_exists = final_slot.is_dir()
+
+        self.assertTrue(final_slot_exists)
+
+    def test_kagemusha_android_raw_puller_install_cleanup_uses_parent_dir_fd(
+        self,
+    ) -> None:
+        original_rmtree = raw_puller.shutil.rmtree
+        rmtree_calls: list[tuple[str, bool, object]] = []
+
+        def fake_rmtree(path, *, ignore_errors=False, dir_fd=None):  # type: ignore[no-untyped-def]
+            rmtree_calls.append((path, ignore_errors, dir_fd))
+
+        with tempfile.TemporaryDirectory() as temp:
+            parent = Path(temp)
+            parent_identity = raw_puller._file_identity(parent.lstat())
+            final_slot = parent / "pixel6"
+            final_slot.mkdir()
+            final_identity = raw_puller._file_identity(final_slot.lstat())
+            raw_puller.shutil.rmtree = fake_rmtree
+            try:
+                raw_puller._remove_created_slot(
+                    final_slot,
+                    final_identity,
+                    parent,
+                    parent_identity,
+                )
+            finally:
+                raw_puller.shutil.rmtree = original_rmtree
+
+        self.assertEqual(len(rmtree_calls), 1)
+        self.assertEqual(rmtree_calls[0][0], "pixel6")
+        self.assertTrue(rmtree_calls[0][1])
+        self.assertIsNotNone(rmtree_calls[0][2])
+
+    def test_kagemusha_android_raw_puller_install_moves_with_directory_fds(
+        self,
+    ) -> None:
+        original_rename = raw_puller.os.rename
+        rename_calls: list[tuple[str, str, int | None, int | None]] = []
+
+        def fake_rename(
+            src: str,
+            dst: str,
+            *,
+            src_dir_fd: int | None = None,
+            dst_dir_fd: int | None = None,
+        ) -> None:
+            rename_calls.append((src, dst, src_dir_fd, dst_dir_fd))
+            original_rename(
+                src,
+                dst,
+                src_dir_fd=src_dir_fd,
+                dst_dir_fd=dst_dir_fd,
+            )
+
+        with tempfile.TemporaryDirectory() as temp:
+            temp_path = Path(temp)
+            out_root = temp_path / "raw"
+            temp_parent = out_root / ".pixel6.stage"
+            final_slot = out_root / "pixel6"
+            out_root.mkdir()
+            stage_slot = write_raw_stage_slot(temp_parent, "pixel6")
+            raw_puller.os.rename = fake_rename
+            try:
+                errors = raw_puller._install_validated_slot(
+                    stage_slot,
+                    final_slot,
+                    out_root,
+                )
+            finally:
+                raw_puller.os.rename = original_rename
+
+        self.assertEqual(errors, [])
+        self.assertEqual(
+            {src for src, _dst, _src_fd, _dst_fd in rename_calls},
+            set(raw_puller.RAW_SLOT_ALLOWED_DIRECTORIES),
+        )
+        self.assertEqual(
+            {src for src, _dst, _src_fd, _dst_fd in rename_calls},
+            {dst for _src, dst, _src_fd, _dst_fd in rename_calls},
+        )
+        self.assertTrue(
+            all(src_fd is not None for _src, _dst, src_fd, _dst_fd in rename_calls)
+        )
+        self.assertTrue(
+            all(dst_fd is not None for _src, _dst, _src_fd, dst_fd in rename_calls)
+        )
+
+    def test_kagemusha_android_raw_puller_temp_cleanup_removes_original_parent(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            temp_parent = Path(temp) / "raw" / ".pixel6.stage"
+            temp_parent.mkdir(parents=True)
+            (temp_parent / "marker").write_text("temporary\n", encoding="utf-8")
+            temp_parent_identity = raw_puller._file_identity(temp_parent.lstat())
+
+            raw_puller._cleanup_temp_parent(
+                temp_parent,
+                expected_identity=temp_parent_identity,
+            )
+            removed = not temp_parent.exists()
+
+        self.assertTrue(removed)
+
+    def test_kagemusha_android_raw_puller_temp_cleanup_preserves_swapped_parent(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            wrapper = Path(temp)
+            temp_parent = wrapper / "raw" / ".pixel6.stage"
+            temp_parent.mkdir(parents=True)
+            temp_parent_identity = raw_puller._file_identity(temp_parent.lstat())
+            swapped_temp_parent = wrapper / "swapped-stage"
+            temp_parent.rename(swapped_temp_parent)
+            temp_parent.mkdir()
+            (temp_parent / "victim").write_text("do not remove\n", encoding="utf-8")
+
+            raw_puller._cleanup_temp_parent(
+                temp_parent,
+                expected_identity=temp_parent_identity,
+            )
+            victim_survived = (temp_parent / "victim").is_file()
+            original_survived = swapped_temp_parent.is_dir()
+
+        self.assertTrue(victim_survived)
+        self.assertTrue(original_survived)
+
+    def test_kagemusha_android_raw_puller_install_sync_rejects_identity_mismatch(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            temp_path = Path(temp)
+            actual = temp_path / "actual"
+            other = temp_path / "other"
+            actual.mkdir()
+            other.mkdir()
+            other_identity = raw_puller._file_identity(other.lstat())
+
+            errors = raw_puller._sync_directory(
+                actual,
+                "raw slot directory could not be synced",
+                expected_identity=other_identity,
+            )
+
+        self.assertEqual(errors, ["raw slot directory could not be synced"])
+
+    def test_kagemusha_android_raw_puller_latest_writer_syncs_parent_identity(
+        self,
+    ) -> None:
+        original_sync_directory = raw_puller._sync_directory
+        sync_calls: list[tuple[Path, str, tuple[int, int] | None]] = []
+
+        def fake_sync_directory(
+            path: Path,
+            error: str,
+            *,
+            expected_identity: tuple[int, int] | None = None,
+        ) -> list[str]:
+            sync_calls.append((path, error, expected_identity))
+            return []
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            raw_puller._sync_directory = fake_sync_directory
+            try:
+                errors = raw_puller._write_latest_slot(root, "pixel6")
+            finally:
+                raw_puller._sync_directory = original_sync_directory
+            latest_text = (root / "latest-slot.txt").read_text(encoding="utf-8")
+
+        self.assertEqual(errors, [])
+        self.assertEqual(latest_text, "pixel6\n")
+        self.assertEqual(
+            [(path, error) for path, error, _identity in sync_calls],
+            [(root, "raw latest-slot output parent directory could not be synced")],
+        )
+        self.assertIsNotNone(sync_calls[0][2])
+
+    def test_kagemusha_android_raw_puller_latest_writer_rejects_symlink_after_replace(
+        self,
+    ) -> None:
+        original_replace = raw_puller.os.replace
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            target = root / "external-latest-slot.txt"
+            target.write_text("external\n", encoding="utf-8")
+
+            def replace_with_symlink(src, dst):  # type: ignore[no-untyped-def]
+                original_replace(src, dst)
+                Path(dst).unlink()
+                Path(dst).symlink_to(target)
+
+            raw_puller.os.replace = replace_with_symlink
+            try:
+                errors = raw_puller._write_latest_slot(root, "pixel6")
+            finally:
+                raw_puller.os.replace = original_replace
+
+        self.assertEqual(
+            errors,
+            ["raw latest-slot output must not be a symlink after writing"],
+        )
+
+    def test_kagemusha_android_raw_puller_latest_writer_rejects_hardlink_after_replace(
+        self,
+    ) -> None:
+        original_replace = raw_puller.os.replace
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            target = root / "external-latest-slot.txt"
+            target.write_text("external\n", encoding="utf-8")
+
+            def replace_with_hardlink(src, dst):  # type: ignore[no-untyped-def]
+                original_replace(src, dst)
+                Path(dst).unlink()
+                os.link(target, dst)
+
+            raw_puller.os.replace = replace_with_hardlink
+            try:
+                errors = raw_puller._write_latest_slot(root, "pixel6")
+            finally:
+                raw_puller.os.replace = original_replace
+
+        self.assertEqual(
+            errors,
+            ["raw latest-slot output must not be hardlinked after writing"],
+        )
+
+    def test_kagemusha_android_raw_puller_latest_writer_rejects_readback_path_swap(
+        self,
+    ) -> None:
+        original_open = raw_puller.Path.open
+        swapped = False
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            latest_path = root / "latest-slot.txt"
+            replacement = root / "replacement-latest-slot.txt"
+
+            def open_with_swap(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+                nonlocal swapped
+                mode = args[0] if args else kwargs.get("mode", "r")
+                if self == latest_path and mode == "rb" and not swapped:
+                    swapped = True
+                    replacement.write_text("replacement\n", encoding="utf-8")
+                    os.replace(replacement, latest_path)
+                return original_open(self, *args, **kwargs)
+
+            raw_puller.Path.open = open_with_swap
+            try:
+                errors = raw_puller._write_latest_slot(root, "pixel6")
+            finally:
+                raw_puller.Path.open = original_open
+
+        self.assertTrue(swapped)
+        self.assertEqual(
+            errors,
+            ["raw latest-slot output changed while being read back"],
+        )
+
+    def test_kagemusha_android_raw_puller_summary_rejects_nonfinite_json_before_tempfile(
+        self,
+    ) -> None:
+        original_mkstemp = raw_puller.tempfile.mkstemp
+        mkstemp_called = False
+
+        def fail_mkstemp(*args, **kwargs):  # type: ignore[no-untyped-def]
+            nonlocal mkstemp_called
+            mkstemp_called = True
+            raise AssertionError("mkstemp must not be called")
+
+        with tempfile.TemporaryDirectory() as temp:
+            summary_out = Path(temp) / "pull-summary.json"
+            raw_puller.tempfile.mkstemp = fail_mkstemp
+            try:
+                errors = raw_puller._write_summary(
+                    summary_out,
+                    {"schema": raw_puller.RAW_PULL_SUMMARY_SCHEMA, "bad": float("nan")},
+                )
+            finally:
+                raw_puller.tempfile.mkstemp = original_mkstemp
+
+        self.assertEqual(errors, ["raw pull summary output is not strict JSON"])
+        self.assertFalse(mkstemp_called)
+        self.assertFalse(summary_out.exists())
+
+    def test_kagemusha_android_raw_puller_summary_rejects_oversized_json_before_tempfile(
+        self,
+    ) -> None:
+        original_mkstemp = raw_puller.tempfile.mkstemp
+        original_limit = raw_puller.device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES
+        mkstemp_called = False
+
+        def fail_mkstemp(*args, **kwargs):  # type: ignore[no-untyped-def]
+            nonlocal mkstemp_called
+            mkstemp_called = True
+            raise AssertionError("mkstemp must not be called")
+
+        with tempfile.TemporaryDirectory() as temp:
+            summary_out = Path(temp) / "pull-summary.json"
+            raw_puller.tempfile.mkstemp = fail_mkstemp
+            raw_puller.device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES = 4
+            try:
+                errors = raw_puller._write_summary(
+                    summary_out,
+                    {"schema": raw_puller.RAW_PULL_SUMMARY_SCHEMA},
+                )
+            finally:
+                raw_puller.tempfile.mkstemp = original_mkstemp
+                raw_puller.device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES = original_limit
+
+        self.assertEqual(
+            errors,
+            ["raw pull summary output must be no more than 4 bytes"],
+        )
+        self.assertFalse(mkstemp_called)
+        self.assertFalse(summary_out.exists())
+
+    def test_kagemusha_android_raw_puller_summary_rejects_symlink_after_replace(
+        self,
+    ) -> None:
+        original_replace = raw_puller.os.replace
+
+        with tempfile.TemporaryDirectory() as temp:
+            temp_path = Path(temp)
+            summary_out = temp_path / "pull-summary.json"
+            target = temp_path / "external-summary.json"
+            target.write_text("external\n", encoding="utf-8")
+
+            def replace_with_symlink(src, dst):  # type: ignore[no-untyped-def]
+                original_replace(src, dst)
+                Path(dst).unlink()
+                Path(dst).symlink_to(target)
+
+            raw_puller.os.replace = replace_with_symlink
+            try:
+                errors = raw_puller._write_summary(
+                    summary_out,
+                    {"schema": raw_puller.RAW_PULL_SUMMARY_SCHEMA},
+                )
+            finally:
+                raw_puller.os.replace = original_replace
+
+        self.assertEqual(
+            errors,
+            ["raw pull summary output must not be a symlink after writing"],
+        )
+
+    def test_kagemusha_android_raw_puller_summary_rejects_hardlink_after_replace(
+        self,
+    ) -> None:
+        original_replace = raw_puller.os.replace
+
+        with tempfile.TemporaryDirectory() as temp:
+            temp_path = Path(temp)
+            summary_out = temp_path / "pull-summary.json"
+            target = temp_path / "external-summary.json"
+            target.write_text("external\n", encoding="utf-8")
+
+            def replace_with_hardlink(src, dst):  # type: ignore[no-untyped-def]
+                original_replace(src, dst)
+                Path(dst).unlink()
+                os.link(target, dst)
+
+            raw_puller.os.replace = replace_with_hardlink
+            try:
+                errors = raw_puller._write_summary(
+                    summary_out,
+                    {"schema": raw_puller.RAW_PULL_SUMMARY_SCHEMA},
+                )
+            finally:
+                raw_puller.os.replace = original_replace
+
+        self.assertEqual(
+            errors,
+            ["raw pull summary output must not be hardlinked after writing"],
+        )
+
+    def test_kagemusha_android_raw_puller_summary_rejects_readback_path_swap(
+        self,
+    ) -> None:
+        original_open = raw_puller.Path.open
+        swapped = False
+
+        with tempfile.TemporaryDirectory() as temp:
+            temp_path = Path(temp)
+            summary_out = temp_path / "pull-summary.json"
+            replacement = temp_path / "replacement-summary.json"
+
+            def open_with_swap(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+                nonlocal swapped
+                mode = args[0] if args else kwargs.get("mode", "r")
+                if self == summary_out and mode == "rb" and not swapped:
+                    swapped = True
+                    replacement.write_text("replacement\n", encoding="utf-8")
+                    os.replace(replacement, summary_out)
+                return original_open(self, *args, **kwargs)
+
+            raw_puller.Path.open = open_with_swap
+            try:
+                errors = raw_puller._write_summary(
+                    summary_out,
+                    {"schema": raw_puller.RAW_PULL_SUMMARY_SCHEMA},
+                )
+            finally:
+                raw_puller.Path.open = original_open
+
+        self.assertTrue(swapped)
+        self.assertEqual(
+            errors,
+            ["raw pull summary output changed while being read back"],
+        )
+
+    def test_kagemusha_android_raw_puller_summary_sync_rejects_parent_identity_swap(
+        self,
+    ) -> None:
+        original_open = raw_puller.os.open
+
+        with tempfile.TemporaryDirectory() as temp:
+            wrapper = Path(temp)
+            root = wrapper / "raw-summary-root"
+            root.mkdir()
+            summary_out = root / "pull-summary.json"
+            swapped_root = wrapper / "raw-summary-root-swapped"
+            swapped = False
+
+            def swapping_parent_open(path, flags, *args, **kwargs):  # type: ignore[no-untyped-def]
+                nonlocal swapped
+                if Path(path) == summary_out.parent and not swapped:
+                    summary_out.parent.rename(swapped_root)
+                    summary_out.parent.mkdir()
+                    swapped = True
+                return original_open(path, flags, *args, **kwargs)
+
+            raw_puller.os.open = swapping_parent_open
+            try:
+                errors = raw_puller._write_summary(
+                    summary_out,
+                    {"schema": raw_puller.RAW_PULL_SUMMARY_SCHEMA},
+                )
+            finally:
+                raw_puller.os.open = original_open
+            written = (swapped_root / summary_out.name).read_text(encoding="utf-8")
+
+        self.assertTrue(swapped)
+        self.assertEqual(
+            errors,
+            ["raw pull summary output parent directory could not be synced"],
+        )
+        self.assertIn(raw_puller.RAW_PULL_SUMMARY_SCHEMA, written)
+
+    def test_kagemusha_android_raw_puller_summary_digest_rejects_symlinked_artifact(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            temp_path = Path(temp)
+            out_root = temp_path / "raw"
+            target = temp_path / "external-runtime.log"
+            target.write_text("kagemusha device-lab run complete\n", encoding="utf-8")
+            status, slot_path, errors = raw_puller.pull_raw_slot(
+                raw_pull_args(out_root),
+                runner=fake_raw_pull_runner(raw_slot_tar_bytes("pixel6"), "pixel6"),
+            )
+            self.assertEqual(status, 0, errors)
+            assert slot_path is not None
+            replace_with_symlink(
+                self,
+                slot_path / "logs" / "runtime.log",
+                target,
+            )
+
+            digests, digest_errors = raw_puller._raw_artifact_digests(slot_path)
+
+        self.assertEqual(set(digests), raw_puller.RAW_SLOT_ALLOWED_PATHS - {"logs/runtime.log"})
+        self.assertIn(
+            "raw artifact digest logs/runtime.log must not be a symlink",
+            digest_errors,
+        )
+        self.assertIn(
+            "raw artifact digest inventory must include every required artifact",
+            digest_errors,
+        )
+
+    def test_kagemusha_android_raw_puller_summary_digest_rejects_hardlinked_artifact(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            temp_path = Path(temp)
+            out_root = temp_path / "raw"
+            target = temp_path / "external-runtime.log"
+            target.write_text("kagemusha device-lab run complete\n", encoding="utf-8")
+            status, slot_path, errors = raw_puller.pull_raw_slot(
+                raw_pull_args(out_root),
+                runner=fake_raw_pull_runner(raw_slot_tar_bytes("pixel6"), "pixel6"),
+            )
+            self.assertEqual(status, 0, errors)
+            assert slot_path is not None
+            replace_with_hardlink(
+                self,
+                slot_path / "logs" / "runtime.log",
+                target,
+            )
+
+            _digests, digest_errors = raw_puller._raw_artifact_digests(slot_path)
+
+        self.assertIn(
+            "raw artifact digest logs/runtime.log must not be hardlinked",
+            digest_errors,
+        )
 
     def test_kagemusha_android_raw_puller_requires_harness_result(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -1824,6 +3027,28 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             errors,
         )
 
+    def test_kagemusha_android_raw_puller_rejects_unexpected_raw_artifact(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            out_root = Path(temp) / "raw"
+            tar_bytes = raw_slot_tar_bytes(
+                "pixel6",
+                extra_files={"pixel6/debug/extra.log": b"debug-only\n"},
+            )
+
+            status, slot_path, errors = raw_puller.pull_raw_slot(
+                raw_pull_args(out_root),
+                runner=fake_raw_pull_runner(tar_bytes, "pixel6"),
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIsNone(slot_path)
+        self.assertIn(
+            "raw slot artifact debug/extra.log is not an allowed path",
+            errors,
+        )
+
     def test_kagemusha_android_raw_puller_rejects_oversized_tar_member(self) -> None:
         original_limit = raw_puller.MAX_RAW_SLOT_FILE_BYTES
         try:
@@ -1857,7 +3082,92 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
 
         self.assertEqual(status, 1)
         self.assertIsNone(slot_path)
-        self.assertIn("latest-slot.txt must match slot id", errors)
+        self.assertIn("latest-slot.txt must be canonical and match slot id", errors)
+
+    def test_kagemusha_android_raw_puller_rejects_noncanonical_latest_slot_query(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            out_root = Path(temp) / "raw"
+            runner = fake_raw_pull_runner(raw_slot_tar_bytes("pixel6"), " pixel6")
+
+            status, slot_path, errors = raw_puller.pull_raw_slot(
+                raw_pull_args(out_root),
+                runner=runner,
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIsNone(slot_path)
+        self.assertIn(
+            "latest-slot.txt must be canonical and contain exactly one slot id",
+            errors,
+        )
+        self.assertFalse(any("exec-out" in call for call in runner.calls))  # type: ignore[attr-defined]
+
+    def test_kagemusha_android_raw_puller_rejects_noncanonical_latest_slot(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            out_root = Path(temp) / "raw"
+            tar_bytes = raw_slot_tar_bytes(
+                "pixel6",
+                latest_slot_bytes=b" pixel6\n",
+            )
+
+            status, slot_path, errors = raw_puller.pull_raw_slot(
+                raw_pull_args(out_root),
+                runner=fake_raw_pull_runner(tar_bytes, "pixel6"),
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIsNone(slot_path)
+        self.assertIn("latest-slot.txt must be canonical and match slot id", errors)
+
+    def test_kagemusha_android_raw_puller_rejects_noncanonical_challenge_file(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            out_root = Path(temp) / "raw"
+            tar_bytes = raw_slot_tar_bytes(
+                "pixel6",
+                omit_files={"attestation/challenge.hex"},
+                extra_files={"pixel6/attestation/challenge.hex": b"ABCDEF00\n"},
+            )
+
+            status, slot_path, errors = raw_puller.pull_raw_slot(
+                raw_pull_args(out_root),
+                runner=fake_raw_pull_runner(tar_bytes, "pixel6"),
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIsNone(slot_path)
+        self.assertIn(
+            "attestation/challenge.hex must be canonical lowercase hexadecimal plus trailing newline",
+            errors,
+        )
+
+    def test_kagemusha_android_raw_puller_requires_challenge_file_newline(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            out_root = Path(temp) / "raw"
+            tar_bytes = raw_slot_tar_bytes(
+                "pixel6",
+                omit_files={"attestation/challenge.hex"},
+                extra_files={"pixel6/attestation/challenge.hex": b"01020304"},
+            )
+
+            status, slot_path, errors = raw_puller.pull_raw_slot(
+                raw_pull_args(out_root),
+                runner=fake_raw_pull_runner(tar_bytes, "pixel6"),
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIsNone(slot_path)
+        self.assertIn(
+            "attestation/challenge.hex must be canonical lowercase hexadecimal plus trailing newline",
+            errors,
+        )
 
     def test_kagemusha_android_raw_puller_rejects_tar_file_parent_collision(
         self,
@@ -1881,6 +3191,438 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertIsNone(slot_path)
         self.assertIn(
             "raw slot tar member pixel6/collision/child parent directory could not be created",
+            errors,
+        )
+
+    def test_kagemusha_android_raw_puller_rejects_tar_directory_collision(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            out_root = Path(temp) / "raw"
+            tar_bytes = raw_slot_tar_bytes(
+                "pixel6",
+                extra_files={"pixel6/file-then-directory": b"file-parent\n"},
+            )
+            buffer = io.BytesIO(tar_bytes)
+            collision_tar = io.BytesIO()
+            with tarfile.open(fileobj=collision_tar, mode="w") as out_tar:
+                with tarfile.open(fileobj=buffer, mode="r:*") as in_tar:
+                    for member in in_tar:
+                        extracted = in_tar.extractfile(member) if member.isfile() else None
+                        out_tar.addfile(member, extracted)
+                add_tar_directory(out_tar, "pixel6/file-then-directory/nested")
+
+            status, slot_path, errors = raw_puller.pull_raw_slot(
+                raw_pull_args(out_root),
+                runner=fake_raw_pull_runner(collision_tar.getvalue(), "pixel6"),
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIsNone(slot_path)
+        self.assertIn(
+            "raw slot tar directory pixel6/file-then-directory/nested could not be created",
+            errors,
+        )
+
+    def test_kagemusha_android_raw_puller_requires_result_slot_field(self) -> None:
+        result = json.loads(raw_slot_artifacts("pixel6")["attestation/result.json"])
+        del result["slot"]
+        with tempfile.TemporaryDirectory() as temp:
+            out_root = Path(temp) / "raw"
+            tar_bytes = raw_slot_tar_bytes(
+                "pixel6",
+                omit_files={"attestation/result.json"},
+                extra_files={
+                    "pixel6/attestation/result.json": json.dumps(
+                        result,
+                        sort_keys=True,
+                    ).encode("utf-8")
+                    + b"\n",
+                },
+            )
+
+            status, slot_path, errors = raw_puller.pull_raw_slot(
+                raw_pull_args(out_root),
+                runner=fake_raw_pull_runner(tar_bytes, "pixel6"),
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIsNone(slot_path)
+        self.assertIn("attestation/result.json slot must match slot id", errors)
+
+    def test_kagemusha_android_raw_puller_requires_result_chain_digest(self) -> None:
+        result = json.loads(raw_slot_artifacts("pixel6")["attestation/result.json"])
+        del result["attestation_certificate_chain_sha256"]
+        with tempfile.TemporaryDirectory() as temp:
+            out_root = Path(temp) / "raw"
+            tar_bytes = raw_slot_tar_bytes(
+                "pixel6",
+                omit_files={"attestation/result.json"},
+                extra_files={
+                    "pixel6/attestation/result.json": json.dumps(
+                        result,
+                        sort_keys=True,
+                    ).encode("utf-8")
+                    + b"\n",
+                },
+            )
+
+            status, slot_path, errors = raw_puller.pull_raw_slot(
+                raw_pull_args(out_root),
+                runner=fake_raw_pull_runner(tar_bytes, "pixel6"),
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIsNone(slot_path)
+        self.assertIn(
+            "attestation/result.json attestation_certificate_chain_sha256 "
+            "must be a lowercase SHA-256 hex digest",
+            errors,
+        )
+
+    def test_kagemusha_android_raw_puller_requires_result_challenge_digest(self) -> None:
+        result = json.loads(raw_slot_artifacts("pixel6")["attestation/result.json"])
+        del result["attestation_challenge_sha256"]
+        with tempfile.TemporaryDirectory() as temp:
+            out_root = Path(temp) / "raw"
+            tar_bytes = raw_slot_tar_bytes(
+                "pixel6",
+                omit_files={"attestation/result.json"},
+                extra_files={
+                    "pixel6/attestation/result.json": json.dumps(
+                        result,
+                        sort_keys=True,
+                    ).encode("utf-8")
+                    + b"\n",
+                },
+            )
+
+            status, slot_path, errors = raw_puller.pull_raw_slot(
+                raw_pull_args(out_root),
+                runner=fake_raw_pull_runner(tar_bytes, "pixel6"),
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIsNone(slot_path)
+        self.assertIn(
+            "attestation/result.json attestation_challenge_sha256 "
+            "must be a lowercase SHA-256 hex digest",
+            errors,
+        )
+
+    def test_kagemusha_android_raw_puller_rejects_result_extra_field(self) -> None:
+        result = json.loads(raw_slot_artifacts("pixel6")["attestation/result.json"])
+        result["debug_note"] = "not production evidence"
+        with tempfile.TemporaryDirectory() as temp:
+            out_root = Path(temp) / "raw"
+            tar_bytes = raw_slot_tar_bytes(
+                "pixel6",
+                omit_files={"attestation/result.json"},
+                extra_files={
+                    "pixel6/attestation/result.json": json.dumps(
+                        result,
+                        sort_keys=True,
+                    ).encode("utf-8")
+                    + b"\n",
+                },
+            )
+
+            status, slot_path, errors = raw_puller.pull_raw_slot(
+                raw_pull_args(out_root),
+                runner=fake_raw_pull_runner(tar_bytes, "pixel6"),
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIsNone(slot_path)
+        self.assertIn(
+            "attestation/result.json contains unexpected field debug_note",
+            errors,
+        )
+
+    def test_kagemusha_android_raw_puller_requires_result_identity_strings(self) -> None:
+        result = json.loads(raw_slot_artifacts("pixel6")["attestation/result.json"])
+        result["device_fingerprint"] = " google/oriole "
+        with tempfile.TemporaryDirectory() as temp:
+            out_root = Path(temp) / "raw"
+            tar_bytes = raw_slot_tar_bytes(
+                "pixel6",
+                omit_files={"attestation/result.json"},
+                extra_files={
+                    "pixel6/attestation/result.json": json.dumps(
+                        result,
+                        sort_keys=True,
+                    ).encode("utf-8")
+                    + b"\n",
+                },
+            )
+
+            status, slot_path, errors = raw_puller.pull_raw_slot(
+                raw_pull_args(out_root),
+                runner=fake_raw_pull_runner(tar_bytes, "pixel6"),
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIsNone(slot_path)
+        self.assertIn(
+            "attestation/result.json device_fingerprint must not have surrounding whitespace",
+            errors,
+        )
+
+    def test_kagemusha_android_raw_puller_requires_result_sdk_digests(self) -> None:
+        result = json.loads(raw_slot_artifacts("pixel6")["attestation/result.json"])
+        del result["app_signing_certificate_sha256"]
+        result["offline_wallet_policy_sha256"] = "ABCDEF"
+        with tempfile.TemporaryDirectory() as temp:
+            out_root = Path(temp) / "raw"
+            tar_bytes = raw_slot_tar_bytes(
+                "pixel6",
+                omit_files={"attestation/result.json"},
+                extra_files={
+                    "pixel6/attestation/result.json": json.dumps(
+                        result,
+                        sort_keys=True,
+                    ).encode("utf-8")
+                    + b"\n",
+                },
+            )
+
+            status, slot_path, errors = raw_puller.pull_raw_slot(
+                raw_pull_args(out_root),
+                runner=fake_raw_pull_runner(tar_bytes, "pixel6"),
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIsNone(slot_path)
+        self.assertIn(
+            "attestation/result.json app_signing_certificate_sha256 "
+            "must be a lowercase SHA-256 hex digest",
+            errors,
+        )
+        self.assertIn(
+            "attestation/result.json offline_wallet_policy_sha256 "
+            "must be a lowercase SHA-256 hex digest",
+            errors,
+        )
+
+    def test_kagemusha_android_raw_puller_requires_result_strongbox_levels(
+        self,
+    ) -> None:
+        result = json.loads(raw_slot_artifacts("pixel6")["attestation/result.json"])
+        result["keymint_security_level"] = "TEE"
+        with tempfile.TemporaryDirectory() as temp:
+            out_root = Path(temp) / "raw"
+            tar_bytes = raw_slot_tar_bytes(
+                "pixel6",
+                omit_files={"attestation/result.json"},
+                extra_files={
+                    "pixel6/attestation/result.json": json.dumps(
+                        result,
+                        sort_keys=True,
+                    ).encode("utf-8")
+                    + b"\n",
+                },
+            )
+
+            status, slot_path, errors = raw_puller.pull_raw_slot(
+                raw_pull_args(out_root),
+                runner=fake_raw_pull_runner(tar_bytes, "pixel6"),
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIsNone(slot_path)
+        self.assertIn(
+            "attestation/result.json keymint_security_level must be STRONGBOX",
+            errors,
+        )
+
+    def test_kagemusha_android_raw_puller_rejects_queue_slot_mismatch(self) -> None:
+        queue = json.loads(raw_slot_artifacts("pixel6")["queue/pending_queue.json"])
+        queue["slot_id"] = "pixel7"
+        with tempfile.TemporaryDirectory() as temp:
+            out_root = Path(temp) / "raw"
+            tar_bytes = raw_slot_tar_bytes(
+                "pixel6",
+                omit_files={"queue/pending_queue.json"},
+                extra_files={
+                    "pixel6/queue/pending_queue.json": json.dumps(
+                        queue,
+                        sort_keys=True,
+                    ).encode("utf-8")
+                    + b"\n",
+                },
+            )
+
+            status, slot_path, errors = raw_puller.pull_raw_slot(
+                raw_pull_args(out_root),
+                runner=fake_raw_pull_runner(tar_bytes, "pixel6"),
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIsNone(slot_path)
+        self.assertIn("queue/pending_queue.json slot_id must match slot id", errors)
+
+    def test_kagemusha_android_raw_puller_rejects_telemetry_slot_mismatch(
+        self,
+    ) -> None:
+        telemetry = json.loads(raw_slot_artifacts("pixel6")["telemetry/telemetry.json"])
+        telemetry["slot_id"] = "pixel7"
+        with tempfile.TemporaryDirectory() as temp:
+            out_root = Path(temp) / "raw"
+            tar_bytes = raw_slot_tar_bytes(
+                "pixel6",
+                omit_files={"telemetry/telemetry.json"},
+                extra_files={
+                    "pixel6/telemetry/telemetry.json": json.dumps(
+                        telemetry,
+                        sort_keys=True,
+                    ).encode("utf-8")
+                    + b"\n",
+                },
+            )
+
+            status, slot_path, errors = raw_puller.pull_raw_slot(
+                raw_pull_args(out_root),
+                runner=fake_raw_pull_runner(tar_bytes, "pixel6"),
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIsNone(slot_path)
+        self.assertIn("telemetry/telemetry.json slot_id must match slot id", errors)
+
+    def test_kagemusha_android_raw_puller_rejects_d2d_online_handoff(self) -> None:
+        d2d = json.loads(raw_slot_artifacts("pixel6")["handoff/d2d-payment.json"])
+        d2d["transport_offline"] = False
+        with tempfile.TemporaryDirectory() as temp:
+            out_root = Path(temp) / "raw"
+            tar_bytes = raw_slot_tar_bytes(
+                "pixel6",
+                omit_files={"handoff/d2d-payment.json"},
+                extra_files={
+                    "pixel6/handoff/d2d-payment.json": json.dumps(
+                        d2d,
+                        sort_keys=True,
+                    ).encode("utf-8")
+                    + b"\n",
+                },
+            )
+
+            status, slot_path, errors = raw_puller.pull_raw_slot(
+                raw_pull_args(out_root),
+                runner=fake_raw_pull_runner(tar_bytes, "pixel6"),
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIsNone(slot_path)
+        self.assertIn(
+            "handoff/d2d-payment.json transport_offline must be true",
+            errors,
+        )
+
+    def test_kagemusha_android_raw_puller_rejects_wallet_rollback_failure(
+        self,
+    ) -> None:
+        wallet = json.loads(raw_slot_artifacts("pixel6")["wallet/integrity.json"])
+        wallet["rollback_rejection_passed"] = False
+        with tempfile.TemporaryDirectory() as temp:
+            out_root = Path(temp) / "raw"
+            tar_bytes = raw_slot_tar_bytes(
+                "pixel6",
+                omit_files={"wallet/integrity.json"},
+                extra_files={
+                    "pixel6/wallet/integrity.json": json.dumps(
+                        wallet,
+                        sort_keys=True,
+                    ).encode("utf-8")
+                    + b"\n",
+                },
+            )
+
+            status, slot_path, errors = raw_puller.pull_raw_slot(
+                raw_pull_args(out_root),
+                runner=fake_raw_pull_runner(tar_bytes, "pixel6"),
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIsNone(slot_path)
+        self.assertIn(
+            "wallet/integrity.json rollback_rejection_passed must be true",
+            errors,
+        )
+
+    def test_kagemusha_android_raw_puller_rejects_failed_status_ndjson(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            out_root = Path(temp) / "raw"
+            tar_bytes = raw_slot_tar_bytes(
+                "pixel6",
+                omit_files={"telemetry/status.ndjson"},
+                extra_files={
+                    "pixel6/telemetry/status.ndjson": b'{"status":"failed","slot_id":"pixel6"}\n',
+                },
+            )
+
+            status, slot_path, errors = raw_puller.pull_raw_slot(
+                raw_pull_args(out_root),
+                runner=fake_raw_pull_runner(tar_bytes, "pixel6"),
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIsNone(slot_path)
+        self.assertIn(
+            "telemetry/status.ndjson line 1 status must not be 'failed'",
+            errors,
+        )
+        self.assertIn("telemetry/status.ndjson must contain at least one ok status", errors)
+
+    def test_kagemusha_android_raw_puller_rejects_status_slot_mismatch(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            out_root = Path(temp) / "raw"
+            tar_bytes = raw_slot_tar_bytes(
+                "pixel6",
+                omit_files={"telemetry/status.ndjson"},
+                extra_files={
+                    "pixel6/telemetry/status.ndjson": b'{"status":"ok","slot_id":"pixel7"}\n',
+                },
+            )
+
+            status, slot_path, errors = raw_puller.pull_raw_slot(
+                raw_pull_args(out_root),
+                runner=fake_raw_pull_runner(tar_bytes, "pixel6"),
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIsNone(slot_path)
+        self.assertIn(
+            "telemetry/status.ndjson line 1 slot_id must match slot id",
+            errors,
+        )
+
+    def test_kagemusha_android_raw_puller_rejects_runtime_failure_marker(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            out_root = Path(temp) / "raw"
+            tar_bytes = raw_slot_tar_bytes(
+                "pixel6",
+                omit_files={"logs/runtime.log"},
+                extra_files={
+                    "pixel6/logs/runtime.log": (
+                        b"kagemusha device-lab run complete\n"
+                        b"TEST FAILED: offline handoff regressed\n"
+                    ),
+                },
+            )
+
+            status, slot_path, errors = raw_puller.pull_raw_slot(
+                raw_pull_args(out_root),
+                runner=fake_raw_pull_runner(tar_bytes, "pixel6"),
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIsNone(slot_path)
+        self.assertIn(
+            "logs/runtime.log must not contain failure marker TEST FAILED",
             errors,
         )
 
@@ -9679,7 +11421,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
     def test_signer_write_json_reports_temp_cleanup_failure_after_write_failure(
         self,
     ) -> None:
-        original_unlink = Path.unlink
+        original_unlink = evidence_signer.os.unlink
 
         with tempfile.TemporaryDirectory() as temp:
             output = Path(temp) / "slot" / "evidence" / "signed-evidence.json"
@@ -9687,14 +11429,17 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             def failing_replace(src: Path, dst: Path) -> None:
                 raise OSError("simulated signer replace failure")
 
-            def failing_temp_unlink(path: Path, *args, **kwargs):
-                if path.name.startswith(f".{output.name}.") and path.suffix == ".tmp":
+            def failing_temp_unlink(path: str, *args, **kwargs):
+                if (
+                    Path(path).name.startswith(f".{output.name}.")
+                    and Path(path).suffix == ".tmp"
+                ):
                     raise OSError("simulated signer temp cleanup failure")
                 return original_unlink(path, *args, **kwargs)
 
             with (
                 mock.patch.object(evidence_signer.os, "replace", failing_replace),
-                mock.patch.object(Path, "unlink", failing_temp_unlink),
+                mock.patch.object(evidence_signer.os, "unlink", failing_temp_unlink),
             ):
                 errors = evidence_signer._write_json(
                     output,
@@ -9716,7 +11461,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self,
     ) -> None:
         original_validate = evidence_signer._validate_json_output_path
-        original_unlink = Path.unlink
+        original_unlink = evidence_signer.os.unlink
 
         with tempfile.TemporaryDirectory() as temp:
             output = Path(temp) / "slot" / "evidence" / "signed-evidence.json"
@@ -9730,8 +11475,11 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                         return ["signed evidence output path changed after staging"]
                 return original_validate(path, label)
 
-            def failing_temp_unlink(path: Path, *args, **kwargs):
-                if path.name.startswith(f".{output.name}.") and path.suffix == ".tmp":
+            def failing_temp_unlink(path: str, *args, **kwargs):
+                if (
+                    Path(path).name.startswith(f".{output.name}.")
+                    and Path(path).suffix == ".tmp"
+                ):
                     raise OSError("simulated signer temp cleanup failure")
                 return original_unlink(path, *args, **kwargs)
 
@@ -9741,7 +11489,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                     "_validate_json_output_path",
                     racing_validate,
                 ),
-                mock.patch.object(Path, "unlink", failing_temp_unlink),
+                mock.patch.object(evidence_signer.os, "unlink", failing_temp_unlink),
             ):
                 errors = evidence_signer._write_json(
                     output,
@@ -9761,6 +11509,30 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertEqual(validation_calls, 2)
         self.assertFalse(output_exists)
         self.assertEqual(len(temp_files), 1)
+
+    def test_signer_write_json_temp_cleanup_rejects_swapped_temp_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            temp_path = Path(temp) / ".signed-evidence.json.swap.tmp"
+            temp_path.write_text("original\n", encoding="utf-8")
+            temp_identity = evidence_signer._file_identity(temp_path.lstat())
+            swapped_temp = Path(temp) / "original-signed-evidence-temp-file"
+            temp_path.rename(swapped_temp)
+            temp_path.write_text("do not remove\n", encoding="utf-8")
+
+            errors = evidence_signer._cleanup_temp_output(
+                temp_path,
+                "signed evidence output path",
+                temp_identity,
+            )
+            victim_survived = temp_path.read_text(encoding="utf-8")
+            original_survived = swapped_temp.read_text(encoding="utf-8")
+
+        self.assertEqual(
+            errors,
+            ["signed evidence output path temporary file changed before cleanup"],
+        )
+        self.assertEqual(victim_survived, "do not remove\n")
+        self.assertEqual(original_survived, "original\n")
 
     def test_signer_write_json_rejects_parent_directory_sync_failure_after_replace(
         self,
@@ -9794,6 +11566,42 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         )
         self.assertEqual(output_text, '{\n  "schema": "test"\n}\n')
         self.assertEqual(temp_files, [])
+
+    def test_signer_write_json_rejects_parent_directory_identity_swap_before_sync(
+        self,
+    ) -> None:
+        original_open = evidence_signer.os.open
+
+        with tempfile.TemporaryDirectory() as temp:
+            wrapper = Path(temp)
+            root = wrapper / "signed-evidence-root"
+            output = root / "signed-evidence.json"
+            root.mkdir()
+            swapped_root = wrapper / "signed-evidence-root-swapped"
+            swapped = False
+
+            def swapping_parent_open(path: Path, flags: int, *args, **kwargs):
+                nonlocal swapped
+                if Path(path) == output.parent and not swapped:
+                    output.parent.rename(swapped_root)
+                    output.parent.mkdir()
+                    swapped = True
+                return original_open(path, flags, *args, **kwargs)
+
+            with mock.patch.object(evidence_signer.os, "open", swapping_parent_open):
+                errors = evidence_signer._write_json(
+                    output,
+                    {"schema": "test"},
+                    "signed evidence output path",
+                )
+            output_text = (swapped_root / output.name).read_text(encoding="utf-8")
+
+        self.assertTrue(swapped)
+        self.assertEqual(
+            errors,
+            ["signed evidence output path parent directory changed before sync"],
+        )
+        self.assertEqual(output_text, '{\n  "schema": "test"\n}\n')
 
     def test_signer_write_json_rejects_symlink_swap_before_replace(self) -> None:
         original_validate = evidence_signer._validate_json_output_path
@@ -13431,7 +15239,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                 summary_path.write_text("existing summary\n", encoding="utf-8")
 
                 def failing_stat(path: Path, *args, **kwargs):
-                    if path == summary_path:
+                    if path == summary_path and kwargs.get("follow_symlinks", True):
                         raise OSError("simulated summary stat failure")
                     return original_stat(path, *args, **kwargs)
 
@@ -13480,7 +15288,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
     def test_write_summary_reports_temp_cleanup_failure_after_write_failure(
         self,
     ) -> None:
-        original_unlink = Path.unlink
+        original_unlink = device_lab.os.unlink
 
         with tempfile.TemporaryDirectory() as temp:
             summary_path = Path(temp) / "summary.json"
@@ -13488,17 +15296,17 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             def failing_replace(src: Path, dst: Path) -> None:
                 raise OSError("simulated summary replace failure")
 
-            def failing_temp_unlink(path: Path, *args, **kwargs):
+            def failing_temp_unlink(path: str, *args, **kwargs):
                 if (
-                    path.name.startswith(f".{summary_path.name}.")
-                    and path.suffix == ".tmp"
+                    Path(path).name.startswith(f".{summary_path.name}.")
+                    and Path(path).suffix == ".tmp"
                 ):
                     raise OSError("simulated summary temp cleanup failure")
                 return original_unlink(path, *args, **kwargs)
 
             with (
                 mock.patch.object(device_lab.os, "replace", failing_replace),
-                mock.patch.object(Path, "unlink", failing_temp_unlink),
+                mock.patch.object(device_lab.os, "unlink", failing_temp_unlink),
             ):
                 errors = device_lab.write_summary(summary_path, {"ok": False})
             temp_files = list(summary_path.parent.glob(".summary.json.*.tmp"))
@@ -13516,7 +15324,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self,
     ) -> None:
         original_validate = device_lab.validate_summary_output_path
-        original_unlink = Path.unlink
+        original_unlink = device_lab.os.unlink
 
         with tempfile.TemporaryDirectory() as temp:
             summary_path = Path(temp) / "summary.json"
@@ -13530,10 +15338,10 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                         return ["--json-out changed after staging"]
                 return original_validate(path, label)
 
-            def failing_temp_unlink(path: Path, *args, **kwargs):
+            def failing_temp_unlink(path: str, *args, **kwargs):
                 if (
-                    path.name.startswith(f".{summary_path.name}.")
-                    and path.suffix == ".tmp"
+                    Path(path).name.startswith(f".{summary_path.name}.")
+                    and Path(path).suffix == ".tmp"
                 ):
                     raise OSError("simulated summary temp cleanup failure")
                 return original_unlink(path, *args, **kwargs)
@@ -13544,7 +15352,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                     "validate_summary_output_path",
                     racing_validate,
                 ),
-                mock.patch.object(Path, "unlink", failing_temp_unlink),
+                mock.patch.object(device_lab.os, "unlink", failing_temp_unlink),
             ):
                 errors = device_lab.write_summary(summary_path, {"ok": False})
             temp_files = list(summary_path.parent.glob(".summary.json.*.tmp"))
@@ -13560,6 +15368,26 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertEqual(validation_calls, 2)
         self.assertFalse(output_exists)
         self.assertEqual(len(temp_files), 1)
+
+    def test_write_summary_temp_cleanup_rejects_swapped_temp_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            temp_path = Path(temp) / ".summary.json.swap.tmp"
+            temp_path.write_text("original\n", encoding="utf-8")
+            temp_identity = device_lab._file_identity(temp_path.lstat())
+            swapped_temp = Path(temp) / "original-temp-file"
+            temp_path.rename(swapped_temp)
+            temp_path.write_text("do not remove\n", encoding="utf-8")
+
+            errors = device_lab._cleanup_summary_output(
+                temp_path,
+                temp_identity,
+            )
+            victim_survived = temp_path.read_text(encoding="utf-8")
+            original_survived = swapped_temp.read_text(encoding="utf-8")
+
+        self.assertEqual(errors, ["--json-out temporary file changed before cleanup"])
+        self.assertEqual(victim_survived, "do not remove\n")
+        self.assertEqual(original_survived, "original\n")
 
     def test_write_summary_rejects_parent_directory_sync_failure_after_replace(
         self,
@@ -13586,6 +15414,37 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertEqual(errors, ["--json-out parent directory could not be synced"])
         self.assertEqual(summary_text, '{\n  "ok": false\n}\n')
         self.assertEqual(temp_files, [])
+
+    def test_write_summary_rejects_parent_directory_identity_swap_before_sync(
+        self,
+    ) -> None:
+        original_open = device_lab.os.open
+
+        with tempfile.TemporaryDirectory() as temp:
+            wrapper = Path(temp)
+            root = wrapper / "summary-output-root"
+            root.mkdir()
+            summary_path = root / "summary.json"
+            swapped_root = wrapper / "summary-output-root-swapped"
+            swapped = False
+
+            def swapping_parent_open(path: Path, flags: int, *args, **kwargs):
+                nonlocal swapped
+                if Path(path) == summary_path.parent and not swapped:
+                    summary_path.parent.rename(swapped_root)
+                    summary_path.parent.mkdir()
+                    swapped = True
+                return original_open(path, flags, *args, **kwargs)
+
+            with mock.patch.object(device_lab.os, "open", swapping_parent_open):
+                errors = device_lab.write_summary(summary_path, {"ok": False})
+            summary_text = (swapped_root / summary_path.name).read_text(
+                encoding="utf-8"
+            )
+
+        self.assertTrue(swapped)
+        self.assertEqual(errors, ["--json-out parent directory changed before sync"])
+        self.assertEqual(summary_text, '{\n  "ok": false\n}\n')
 
     def test_write_summary_rejects_symlink_swap_before_replace(self) -> None:
         original_validate = device_lab.validate_summary_output_path

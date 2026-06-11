@@ -79,7 +79,17 @@ class PrivacyNativeBridgeTest {
             PrivacyNativeBridge::buildConfidentialUnshieldProofV3,
             PrivacyNativeBridge::buildZkAceAuthorizationProofV1,
             PrivacyNativeBridge::buildJindoLatticeProofV0,
+            PrivacyNativeBridge::buildSisHintsAnonymousCredentialProofV0,
+            PrivacyNativeBridge::buildSilentThresholdCredentialShowingProofV0,
+            PrivacyNativeBridge::buildVegaCredentialPredicateProofV0,
+            PrivacyNativeBridge::buildZkAmsAdmissionBatchProofV0,
+            PrivacyNativeBridge::buildZkAtPolicyProofV1,
             PrivacyNativeBridge::verifyJindoPolynomialCommitmentV0,
+            PrivacyNativeBridge::verifySisHintsAnonymousCredentialProofV0,
+            PrivacyNativeBridge::verifySilentThresholdCredentialShowingProofV0,
+            PrivacyNativeBridge::verifyVegaCredentialPredicateProofV0,
+            PrivacyNativeBridge::verifyZkAmsAdmissionBatchProofV0,
+            PrivacyNativeBridge::verifyZkAtPolicyProofV1,
             PrivacyNativeBridge::verifyProof,
         )
 

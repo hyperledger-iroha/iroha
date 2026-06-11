@@ -47,6 +47,7 @@ TEXT_REQUIREMENTS = {
         "compact key generator log",
         "recursive-compact-key-staged-run.json",
         "generator-log byte count",
+        "execution-report SHA-256",
         "runner-report binding",
         "Reserved-lineage and compact key artifact size maps",
         "packaged lineage artifacts",
@@ -165,6 +166,7 @@ TEXT_REQUIREMENTS = {
         "lineage-proof-staged-run.json",
         "proof-log byte count",
         "lineage-key-artifact log byte counts",
+        "execution-report SHA-256",
         "runner-report binding",
         "missing-vs-unreadable state",
         "Path.is_file()",
@@ -278,7 +280,7 @@ TEXT_REQUIREMENTS = {
     ),
     "docs/source/sdk/android/readiness/android_strongbox_device_matrix.md": (
         "Android StrongBox Offline Payments Device Matrix",
-        "Last updated: 2026-06-10",
+        "Last updated: 2026-06-11",
         "ABI 6 recursive spend JNI probes pass on every required device family.",
         "ABI 7 recursive compact-token JNI probes prove and verify the packaged",
         "one-hop LEN=4 path on every required device family.",
@@ -302,7 +304,8 @@ TEXT_REQUIREMENTS = {
         "python3 scripts/kagemusha_pull_android_device_lab_raw_slot.py",
         "--run-as-package org.hyperledger.iroha.sdk.offline.wallet.lab",
         "rejects symlink, hardlink, special-file, traversal, duplicate,",
-        "oversized, and slot-mismatched tar members",
+        "oversized, directory-colliding, unreviewed extra-artifact, and",
+        "slot-mismatched tar members",
         "python3 scripts/check_android_device_lab_slot.py --root artifacts/android/device_lab --require-slot --require-kagemusha-production-evidence --require-kagemusha-standard-matrix --trusted-signer-public-key",
         "single safe slot",
         "python3 scripts/sign_android_device_lab_evidence.py --slot artifacts/android/device_lab/<slot-id> --private-key",
@@ -882,8 +885,20 @@ TEXT_REQUIREMENTS = {
         "os.replace(tmp_path, path)",
         "_cleanup_summary_output",
         "--json-out temporary file could not be removed",
-        "write_errors.extend(_cleanup_summary_output(tmp_path))",
+        "tmp_identity = _file_identity(os.fstat(handle.fileno()))",
+        "write_errors.extend(_cleanup_summary_output(tmp_path, tmp_identity))",
+        "--json-out temporary file changed before cleanup",
+        "os.stat(\n                path.name,\n                dir_fd=parent_fd,\n                follow_symlinks=False",
+        "_file_identity(temp_stat) != expected_identity",
+        "os.unlink(path.name, dir_fd=parent_fd)",
         "--json-out parent directory could not be synced",
+        "parent directory changed before sync",
+        "def _file_identity",
+        "def _directory_open_flags",
+        "O_NOFOLLOW",
+        "def _sync_summary_output_parent",
+        "os.fstat(parent_fd)",
+        "expected_identity=parent_identity",
         "_read_summary_output_text",
         "summary_expected_identity = (expected_stat.st_dev, expected_stat.st_ino)",
         "summary_open_identity = (open_stat.st_dev, open_stat.st_ino)",
@@ -1016,8 +1031,18 @@ TEXT_REQUIREMENTS = {
         "os.replace(tmp_path, path)",
         "_cleanup_temp_output",
         'f"{label} temporary file could not be removed"',
-        "write_errors.extend(_cleanup_temp_output(tmp_path, label))",
+        "tmp_identity = _file_identity(os.fstat(handle.fileno()))",
+        "write_errors.extend(_cleanup_temp_output(tmp_path, label, tmp_identity))",
+        'f"{label} temporary file changed before cleanup"',
+        "_file_identity(temp_stat) != expected_identity",
+        "os.unlink(path.name, dir_fd=parent_fd)",
         'f"{label} parent directory could not be synced"',
+        "def _file_identity",
+        "def _directory_open_flags",
+        "O_NOFOLLOW",
+        "def _sync_output_parent",
+        "expected_identity=parent_identity",
+        "parent directory changed before sync",
         "_read_existing_output_text",
         '        if read_errors == [f"{label} could not be read"]:\n            return None, [f"{label} write verification failed"]\n',
         "readback_text != text",
@@ -1092,7 +1117,36 @@ TEXT_REQUIREMENTS = {
         "open_identity = (open_stat.st_dev, open_stat.st_ino)",
         "open_identity != expected_identity or path_identity != expected_identity",
         "changed while being read",
+        "destination_parent_identity = _file_identity(destination_parent_stat)",
+        "expected_identity=destination_parent_identity",
+        "def _verify_copied_file(",
+        "verify_errors = _verify_copied_file(",
+        "if verify_errors:",
+        "def _write_json(",
+        "def _cleanup_temp_output(",
+        "tmp_identity = _file_identity(os.fstat(handle.fileno()))",
+        "_file_identity(temp_stat) != expected_identity",
+        "os.unlink(path.name, dir_fd=parent_fd)",
+        "temporary output changed before cleanup",
+        "cleanup_errors = _cleanup_temp_output(tmp_path, label, tmp_identity)",
+        "expected_identity=json_parent_identity",
+        "parent directory changed before sync",
+        "def _verify_written_bytes(",
+        "return _verify_written_bytes(path, encoded, label)",
+        "changed after write",
         "device_lab.classify_device_lab_root_path(root)",
+        "def _publish_stage_slot(",
+        "_file_identity(root_stat) != expected_root_identity",
+        "_file_identity(temp_parent_stat) != expected_temp_parent_identity",
+        "_file_identity(stage_stat) != expected_stage_identity",
+        "src_dir_fd=temp_parent_fd",
+        "dst_dir_fd=root_fd",
+        "os.fsync(root_fd)",
+        "slot root directory changed before publish",
+        "staged slot directory changed before publish",
+        "def _cleanup_temp_parent(",
+        "_file_identity(temp_parent_stat) != expected_identity",
+        "shutil.rmtree(temp_parent.name, ignore_errors=True, dir_fd=parent_fd)",
         "slot directory already exists; refuse to overwrite evidence",
         "signing inputs are required unless --allow-unsigned is set",
         "--private-key, --public-key, and --signer-key-id must be supplied together",
@@ -1119,6 +1173,9 @@ TEXT_REQUIREMENTS = {
         "ADB_PULL_TAR_COMMAND_HELP",
         "KagemushaDeviceLabArtifactExportTest",
         "RAW_SLOT_REQUIRED_PATHS",
+        "RAW_SLOT_ALLOWED_PATHS",
+        "RAW_SLOT_ALLOWED_DIRECTORIES",
+        "raw slot artifact {relative} is not an allowed path",
         "attestation/harness-result.json",
         "HARNESS_RESULT_ALLOWED_FIELDS",
         "_validate_harness_result",
@@ -1126,13 +1183,115 @@ TEXT_REQUIREMENTS = {
         "attestation/harness-result.json challenge_hex must be lowercase hexadecimal without whitespace",
         "attestation/harness-result.json chain_length must match",
         "attestation/harness-result.json challenge_hex must match attestation/challenge.hex",
+        "_validate_challenge_hex_file",
+        "attestation/challenge.hex must be canonical lowercase hexadecimal plus trailing newline",
+        "challenge_text.count(\"\\n\") != 1",
+        "latest-slot.txt must be canonical and contain exactly one slot id",
+        "latest_text.count(\"\\n\") != 1",
         "extract_raw_slot_tar",
         "slot directory already exists; refuse to overwrite raw evidence",
-        "latest-slot.txt must match slot id",
+        'latest_text != f"{slot_id}\\n"',
+        "latest-slot.txt must be canonical and match slot id",
+        "raw latest-slot output must not be a symlink after writing",
+        "raw latest-slot output must not be hardlinked after writing",
+        "raw latest-slot output changed while being read back",
+        "expected_identity=root_identity",
+        "raw slot tar directory {relative} could not be created",
+        "_validate_sha256_hex",
+        "must be a lowercase SHA-256 hex digest",
+        "RAW_RESULT_ALLOWED_FIELDS",
+        "RAW_RESULT_STRING_FIELDS",
+        'RAW_RESULT_APP_SIGNING_DIGEST_FIELD = "app_signing_certificate_sha256"',
+        'RAW_RESULT_CHALLENGE_DIGEST_FIELD = "attestation_challenge_sha256"',
+        'RAW_RESULT_CHAIN_DIGEST_FIELD = "attestation_certificate_chain_sha256"',
+        'RAW_RESULT_POLICY_DIGEST_FIELD = "offline_wallet_policy_sha256"',
+        "RAW_RESULT_SHA256_FIELDS",
+        "RAW_RESULT_STRONGBOX_FIELDS",
+        "def _validate_raw_result_string",
+        "_validate_raw_result_string",
+        "_validate_raw_json_artifacts",
+        "def _validate_raw_json_slot_id",
+        "_validate_raw_json_slot_id",
+        "_validate_raw_json_true",
+        "device_lab.D2D_PAYMENT_TRANSCRIPT_SCHEMA",
+        "device_lab.D2D_PAYMENT_PAYLOAD_SCHEMA",
+        "device_lab.WALLET_INTEGRITY_TRANSCRIPT_SCHEMA",
+        "queue/pending_queue.json pending_transactions must be an array",
+        "telemetry/telemetry.json suite must identify a Kagemusha device-lab run",
+        "\"transport_offline\"",
+        "\"rollback_rejection_passed\"",
+        "_validate_raw_status_ndjson",
+        "device_lab._loads_json_without_duplicate_keys",
+        "device_lab.KAGEMUSHA_STATUS_FAILURE_VALUES",
+        "device_lab.KAGEMUSHA_RUNTIME_LOG_FAILURE_MARKERS",
+        "telemetry/status.ndjson line {line_no} slot_id must match slot id",
+        "telemetry/status.ndjson line {line_no} status must not be",
+        "logs/runtime.log must not contain failure marker {marker}",
+        "for field in RAW_RESULT_SHA256_FIELDS:",
+        "for field in RAW_RESULT_STRONGBOX_FIELDS:",
+        "attestation/result.json {field} must be STRONGBOX",
+        "must not have surrounding whitespace",
+        "attestation/result.json contains unexpected field",
+        'result.get("slot") != slot_id',
+        "attestation/result.json slot must match slot id",
         "must not be a symlink or hardlink",
         "must not exceed",
         "slot-mismatched tar members",
         "device_lab.validate_summary_output_path",
+        "raw pull summary output is not strict JSON",
+        "if len(encoded) > device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES:",
+        "raw pull summary output must be no more than",
+        "device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES",
+        "raw pull summary output parent directory could not be synced",
+        "raw pull summary output parent directory metadata could not be read",
+        "parent_identity = _file_identity(parent_stat)",
+        "expected_identity=parent_identity",
+        "raw pull summary output must not be a symlink after writing",
+        "raw pull summary output must not be hardlinked after writing",
+        "raw pull summary output changed while being read back",
+        "expected_identity = _file_identity(expected_stat)",
+        "with path.open(\"rb\") as readback_handle:",
+        "_file_identity(final_stat) != expected_identity",
+        "def _raw_artifact_digest",
+        "os.fstat(handle.fileno())",
+        "open_identity != expected_identity",
+        "path_identity != expected_identity",
+        "raw artifact digest inventory must include every required artifact",
+        "def _install_validated_slot",
+        "def _file_identity",
+        "def _directory_open_flags",
+        "O_NOFOLLOW",
+        "os.fstat(dir_fd)",
+        "if _file_identity(open_stat) != expected_identity:",
+        "def _slot_entry_identity",
+        "os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)",
+        "def _created_slot_identity_errors",
+        "raw slot directory changed during install",
+        "def _remove_created_slot",
+        "parent_fd = os.open(parent_path, _directory_open_flags())",
+        "os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)",
+        "_file_identity(path_stat) == expected_identity",
+        "shutil.rmtree(path.name, ignore_errors=True, dir_fd=parent_fd)",
+        "def _cleanup_temp_parent",
+        "_file_identity(temp_parent_stat) != expected_identity",
+        "shutil.rmtree(temp_parent.name, ignore_errors=True, dir_fd=parent_fd)",
+        "def _open_verified_directory",
+        "os.listdir(stage_fd)",
+        "os.rename(",
+        "src_dir_fd=stage_fd",
+        "dst_dir_fd=final_fd",
+        "def _remove_empty_stage_slot",
+        "os.rmdir(stage_slot.name, dir_fd=parent_fd)",
+        "raw pull temporary directory metadata could not be read",
+        "raw output root directory metadata could not be read",
+        "raw output root directory changed during install",
+        "final_slot.mkdir(mode=0o700)",
+        "raw slot install source contains unexpected top-level entry",
+        "_slot_entry_identity(\n        final_slot,\n        output_root,\n        output_root_identity",
+        "expected_identity=final_slot_identity",
+        "expected_identity=output_root_identity",
+        "raw slot directory could not be synced",
+        "raw slot directory parent could not be synced",
     ),
     "scripts/kagemusha_android_attestation_report.py": (
         "Render a slot-bound Kagemusha Android attestation verifier report",
@@ -1146,6 +1305,14 @@ TEXT_REQUIREMENTS = {
         "attestation certificate chain path must stay under attestation/",
         "device_lab.ATTESTATION_REPORT_SCHEMA",
         "device_lab.validate_summary_output_path(path, label)",
+        "tmp_identity = device_lab._file_identity(os.fstat(handle.fileno()))",
+        "write_errors.extend(_cleanup_temp_output(tmp_path, label, tmp_identity))",
+        "temporary file changed before cleanup",
+        "device_lab._file_identity(temp_stat) != expected_identity",
+        "os.unlink(path.name, dir_fd=parent_fd)",
+        "parent_identity = device_lab._file_identity(parent_stat)",
+        "sync_errors = device_lab._sync_summary_output_parent(",
+        "expected_identity=parent_identity",
     ),
     "scripts/android_keystore_attestation.sh": (
         "Verify an Android Keystore attestation bundle using the Iroha Android attestation harness",
@@ -1515,7 +1682,11 @@ TEXT_REQUIREMENTS = {
         "--summary-out could not be written",
         "_cleanup_summary_output",
         "--summary-out temporary file could not be removed",
-        "write_blockers.extend(_cleanup_summary_output(tmp_path))",
+        "tmp_identity = _file_identity(os.fstat(handle.fileno()))",
+        "write_blockers.extend(_cleanup_summary_output(tmp_path, tmp_identity))",
+        "--summary-out temporary file changed before cleanup",
+        "_file_identity(temp_stat) != expected_identity",
+        "os.unlink(path.name, dir_fd=parent_fd)",
         "tempfile.NamedTemporaryFile(",
         "handle.flush()",
         "os.fsync(handle.fileno())",
@@ -1531,6 +1702,13 @@ TEXT_REQUIREMENTS = {
         "readback_text != summary_text",
         "--summary-out write verification failed",
         "--summary-out parent directory could not be synced",
+        "--summary-out parent directory changed before sync",
+        "def _file_identity",
+        "def _directory_open_flags",
+        "O_NOFOLLOW",
+        "def _sync_summary_output_parent",
+        "os.fstat(parent_fd)",
+        "expected_identity=parent_identity",
         '    except OSError:\n        return None, [\n            _summary_out_blocker("--summary-out write verification failed")\n        ]\n',
         '    errors = validate_summary_output_path(path)\n    if errors:\n        return errors\n    try:\n        expected_stat = path.lstat()\n',
         "--summary-out must not be a symlink",
@@ -1631,8 +1809,19 @@ TEXT_REQUIREMENTS = {
         "os.replace(tmp_path, path)",
         "_cleanup_temp_output",
         "--out temporary file could not be removed",
-        "write_errors.extend(_cleanup_temp_output(tmp_path))",
+        "tmp_identity = _file_identity(os.fstat(handle.fileno()))",
+        "write_errors.extend(_cleanup_temp_output(tmp_path, tmp_identity))",
+        "--out temporary file changed before cleanup",
+        "_file_identity(temp_stat) != expected_identity",
+        "os.unlink(path.name, dir_fd=parent_fd)",
         "--out parent directory could not be synced",
+        "parent directory changed before sync",
+        "def _file_identity",
+        "def _directory_open_flags",
+        "O_NOFOLLOW",
+        "def _sync_output_parent",
+        "os.fstat(parent_fd)",
+        "expected_identity=parent_identity",
         "def _read_output_text(",
         "output_expected_identity = (expected_stat.st_dev, expected_stat.st_ino)",
         "output_open_identity = (open_stat.st_dev, open_stat.st_ino)",
@@ -1658,8 +1847,14 @@ TEXT_REQUIREMENTS = {
         "max_bytes=readiness.MAX_LINEAGE_PROOF_EVIDENCE_JSON_BYTES",
         "lineage proof evidence validation file could not be written",
         'errors = ["lineage proof evidence validation file could not be written"]',
-        'errors.append("lineage proof evidence validation file could not be removed")',
-        '    try:\n        path.unlink(missing_ok=True)\n    except OSError:\n        return ["lineage proof evidence validation file could not be removed"]\n',
+        "def _cleanup_validation_temp_output(",
+        "validation_temp_stat = os.stat(",
+        "_file_identity(validation_temp_stat) != expected_identity",
+        "os.unlink(path.name, dir_fd=parent_fd)",
+        "lineage proof evidence validation file changed before cleanup",
+        "tmp_identity = _file_identity(os.fstat(handle.fileno()))",
+        "errors.extend(_cleanup_validation_temp_output(path, tmp_identity))",
+        "cleanup_errors = _cleanup_validation_temp_output(path, tmp_identity)",
     ),
     "scripts/kagemusha_recursive_compact_key_evidence.py": (
         "Build ABI-7 recursive compact key-artifact release evidence JSON",
@@ -1739,8 +1934,19 @@ TEXT_REQUIREMENTS = {
         "os.replace(tmp_path, path)",
         "_cleanup_temp_output",
         "--out temporary file could not be removed",
-        "write_errors.extend(_cleanup_temp_output(tmp_path))",
+        "tmp_identity = _file_identity(os.fstat(handle.fileno()))",
+        "write_errors.extend(_cleanup_temp_output(tmp_path, tmp_identity))",
+        "--out temporary file changed before cleanup",
+        "_file_identity(temp_stat) != expected_identity",
+        "os.unlink(path.name, dir_fd=parent_fd)",
         "--out parent directory could not be synced",
+        "parent directory changed before sync",
+        "def _file_identity",
+        "def _directory_open_flags",
+        "O_NOFOLLOW",
+        "def _sync_output_parent",
+        "os.fstat(parent_fd)",
+        "expected_identity=parent_identity",
         "def _read_output_text(",
         "output_expected_identity = (expected_stat.st_dev, expected_stat.st_ino)",
         "output_open_identity = (open_stat.st_dev, open_stat.st_ino)",
@@ -1760,7 +1966,14 @@ TEXT_REQUIREMENTS = {
         "recursive compact key evidence validation file could not be written",
         "recursive compact key evidence validation file could not be removed",
         'errors = ["recursive compact key evidence validation file could not be written"]',
-        'errors.append(\n                    "recursive compact key evidence validation file could not be removed"\n                )',
+        "def _cleanup_validation_temp_output(",
+        "validation_temp_stat = os.stat(",
+        "_file_identity(validation_temp_stat) != expected_identity",
+        "os.unlink(path.name, dir_fd=parent_fd)",
+        "recursive compact key evidence validation file changed before cleanup",
+        "tmp_identity = _file_identity(os.fstat(handle.fileno()))",
+        "errors.extend(_cleanup_validation_temp_output(path, tmp_identity))",
+        "cleanup_errors = _cleanup_validation_temp_output(path, tmp_identity)",
         "wrote evidence",
     ),
     "scripts/kagemusha_finalize_recursive_compact_key_staged_run.py": (
@@ -1785,7 +1998,18 @@ TEXT_REQUIREMENTS = {
         "_verify_published_file",
         "verify_errors = _verify_published_file(",
         "published {destination.name} does not match staged bytes",
-        "for path in [destination, *installed]:",
+        "def _unlink_file_if_identity(",
+        "os.unlink(path.name, dir_fd=parent_fd)",
+        "_file_identity(path_stat) == expected_identity",
+        "def _cleanup_published_files(",
+        "_cleanup_published_files(installed)",
+        "destination_identity = _regular_file_identity(destination)",
+        "def _sync_artifact_dir",
+        "expected_identity=artifact_dir_identity",
+        "artifact directory changed before sync",
+        "def _cleanup_temp_parent(",
+        "_file_identity(temp_parent_stat) != expected_identity",
+        "shutil.rmtree(temp_parent.name, ignore_errors=True, dir_fd=parent_fd)",
         "check_compact_key_evidence(final_evidence_path)",
         "compact_evidence.build_evidence",
         "compact_evidence.validate_evidence_document",
@@ -1821,7 +2045,18 @@ TEXT_REQUIREMENTS = {
         "_verify_published_file",
         "verify_errors = _verify_published_file(",
         "published {destination.name} does not match staged bytes",
-        "for path in [destination, *installed]:",
+        "def _unlink_file_if_identity(",
+        "os.unlink(path.name, dir_fd=parent_fd)",
+        "_file_identity(path_stat) == expected_identity",
+        "def _cleanup_published_files(",
+        "_cleanup_published_files(installed)",
+        "destination_identity = _regular_file_identity(destination)",
+        "def _sync_artifact_dir",
+        "expected_identity=artifact_dir_identity",
+        "artifact directory changed before sync",
+        "def _cleanup_temp_parent(",
+        "_file_identity(temp_parent_stat) != expected_identity",
+        "shutil.rmtree(temp_parent.name, ignore_errors=True, dir_fd=parent_fd)",
         "check_lineage_proof_evidence(final_evidence_path)",
         "lineage_evidence.build_evidence",
         "lineage_evidence.validate_evidence_document",
@@ -1858,6 +2093,23 @@ TEXT_REQUIREMENTS = {
         "staged lineage proof artifact",
         "staged lineage proof execution report",
         "already exists; refuse to overwrite without --replace",
+        "def _file_identity",
+        "def _directory_open_flags",
+        "O_NOFOLLOW",
+        "def _sync_output_parent",
+        "expected_identity=parent_identity",
+        "log_parent_identity = _file_identity(log_parent_stat)",
+        "expected_identity=log_parent_identity",
+        "parent directory changed before sync",
+        "def _regular_file_identity_for_unlink(",
+        "def _unlink_file_if_identity(",
+        "def _unlink_output_for_replace(",
+        "def _cleanup_temp_output(",
+        "_file_identity(path_stat) != expected_identity",
+        "os.unlink(path.name, dir_fd=parent_fd)",
+        "temporary output changed before cleanup",
+        "tmp_identity = _file_identity(os.fstat(handle.fileno()))",
+        "_unlink_output_for_replace(path, label)",
         "_verify_written_text_file",
         "return _verify_written_text_file(path, expected_bytes, label)",
         "changed after write",
@@ -1869,9 +2121,14 @@ TEXT_REQUIREMENTS = {
         "staged run exited with",
         "return _wrapper_exit_status(status)",
         "proof_log_size_bytes",
+        "log_sha256",
+        "lineage_evidence._sha256_file(",
+        "log_sha256 must match staged {profile} lineage key artifact log SHA-256",
         "lineage_key_artifact_logs",
         "subprocess.Popen(",
+        "stdout=log_handle",
         "stderr=subprocess.STDOUT",
+        "os.fsync(log_handle.fileno())",
         "shlex.split(DEFAULT_RECORD_ARCHIVE_PROOF_COMMAND)",
         "readiness.validate_lineage_proof_command(",
         "_write_exit_marker",
@@ -1902,6 +2159,23 @@ TEXT_REQUIREMENTS = {
         "validate_output_file_path",
         "already exists; refuse to overwrite without --replace",
         "staged recursive compact key execution report",
+        "def _file_identity",
+        "def _directory_open_flags",
+        "O_NOFOLLOW",
+        "def _sync_output_parent",
+        "expected_identity=parent_identity",
+        "log_parent_identity = _file_identity(log_parent_stat)",
+        "expected_identity=log_parent_identity",
+        "parent directory changed before sync",
+        "def _regular_file_identity_for_unlink(",
+        "def _unlink_file_if_identity(",
+        "def _unlink_output_for_replace(",
+        "def _cleanup_temp_output(",
+        "_file_identity(path_stat) != expected_identity",
+        "os.unlink(path.name, dir_fd=parent_fd)",
+        "temporary output changed before cleanup",
+        "tmp_identity = _file_identity(os.fstat(handle.fileno()))",
+        "_unlink_output_for_replace(path, label)",
         "_verify_written_text_file",
         "return _verify_written_text_file(path, expected_bytes, label)",
         "changed after write",
@@ -1912,8 +2186,13 @@ TEXT_REQUIREMENTS = {
         "staged keygen exited with",
         "return _wrapper_exit_status(status)",
         "generator_log_size_bytes",
+        "generator_log_sha256",
+        "compact_evidence._sha256_file(",
+        "generator_log_sha256 must match staged generator log SHA-256",
         "subprocess.Popen(",
+        "stdout=log_handle",
         "stderr=subprocess.STDOUT",
+        "os.fsync(log_handle.fileno())",
         "shlex.split(DEFAULT_COMPACT_KEY_COMMAND)",
         "readiness.validate_compact_key_command(DEFAULT_COMPACT_KEY_COMMAND)",
         'f"{exit_code}\\n"',
@@ -2097,9 +2376,20 @@ TEXT_REQUIREMENTS = {
         "os.replace(tmp_path, path)",
         "_cleanup_temp_output",
         "--out temporary file could not be removed",
-        "write_blockers.extend(_cleanup_temp_output(tmp_path))",
+        "tmp_identity = _file_identity(os.fstat(handle.fileno()))",
+        "write_blockers.extend(_cleanup_temp_output(tmp_path, tmp_identity))",
+        "--out temporary file changed before cleanup",
+        "_file_identity(temp_stat) != expected_identity",
+        "os.unlink(path.name, dir_fd=parent_fd)",
         "_read_output_text",
         "--out parent directory could not be synced",
+        "--out parent directory changed before sync",
+        "def _file_identity",
+        "def _directory_open_flags",
+        "O_NOFOLLOW",
+        "def _sync_output_parent",
+        "os.fstat(parent_fd)",
+        "expected_identity=parent_identity",
         "output_expected_identity = (expected_stat.st_dev, expected_stat.st_ino)",
         "output_open_identity = (open_stat.st_dev, open_stat.st_ino)",
         "--out changed while being read",
@@ -2108,7 +2398,7 @@ TEXT_REQUIREMENTS = {
         'f"--out must be no more than {MAX_RELEASE_BUNDLE_OUTPUT_JSON_BYTES} bytes"',
         "readback, readback_blockers = _read_output_text(path, expected_stat)",
         '    try:\n        expected_stat = path.lstat()\n    except (FileNotFoundError, OSError):\n        return [\n            _release_bundle_out_blocker("--out could not be read back after writing")\n        ]\n',
-        "os.open(path.parent, os.O_RDONLY)",
+        "_sync_output_parent(path.parent, expected_identity=parent_identity)",
         "os.fsync(parent_fd)",
         '    except OSError:\n        return None, [\n            _release_bundle_out_blocker("--out could not be read back after writing")\n        ]\n',
         "--out readback did not match the generated manifest",
@@ -2130,16 +2420,65 @@ TEXT_REQUIREMENTS = {
         "test_kagemusha_slot_assembler_rejects_source_swap_after_preflight",
         "test_kagemusha_slot_assembler_requires_attestation_harness_result",
         "test_kagemusha_slot_assembler_rejects_harness_challenge_mismatch",
+        "test_kagemusha_slot_assembler_json_write_rejects_parent_identity_swap",
+        "test_kagemusha_slot_assembler_json_write_reports_temp_cleanup_failure",
+        "test_kagemusha_slot_assembler_json_temp_cleanup_preserves_swapped_file",
+        "test_kagemusha_slot_assembler_json_write_verifies_installed_bytes",
+        "test_kagemusha_attestation_report_writer_temp_cleanup_rejects_swap",
         "test_kagemusha_android_raw_puller_reads_latest_and_installs_slot",
+        "test_kagemusha_android_raw_puller_install_refuses_late_existing_slot",
+        "test_kagemusha_android_raw_puller_install_rejects_unexpected_top_level_entry",
+        "test_kagemusha_android_raw_puller_install_syncs_directories_and_cleans_failure",
+        "test_kagemusha_android_raw_puller_install_rejects_destination_identity_swap",
+        "test_kagemusha_android_raw_puller_install_rejects_output_root_identity_swap",
+        "test_kagemusha_android_raw_puller_install_rejects_parent_identity_before_slot_stat",
+        "test_kagemusha_android_raw_puller_install_cleanup_preserves_swapped_destination",
+        "test_kagemusha_android_raw_puller_install_cleanup_uses_parent_dir_fd",
+        "test_kagemusha_android_raw_puller_install_moves_with_directory_fds",
+        "test_kagemusha_android_raw_puller_temp_cleanup_removes_original_parent",
+        "test_kagemusha_android_raw_puller_temp_cleanup_preserves_swapped_parent",
+        "test_kagemusha_android_raw_puller_install_sync_rejects_identity_mismatch",
+        "test_kagemusha_android_raw_puller_latest_writer_syncs_parent_identity",
+        "test_kagemusha_android_raw_puller_latest_writer_rejects_symlink_after_replace",
+        "test_kagemusha_android_raw_puller_latest_writer_rejects_hardlink_after_replace",
+        "test_kagemusha_android_raw_puller_latest_writer_rejects_readback_path_swap",
+        "test_kagemusha_android_raw_puller_summary_rejects_nonfinite_json_before_tempfile",
+        "test_kagemusha_android_raw_puller_summary_rejects_oversized_json_before_tempfile",
+        "test_kagemusha_android_raw_puller_summary_rejects_symlink_after_replace",
+        "test_kagemusha_android_raw_puller_summary_rejects_hardlink_after_replace",
+        "test_kagemusha_android_raw_puller_summary_rejects_readback_path_swap",
+        "test_kagemusha_android_raw_puller_summary_sync_rejects_parent_identity_swap",
+        "test_kagemusha_android_raw_puller_summary_digest_rejects_symlinked_artifact",
+        "test_kagemusha_android_raw_puller_summary_digest_rejects_hardlinked_artifact",
         "test_kagemusha_android_raw_puller_requires_harness_result",
         "test_kagemusha_android_raw_puller_rejects_harness_challenge_mismatch",
         "test_kagemusha_android_raw_puller_refuses_existing_slot_before_adb_tar",
         "test_kagemusha_android_raw_puller_rejects_tar_path_traversal",
         "test_kagemusha_android_raw_puller_rejects_tar_symlink_member",
         "test_kagemusha_android_raw_puller_rejects_tar_hardlink_member",
+        "test_kagemusha_android_raw_puller_rejects_unexpected_raw_artifact",
         "test_kagemusha_android_raw_puller_rejects_oversized_tar_member",
         "test_kagemusha_android_raw_puller_rejects_latest_slot_mismatch",
+        "test_kagemusha_android_raw_puller_rejects_noncanonical_latest_slot_query",
+        "test_kagemusha_android_raw_puller_rejects_noncanonical_latest_slot",
+        "test_kagemusha_android_raw_puller_rejects_noncanonical_challenge_file",
+        "test_kagemusha_android_raw_puller_requires_challenge_file_newline",
         "test_kagemusha_android_raw_puller_rejects_tar_file_parent_collision",
+        "test_kagemusha_android_raw_puller_rejects_tar_directory_collision",
+        "test_kagemusha_android_raw_puller_requires_result_slot_field",
+        "test_kagemusha_android_raw_puller_requires_result_chain_digest",
+        "test_kagemusha_android_raw_puller_requires_result_challenge_digest",
+        "test_kagemusha_android_raw_puller_rejects_result_extra_field",
+        "test_kagemusha_android_raw_puller_requires_result_identity_strings",
+        "test_kagemusha_android_raw_puller_requires_result_sdk_digests",
+        "test_kagemusha_android_raw_puller_requires_result_strongbox_levels",
+        "test_kagemusha_android_raw_puller_rejects_queue_slot_mismatch",
+        "test_kagemusha_android_raw_puller_rejects_telemetry_slot_mismatch",
+        "test_kagemusha_android_raw_puller_rejects_d2d_online_handoff",
+        "test_kagemusha_android_raw_puller_rejects_wallet_rollback_failure",
+        "test_kagemusha_android_raw_puller_rejects_failed_status_ndjson",
+        "test_kagemusha_android_raw_puller_rejects_status_slot_mismatch",
+        "test_kagemusha_android_raw_puller_rejects_runtime_failure_marker",
         "test_kagemusha_android_raw_puller_rejects_noncanonical_harness_strings",
         "test_kagemusha_android_raw_puller_rejects_harness_chain_length_mismatch",
         "test_kagemusha_android_raw_puller_rejects_malformed_harness_result",
@@ -2376,7 +2715,9 @@ TEXT_REQUIREMENTS = {
         "test_write_summary_preserves_existing_output_on_replace_failure",
         "test_write_summary_reports_temp_cleanup_failure_after_write_failure",
         "test_write_summary_reports_temp_cleanup_failure_after_post_stage_validation_failure",
+        "test_write_summary_temp_cleanup_rejects_swapped_temp_file",
         "test_write_summary_rejects_parent_directory_sync_failure_after_replace",
+        "test_write_summary_rejects_parent_directory_identity_swap_before_sync",
         "test_write_summary_rejects_symlink_swap_before_replace",
         "test_write_summary_rejects_readback_mismatch",
         "test_write_summary_rejects_readback_failure",
@@ -2446,6 +2787,7 @@ TEXT_REQUIREMENTS = {
         "test_signer_write_json_preserves_existing_output_on_replace_failure",
         "test_signer_write_json_reports_temp_cleanup_failure_after_write_failure",
         "test_signer_write_json_reports_temp_cleanup_failure_after_post_stage_validation_failure",
+        "test_signer_write_json_temp_cleanup_rejects_swapped_temp_file",
         "test_signer_write_json_rejects_parent_directory_sync_failure_after_replace",
         "test_signer_write_json_rejects_symlink_swap_before_replace",
         "test_signer_write_json_rejects_readback_mismatch",
@@ -2662,6 +3004,7 @@ TEXT_REQUIREMENTS = {
         "test_compact_key_staged_finalizer_defaults_out_under_artifact_dir",
         "test_compact_key_runner_and_finalizer_defaults_share_staging_paths",
         "test_compact_key_staged_finalizer_cleans_partial_publish_on_copy_error",
+        "test_compact_key_staged_finalizer_unlink_preserves_swapped_published_file",
         "test_compact_key_staged_finalizer_verifies_published_stage_bytes",
         "test_compact_key_staged_runner_outputs_finalize_successfully",
         "test_compact_key_staged_runner_resume_reuses_complete_keygen",
@@ -2674,7 +3017,12 @@ TEXT_REQUIREMENTS = {
         "test_compact_key_staged_runner_main_reports_nonzero_conventionally",
         "test_compact_key_staged_runner_main_errors_exit_conventionally",
         "test_compact_key_staged_runner_atomic_write_verifies_installed_bytes",
+        "test_compact_key_staged_runner_resume_cleanup_preserves_swapped_output",
+        "test_compact_key_staged_runner_temp_cleanup_preserves_swapped_output",
         "test_compact_key_staged_runner_rejects_symlinked_exit_marker",
+        "test_compact_key_staged_runner_writes_child_output_directly_to_log_file",
+        "fsync_fds",
+        "stdout_fds",
         "test_compact_key_staged_runner_removes_temp_log_on_spawn_failure",
         "test_lineage_proof_staged_finalizer_publishes_validator_accepted_evidence",
         "test_lineage_proof_staged_finalizer_rejects_missing_exit_marker",
@@ -2698,6 +3046,7 @@ TEXT_REQUIREMENTS = {
         "test_lineage_proof_staged_finalizer_defaults_out_under_artifact_dir",
         "test_lineage_runner_and_finalizer_defaults_share_staging_paths",
         "test_lineage_proof_staged_finalizer_cleans_partial_publish_on_copy_error",
+        "test_lineage_proof_staged_finalizer_unlink_preserves_swapped_published_file",
         "test_lineage_proof_staged_finalizer_verifies_published_stage_bytes",
         "test_lineage_proof_staged_runner_outputs_finalize_successfully",
         "test_lineage_proof_staged_runner_resume_reuses_completed_init_phase",
@@ -2711,7 +3060,10 @@ TEXT_REQUIREMENTS = {
         "test_lineage_proof_staged_runner_main_reports_nonzero_without_success_paths",
         "test_lineage_proof_staged_runner_main_errors_exit_conventionally",
         "test_lineage_proof_staged_runner_atomic_write_verifies_installed_bytes",
+        "test_lineage_proof_staged_runner_resume_cleanup_preserves_swapped_output",
+        "test_lineage_proof_staged_runner_temp_cleanup_preserves_swapped_output",
         "test_lineage_proof_staged_runner_rejects_symlinked_exit_marker",
+        "test_lineage_proof_staged_runner_writes_child_output_directly_to_log_file",
         "test_lineage_proof_staged_runner_removes_temp_log_on_spawn_failure",
         "test_lineage_proof_staged_finalizer_rejects_elapsed_seconds_file_conflict",
         "test_lineage_proof_staged_finalizer_rejects_bad_elapsed_seconds_file",
@@ -2744,7 +3096,9 @@ TEXT_REQUIREMENTS = {
         "test_compact_key_write_evidence_preserves_existing_output_on_replace_failure",
         "test_compact_key_write_evidence_reports_temp_cleanup_failure_after_write_failure",
         "test_compact_key_write_evidence_reports_temp_cleanup_failure_after_post_stage_validation_failure",
+        "test_compact_key_write_evidence_temp_cleanup_rejects_swapped_temp_file",
         "test_compact_key_write_evidence_rejects_parent_directory_sync_failure_after_replace",
+        "test_compact_key_write_evidence_rejects_parent_directory_identity_swap_before_sync",
         "test_compact_key_write_evidence_rejects_readback_mismatch",
         "test_compact_key_write_evidence_rejects_readback_failure",
         "test_compact_key_write_evidence_rejects_oversized_readback_after_replace",
@@ -2756,6 +3110,7 @@ TEXT_REQUIREMENTS = {
         "test_compact_key_evidence_document_validator_rejects_temp_write_failure_after_preflight",
         "test_compact_key_evidence_document_validator_reports_temp_cleanup_failure_after_write_failure",
         "test_compact_key_evidence_document_validator_rejects_temp_cleanup_failure",
+        "test_compact_key_evidence_document_validator_temp_cleanup_rejects_swap",
         "test_compact_key_artifact_dir_validator_rejects_secret_path_directly",
         "test_compact_key_artifact_dir_validator_rejects_metadata_failure_directly",
         "test_compact_key_sha256_file_rejects_secret_path_directly",
@@ -2916,7 +3271,9 @@ TEXT_REQUIREMENTS = {
         "test_write_release_bundle_preserves_existing_output_on_replace_failure",
         "test_write_release_bundle_reports_temp_cleanup_failure_after_write_failure",
         "test_write_release_bundle_reports_temp_cleanup_failure_after_post_stage_validation_failure",
+        "test_write_release_bundle_temp_cleanup_rejects_swapped_temp_file",
         "test_write_release_bundle_rejects_parent_directory_sync_failure_after_replace",
+        "test_write_release_bundle_rejects_parent_directory_identity_swap_before_sync",
         "test_write_release_bundle_rejects_nonfinite_manifest_before_write",
         "test_write_release_bundle_rejects_oversized_manifest_before_write",
         "test_write_release_bundle_rejects_oversized_readback_after_replace",
@@ -2981,6 +3338,7 @@ TEXT_REQUIREMENTS = {
         "test_lineage_proof_evidence_document_validator_rejects_temp_write_failure_after_preflight",
         "test_lineage_proof_evidence_document_validator_reports_temp_cleanup_failure_after_write_failure",
         "test_lineage_proof_evidence_document_validator_rejects_temp_cleanup_failure",
+        "test_lineage_proof_evidence_document_validator_temp_cleanup_rejects_swap",
         "test_lineage_proof_artifact_dir_validator_rejects_secret_path_directly",
         "test_lineage_proof_artifact_dir_validator_rejects_metadata_failure_directly",
         "test_lineage_proof_sha256_file_rejects_secret_path_directly",
@@ -3028,7 +3386,9 @@ TEXT_REQUIREMENTS = {
         "test_lineage_proof_write_evidence_preserves_existing_output_on_replace_failure",
         "test_lineage_proof_write_evidence_reports_temp_cleanup_failure_after_write_failure",
         "test_lineage_proof_write_evidence_reports_temp_cleanup_failure_after_post_stage_validation_failure",
+        "test_lineage_proof_write_evidence_temp_cleanup_rejects_swapped_temp_file",
         "test_lineage_proof_write_evidence_rejects_parent_directory_sync_failure_after_replace",
+        "test_lineage_proof_write_evidence_rejects_parent_directory_identity_swap_before_sync",
         "test_lineage_proof_write_evidence_rejects_readback_mismatch",
         "test_lineage_proof_write_evidence_rejects_readback_failure",
         "test_lineage_proof_write_evidence_rejects_oversized_readback_after_replace",
@@ -3075,7 +3435,9 @@ TEXT_REQUIREMENTS = {
         "test_write_summary_preserves_existing_output_on_replace_failure",
         "test_write_summary_reports_temp_cleanup_failure_after_write_failure",
         "test_write_summary_reports_temp_cleanup_failure_after_post_stage_validation_failure",
+        "test_write_summary_temp_cleanup_rejects_swapped_temp_file",
         "test_write_summary_rejects_parent_directory_sync_failure_after_replace",
+        "test_write_summary_rejects_parent_directory_identity_swap_before_sync",
         "test_write_summary_rejects_symlink_swap_before_replace",
         "test_write_summary_rejects_readback_mismatch",
         "test_write_summary_rejects_readback_failure",
@@ -3286,6 +3648,16 @@ FORBIDDEN_SNIPPETS = {
     "scripts/kagemusha_production_readiness.py": (
         '            if not artifact_path.is_file():\n                blockers.append(\n                    blocker(\n                        "lineage_proof_evidence_artifact_missing",\n',
     ),
+    "scripts/kagemusha_run_lineage_proof_staged.py": (
+        "stdout=subprocess.PIPE",
+        "process.stdout.read",
+        "sys.stdout.buffer",
+    ),
+    "scripts/kagemusha_run_recursive_compact_keygen_staged.py": (
+        "stdout=subprocess.PIPE",
+        "process.stdout.read",
+        "sys.stdout.buffer",
+    ),
 }
 
 WORKFLOW_PATH = ".github/workflows/pr_kagemusha_payload_bench.yml"
@@ -3332,6 +3704,15 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-instrumentation-harness",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-command-marker-specificity",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-artifact-binding",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-strict-json",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-size-limit",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-parent-sync",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-parent-identity",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-readback-symlink",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-readback-hardlink",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-readback-identity",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-digest-open-path",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-digest-inventory",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-harness-result",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signed-harness-result",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signed-evidence-path-root",
@@ -3355,10 +3736,12 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-parent-metadata-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-parent-create-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-post-create-parent-preflight",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-parent-sync-identity",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-file-metadata-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-hardlink-metadata-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-write-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-temp-cleanup-failure",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-temp-cleanup-identity",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-strict-json-write",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-size-limit",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-readback-verification",
@@ -3491,6 +3874,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-parent-metadata-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-parent-create-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-post-create-parent-preflight",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-parent-sync-identity",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-resolve-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-dangling-output-alias",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-hardlink-metadata-failure",
@@ -3509,6 +3893,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-text-size-limit",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-text-write-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-temp-cleanup-failure",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-temp-cleanup-identity",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-readback-verification",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-direct-manifest-shape",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-slot-metadata-failure",
@@ -3549,13 +3934,55 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-command-exact",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-report",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-report-writer-physical-device",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-report-writer-parent-sync-identity",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-report-writer-temp-cleanup-identity",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-overwrite",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-no-overwrite",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-top-level",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-parent-sync",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-directory-identity",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-sync-identity",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-cleanup-identity",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-temp-cleanup-identity",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-rename-dir-fd",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-output-root-identity",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-cleanup-dir-fd",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-slot-entry-dir-fd",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-allowed-artifacts",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-json-slot-binding",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-d2d-offline",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-wallet-rollback",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-status-failure",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-runtime-failure-marker",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-harness-challenge",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-harness-strongbox",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-harness-chain-length",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-harness-canonical",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-challenge-file-canonical",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-latest-slot-canonical",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-latest-query-canonical",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-latest-write-parent-identity",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-latest-write-readback-symlink",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-latest-write-readback-hardlink",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-latest-write-readback-identity",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-directory-collision",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-result-slot-required",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-result-chain-digest-required",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-result-challenge-digest-required",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-result-closed-schema",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-result-identity-strings",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-result-sdk-digests",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-result-strongbox-levels",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-signature-required",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-source-open-binding",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-copy-parent-sync-identity",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-copy-readback",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-json-parent-sync-identity",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-json-readback",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-json-temp-cleanup-identity",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-publish-root-identity",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-publish-stage-identity",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-temp-cleanup-identity",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-signed-evidence-freshness-report",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-signed-evidence-timestamp-raw",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-rollup",
@@ -3589,12 +4016,14 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-direct-secret-paths",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-write-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-temp-cleanup-failure",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-temp-cleanup-identity",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-strict-json-write",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-size-limit",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-readback-verification",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-readback-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-readback-size-limit",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-readback-open-path-binding",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-parent-sync-identity",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-post-write-preflight",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-release-json-hardlink-metadata-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-release-json-file-metadata-failure",
@@ -3632,6 +4061,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-early-preflight",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-write-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-temp-cleanup-failure",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-temp-cleanup-identity",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-strict-json-write",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-readback-verification",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-readback-failure",
@@ -3643,16 +4073,19 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-early-preflight",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-write-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-temp-cleanup-failure",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-temp-cleanup-identity",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-strict-json-write",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-readback-verification",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-readback-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-readback-open-path-binding",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-parent-sync-identity",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-post-write-preflight",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-validation-dir-create-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-validation-strict-json-write",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-validation-temp-write-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-validation-temp-cleanup-after-write-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-validation-temp-cleanup-failure",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-validation-temp-cleanup-identity",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-direct-artifact-dir-secret-paths",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-direct-artifact-dir-metadata-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-direct-hash-shape",
@@ -3662,12 +4095,30 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-exit-marker",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-readback",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-readback",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-parent-sync-identity",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-parent-sync-identity",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-log-install-parent-sync-identity",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-log-install-parent-sync-identity",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-cleanup-identity",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-cleanup-identity",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-child-log-file",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-child-log-file",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-supervisor-output-pipe",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-supervisor-output-pipe",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-execution-log-sha256",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-execution-log-sha256",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-resume-replace-conflict",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-resume-replace-conflict",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-exit-marker",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-exit-marker",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-publish-readback",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-publish-readback",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-publish-rollback-identity",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-publish-rollback-identity",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-publish-dir-sync-identity",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-publish-dir-sync-identity",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-temp-cleanup-identity",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-temp-cleanup-identity",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-direct-secret-paths",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-direct-hash-shape",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-direct-hash-read-failure",
@@ -3681,6 +4132,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-validation-temp-write-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-validation-temp-cleanup-after-write-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-validation-temp-cleanup-failure",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-validation-temp-cleanup-identity",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-input-corridor",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-input-corridor-resolve-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-corridor-resolve-failure",
@@ -3723,11 +4175,13 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-digest-open-path-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-atomic-output",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-temp-cleanup-failure",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-temp-cleanup-identity",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-strict-json-write",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-size-limit",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-readback-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-readback-size-limit",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-readback-open-path-binding",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-parent-sync-identity",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-post-write-preflight",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-input-path-preflight",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-scan-preflight",
@@ -3742,6 +4196,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-log-text-preflight",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-log-open-path-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-evidence-filename",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-evidence-output-parent-sync-identity",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-evidence-filename",
     "ci/check_kagemusha_production_readiness.sh --negative-control-json-duplicate-keys",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-closed-schema",
@@ -4202,6 +4657,105 @@ if mode == "--negative-control-android-device-lab-artifact-binding":
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-android-device-lab-raw-puller-summary-strict-json":
+    run_negative_control(
+        "Android raw puller summary strict-JSON gate",
+        lambda: override_text(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            "raw pull summary output is not strict JSON",
+            "raw pull summary output may contain non-finite JSON",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-raw-puller-summary-size-limit":
+    run_negative_control(
+        "Android raw puller summary size-limit gate",
+        lambda: override_text(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            "len(encoded) > device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES",
+            "False",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-raw-puller-summary-parent-sync":
+    run_negative_control(
+        "Android raw puller summary parent-sync gate",
+        lambda: override_text_all(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            "raw pull summary output parent directory could not be synced",
+            "raw pull summary output parent sync is optional",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-raw-puller-summary-parent-identity":
+    run_negative_control(
+        "Android raw puller summary parent identity gate",
+        lambda: override_text(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            "expected_identity=parent_identity",
+            "expected_identity=None",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-raw-puller-summary-readback-symlink":
+    run_negative_control(
+        "Android raw puller summary readback symlink gate",
+        lambda: override_text(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            "raw pull summary output must not be a symlink after writing",
+            "raw pull summary output symlink readback is accepted",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-raw-puller-summary-readback-hardlink":
+    run_negative_control(
+        "Android raw puller summary readback hardlink gate",
+        lambda: override_text_all(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            "raw pull summary output must not be hardlinked after writing",
+            "raw pull summary output hardlink readback is accepted",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-raw-puller-summary-readback-identity":
+    run_negative_control(
+        "Android raw puller summary readback identity gate",
+        lambda: override_text_all(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            "raw pull summary output changed while being read back",
+            "raw pull summary output path swaps are accepted during readback",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-raw-puller-summary-digest-open-path":
+    run_negative_control(
+        "Android raw puller summary digest open-path gate",
+        lambda: override_text(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            "open_identity != expected_identity",
+            "False",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-raw-puller-summary-digest-inventory":
+    run_negative_control(
+        "Android raw puller summary digest inventory gate",
+        lambda: override_text(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            "raw artifact digest inventory must include every required artifact",
+            "raw artifact digest inventory may omit artifacts",
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-android-device-lab-raw-harness-result":
     run_negative_control(
         "Android device-lab raw harness-result contract",
@@ -4455,6 +5009,17 @@ if mode == "--negative-control-android-device-lab-json-output-post-create-parent
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-android-device-lab-json-output-parent-sync-identity":
+    run_negative_control(
+        "Android device-lab JSON summary output parent sync identity gate",
+        lambda: override_text(
+            "scripts/check_android_device_lab_slot.py",
+            "expected_identity=parent_identity",
+            "expected_identity=None",
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-android-device-lab-json-output-file-metadata-failure":
     run_negative_control(
         "Android device-lab JSON summary output file metadata failure gate",
@@ -4495,6 +5060,17 @@ if mode == "--negative-control-android-device-lab-json-output-temp-cleanup-failu
             "scripts/check_android_device_lab_slot.py",
             '    except OSError:\n        return ["--json-out temporary file could not be removed"]\n',
             "    except OSError:\n        return []\n",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-json-output-temp-cleanup-identity":
+    run_negative_control(
+        "Android device-lab JSON summary output temp cleanup identity gate",
+        lambda: override_text(
+            "scripts/check_android_device_lab_slot.py",
+            "_file_identity(temp_stat) != expected_identity",
+            "False",
         ),
     )
     raise SystemExit(0)
@@ -5965,6 +6541,17 @@ if mode == "--negative-control-android-device-lab-signing-helper-output-post-cre
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-android-device-lab-signing-helper-output-parent-sync-identity":
+    run_negative_control(
+        "Android device-lab signed evidence helper output parent sync identity gate",
+        lambda: override_text(
+            "scripts/sign_android_device_lab_evidence.py",
+            "expected_identity=parent_identity",
+            "expected_identity=None",
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-android-device-lab-signing-helper-output-resolve-failure":
     run_negative_control(
         "Android device-lab signed evidence helper output resolve-failure gate",
@@ -6181,6 +6768,17 @@ if mode == "--negative-control-android-device-lab-signing-helper-temp-cleanup-fa
             "scripts/sign_android_device_lab_evidence.py",
             '    except OSError:\n        return [f"{label} temporary file could not be removed"]\n',
             "    except OSError:\n        return []\n",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-signing-helper-temp-cleanup-identity":
+    run_negative_control(
+        "Android device-lab signed evidence helper temp cleanup identity gate",
+        lambda: override_text(
+            "scripts/sign_android_device_lab_evidence.py",
+            "_file_identity(temp_stat) != expected_identity",
+            "False",
         ),
     )
     raise SystemExit(0)
@@ -6661,6 +7259,28 @@ if mode == "--negative-control-android-device-lab-attestation-report-writer-phys
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-android-device-lab-attestation-report-writer-parent-sync-identity":
+    run_negative_control(
+        "Android attestation report writer parent sync identity gate",
+        lambda: override_text(
+            "scripts/kagemusha_android_attestation_report.py",
+            "expected_identity=parent_identity",
+            "expected_identity=None",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-attestation-report-writer-temp-cleanup-identity":
+    run_negative_control(
+        "Android attestation report writer temp cleanup identity gate",
+        lambda: override_text(
+            "scripts/kagemusha_android_attestation_report.py",
+            "device_lab._file_identity(temp_stat) != expected_identity",
+            "False",
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-android-device-lab-raw-puller-overwrite":
     run_negative_control(
         "Android raw puller overwrite refusal gate",
@@ -6668,6 +7288,193 @@ if mode == "--negative-control-android-device-lab-raw-puller-overwrite":
             "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
             "slot directory already exists; refuse to overwrite raw evidence",
             "slot directory already exists; replacing raw evidence",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-raw-puller-install-no-overwrite":
+    run_negative_control(
+        "Android raw puller install-time overwrite refusal gate",
+        lambda: override_text(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            "final_slot.mkdir(mode=0o700)",
+            "final_slot.mkdir(mode=0o700, exist_ok=True)",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-raw-puller-install-top-level":
+    run_negative_control(
+        "Android raw puller install top-level allowlist gate",
+        lambda: override_text_all(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            "raw slot install source contains unexpected top-level entry",
+            "raw slot install source accepts unexpected top-level entry",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-raw-puller-install-parent-sync":
+    run_negative_control(
+        "Android raw puller install parent-sync gate",
+        lambda: override_text_all(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            "raw slot directory parent could not be synced",
+            "raw slot directory parent sync is optional",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-raw-puller-install-directory-identity":
+    run_negative_control(
+        "Android raw puller install directory-identity gate",
+        lambda: override_text_all(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            "raw slot directory changed during install",
+            "raw slot directory identity drift is accepted",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-raw-puller-install-sync-identity":
+    run_negative_control(
+        "Android raw puller install sync identity gate",
+        lambda: override_text(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            "if _file_identity(open_stat) != expected_identity:",
+            "if False:",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-raw-puller-install-cleanup-identity":
+    run_negative_control(
+        "Android raw puller install cleanup identity gate",
+        lambda: override_text(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            "and _file_identity(path_stat) == expected_identity",
+            "and True",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-raw-puller-temp-cleanup-identity":
+    run_negative_control(
+        "Android raw puller temp cleanup identity gate",
+        lambda: override_text(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            "_file_identity(temp_parent_stat) != expected_identity",
+            "False",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-raw-puller-install-rename-dir-fd":
+    run_negative_control(
+        "Android raw puller install rename dir-fd gate",
+        lambda: override_text(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            "src_dir_fd=stage_fd,\n                            dst_dir_fd=final_fd,",
+            "src_dir_fd=None,\n                            dst_dir_fd=None,",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-raw-puller-install-output-root-identity":
+    run_negative_control(
+        "Android raw puller install output-root identity gate",
+        lambda: override_text(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            "expected_identity=output_root_identity",
+            "expected_identity=None",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-raw-puller-install-cleanup-dir-fd":
+    run_negative_control(
+        "Android raw puller install cleanup dir-fd gate",
+        lambda: override_text(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            "shutil.rmtree(path.name, ignore_errors=True, dir_fd=parent_fd)",
+            "shutil.rmtree(path, ignore_errors=True)",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-raw-puller-install-slot-entry-dir-fd":
+    run_negative_control(
+        "Android raw puller install slot-entry dir-fd gate",
+        lambda: override_text(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            "_slot_entry_identity(\n        final_slot,\n        output_root,\n        output_root_identity",
+            "_created_slot_identity_errors(\n        final_slot,\n        final_slot_identity",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-raw-puller-allowed-artifacts":
+    run_negative_control(
+        "Android raw puller closed artifact set gate",
+        lambda: override_text_all(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            "raw slot artifact {relative} is not an allowed path",
+            "raw slot artifact {relative} may be an unreviewed debug path",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-raw-puller-json-slot-binding":
+    run_negative_control(
+        "Android raw puller JSON slot-binding gate",
+        lambda: override_text(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            "def _validate_raw_json_slot_id",
+            "def _normalise_raw_json_slot_id",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-raw-puller-d2d-offline":
+    run_negative_control(
+        "Android raw puller D2D offline-offline gate",
+        lambda: override_text(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            '"transport_offline"',
+            '"transport_online_optional"',
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-raw-puller-wallet-rollback":
+    run_negative_control(
+        "Android raw puller wallet rollback-rejection gate",
+        lambda: override_text(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            '"rollback_rejection_passed"',
+            '"rollback_rejection_optional"',
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-raw-puller-status-failure":
+    run_negative_control(
+        "Android raw puller status failure gate",
+        lambda: override_text(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            "device_lab.KAGEMUSHA_STATUS_FAILURE_VALUES",
+            "set()",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-raw-puller-runtime-failure-marker":
+    run_negative_control(
+        "Android raw puller runtime failure-marker gate",
+        lambda: override_text(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            "device_lab.KAGEMUSHA_RUNTIME_LOG_FAILURE_MARKERS",
+            "()",
         ),
     )
     raise SystemExit(0)
@@ -6716,6 +7523,171 @@ if mode == "--negative-control-android-device-lab-raw-puller-harness-canonical":
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-android-device-lab-raw-puller-challenge-file-canonical":
+    run_negative_control(
+        "Android raw puller challenge file canonical gate",
+        lambda: override_text(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            'challenge_text.count("\\n") != 1',
+            'False',
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-raw-puller-latest-slot-canonical":
+    run_negative_control(
+        "Android raw puller latest-slot canonical binding gate",
+        lambda: override_text(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            'latest_text != f"{slot_id}\\n"',
+            "latest_text.strip() != slot_id",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-raw-puller-latest-query-canonical":
+    run_negative_control(
+        "Android raw puller latest-slot query canonical gate",
+        lambda: override_text(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            'latest_text.count("\\n") != 1',
+            'False',
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-raw-puller-latest-write-parent-identity":
+    run_negative_control(
+        "Android raw puller latest-slot writer parent identity gate",
+        lambda: override_text(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            "expected_identity=root_identity",
+            "expected_identity=None",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-raw-puller-latest-write-readback-symlink":
+    run_negative_control(
+        "Android raw puller latest-slot writer symlink readback gate",
+        lambda: override_text(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            "raw latest-slot output must not be a symlink after writing",
+            "raw latest-slot output symlink readback is accepted",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-raw-puller-latest-write-readback-hardlink":
+    run_negative_control(
+        "Android raw puller latest-slot writer hardlink readback gate",
+        lambda: override_text_all(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            "raw latest-slot output must not be hardlinked after writing",
+            "raw latest-slot output hardlink readback is accepted",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-raw-puller-latest-write-readback-identity":
+    run_negative_control(
+        "Android raw puller latest-slot writer identity readback gate",
+        lambda: override_text_all(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            "raw latest-slot output changed while being read back",
+            "raw latest-slot output path swaps are accepted during readback",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-raw-puller-directory-collision":
+    run_negative_control(
+        "Android raw puller tar directory collision gate",
+        lambda: override_text(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            "raw slot tar directory {relative} could not be created",
+            "raw slot tar directory collisions are ignored",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-raw-puller-result-slot-required":
+    run_negative_control(
+        "Android raw puller attestation result slot-required gate",
+        lambda: override_text(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            'result.get("slot") != slot_id',
+            'result.get("slot") not in (None, slot_id)',
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-raw-puller-result-chain-digest-required":
+    run_negative_control(
+        "Android raw puller attestation result chain digest-required gate",
+        lambda: override_text(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            'RAW_RESULT_CHAIN_DIGEST_FIELD = "attestation_certificate_chain_sha256"',
+            'RAW_RESULT_CHAIN_DIGEST_FIELD = "attestation_certificate_chain_digest_optional"',
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-raw-puller-result-challenge-digest-required":
+    run_negative_control(
+        "Android raw puller attestation result challenge digest-required gate",
+        lambda: override_text(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            'RAW_RESULT_CHALLENGE_DIGEST_FIELD = "attestation_challenge_sha256"',
+            'RAW_RESULT_CHALLENGE_DIGEST_FIELD = "attestation_challenge_digest_optional"',
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-raw-puller-result-closed-schema":
+    run_negative_control(
+        "Android raw puller attestation result closed-schema gate",
+        lambda: override_text(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            "attestation/result.json contains unexpected field",
+            "attestation/result.json may contain debug fields",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-raw-puller-result-identity-strings":
+    run_negative_control(
+        "Android raw puller attestation result identity string gate",
+        lambda: override_text(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            "def _validate_raw_result_string",
+            "_normalise_raw_result_string",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-raw-puller-result-sdk-digests":
+    run_negative_control(
+        "Android raw puller attestation result SDK digest gate",
+        lambda: override_text(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            "for field in RAW_RESULT_SHA256_FIELDS:",
+            "for field in ():",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-raw-puller-result-strongbox-levels":
+    run_negative_control(
+        "Android raw puller attestation result StrongBox-level gate",
+        lambda: override_text(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            "for field in RAW_RESULT_STRONGBOX_FIELDS:",
+            "for field in ():",
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-android-device-lab-slot-assembler-signature-required":
     run_negative_control(
         "Android device-lab slot assembler signing-required gate",
@@ -6733,6 +7705,94 @@ if mode == "--negative-control-android-device-lab-slot-assembler-source-open-bin
         lambda: override_text(
             "scripts/kagemusha_android_device_lab_slot.py",
             "open_identity != expected_identity or path_identity != expected_identity",
+            "False",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-slot-assembler-copy-parent-sync-identity":
+    run_negative_control(
+        "Android device-lab slot assembler copy parent sync identity",
+        lambda: override_text(
+            "scripts/kagemusha_android_device_lab_slot.py",
+            "expected_identity=destination_parent_identity",
+            "expected_identity=None",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-slot-assembler-copy-readback":
+    run_negative_control(
+        "Android device-lab slot assembler copy readback",
+        lambda: override_text(
+            "scripts/kagemusha_android_device_lab_slot.py",
+            "if verify_errors:",
+            "if False:",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-slot-assembler-json-parent-sync-identity":
+    run_negative_control(
+        "Android device-lab slot assembler JSON parent sync identity",
+        lambda: override_text(
+            "scripts/kagemusha_android_device_lab_slot.py",
+            "expected_identity=json_parent_identity",
+            "expected_identity=None",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-slot-assembler-json-readback":
+    run_negative_control(
+        "Android device-lab slot assembler JSON readback",
+        lambda: override_text(
+            "scripts/kagemusha_android_device_lab_slot.py",
+            "return _verify_written_bytes(path, encoded, label)",
+            "return []",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-slot-assembler-json-temp-cleanup-identity":
+    run_negative_control(
+        "Android device-lab slot assembler JSON temp cleanup identity",
+        lambda: override_text(
+            "scripts/kagemusha_android_device_lab_slot.py",
+            "_file_identity(temp_stat) != expected_identity",
+            "False",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-slot-assembler-publish-root-identity":
+    run_negative_control(
+        "Android device-lab slot assembler publish root identity",
+        lambda: override_text(
+            "scripts/kagemusha_android_device_lab_slot.py",
+            "_file_identity(root_stat) != expected_root_identity",
+            "False",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-slot-assembler-publish-stage-identity":
+    run_negative_control(
+        "Android device-lab slot assembler publish staged-slot identity",
+        lambda: override_text(
+            "scripts/kagemusha_android_device_lab_slot.py",
+            "_file_identity(stage_stat) != expected_stage_identity",
+            "False",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-slot-assembler-temp-cleanup-identity":
+    run_negative_control(
+        "Android device-lab slot assembler temporary cleanup identity",
+        lambda: override_text(
+            "scripts/kagemusha_android_device_lab_slot.py",
+            "_file_identity(temp_parent_stat) != expected_identity",
             "False",
         ),
     )
@@ -7003,6 +8063,17 @@ if mode == "--negative-control-kagemusha-readiness-summary-output-temp-cleanup-f
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-kagemusha-readiness-summary-output-temp-cleanup-identity":
+    run_negative_control(
+        "Kagemusha readiness summary output temp cleanup identity gate",
+        lambda: override_text(
+            "scripts/kagemusha_production_readiness.py",
+            "_file_identity(temp_stat) != expected_identity",
+            "False",
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-kagemusha-readiness-summary-output-strict-json-write":
     run_negative_control(
         "Kagemusha readiness summary output strict JSON writer",
@@ -7065,6 +8136,17 @@ if mode == "--negative-control-kagemusha-readiness-summary-output-readback-open-
             "scripts/kagemusha_production_readiness.py",
             "summary_expected_identity = (expected_stat.st_dev, expected_stat.st_ino)",
             "summary_expected_identity = (open_stat.st_dev, open_stat.st_ino)",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-kagemusha-readiness-summary-output-parent-sync-identity":
+    run_negative_control(
+        "Kagemusha readiness summary output parent sync identity gate",
+        lambda: override_text(
+            "scripts/kagemusha_production_readiness.py",
+            "expected_identity=parent_identity",
+            "expected_identity=None",
         ),
     )
     raise SystemExit(0)
@@ -7376,6 +8458,17 @@ if mode == "--negative-control-release-bundle-temp-cleanup-failure":
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-release-bundle-temp-cleanup-identity":
+    run_negative_control(
+        "Kagemusha release bundle temp cleanup identity gate",
+        lambda: override_text(
+            "scripts/kagemusha_release_bundle.py",
+            "_file_identity(temp_stat) != expected_identity",
+            "False",
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-release-bundle-strict-json-write":
     run_negative_control(
         "Kagemusha release bundle strict JSON writer",
@@ -7427,6 +8520,17 @@ if mode == "--negative-control-release-bundle-output-readback-open-path-binding"
             "scripts/kagemusha_release_bundle.py",
             "output_expected_identity = (expected_stat.st_dev, expected_stat.st_ino)",
             "output_expected_identity = (open_stat.st_dev, open_stat.st_ino)",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-release-bundle-output-parent-sync-identity":
+    run_negative_control(
+        "Kagemusha release bundle output parent sync identity gate",
+        lambda: override_text(
+            "scripts/kagemusha_release_bundle.py",
+            "expected_identity=parent_identity",
+            "expected_identity=None",
         ),
     )
     raise SystemExit(0)
@@ -7761,6 +8865,17 @@ if mode == "--negative-control-lineage-proof-helper-output-temp-cleanup-failure"
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-lineage-proof-helper-output-temp-cleanup-identity":
+    run_negative_control(
+        "Reserved-lineage proof evidence helper output temp cleanup identity gate",
+        lambda: override_text(
+            "scripts/kagemusha_lineage_proof_evidence.py",
+            "_file_identity(temp_stat) != expected_identity",
+            "False",
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-lineage-proof-helper-strict-json-write":
     run_negative_control(
         "Reserved-lineage proof evidence helper strict JSON writer",
@@ -7916,6 +9031,17 @@ if mode == "--negative-control-compact-key-helper-output-temp-cleanup-failure":
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-compact-key-helper-output-temp-cleanup-identity":
+    run_negative_control(
+        "ABI-7 recursive compact key evidence helper output temp cleanup identity gate",
+        lambda: override_text(
+            "scripts/kagemusha_recursive_compact_key_evidence.py",
+            "_file_identity(temp_stat) != expected_identity",
+            "False",
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-compact-key-helper-strict-json-write":
     run_negative_control(
         "ABI-7 recursive compact key evidence helper strict JSON writer",
@@ -7956,6 +9082,17 @@ if mode == "--negative-control-compact-key-helper-output-readback-open-path-bind
             "scripts/kagemusha_recursive_compact_key_evidence.py",
             "output_expected_identity = (expected_stat.st_dev, expected_stat.st_ino)",
             "output_expected_identity = (open_stat.st_dev, open_stat.st_ino)",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-compact-key-helper-output-parent-sync-identity":
+    run_negative_control(
+        "ABI-7 recursive compact key evidence helper output parent sync identity gate",
+        lambda: override_text(
+            "scripts/kagemusha_recursive_compact_key_evidence.py",
+            "expected_identity=parent_identity",
+            "expected_identity=None",
         ),
     )
     raise SystemExit(0)
@@ -8051,6 +9188,17 @@ if mode == "--negative-control-compact-key-helper-validation-temp-cleanup-failur
             "scripts/kagemusha_recursive_compact_key_evidence.py",
             "recursive compact key evidence validation file could not be removed",
             "recursive compact key evidence validation file cleanup failures ignored",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-compact-key-helper-validation-temp-cleanup-identity":
+    run_negative_control(
+        "ABI-7 recursive compact key evidence helper validation temp cleanup identity",
+        lambda: override_text(
+            "scripts/kagemusha_recursive_compact_key_evidence.py",
+            "_file_identity(validation_temp_stat) != expected_identity",
+            "False",
         ),
     )
     raise SystemExit(0)
@@ -8260,6 +9408,17 @@ if mode == "--negative-control-lineage-proof-helper-validation-temp-cleanup-fail
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-lineage-proof-helper-validation-temp-cleanup-identity":
+    run_negative_control(
+        "Reserved-lineage proof evidence helper validation temp cleanup identity",
+        lambda: override_text(
+            "scripts/kagemusha_lineage_proof_evidence.py",
+            "_file_identity(validation_temp_stat) != expected_identity",
+            "False",
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-lineage-proof-helper-input-corridor":
     run_negative_control(
         "Reserved-lineage proof evidence helper input corridor",
@@ -8344,6 +9503,72 @@ if mode == "--negative-control-lineage-proof-finalizer-publish-readback":
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-compact-key-finalizer-publish-rollback-identity":
+    run_negative_control(
+        "ABI-7 recursive compact key staged finalizer publish rollback identity",
+        lambda: override_text(
+            "scripts/kagemusha_finalize_recursive_compact_key_staged_run.py",
+            "_file_identity(path_stat) == expected_identity",
+            "True",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-lineage-proof-finalizer-publish-rollback-identity":
+    run_negative_control(
+        "Reserved-lineage proof staged finalizer publish rollback identity",
+        lambda: override_text(
+            "scripts/kagemusha_finalize_lineage_proof_staged_run.py",
+            "_file_identity(path_stat) == expected_identity",
+            "True",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-compact-key-finalizer-publish-dir-sync-identity":
+    run_negative_control(
+        "ABI-7 recursive compact key staged finalizer publish directory sync identity",
+        lambda: override_text(
+            "scripts/kagemusha_finalize_recursive_compact_key_staged_run.py",
+            "expected_identity=artifact_dir_identity",
+            "expected_identity=None",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-lineage-proof-finalizer-publish-dir-sync-identity":
+    run_negative_control(
+        "Reserved-lineage proof staged finalizer publish directory sync identity",
+        lambda: override_text(
+            "scripts/kagemusha_finalize_lineage_proof_staged_run.py",
+            "expected_identity=artifact_dir_identity",
+            "expected_identity=None",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-compact-key-finalizer-temp-cleanup-identity":
+    run_negative_control(
+        "ABI-7 recursive compact staged finalizer temporary cleanup identity",
+        lambda: override_text(
+            "scripts/kagemusha_finalize_recursive_compact_key_staged_run.py",
+            "_file_identity(temp_parent_stat) != expected_identity",
+            "False",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-lineage-proof-finalizer-temp-cleanup-identity":
+    run_negative_control(
+        "Reserved-lineage proof staged finalizer temporary cleanup identity",
+        lambda: override_text(
+            "scripts/kagemusha_finalize_lineage_proof_staged_run.py",
+            "_file_identity(temp_parent_stat) != expected_identity",
+            "False",
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-lineage-proof-staged-runner-exit-marker":
     run_negative_control(
         "Reserved-lineage proof staged runner exit-marker preservation",
@@ -8366,6 +9591,39 @@ if mode == "--negative-control-lineage-proof-staged-runner-readback":
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-lineage-proof-staged-runner-parent-sync-identity":
+    run_negative_control(
+        "Reserved-lineage proof staged runner parent sync identity",
+        lambda: override_text(
+            "scripts/kagemusha_run_lineage_proof_staged.py",
+            "expected_identity=parent_identity",
+            "expected_identity=None",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-lineage-proof-staged-runner-log-install-parent-sync-identity":
+    run_negative_control(
+        "Reserved-lineage proof staged runner log-install parent sync identity",
+        lambda: override_text(
+            "scripts/kagemusha_run_lineage_proof_staged.py",
+            "expected_identity=log_parent_identity",
+            "expected_identity=None",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-lineage-proof-staged-runner-cleanup-identity":
+    run_negative_control(
+        "Reserved-lineage proof staged runner cleanup identity",
+        lambda: override_text(
+            "scripts/kagemusha_run_lineage_proof_staged.py",
+            "_file_identity(path_stat) != expected_identity",
+            "False",
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-compact-key-staged-runner-exit-marker":
     run_negative_control(
         "ABI-7 recursive compact key staged runner exit-marker preservation",
@@ -8384,6 +9642,105 @@ if mode == "--negative-control-compact-key-staged-runner-readback":
             "scripts/kagemusha_run_recursive_compact_keygen_staged.py",
             "return _verify_written_text_file(path, expected_bytes, label)",
             "return []",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-compact-key-staged-runner-parent-sync-identity":
+    run_negative_control(
+        "ABI-7 recursive compact key staged runner parent sync identity",
+        lambda: override_text(
+            "scripts/kagemusha_run_recursive_compact_keygen_staged.py",
+            "expected_identity=parent_identity",
+            "expected_identity=None",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-compact-key-staged-runner-log-install-parent-sync-identity":
+    run_negative_control(
+        "ABI-7 recursive compact key staged runner log-install parent sync identity",
+        lambda: override_text(
+            "scripts/kagemusha_run_recursive_compact_keygen_staged.py",
+            "expected_identity=log_parent_identity",
+            "expected_identity=None",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-compact-key-staged-runner-cleanup-identity":
+    run_negative_control(
+        "ABI-7 recursive compact key staged runner cleanup identity",
+        lambda: override_text(
+            "scripts/kagemusha_run_recursive_compact_keygen_staged.py",
+            "_file_identity(path_stat) != expected_identity",
+            "False",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-lineage-proof-staged-runner-child-log-file":
+    run_negative_control(
+        "Reserved-lineage proof staged runner child log-file binding",
+        lambda: override_text(
+            "scripts/kagemusha_run_lineage_proof_staged.py",
+            "stdout=log_handle",
+            "stdout=subprocess.PIPE",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-compact-key-staged-runner-child-log-file":
+    run_negative_control(
+        "ABI-7 recursive compact key staged runner child log-file binding",
+        lambda: override_text(
+            "scripts/kagemusha_run_recursive_compact_keygen_staged.py",
+            "stdout=log_handle",
+            "stdout=subprocess.PIPE",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-lineage-proof-staged-runner-supervisor-output-pipe":
+    run_negative_control(
+        "Reserved-lineage proof staged runner supervisor output pipe",
+        lambda: override_text(
+            "scripts/kagemusha_run_lineage_proof_staged.py",
+            "exit_code = process.wait()",
+            'sys.stdout.buffer.write(b"")\n        exit_code = process.wait()',
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-compact-key-staged-runner-supervisor-output-pipe":
+    run_negative_control(
+        "ABI-7 recursive compact key staged runner supervisor output pipe",
+        lambda: override_text(
+            "scripts/kagemusha_run_recursive_compact_keygen_staged.py",
+            "exit_code = process.wait()",
+            'sys.stdout.buffer.write(b"")\n        exit_code = process.wait()',
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-lineage-proof-staged-runner-execution-log-sha256":
+    run_negative_control(
+        "Reserved-lineage proof staged runner execution-log SHA-256 binding",
+        lambda: override_text(
+            "scripts/kagemusha_run_lineage_proof_staged.py",
+            "log_sha256 must match staged {profile} lineage key artifact log SHA-256",
+            "log_sha256 may drift from staged {profile} lineage key artifact log",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-compact-key-staged-runner-execution-log-sha256":
+    run_negative_control(
+        "ABI-7 recursive compact key staged runner execution-log SHA-256 binding",
+        lambda: override_text(
+            "scripts/kagemusha_run_recursive_compact_keygen_staged.py",
+            "generator_log_sha256 must match staged generator log SHA-256",
+            "generator_log_sha256 may drift from staged generator log SHA-256",
         ),
     )
     raise SystemExit(0)
@@ -8681,6 +10038,17 @@ if mode == "--negative-control-lineage-proof-evidence-filename":
             "scripts/kagemusha_production_readiness.py",
             "lineage_proof_evidence_filename",
             "lineage_proof_evidence_any_filename",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-lineage-proof-evidence-output-parent-sync-identity":
+    run_negative_control(
+        "Reserved-lineage proof evidence output parent sync identity gate",
+        lambda: override_text(
+            "scripts/kagemusha_lineage_proof_evidence.py",
+            "expected_identity=parent_identity",
+            "expected_identity=None",
         ),
     )
     raise SystemExit(0)

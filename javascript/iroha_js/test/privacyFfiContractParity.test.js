@@ -363,7 +363,19 @@ const EXPECTED_SWIFT_PRIVACY_BRIDGE_METHODS = Object.freeze([
   "buildConfidentialTransferProofV2",
   "buildConfidentialUnshieldProofV3",
   "buildZkAceAuthorizationProofV1",
+  "buildJindoLatticeProofV0",
+  "buildSisHintsAnonymousCredentialProofV0",
+  "buildSilentThresholdCredentialShowingProofV0",
+  "buildVegaCredentialPredicateProofV0",
+  "buildZkAmsAdmissionBatchProofV0",
+  "buildZkAtPolicyProofV1",
   "verifyProofV1",
+  "verifyJindoPolynomialCommitmentV0",
+  "verifySisHintsAnonymousCredentialProofV0",
+  "verifySilentThresholdCredentialShowingProofV0",
+  "verifyVegaCredentialPredicateProofV0",
+  "verifyZkAmsAdmissionBatchProofV0",
+  "verifyZkAtPolicyProofV1",
 ]);
 const EXPECTED_JAVA_PRIVACY_BRIDGE_METHODS = Object.freeze([
   "isNativeAvailable",
@@ -375,7 +387,19 @@ const EXPECTED_JAVA_PRIVACY_BRIDGE_METHODS = Object.freeze([
   "buildConfidentialTransferProofV2",
   "buildConfidentialUnshieldProofV3",
   "buildZkAceAuthorizationProofV1",
+  "buildJindoLatticeProofV0",
+  "buildSisHintsAnonymousCredentialProofV0",
+  "buildSilentThresholdCredentialShowingProofV0",
+  "buildVegaCredentialPredicateProofV0",
+  "buildZkAmsAdmissionBatchProofV0",
+  "buildZkAtPolicyProofV1",
   "verifyProof",
+  "verifyJindoPolynomialCommitmentV0",
+  "verifySisHintsAnonymousCredentialProofV0",
+  "verifySilentThresholdCredentialShowingProofV0",
+  "verifyVegaCredentialPredicateProofV0",
+  "verifyZkAmsAdmissionBatchProofV0",
+  "verifyZkAtPolicyProofV1",
 ]);
 const EXPECTED_KOTLIN_PRIVACY_BRIDGE_METHODS = Object.freeze([
   "isNativeAvailable",
@@ -386,7 +410,19 @@ const EXPECTED_KOTLIN_PRIVACY_BRIDGE_METHODS = Object.freeze([
   "buildConfidentialTransferProofV2",
   "buildConfidentialUnshieldProofV3",
   "buildZkAceAuthorizationProofV1",
+  "buildJindoLatticeProofV0",
+  "buildSisHintsAnonymousCredentialProofV0",
+  "buildSilentThresholdCredentialShowingProofV0",
+  "buildVegaCredentialPredicateProofV0",
+  "buildZkAmsAdmissionBatchProofV0",
+  "buildZkAtPolicyProofV1",
   "verifyProof",
+  "verifyJindoPolynomialCommitmentV0",
+  "verifySisHintsAnonymousCredentialProofV0",
+  "verifySilentThresholdCredentialShowingProofV0",
+  "verifyVegaCredentialPredicateProofV0",
+  "verifyZkAmsAdmissionBatchProofV0",
+  "verifyZkAtPolicyProofV1",
 ]);
 const EXPECTED_CSHARP_PRIVACY_BRIDGE_METHODS = Object.freeze([
   "IsAvailable",
@@ -403,7 +439,35 @@ const EXPECTED_CSHARP_PRIVACY_BRIDGE_METHODS = Object.freeze([
   "BuildConfidentialUnshieldProofV3",
   "buildZkAceAuthorizationProofV1",
   "BuildZkAceAuthorizationProofV1",
+  "buildVeRangeProofV1",
+  "BuildVeRangeProofV1",
+  "buildJindoLatticeProofV0",
+  "BuildJindoLatticeProofV0",
+  "buildSisHintsAnonymousCredentialProofV0",
+  "BuildSisHintsAnonymousCredentialProofV0",
+  "buildSilentThresholdCredentialShowingProofV0",
+  "BuildSilentThresholdCredentialShowingProofV0",
+  "buildVegaCredentialPredicateProofV0",
+  "BuildVegaCredentialPredicateProofV0",
+  "buildZkAmsAdmissionBatchProofV0",
+  "BuildZkAmsAdmissionBatchProofV0",
+  "buildZkAtPolicyProofV1",
+  "BuildZkAtPolicyProofV1",
   "VerifyProofV1",
+  "verifyJindoPolynomialCommitmentV0",
+  "VerifyJindoPolynomialCommitmentV0",
+  "verifySisHintsAnonymousCredentialProofV0",
+  "VerifySisHintsAnonymousCredentialProofV0",
+  "verifySilentThresholdCredentialShowingProofV0",
+  "VerifySilentThresholdCredentialShowingProofV0",
+  "verifyVegaCredentialPredicateProofV0",
+  "VerifyVegaCredentialPredicateProofV0",
+  "verifyZkAmsAdmissionBatchProofV0",
+  "VerifyZkAmsAdmissionBatchProofV0",
+  "verifyZkAtPolicyProofV1",
+  "VerifyZkAtPolicyProofV1",
+  "verifyVeRangeProofV1",
+  "VerifyVeRangeProofV1",
 ]);
 
 function source(relativePath) {
@@ -2016,8 +2080,8 @@ test("native privacy FFI catalogs pin required production plan rows", () => {
     );
     assert.match(
       text,
-      /fn\s+privacy_required_production_plan_rows_are_present\([^)]*\)\s*->\s*bool\s*\{[\s\S]*PRIVACY_REQUIRED_PRODUCTION_PLAN_ROWS[\s\S]*let\s+mut\s+matching_rows\s*=\s*entries\.iter\(\)\.filter\(\|entry\|\s*entry\.id\s*==\s*\*algorithm_id\)[\s\S]*matching_rows\.next\(\)\s*,\s*matching_rows\.next\(\)[\s\S]*\(Some\(entry\),\s*None\)[\s\S]*entry\.proof_family\s*==\s*\*proof_family[\s\S]*entry\.backend_family\s*==\s*\*backend_family[\s\S]*privacy_entrypoints_include_production_proof_builder\s*\(\s*entry\.planned_entrypoints\s*,?\s*\)[\s\S]*\}/,
-      `${label} must validate exact required row cardinality, proof families, backend families, and planned production proof builders`,
+      /fn\s+privacy_required_production_plan_rows_are_present\([^)]*\)\s*->\s*bool\s*\{[\s\S]*PRIVACY_REQUIRED_PRODUCTION_PLAN_ROWS[\s\S]*let\s+mut\s+matching_rows\s*=\s*entries\.iter\(\)\.filter\(\|entry\|\s*entry\.id\s*==\s*\*algorithm_id\)[\s\S]*matching_rows\.next\(\)\s*,\s*matching_rows\.next\(\)[\s\S]*\(Some\(entry\),\s*None\)[\s\S]*entry\.proof_family\s*==\s*\*proof_family[\s\S]*entry\.backend_family\s*==\s*\*backend_family[\s\S]*privacy_entrypoints_include_production_proof_builder\s*\(\s*entry\.sdk_entrypoints\s*,?\s*\)[\s\S]*privacy_entrypoints_include_production_proof_builder\s*\(\s*entry\.planned_entrypoints\s*,?\s*\)[\s\S]*\}/,
+      `${label} must validate exact required row cardinality, proof families, backend families, and SDK-or-planned production proof builders`,
     );
     assert.match(
       text,
@@ -2026,8 +2090,8 @@ test("native privacy FFI catalogs pin required production plan rows", () => {
     );
     assert.match(
       text,
-      /privacy_algorithm_catalog_rejects_missing_or_misregistered_required_plan_rows[\s\S]*deriveOrchardWitness[\s\S]*ProofEnvelope[\s\S]*anonymous-pgc-k-out-of-n-v1[\s\S]*duplicate required production plan rows must be rejected[\s\S]*wrong-backend[\s\S]*wrong-proof[\s\S]*planned_entrypoints\s*=\s*&\[\][\s\S]*planned production proof builder/,
-      `${label} must test missing, duplicate, proof-drifted, backend-drifted, unplanned, helper-only, and proof-helper required rows`,
+      /privacy_algorithm_catalog_rejects_missing_or_misregistered_required_plan_rows[\s\S]*deriveOrchardWitness[\s\S]*ProofEnvelope[\s\S]*anonymous-pgc-k-out-of-n-v1[\s\S]*duplicate required production plan rows must be rejected[\s\S]*wrong-backend[\s\S]*wrong-proof[\s\S]*sdk_entrypoints\s*=\s*&\[\][\s\S]*planned_entrypoints\s*=\s*&\[\][\s\S]*production proof builders/,
+      `${label} must test missing, duplicate, proof-drifted, backend-drifted, no-builder, helper-only, and proof-helper required rows`,
     );
   }
 });
@@ -2533,7 +2597,7 @@ test("native privacy FFI hosts reject proof/witness operation confusion before p
     );
     assert.match(
       text,
-      /!privacy_entrypoint_is_production_proof_builder\(&request\.entrypoint\)[\s\S]*privacy proof request entrypoint must be a production proof builder/,
+      /privacy_entrypoint_is_production_proof_builder\(&request\.entrypoint\)[\s\S]*privacy_entrypoint_is_production_proof_verifier\(&request\.entrypoint\)[\s\S]*privacy proof build request entrypoint must be a production proof builder[\s\S]*privacy proof verify request entrypoint must be a production proof builder or verifier/,
       `${label} must reject non-proof SDK helpers on proof FFI requests`,
     );
     assert.match(
@@ -2558,7 +2622,7 @@ test("native privacy FFI hosts reject proof/witness operation confusion before p
     );
     assert.match(
       text,
-      /privacy_proof_ffi_rejects_non_proof_sdk_entrypoints_before_production_gate[\s\S]*buildRangeCommitment[\s\S]*buildVeRangeDevProofFixture[\s\S]*verifyVeRangeProofLocally[\s\S]*buildZkTransferInstruction[\s\S]*production proof builder/,
+      /privacy_proof_ffi_rejects_non_proof_sdk_entrypoints_before_production_gate[\s\S]*buildRangeCommitment[\s\S]*buildVeRangeProofEnvelope[\s\S]*verify-proof-envelope-helper[\s\S]*buildZkTransferInstruction[\s\S]*production proof builder/,
       `${label} must test non-proof SDK entrypoint rejection`,
     );
   }

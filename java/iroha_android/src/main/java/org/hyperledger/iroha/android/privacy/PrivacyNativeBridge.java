@@ -172,11 +172,51 @@ public final class PrivacyNativeBridge {
     return buildProof(requestArchive);
   }
 
+  public static byte[] buildSisHintsAnonymousCredentialProofV0(final byte[] requestArchive) {
+    return buildProof(requestArchive);
+  }
+
+  public static byte[] buildSilentThresholdCredentialShowingProofV0(final byte[] requestArchive) {
+    return buildProof(requestArchive);
+  }
+
+  public static byte[] buildVegaCredentialPredicateProofV0(final byte[] requestArchive) {
+    return buildProof(requestArchive);
+  }
+
+  public static byte[] buildZkAmsAdmissionBatchProofV0(final byte[] requestArchive) {
+    return buildProof(requestArchive);
+  }
+
+  public static byte[] buildZkAtPolicyProofV1(final byte[] requestArchive) {
+    return buildProof(requestArchive);
+  }
+
   public static byte[] verifyProof(final byte[] requestArchive) {
     return call("verify proof", requestArchive, PrivacyNativeBridge::nativeVerifyProof);
   }
 
   public static byte[] verifyJindoPolynomialCommitmentV0(final byte[] requestArchive) {
+    return verifyProof(requestArchive);
+  }
+
+  public static byte[] verifySisHintsAnonymousCredentialProofV0(final byte[] requestArchive) {
+    return verifyProof(requestArchive);
+  }
+
+  public static byte[] verifySilentThresholdCredentialShowingProofV0(final byte[] requestArchive) {
+    return verifyProof(requestArchive);
+  }
+
+  public static byte[] verifyVegaCredentialPredicateProofV0(final byte[] requestArchive) {
+    return verifyProof(requestArchive);
+  }
+
+  public static byte[] verifyZkAmsAdmissionBatchProofV0(final byte[] requestArchive) {
+    return verifyProof(requestArchive);
+  }
+
+  public static byte[] verifyZkAtPolicyProofV1(final byte[] requestArchive) {
     return verifyProof(requestArchive);
   }
 

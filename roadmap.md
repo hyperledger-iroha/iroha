@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-06-10
+Last updated: 2026-06-11
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 The detailed engineering backlog lives in
@@ -63,6 +63,11 @@ and completed history lives in [`status.md`](./status.md).
     `invalidUtf8CircuitArchive` so the C# parser rejects non-canonical,
     address-space oversized, u64-overflowing compact lengths and invalid UTF-8
     lineage archive circuit fields on Windows.
+  - Privacy VeRange planned-helper quarantine: remove or hide the C# public
+    `BuildVeRangeProofV1`, `buildVeRangeProofV1`, `VerifyVeRangeProofV1`, and
+    `verifyVeRangeProofV1` aliases once the Windows C# SDK test lane can verify
+    the generic `BuildProofV1` and `VerifyProofV1` archive paths cover the same
+    native bridge behavior.
   - Re-run `ci/check_kagemusha_recursive_spend_sdk_parity.sh` after recording
     the Windows evidence so C# SDK parity status can be cleared explicitly.
 - Kagemusha JVM SDK validation must keep the focused runner aligned with the
@@ -93,18 +98,80 @@ and completed history lives in [`status.md`](./status.md).
   artifact to symlink-free ancestors and the opened file identity, uses a
   separate 64 MiB cap for the JNI-bearing offline wallet APK while retaining
   16 MiB caps for smaller evidence artifacts, and rejects source-directory
-  aliases or post-preflight source swaps before signed slot installation. Fresh
+  aliases or post-preflight source swaps before signed slot installation. It
+  now syncs copied-artifact parents and reads staged copies back through
+  opened-file identity bindings before manifesting. Its normalized attestation
+  and slot metadata JSON writes use fsynced temporary files, identity-bound
+  parent fsync, and opened-file readback before manifesting. It publishes the completed stage through directory file
+  descriptors pinned to the captured device-lab root, temp-parent, and
+  staged-slot identities, and cleanup checks the captured temp-parent identity
+  before removing staging directories, so path swaps before final fsync or
+  cleanup fail closed. Fresh
   raw exports now include `attestation/harness-result.json`, and the raw puller
   requires that harness result to match the slot challenge before the host
-  verifier report and signed slot can be assembled. Signed slots now preserve
-  the same `attestation/harness-result.json`, include it in signed
+  verifier report and signed slot can be assembled. The raw puller also
+  requires both the `run-as cat` latest-slot query and the tarred
+  `latest-slot.txt` to be exactly the selected slot id plus a trailing newline,
+  rejecting whitespace-normalized matches, reports tar directory collisions
+  as structured blockers instead of tracebacks, moves top-level raw artifacts
+  through opened stage/final directory descriptors, and revalidates the
+  captured temporary extraction directory identity before cleanup. It also rejects unreviewed
+  extra files or directories under the raw slot, requires both `slot` and
+  `slot_id` in raw `attestation/result.json` to match the selected slot id, and
+  requires canonical lowercase SHA-256 chain/challenge digests matching the
+  pulled StrongBox certificate-chain and challenge bytes. Raw
+  `attestation/result.json` is closed-schema, and
+  `attestation/challenge.hex` must be lowercase hexadecimal with exactly one
+  trailing newline so challenge bytes are never accepted through whitespace or
+  case normalization. Raw identity strings must be trim-stable, SDK/policy
+  digests must be canonical lowercase SHA-256 hex, and raw security levels must
+  remain exact `STRONGBOX`. Queue, telemetry, D2D handoff, and wallet integrity
+  JSON artifacts are now parsed as slot-bound strict JSON before assembly; D2D
+  must remain offline-offline and wallet integrity must prove key rotation plus
+  rollback rejection. Raw status NDJSON must not contain failure statuses or
+  mismatched slot bindings, and runtime logs must contain the completion marker
+  without build/test/panic/traceback/fatal failure markers. Raw pull summaries
+  now reject non-finite or oversized JSON before temp-file creation and fsync
+  summary bytes before atomic replacement, then verify summary readback through
+  opened-file identity checks that reject symlinks, hardlinks, and path swaps
+  before the identity-bound parent directory fsync. Summary artifact digests
+  must cover every required raw artifact and are collected through separate
+  opened-file identity checks that reject symlinks, hardlinks, and file swaps
+  after raw slot validation. Raw slot installation now rechecks the final
+  destination, creates the installed slot directory exclusively with owner-only
+  permissions, moves only expected top-level artifact directories, binds the
+  created slot-directory identity through each parent-fd slot-entry stat, move,
+  and slot fsync, binds the output-root identity through the parent fsync, and
+  removes partial installs through the identity-bound output-root file
+  descriptor only when the destination entry still names the directory created
+  by the puller. The host `latest-slot.txt` writer now follows the same
+  output-readback contract, with byte fsync, atomic replace, opened-file
+  identity readback that rejects symlinks, hardlinks, and path swaps, and an
+  identity-bound output-root fsync.
+  Signed slots now preserve the same `attestation/harness-result.json`, include
+  it in signed
   `artifact_digests`, and reject legacy signed evidence that drops the raw
   StrongBox harness output. The standalone Android scanner also rejects copied
   Kagemusha matrix rows by reporting hash-only duplicate device fingerprints or
   attestation challenges across otherwise-valid slots, and the production
   readiness rollup mirrors that non-secret duplicate inventory with
   release-bundle schema validation, verify-existing validation, exact standard
-  matrix and signer-pin manifest checks, and drift checks. The
+  matrix and signer-pin manifest checks, drift checks, and an identity-bound
+  scanner JSON summary parent sync. The Android attestation report writer and
+  signed-evidence helper also identity-bind their post-replace output-parent
+  syncs before accepting local JSON or manifest outputs, and the signed-slot
+  assembler now identity-binds local JSON temp cleanup before accepting slot
+  metadata outputs. The lineage plus
+  compact-key staged runners apply the same gate to their child-log installs,
+  marker, and metadata outputs before readback. Those staged runners also
+  identity-bind resume/replace cleanup and temporary log/output cleanup before
+  unlinking stale staged paths. The lineage and compact-key evidence helpers
+  now identity-bind validation scratch-file cleanup under `--artifact-dir`
+  before unlinking those temp files. The staged finalizers also
+  identity-bind the published artifact directory before their final fsync and
+  revalidate temporary staging directory identity before cleanup, and their
+  rollback cleanup unlinks only published files whose current identity still
+  matches the identity captured immediately after install. The
   latest attached Pixel 6 / Android 16 slot
   `google-pixel-6-6a-physical-1781077370103` verifies and signs successfully
   through the lab-app path; remaining Android release work is evidence
@@ -128,7 +195,9 @@ and completed history lives in [`status.md`](./status.md).
   count, and init/append lineage-key-artifact log byte counts before publishing.
   It also emits per-phase closed-schema execution reports for init, append, and
   proof attempts so signal-style failures are diagnosable without becoming
-  publishable evidence. The wrapper exits conventionally on failure while
+  publishable evidence; each execution report now includes an execution-report
+  SHA-256 of the child log so resume rejects digest drift as well as byte-count
+  drift. The wrapper exits conventionally on failure while
   preserving the exact subprocess status in the staged marker, execution
   reports, and run report.
   The runner can now resume at init/append key-artifact phase boundaries:
@@ -141,18 +210,36 @@ and completed history lives in [`status.md`](./status.md).
   Staged metadata writes are now self-verifying: after the atomic rename the
   runner reopens marker, elapsed, and JSON report files, checks the opened file
   identity, and compares exact bytes before returning.
+  Long-running child commands write stdout/stderr directly to their temporary
+  staged log file instead of through a supervisor-owned pipe, so interrupted
+  supervisor sessions are less likely to strand keygen/proof children behind a
+  broken output pipe while the existing exit-marker/report gates continue to
+  prevent ambiguous partial runs from becoming release evidence. The production
+  guard forbids the old `subprocess.PIPE`, `process.stdout.read`, and
+  `sys.stdout.buffer` staged-runner patterns so Python-side output mirroring
+  cannot silently return. Resume/replace cleanup and temporary log/output
+  cleanup now unlink staged files only through an identity-checked parent file
+  descriptor, so a path swapped after validation is reported as cleanup drift
+  instead of being removed. Evidence-helper validation scratch files use the
+  same parent-fd identity check before cleanup.
   The finalizer also verifies each published file after install by reopening it
   through the identity-bound artifact reader and comparing it with the staged
-  source bytes before the final evidence check.
-  The latest staged attempts, including one retry with the existing release
-  `iroha` binary, exited `-9` during init LEN=128 key generation after
-  producing only the init key-log, so the remaining lineage release blocker is
-  successful production-width init/append key-artifact generation plus the
-  heavy ignored proof run, followed by finalization into `artifacts/kagemusha`.
-  A lower-memory key-generation-only verifier-slice shape path is now
-  implemented and source-pinned for the one-hop and append circuits, but release
-  evidence still requires a successful production-width run on a host that can
-  complete init/append key generation without OS termination.
+  source bytes before the final evidence check, then identity-binds the
+  published artifact directory before the final fsync and revalidates temporary
+  staging directory identity before cleanup. Rollback cleanup after failed
+  copies, readback verification, or final evidence publication also refuses to
+  unlink a path unless its current identity still matches the publish-time file
+  identity captured after install.
+  Older staged attempts, including one retry with the existing release `iroha`
+  binary, exited `-9` during init LEN=128 key generation after producing only
+  the init key-log. A lower-memory key-generation-only verifier-slice shape path
+  is now implemented for the one-hop and append circuits, the processed
+  verifier-key bytes have been checked against the full circuits in explicit
+  expensive equivalence tests, and the release CLI has been rebuilt with that
+  path. A replacement production-width staged run is in progress; the remaining
+  lineage release blocker is successful init/append key-artifact generation plus
+  the heavy ignored proof run, followed by finalization into
+  `artifacts/kagemusha`.
 - Kagemusha ABI-7 recursive compact key evidence now has a staged-run finalizer
   that requires a zero exit marker, validates staged artifacts and the generator
   log, writes canonical `recursive-compact-key-evidence.json`, and refuses
@@ -162,19 +249,29 @@ and completed history lives in [`status.md`](./status.md).
   conventional wrapper failure status, and refuses staged overwrites by default.
   `--resume-keygen` now reuses only a complete zero-exit compact keygen whose
   artifacts, generator log, execution report, run report, marker, canonical
-  command, and generator-log byte count validate; failed or malformed regular
+  command, generator-log byte count, and execution-report SHA-256 validate;
+  failed or malformed regular
   staged outputs are replaced and rerun, while unsafe aliases still fail closed.
   `--resume-keygen` is mutually exclusive with `--replace`, so operators must
   choose validated resume or full staged-output replacement before cleanup.
-  The runner also self-verifies marker and JSON report writes after atomic
-  rename so post-write metadata drift is rejected before finalization.
+  The runner also identity-binds the generator-log parent sync after log
+  install and self-verifies marker and JSON report writes after atomic rename
+  so post-write metadata drift is rejected before finalization.
+  The keygen child writes stdout/stderr directly to the temporary generator log
+  file rather than a supervisor-owned pipe, preserving the staged log on
+  multi-hour runs while still requiring the zero-exit marker, execution report,
+  run report, and byte-count validation before reuse or finalization. The
+  production guard also forbids the old staged-runner pipe-read/stdout-mirror
+  patterns from returning.
   The finalizer reopens every published key artifact, generator log, and
   evidence JSON after install and compares the identity-bound readback with the
-  staged source bytes before reporting success.
-  The latest staged production-width keygen attempt exited nonzero (`143`) after
-  about 9h26m with no artifacts, so the remaining compact-key release blocker is
-  a successful rerun that produces artifacts and is finalized into
-  `artifacts/kagemusha`.
+  staged source bytes before reporting success, then identity-binds the
+  published artifact directory before the final fsync and revalidates temporary
+  staging directory identity before cleanup.
+  The previous staged production-width keygen attempt exited nonzero (`143`)
+  after about 9h26m with no artifacts. A detached replacement retry is in
+  progress; the remaining compact-key release blocker is a successful rerun that
+  produces artifacts and is finalized into `artifacts/kagemusha`.
 - Continue reducing local/CI compile memory after the WSL cargo-test hardening
   and Kagemusha record-bound compact preflight isolation: plain default tests no
   longer run the heavy ABI-7 recursive compact record-bound Pallas proof matrix,
@@ -1256,16 +1353,22 @@ and completed history lives in [`status.md`](./status.md).
 	  rejection of secret-looking paths and unreadable root metadata before slot
 	  discovery, direct summary-writer rejection of secret-looking output paths and
 	  unreadable output leaf metadata before JSON writes, scanner `--json-out`
-	  fsynced temp-file writes with atomic replace and opened-file identity-bound
-	  readback verification capped at 16 MiB,
+	  fsynced temp-file writes with atomic replace, identity-bound temporary
+	  cleanup on failed writes, and opened-file identity-bound readback
+	  verification capped at 16 MiB,
 	  discovered slot-name rejection/redaction before artifact traversal or summary serialization,
 	  a signed-slot assembler that consumes completed attached-device
 	  attestation, verifier-report, certificate-chain, release APK, D2D handoff,
 	  wallet-integrity, telemetry, queue, status, and runtime-log artifacts,
 	  reads ADB device identity unless explicit overrides are supplied, refuses
-	  existing-slot overwrite, requires signing inputs by default, and leaves
-	  explicitly unsigned staging slots rejected by the production readiness
-	  rollup,
+	  existing-slot overwrite, requires signing inputs by default, verifies
+	  copied artifacts through destination parent sync and opened-file readback,
+	  writes normalized JSON through fsynced temporary files with identity-bound parent
+	  sync and readback, publishes the completed stage through directory file
+	  descriptors pinned to the captured device-lab root, temp-parent, and
+	  staged-slot identities, cleans temporary staging directories only after
+	  identity revalidation, and leaves explicitly unsigned staging slots
+	  rejected by the production readiness rollup,
 	  signer-helper rejection
 	  of secret-looking `--slot`, `--output`, and `--signer-key-id` runtime
 	  arguments before metadata reads, standard device-family coverage,
@@ -1451,24 +1554,35 @@ and completed history lives in [`status.md`](./status.md).
 		  validation scratch-file serialization cannot mask writer drift. The readiness
 		  summary writer enforces a 16 MiB `--summary-out` cap before
 		  temporary-file creation, during final opened-file readback, and
-		  reports temporary-file cleanup failures after write or post-stage
+		  reports identity-bound temporary-file cleanup failures after write or post-stage
 		  output-validation errors. The lineage and compact-key
 		  evidence helpers also enforce their readiness evidence JSON byte caps
 		  before creating `--out` temporary files and during final opened-file
-		  readback after atomic replacement, and report temporary-file cleanup
+		  readback after atomic replacement, and report identity-bound temporary-file cleanup
 		  failures after output write or post-stage output-validation errors. The Android device-lab summary
 		  writer enforces the 16 MiB JSON cap before creating `--json-out`
 		  temporary files plus during final opened-file readback and reports
-		  temporary-file cleanup failures after write or post-stage
+		  identity-bound temporary-file cleanup failures after write or post-stage
 		  output-validation errors. The Android
 		  signed-evidence helper output writer applies the same cleanup failure
-		  reporting to its atomic JSON and manifest text writes, while the
+		  reporting and temp-file identity checks to its atomic JSON and manifest text writes, while the
 		  release-bundle writer enforces its 16 MiB manifest cap before
 		  temporary-file creation and during final opened-file readback and
-		  reports temporary-file cleanup failures after write or post-stage
+		  reports identity-bound temporary-file cleanup failures after write or post-stage
 		  output-validation errors as structured blockers. The release-output
 		  writers now fail closed on parent-directory sync failures after atomic
-		  replacement rather than accepting an unsynced directory entry. Android signed-evidence
+		  replacement rather than accepting an unsynced directory entry, and the
+		  readiness summary writer now identity-binds that parent-directory sync
+		  before readback. The Reserved-lineage proof evidence helper applies the
+		  same identity-bound parent sync before publishing
+		  `lineage-proof-evidence.json`, and the ABI-7 compact-key evidence helper
+		  does the same before publishing `recursive-compact-key-evidence.json`.
+		  The Android attestation report writer and signed-evidence helper now
+		  apply that same parent-identity gate to local report, signed-evidence,
+		  and manifest outputs. The staged lineage and compact-key runners also
+		  identity-bind parent syncs before accepting marker and JSON metadata
+		  outputs, and the staged finalizers apply the same gate to the published
+		  artifact directory before final fsync. Android signed-evidence
 		  canonical signature payloads also reject non-finite values before
 		  hashing, signing, or verification.
 	  The Kagemusha release
@@ -1499,9 +1613,11 @@ and completed history lives in [`status.md`](./status.md).
 	  bundle roots, symlinked or hardlinked bundle outputs, and secret-looking
 	  trusted signer key paths before loading signer keys, with newly-created
 	  bundle-output parents revalidated before 16 MiB-capped fsynced temporary-file writes,
-	  atomic replacement, final output-path revalidation, parent-directory sync,
+	  atomic replacement, final output-path revalidation, identity-bound
+	  parent-directory sync,
 	  and 16 MiB-capped readback verification pinned by read-failure, oversized
-	  readback, and post-replace symlink-swap regressions. The same helper can verify existing manifests
+	  readback, post-replace symlink-swap, and parent-directory swap
+	  regressions. The same helper can verify existing manifests
 	  by parsing readiness summaries and existing manifests from opened regular
 	  JSON files whose identities match their preflight `lstat()` checks,
 	  preflighting the

@@ -1,4 +1,4 @@
-"""zkAt policy-private authenticator SDK dev-fixture helpers."""
+"""zkAt policy-private authenticator SDK helpers."""
 
 from __future__ import annotations
 
@@ -39,11 +39,15 @@ __all__ = [
     "ZKAT_DOMAIN_SEPARATOR",
     "build_zkat_policy_commitment",
     "build_zkat_authenticator_envelope",
+    "build_zkat_policy_proof_v1",
     "build_zkat_dev_proof_fixture",
+    "verify_zkat_policy_proof_v1",
     "verify_zkat_authenticator_locally",
     "buildZkAtPolicyCommitment",
     "buildZkAtAuthenticatorEnvelope",
+    "buildZkAtPolicyProofV1",
     "buildZkAtDevProofFixture",
+    "verifyZkAtPolicyProofV1",
     "verifyZkAtAuthenticatorLocally",
 ]
 
@@ -651,6 +655,32 @@ def build_zkat_authenticator_envelope(options: Mapping[str, Any]) -> bytes:
     )
 
 
+def build_zkat_policy_proof_v1(options: Mapping[str, Any]) -> bytes:
+    """Build canonical production zkAt policy proof envelope bytes."""
+
+    source = _require_mapping(options, "zkAtPolicyProofV1")
+    _reject_unknown_fields(source, _AUTHENTICATOR_FIELDS, "zkAtPolicyProofV1")
+    parts = _normalize_authenticator_parts(
+        source,
+        "zkAtPolicyProofV1",
+        require_proof_bytes=True,
+    )
+    if parts["proof_bytes"].startswith(ZKAT_DEV_PROOF_PREFIX):
+        raise ValueError("zkAtPolicyProofV1.proofBytes must not contain a dev fixture proof")
+    return build_privacy_proof_envelope(
+        {
+            "backend": parts["backend"],
+            "circuitId": parts["circuit_id"],
+            "vkHash": parts["vk_hash"],
+            "publicInputs": parts["public_input_bytes"],
+            "proofBytes": parts["proof_bytes"],
+            "aux": source.get("aux", b""),
+            "maxProofBytes": parts["max_proof_bytes"],
+            "maxPublicInputBytes": parts["max_public_input_bytes"],
+        }
+    )
+
+
 def _dev_proof_bytes(
     *,
     circuit_id: str,
@@ -890,7 +920,79 @@ def verify_zkat_authenticator_locally(options: Any) -> dict[str, Any]:
     }
 
 
+def verify_zkat_policy_proof_v1(options: Any) -> dict[str, Any]:
+    """Validate a production zkAt policy proof envelope binding."""
+
+    if isinstance(options, Mapping):
+        source = options
+    else:
+        source = {"envelope": options}
+    _reject_unknown_fields(
+        source,
+        (
+            _AUTHENTICATOR_FIELDS
+            | {
+                "envelope",
+                "proofEnvelope",
+                "proof_envelope",
+                "bytes",
+            }
+        )
+        - {"backend", "backendTag", "backend_tag", "circuitId", "circuit_id", "vkHash", "vk_hash", "verifierKeyHash", "verifyingKeyHash", "proofBytes", "proof_bytes", "proof", "aux", "maxProofBytes", "max_proof_bytes", "maxPublicInputBytes", "max_public_input_bytes", "version"},
+        "zkAtPolicyProofV1Verification",
+    )
+    _envelope_key, envelope_value = _read_single_alias(
+        source,
+        ("envelope", "proofEnvelope", "proof_envelope", "bytes"),
+        "zkAtPolicyProofV1Verification.envelope",
+        "proof envelope",
+    )
+    decoded = decode_privacy_proof_envelope(envelope_value)
+    if decoded["backend"] != "Stark":
+        raise ValueError("zkAtPolicyProofV1Verification.envelope.backend must be Stark")
+    circuit_id = _normalize_circuit_id(
+        decoded["circuit_id"],
+        "zkAtPolicyProofV1Verification.envelope.circuitId",
+    )
+    vk_hash = _fixed_bytes(
+        decoded["vk_hash"],
+        "zkAtPolicyProofV1Verification.envelope.vkHash",
+        32,
+        nonzero=True,
+    )
+    public_inputs = _parse_public_inputs(
+        decoded["public_inputs"],
+        "zkAtPolicyProofV1Verification.publicInputs",
+    )
+    _ensure_verification_expectations(
+        source,
+        public_inputs,
+        "zkAtPolicyProofV1Verification",
+    )
+    if decoded["proof_bytes"].startswith(ZKAT_DEV_PROOF_PREFIX):
+        raise ValueError(
+            "zkAtPolicyProofV1Verification proof bytes must not contain a zkAt dev fixture"
+        )
+    return {
+        "ok": True,
+        "production": True,
+        "kind": "zkat-policy-private-auth-v1",
+        "backend": "Stark",
+        "circuit_id": circuit_id,
+        "verifier_key_hash": vk_hash.hex(),
+        "public_inputs": public_inputs,
+        "public_input_bytes": len(decoded["public_inputs"]),
+        "proof_bytes": len(decoded["proof_bytes"]),
+        "aux_bytes": len(decoded["aux"]),
+        "account_id": public_inputs["account_id"],
+        "action_class": public_inputs["action_class"],
+        "policy_epoch": public_inputs["policy_epoch"],
+    }
+
+
 buildZkAtPolicyCommitment = build_zkat_policy_commitment
 buildZkAtAuthenticatorEnvelope = build_zkat_authenticator_envelope
+buildZkAtPolicyProofV1 = build_zkat_policy_proof_v1
 buildZkAtDevProofFixture = build_zkat_dev_proof_fixture
+verifyZkAtPolicyProofV1 = verify_zkat_policy_proof_v1
 verifyZkAtAuthenticatorLocally = verify_zkat_authenticator_locally

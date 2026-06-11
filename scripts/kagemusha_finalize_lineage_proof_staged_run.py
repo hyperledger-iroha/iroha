@@ -109,6 +109,111 @@ def _validate_output_file_path(path: Path, label: str, *, replace: bool) -> list
     return []
 
 
+def _file_identity(file_stat: os.stat_result) -> tuple[int, int]:
+    return file_stat.st_dev, file_stat.st_ino
+
+
+def _directory_open_flags() -> int:
+    flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        flags |= os.O_DIRECTORY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    return flags
+
+
+def _sync_artifact_dir(
+    artifact_dir: Path,
+    *,
+    expected_identity: tuple[int, int] | None,
+) -> list[str]:
+    try:
+        dir_fd = os.open(artifact_dir, _directory_open_flags())
+    except OSError:
+        return ["artifact directory could not be synced"]
+    try:
+        dir_stat = os.fstat(dir_fd)
+        if not stat.S_ISDIR(dir_stat.st_mode):
+            return ["artifact directory could not be synced"]
+        if expected_identity is not None and _file_identity(dir_stat) != expected_identity:
+            return ["artifact directory changed before sync"]
+        os.fsync(dir_fd)
+    except OSError:
+        return ["artifact directory could not be synced"]
+    finally:
+        os.close(dir_fd)
+    return []
+
+
+def _cleanup_temp_parent(
+    temp_parent: Path,
+    *,
+    expected_identity: tuple[int, int],
+) -> None:
+    try:
+        parent_fd = os.open(temp_parent.parent, _directory_open_flags())
+    except OSError:
+        return
+    try:
+        try:
+            temp_parent_stat = os.stat(
+                temp_parent.name,
+                dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+        except OSError:
+            return
+        if (
+            not stat.S_ISDIR(temp_parent_stat.st_mode)
+            or _file_identity(temp_parent_stat) != expected_identity
+        ):
+            return
+        shutil.rmtree(temp_parent.name, ignore_errors=True, dir_fd=parent_fd)
+    finally:
+        os.close(parent_fd)
+
+
+def _regular_file_identity(path: Path) -> tuple[int, int] | None:
+    try:
+        path_stat = path.lstat()
+    except OSError:
+        return None
+    if stat.S_ISLNK(path_stat.st_mode) or not stat.S_ISREG(path_stat.st_mode):
+        return None
+    return _file_identity(path_stat)
+
+
+def _unlink_file_if_identity(path: Path, expected_identity: tuple[int, int]) -> None:
+    try:
+        parent_fd = os.open(path.parent, _directory_open_flags())
+    except OSError:
+        return
+    try:
+        try:
+            path_stat = os.stat(
+                path.name,
+                dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+        except OSError:
+            return
+        if (
+            stat.S_ISREG(path_stat.st_mode)
+            and _file_identity(path_stat) == expected_identity
+        ):
+            try:
+                os.unlink(path.name, dir_fd=parent_fd)
+            except OSError:
+                pass
+    finally:
+        os.close(parent_fd)
+
+
+def _cleanup_published_files(installed: list[tuple[Path, tuple[int, int]]]) -> None:
+    for path, identity in installed:
+        _unlink_file_if_identity(path, identity)
+
+
 def _read_small_text_file(
     path: Path,
     label: str,
@@ -377,41 +482,47 @@ def validate_staged_run_report(
     return []
 
 
-def _copy_validated_file(source: Path, destination: Path, label: str) -> list[str]:
+def _copy_validated_file(
+    source: Path,
+    destination: Path,
+    label: str,
+) -> tuple[list[str], tuple[int, int] | None]:
     digest, size, _prefix, errors = lineage_evidence._sha256_file_with_size(source, label)
     if errors:
-        return errors
+        return errors, None
     assert digest is not None and size is not None
     destination.parent.mkdir(parents=True, exist_ok=True)
     expected_stat = source.lstat()
     expected_identity = (expected_stat.st_dev, expected_stat.st_ino)
+    destination_identity: tuple[int, int] | None = None
     try:
         with source.open("rb") as src, destination.open("xb") as dst:
+            destination_identity = _file_identity(os.fstat(dst.fileno()))
             open_stat = os.fstat(src.fileno())
             path_stat = source.lstat()
             if (open_stat.st_dev, open_stat.st_ino) != expected_identity or (
                 path_stat.st_dev,
                 path_stat.st_ino,
             ) != expected_identity:
-                return [f"{label} changed while being copied"]
+                return [f"{label} changed while being copied"], destination_identity
             shutil.copyfileobj(src, dst, length=1024 * 1024)
             dst.flush()
             os.fsync(dst.fileno())
             final_stat = source.lstat()
             if (final_stat.st_dev, final_stat.st_ino) != expected_identity:
-                return [f"{label} changed while being copied"]
+                return [f"{label} changed while being copied"], destination_identity
     except FileExistsError:
-        return [f"published {destination.name} already exists"]
+        return [f"published {destination.name} already exists"], destination_identity
     except OSError:
-        return [f"{label} could not be copied"]
+        return [f"{label} could not be copied"], destination_identity
     copied_digest, copied_size, _copied_prefix, copied_errors = (
         lineage_evidence._sha256_file_with_size(destination, f"published {destination.name}")
     )
     if copied_errors:
-        return copied_errors
+        return copied_errors, destination_identity
     if copied_digest != digest or copied_size != size:
-        return [f"published {destination.name} does not match staged bytes"]
-    return []
+        return [f"published {destination.name} does not match staged bytes"], destination_identity
+    return [], destination_identity
 
 
 def _verify_published_file(source: Path, destination: Path, label: str) -> list[str]:
@@ -450,21 +561,19 @@ def stage_lineage_proof_evidence(
 
     errors: list[str] = []
     for name in readiness.LINEAGE_PROOF_REQUIRED_ARTIFACTS:
-        errors.extend(
-            _copy_validated_file(
-                staged_artifact_dir / name,
-                stage_dir / name,
-                f"staged lineage proof artifact {name}",
-            )
+        copy_errors, _copy_identity = _copy_validated_file(
+            staged_artifact_dir / name,
+            stage_dir / name,
+            f"staged lineage proof artifact {name}",
         )
+        errors.extend(copy_errors)
     proof_log_name = readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS["record_archive_proof"]
-    errors.extend(
-        _copy_validated_file(
-            staged_artifact_dir / proof_log_name,
-            stage_dir / proof_log_name,
-            f"staged lineage proof log {proof_log_name}",
-        )
+    copy_errors, _copy_identity = _copy_validated_file(
+        staged_artifact_dir / proof_log_name,
+        stage_dir / proof_log_name,
+        f"staged lineage proof log {proof_log_name}",
     )
+    errors.extend(copy_errors)
     if errors:
         return None, errors
     evidence, evidence_errors = lineage_evidence.build_evidence(
@@ -494,6 +603,14 @@ def publish_stage(*, stage_dir: Path, artifact_dir: Path, replace: bool) -> list
 
     errors: list[str] = []
     artifact_dir.mkdir(parents=True, exist_ok=True)
+    errors.extend(validate_directory_path(artifact_dir, "artifact directory", must_exist=True))
+    if errors:
+        return errors
+    try:
+        artifact_dir_stat = artifact_dir.lstat()
+    except OSError:
+        return ["artifact directory metadata could not be read"]
+    artifact_dir_identity = _file_identity(artifact_dir_stat)
     for name in _required_publish_filenames():
         errors.extend(
             _validate_output_file_path(
@@ -504,63 +621,56 @@ def publish_stage(*, stage_dir: Path, artifact_dir: Path, replace: bool) -> list
         )
     if errors:
         return errors
-    installed: list[Path] = []
+    installed: list[tuple[Path, tuple[int, int]]] = []
     for name in _required_publish_filenames():
         source = stage_dir / name
         destination = artifact_dir / name
         tmp_destination = artifact_dir / f".{name}.staged-finalizer.tmp"
+        tmp_identity: tuple[int, int] | None = None
         try:
             if tmp_destination.exists() or tmp_destination.is_symlink():
                 return [f"temporary output for {name} already exists"]
-            copy_errors = _copy_validated_file(
+            copy_errors, tmp_identity = _copy_validated_file(
                 source,
                 tmp_destination,
                 f"validated staged {name}",
             )
+            if tmp_identity is None:
+                tmp_identity = _regular_file_identity(tmp_destination)
             if copy_errors:
-                tmp_destination.unlink(missing_ok=True)
-                for path in installed:
-                    try:
-                        path.unlink()
-                    except OSError:
-                        pass
+                if tmp_identity is not None:
+                    _unlink_file_if_identity(tmp_destination, tmp_identity)
+                _cleanup_published_files(installed)
                 return copy_errors
             if replace:
                 os.replace(tmp_destination, destination)
             else:
                 tmp_destination.rename(destination)
+            destination_identity = _regular_file_identity(destination)
+            if destination_identity is None:
+                _cleanup_published_files(installed)
+                return [f"published {name} could not be installed"]
             verify_errors = _verify_published_file(
                 source,
                 destination,
                 f"published {name}",
             )
             if verify_errors:
-                for path in [destination, *installed]:
-                    try:
-                        path.unlink()
-                    except OSError:
-                        pass
+                _unlink_file_if_identity(destination, destination_identity)
+                _cleanup_published_files(installed)
                 return verify_errors
-            installed.append(destination)
+            installed.append((destination, destination_identity))
         except OSError:
-            tmp_destination.unlink(missing_ok=True)
-            for path in installed:
-                try:
-                    path.unlink()
-                except OSError:
-                    pass
+            if tmp_identity is None:
+                tmp_identity = _regular_file_identity(tmp_destination)
+            if tmp_identity is not None:
+                _unlink_file_if_identity(tmp_destination, tmp_identity)
+            _cleanup_published_files(installed)
             return [f"published {name} could not be installed"]
-    try:
-        dir_fd = os.open(artifact_dir, os.O_RDONLY)
-    except OSError:
-        return ["artifact directory could not be synced"]
-    try:
-        os.fsync(dir_fd)
-    except OSError:
-        return ["artifact directory could not be synced"]
-    finally:
-        os.close(dir_fd)
-    return []
+    return _sync_artifact_dir(
+        artifact_dir,
+        expected_identity=artifact_dir_identity,
+    )
 
 
 def finalize_staged_run(args: argparse.Namespace) -> tuple[int, Path | None, list[str]]:
@@ -604,6 +714,10 @@ def finalize_staged_run(args: argparse.Namespace) -> tuple[int, Path | None, lis
         return 1, None, errors
 
     temp_parent = Path(tempfile.mkdtemp(prefix=".lineage-proof-finalize.", dir=args.artifact_dir))
+    try:
+        temp_parent_identity = _file_identity(temp_parent.lstat())
+    except OSError:
+        return 1, None, ["staged finalizer temporary directory metadata could not be read"]
     stage_dir = temp_parent / "stage"
     try:
         stage_dir.mkdir()
@@ -624,7 +738,7 @@ def finalize_staged_run(args: argparse.Namespace) -> tuple[int, Path | None, lis
         if publish_errors:
             return 1, None, publish_errors
     finally:
-        shutil.rmtree(temp_parent, ignore_errors=True)
+        _cleanup_temp_parent(temp_parent, expected_identity=temp_parent_identity)
 
     final_evidence_path = args.artifact_dir / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME
     blockers = readiness.check_lineage_proof_evidence(final_evidence_path)["blockers"]

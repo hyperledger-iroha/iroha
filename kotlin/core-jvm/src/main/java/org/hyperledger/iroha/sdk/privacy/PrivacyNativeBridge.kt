@@ -136,11 +136,51 @@ class PrivacyNativeBridge private constructor() {
             buildProof(requestArchive)
 
         @JvmStatic
+        fun buildSisHintsAnonymousCredentialProofV0(requestArchive: ByteArray?): ByteArray =
+            buildProof(requestArchive)
+
+        @JvmStatic
+        fun buildSilentThresholdCredentialShowingProofV0(requestArchive: ByteArray?): ByteArray =
+            buildProof(requestArchive)
+
+        @JvmStatic
+        fun buildVegaCredentialPredicateProofV0(requestArchive: ByteArray?): ByteArray =
+            buildProof(requestArchive)
+
+        @JvmStatic
+        fun buildZkAmsAdmissionBatchProofV0(requestArchive: ByteArray?): ByteArray =
+            buildProof(requestArchive)
+
+        @JvmStatic
+        fun buildZkAtPolicyProofV1(requestArchive: ByteArray?): ByteArray =
+            buildProof(requestArchive)
+
+        @JvmStatic
         fun verifyProof(requestArchive: ByteArray?): ByteArray =
             call("verify proof", requestArchive, ::nativeVerifyProof)
 
         @JvmStatic
         fun verifyJindoPolynomialCommitmentV0(requestArchive: ByteArray?): ByteArray =
+            verifyProof(requestArchive)
+
+        @JvmStatic
+        fun verifySisHintsAnonymousCredentialProofV0(requestArchive: ByteArray?): ByteArray =
+            verifyProof(requestArchive)
+
+        @JvmStatic
+        fun verifySilentThresholdCredentialShowingProofV0(requestArchive: ByteArray?): ByteArray =
+            verifyProof(requestArchive)
+
+        @JvmStatic
+        fun verifyVegaCredentialPredicateProofV0(requestArchive: ByteArray?): ByteArray =
+            verifyProof(requestArchive)
+
+        @JvmStatic
+        fun verifyZkAmsAdmissionBatchProofV0(requestArchive: ByteArray?): ByteArray =
+            verifyProof(requestArchive)
+
+        @JvmStatic
+        fun verifyZkAtPolicyProofV1(requestArchive: ByteArray?): ByteArray =
             verifyProof(requestArchive)
 
         internal fun call(

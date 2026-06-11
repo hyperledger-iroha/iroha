@@ -202,6 +202,45 @@ def validate_artifact_dir_path(artifact_dir: Path) -> list[str]:
     return []
 
 
+def _cleanup_validation_temp_output(
+    path: Path,
+    expected_identity: tuple[int, int] | None,
+) -> list[str]:
+    if expected_identity is None:
+        return ["recursive compact key evidence validation file could not be removed"]
+    try:
+        parent_fd = os.open(path.parent, device_lab._directory_open_flags())
+    except OSError:
+        return ["recursive compact key evidence validation file could not be removed"]
+    try:
+        try:
+            validation_temp_stat = os.stat(
+                path.name,
+                dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            return []
+        except OSError:
+            return ["recursive compact key evidence validation file could not be removed"]
+        if (
+            not stat.S_ISREG(validation_temp_stat.st_mode)
+            or _file_identity(validation_temp_stat) != expected_identity
+        ):
+            return [
+                "recursive compact key evidence validation file changed before cleanup"
+            ]
+        try:
+            os.unlink(path.name, dir_fd=parent_fd)
+        except FileNotFoundError:
+            return []
+        except OSError:
+            return ["recursive compact key evidence validation file could not be removed"]
+    finally:
+        os.close(parent_fd)
+    return []
+
+
 def build_evidence(
     *,
     artifact_dir: Path,
@@ -346,6 +385,7 @@ def validate_evidence_document(evidence: dict[str, Any], artifact_dir: Path) -> 
     if post_create_dir_errors:
         return post_create_dir_errors
     path: Path | None = None
+    tmp_identity: tuple[int, int] | None = None
     try:
         with tempfile.NamedTemporaryFile(
             "w",
@@ -356,25 +396,22 @@ def validate_evidence_document(evidence: dict[str, Any], artifact_dir: Path) -> 
             delete=False,
         ) as handle:
             path = Path(handle.name)
+            tmp_identity = _file_identity(os.fstat(handle.fileno()))
             handle.write(evidence_text)
+            handle.flush()
+            os.fsync(handle.fileno())
     except OSError:
         errors = ["recursive compact key evidence validation file could not be written"]
         if path is not None:
-            try:
-                path.unlink(missing_ok=True)
-            except OSError:
-                errors.append(
-                    "recursive compact key evidence validation file could not be removed"
-                )
+            errors.extend(_cleanup_validation_temp_output(path, tmp_identity))
         return errors
     result = readiness.check_compact_key_evidence(
         path,
         require_canonical_filename=False,
     )
-    try:
-        path.unlink(missing_ok=True)
-    except OSError:
-        return ["recursive compact key evidence validation file could not be removed"]
+    cleanup_errors = _cleanup_validation_temp_output(path, tmp_identity)
+    if cleanup_errors:
+        return cleanup_errors
     return [item["message"] for item in result["blockers"]]
 
 
@@ -507,6 +544,43 @@ def validate_output_path(path: Path, label: str) -> list[str]:
     return preflight_output_path(path, label)
 
 
+def _file_identity(file_stat: os.stat_result) -> tuple[int, int]:
+    return file_stat.st_dev, file_stat.st_ino
+
+
+def _directory_open_flags() -> int:
+    flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        flags |= os.O_DIRECTORY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    return flags
+
+
+def _sync_output_parent(
+    parent: Path,
+    label: str,
+    *,
+    expected_identity: tuple[int, int] | None,
+) -> list[str]:
+    try:
+        parent_fd = os.open(parent, _directory_open_flags())
+    except OSError:
+        return [f"{label} parent directory could not be synced"]
+    try:
+        parent_stat = os.fstat(parent_fd)
+        if not stat.S_ISDIR(parent_stat.st_mode):
+            return [f"{label} parent directory could not be synced"]
+        if expected_identity is not None and _file_identity(parent_stat) != expected_identity:
+            return [f"{label} parent directory changed before sync"]
+        os.fsync(parent_fd)
+    except OSError:
+        return [f"{label} parent directory could not be synced"]
+    finally:
+        os.close(parent_fd)
+    return []
+
+
 def _read_output_text(
     path: Path,
     expected_stat: os.stat_result,
@@ -563,6 +637,13 @@ def write_evidence(path: Path, evidence: dict[str, Any]) -> list[str]:
     if errors:
         return errors
     try:
+        parent_stat = path.parent.lstat()
+    except OSError:
+        return ["--out parent directory metadata could not be read"]
+    if stat.S_ISLNK(parent_stat.st_mode) or not stat.S_ISDIR(parent_stat.st_mode):
+        return ["--out parent directory could not be synced"]
+    parent_identity = _file_identity(parent_stat)
+    try:
         evidence_text = json.dumps(
             evidence,
             indent=2,
@@ -574,6 +655,7 @@ def write_evidence(path: Path, evidence: dict[str, Any]) -> list[str]:
     if len(evidence_text.encode("utf-8")) > readiness.MAX_COMPACT_KEY_EVIDENCE_JSON_BYTES:
         return ["--out evidence exceeds maximum size"]
     tmp_path: Path | None = None
+    tmp_identity: tuple[int, int] | None = None
     write_errors: list[str] = []
     try:
         with tempfile.NamedTemporaryFile(
@@ -585,6 +667,7 @@ def write_evidence(path: Path, evidence: dict[str, Any]) -> list[str]:
             delete=False,
         ) as handle:
             tmp_path = Path(handle.name)
+            tmp_identity = _file_identity(os.fstat(handle.fileno()))
             handle.write(evidence_text)
             handle.flush()
             os.fsync(handle.fileno())
@@ -598,19 +681,16 @@ def write_evidence(path: Path, evidence: dict[str, Any]) -> list[str]:
         write_errors.append("--out could not be written")
     finally:
         if tmp_path is not None:
-            write_errors.extend(_cleanup_temp_output(tmp_path))
+            write_errors.extend(_cleanup_temp_output(tmp_path, tmp_identity))
     if write_errors:
         return write_errors
-    try:
-        parent_fd = os.open(path.parent, os.O_RDONLY)
-    except OSError:
-        return ["--out parent directory could not be synced"]
-    try:
-        os.fsync(parent_fd)
-    except OSError:
-        return ["--out parent directory could not be synced"]
-    finally:
-        os.close(parent_fd)
+    sync_errors = _sync_output_parent(
+        path.parent,
+        "--out",
+        expected_identity=parent_identity,
+    )
+    if sync_errors:
+        return sync_errors
     errors = validate_output_path(path, "--out")
     if errors:
         return errors
@@ -631,11 +711,40 @@ def write_evidence(path: Path, evidence: dict[str, Any]) -> list[str]:
     return []
 
 
-def _cleanup_temp_output(path: Path) -> list[str]:
+def _cleanup_temp_output(
+    path: Path,
+    expected_identity: tuple[int, int] | None,
+) -> list[str]:
+    if expected_identity is None:
+        return ["--out temporary file metadata could not be read"]
     try:
-        path.unlink(missing_ok=True)
+        parent_fd = os.open(path.parent, _directory_open_flags())
     except OSError:
         return ["--out temporary file could not be removed"]
+    try:
+        try:
+            temp_stat = os.stat(
+                path.name,
+                dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            return []
+        except OSError:
+            return ["--out temporary file could not be removed"]
+        if (
+            not stat.S_ISREG(temp_stat.st_mode)
+            or _file_identity(temp_stat) != expected_identity
+        ):
+            return ["--out temporary file changed before cleanup"]
+        try:
+            os.unlink(path.name, dir_fd=parent_fd)
+        except FileNotFoundError:
+            return []
+        except OSError:
+            return ["--out temporary file could not be removed"]
+    finally:
+        os.close(parent_fd)
     return []
 
 

@@ -4263,7 +4263,9 @@ public final class HttpClientTransportTests {
             "accumulator_digest_hex",
             "proof_public_input_schema_digest_hex",
             "prover_key_digest_hex",
+            "prover_key_material_commitment_hex",
             "verifier_key_digest_hex",
+            "verifier_key_material_commitment_hex",
             "vk_commitment_hex",
             "expected_material_digest_hex",
             "expected_statement_digest_hex");
@@ -4280,7 +4282,7 @@ public final class HttpClientTransportTests {
     assert string(object(operationVectors, "rns_modulus_chain"), "expected_digest_hex")
             .equals(string(material, "rns_modulus_chain_digest_hex"))
         : "full-bootstrap RNS digest mismatch";
-    assert string(material, "verifier_key_digest_hex")
+    assert string(material, "verifier_key_material_commitment_hex")
             .equals(string(material, "vk_commitment_hex"))
         : "full-bootstrap verifier-key commitment mismatch";
     assert !string(material, "expected_material_digest_hex")

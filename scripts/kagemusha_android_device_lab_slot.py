@@ -59,9 +59,281 @@ def _json_dumps(payload: dict[str, Any]) -> str:
     return json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n"
 
 
-def _write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(_json_dumps(payload), encoding="utf-8")
+def _file_identity(file_stat: os.stat_result) -> tuple[int, int]:
+    return file_stat.st_dev, file_stat.st_ino
+
+
+def _directory_open_flags() -> int:
+    flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        flags |= os.O_DIRECTORY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    return flags
+
+
+def _sync_directory(
+    path: Path,
+    label: str,
+    *,
+    expected_identity: tuple[int, int] | None,
+) -> list[str]:
+    try:
+        dir_fd = os.open(path, _directory_open_flags())
+    except OSError:
+        return [f"{label} parent directory could not be synced"]
+    try:
+        dir_stat = os.fstat(dir_fd)
+        if not stat.S_ISDIR(dir_stat.st_mode):
+            return [f"{label} parent directory could not be synced"]
+        if expected_identity is not None and _file_identity(dir_stat) != expected_identity:
+            return [f"{label} parent directory changed before sync"]
+        os.fsync(dir_fd)
+    except OSError:
+        return [f"{label} parent directory could not be synced"]
+    finally:
+        os.close(dir_fd)
+    return []
+
+
+def _verify_written_bytes(path: Path, expected_bytes: bytes, label: str) -> list[str]:
+    try:
+        expected_stat = path.lstat()
+    except OSError:
+        return [f"{label} metadata could not be read after write"]
+    if stat.S_ISLNK(expected_stat.st_mode) or not stat.S_ISREG(expected_stat.st_mode):
+        return [f"{label} changed after write"]
+    expected_identity = _file_identity(expected_stat)
+    try:
+        with path.open("rb") as handle:
+            open_stat = os.fstat(handle.fileno())
+            path_stat = path.lstat()
+            if (
+                _file_identity(open_stat) != expected_identity
+                or _file_identity(path_stat) != expected_identity
+            ):
+                return [f"{label} changed after write"]
+            data = handle.read(len(expected_bytes) + 1)
+            final_stat = path.lstat()
+            if _file_identity(final_stat) != expected_identity or data != expected_bytes:
+                return [f"{label} changed after write"]
+    except OSError:
+        return [f"{label} could not be verified after write"]
+    return []
+
+
+def _verify_copied_file(
+    path: Path,
+    *,
+    expected_digest: str,
+    expected_size: int,
+    label: str,
+    max_bytes: int,
+) -> list[str]:
+    try:
+        expected_stat = path.lstat()
+    except OSError:
+        return [f"{label} metadata could not be read after write"]
+    if stat.S_ISLNK(expected_stat.st_mode) or not stat.S_ISREG(expected_stat.st_mode):
+        return [f"{label} changed after write"]
+    if expected_stat.st_nlink > 1:
+        return [f"{label} must not be hardlinked"]
+    expected_identity = _file_identity(expected_stat)
+    digest = hashlib.sha256()
+    size = 0
+    try:
+        with path.open("rb") as handle:
+            open_stat = os.fstat(handle.fileno())
+            path_stat = path.lstat()
+            if (
+                _file_identity(open_stat) != expected_identity
+                or _file_identity(path_stat) != expected_identity
+            ):
+                return [f"{label} changed after write"]
+            if not stat.S_ISREG(open_stat.st_mode) or open_stat.st_nlink > 1:
+                return [f"{label} changed after write"]
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                size += len(chunk)
+                if size > max_bytes:
+                    return [f"{label} must not exceed {max_bytes} bytes"]
+                digest.update(chunk)
+            final_stat = path.lstat()
+            if _file_identity(final_stat) != expected_identity:
+                return [f"{label} changed after write"]
+    except OSError:
+        return [f"{label} could not be verified after write"]
+    if size != expected_size or digest.hexdigest() != expected_digest:
+        return [f"{label} changed after write"]
+    return []
+
+
+def _cleanup_temp_output(
+    path: Path,
+    label: str,
+    expected_identity: tuple[int, int] | None,
+) -> list[str]:
+    if expected_identity is None:
+        return [f"{label} temporary output metadata could not be read"]
+    try:
+        parent_fd = os.open(path.parent, _directory_open_flags())
+    except OSError:
+        return [f"{label} temporary output could not be removed"]
+    try:
+        try:
+            temp_stat = os.stat(
+                path.name,
+                dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            return []
+        except OSError:
+            return [f"{label} temporary output could not be removed"]
+        if (
+            not stat.S_ISREG(temp_stat.st_mode)
+            or _file_identity(temp_stat) != expected_identity
+        ):
+            return [f"{label} temporary output changed before cleanup"]
+        try:
+            os.unlink(path.name, dir_fd=parent_fd)
+        except FileNotFoundError:
+            return []
+        except OSError:
+            return [f"{label} temporary output could not be removed"]
+    finally:
+        os.close(parent_fd)
+    return []
+
+
+def _write_json(path: Path, payload: dict[str, Any], label: str) -> list[str]:
+    try:
+        encoded = _json_dumps(payload).encode("utf-8")
+    except (TypeError, ValueError):
+        return [f"{label} is not strict JSON"]
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return [f"{label} parent directory could not be created"]
+    try:
+        json_parent_stat = path.parent.lstat()
+    except OSError:
+        return [f"{label} parent metadata could not be read"]
+    if stat.S_ISLNK(json_parent_stat.st_mode) or not stat.S_ISDIR(json_parent_stat.st_mode):
+        return [f"{label} parent directory could not be synced"]
+    json_parent_identity = _file_identity(json_parent_stat)
+    tmp_path = path.parent / f".{path.name}.android-slot.tmp"
+    tmp_identity: tuple[int, int] | None = None
+    try:
+        if tmp_path.exists() or tmp_path.is_symlink():
+            return [f"{label} temporary output already exists"]
+        with tmp_path.open("xb") as handle:
+            tmp_identity = _file_identity(os.fstat(handle.fileno()))
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, path)
+        sync_errors = _sync_directory(
+            path.parent,
+            label,
+            expected_identity=json_parent_identity,
+        )
+        if sync_errors:
+            return sync_errors
+    except OSError:
+        cleanup_errors = _cleanup_temp_output(tmp_path, label, tmp_identity)
+        return [f"{label} could not be written", *cleanup_errors]
+    return _verify_written_bytes(path, encoded, label)
+
+
+def _publish_stage_slot(
+    *,
+    stage_slot: Path,
+    root: Path,
+    slot_id: str,
+    expected_root_identity: tuple[int, int],
+    expected_temp_parent_identity: tuple[int, int],
+    expected_stage_identity: tuple[int, int],
+) -> list[str]:
+    try:
+        root_fd = os.open(root, _directory_open_flags())
+    except OSError:
+        return ["slot root directory could not be synced"]
+    try:
+        root_stat = os.fstat(root_fd)
+        if not stat.S_ISDIR(root_stat.st_mode):
+            return ["slot root directory could not be synced"]
+        if _file_identity(root_stat) != expected_root_identity:
+            return ["slot root directory changed before publish"]
+        try:
+            os.stat(slot_id, dir_fd=root_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            return ["slot directory metadata could not be read before publish"]
+        else:
+            return ["slot directory already exists; refuse to overwrite evidence"]
+
+        try:
+            temp_parent_fd = os.open(stage_slot.parent, _directory_open_flags())
+        except OSError:
+            return ["staged slot parent directory could not be opened"]
+        try:
+            temp_parent_stat = os.fstat(temp_parent_fd)
+            if not stat.S_ISDIR(temp_parent_stat.st_mode):
+                return ["staged slot parent directory could not be opened"]
+            if _file_identity(temp_parent_stat) != expected_temp_parent_identity:
+                return ["staged slot parent directory changed before publish"]
+            stage_stat = os.stat(
+                stage_slot.name,
+                dir_fd=temp_parent_fd,
+                follow_symlinks=False,
+            )
+            if not stat.S_ISDIR(stage_stat.st_mode):
+                return ["staged slot must be a directory"]
+            if _file_identity(stage_stat) != expected_stage_identity:
+                return ["staged slot directory changed before publish"]
+            os.rename(
+                stage_slot.name,
+                slot_id,
+                src_dir_fd=temp_parent_fd,
+                dst_dir_fd=root_fd,
+            )
+            os.fsync(root_fd)
+        except OSError:
+            return ["slot directory could not be published"]
+        finally:
+            os.close(temp_parent_fd)
+    finally:
+        os.close(root_fd)
+    return []
+
+
+def _cleanup_temp_parent(
+    temp_parent: Path,
+    *,
+    expected_identity: tuple[int, int],
+) -> None:
+    try:
+        parent_fd = os.open(temp_parent.parent, _directory_open_flags())
+    except OSError:
+        return
+    try:
+        try:
+            temp_parent_stat = os.stat(
+                temp_parent.name,
+                dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+        except OSError:
+            return
+        if (
+            not stat.S_ISDIR(temp_parent_stat.st_mode)
+            or _file_identity(temp_parent_stat) != expected_identity
+        ):
+            return
+        shutil.rmtree(temp_parent.name, ignore_errors=True, dir_fd=parent_fd)
+    finally:
+        os.close(parent_fd)
 
 
 def _sha256_bytes(data: bytes) -> str:
@@ -153,6 +425,17 @@ def _copy_source_file(
                 errors.append(f"{label} must not be hardlinked")
                 return None
             destination.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                destination_parent_stat = destination.parent.lstat()
+            except OSError:
+                errors.append(f"{label} destination parent metadata could not be read")
+                return None
+            if stat.S_ISLNK(destination_parent_stat.st_mode) or not stat.S_ISDIR(
+                destination_parent_stat.st_mode
+            ):
+                errors.append(f"{label} destination parent directory could not be synced")
+                return None
+            destination_parent_identity = _file_identity(destination_parent_stat)
             with destination.open("xb") as out:
                 for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                     size += len(chunk)
@@ -173,7 +456,26 @@ def _copy_source_file(
     if size <= 0:
         errors.append(f"{label} must be non-empty")
         return None
-    return digest.hexdigest()
+    copied_digest = digest.hexdigest()
+    sync_errors = _sync_directory(
+        destination.parent,
+        label,
+        expected_identity=destination_parent_identity,
+    )
+    if sync_errors:
+        errors.extend(sync_errors)
+        return None
+    verify_errors = _verify_copied_file(
+        destination,
+        expected_digest=copied_digest,
+        expected_size=size,
+        label=label,
+        max_bytes=max_bytes,
+    )
+    if verify_errors:
+        errors.extend(verify_errors)
+        return None
+    return copied_digest
 
 
 def _load_source_json(path: Path, label: str, errors: list[str]) -> dict[str, Any] | None:
@@ -525,9 +827,22 @@ def assemble_slot(args: argparse.Namespace) -> tuple[int, Path | None, list[str]
     if not root_exists:
         root.parent.mkdir(parents=True, exist_ok=True)
         root.mkdir()
+    try:
+        root_stat = root.lstat()
+    except OSError:
+        return 1, None, ["device-lab root metadata could not be read"]
+    if stat.S_ISLNK(root_stat.st_mode) or not stat.S_ISDIR(root_stat.st_mode):
+        return 1, None, ["device-lab root must be a directory"]
+    root_identity = _file_identity(root_stat)
 
     final_slot = root / slot_id
-    if final_slot.exists() or final_slot.is_symlink():
+    try:
+        final_slot.lstat()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        return 1, None, ["slot directory metadata could not be read before publish"]
+    else:
         return 1, None, ["slot directory already exists; refuse to overwrite evidence"]
 
     sign_args = [args.private_key, args.public_key, args.signer_key_id]
@@ -571,6 +886,10 @@ def assemble_slot(args: argparse.Namespace) -> tuple[int, Path | None, list[str]
         return 1, None, errors
 
     temp_parent = Path(tempfile.mkdtemp(prefix=f".{slot_id}.", dir=root))
+    try:
+        temp_parent_identity = _file_identity(temp_parent.lstat())
+    except OSError:
+        return 1, None, ["staged slot parent metadata could not be read"]
     stage_slot = temp_parent / slot_id
     try:
         chain_name = args.attestation_certificate_chain.name
@@ -677,8 +996,20 @@ def assemble_slot(args: argparse.Namespace) -> tuple[int, Path | None, list[str]
         if errors:
             return 1, None, errors
 
-        _write_json(stage_slot / "attestation" / "result.json", result)
-        _write_json(stage_slot / "attestation" / "report.json", report)
+        errors.extend(
+            _write_json(
+                stage_slot / "attestation" / "result.json",
+                result,
+                "attestation result",
+            )
+        )
+        errors.extend(
+            _write_json(
+                stage_slot / "attestation" / "report.json",
+                report,
+                "attestation verifier report",
+            )
+        )
 
         metadata = build_slot_metadata(
             slot_id=slot_id,
@@ -693,7 +1024,9 @@ def assemble_slot(args: argparse.Namespace) -> tuple[int, Path | None, list[str]
             wallet_integrity_transcript_sha256=wallet_digest,
             raw_test_commands=list(device_lab.KAGEMUSHA_ANDROID_PRODUCTION_RAW_TEST_COMMANDS),
         )
-        _write_json(stage_slot / "slot.json", metadata)
+        errors.extend(_write_json(stage_slot / "slot.json", metadata, "slot metadata"))
+        if errors:
+            return 1, None, errors
 
         manifest_errors = evidence_signer.rewrite_sha256_manifest(stage_slot)
         if manifest_errors:
@@ -721,10 +1054,28 @@ def assemble_slot(args: argparse.Namespace) -> tuple[int, Path | None, list[str]
 
         if errors:
             return 1, None, errors
-        stage_slot.rename(final_slot)
+        try:
+            temp_parent_stat = temp_parent.lstat()
+            stage_slot_stat = stage_slot.lstat()
+        except OSError:
+            return 1, None, ["staged slot metadata could not be read before publish"]
+        if not stat.S_ISDIR(temp_parent_stat.st_mode) or not stat.S_ISDIR(
+            stage_slot_stat.st_mode
+        ):
+            return 1, None, ["staged slot must be a directory"]
+        publish_errors = _publish_stage_slot(
+            stage_slot=stage_slot,
+            root=root,
+            slot_id=slot_id,
+            expected_root_identity=root_identity,
+            expected_temp_parent_identity=temp_parent_identity,
+            expected_stage_identity=_file_identity(stage_slot_stat),
+        )
+        if publish_errors:
+            return 1, None, publish_errors
         return 0, final_slot, []
     finally:
-        shutil.rmtree(temp_parent, ignore_errors=True)
+        _cleanup_temp_parent(temp_parent, expected_identity=temp_parent_identity)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:

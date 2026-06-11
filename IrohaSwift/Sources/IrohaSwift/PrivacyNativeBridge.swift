@@ -201,6 +201,30 @@ public enum PrivacyNativeBridge {
         try buildProofV1(requestArchive: requestArchive)
     }
 
+    public static func buildJindoLatticeProofV0(requestArchive: Data) throws -> Data {
+        try buildProofV1(requestArchive: requestArchive)
+    }
+
+    public static func buildSisHintsAnonymousCredentialProofV0(requestArchive: Data) throws -> Data {
+        try buildProofV1(requestArchive: requestArchive)
+    }
+
+    public static func buildSilentThresholdCredentialShowingProofV0(requestArchive: Data) throws -> Data {
+        try buildProofV1(requestArchive: requestArchive)
+    }
+
+    public static func buildVegaCredentialPredicateProofV0(requestArchive: Data) throws -> Data {
+        try buildProofV1(requestArchive: requestArchive)
+    }
+
+    public static func buildZkAmsAdmissionBatchProofV0(requestArchive: Data) throws -> Data {
+        try buildProofV1(requestArchive: requestArchive)
+    }
+
+    public static func buildZkAtPolicyProofV1(requestArchive: Data) throws -> Data {
+        try buildProofV1(requestArchive: requestArchive)
+    }
+
     public static func verifyProofV1(requestArchive: Data) throws -> Data {
         try call(
             requestArchive: requestArchive,
@@ -209,6 +233,30 @@ public enum PrivacyNativeBridge {
         ) {
             try NoritoNativeBridge.shared.privacyVerifyProofV1(requestArchive: $0)
         }
+    }
+
+    public static func verifyJindoPolynomialCommitmentV0(requestArchive: Data) throws -> Data {
+        try verifyProofV1(requestArchive: requestArchive)
+    }
+
+    public static func verifySisHintsAnonymousCredentialProofV0(requestArchive: Data) throws -> Data {
+        try verifyProofV1(requestArchive: requestArchive)
+    }
+
+    public static func verifySilentThresholdCredentialShowingProofV0(requestArchive: Data) throws -> Data {
+        try verifyProofV1(requestArchive: requestArchive)
+    }
+
+    public static func verifyVegaCredentialPredicateProofV0(requestArchive: Data) throws -> Data {
+        try verifyProofV1(requestArchive: requestArchive)
+    }
+
+    public static func verifyZkAmsAdmissionBatchProofV0(requestArchive: Data) throws -> Data {
+        try verifyProofV1(requestArchive: requestArchive)
+    }
+
+    public static func verifyZkAtPolicyProofV1(requestArchive: Data) throws -> Data {
+        try verifyProofV1(requestArchive: requestArchive)
     }
 
     static func call(
