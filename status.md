@@ -2,6 +2,19 @@
 
 Last updated: 2026-06-11
 
+## 2026-06-11 Governance ZK default test fixture alignment
+
+- Updated the default-feature governance ZK tests to use the production-shaped
+  `halo2/ipa` vote Merkle fixture instead of dev-only tiny Halo2 backend labels,
+  so verifying-key registration exercises the same backend admission corridor as
+  normal governance voting.
+- Kept the parliament lifecycle test focused on parliament/referendum state
+  transitions after a verified ZK ballot; tally proof verification remains
+  covered by the heavy ZK test fixtures.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --test iroha_core_group_02`
+
 ## 2026-06-11 Soracloud STARK query schedule and fixture refresh
 
 - Fixed STARK/FRI proof synthesis and verification to sample query indices
