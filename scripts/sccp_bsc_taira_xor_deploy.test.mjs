@@ -810,6 +810,42 @@ test("BSC verifier material normalization rejects foreign or malformed inputs", 
   );
 });
 
+test("BSC verifier material normalization ignores inherited verifier fields", () => {
+  const inheritedMaterial = Object.create(verifierMaterial());
+
+  assert.throws(
+    () => normalizeVerifierMaterial(inheritedMaterial),
+    /expectedVerifierKeyHash/u,
+  );
+  assert.equal(
+    isSmokeFixtureGroth16VerifierMaterial(
+      Object.create(
+        verifierMaterial({
+          alpha1: SMOKE_FIXTURE_G1,
+          beta2: SMOKE_FIXTURE_G2,
+          gamma2: SMOKE_FIXTURE_G2,
+          delta2: SMOKE_FIXTURE_G2,
+          ic: SMOKE_FIXTURE_IC,
+        }),
+      ),
+    ),
+    false,
+  );
+});
+
+test("BSC verifier material diagnostic flags must be own fields", () => {
+  const material = {
+    ...verifierMaterial(),
+  };
+  Object.setPrototypeOf(material, {
+    diagnostic: true,
+    warning: "Generated diagnostic BSC testnet verifier material.",
+  });
+
+  const normalized = normalizeVerifierMaterial(material);
+  assert.deepEqual(normalized.diagnosticVerifierReasons, []);
+});
+
 test("BSC verifier material reports diagnostic key material before deployment", () => {
   const normalized = normalizeVerifierMaterial(
     verifierMaterial({
@@ -930,6 +966,34 @@ test("BSC route-config writes backend-compatible TOML with BSC deployment eviden
     ),
   );
   assert.doesNotMatch(toml, /private[_-]?key|mnemonic|seed[_-]?phrase/iu);
+});
+
+test("BSC route-config rejects route material supplied only by prototypes", () => {
+  assert.throws(
+    () =>
+      buildBscTairaXorRouteConfigToml(Object.create(routeManifest()), {
+        "allow-unready": "true",
+      }),
+    /route manifest schema/u,
+  );
+
+  const route = routeManifest();
+  const {
+    destinationRollout,
+    productionReady: _productionReady,
+    ...ownRouteWithoutRolloutOrReady
+  } = route;
+  Object.setPrototypeOf(ownRouteWithoutRolloutOrReady, {
+    destinationRollout,
+    productionReady: false,
+  });
+  assert.throws(
+    () =>
+      buildBscTairaXorRouteConfigToml(ownRouteWithoutRolloutOrReady, {
+        "allow-unready": "true",
+      }),
+    /route manifest destinationRollout/u,
+  );
 });
 
 test("BSC route-config requires explicit post-deploy evidence for production-ready manifests", () => {

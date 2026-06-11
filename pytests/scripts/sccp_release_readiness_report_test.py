@@ -561,6 +561,7 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "SCCP_NATIVE_EVM_PROVER_MIN_PROOF_ARTIFACT_BYTES_V1",
             "SCCP_NATIVE_EVM_PROVER_MIN_PROVING_KEY_BYTES_V1",
             "SCCP_NATIVE_EVM_PROVER_MIN_VERIFIER_KEY_BYTES_V1",
+            "SCCP_NATIVE_EVM_PROVER_MIN_IMPLEMENTATION_BYTES_V1",
             "SCCP_NATIVE_EVM_PROVER_MIN_SUPPORT_ARTIFACT_BYTES_V1",
             "assertNativeEvmProverArtifactHasProductionSize",
             "must be at least",
@@ -614,6 +615,7 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "SCCP_NATIVE_EVM_PROVER_MIN_PROOF_ARTIFACT_BYTES_V1",
             "SCCP_NATIVE_EVM_PROVER_MIN_PROVING_KEY_BYTES_V1",
             "SCCP_NATIVE_EVM_PROVER_MIN_VERIFIER_KEY_BYTES_V1",
+            "SCCP_NATIVE_EVM_PROVER_MIN_IMPLEMENTATION_BYTES_V1",
             "SCCP_NATIVE_EVM_PROVER_MIN_SUPPORT_ARTIFACT_BYTES_V1",
             "assertNativeEvmProverArtifactHasProductionSize",
             "must be at least",
@@ -710,6 +712,19 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "nativeProverParityFixture contains duplicate JSON key",
             "nativeProverSelfTestFixture contains duplicate JSON key",
         ),
+        ROOT / "javascript" / "iroha_js" / "test" / "sccpBscMainnet.test.js": (
+            "BSC native prover artifact descriptors must be verifier-owned before callbacks run",
+            "unverifiedDescriptorMessage",
+            "local native EVM prover artifact byte verifier",
+            "mainnetSelfTestCalled",
+            "mainnetProverCalled",
+            "testnetSelfTestCalled",
+            "testnetProverCalled",
+            "nativeProverArtifacts: { ...mainnetFixture.nativeProverArtifacts }",
+            "nativeProverArtifacts: { ...testnetFixture.nativeProverArtifacts }",
+            "runNativeProverSelfTest",
+            "proveOutboundToBsc",
+        ),
         ROOT / "javascript" / "iroha_js" / "test" / "package_dist.test.js": (
             "verifyEthereumMainnetNativeEvmProverArtifacts",
             "verifyEthereumMainnetNativeEvmProverArtifactsFromBundle",
@@ -729,6 +744,11 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "ipfs:proof-artifact.bin",
             "artifacts/eth-mainnet/proof.wasm",
             "proofArtifactBytes must be at least 65536 bytes",
+            "provingKeyBytes must be at least 65536 bytes",
+            "verifierKeyBytes must be at least 128 bytes",
+            "crossSdkFixtureParityBytes must be at least 128 bytes",
+            "nativeProverSelfTestBytes must be at least 128 bytes",
+            "implementationBytes must be at least 1024 bytes",
         ),
     },
     "swift-sdk": {
@@ -744,7 +764,11 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "fromNativeProverBundle",
             "nativeProverBundle.verifiedArtifacts",
             "sccpNativeEvmProverArtifactSha256Hex",
-            "sccpNativeEvmProverMinArtifactBytesV1",
+            "sccpNativeEvmProverMinProofArtifactBytesV1",
+            "sccpNativeEvmProverMinProvingKeyBytesV1",
+            "sccpNativeEvmProverMinVerifierKeyBytesV1",
+            "sccpNativeEvmProverMinImplementationBytesV1",
+            "sccpNativeEvmProverMinSupportArtifactBytesV1",
             "sccpNativeEvmProverRequireProductionArtifactSize",
             ".minBytes",
             "implementationBytes",
@@ -805,7 +829,13 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "Data(\"{}\".utf8)",
             "nativeProverBundle.verifierKeyHash",
             "nativeEvmProverArtifactBytes",
+            "hashConsistentNativeEvmProverBundle",
             "proofArtifactBytes.minBytes",
+            "provingKeyBytes.minBytes",
+            "verifierKeyBytes.minBytes",
+            "crossSdkFixtureParityBytes.minBytes",
+            "nativeProverSelfTestBytes.minBytes",
+            "implementationBytes.minBytes",
             "proof.wasm",
             "flaggedArtifactBytes",
             "proofArtifactBytes.forbiddenMarker",
@@ -848,7 +878,11 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "fun fromNativeProverBundle(",
             "nativeProverBundle.verifiedArtifacts",
             'MessageDigest.getInstance("SHA-256")',
-            "NATIVE_EVM_PROVER_MIN_ARTIFACT_BYTES_V1",
+            "NATIVE_EVM_PROVER_MIN_PROOF_ARTIFACT_BYTES_V1",
+            "NATIVE_EVM_PROVER_MIN_PROVING_KEY_BYTES_V1",
+            "NATIVE_EVM_PROVER_MIN_VERIFIER_KEY_BYTES_V1",
+            "NATIVE_EVM_PROVER_MIN_IMPLEMENTATION_BYTES_V1",
+            "NATIVE_EVM_PROVER_MIN_SUPPORT_ARTIFACT_BYTES_V1",
             "requireNativeEvmProverProductionArtifactSize",
             "must be at least",
             "implementationBytes sha256",
@@ -908,7 +942,12 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "\"{}\".toByteArray()",
             "nativeProverBundle.verifierKeyHash",
             "nativeEvmProverArtifactBytes",
-            "proofArtifactBytes must be at least 256 bytes",
+            "proofArtifactBytes must be at least 65536 bytes",
+            "provingKeyBytes must be at least 65536 bytes",
+            "verifierKeyBytes must be at least 128 bytes",
+            "crossSdkFixtureParityBytes must be at least 128 bytes",
+            "nativeProverSelfTestBytes must be at least 128 bytes",
+            "implementationBytes must be at least 1024 bytes",
             "proof.wasm",
             "flaggedArtifactBytes",
             "proofArtifactBytes contains forbidden",
@@ -950,7 +989,11 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "NativeEvmProverArtifactResolver",
             "artifactResolver.resolveArtifact",
             'MessageDigest.getInstance("SHA-256")',
-            "NATIVE_EVM_PROVER_MIN_ARTIFACT_BYTES_V1",
+            "NATIVE_EVM_PROVER_MIN_PROOF_ARTIFACT_BYTES_V1",
+            "NATIVE_EVM_PROVER_MIN_PROVING_KEY_BYTES_V1",
+            "NATIVE_EVM_PROVER_MIN_VERIFIER_KEY_BYTES_V1",
+            "NATIVE_EVM_PROVER_MIN_IMPLEMENTATION_BYTES_V1",
+            "NATIVE_EVM_PROVER_MIN_SUPPORT_ARTIFACT_BYTES_V1",
             "requireNativeEvmProverProductionArtifactSize",
             "must be at least",
             "implementationBytes sha256",
@@ -1028,7 +1071,13 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "\"{}\".getBytes(StandardCharsets.UTF_8)",
             "nativeProverBundle.verifierKeyHash",
             "nativeEvmProverArtifactBytes",
-            "proofArtifactBytes must be at least 256 bytes",
+            "NativeEvmVerifierFixture",
+            "proofArtifactBytes must be at least 65536 bytes",
+            "provingKeyBytes must be at least 65536 bytes",
+            "verifierKeyBytes must be at least 128 bytes",
+            "crossSdkFixtureParityBytes must be at least 128 bytes",
+            "nativeProverSelfTestBytes must be at least 128 bytes",
+            "implementationBytes must be at least 1024 bytes",
             "proof.wasm",
             "flaggedArtifactBytes",
             "proofArtifactBytes contains forbidden",
@@ -1068,7 +1117,11 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "Func<string, byte[]> artifactResolver",
             "artifactResolver(ProofArtifact)",
             "SHA256.HashData",
-            "NativeEvmProverMinArtifactBytesV1",
+            "NativeEvmProverMinProofArtifactBytesV1",
+            "NativeEvmProverMinProvingKeyBytesV1",
+            "NativeEvmProverMinVerifierKeyBytesV1",
+            "NativeEvmProverMinImplementationBytesV1",
+            "NativeEvmProverMinSupportArtifactBytesV1",
             "RequireNativeEvmProverProductionArtifactSize",
             "must be at least",
             "implementationBytes sha256",
@@ -1125,7 +1178,13 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "Encoding.UTF8.GetBytes(\"{}\")",
             "nativeProverBundle.verifierKeyHash",
             "NativeEvmProverArtifactBytes",
-            "proofArtifactBytes must be at least 256 bytes",
+            "HashConsistentNativeEvmProverBundle",
+            "proofArtifactBytes must be at least 65536 bytes",
+            "provingKeyBytes must be at least 65536 bytes",
+            "verifierKeyBytes must be at least 128 bytes",
+            "crossSdkFixtureParityBytes must be at least 128 bytes",
+            "nativeProverSelfTestBytes must be at least 128 bytes",
+            "implementationBytes must be at least 1024 bytes",
             "proof.wasm",
             "flaggedArtifactBytes",
             "proofArtifactBytes contains forbidden",
@@ -1573,18 +1632,27 @@ def write_native_evm_prover_bundle(
             "0x" + hashlib.sha256(content).hexdigest(),
         )
 
-    def native_payload(label: str) -> bytes:
+    def native_payload(
+        label: str,
+        size: int = report.NATIVE_EVM_PROVER_MIN_PAYLOAD_BYTES,
+    ) -> bytes:
         content = (f"{label}\n").encode("utf-8")
-        repeats = report.NATIVE_EVM_PROVER_MIN_PAYLOAD_BYTES // len(content) + 1
-        return (content * repeats)[: report.NATIVE_EVM_PROVER_MIN_PAYLOAD_BYTES]
+        repeats = size // len(content) + 1
+        return (content * repeats)[:size]
 
     proof_artifact, proof_artifact_hash = write_artifact(
         "proof-artifact.bin",
-        native_payload("ethereum mainnet sccp proof artifact v1"),
+        native_payload(
+            "ethereum mainnet sccp proof artifact v1",
+            report.NATIVE_EVM_PROVER_MIN_PROOF_ARTIFACT_BYTES,
+        ),
     )
     proving_key, proving_key_hash = write_artifact(
         "proving-key.bin",
-        native_payload("ethereum mainnet sccp proving key v1"),
+        native_payload(
+            "ethereum mainnet sccp proving key v1",
+            report.NATIVE_EVM_PROVER_MIN_PROVING_KEY_BYTES,
+        ),
     )
     verifier_key, verifier_key_hash = write_artifact(
         "verifier-key.bin",
@@ -1598,7 +1666,8 @@ def write_native_evm_prover_bundle(
             f"{sdk}-implementation.bin",
             native_payload(
                 "ethereum mainnet sccp "
-                f"{sdk} {implementation} implementation v1"
+                f"{sdk} {implementation} implementation v1",
+                report.NATIVE_EVM_PROVER_MIN_IMPLEMENTATION_BYTES,
             ),
         )
         sdk_artifacts.append(
@@ -4206,6 +4275,40 @@ def test_release_readiness_report_guards_native_sccp_no_wasm_readiness_gate_inve
         for error in errors
     )
 
+    markers_by_path = dict(verifier.NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS)
+    package_dist_markers = markers_by_path[
+        "javascript/iroha_js/test/package_dist.test.js"
+    ]
+    sparse_package_dist = tmp_path / "package_dist.test.js"
+    sparse_package_dist.write_text(
+        "function assertBrowserMainnetSccpArtifactsStayJsOnlyAndLocalProverOwned() {}\n",
+        encoding="utf-8",
+    )
+
+    errors = report._native_sccp_no_wasm_readiness_gate_inventory_errors(
+        (
+            (
+                sparse_package_dist,
+                package_dist_markers,
+            ),
+        )
+    )
+
+    for role_floor_marker in (
+        "proofArtifactBytes must be at least 65536 bytes",
+        "provingKeyBytes must be at least 65536 bytes",
+        "verifierKeyBytes must be at least 128 bytes",
+        "crossSdkFixtureParityBytes must be at least 128 bytes",
+        "nativeProverSelfTestBytes must be at least 128 bytes",
+        "implementationBytes must be at least 1024 bytes",
+    ):
+        assert any(
+            "native SCCP no-WASM readiness SDK test inventory" in error
+            and str(sparse_package_dist) in error
+            and f"missing marker: {role_floor_marker}" in error
+            for error in errors
+        )
+
 
 def test_release_readiness_report_guards_native_evm_canonical_sdk_inventory(
     tmp_path: Path,
@@ -4728,6 +4831,24 @@ def test_release_readiness_report_guards_sccp_phase_evidence_source_gate_invento
                     "duplicate SCCP corridor phase evidence for",
                     "already set by",
                     "cannot set from",
+                    "source_labels",
+                    "def _phase_evidence_source_label(",
+                    "--phase-evidence {name}=<path>",
+                    "def _phase_log_from_dir(",
+                    "checked standard phase log layouts",
+                    "def _parse_phase_assignment_name(",
+                    "unknown SCCP corridor phase",
+                    "phase result must use NAME=STATUS syntax",
+                    "phase result name contains surrounding whitespace",
+                    "phase result name contains Markdown-unsafe character",
+                    "phase result name contains malformed phase",
+                    "phase result status contains surrounding whitespace",
+                    "phase result status must be passed, failed, skipped, or missing",
+                    "phase evidence must use NAME=PATH syntax",
+                    "phase evidence path must not be empty",
+                    "phase evidence name contains surrounding whitespace",
+                    "phase evidence name contains Markdown-unsafe character",
+                    "phase evidence name contains malformed phase",
                 ),
             ),
         )
@@ -4742,6 +4863,82 @@ def test_release_readiness_report_guards_sccp_phase_evidence_source_gate_invento
     assert any(
         "SCCP phase evidence duplicate-input source inventory" in error
         and "missing marker: cannot set from" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP phase evidence duplicate-input source inventory" in error
+        and "missing marker: def _phase_evidence_source_label(" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP phase evidence duplicate-input source inventory" in error
+        and "missing marker: --phase-evidence {name}=<path>" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP phase evidence duplicate-input source inventory" in error
+        and "missing marker: def _phase_log_from_dir(" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP phase evidence duplicate-input source inventory" in error
+        and "missing marker: checked standard phase log layouts" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP phase evidence duplicate-input source inventory" in error
+        and "missing marker: unknown SCCP corridor phase" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP phase evidence duplicate-input source inventory" in error
+        and "missing marker: phase evidence name contains surrounding whitespace" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP phase evidence duplicate-input source inventory" in error
+        and "missing marker: phase result name contains Markdown-unsafe character"
+        in error
+        for error in errors
+    )
+    assert any(
+        "SCCP phase evidence duplicate-input source inventory" in error
+        and "missing marker: phase result must use NAME=STATUS syntax" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP phase evidence duplicate-input source inventory" in error
+        and "missing marker: phase evidence must use NAME=PATH syntax" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP phase evidence duplicate-input source inventory" in error
+        and "missing marker: phase evidence path must not be empty" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP phase evidence duplicate-input source inventory" in error
+        and "missing marker: phase evidence name contains Markdown-unsafe character"
+        in error
+        for error in errors
+    )
+    assert any(
+        "SCCP phase evidence duplicate-input source inventory" in error
+        and "missing marker: phase result name contains malformed phase" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP phase evidence duplicate-input source inventory" in error
+        and "missing marker: phase result status contains surrounding whitespace" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP phase evidence duplicate-input source inventory" in error
+        and (
+            "missing marker: phase result status must be passed, failed, "
+            "skipped, or missing"
+        )
+        in error
         for error in errors
     )
 
@@ -11621,7 +11818,7 @@ def test_release_readiness_report_blocks_malformed_active_required_record_metada
         (
             "records.operator_override",
             True,
-            "required record summary has unknown field operator_override",
+            "required record summary contains unknown field: operator_override",
         ),
     )
 
@@ -11657,6 +11854,64 @@ def test_release_readiness_report_blocks_malformed_active_required_record_metada
         assert any(
             expected_blocker in blocker for blocker in records_item["blockers"]
         ), path
+
+
+def test_release_readiness_report_classifies_malformed_active_required_record_fields(
+    tmp_path: Path,
+) -> None:
+    """Malformed active required-record keys must not leak through checklist text."""
+
+    report = load_report_module()
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    confusable_field = "operat\u043er_override"
+    markdown_field = "operator|secret-token"
+    cases = (
+        (
+            " operator_override ",
+            "required record summary contains unknown field name with surrounding whitespace",
+        ),
+        (
+            "operator\noverride",
+            "required record summary contains unknown field name with control character",
+        ),
+        (
+            "operator override",
+            "required record summary contains unknown field name with whitespace",
+        ),
+        (
+            markdown_field,
+            "required record summary contains unknown field name with Markdown-unsafe character",
+        ),
+        (
+            confusable_field,
+            "required record summary contains unknown field name with non-ASCII character",
+        ),
+    )
+
+    for field, expected_blocker in cases:
+        evidence_summary = report._load_evidence_summary([evidence])
+        native_status = report._native_evm_prover_bundle_status(
+            native_bundle,
+            evidence_summary,
+        )
+        active_lane = report._active_launch_lane(evidence_summary)
+        assert active_lane is not None
+        active_lane["records"][field] = True
+
+        checklist = report._active_launch_release_checklist(
+            evidence_summary,
+            native_status,
+        )
+        item_by_id = {item["id"]: item for item in checklist["items"]}
+        records_item = item_by_id["all_required_lane_records"]
+        blockers = "\n".join(records_item["blockers"])
+
+        assert checklist["ready"] is False, field
+        assert records_item["ready"] is False, field
+        assert expected_blocker in blockers, field
+        assert markdown_field not in blockers
+        assert confusable_field not in blockers
 
 
 def test_release_readiness_report_blocks_active_lane_unresolved_blockers(
@@ -12414,9 +12669,134 @@ def test_release_readiness_report_blocks_tiny_native_evm_prover_payload(
     blockers = payload["native_evm_prover_bundle"]["validation_blockers"]
     assert (
         "native EVM Groth16 prover bundle proof_artifact must be at least "
-        "256 bytes"
+        "65536 bytes"
     ) in blockers
     assert payload["release_checklist"]["ready"] is False
+
+
+def test_release_readiness_report_blocks_below_floor_native_evm_implementation(
+    tmp_path: Path,
+) -> None:
+    """Native SDK implementation artifacts must meet the launch SDK byte floor."""
+
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    implementation_path = (
+        tmp_path / "native-prover-artifacts" / "javascript-implementation.bin"
+    )
+    tiny_payload = b"tiny native javascript implementation\n"
+    implementation_path.write_bytes(tiny_payload)
+    implementation_hash = "0x" + hashlib.sha256(tiny_payload).hexdigest()
+    payload = json.loads(native_bundle.read_text(encoding="utf-8"))
+    for artifact in payload["native_sdk_artifacts"]:
+        if artifact["sdk"] == "javascript":
+            artifact["implementation_hash"] = implementation_hash
+            break
+    native_bundle.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--format",
+            "json",
+            "--phase-result",
+            "all=passed",
+            "--native-evm-prover-bundle",
+            str(native_bundle),
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    payload = json.loads(completed.stdout)
+    blockers = payload["native_evm_prover_bundle"]["validation_blockers"]
+    assert (
+        "native EVM Groth16 prover bundle javascript implementation_artifact "
+        "must be at least 1024 bytes"
+    ) in blockers
+    assert payload["release_checklist"]["ready"] is False
+
+
+def test_release_readiness_report_blocks_below_floor_native_evm_support_roles(
+    tmp_path: Path,
+) -> None:
+    """Native verifier and support artifacts must meet role-specific floors."""
+
+    cases = (
+        (
+            "verifier-key",
+            "verifier_key",
+            ("verifier_key_hash",),
+            b"tiny native verifier key\n",
+            "native EVM Groth16 prover bundle verifier_key must be at least 128 bytes",
+        ),
+        (
+            "parity-fixture",
+            "cross_sdk_fixture_parity_artifact",
+            ("audit_hashes", "cross_sdk_fixture_parity"),
+            b"{}\n",
+            "native EVM Groth16 prover bundle cross_sdk_fixture_parity_artifact "
+            "must be at least 128 bytes",
+        ),
+        (
+            "self-test-fixture",
+            "native_prover_self_test_artifact",
+            ("audit_hashes", "native_prover_self_test"),
+            b"{}\n",
+            "native EVM Groth16 prover bundle native_prover_self_test_artifact "
+            "must be at least 128 bytes",
+        ),
+    )
+
+    for label, path_field, hash_path, tiny_payload, expected_blocker in cases:
+        case_dir = tmp_path / label
+        case_dir.mkdir()
+        evidence, _ = write_active_launch_evidence(case_dir)
+        native_bundle = write_native_evm_prover_bundle(case_dir, evidence)
+        payload = json.loads(native_bundle.read_text(encoding="utf-8"))
+        artifact_path = case_dir / payload[path_field]
+        artifact_path.write_bytes(tiny_payload)
+        artifact_hash = "0x" + hashlib.sha256(tiny_payload).hexdigest()
+        if hash_path[0] == "audit_hashes":
+            payload["audit_hashes"][hash_path[1]] = artifact_hash
+        else:
+            payload[hash_path[0]] = artifact_hash
+        native_bundle.write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+        completed = subprocess.run(
+            [
+                "python3",
+                str(SCRIPT),
+                "--format",
+                "json",
+                "--phase-result",
+                "all=passed",
+                "--native-evm-prover-bundle",
+                str(native_bundle),
+                str(evidence),
+            ],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        assert completed.returncode == 1, label
+        report_payload = json.loads(completed.stdout)
+        blockers = report_payload["native_evm_prover_bundle"]["validation_blockers"]
+        assert expected_blocker in blockers
+        assert report_payload["release_checklist"]["ready"] is False
 
 
 def test_release_readiness_report_blocks_reused_native_evm_prover_role_hash(
@@ -14629,6 +15009,39 @@ def test_release_readiness_report_accepts_phase_evidence_dir(
     assert "## Blocking Items\n\n- None" in completed.stdout
 
 
+def test_release_readiness_report_suppresses_missing_phase_evidence_dir_path(
+    tmp_path: Path,
+) -> None:
+    """Missing phase evidence dir diagnostics must not echo local paths."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    phase_artifacts = tmp_path / "secret-token-phase-artifacts"
+    phase_artifacts.mkdir()
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--require-phase-evidence",
+            "--phase-result",
+            "all=passed",
+            "--phase-evidence-dir",
+            str(phase_artifacts),
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode != 0
+    assert "missing SCCP corridor evidence log for phase" in completed.stderr
+    assert "checked standard phase log layouts" in completed.stderr
+    assert "secret-token" not in completed.stderr
+    assert "Status:" not in completed.stdout
+
+
 def test_release_readiness_report_requires_contract_smoke_node_success_evidence(
     tmp_path: Path,
 ) -> None:
@@ -14726,6 +15139,424 @@ def test_release_readiness_report_rejects_duplicate_phase_evidence_assignment(
     ) in completed.stderr
     assert "already set by --phase-evidence rust-sccp=" in completed.stderr
     assert "cannot set from --phase-evidence rust-sccp=" in completed.stderr
+
+
+def test_release_readiness_report_suppresses_duplicate_phase_evidence_paths(
+    tmp_path: Path,
+) -> None:
+    """Duplicate phase-evidence diagnostics must not echo local paths."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    first_log = tmp_path / "phase-evidence-secret-token-first.log"
+    second_log = tmp_path / "phase-evidence-secret-token-second.log"
+    first_log.write_text(complete_corridor_log(("rust-sccp",)), encoding="utf-8")
+    second_log.write_text(complete_corridor_log(("rust-sccp",)), encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--require-phase-evidence",
+            "--phase-result",
+            "all=missing",
+            "--phase-result",
+            "rust-sccp=passed",
+            "--phase-evidence",
+            f"rust-sccp={first_log}",
+            "--phase-evidence",
+            f"rust-sccp={second_log}",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert (
+        "duplicate SCCP corridor phase evidence for rust-sccp"
+    ) in completed.stderr
+    assert "already set by --phase-evidence rust-sccp=<path>" in completed.stderr
+    assert "cannot set from --phase-evidence rust-sccp=<path>" in completed.stderr
+    assert "secret-token" not in completed.stderr
+
+
+def test_release_readiness_report_rejects_padded_phase_result_name(
+    tmp_path: Path,
+) -> None:
+    """Phase-result names must not be trim-normalized before readiness state."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--phase-result",
+            " rust-sccp =passed",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert "phase result name contains surrounding whitespace" in completed.stderr
+    assert "Status:" not in completed.stdout
+
+
+def test_release_readiness_report_suppresses_phase_result_syntax_input(
+    tmp_path: Path,
+) -> None:
+    """Phase-result syntax errors must not echo table-breaking operator input."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--phase-result",
+            "rust|sccp",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert "phase result must use NAME=STATUS syntax" in completed.stderr
+    assert "rust|sccp" not in completed.stderr
+    assert "Status:" not in completed.stdout
+
+
+def test_release_readiness_report_rejects_markdown_phase_result_name(
+    tmp_path: Path,
+) -> None:
+    """Phase-result names must not echo table-breaking operator input."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--phase-result",
+            "rust|sccp=passed",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert "phase result name contains Markdown-unsafe character" in completed.stderr
+    assert "rust|sccp" not in completed.stderr
+    assert "Status:" not in completed.stdout
+
+
+def test_release_readiness_report_rejects_malformed_phase_result_name(
+    tmp_path: Path,
+) -> None:
+    """Phase-result names must fail closed before unknown-phase lookup."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--phase-result",
+            "Rust-sccp=passed",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert "phase result name contains malformed phase" in completed.stderr
+    assert "Rust-sccp" not in completed.stderr
+    assert "Status:" not in completed.stdout
+
+
+def test_release_readiness_report_suppresses_unknown_phase_result_name(
+    tmp_path: Path,
+) -> None:
+    """Unknown phase-result names must not echo operator-supplied strings."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--phase-result",
+            "secret-token=passed",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert "unknown SCCP corridor phase" in completed.stderr
+    assert "secret-token" not in completed.stderr
+    assert "Status:" not in completed.stdout
+
+
+def test_release_readiness_report_rejects_padded_phase_result_status(
+    tmp_path: Path,
+) -> None:
+    """Phase-result statuses must not be trim-normalized before readiness state."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--phase-result",
+            "rust-sccp= passed",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert "phase result status contains surrounding whitespace" in completed.stderr
+    assert "Status:" not in completed.stdout
+
+
+def test_release_readiness_report_suppresses_unknown_phase_result_status(
+    tmp_path: Path,
+) -> None:
+    """Unknown phase-result statuses must not echo unsafe operator input."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--phase-result",
+            "rust-sccp=passed|failed",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert (
+        "phase result status must be passed, failed, skipped, or missing"
+        in completed.stderr
+    )
+    assert "passed|failed" not in completed.stderr
+    assert "Status:" not in completed.stdout
+
+
+def test_release_readiness_report_rejects_padded_phase_evidence_name(
+    tmp_path: Path,
+) -> None:
+    """Phase-evidence names must not be trim-normalized before artifact hashing."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    corridor_log = tmp_path / "rust-sccp.log"
+    corridor_log.write_text(complete_corridor_log(("rust-sccp",)), encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--require-phase-evidence",
+            "--phase-result",
+            "rust-sccp=passed",
+            "--phase-evidence",
+            f" rust-sccp ={corridor_log}",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert "phase evidence name contains surrounding whitespace" in completed.stderr
+    assert "Status:" not in completed.stdout
+
+
+def test_release_readiness_report_suppresses_phase_evidence_syntax_input(
+    tmp_path: Path,
+) -> None:
+    """Phase-evidence syntax errors must not echo table-breaking operator input."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--require-phase-evidence",
+            "--phase-result",
+            "rust-sccp=passed",
+            "--phase-evidence",
+            "rust|sccp",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert "phase evidence must use NAME=PATH syntax" in completed.stderr
+    assert "rust|sccp" not in completed.stderr
+    assert "Status:" not in completed.stdout
+
+
+def test_release_readiness_report_rejects_empty_phase_evidence_path(
+    tmp_path: Path,
+) -> None:
+    """Phase-evidence paths must be explicit before artifact hashing."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--require-phase-evidence",
+            "--phase-result",
+            "rust-sccp=passed",
+            "--phase-evidence",
+            "rust-sccp=",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert "phase evidence path must not be empty" in completed.stderr
+    assert "rust-sccp=" not in completed.stderr
+    assert "Status:" not in completed.stdout
+
+
+def test_release_readiness_report_rejects_markdown_phase_evidence_name(
+    tmp_path: Path,
+) -> None:
+    """Phase-evidence names must not echo table-breaking operator input."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    corridor_log = tmp_path / "rust-sccp.log"
+    corridor_log.write_text(complete_corridor_log(("rust-sccp",)), encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--require-phase-evidence",
+            "--phase-result",
+            "rust-sccp=passed",
+            "--phase-evidence",
+            f"rust|sccp={corridor_log}",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert "phase evidence name contains Markdown-unsafe character" in completed.stderr
+    assert "rust|sccp" not in completed.stderr
+    assert "Status:" not in completed.stdout
+
+
+def test_release_readiness_report_rejects_malformed_phase_evidence_name(
+    tmp_path: Path,
+) -> None:
+    """Phase-evidence names must fail closed before artifact hashing."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    corridor_log = tmp_path / "rust-sccp.log"
+    corridor_log.write_text(complete_corridor_log(("rust-sccp",)), encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--require-phase-evidence",
+            "--phase-result",
+            "rust-sccp=passed",
+            "--phase-evidence",
+            f"rust_sccp={corridor_log}",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert "phase evidence name contains malformed phase" in completed.stderr
+    assert "rust_sccp" not in completed.stderr
+    assert "Status:" not in completed.stdout
+
+
+def test_release_readiness_report_suppresses_unknown_phase_evidence_name(
+    tmp_path: Path,
+) -> None:
+    """Unknown phase-evidence names must not echo operator-supplied strings."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    corridor_log = tmp_path / "rust-sccp.log"
+    corridor_log.write_text(complete_corridor_log(("rust-sccp",)), encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--require-phase-evidence",
+            "--phase-result",
+            "rust-sccp=passed",
+            "--phase-evidence",
+            f"secret-token={corridor_log}",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert "unknown SCCP corridor phase" in completed.stderr
+    assert "secret-token" not in completed.stderr
+    assert "Status:" not in completed.stdout
 
 
 def test_release_readiness_report_rejects_phase_evidence_dir_override(

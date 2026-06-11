@@ -474,6 +474,10 @@ main() {
           exit 2
         fi
         LOG_DIR="$2"
+        if [[ -z "$LOG_DIR" ]]; then
+          echo "--log-dir requires a directory." >&2
+          exit 2
+        fi
         shift 2
         ;;
       --log-dir=*)

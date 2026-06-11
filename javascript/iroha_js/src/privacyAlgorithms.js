@@ -636,7 +636,7 @@ const BACKEND_FAMILY_BY_ALGORITHM_ID = Object.freeze({
 });
 const REQUIRED_PRIVACY_PLAN_ROWS = Object.freeze([
   Object.freeze(["anonymous-pgc-k-out-of-n-v1", "production-hardened", "anonymous-pgc"]),
-  Object.freeze(["verange-transparent-range-v1", "production-hardened", "verange"]),
+  Object.freeze(["verange-transparent-range-v1", "component", "verange"]),
   Object.freeze(["zkat-policy-private-auth-v1", "production-hardened", "zkat"]),
   Object.freeze([
     "zk-ams-recursive-admission-v0",
@@ -1069,7 +1069,7 @@ const REQUIRED_PRIVACY_PLAN_FAILURE_MODES_BY_ALGORITHM_ID = Object.freeze({
 });
 const REQUIRED_PRIVACY_PLAN_SECURITY_NOTES_BY_ALGORITHM_ID = Object.freeze({
   "anonymous-pgc-k-out-of-n-v1": Object.freeze(["Requires fresh anonymity-set roots and replay/link-tag state.", "Amount privacy depends on the range-proof component and commitment binding.", "Receiver ciphertext commitments must bind to the same transaction digest as the proof.", "Production Anonymous PGC proof admission requires a caller-supplied proof envelope bound to the anonymity root, receiver set, link tag, range commitments, chain id, and domain separator.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."]),
-  "verange-transparent-range-v1": Object.freeze(["This is a production proof backend component, not a standalone payment protocol.", "Range parameters must be bound to the transaction payload and verifier key.", "Aggregated proof limits must be enforced by validators.", "Production VeRange proof admission requires canonical public inputs, Stark verifier parameters, deterministic vectors, parser/verifier fuzzing, performance gates, and internal cryptographic review.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."]),
+  "verange-transparent-range-v1": Object.freeze(["This range-proof backend component is not a standalone payment protocol.", "Range parameters must be bound to the transaction payload and verifier key.", "Aggregated proof limits must be enforced by validators.", "The SDK dev fixture is non-production and verifies deterministic binding only; production VeRange proving remains unavailable until the hardening gates pass.", "Wallet witnesses and private range inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."]),
   "zkat-policy-private-auth-v1": Object.freeze(["Hides authorization policy, not payment fields.", "Policy commitments require explicit epoch, replay, and rotation semantics.", "Combining with ZK-ACE requires both proofs to bind the same transaction digest.", "Production zkAt proof admission requires canonical policy commitments, transaction digest binding, account/action/domain binding, verifier-key registration, deterministic vectors, parser/verifier fuzzing, performance gates, and internal cryptographic review.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."]),
   "zk-ams-recursive-admission-v0": Object.freeze(["Admission privacy is separate from later payment privacy.", "Duplicate admission prevention depends on issuer-scoped nullifiers.", "Recursive batching must bind every admitted account commitment.", "This production admission component is proof-verifiable but not a standalone payment protocol.", "Production ZK-AMS admission requires canonical issuer roots, admission-nullifier sets, anonymous account commitments, recursive admission digests, domain binding, verifier-key registration, deterministic vectors, parser/verifier fuzzing, performance gates, and internal cryptographic review.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet admission witnesses and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."]),
   "vega-existing-credential-zk-v0": Object.freeze(["Credential schema parsing must be deterministic and versioned.", "Proofs must bind to wallet or identity commitments to prevent credential replay.", "Issuer trust, expiration, and revocation semantics require registered policy inputs.", "This production credential component is proof-verifiable but not a standalone payment protocol.", "Production Vega credential admission requires canonical issuer commitments, credential schema, predicate commitment, subject binding, expiration epoch, domain binding, verifier-key registration, deterministic vectors, parser/verifier fuzzing, performance gates, and internal cryptographic review.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet credential predicate witnesses and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."]),
@@ -1220,7 +1220,7 @@ const REQUIRED_PRIVACY_PLAN_SDK_ENTRYPOINTS_BY_ALGORITHM_ID = Object.freeze({
     "buildAnonymousPgcKOutOfNProofV1",
     "buildAnonymousPgcTransferInstruction",
   ]),
-  "verange-transparent-range-v1": Object.freeze(["buildRangeCommitment", "buildVeRangeProofEnvelope", "buildVeRangeProofV1", "verifyVeRangeProofV1"]),
+  "verange-transparent-range-v1": Object.freeze(["buildRangeCommitment", "buildVeRangeDevProofFixture", "buildVeRangeProofEnvelope", "verifyVeRangeProofLocally"]),
   "zkat-policy-private-auth-v1": Object.freeze(["buildZkAtPolicyCommitment", "buildZkAtAuthenticatorEnvelope", "buildZkAtPolicyProofV1", "verifyZkAtPolicyProofV1"]),
   "zk-ams-recursive-admission-v0": Object.freeze(["buildZkAmsAdmissionBatch", "buildZkAmsAdmissionProofEnvelope", "buildZkAmsAdmissionBatchProofV0", "verifyZkAmsAdmissionBatchProofV0"]),
   "vega-existing-credential-zk-v0": Object.freeze(["buildVegaCredentialPredicateCommitment", "buildVegaCredentialProofEnvelope", "buildVegaCredentialPredicateProofV0", "verifyVegaCredentialPredicateProofV0"]),
@@ -1260,7 +1260,7 @@ const REQUIRED_PRIVACY_PLAN_SDK_ENTRYPOINTS_BY_ALGORITHM_ID = Object.freeze({
 });
 const REQUIRED_PRIVACY_PLAN_PLANNED_SDK_ENTRYPOINTS_BY_ALGORITHM_ID = Object.freeze({
   "anonymous-pgc-k-out-of-n-v1": Object.freeze([]),
-  "verange-transparent-range-v1": Object.freeze([]),
+  "verange-transparent-range-v1": Object.freeze(["buildVeRangeProofV1"]),
   "zkat-policy-private-auth-v1": Object.freeze([]),
   "zk-ams-recursive-admission-v0": Object.freeze([]),
   "vega-existing-credential-zk-v0": Object.freeze([]),
@@ -4438,7 +4438,7 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       authorization: false,
       noteEncryption: false,
     }),
-    implementationStage: "production-hardened",
+    implementationStage: "component",
     recommendedFor: Object.freeze([
       "confidential amount range proofs",
       "reserve or solvency proofs",
@@ -4451,10 +4451,11 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       }),
     ]),
     securityNotes: Object.freeze([
-      "This is a production proof backend component, not a standalone payment protocol.",
+      "This range-proof backend component is not a standalone payment protocol.",
       "Range parameters must be bound to the transaction payload and verifier key.",
       "Aggregated proof limits must be enforced by validators.",
-      "Production VeRange proof admission requires canonical public inputs, Stark verifier parameters, deterministic vectors, parser/verifier fuzzing, performance gates, and internal cryptographic review.",
+      "The SDK dev fixture is non-production and verifies deterministic binding only; production VeRange proving remains unavailable until the hardening gates pass.",
+      "Wallet witnesses and private range inputs must stay local and must not be exposed through SDK or chain APIs.",
       "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.",
     ]),
     requiredState: Object.freeze([
@@ -4483,11 +4484,11 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
     ]),
     sdkEntrypoints: Object.freeze([
       "buildRangeCommitment",
+      "buildVeRangeDevProofFixture",
       "buildVeRangeProofEnvelope",
-      "buildVeRangeProofV1",
-      "verifyVeRangeProofV1",
+      "verifyVeRangeProofLocally",
     ]),
-    plannedSdkEntrypoints: Object.freeze([]),
+    plannedSdkEntrypoints: Object.freeze(["buildVeRangeProofV1"]),
     chainRequirements: Object.freeze([
       "VeRange verifier registry entry",
       "range commitment binding rules",

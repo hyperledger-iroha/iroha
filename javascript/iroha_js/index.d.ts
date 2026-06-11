@@ -13912,7 +13912,7 @@ export interface OfflineCashConfigurationSnapshot {
   readonly assetDefinitionId: string;
   readonly offlinePaymentsEnabled: boolean;
   readonly issuerPublicKeyBase64?: string | null;
-  readonly bridgeAbiVersion?: number | null;
+  readonly nativeBridgeAbiVersion?: number | null;
   readonly artifactSetId?: string | null;
   readonly circuitId?: string | null;
   readonly createdAtMs: number;
@@ -13924,7 +13924,7 @@ export class OfflineCashConfigurationSnapshotError extends Error {
     | "offline_payments_disabled"
     | "missing_issuer_public_key"
     | "expired"
-    | "unsupported_bridge_abi"
+    | "unsupported_native_bridge_abi"
     | "malformed_snapshot";
 }
 
@@ -13932,7 +13932,7 @@ export function assertOfflineCashConfigurationSnapshotUsable(
   snapshot: OfflineCashConfigurationSnapshot,
   options?: {
     nowMs?: number;
-    requiredBridgeAbiVersion?: number | null;
+    requiredNativeBridgeAbiVersion?: number | null;
   },
 ): true;
 
@@ -17831,8 +17831,8 @@ export function deriveConfidentialNullifierV2(input: {
 export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1: "recursive_compact_v1";
 export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1: "recursive_spend_v1";
 export const KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1: "checked_prefold_v1";
-export const KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION: 6;
-export const KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION: 7;
+export const KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: 6;
+export const KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: 7;
 export const KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1: "kagemusha-recursive-compact-v1";
 export const KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT: "recursive compact Kagemusha payment-token multi-hop proving requires the append verifier batch";
 export const KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_UNAVAILABLE_FRAGMENT: "recursive compact Kagemusha multi-hop payment-token proving requires the append verifier batch";
@@ -19483,12 +19483,6 @@ export function buildVeRangeDevProofFixture(
 export function buildVeRangeProofEnvelope(
   input: VeRangeProofEnvelopeInput,
 ): Buffer;
-
-export function buildVeRangeProofV1(input: VeRangeProofV1Input): Buffer;
-
-export function verifyVeRangeProofV1(
-  input: VeRangeProofV1VerificationInput | BinaryLike,
-): VeRangeProofV1VerificationResult;
 
 export function verifyVeRangeProofLocally(
   input: VeRangeLocalVerificationInput | BinaryLike,

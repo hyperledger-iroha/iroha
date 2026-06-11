@@ -10058,6 +10058,34 @@ Temporal properties:
   continuation: the source action is exactly `RbcDeliverGood`, certified
   delivery installs the finality certificate surface, and pending delivery
   installs the no-certificate wait surface with only the proved residual gates.
+- `RbcDeliveryEntryCommitEvidenceBranchAlwaysSeedsContinuationState` proves
+  that the same first-delivery branch selector seeds the next proof corridor:
+  certified delivery satisfies the committed finality invariants, while
+  non-final delivery installs the exact delivered-pending precondition,
+  evidence surface, counter handoff, and gate/timer predicates consumed by the
+  delivered-pending step-closure theorems.
+- `RbcDeliveryEntryCommitEvidenceBranchAlwaysSeedsPendingActionSurface` proves
+  that the same first-delivery branch selector seeds the delivered-pending
+  action surface exactly: non-final delivery exposes only the
+  phase-appropriate proposal, prepare, commit, Byzantine-commit, or NewView
+  gate, keeps RBC/fault gates closed, and preserves the GST/timeout
+  predicates used by the delivered-pending action-source proofs.
+- `RbcDeliveryEntryCommitEvidenceBranchAlwaysSeedsPendingTimerSurface` proves
+  that the same first-delivery branch selector seeds the delivered-pending
+  timer surface exactly: pre-GST pending delivery exposes both GST observation
+  and timeout, while post-GST pending delivery makes timeout track missing
+  honest progress and certified delivery keeps timeout closed.
+- `RbcDeliveryEntryCommitEvidenceBranchAlwaysSeedsPendingCounterFrame` proves
+  that the same first-delivery branch selector seeds the delivered-pending
+  counter frame exactly: non-final delivery preserves view, vote, stake,
+  NewView, view-evidence, and empty commit-witness counters, while certified
+  delivery installs the exact quorum witness counters and commit view.
+- `RbcDeliveryEntryCommitEvidenceBranchAlwaysSeedsPendingCompleteWaitState`
+  proves that the same first-delivery branch selector packages the
+  delivered-pending continuation as a complete wait-state seed: non-final
+  delivery preserves the delivered RBC evidence, view/GST/vote counters, empty
+  commit witnesses, closed RBC/fault gates, and the exact progress/timer
+  surface used by later delivered-pending closure proofs.
 - `RbcProgressEvidenceNeverDiverges` proves that every reachable RBC progress
   state keeps the evidence expected for that state: initialized states keep
   validated header/digest evidence, chunk-covered states keep full chunk

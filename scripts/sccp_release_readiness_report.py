@@ -192,7 +192,12 @@ NATIVE_EVM_PROVER_FORBIDDEN_PATH_MARKERS = (
     "prover_endpoint",
     "prover endpoint",
 )
-NATIVE_EVM_PROVER_MIN_PAYLOAD_BYTES = 256
+NATIVE_EVM_PROVER_MIN_SUPPORT_ARTIFACT_BYTES = 128
+NATIVE_EVM_PROVER_MIN_IMPLEMENTATION_BYTES = 1024
+NATIVE_EVM_PROVER_MIN_PROOF_ARTIFACT_BYTES = 64 * 1024
+NATIVE_EVM_PROVER_MIN_PROVING_KEY_BYTES = 64 * 1024
+NATIVE_EVM_PROVER_MIN_VERIFIER_KEY_BYTES = 128
+NATIVE_EVM_PROVER_MIN_PAYLOAD_BYTES = NATIVE_EVM_PROVER_MIN_SUPPORT_ARTIFACT_BYTES
 
 
 class DuplicateJsonKeyError(ValueError):
@@ -2383,7 +2388,24 @@ def _corridor_phases() -> list[str]:
 
 
 def _normalize_phase_status(value: str) -> str:
-    normalized = value.strip().lower()
+    # Source-inventory marker: phase result status contains surrounding whitespace
+    if not value:
+        raise argparse.ArgumentTypeError("phase result status is empty")
+    if _path_control_character(value) is not None:
+        raise argparse.ArgumentTypeError(
+            "phase result status contains control character"
+        )
+    if not value.isascii():
+        raise argparse.ArgumentTypeError(
+            "phase result status contains non-ASCII character"
+        )
+    if value.strip() != value:
+        raise argparse.ArgumentTypeError(
+            "phase result status contains surrounding whitespace"
+        )
+    if any(character.isspace() for character in value):
+        raise argparse.ArgumentTypeError("phase result status contains whitespace")
+    normalized = value.lower()
     if normalized in {"pass", "passed", "ok", "success", "successful", "green"}:
         return "passed"
     if normalized in {"fail", "failed", "failure", "red"}:
@@ -2393,8 +2415,42 @@ def _normalize_phase_status(value: str) -> str:
     if normalized in {"missing", "unknown", "pending", "not-run", "not_run"}:
         return "missing"
     raise argparse.ArgumentTypeError(
-        f"phase result status must be passed, failed, skipped, or missing: {value}"
+        "phase result status must be passed, failed, skipped, or missing"
     )
+
+
+def _parse_phase_assignment_name(raw_name: str, label: str) -> str:
+    # Source-inventory markers:
+    # - phase result name contains surrounding whitespace
+    # - phase result name contains Markdown-unsafe character
+    # - phase result name contains malformed phase
+    # - phase evidence name contains surrounding whitespace
+    # - phase evidence name contains Markdown-unsafe character
+    # - phase evidence name contains malformed phase
+    if not raw_name:
+        raise argparse.ArgumentTypeError(f"{label} name is empty")
+    if _path_control_character(raw_name) is not None:
+        raise argparse.ArgumentTypeError(f"{label} name contains control character")
+    if not raw_name.isascii():
+        raise argparse.ArgumentTypeError(f"{label} name contains non-ASCII character")
+    if raw_name.strip() != raw_name:
+        raise argparse.ArgumentTypeError(
+            f"{label} name contains surrounding whitespace"
+        )
+    if any(character.isspace() for character in raw_name):
+        raise argparse.ArgumentTypeError(f"{label} name contains whitespace")
+    if _path_markdown_unsafe_character(raw_name) is not None:
+        raise argparse.ArgumentTypeError(
+            f"{label} name contains Markdown-unsafe character"
+        )
+    allowed = set("abcdefghijklmnopqrstuvwxyz0123456789-")
+    if (
+        any(character not in allowed for character in raw_name)
+        or raw_name.startswith("-")
+        or raw_name.endswith("-")
+    ):
+        raise argparse.ArgumentTypeError(f"{label} name contains malformed phase")
+    return raw_name
 
 
 def _parse_phase_results(values: list[str], phases: list[str]) -> dict[str, str]:
@@ -2402,18 +2458,22 @@ def _parse_phase_results(values: list[str], phases: list[str]) -> dict[str, str]
     for raw in values:
         if "=" not in raw:
             raise argparse.ArgumentTypeError(
-                f"phase result must use NAME=STATUS syntax: {raw}"
+                "phase result must use NAME=STATUS syntax"
             )
         name, status = raw.split("=", 1)
-        name = name.strip()
+        name = _parse_phase_assignment_name(name, "phase result")
         normalized = _normalize_phase_status(status)
         if name == "all":
             results = {phase: normalized for phase in phases}
             continue
         if name not in results:
-            raise argparse.ArgumentTypeError(f"unknown SCCP corridor phase: {name}")
+            raise argparse.ArgumentTypeError("unknown SCCP corridor phase")
         results[name] = normalized
     return results
+
+
+def _phase_evidence_source_label(name: str) -> str:
+    return f"--phase-evidence {name}=<path>"
 
 
 def _path_control_character(path: str) -> str | None:
@@ -2590,6 +2650,7 @@ def _native_evm_prover_payload_artifact(
     path_field: str,
     hash_field: str,
     label: str,
+    min_bytes: int = NATIVE_EVM_PROVER_MIN_SUPPORT_ARTIFACT_BYTES,
 ) -> tuple[dict[str, Any] | None, list[str]]:
     if path_field not in payload:
         return None, []
@@ -2619,11 +2680,8 @@ def _native_evm_prover_payload_artifact(
 
     if artifact["bytes"] == 0:
         blockers.append(f"{prefix} must not be empty")
-    elif artifact["bytes"] < NATIVE_EVM_PROVER_MIN_PAYLOAD_BYTES:
-        blockers.append(
-            f"{prefix} must be at least "
-            f"{NATIVE_EVM_PROVER_MIN_PAYLOAD_BYTES} bytes"
-        )
+    elif artifact["bytes"] < min_bytes:
+        blockers.append(f"{prefix} must be at least {min_bytes} bytes")
 
     expected_hash = payload.get(hash_field)
     actual_hash = f"0x{artifact['sha256']}"
@@ -2688,6 +2746,7 @@ def _native_evm_prover_bundle_artifact_summary(
                 "implementation_artifact",
                 "implementation_hash",
                 f"{sdk} implementation_artifact",
+                NATIVE_EVM_PROVER_MIN_IMPLEMENTATION_BYTES,
             )
         )
         blockers.extend(artifact_blockers)
@@ -2807,6 +2866,17 @@ def _native_evm_prover_field_name_blocker(
     return f"{label} contains {field_kind} field: {key}"
 
 
+def _required_record_summary_unknown_field_blocker(
+    lane_label: str,
+    key: Any,
+) -> str:
+    return _native_evm_prover_field_name_blocker(
+        f"{lane_label}: required record summary",
+        key,
+        "unknown",
+    )
+
+
 def _native_evm_prover_duplicate_json_key_blocker(label: str, key: Any) -> str:
     if not isinstance(key, str) or not key:
         return f"{label} JSON contains malformed duplicate key"
@@ -2854,6 +2924,11 @@ def _native_evm_prover_parity_fixture_status(
 
     if artifact["bytes"] == 0:
         blockers.append(f"{prefix} must not be empty")
+    elif artifact["bytes"] < NATIVE_EVM_PROVER_MIN_SUPPORT_ARTIFACT_BYTES:
+        blockers.append(
+            f"{prefix} must be at least "
+            f"{NATIVE_EVM_PROVER_MIN_SUPPORT_ARTIFACT_BYTES} bytes"
+        )
 
     audit_hashes = payload.get("audit_hashes")
     expected_hash = (
@@ -3015,6 +3090,11 @@ def _native_evm_prover_self_test_status(
 
     if artifact["bytes"] == 0:
         blockers.append(f"{prefix} must not be empty")
+    elif artifact["bytes"] < NATIVE_EVM_PROVER_MIN_SUPPORT_ARTIFACT_BYTES:
+        blockers.append(
+            f"{prefix} must be at least "
+            f"{NATIVE_EVM_PROVER_MIN_SUPPORT_ARTIFACT_BYTES} bytes"
+        )
 
     audit_hashes = payload.get("audit_hashes")
     expected_hash = (
@@ -3399,6 +3479,7 @@ def _native_evm_prover_bundle_status(
         "proof_artifact",
         "proof_artifact_hash",
         "proof_artifact",
+        NATIVE_EVM_PROVER_MIN_PROOF_ARTIFACT_BYTES,
     )
     blockers.extend(proof_artifact_blockers)
     proving_key, proving_key_blockers = _native_evm_prover_payload_artifact(
@@ -3407,6 +3488,7 @@ def _native_evm_prover_bundle_status(
         "proving_key",
         "proving_key_hash",
         "proving_key",
+        NATIVE_EVM_PROVER_MIN_PROVING_KEY_BYTES,
     )
     blockers.extend(proving_key_blockers)
     verifier_key, verifier_key_blockers = _native_evm_prover_payload_artifact(
@@ -3415,6 +3497,7 @@ def _native_evm_prover_bundle_status(
         "verifier_key",
         "verifier_key_hash",
         "verifier_key",
+        NATIVE_EVM_PROVER_MIN_VERIFIER_KEY_BYTES,
     )
     blockers.extend(verifier_key_blockers)
 
@@ -3477,9 +3560,9 @@ def _phase_log_from_dir(directory: Path, phase: str) -> Path:
     for candidate in candidates:
         if candidate.is_file():
             return candidate
-    expected = ", ".join(str(candidate) for candidate in candidates)
     raise FileNotFoundError(
-        f"missing SCCP corridor evidence log for phase {phase}; checked {expected}"
+        "missing SCCP corridor evidence log for phase "
+        f"{phase}; checked standard phase log layouts"
     )
 
 
@@ -4410,22 +4493,22 @@ def _parse_phase_evidence(
     for raw in values:
         if "=" not in raw:
             raise argparse.ArgumentTypeError(
-                f"phase evidence must use NAME=PATH syntax: {raw}"
+                "phase evidence must use NAME=PATH syntax"
             )
         name, path_text = raw.split("=", 1)
-        name = name.strip()
+        name = _parse_phase_assignment_name(name, "phase evidence")
         if not path_text:
             raise argparse.ArgumentTypeError(
-                f"phase evidence path must not be empty: {raw}"
+                "phase evidence path must not be empty"
             )
         artifact = _artifact(Path(path_text))
-        label = f"--phase-evidence {raw}"
+        label = _phase_evidence_source_label(name)
         if name == "all":
             for phase in phases:
                 assign(phase, artifact, label)
             continue
         if name not in phases:
-            raise argparse.ArgumentTypeError(f"unknown SCCP corridor phase: {name}")
+            raise argparse.ArgumentTypeError("unknown SCCP corridor phase")
         assign(name, artifact, label)
     return artifacts
 
@@ -4756,7 +4839,7 @@ def _active_launch_required_record_metadata_blockers(
     if not isinstance(records, dict):
         return blockers + [f"{lane_label}: required record summary is missing"]
     for key in sorted(set(records) - set(record_labels)):
-        blockers.append(f"{lane_label}: required record summary has unknown field {key}")
+        blockers.append(_required_record_summary_unknown_field_blocker(lane_label, key))
     for key, label in record_labels.items():
         if records.get(key) is not True:
             blockers.append(f"{lane_label}: missing {label}")
@@ -6092,18 +6175,40 @@ def _boolean_cell(value: Any) -> str:
     return "-"
 
 
+def _helper_symbol_is_markdown_safe(symbol: Any) -> bool:
+    if not isinstance(symbol, str) or not symbol:
+        return False
+    if any(ord(character) < 0x20 or ord(character) == 0x7F for character in symbol):
+        return False
+    if not symbol.isascii() or symbol.strip() != symbol:
+        return False
+    if any(character.isspace() for character in symbol):
+        return False
+    if any(character in "|`<>" for character in symbol):
+        return False
+    allowed = set(
+        "abcdefghijklmnopqrstuvwxyz"
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        "0123456789"
+        "._:()"
+    )
+    return symbol[0].isalpha() and all(character in allowed for character in symbol)
+
+
 def _sdk_helper_sets_cell(surface: dict[str, Any]) -> str:
     helper_sets = surface.get("sdk_helper_symbols_by_sdk")
     if not isinstance(helper_sets, dict):
-        return surface["sdk_helpers"]
+        return "`<invalid sdk_helper_symbols_by_sdk>`"
     rows: list[str] = []
     for sdk in (*USER_PROVER_SDK_PHASES, EVM_NATIVE_DOTNET_PHASE):
         helpers = helper_sets.get(sdk)
         if not isinstance(helpers, list):
             continue
+        if any(not _helper_symbol_is_markdown_safe(helper) for helper in helpers):
+            return "`<invalid sdk_helper_symbols_by_sdk>`"
         helper_text = ", ".join(f"`{helper}`" for helper in helpers)
         rows.append(f"`{sdk}`: {helper_text}")
-    return "<br>".join(rows) if rows else surface["sdk_helpers"]
+    return "<br>".join(rows) if rows else "`<invalid sdk_helper_symbols_by_sdk>`"
 
 
 def _markdown_string_list_cell(value: Any, *, field_label: str) -> str:

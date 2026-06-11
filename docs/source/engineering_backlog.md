@@ -445,8 +445,9 @@ redistributable schemas, and official trust/revocation bundles.
   material digest for governed prover inventories. The data-model refresh
   transcript wrapper can derive the same full-bootstrap material statement for
   manifest callers, and execution policies now require bootstrap-capable
-  bundles to bind exactly one bootstrap statement class: zero-refresh for
-  `RefreshOnlyV1`, or full material for `FullBootstrapV1`. Full-bootstrap
+	  bundles to bind exactly one bootstrap statement class: exact or
+	  bounded-noise zero-refresh for `RefreshOnlyV1`, or full material for
+	  `FullBootstrapV1`. Full-bootstrap
   refresh transcript digesting omits deterministic zero-refresh bootstrap
   transcript seeds, and Core rejects missing, mismatched, stale, or cross-mode
   policy statement bindings before execution. The data model now also exposes a
@@ -594,7 +595,11 @@ redistributable schemas, and official trust/revocation bundles.
   `StarkVerifyEnvelopeV1` payloads before backend verification and
   adversarially rejects drift across transcript label, domain tag, AIR section
   presence, circuit id, trace width, opening count, composition root, and public
-	  digest. The governed material-native AIR verifier now also has active drift
+	  digest. Native STARK/FRI proof construction, query replay, and envelope
+	  verification also reject noncanonical transcript labels, malformed domain
+	  tags, and malformed AIR circuit ids before transcript sampling or
+	  verification, and the ZK-ACE AIR
+	  path binds the canonical ZK-ACE circuit id. The governed material-native AIR verifier now also has active drift
 	  coverage for transcript labels, STARK parameters, trace roots, composition
 	  roots, public digests, and opened composition values. For full-bootstrap
 	  material and execution proofs, generic binding-AIR fixtures are fully
@@ -713,11 +718,27 @@ redistributable schemas, and official trust/revocation bundles.
 	  helpers are now internal; the crypto release-audit validator owns the
 	  governed material/artifact, caller-trusted reviewer id/key, and
 	  caller-pinned package digest gate used by the callable production material
-	  and batch paths, standalone release audit evidence validation rejects reused
+	  and batch paths, and that gate rejects zero or known placeholder pinned
+	  package digests before package comparison; Core material and execution
+	  proof wrappers pin those rejections before native proof generation. The
+	  trusted-reviewer package gates preflight caller-supplied reviewer id/key
+	  inputs before package or artifact validation can mask malformed trust
+	  configuration, and the standalone signoff, record, and manifest
+	  trusted-reviewer validators use the same preflight before stale signed
+	  objects can mask malformed trust anchors. Signoff payload construction now
+	  preflights the caller-supplied reviewer id/key and external report/archive
+	  digests before stale evidence can mask malformed operator inputs.
+	  Release-audit record and package construction also reject malformed
+	  reviewer ids before evidence derivation or audit-byte validation.
+	  Release-audit package construction now also runs the shared report/archive
+	  byte-pair preflight, including edge-whitespace-normalized copied-body
+	  rejection, before evidence derivation or record signing can mask malformed
+	  external audit bytes.
+	  Standalone release audit evidence validation rejects reused
 	  artifact/profile/native-payload commitments plus empty/all-zero and short,
 	  long, padded, binary-decorated, case-decorated, or whitespace-prefixed
-	  placeholder native-payload digest sentinels, standalone signoff/manifest
-	  validation rejects known header-only, nested-header,
+	  placeholder native-payload digest sentinels, standalone record construction
+	  plus signoff/manifest validation rejects known header-only, nested-header,
 	  whitespace-prefixed nested-header, padded zero/blank-body, and
 	  short/long/padded/binary-decorated/case-decorated/whitespace-prefixed
 	  placeholder report/archive digests,
@@ -781,7 +802,8 @@ redistributable schemas, and official trust/revocation bundles.
 		  claim matching, the duplicate-free opening policy, the proof-key-bound
 		  release prover input package, the execution proof input package digest
 		  domain, release-prover AIR constraint-system digest/artifact binding,
-		  release audit package caller-pinned digest enforcement, and release prover
+		  release audit package caller-pinned digest enforcement with zero and
+		  placeholder pinned-digest rejection, and release prover
 		  verifier-key binding. The typed crypto schema validates those AIR
 		  contract, release-prover, and execution proof input package digest-domain
 		  terms directly, and the
@@ -923,8 +945,9 @@ redistributable schemas, and official trust/revocation bundles.
 					  report/archive artifacts must carry canonical v1 audit byte headers
 					  with nonempty, nonblank, nonzero, at-least-64-byte bodies and
 					  no nested canonical audit headers after leading body whitespace,
-					  plus distinct report/archive body content before packages can be
-					  hashed, signed, or consumed by audited prover wrappers.
+						  plus distinct report/archive body content after edge-whitespace
+						  normalization before packages can be hashed, signed, or consumed by
+						  audited prover wrappers.
 					  The shared explicit STARK AIR builder now self-verifies generated
 					  row/composition envelopes before returning proof bytes to BFV native
 					  AIR callers, the Soracloud release-prover handoff replays encoded
@@ -948,15 +971,26 @@ redistributable schemas, and official trust/revocation bundles.
 						  proof-input or release-prover package hashing can rely on them.
 					  The shared
 					  STARK/AIR prover and verifier derive duplicate-free query schedules by
-						  transcript-bound sampling without replacement, while failing closed
-						  when a duplicate-free schedule cannot exist, so duplicate openings
-						  cannot reduce effective sampling. The BFV material and execution native-AIR builders
+						  bound-specific transcript rejection sampling without replacement,
+								  require noncanonical transcript labels, malformed domain tags,
+								  and malformed AIR or verifier-key circuit ids to fail closed before query replay or envelope verification,
+								  keep caller-provided verifier limits from relaxing canonical
+								  STARK structure and envelope-byte caps, and reject
+								  blowup/domain parameter pairs where `blowup_log2`
+								  exceeds `n_log2` before proof synthesis, verifier-key
+								  admission, or envelope verification,
+						  while failing closed when a duplicate-free schedule cannot exist, so
+						  duplicate openings cannot reduce effective sampling. The BFV material and execution native-AIR builders
 						  still retry bounded material/statement-domain query nonces for privacy-policy
 						  public-row constraints, and the material verifier accepts only
 						  nonce-bound material domain tags derived from the statement hash and
 						  caller-bound material-input digest. The ZK-ACE native AIR prover uses the
 						  same duplicate-free query validator plus encoded-envelope
-						  self-verification before returning proof bytes. Governed full-bootstrap material admission rejects
+						  self-verification before returning proof bytes. BFV native
+						  STARK/FRI proof-key material, verifier payloads, and release-audit
+						  proof profiles also reject blowup/domain parameter pairs where
+						  `blowup_log2` exceeds `n_log2` before key material or evidence can be
+						  admitted. Governed full-bootstrap material admission rejects
 						  known nonzero pending/placeholder digest literals before artifact,
 						  proof-key pair, key-material, or release-audit evidence commitments
 						  can be accepted, including standalone release-audit signoff and

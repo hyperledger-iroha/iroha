@@ -543,6 +543,7 @@ TEXT_REQUIREMENTS = {
         "KAGEMUSHA_RUNTIME_LOG_FAILURE_MARKERS",
         "KAGEMUSHA_STATUS_FAILURE_VALUES",
         "_validate_required_telemetry_artifact",
+        "slot_id != slot_path.name",
         "_validate_required_status_artifact",
         "_validate_required_runtime_log_artifact",
         "kagemusha device-lab run complete",
@@ -582,6 +583,11 @@ TEXT_REQUIREMENTS = {
         "validate_attestation_report(slot_path, metadata, errors)",
         "validate_attestation_harness_result",
         "validate_attestation_harness_result(",
+        "attestation/harness-result.json {key} must not have surrounding whitespace",
+        "attestation/harness-result.json {key} must not contain control characters",
+        "if level is not None and level not in STRONGBOX_LEVELS:",
+        "attestation/harness-result.json challenge_hex must be lowercase hexadecimal without whitespace",
+        "challenge_hex != challenge_hex.lower()",
         "attestation/harness-result.json challenge_hex digest must match slot.json attestation_challenge_sha256",
         "attestation/harness-result.json chain_length must match",
         "set(result) - ATTESTATION_RESULT_FIELDS",
@@ -624,8 +630,12 @@ TEXT_REQUIREMENTS = {
         'def _validate_summary_output_parent(\n    path: Path,\n    label: str,\n    *,\n    missing_error: str | None = None,\n) -> tuple[bool, list[str]]:\n    """Classify a scanner summary output parent without following aliases."""\n\n    parent = path.parent\n    try:\n        parent_mode = parent.lstat().st_mode\n    except FileNotFoundError:\n        if missing_error is None:\n            return False, []\n        return False, [missing_error]\n    except OSError:\n        return False, [f"{label} parent directory metadata could not be read"]\n',
         '    if stat.S_ISLNK(parent_mode):\n        return True, [f"{label} parent directory must not be a symlink"]\n    if not stat.S_ISDIR(parent_mode):\n        return True, [f"{label} parent must be a directory"]\n    return True, []\n',
         "_slot_tree_entries",
+        "pending = [dir_path]",
+        "scanned = sorted(os.scandir(current), key=lambda entry: entry.name)",
+        "entry.stat(follow_symlinks=False)",
         'f"{label} could not be listed"',
         "slot id {_display_path(slot_id)!r} must be a single safe directory name",
+        "slot id {index} must not contain whitespace",
         'if SECRET_RE.search(str(root)):\n        return False, ["device-lab root path must not contain secret-looking material"]',
         "DuplicateJsonKeyError",
         "NonFiniteJsonConstantError",
@@ -647,6 +657,19 @@ TEXT_REQUIREMENTS = {
         'def _reject_hardlinked_file(path: Path, label: str, errors: list[str]) -> None:\n    try:\n        mode = path.lstat().st_mode\n    except FileNotFoundError:\n        return\n    except OSError:\n        errors.append(f"{label} file metadata could not be read")\n        return\n    if stat.S_ISLNK(mode) or not stat.S_ISREG(mode):\n        return\n',
         'def _reject_non_regular_file(path: Path, label: str, errors: list[str]) -> None:\n    try:\n        mode = path.lstat().st_mode\n    except FileNotFoundError:\n        return\n    except OSError:\n        errors.append(f"{label} file metadata could not be read")\n        return\n    if stat.S_ISLNK(mode):\n        return\n    if not stat.S_ISREG(mode):\n        errors.append(f"{label} must be a regular file")\n',
         "slot directory name must not contain secret-looking material",
+        "slot directory name must not contain whitespace",
+        "slot directory name must not contain control characters",
+        "slot id {index} must not contain control characters",
+        "slot.json {key} must not contain surrounding whitespace",
+        "slot.json {key} must not contain control characters",
+        "signed evidence artifact {key} must not contain surrounding whitespace",
+        "signed evidence artifact {key} must not contain control characters",
+        "attestation/result.json {key} must not contain surrounding whitespace",
+        "attestation/result.json {key} must not contain control characters",
+        "attestation/report.json {key} must not contain surrounding whitespace",
+        "attestation/report.json {key} must not contain control characters",
+        "attestation/report.json verification.{key} must not contain surrounding whitespace",
+        "attestation/report.json verification.{key} must not contain control characters",
         'def _reject_secret_slot_path(slot_path: Path, errors: list[str]) -> bool:\n    """Reject direct helper calls that receive secret-looking slot paths."""\n\n    if SECRET_RE.search(str(slot_path)):\n        errors.append("slot path must not contain secret-looking material")\n        return True\n    return False\n',
         "_reject_secret_slot_path(slot_path, errors)",
         '    try:\n        slot_mode = slot_path.lstat().st_mode\n    except FileNotFoundError:\n        slot_mode = None\n    except OSError:\n        return {\n            "slot": slot_label,\n            "status": "error",\n            "errors": ["slot directory metadata could not be read"],\n            "present": present,\n            "file_counts": file_counts,\n            "kagemusha": {"required": require_kagemusha_production_evidence},\n        }\n',
@@ -1146,7 +1169,10 @@ TEXT_REQUIREMENTS = {
         "staged slot directory changed before publish",
         "def _cleanup_temp_parent(",
         "_file_identity(temp_parent_stat) != expected_identity",
-        "shutil.rmtree(temp_parent.name, ignore_errors=True, dir_fd=parent_fd)",
+        "shutil.rmtree(temp_parent.name, dir_fd=parent_fd)",
+        "staged slot temporary directory could not be removed",
+        "cleanup_errors = _cleanup_temp_parent(",
+        "if stage_errors or cleanup_errors:",
         "slot directory already exists; refuse to overwrite evidence",
         "signing inputs are required unless --allow-unsigned is set",
         "--private-key, --public-key, and --signer-key-id must be supplied together",
@@ -1156,6 +1182,10 @@ TEXT_REQUIREMENTS = {
         "validate_attestation_harness_source_claims",
         "--attestation-harness-result",
         "attestation harness result source",
+        "f\"{label} {key} must not have surrounding whitespace\"",
+        "if level is not None and level not in device_lab.STRONGBOX_LEVELS:",
+        "attestation harness result challenge_hex must be lowercase hexadecimal without whitespace",
+        "challenge_hex != challenge_hex.lower()",
         "attestation harness result challenge_hex digest must match",
         "attestation/report.json device_fingerprint must match device identity",
         "attestation/report.json os_build_id must match device identity",
@@ -1277,10 +1307,16 @@ TEXT_REQUIREMENTS = {
         "parent_fd = os.open(parent_path, _directory_open_flags())",
         "os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)",
         "_file_identity(path_stat) == expected_identity",
-        "shutil.rmtree(path.name, ignore_errors=True, dir_fd=parent_fd)",
+        "shutil.rmtree(path.name, dir_fd=parent_fd)",
+        "raw slot partial install could not be removed",
+        "cleanup_errors = _remove_created_slot(",
+        "return [*install_errors, *cleanup_errors]",
         "def _cleanup_temp_parent",
         "_file_identity(temp_parent_stat) != expected_identity",
-        "shutil.rmtree(temp_parent.name, ignore_errors=True, dir_fd=parent_fd)",
+        "shutil.rmtree(temp_parent.name, dir_fd=parent_fd)",
+        "raw pull temporary directory could not be removed",
+        "cleanup_errors = _cleanup_temp_parent(",
+        "if pull_errors or cleanup_errors:",
         "def _open_verified_directory",
         "os.listdir(stage_fd)",
         "os.rename(",
@@ -1306,8 +1342,24 @@ TEXT_REQUIREMENTS = {
         "PHYSICAL_DEVICE_ASSERTION_REQUIRED",
         "--physical-device-attestation",
         "physical device attestation must be explicitly asserted",
+        "def _reject_whitespace",
+        "f\"{label} must not contain whitespace\"",
+        "if _reject_whitespace(value, label, errors):\n        return None\n    candidate = PurePosixPath(value)",
+        "if _reject_whitespace(value, label, errors):\n        return None\n    if device_lab.SECRET_RE.search(value):",
+        "if _reject_whitespace(value, label, errors):\n        return None\n    if value not in device_lab.STRONGBOX_LEVELS:",
         "attestation harness result strongbox_attestation must be true",
         "attestation harness result keymaster_security_level must be STRONGBOX",
+        "_pem_certificate_count",
+        "attestation certificate chain PEM must contain at least two certificates",
+        "elif chain_length != certificate_count:",
+        "attestation harness result chain_length must match",
+        "attestation certificate-chain certificate count",
+        "f\"{label} must be lowercase hexadecimal without whitespace\"",
+        "\"--expected-challenge-hex\",",
+        '    if value != value.strip() or any(ch.isspace() for ch in value):\n        errors.append(f"{label} must be lowercase hexadecimal without whitespace")\n        return None\n',
+        'if any(ch not in "0123456789abcdef" for ch in value):',
+        "attestation certificate chain path must not contain whitespace",
+        "elif raw != raw.strip() or any(ch.isspace() for ch in raw):",
         "attestation certificate chain path must stay under attestation/",
         "device_lab.ATTESTATION_REPORT_SCHEMA",
         "device_lab.validate_summary_output_path(path, label)",
@@ -2009,13 +2061,19 @@ TEXT_REQUIREMENTS = {
         "_file_identity(path_stat) == expected_identity",
         "def _cleanup_published_files(",
         "_cleanup_published_files(installed)",
+        "rollback cleanup could not remove file",
+        "cleanup_errors.extend(_cleanup_published_files(installed))",
+        "return [*copy_errors, *cleanup_errors]",
         "destination_identity = _regular_file_identity(destination)",
         "def _sync_artifact_dir",
         "expected_identity=artifact_dir_identity",
         "artifact directory changed before sync",
         "def _cleanup_temp_parent(",
         "_file_identity(temp_parent_stat) != expected_identity",
-        "shutil.rmtree(temp_parent.name, ignore_errors=True, dir_fd=parent_fd)",
+        "shutil.rmtree(temp_parent.name, dir_fd=parent_fd)",
+        "staged finalizer temporary directory could not be removed",
+        "cleanup_errors = _cleanup_temp_parent(",
+        "if finalizer_errors or cleanup_errors:",
         "check_compact_key_evidence(final_evidence_path)",
         "compact_evidence.build_evidence",
         "compact_evidence.validate_evidence_document",
@@ -2056,13 +2114,19 @@ TEXT_REQUIREMENTS = {
         "_file_identity(path_stat) == expected_identity",
         "def _cleanup_published_files(",
         "_cleanup_published_files(installed)",
+        "rollback cleanup could not remove file",
+        "cleanup_errors.extend(_cleanup_published_files(installed))",
+        "return [*copy_errors, *cleanup_errors]",
         "destination_identity = _regular_file_identity(destination)",
         "def _sync_artifact_dir",
         "expected_identity=artifact_dir_identity",
         "artifact directory changed before sync",
         "def _cleanup_temp_parent(",
         "_file_identity(temp_parent_stat) != expected_identity",
-        "shutil.rmtree(temp_parent.name, ignore_errors=True, dir_fd=parent_fd)",
+        "shutil.rmtree(temp_parent.name, dir_fd=parent_fd)",
+        "staged finalizer temporary directory could not be removed",
+        "cleanup_errors = _cleanup_temp_parent(",
+        "if finalizer_errors or cleanup_errors:",
         "check_lineage_proof_evidence(final_evidence_path)",
         "lineage_evidence.build_evidence",
         "lineage_evidence.validate_evidence_document",
@@ -2430,6 +2494,8 @@ TEXT_REQUIREMENTS = {
         "test_kagemusha_slot_assembler_json_write_reports_temp_cleanup_failure",
         "test_kagemusha_slot_assembler_json_temp_cleanup_preserves_swapped_file",
         "test_kagemusha_slot_assembler_json_write_verifies_installed_bytes",
+        "test_kagemusha_slot_assembler_cleanup_reports_temp_parent_failure",
+        "test_kagemusha_slot_assembler_reports_temp_parent_cleanup_failure",
         "test_kagemusha_attestation_report_writer_temp_cleanup_rejects_swap",
         "test_kagemusha_android_raw_puller_reads_latest_and_installs_slot",
         "test_kagemusha_android_raw_puller_install_refuses_late_existing_slot",
@@ -2440,9 +2506,12 @@ TEXT_REQUIREMENTS = {
         "test_kagemusha_android_raw_puller_install_rejects_parent_identity_before_slot_stat",
         "test_kagemusha_android_raw_puller_install_cleanup_preserves_swapped_destination",
         "test_kagemusha_android_raw_puller_install_cleanup_uses_parent_dir_fd",
+        "test_kagemusha_android_raw_puller_install_cleanup_reports_failure",
         "test_kagemusha_android_raw_puller_install_moves_with_directory_fds",
         "test_kagemusha_android_raw_puller_temp_cleanup_removes_original_parent",
+        "test_kagemusha_android_raw_puller_temp_cleanup_reports_failure",
         "test_kagemusha_android_raw_puller_temp_cleanup_preserves_swapped_parent",
+        "test_kagemusha_android_raw_puller_reports_temp_cleanup_failure",
         "test_kagemusha_android_raw_puller_install_sync_rejects_identity_mismatch",
         "test_kagemusha_android_raw_puller_latest_writer_syncs_parent_identity",
         "test_kagemusha_android_raw_puller_latest_writer_rejects_symlink_after_replace",
@@ -2484,17 +2553,23 @@ TEXT_REQUIREMENTS = {
         "test_kagemusha_android_raw_puller_requires_result_strongbox_levels",
         "test_kagemusha_android_raw_puller_rejects_queue_slot_mismatch",
         "test_kagemusha_android_raw_puller_rejects_telemetry_slot_mismatch",
+        "test_kagemusha_android_raw_puller_rejects_whitespace_normalized_telemetry_slot",
         "test_kagemusha_android_raw_puller_rejects_d2d_online_handoff",
         "test_kagemusha_android_raw_puller_rejects_wallet_rollback_failure",
         "test_kagemusha_android_raw_puller_rejects_failed_status_ndjson",
         "test_kagemusha_android_raw_puller_rejects_status_slot_mismatch",
         "test_kagemusha_android_raw_puller_rejects_runtime_failure_marker",
         "test_kagemusha_android_raw_puller_rejects_noncanonical_harness_strings",
+        "test_kagemusha_android_raw_puller_rejects_control_harness_strings",
         "test_kagemusha_android_raw_puller_rejects_harness_chain_length_mismatch",
         "test_kagemusha_android_raw_puller_rejects_malformed_harness_result",
         "test_scan_slot_rejects_missing_attestation_harness_result",
         "test_scan_slot_rejects_attestation_harness_challenge_mismatch",
+        "test_scan_slot_rejects_control_attestation_harness_strings",
         "test_scan_slot_rejects_sha256_drift",
+        "test_production_metadata_rejects_whitespace_normalized_signed_evidence_path",
+        "test_production_metadata_rejects_control_signed_evidence_path",
+        "test_production_metadata_rejects_whitespace_normalized_signed_evidence_digest",
         "test_explicit_missing_slot_returns_structured_error",
         "test_discover_slots_returns_structured_error_on_root_list_failure",
         "test_discover_slots_uses_lstat_before_is_dir_preflight",
@@ -2502,8 +2577,16 @@ TEXT_REQUIREMENTS = {
         "test_discover_slots_preserves_symlinked_slot_for_scan_slot_rejection",
         "test_main_rejects_device_lab_root_list_failure_without_traceback",
         "test_explicit_unsafe_slot_id_rejected_before_path_join",
+        "test_explicit_slot_id_rejects_surrounding_whitespace_before_path_join",
+        "test_explicit_slot_id_rejects_newline_before_path_join",
+        "test_explicit_slot_id_rejects_internal_whitespace_before_path_join",
+        "test_explicit_slot_id_rejects_control_character_before_path_join",
         "test_explicit_secret_looking_slot_id_is_not_echoed",
         "test_discovered_secret_looking_slot_directory_is_not_echoed",
+        "test_discovered_whitespace_slot_directory_is_rejected_before_metadata",
+        "test_discovered_control_slot_directory_is_rejected_without_echo",
+        "test_scan_slot_rejects_control_slot_directory_before_metadata",
+        "test_scan_slot_rejects_newline_slot_directory_before_metadata",
         "test_scan_slot_redacts_secret_looking_manifest_paths",
         "test_scan_slot_rejects_slot_directory_metadata_failure",
         "test_scan_slot_rejects_slot_parent_metadata_failure",
@@ -2618,6 +2701,7 @@ TEXT_REQUIREMENTS = {
         "test_scan_slot_sha_presence_uses_lstat_before_is_file_preflight",
         "test_scan_slot_rejects_symlinked_slot_ancestor_directory",
         "test_scan_slot_rejects_directory_traversal_failure_without_traceback",
+        "device_lab.os.scandir = failing_scandir",
         "test_load_json_rejects_symlinked_ancestor_before_read",
         "test_load_json_rejects_symlink_swap_after_preflight",
         "test_load_json_rejects_regular_file_swap_after_preflight",
@@ -2664,7 +2748,14 @@ TEXT_REQUIREMENTS = {
         "test_production_metadata_rejects_attestation_result_challenge_mismatch",
         "test_production_metadata_rejects_attestation_result_chain_digest_mismatch",
         "test_production_metadata_rejects_attestation_slot_alias_mismatch",
+        "test_production_metadata_rejects_whitespace_normalized_attestation_slot_alias",
+        "test_production_metadata_rejects_noncanonical_attestation_status",
         "test_production_metadata_rejects_attestation_result_without_strongbox",
+        "test_production_metadata_rejects_whitespace_normalized_attestation_strongbox_level",
+        "test_production_metadata_rejects_whitespace_normalized_attestation_report_binding",
+        "test_production_metadata_rejects_attestation_report_without_strongbox",
+        "test_production_metadata_rejects_whitespace_normalized_attestation_report_strongbox",
+        "test_production_metadata_rejects_noncanonical_attestation_report_status",
         "test_production_metadata_rejects_signed_evidence_challenge_mismatch",
         "test_production_metadata_rejects_signed_evidence_attestation_chain_mismatch",
         "test_production_metadata_rejects_signed_evidence_apk_digest_mismatch",
@@ -2679,6 +2770,9 @@ TEXT_REQUIREMENTS = {
         " 2026-06-06T00:00:00Z ",
         "test_production_metadata_rejects_signed_evidence_schema_drift",
         "test_production_metadata_rejects_signed_evidence_slot_mismatch",
+        "test_production_metadata_rejects_whitespace_normalized_signed_evidence_slot_field",
+        "test_production_metadata_rejects_control_signed_evidence_slot_field",
+        "test_production_metadata_rejects_whitespace_normalized_signed_evidence_algorithm",
         "test_production_metadata_rejects_signed_evidence_digest_map_drift",
         "test_signed_evidence_artifact_digest_rejects_secret_relative_path_directly",
         "test_signed_evidence_artifact_digest_rejects_symlink_directly",
@@ -2693,6 +2787,7 @@ TEXT_REQUIREMENTS = {
         "test_production_metadata_rejects_empty_required_slot_artifact",
         "test_production_metadata_rejects_oversized_required_slot_artifact",
         "test_production_metadata_rejects_telemetry_slot_mismatch",
+        "test_production_metadata_rejects_whitespace_normalized_telemetry_slot",
         "test_production_metadata_rejects_failed_status_ndjson",
         "test_production_metadata_rejects_runtime_log_without_completion_marker",
         "test_production_metadata_rejects_runtime_log_failure_marker",
@@ -3014,8 +3109,10 @@ TEXT_REQUIREMENTS = {
         "test_compact_key_staged_finalizer_defaults_out_under_artifact_dir",
         "test_compact_key_runner_and_finalizer_defaults_share_staging_paths",
         "test_compact_key_staged_finalizer_cleans_partial_publish_on_copy_error",
+        "test_compact_key_staged_finalizer_reports_partial_publish_cleanup_failure",
         "test_compact_key_staged_finalizer_unlink_preserves_swapped_published_file",
         "test_compact_key_staged_finalizer_verifies_published_stage_bytes",
+        "test_compact_key_staged_finalizer_reports_temp_parent_cleanup_failure",
         "test_compact_key_staged_runner_outputs_finalize_successfully",
         "test_compact_key_staged_runner_resume_reuses_complete_keygen",
         "test_compact_key_staged_runner_rejects_replace_with_resume_keygen",
@@ -3056,8 +3153,10 @@ TEXT_REQUIREMENTS = {
         "test_lineage_proof_staged_finalizer_defaults_out_under_artifact_dir",
         "test_lineage_runner_and_finalizer_defaults_share_staging_paths",
         "test_lineage_proof_staged_finalizer_cleans_partial_publish_on_copy_error",
+        "test_lineage_proof_staged_finalizer_reports_partial_publish_cleanup_failure",
         "test_lineage_proof_staged_finalizer_unlink_preserves_swapped_published_file",
         "test_lineage_proof_staged_finalizer_verifies_published_stage_bytes",
+        "test_lineage_proof_staged_finalizer_reports_temp_parent_cleanup_failure",
         "test_lineage_proof_staged_runner_outputs_finalize_successfully",
         "test_lineage_proof_staged_runner_resume_reuses_completed_init_phase",
         "test_lineage_proof_staged_runner_rejects_replace_with_resume_key_artifacts",
@@ -3954,7 +4053,9 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-directory-identity",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-sync-identity",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-cleanup-identity",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-cleanup-report",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-temp-cleanup-identity",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-temp-cleanup-report",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-rename-dir-fd",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-output-root-identity",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-cleanup-dir-fd",
@@ -3969,6 +4070,13 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-harness-strongbox",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-harness-chain-length",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-harness-canonical",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-scanner-harness-canonical",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-attestation-report-challenge-canonical",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-attestation-report-chain-path-canonical",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-attestation-report-slot-id-canonical",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-attestation-report-identity-canonical",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-attestation-report-strongbox-level-canonical",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-attestation-report-chain-length-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-challenge-file-canonical",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-latest-slot-canonical",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-latest-query-canonical",
@@ -3995,6 +4103,8 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-publish-root-identity",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-publish-stage-identity",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-temp-cleanup-identity",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-temp-cleanup-report",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-harness-canonical",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-signed-evidence-freshness-report",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-signed-evidence-timestamp-raw",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-rollup",
@@ -4127,10 +4237,14 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-publish-readback",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-publish-rollback-identity",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-publish-rollback-identity",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-publish-rollback-cleanup-report",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-publish-rollback-cleanup-report",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-publish-dir-sync-identity",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-publish-dir-sync-identity",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-temp-cleanup-identity",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-temp-cleanup-identity",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-temp-cleanup-report",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-temp-cleanup-report",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-direct-secret-paths",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-direct-hash-shape",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-direct-hash-read-failure",
@@ -4257,7 +4371,7 @@ def require_manifest(errors: list[str]) -> None:
     manifest = json.loads(read_text("fixtures/kagemusha_recursive_spend_abi6/manifest.json"))
     if manifest.get("schema") != "iroha.kagemusha.recursive_spend.abi6.fixture_manifest.v1":
         errors.append("ABI-6 fixture manifest schema mismatch")
-    if manifest.get("bridge_abi_version") != 6:
+    if manifest.get("native_bridge_abi_version") != 6:
         errors.append("ABI-6 fixture manifest must advertise bridge ABI 6")
     if manifest.get("operation_count") != len(ABI6_SYMBOLS):
         errors.append("ABI-6 fixture manifest operation_count must remain 9")
@@ -6091,10 +6205,22 @@ if mode == "--negative-control-android-device-lab-slot-id-safety":
 if mode == "--negative-control-android-device-lab-slot-name-safety":
     run_negative_control(
         "Android device-lab discovered slot name safety",
-        lambda: override_text(
-            "scripts/check_android_device_lab_slot.py",
-            "slot directory name must not contain secret-looking material",
-            "slot directory name may contain secret-looking material",
+        lambda: (
+            override_text(
+                "scripts/check_android_device_lab_slot.py",
+                "slot directory name must not contain secret-looking material",
+                "slot directory name may contain secret-looking material",
+            ),
+            override_text(
+                "scripts/check_android_device_lab_slot.py",
+                "slot directory name must not contain whitespace",
+                "slot directory name may contain whitespace",
+            ),
+            override_text(
+                "scripts/check_android_device_lab_slot.py",
+                "slot directory name must not contain control characters",
+                "slot directory name may contain control characters",
+            ),
         ),
     )
     raise SystemExit(0)
@@ -7381,6 +7507,17 @@ if mode == "--negative-control-android-device-lab-raw-puller-install-cleanup-ide
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-android-device-lab-raw-puller-install-cleanup-report":
+    run_negative_control(
+        "Android raw puller install cleanup report gate",
+        lambda: override_text(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            "return [*install_errors, *cleanup_errors]",
+            "return install_errors",
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-android-device-lab-raw-puller-temp-cleanup-identity":
     run_negative_control(
         "Android raw puller temp cleanup identity gate",
@@ -7419,8 +7556,8 @@ if mode == "--negative-control-android-device-lab-raw-puller-install-cleanup-dir
         "Android raw puller install cleanup dir-fd gate",
         lambda: override_text(
             "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
-            "shutil.rmtree(path.name, ignore_errors=True, dir_fd=parent_fd)",
-            "shutil.rmtree(path, ignore_errors=True)",
+            "shutil.rmtree(path.name, dir_fd=parent_fd)",
+            "shutil.rmtree(path)",
         ),
     )
     raise SystemExit(0)
@@ -7542,6 +7679,83 @@ if mode == "--negative-control-android-device-lab-raw-puller-harness-canonical":
             "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
             "attestation/harness-result.json challenge_hex must be lowercase hexadecimal without whitespace",
             "attestation/harness-result.json challenge_hex may be normalized",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-scanner-harness-canonical":
+    run_negative_control(
+        "Android scanner harness canonical string gate",
+        lambda: override_text(
+            "scripts/check_android_device_lab_slot.py",
+            "if level is not None and level not in STRONGBOX_LEVELS:",
+            "if level is not None and level.upper() not in STRONGBOX_LEVELS:",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-attestation-report-challenge-canonical":
+    run_negative_control(
+        "Android attestation report canonical challenge gate",
+        lambda: override_text(
+            "scripts/kagemusha_android_attestation_report.py",
+            'if any(ch not in "0123456789abcdef" for ch in value):',
+            "if False:",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-attestation-report-chain-path-canonical":
+    run_negative_control(
+        "Android attestation report canonical chain path gate",
+        lambda: override_text(
+            "scripts/kagemusha_android_attestation_report.py",
+            "elif raw != raw.strip() or any(ch.isspace() for ch in raw):",
+            "elif False:",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-attestation-report-slot-id-canonical":
+    run_negative_control(
+        "Android attestation report slot id canonical gate",
+        lambda: override_text(
+            "scripts/kagemusha_android_attestation_report.py",
+            "if _reject_whitespace(value, label, errors):\n        return None\n    candidate = PurePosixPath(value)",
+            "if False:\n        return None\n    candidate = PurePosixPath(value.strip())",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-attestation-report-identity-canonical":
+    run_negative_control(
+        "Android attestation report identity string canonical gate",
+        lambda: override_text(
+            "scripts/kagemusha_android_attestation_report.py",
+            "if _reject_whitespace(value, label, errors):\n        return None\n    if device_lab.SECRET_RE.search(value):",
+            "if False:\n        return None\n    if device_lab.SECRET_RE.search(value):",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-attestation-report-strongbox-level-canonical":
+    run_negative_control(
+        "Android attestation report StrongBox level canonical gate",
+        lambda: override_text(
+            "scripts/kagemusha_android_attestation_report.py",
+            "if _reject_whitespace(value, label, errors):\n        return None\n    if value not in device_lab.STRONGBOX_LEVELS:",
+            "if False:\n        return None\n    if value.strip().upper() not in device_lab.STRONGBOX_LEVELS:",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-attestation-report-chain-length-binding":
+    run_negative_control(
+        "Android attestation report chain-length binding gate",
+        lambda: override_text(
+            "scripts/kagemusha_android_attestation_report.py",
+            "elif chain_length != certificate_count:",
+            "elif False:",
         ),
     )
     raise SystemExit(0)
@@ -7810,6 +8024,17 @@ if mode == "--negative-control-android-device-lab-slot-assembler-publish-root-id
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-android-device-lab-raw-puller-temp-cleanup-report":
+    run_negative_control(
+        "Android raw puller temp cleanup report gate",
+        lambda: override_text(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            "if pull_errors or cleanup_errors:",
+            "if pull_errors:",
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-android-device-lab-slot-assembler-publish-stage-identity":
     run_negative_control(
         "Android device-lab slot assembler publish staged-slot identity",
@@ -7828,6 +8053,28 @@ if mode == "--negative-control-android-device-lab-slot-assembler-temp-cleanup-id
             "scripts/kagemusha_android_device_lab_slot.py",
             "_file_identity(temp_parent_stat) != expected_identity",
             "False",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-slot-assembler-temp-cleanup-report":
+    run_negative_control(
+        "Android device-lab slot assembler temporary cleanup report",
+        lambda: override_text(
+            "scripts/kagemusha_android_device_lab_slot.py",
+            "if stage_errors or cleanup_errors:",
+            "if stage_errors:",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-slot-assembler-harness-canonical":
+    run_negative_control(
+        "Android device-lab slot assembler harness canonical string gate",
+        lambda: override_text(
+            "scripts/kagemusha_android_device_lab_slot.py",
+            "if level is not None and level not in device_lab.STRONGBOX_LEVELS:",
+            "if level is not None and level.upper() not in device_lab.STRONGBOX_LEVELS:",
         ),
     )
     raise SystemExit(0)
@@ -9559,6 +9806,28 @@ if mode == "--negative-control-lineage-proof-finalizer-publish-rollback-identity
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-compact-key-finalizer-publish-rollback-cleanup-report":
+    run_negative_control(
+        "ABI-7 recursive compact key staged finalizer publish rollback cleanup report",
+        lambda: override_text(
+            "scripts/kagemusha_finalize_recursive_compact_key_staged_run.py",
+            'return [f"{label} rollback cleanup could not remove file"]',
+            "return []",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-lineage-proof-finalizer-publish-rollback-cleanup-report":
+    run_negative_control(
+        "Reserved-lineage proof staged finalizer publish rollback cleanup report",
+        lambda: override_text(
+            "scripts/kagemusha_finalize_lineage_proof_staged_run.py",
+            'return [f"{label} rollback cleanup could not remove file"]',
+            "return []",
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-compact-key-finalizer-publish-dir-sync-identity":
     run_negative_control(
         "ABI-7 recursive compact key staged finalizer publish directory sync identity",
@@ -9599,6 +9868,28 @@ if mode == "--negative-control-lineage-proof-finalizer-temp-cleanup-identity":
             "scripts/kagemusha_finalize_lineage_proof_staged_run.py",
             "_file_identity(temp_parent_stat) != expected_identity",
             "False",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-compact-key-finalizer-temp-cleanup-report":
+    run_negative_control(
+        "ABI-7 recursive compact staged finalizer temporary cleanup report",
+        lambda: override_text(
+            "scripts/kagemusha_finalize_recursive_compact_key_staged_run.py",
+            "if finalizer_errors or cleanup_errors:",
+            "if finalizer_errors:",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-lineage-proof-finalizer-temp-cleanup-report":
+    run_negative_control(
+        "Reserved-lineage proof staged finalizer temporary cleanup report",
+        lambda: override_text(
+            "scripts/kagemusha_finalize_lineage_proof_staged_run.py",
+            "if finalizer_errors or cleanup_errors:",
+            "if finalizer_errors:",
         ),
     )
     raise SystemExit(0)

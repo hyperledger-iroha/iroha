@@ -828,8 +828,8 @@ public final class OfflineNoteTest {
         "recursive Kagemusha spend wire mode");
     assertEquals(
         6,
-        KagemushaRecursiveSpendProver.REQUIRED_BRIDGE_ABI_VERSION,
-        "recursive Kagemusha spend requires bridge ABI 6");
+        KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
+        "recursive Kagemusha spend requires native bridge ABI 6");
     assertEquals(
         "kagemusha-recursive-aggregation-v1",
         KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,

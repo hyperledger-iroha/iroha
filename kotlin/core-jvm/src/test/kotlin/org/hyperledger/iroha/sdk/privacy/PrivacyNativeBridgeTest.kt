@@ -117,24 +117,24 @@ class PrivacyNativeBridgeTest {
         assertFailsWith<IllegalArgumentException> {
             PrivacyNativeBridge.privacyProofRequestV1(
                 null,
-                "buildVeRangeProofV1",
-                "bulletproofs:verange_transparent_range_v1",
+                "buildZkAceAuthorizationProofV1",
+                "stark-fri:zk_ace_pq_authorization_v0",
                 "public-inputs".toByteArray(),
             )
         }
         assertFailsWith<IllegalArgumentException> {
             PrivacyNativeBridge.privacyProofRequestV1(
-                "verange-transparent-range-v1",
-                "buildVeRangeProofV1",
-                "bulletproofs:verange_transparent_range_v1",
+                "zk-ace-pq-authorization-v0",
+                "buildZkAceAuthorizationProofV1",
+                "stark-fri:zk_ace_pq_authorization_v0",
                 ByteArray(0),
             )
         }
         assertFailsWith<IllegalArgumentException> {
             PrivacyNativeBridge.privacyProofRequestV1(
-                "verange-transparent-range-v1",
-                "buildVeRangeProofV1",
-                "bulletproofs:verange_transparent_range_v1",
+                "zk-ace-pq-authorization-v0",
+                "buildZkAceAuthorizationProofV1",
+                "stark-fri:zk_ace_pq_authorization_v0",
                 "public-inputs".toByteArray(),
                 ByteArray(PrivacyNativeBridge.PRIVACY_NATIVE_ARCHIVE_MAX_BYTES / 2 + 1),
                 ByteArray(0),

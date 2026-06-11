@@ -118,17 +118,13 @@ __all__ = [
     "VERANGE_DOMAIN_SEPARATOR",
     "build_range_commitment",
     "build_verange_proof_envelope",
-    "build_verange_proof_v1",
     "build_verange_dev_proof_fixture",
-    "verify_verange_proof_v1",
     "verify_verange_proof_locally",
     "build_privacy_proof_envelope",
     "decode_privacy_proof_envelope",
     "buildRangeCommitment",
     "buildVeRangeProofEnvelope",
-    "buildVeRangeProofV1",
     "buildVeRangeDevProofFixture",
-    "verifyVeRangeProofV1",
     "verifyVeRangeProofLocally",
     "buildPrivacyProofEnvelope",
     "decodePrivacyProofEnvelope",
@@ -1803,11 +1799,7 @@ def _verify_verange_proof_v1(options: Any) -> dict[str, Any]:
 
 buildRangeCommitment = build_range_commitment
 buildVeRangeProofEnvelope = build_verange_proof_envelope
-build_verange_proof_v1 = _build_verange_proof_v1
-buildVeRangeProofV1 = build_verange_proof_v1
 buildVeRangeDevProofFixture = build_verange_dev_proof_fixture
-verify_verange_proof_v1 = _verify_verange_proof_v1
-verifyVeRangeProofV1 = verify_verange_proof_v1
 verifyVeRangeProofLocally = verify_verange_proof_locally
 buildPrivacyProofEnvelope = build_privacy_proof_envelope
 decodePrivacyProofEnvelope = decode_privacy_proof_envelope

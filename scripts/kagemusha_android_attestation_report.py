@@ -48,11 +48,20 @@ def _json_dumps(payload: dict[str, Any]) -> str:
     return json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n"
 
 
+def _reject_whitespace(value: str, label: str, errors: list[str]) -> bool:
+    if value != value.strip() or any(ch.isspace() for ch in value):
+        errors.append(f"{label} must not contain whitespace")
+        return True
+    return False
+
+
 def _safe_single_name(value: str, label: str, errors: list[str]) -> str | None:
     if not isinstance(value, str) or not value.strip():
         errors.append(f"{label} must be a non-empty string")
         return None
-    candidate = PurePosixPath(value.strip())
+    if _reject_whitespace(value, label, errors):
+        return None
+    candidate = PurePosixPath(value)
     if (
         device_lab.SECRET_RE.search(value)
         or candidate.is_absolute()
@@ -69,10 +78,12 @@ def _string_value(value: str | None, label: str, errors: list[str]) -> str | Non
     if not isinstance(value, str) or not value.strip():
         errors.append(f"{label} must be a non-empty string")
         return None
+    if _reject_whitespace(value, label, errors):
+        return None
     if device_lab.SECRET_RE.search(value):
         errors.append(f"{label} must not contain secret-looking material")
         return None
-    return value.strip()
+    return value
 
 
 def _normalise_strongbox_level(
@@ -84,30 +95,44 @@ def _normalise_strongbox_level(
     if not isinstance(value, str) or not value.strip():
         errors.append(f"{label} must be a non-empty string")
         return None
-    level = value.strip().upper()
-    if level not in device_lab.STRONGBOX_LEVELS:
+    if _reject_whitespace(value, label, errors):
+        return None
+    if value not in device_lab.STRONGBOX_LEVELS:
         errors.append(strongbox_error or f"{label} must be STRONGBOX")
         return None
     return "STRONGBOX"
 
 
-def _decode_challenge_hex(value: Any, errors: list[str]) -> bytes | None:
+def _decode_challenge_hex(
+    value: Any,
+    errors: list[str],
+    label: str = "attestation harness result challenge_hex",
+) -> bytes | None:
     if not isinstance(value, str) or not value.strip():
-        errors.append("attestation harness result challenge_hex must be a non-empty string")
+        errors.append(f"{label} must be a non-empty string")
         return None
-    normalized = "".join(value.split())
-    if len(normalized) % 2 != 0:
-        errors.append("attestation harness result challenge_hex must have even length")
+    if value != value.strip() or any(ch.isspace() for ch in value):
+        errors.append(f"{label} must be lowercase hexadecimal without whitespace")
+        return None
+    if any(ch not in "0123456789abcdef" for ch in value):
+        errors.append(f"{label} must be lowercase hexadecimal without whitespace")
+        return None
+    if len(value) % 2 != 0:
+        errors.append(f"{label} must have even length")
         return None
     try:
-        decoded = bytes.fromhex(normalized)
+        decoded = bytes.fromhex(value)
     except ValueError:
-        errors.append("attestation harness result challenge_hex must be hex")
+        errors.append(f"{label} must be hex")
         return None
     if not decoded:
-        errors.append("attestation harness result challenge_hex must be non-empty")
+        errors.append(f"{label} must be non-empty")
         return None
     return decoded
+
+
+def _pem_certificate_count(payload: bytes) -> int:
+    return payload.count(b"-----BEGIN CERTIFICATE-----")
 
 
 def _slot_relative_chain_path(
@@ -115,9 +140,12 @@ def _slot_relative_chain_path(
     requested: str | None,
     errors: list[str],
 ) -> str | None:
-    raw = requested.strip() if isinstance(requested, str) and requested.strip() else None
+    raw = requested if isinstance(requested, str) and requested != "" else None
     if raw is None:
         raw = f"attestation/{source.name}"
+    elif raw != raw.strip() or any(ch.isspace() for ch in raw):
+        errors.append("attestation certificate chain path must not contain whitespace")
+        return None
     if device_lab.SECRET_RE.search(raw):
         errors.append("attestation certificate chain path must not contain secret-looking material")
         return None
@@ -270,23 +298,38 @@ def build_report(args: argparse.Namespace) -> tuple[dict[str, Any] | None, list[
     chain_length = result.get("chain_length")
     if not isinstance(chain_length, int) or chain_length < 2:
         errors.append("attestation harness result chain_length must be at least 2")
+    elif chain_relative.endswith(".pem"):
+        certificate_count = _pem_certificate_count(chain_data)
+        if certificate_count < 2:
+            errors.append(
+                "attestation certificate chain PEM must contain at least two certificates"
+            )
+        elif chain_length != certificate_count:
+            errors.append(
+                "attestation harness result chain_length must match "
+                "attestation certificate-chain certificate count"
+            )
     challenge = _decode_challenge_hex(result.get("challenge_hex"), errors)
     if challenge is not None:
         computed_challenge_sha256 = hashlib.sha256(challenge).hexdigest()
         expected_challenge_hex = (
-            args.expected_challenge_hex.strip()
+            args.expected_challenge_hex
             if isinstance(args.expected_challenge_hex, str)
-            and args.expected_challenge_hex.strip()
+            and args.expected_challenge_hex != ""
             else None
         )
         if expected_challenge_hex is not None:
-            expected_bytes = _decode_challenge_hex(expected_challenge_hex, errors)
+            expected_bytes = _decode_challenge_hex(
+                expected_challenge_hex,
+                errors,
+                "--expected-challenge-hex",
+            )
             if expected_bytes is not None and expected_bytes != challenge:
                 errors.append("attestation harness result challenge_hex must match --expected-challenge-hex")
         expected_digest = (
-            args.attestation_challenge_sha256.strip()
+            args.attestation_challenge_sha256
             if isinstance(args.attestation_challenge_sha256, str)
-            and args.attestation_challenge_sha256.strip()
+            and args.attestation_challenge_sha256 != ""
             else None
         )
         if expected_digest is not None:

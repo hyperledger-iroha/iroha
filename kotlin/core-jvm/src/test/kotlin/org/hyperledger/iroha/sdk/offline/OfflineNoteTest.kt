@@ -274,6 +274,31 @@ class OfflineNoteTest {
     }
 
     @Test
+    fun verifyingKeyBoxCanonicalEncodingMatchesStandaloneCodec() {
+        val sourceBytes = byteArrayOf(1, 2, 3)
+        val verifyingKey = OfflineNote.VerifyingKeyBox(" halo2/ipa ", sourceBytes)
+        sourceBytes[0] = 0x7f.toByte()
+
+        assertEquals("halo2/ipa", verifyingKey.backend)
+        assertContentEquals(byteArrayOf(1, 2, 3), verifyingKey.bytes())
+
+        val returnedBytes = verifyingKey.bytes()
+        returnedBytes[1] = 0x7e.toByte()
+        assertContentEquals(byteArrayOf(1, 2, 3), verifyingKey.bytes())
+
+        val expected = VerifyingKeyBoxCodec.encodeNorito("halo2/ipa", byteArrayOf(1, 2, 3))
+        assertContentEquals(expected, OfflineNote.encodeVerifyingKeyBox(verifyingKey))
+        assertContentEquals(expected, verifyingKey.noritoEncoded())
+
+        assertIllegalArgumentContains("verifying key backend must not be empty") {
+            OfflineNote.VerifyingKeyBox(" ", byteArrayOf(1))
+        }
+        assertIllegalArgumentContains("verifying key bytes must not be empty") {
+            OfflineNote.VerifyingKeyBox("halo2/ipa", ByteArray(0))
+        }
+    }
+
+    @Test
     fun kagemushaRecursiveSpendNativeProverValidatesInput() {
         assertEquals(
             "recursive_spend_v1",
@@ -283,7 +308,7 @@ class OfflineNoteTest {
             "checked_prefold_v1",
             KagemushaRecursiveSpendProver.preferredMode(false).wireName,
         )
-        assertEquals(6, KagemushaRecursiveSpendProver.REQUIRED_BRIDGE_ABI_VERSION)
+        assertEquals(6, KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION)
         assertEquals(
             "kagemusha-recursive-aggregation-v1",
             KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
@@ -302,7 +327,7 @@ class OfflineNoteTest {
         assertTrue(
             KagemushaRecursiveSpendProver.detectNativeAvailability(
                 loadLibrary = {},
-                bridgeAbiVersion = { 6 },
+                nativeBridgeAbiVersionProbe = { 6 },
                 probeSymbol = {
                     KagemushaRecursiveSpendProver.expectIllegalArgumentProbe {
                         throw IllegalArgumentException("empty archive probe")
@@ -313,42 +338,42 @@ class OfflineNoteTest {
         assertFalse(
             KagemushaRecursiveSpendProver.detectNativeAvailability(
                 loadLibrary = {},
-                bridgeAbiVersion = { 6 },
+                nativeBridgeAbiVersionProbe = { 6 },
                 probeSymbol = { false },
             ),
         )
         assertFalse(
             KagemushaRecursiveSpendProver.detectNativeAvailability(
                 loadLibrary = {},
-                bridgeAbiVersion = { 5 },
+                nativeBridgeAbiVersionProbe = { 5 },
                 probeSymbol = { true },
             ),
         )
         assertFalse(
             KagemushaRecursiveSpendProver.detectNativeAvailability(
                 loadLibrary = {},
-                bridgeAbiVersion = { throw IllegalArgumentException("broken ABI probe") },
+                nativeBridgeAbiVersionProbe = { throw IllegalArgumentException("broken ABI probe") },
                 probeSymbol = { error("probe must not run") },
             ),
         )
         assertFalse(
             KagemushaRecursiveSpendProver.detectNativeAvailability(
                 loadLibrary = { throw UnsatisfiedLinkError("missing library") },
-                bridgeAbiVersion = { 6 },
+                nativeBridgeAbiVersionProbe = { 6 },
                 probeSymbol = { true },
             ),
         )
         assertFalse(
             KagemushaRecursiveSpendProver.detectNativeAvailability(
                 loadLibrary = {},
-                bridgeAbiVersion = { 6 },
+                nativeBridgeAbiVersionProbe = { 6 },
                 probeSymbol = { throw UnsatisfiedLinkError("missing recursive spend symbol") },
             ),
         )
         assertFalse(
             KagemushaRecursiveSpendProver.detectNativeAvailability(
                 loadLibrary = {},
-                bridgeAbiVersion = { 6 },
+                nativeBridgeAbiVersionProbe = { 6 },
                 probeSymbol = { throw SecurityException("native bridge denied") },
             ),
         )

@@ -67,7 +67,7 @@ REQUIRED_RECURSIVE_SPEND_COMPACT_PROJECTION_JS_METHODS = (
 )
 
 REQUIRED_RECURSIVE_COMPACT_JS_PUBLIC_EXPORTS = (
-    "KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION",
+    "KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION",
     "KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1",
     "KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT",
     "KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_UNAVAILABLE_FRAGMENT",
@@ -133,7 +133,7 @@ REQUIRED_RECURSIVE_SPEND_COMPACT_PROJECTION_PYTHON_METHODS = (
 )
 
 REQUIRED_RECURSIVE_COMPACT_PYTHON_PUBLIC_METHODS = (
-    "KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION",
+    "KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION",
     "KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1",
     "KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT",
     "KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_UNAVAILABLE_FRAGMENT",
@@ -1814,7 +1814,7 @@ def check_c_bridge(texts, errors):
         texts,
         "crates/connect_norito_bridge/src/lib.rs",
         r"CONNECT_NORITO_BRIDGE_ABI_VERSION\s*:\s*u32\s*=\s*7\s*;",
-        "C bridge ABI version",
+        "C native bridge ABI version",
         errors,
     )
     require_contains(
@@ -2173,7 +2173,7 @@ def check_recursive_compact_surface(texts, errors):
             relative,
             REQUIRED_RECURSIVE_COMPACT_JS_PUBLIC_EXPORTS
             + (
-                "KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION = 7",
+                "KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 7",
                 '"kagemusha-recursive-compact-v1"',
                 "KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT",
                 "KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_UNAVAILABLE_FRAGMENT",
@@ -2221,7 +2221,7 @@ def check_recursive_compact_surface(texts, errors):
         texts,
         "javascript/iroha_js/index.d.ts",
         (
-            "KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION: 7",
+            "KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: 7",
             "KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1:",
             "KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT:",
             "KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_UNAVAILABLE_FRAGMENT:",
@@ -2284,13 +2284,13 @@ def check_recursive_compact_surface(texts, errors):
             '"kagemusha_verify_recursive_compact_payment_token"',
             "globals()[_RECURSIVE_COMPACT_TOKEN_METHOD]",
             "globals()[_RECURSIVE_COMPACT_TOKEN_VERIFY_METHOD]",
-            "KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION = 7",
+            "KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 7",
             '"kagemusha-recursive-compact-v1"',
             "KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT",
             "KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_UNAVAILABLE_FRAGMENT",
             "def is_kagemusha_recursive_compact_unavailable",
-            "bridge ABI 7 with compact prover and verifier symbols",
-            "bridge ABI 7 with the compact verifier symbol",
+            "native bridge ABI 7 with compact prover and verifier symbols",
+            "native bridge ABI 7 with the compact verifier symbol",
             '("archive", "norito", "probe")',
             '_assert_kagemusha_norito_archive(compact_token, "compact_token_archive")',
             "returned non-boolean result",
@@ -2484,7 +2484,7 @@ def check_recursive_compact_surface(texts, errors):
         swift_wrapper,
         (
             "KagemushaRecursiveCompactPaymentTokenProver",
-            "requiredBridgeAbiVersion: UInt32 = 7",
+            "requiredNativeBridgeAbiVersion: UInt32 = 7",
             'recursiveCompactCircuitIdV1 = "kagemusha-recursive-compact-v1"',
             "public static var isVerifierNativeAvailable",
             "isKagemushaRecursiveCompactPaymentTokenVerifierAvailable",
@@ -2650,7 +2650,7 @@ def check_recursive_compact_surface(texts, errors):
         (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveCompactPaymentTokenProver.kt",
             "Kotlin recursive compact wrapper",
-            "REQUIRED_BRIDGE_ABI_VERSION: Int = 7",
+            "REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 7",
             "fun isVerifierNativeAvailable(): Boolean",
             "fun isProjectionVerifierNativeAvailable(): Boolean",
             "recursiveCompactVerifierKeysArchive: ByteArray?",
@@ -2681,6 +2681,7 @@ def check_recursive_compact_surface(texts, errors):
             "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveCompactPaymentTokenProver.java",
             "Android Java recursive compact wrapper",
             "REQUIRED_BRIDGE_ABI_VERSION = 7",
+            "REQUIRED_NATIVE_BRIDGE_ABI_VERSION = REQUIRED_BRIDGE_ABI_VERSION",
             "public static boolean isVerifierNativeAvailable()",
             "public static boolean isProjectionVerifierNativeAvailable()",
             "final byte[] recursiveCompactVerifierKeysArchive",
@@ -2784,7 +2785,7 @@ def check_recursive_compact_surface(texts, errors):
         texts,
         "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProverTest.kt",
         (
-            "KagemushaRecursiveCompactPaymentTokenProver.REQUIRED_BRIDGE_ABI_VERSION",
+            "KagemushaRecursiveCompactPaymentTokenProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION",
             "KagemushaRecursiveCompactPaymentTokenProver.isVerifierNativeAvailable()",
             "KagemushaRecursiveCompactPaymentTokenProver.isProjectionVerifierNativeAvailable()",
             ".recursiveSpendCompactPaymentTokenFromBundle(ByteArray(0))",
@@ -2821,7 +2822,7 @@ def check_recursive_compact_surface(texts, errors):
         texts,
         "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
         (
-            "KagemushaRecursiveCompactPaymentTokenProver.REQUIRED_BRIDGE_ABI_VERSION",
+            "KagemushaRecursiveCompactPaymentTokenProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION",
             "KagemushaRecursiveCompactPaymentTokenProver.isVerifierNativeAvailable()",
             "KagemushaRecursiveCompactPaymentTokenProver.isProjectionVerifierNativeAvailable()",
             ".recursiveSpendCompactPaymentTokenFromBundle(new byte[0])",
@@ -2861,7 +2862,7 @@ def check_recursive_compact_surface(texts, errors):
         csharp,
         REQUIRED_RECURSIVE_COMPACT_C_SYMBOLS
         + (
-            "RecursiveCompactRequiredBridgeAbiVersion = 7",
+            "RecursiveCompactRequiredNativeBridgeAbiVersion = 7",
             "IsRecursiveCompactPaymentTokenProverAvailable",
             "IsRecursiveCompactPaymentTokenVerifierAvailable",
             "IsRecursiveSpendCompactPaymentTokenProjectionVerifierAvailable",
@@ -3317,7 +3318,7 @@ def check_node_host(texts, errors):
         texts,
         relative,
         r"pub\s+fn\s+connect_norito_bridge_abi_version\s*\(\)\s*->\s*u32\s*\{\s*7\s*\}",
-        "Node NAPI bridge ABI version",
+        "Node NAPI native bridge ABI version",
         errors,
     )
 
@@ -3393,7 +3394,7 @@ def check_jvm_sdk_script_pins_jdk21(texts, errors):
 
 def check_javascript(texts, errors):
     constants = (
-        "KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION = 6",
+        "KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 6",
         "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1 = 64",
         "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 = true",
         "KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1 = 1",
@@ -3424,10 +3425,10 @@ def check_javascript(texts, errors):
             texts,
             relative,
             (
-                "const KAGEMUSHA_MAX_BRIDGE_ABI_VERSION = 0xffff_ffff",
+                "const KAGEMUSHA_MAX_NATIVE_BRIDGE_ABI_VERSION = 0xffff_ffff",
                 "Number.isSafeInteger(version)",
                 "version >= 0",
-                "version <= KAGEMUSHA_MAX_BRIDGE_ABI_VERSION",
+                "version <= KAGEMUSHA_MAX_NATIVE_BRIDGE_ABI_VERSION",
             ),
             f"{relative} Kagemusha ABI probe bounds",
             errors,
@@ -3527,7 +3528,7 @@ def check_javascript(texts, errors):
             texts,
             relative,
             (
-                "KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION",
+                "KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION",
                 "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1",
                 "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1",
                 "KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1",
@@ -3550,7 +3551,7 @@ def check_javascript(texts, errors):
         "javascript/iroha_js/index.d.ts",
         REQUIRED_JS_PUBLIC_EXPORTS
         + (
-            "KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION: 6",
+            "KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: 6",
             "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1: 64",
             "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1: true",
             "KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1: 1",
@@ -3871,6 +3872,8 @@ def check_javascript(texts, errors):
             "overlongCircuitStringArchive",
             "invalidUtf8CircuitArchive",
             "appendVerifierKey",
+            "whitespaceCidVerifierKey",
+            "whitespaceCidProvingKeyArchive",
             "lineage_verifier_key",
             "lineage_proving_key_archive",
             "exposedVerifierKey[0] = 0",
@@ -4073,11 +4076,11 @@ def check_python(texts, errors):
         texts,
         wrapper,
         (
-            "KAGEMUSHA_MAX_BRIDGE_ABI_VERSION = 0xFFFF_FFFF",
+            "KAGEMUSHA_MAX_NATIVE_BRIDGE_ABI_VERSION = 0xFFFF_FFFF",
             "isinstance(version, bool)",
             "not isinstance(version, int)",
             "version < 0",
-            "version > KAGEMUSHA_MAX_BRIDGE_ABI_VERSION",
+            "version > KAGEMUSHA_MAX_NATIVE_BRIDGE_ABI_VERSION",
         ),
         "Python Kagemusha ABI probe bounds",
         errors,
@@ -4100,7 +4103,7 @@ def check_python(texts, errors):
         texts,
         wrapper,
         (
-            "KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION = 6",
+            "KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 6",
             "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1 = 64",
             "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 = True",
             "KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1 = 1",
@@ -4124,7 +4127,7 @@ def check_python(texts, errors):
         texts,
         init,
         (
-            "KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION",
+            "KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION",
             "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1",
             "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1",
             "KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1",
@@ -4220,6 +4223,8 @@ def check_python(texts, errors):
             "_kagemusha_verifier_key_commitment",
             "append_verifier_key",
             "duplicate_cid_verifier_key",
+            "whitespace_cid_verifier_key",
+            "whitespace_cid_proving_key_archive",
             "missing_circuit_archive",
             "wrong_commitment_archive",
             "smuggled_circuit_archive",
@@ -4277,7 +4282,7 @@ def check_python(texts, errors):
     require_regex(
         texts,
         host,
-        r"fn\s+kagemusha_recursive_spend_bridge_abi_version_py\s*\(\)\s*->\s*u32\s*\{\s*7\s*\}",
+        r"fn\s+kagemusha_recursive_spend_native_bridge_abi_version_py\s*\(\)\s*->\s*u32\s*\{\s*7\s*\}",
         "Python recursive spend ABI version",
         errors,
     )
@@ -4500,7 +4505,7 @@ def check_swift(texts, errors):
         texts,
         prover,
         (
-            "requiredBridgeAbiVersion: UInt32 = 6",
+            "requiredNativeBridgeAbiVersion: UInt32 = 6",
             "recursiveSpendLineageWitnesslessMaxHopsV1: UInt32 = 64",
             "recursiveSpendLineageTransitionCircuitWiredV1 = true",
             "recursivePreviousProofOpenEnvelopesRequiredCountV1 = 1",
@@ -4601,6 +4606,8 @@ def check_swift(texts, errors):
             "noritoOverlongCompactLength",
             "noritoOversizedTerminalCompactLength",
             "noritoHugeCanonicalCompactLength",
+            "whitespaceCidVerifierKey",
+            "whitespaceCidProvingKeyArchive",
             "Data(\"not-zk1\".utf8)",
             "Data(\"not-norito\".utf8)",
             "lineageVerifierKey: appendVerifierKey",
@@ -5264,7 +5271,7 @@ def check_java_kotlin(texts, errors):
             texts,
             relative,
             (
-                "REQUIRED_BRIDGE_ABI_VERSION",
+                "REQUIRED_NATIVE_BRIDGE_ABI_VERSION",
                 "RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1",
                 "RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1",
                 "RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1",
@@ -5657,13 +5664,13 @@ def check_java_kotlin(texts, errors):
         errors,
     )
 
-    require_regex(texts, java, r"REQUIRED_BRIDGE_ABI_VERSION\s*=\s*6\s*;", "Android ABI version", errors)
+    require_regex(texts, java, r"REQUIRED_NATIVE_BRIDGE_ABI_VERSION\s*=\s*6\s*;", "Android ABI version", errors)
     require_regex(texts, java, r"RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1\s*=\s*64\s*;", "Android max hops", errors)
     require_regex(texts, java, r"RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1\s*=\s*true\s*;", "Android transition-circuit wired flag", errors)
     require_regex(texts, java, r"RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1\s*=\s*1\s*;", "Android open envelope count", errors)
     require_regex(texts, java, r"RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES\s*=\s*8\s*\*\s*1024\s*\*\s*1024\s*;", "Android open envelope max bytes", errors)
     require_regex(texts, java, r"RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES\s*=\s*128\s*;", "Android Pallas open-envelope transcript label max bytes", errors)
-    require_regex(texts, kotlin, r"REQUIRED_BRIDGE_ABI_VERSION:\s*Int\s*=\s*6", "Kotlin ABI version", errors)
+    require_regex(texts, kotlin, r"REQUIRED_NATIVE_BRIDGE_ABI_VERSION:\s*Int\s*=\s*6", "Kotlin ABI version", errors)
     require_regex(texts, kotlin, r"RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1:\s*Int\s*=\s*64", "Kotlin max hops", errors)
     require_regex(texts, kotlin, r"RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1:\s*Boolean\s*=\s*true", "Kotlin transition-circuit wired flag", errors)
     require_regex(texts, kotlin, r"RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1:\s*Int\s*=\s*1", "Kotlin open envelope count", errors)
@@ -5749,6 +5756,8 @@ def check_java_kotlin(texts, errors):
                 "verifierKeyCommitment",
                 "appendVerifierKey",
                 "duplicateCidVerifierKey",
+                "whitespaceCidVerifierKey",
+                "whitespaceCidProvingKeyArchive",
                 "missingCircuitArchive",
                 "smuggledCircuitArchive",
                 "wrongCommitmentArchive",
@@ -6166,7 +6175,7 @@ def check_csharp(texts, errors):
         texts,
         relative,
         (
-            "RequiredBridgeAbiVersion = 6",
+            "RequiredNativeBridgeAbiVersion = 6",
             "RecursiveSpendLineageWitnesslessMaxHopsV1 = 64",
             "RecursiveSpendLineageTransitionCircuitWiredV1 = true",
             "RecursivePreviousProofOpenEnvelopesRequiredCountV1 = 1",
@@ -11688,7 +11697,7 @@ if mode == "--negative-control-kagemusha-abi-probe-bounds":
     mutated = dict(texts)
     target = "javascript/iroha_js/src/crypto.js"
     mutated[target] = mutated[target].replace(
-        "version <= KAGEMUSHA_MAX_BRIDGE_ABI_VERSION",
+        "version <= KAGEMUSHA_MAX_NATIVE_BRIDGE_ABI_VERSION",
         "version <= Number.MAX_SAFE_INTEGER",
         1,
     )

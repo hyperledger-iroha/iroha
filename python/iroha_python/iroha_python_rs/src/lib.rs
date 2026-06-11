@@ -4793,8 +4793,8 @@ fn kagemusha_verify_recursive_compact_payment_token_py(
 }
 
 #[pyfunction]
-#[pyo3(name = "kagemusha_recursive_spend_bridge_abi_version")]
-fn kagemusha_recursive_spend_bridge_abi_version_py() -> u32 {
+#[pyo3(name = "kagemusha_recursive_spend_native_bridge_abi_version")]
+fn kagemusha_recursive_spend_native_bridge_abi_version_py() -> u32 {
     7
 }
 
@@ -10667,7 +10667,7 @@ mod tests {
                 "{{\n",
                 "  \"schema\": \"iroha.kagemusha.recursive_spend.abi7.archive_fixtures.v1\",\n",
                 "  \"fixture_kind\": \"native_bridge_norito_archives\",\n",
-                "  \"bridge_abi_version\": 7,\n",
+                "  \"native_bridge_abi_version\": 7,\n",
                 "  \"archives\": [\n",
                 "{entries}\n",
                 "  ]\n",
@@ -11663,8 +11663,8 @@ mod tests {
     }
 
     #[test]
-    fn kagemusha_recursive_spend_bridge_abi_version_python_function_is_additive_seven() {
-        assert_eq!(kagemusha_recursive_spend_bridge_abi_version_py(), 7);
+    fn kagemusha_recursive_spend_native_bridge_abi_version_python_function_is_additive_seven() {
+        assert_eq!(kagemusha_recursive_spend_native_bridge_abi_version_py(), 7);
     }
 
     #[test]
@@ -11687,7 +11687,7 @@ mod tests {
         );
         assert_eq!(
             fixture
-                .get("bridge_abi_version")
+                .get("native_bridge_abi_version")
                 .and_then(norito::json::Value::as_u64),
             Some(7)
         );
@@ -19359,11 +19359,11 @@ const PRIVACY_ALGORITHM_ENTRIES: &[PrivacyAlgorithmEntry] = &[
         backend_family: "verange",
         sdk_entrypoints: &[
             "buildRangeCommitment",
+            "buildVeRangeDevProofFixture",
             "buildVeRangeProofEnvelope",
-            "buildVeRangeProofV1",
-            "verifyVeRangeProofV1",
+            "verifyVeRangeProofLocally",
         ],
-        planned_entrypoints: &[],
+        planned_entrypoints: &["buildVeRangeProofV1"],
     },
     PrivacyAlgorithmEntry {
         id: "zkat-policy-private-auth-v1",
@@ -21678,7 +21678,7 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
         module
     )?)?;
     module.add_function(wrap_pyfunction!(
-        kagemusha_recursive_spend_bridge_abi_version_py,
+        kagemusha_recursive_spend_native_bridge_abi_version_py,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(kagemusha_recursive_spend_init_py, module)?)?;

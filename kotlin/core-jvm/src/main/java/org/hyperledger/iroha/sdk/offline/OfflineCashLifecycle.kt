@@ -22,7 +22,7 @@ class OfflineCashConfigurationSnapshot(
     val assetDefinitionId: String,
     val offlinePaymentsEnabled: Boolean,
     val issuerPublicKeyBase64: String?,
-    val bridgeAbiVersion: Int? = null,
+    val nativeBridgeAbiVersion: Int? = null,
     val artifactSetId: String? = null,
     val circuitId: String? = null,
     val createdAtMs: Long = 0L,
@@ -30,7 +30,7 @@ class OfflineCashConfigurationSnapshot(
 ) {
     fun requireUsableForOfflineExchange(
         nowMs: Long,
-        requiredBridgeAbiVersion: Int? = null,
+        requiredNativeBridgeAbiVersion: Int? = null,
     ) {
         if (!offlinePaymentsEnabled) {
             throw OfflineCashConfigurationSnapshotException(
@@ -50,12 +50,12 @@ class OfflineCashConfigurationSnapshot(
                 "Offline cash configuration snapshot expired at $expiresAtMs.",
             )
         }
-        if (requiredBridgeAbiVersion != null &&
-            (bridgeAbiVersion == null || bridgeAbiVersion < requiredBridgeAbiVersion)
+        if (requiredNativeBridgeAbiVersion != null &&
+            (nativeBridgeAbiVersion == null || nativeBridgeAbiVersion < requiredNativeBridgeAbiVersion)
         ) {
             throw OfflineCashConfigurationSnapshotException(
-                "unsupported_bridge_abi",
-                "Offline cash requires bridge ABI $requiredBridgeAbiVersion.",
+                "unsupported_native_bridge_abi",
+                "Offline cash requires native bridge ABI $requiredNativeBridgeAbiVersion.",
             )
         }
     }

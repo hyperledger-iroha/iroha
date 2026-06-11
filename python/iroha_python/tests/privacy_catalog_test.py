@@ -7123,17 +7123,17 @@ def test_privacy_catalog_enforces_execution_and_metadata_invariants() -> None:
     assert sis_hints["planned_sdk_entrypoints"] == []
 
     verange = by_id["verange-transparent-range-v1"]
-    assert verange["implementation_stage"] == "production-hardened"
+    assert verange["implementation_stage"] == "component"
     assert verange["public_inputs_schema"] == (
         "commitments,range_parameters,aggregation_count,domain_separator,payload_digest"
     )
     assert verange["sdk_entrypoints"] == [
         "buildRangeCommitment",
+        "buildVeRangeDevProofFixture",
         "buildVeRangeProofEnvelope",
-        "buildVeRangeProofV1",
-        "verifyVeRangeProofV1",
+        "verifyVeRangeProofLocally",
     ]
-    assert verange["planned_sdk_entrypoints"] == []
+    assert verange["planned_sdk_entrypoints"] == ["buildVeRangeProofV1"]
 
     for descriptor in descriptors:
         assert descriptor["maturity"] in allowed_maturities
@@ -7468,7 +7468,7 @@ def test_planned_privacy_sdk_entrypoints_remain_unexported_and_fail_closed() -> 
     package_exports = set(getattr(iroha_python, "__all__", ()))
     crypto_exports = set(getattr(crypto, "__all__", ()))
 
-    assert not planned_entrypoints
+    assert planned_entrypoints == {"buildVeRangeProofV1"}
     assert planned_entrypoints.isdisjoint(sdk_entrypoints)
     assert all(
         not privacy_catalog._entrypoint_is_local_verifier(entrypoint)
@@ -7513,7 +7513,7 @@ def test_planned_privacy_sdk_entrypoints_have_no_public_python_definitions() -> 
     )
     source_root = Path(privacy_catalog.__file__).resolve().parent
 
-    assert not planned_entrypoints
+    assert planned_entrypoints == {"buildVeRangeProofV1"}
     for source_path in sorted(source_root.rglob("*.py")):
         text = source_path.read_text(encoding="utf8")
         for entrypoint in planned_name_variants:
@@ -7557,6 +7557,8 @@ def test_privacy_capabilities_do_not_advertise_planned_production_entrypoints() 
     forbidden_status_keys = {
         "shielded_zk_ace_authorized_transfer_instruction",
         "verange_proof_v1",
+        "verange_proof_builder_v1",
+        "verange_proof_verifier_v1",
         "zkat_policy_commitment_instruction",
         "zkat_policy_proof_v1",
         "zkat_authorized_transaction",
@@ -7586,7 +7588,7 @@ def test_privacy_capabilities_do_not_advertise_planned_production_entrypoints() 
         "ml_kem_note_encryption",
     }
 
-    assert not planned_entrypoints
+    assert planned_entrypoints == {"buildVeRangeProofV1"}
     for entrypoint in planned_entrypoints:
         for variant in _planned_entrypoint_name_variants(entrypoint):
             exact_key = _snake_entrypoint_name(variant)
@@ -7626,8 +7628,8 @@ def test_privacy_capabilities_uses_client_entrypoints() -> None:
     assert capabilities["zk_ace_sdk_exports_v1"] is True
     assert capabilities["verange_commitment_builder_v1"] is True
     assert capabilities["verange_proof_envelope_builder_v1"] is True
-    assert capabilities["verange_proof_builder_v1"] is True
-    assert capabilities["verange_proof_verifier_v1"] is True
+    assert capabilities["verange_proof_builder_v1"] is False
+    assert capabilities["verange_proof_verifier_v1"] is False
     assert capabilities["verange_dev_fixture_v1"] is True
     assert capabilities["verange_local_verifier_v1"] is True
     assert capabilities["verange_sdk_exports_v1"] is True

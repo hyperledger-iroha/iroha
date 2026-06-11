@@ -10237,9 +10237,9 @@ pub fn bfv_full_bootstrap_release_audit_evidence_digest(
 /// Build the signable payload for a BFV full-bootstrap release audit signoff.
 ///
 /// # Errors
-/// Returns [`BfvError`] when the evidence is malformed, report/archive digests
-/// are empty or reused, the reviewer id is not canonical, or canonical evidence
-/// digesting fails.
+/// Returns [`BfvError`] when the reviewer id/key input is malformed,
+/// report/archive digests are empty or reused, the evidence is malformed, or
+/// canonical evidence digesting fails.
 pub fn bfv_full_bootstrap_release_audit_signoff_payload_v1(
     evidence: &BfvFullBootstrapReleaseAuditEvidenceV1,
     audit_report_digest: Hash,
@@ -10247,6 +10247,15 @@ pub fn bfv_full_bootstrap_release_audit_signoff_payload_v1(
     reviewer_id: &str,
     reviewer_public_key: &PublicKey,
 ) -> Result<BfvFullBootstrapReleaseAuditSignoffPayloadV1, BfvError> {
+    validate_bfv_full_bootstrap_release_audit_trusted_reviewer_inputs_v1(
+        reviewer_id,
+        reviewer_public_key,
+    )?;
+    validate_bfv_full_bootstrap_release_audit_external_artifact_digest_pair_v1(
+        "signoff",
+        &audit_report_digest,
+        &audit_evidence_archive_digest,
+    )?;
     validate_bfv_full_bootstrap_release_audit_evidence_v1(evidence)?;
     let payload = BfvFullBootstrapReleaseAuditSignoffPayloadV1 {
         version: BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_SIGNOFF_PAYLOAD_VERSION_V1,
@@ -10360,26 +10369,25 @@ pub fn validate_bfv_full_bootstrap_release_audit_signoff_for_evidence_v1(
 /// Validate the reviewer identity and public key on a release audit signoff.
 ///
 /// # Errors
-/// Returns [`BfvError`] when the signoff is malformed or the signed reviewer
-/// id/key do not match the caller's trusted reviewer inputs.
+/// Returns [`BfvError`] when the caller's trusted reviewer inputs are
+/// malformed, the signoff is malformed, or the signed reviewer id/key do not
+/// match the caller's trusted reviewer inputs.
 pub fn validate_bfv_full_bootstrap_release_audit_signoff_trusted_reviewer_v1(
     signoff: &BfvFullBootstrapReleaseAuditSignoffV1,
     reviewer_id: &str,
     reviewer_public_key: &PublicKey,
 ) -> Result<(), BfvError> {
+    validate_bfv_full_bootstrap_release_audit_trusted_reviewer_inputs_v1(
+        reviewer_id,
+        reviewer_public_key,
+    )?;
     validate_bfv_full_bootstrap_release_audit_signoff_v1(signoff)?;
-    validate_bfv_full_bootstrap_release_audit_reviewer_id(reviewer_id)?;
     if signoff.payload.reviewer_id != reviewer_id {
         return Err(BfvError::InvalidParameters(
             "BFV full-bootstrap release audit signoff reviewer id does not match trusted reviewer"
                 .to_owned(),
         ));
     }
-    reviewer_public_key.try_algorithm().map_err(|err| {
-        BfvError::InvalidParameters(format!(
-            "BFV full-bootstrap release audit trusted reviewer public key is invalid: {err}"
-        ))
-    })?;
     if &signoff.payload.reviewer_public_key != reviewer_public_key {
         return Err(BfvError::InvalidParameters(
             "BFV full-bootstrap release audit signoff reviewer public key does not match trusted reviewer"
@@ -10412,8 +10420,9 @@ pub fn validate_bfv_full_bootstrap_release_audit_signoff_for_artifacts_v1(
 /// Build a publishable BFV full-bootstrap release audit record.
 ///
 /// # Errors
-/// Returns [`BfvError`] when evidence derivation fails, the signoff payload is
-/// malformed, or the reviewer signature cannot be produced or verified.
+/// Returns [`BfvError`] when the reviewer id or external audit digests are
+/// malformed, evidence derivation fails, the signoff payload is malformed, or
+/// the reviewer signature cannot be produced or verified.
 pub fn bfv_full_bootstrap_release_audit_record_v1(
     params: &BfvParameters,
     material: &BfvFullBootstrapCircuitMaterialV1,
@@ -10423,6 +10432,12 @@ pub fn bfv_full_bootstrap_release_audit_record_v1(
     reviewer_id: &str,
     reviewer_private_key: &PrivateKey,
 ) -> Result<BfvFullBootstrapReleaseAuditRecordV1, BfvError> {
+    validate_bfv_full_bootstrap_release_audit_reviewer_id(reviewer_id)?;
+    validate_bfv_full_bootstrap_release_audit_external_artifact_digest_pair_v1(
+        "signoff",
+        &audit_report_digest,
+        &audit_evidence_archive_digest,
+    )?;
     let evidence = bfv_full_bootstrap_release_audit_evidence_v1(params, material, artifacts)?;
     let signoff = sign_bfv_full_bootstrap_release_audit_signoff_v1(
         &evidence,
@@ -10472,13 +10487,18 @@ pub fn validate_bfv_full_bootstrap_release_audit_record_v1(
 /// Validate a release audit record against a trusted reviewer key.
 ///
 /// # Errors
-/// Returns [`BfvError`] when record validation fails or the packaged signoff was
-/// not issued by the caller's trusted reviewer id/key pair.
+/// Returns [`BfvError`] when the caller's trusted reviewer inputs are
+/// malformed, record validation fails, or the packaged signoff was not issued
+/// by the caller's trusted reviewer id/key pair.
 pub fn validate_bfv_full_bootstrap_release_audit_record_trusted_reviewer_v1(
     record: &BfvFullBootstrapReleaseAuditRecordV1,
     reviewer_id: &str,
     reviewer_public_key: &PublicKey,
 ) -> Result<(), BfvError> {
+    validate_bfv_full_bootstrap_release_audit_trusted_reviewer_inputs_v1(
+        reviewer_id,
+        reviewer_public_key,
+    )?;
     validate_bfv_full_bootstrap_release_audit_record_v1(record)?;
     validate_bfv_full_bootstrap_release_audit_signoff_trusted_reviewer_v1(
         &record.signoff,
@@ -10654,32 +10674,11 @@ pub fn validate_bfv_full_bootstrap_release_audit_manifest_v1(
         &manifest.circuit_id,
         &manifest.native_circuit_fingerprint,
     )?;
-    validate_nonzero_material_digest(
-        "BFV full-bootstrap release audit manifest report digest",
+    validate_bfv_full_bootstrap_release_audit_external_artifact_digest_pair_v1(
+        "manifest",
         &manifest.audit_report_digest,
-    )?;
-    validate_bfv_full_bootstrap_release_audit_external_artifact_digest_v1(
-        "BFV full-bootstrap release audit manifest report digest",
-        &manifest.audit_report_digest,
-        BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1,
-        BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_BODY_MIN_BYTES,
-    )?;
-    validate_nonzero_material_digest(
-        "BFV full-bootstrap release audit manifest evidence archive digest",
         &manifest.audit_evidence_archive_digest,
     )?;
-    validate_bfv_full_bootstrap_release_audit_external_artifact_digest_v1(
-        "BFV full-bootstrap release audit manifest evidence archive digest",
-        &manifest.audit_evidence_archive_digest,
-        BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_HEADER_V1,
-        BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_BODY_MIN_BYTES,
-    )?;
-    if manifest.audit_report_digest == manifest.audit_evidence_archive_digest {
-        return Err(BfvError::InvalidParameters(
-            "BFV full-bootstrap release audit manifest report and evidence archive digests must be distinct"
-                .to_owned(),
-        ));
-    }
     if manifest.audit_report_digest == manifest.release_audit_evidence_digest
         || manifest.audit_evidence_archive_digest == manifest.release_audit_evidence_digest
     {
@@ -10738,26 +10737,25 @@ pub fn validate_bfv_full_bootstrap_release_audit_manifest_v1(
 /// Validate a release audit manifest against a trusted reviewer key.
 ///
 /// # Errors
-/// Returns [`BfvError`] when the manifest is malformed or its reviewer id/key
-/// do not match the caller's trusted reviewer inputs.
+/// Returns [`BfvError`] when the caller's trusted reviewer inputs are
+/// malformed, the manifest is malformed, or its reviewer id/key do not match
+/// the caller's trusted reviewer inputs.
 pub fn validate_bfv_full_bootstrap_release_audit_manifest_trusted_reviewer_v1(
     manifest: &BfvFullBootstrapReleaseAuditManifestV1,
     reviewer_id: &str,
     reviewer_public_key: &PublicKey,
 ) -> Result<(), BfvError> {
+    validate_bfv_full_bootstrap_release_audit_trusted_reviewer_inputs_v1(
+        reviewer_id,
+        reviewer_public_key,
+    )?;
     validate_bfv_full_bootstrap_release_audit_manifest_v1(manifest)?;
-    validate_bfv_full_bootstrap_release_audit_reviewer_id(reviewer_id)?;
     if manifest.reviewer_id.as_str() != reviewer_id {
         return Err(BfvError::InvalidParameters(
             "BFV full-bootstrap release audit manifest reviewer id does not match trusted reviewer"
                 .to_owned(),
         ));
     }
-    reviewer_public_key.try_algorithm().map_err(|err| {
-        BfvError::InvalidParameters(format!(
-            "BFV full-bootstrap release audit trusted reviewer public key is invalid: {err}"
-        ))
-    })?;
     if &manifest.reviewer_public_key != reviewer_public_key {
         return Err(BfvError::InvalidParameters(
             "BFV full-bootstrap release audit manifest reviewer public key does not match trusted reviewer"
@@ -10908,11 +10906,11 @@ pub fn bfv_full_bootstrap_release_audit_archive_bytes_v1(body: &[u8]) -> Result<
 /// Build a publishable BFV full-bootstrap release audit package.
 ///
 /// # Errors
-/// Returns [`BfvError`] when the audit report/archive bytes are empty,
-/// all-zero, header-only, carry a blank, too-short, all-zero, nested-header, or
-/// placeholder body, reuse the same artifact body, or are too large, record
-/// construction fails, or the generated package does not validate against the
-/// governed artifacts.
+/// Returns [`BfvError`] when the reviewer id is malformed, the audit
+/// report/archive bytes are empty, all-zero, header-only, carry a blank,
+/// too-short, all-zero, nested-header, or placeholder body, reuse the same
+/// artifact body, or are too large, record construction fails, or the generated
+/// package does not validate against the governed artifacts.
 pub fn bfv_full_bootstrap_release_audit_package_v1(
     params: &BfvParameters,
     material: &BfvFullBootstrapCircuitMaterialV1,
@@ -10922,20 +10920,12 @@ pub fn bfv_full_bootstrap_release_audit_package_v1(
     reviewer_id: &str,
     reviewer_private_key: &PrivateKey,
 ) -> Result<BfvFullBootstrapReleaseAuditPackageV1, BfvError> {
-    let audit_report_digest = bfv_full_bootstrap_release_audit_artifact_digest_v1(
-        "BFV full-bootstrap release audit report bytes",
-        audit_report_bytes,
-        BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_BODY_MIN_BYTES,
-        BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_MAX_BYTES,
-        BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1,
-    )?;
-    let audit_evidence_archive_digest = bfv_full_bootstrap_release_audit_artifact_digest_v1(
-        "BFV full-bootstrap release audit evidence archive bytes",
-        audit_evidence_archive_bytes,
-        BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_BODY_MIN_BYTES,
-        BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_MAX_BYTES,
-        BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_HEADER_V1,
-    )?;
+    validate_bfv_full_bootstrap_release_audit_reviewer_id(reviewer_id)?;
+    let (audit_report_digest, audit_evidence_archive_digest) =
+        bfv_full_bootstrap_release_audit_artifact_digest_pair_v1(
+            audit_report_bytes,
+            audit_evidence_archive_bytes,
+        )?;
     let record = bfv_full_bootstrap_release_audit_record_v1(
         params,
         material,
@@ -11052,6 +11042,10 @@ pub fn validate_bfv_full_bootstrap_release_audit_package_trusted_reviewer_v1(
     reviewer_id: &str,
     reviewer_public_key: &PublicKey,
 ) -> Result<(), BfvError> {
+    validate_bfv_full_bootstrap_release_audit_trusted_reviewer_inputs_v1(
+        reviewer_id,
+        reviewer_public_key,
+    )?;
     validate_bfv_full_bootstrap_release_audit_package_v1(package)?;
     validate_bfv_full_bootstrap_release_audit_record_trusted_reviewer_v1(
         &package.record,
@@ -11098,6 +11092,10 @@ pub fn validate_bfv_full_bootstrap_release_audit_package_for_artifacts_and_trust
     reviewer_id: &str,
     reviewer_public_key: &PublicKey,
 ) -> Result<(), BfvError> {
+    validate_bfv_full_bootstrap_release_audit_trusted_reviewer_inputs_v1(
+        reviewer_id,
+        reviewer_public_key,
+    )?;
     validate_bfv_full_bootstrap_release_audit_package_for_artifacts_v1(
         params, material, artifacts, package,
     )?;
@@ -11124,6 +11122,14 @@ pub fn validate_bfv_full_bootstrap_release_audit_package_for_artifacts_trusted_r
     reviewer_id: &str,
     reviewer_public_key: &PublicKey,
 ) -> Result<(), BfvError> {
+    validate_nonzero_material_digest(
+        "BFV full-bootstrap release audit caller-pinned package digest",
+        &expected_package_digest,
+    )?;
+    validate_no_full_bootstrap_placeholder_material_digest(
+        "BFV full-bootstrap release audit caller-pinned package digest",
+        &expected_package_digest,
+    )?;
     validate_bfv_full_bootstrap_release_audit_package_for_artifacts_and_trusted_reviewer_v1(
         params,
         material,
@@ -11208,6 +11214,31 @@ fn bfv_full_bootstrap_release_audit_artifact_digest_v1(
     validate_bfv_full_bootstrap_release_audit_artifact_body_not_blank_v1(label, body)?;
     validate_bfv_full_bootstrap_release_audit_artifact_body_not_nested_v1(label, body)?;
     Ok(Hash::new(bytes))
+}
+
+fn bfv_full_bootstrap_release_audit_artifact_digest_pair_v1(
+    audit_report_bytes: &[u8],
+    audit_evidence_archive_bytes: &[u8],
+) -> Result<(Hash, Hash), BfvError> {
+    let audit_report_digest = bfv_full_bootstrap_release_audit_artifact_digest_v1(
+        "BFV full-bootstrap release audit report bytes",
+        audit_report_bytes,
+        BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_BODY_MIN_BYTES,
+        BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_MAX_BYTES,
+        BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1,
+    )?;
+    let audit_evidence_archive_digest = bfv_full_bootstrap_release_audit_artifact_digest_v1(
+        "BFV full-bootstrap release audit evidence archive bytes",
+        audit_evidence_archive_bytes,
+        BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_BODY_MIN_BYTES,
+        BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_MAX_BYTES,
+        BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_HEADER_V1,
+    )?;
+    validate_bfv_full_bootstrap_release_audit_artifact_bodies_distinct_v1(
+        audit_report_bytes,
+        audit_evidence_archive_bytes,
+    )?;
+    Ok((audit_report_digest, audit_evidence_archive_digest))
 }
 
 fn bfv_full_bootstrap_release_audit_artifact_bytes_with_header_v1(
@@ -11298,9 +11329,14 @@ fn validate_bfv_full_bootstrap_release_audit_artifact_bodies_distinct_v1(
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_BODY_MIN_BYTES,
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_HEADER_V1,
     )?;
-    if audit_report_body == audit_evidence_archive_body {
+    let normalized_report_body =
+        bfv_full_bootstrap_release_audit_body_without_edge_whitespace_v1(audit_report_body);
+    let normalized_archive_body = bfv_full_bootstrap_release_audit_body_without_edge_whitespace_v1(
+        audit_evidence_archive_body,
+    );
+    if normalized_report_body == normalized_archive_body {
         return Err(BfvError::InvalidParameters(
-            "BFV full-bootstrap release audit report body must be distinct from evidence archive body"
+            "BFV full-bootstrap release audit report body must be distinct from evidence archive body after edge-whitespace normalization"
                 .to_owned(),
         ));
     }
@@ -11438,6 +11474,18 @@ fn bfv_full_bootstrap_release_audit_body_after_leading_whitespace_v1(body: &[u8]
         .map_or(&[][..], |index| &body[index..])
 }
 
+fn bfv_full_bootstrap_release_audit_body_without_edge_whitespace_v1(body: &[u8]) -> &[u8] {
+    let start = body
+        .iter()
+        .position(|byte| !byte.is_ascii_whitespace())
+        .unwrap_or(body.len());
+    let end = body
+        .iter()
+        .rposition(|byte| !byte.is_ascii_whitespace())
+        .map_or(start, |index| index + 1);
+    &body[start..end]
+}
+
 fn bfv_full_bootstrap_release_audit_key_evidence_from_key_v1(
     key_digest: Hash,
     key: &BfvFullBootstrapProofKeyV1,
@@ -11536,32 +11584,11 @@ fn validate_bfv_full_bootstrap_release_audit_signoff_payload_digests_v1(
         &payload.circuit_id,
         &payload.native_circuit_fingerprint,
     )?;
-    validate_nonzero_material_digest(
-        "BFV full-bootstrap release audit signoff report digest",
+    validate_bfv_full_bootstrap_release_audit_external_artifact_digest_pair_v1(
+        "signoff",
         &payload.audit_report_digest,
-    )?;
-    validate_bfv_full_bootstrap_release_audit_external_artifact_digest_v1(
-        "BFV full-bootstrap release audit signoff report digest",
-        &payload.audit_report_digest,
-        BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1,
-        BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_BODY_MIN_BYTES,
-    )?;
-    validate_nonzero_material_digest(
-        "BFV full-bootstrap release audit signoff evidence archive digest",
         &payload.audit_evidence_archive_digest,
     )?;
-    validate_bfv_full_bootstrap_release_audit_external_artifact_digest_v1(
-        "BFV full-bootstrap release audit signoff evidence archive digest",
-        &payload.audit_evidence_archive_digest,
-        BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_HEADER_V1,
-        BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_BODY_MIN_BYTES,
-    )?;
-    if payload.audit_report_digest == payload.audit_evidence_archive_digest {
-        return Err(BfvError::InvalidParameters(
-            "BFV full-bootstrap release audit signoff report and evidence archive digests must be distinct"
-                .to_owned(),
-        ));
-    }
     if payload.audit_report_digest == payload.release_audit_evidence_digest
         || payload.audit_evidence_archive_digest == payload.release_audit_evidence_digest
     {
@@ -11783,6 +11810,36 @@ fn validate_distinct_bfv_full_bootstrap_release_audit_signed_commitments(
     Ok(())
 }
 
+fn validate_bfv_full_bootstrap_release_audit_external_artifact_digest_pair_v1(
+    context: &str,
+    audit_report_digest: &Hash,
+    audit_evidence_archive_digest: &Hash,
+) -> Result<(), BfvError> {
+    let report_label = format!("BFV full-bootstrap release audit {context} report digest");
+    validate_nonzero_material_digest(&report_label, audit_report_digest)?;
+    validate_bfv_full_bootstrap_release_audit_external_artifact_digest_v1(
+        &report_label,
+        audit_report_digest,
+        BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1,
+        BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_BODY_MIN_BYTES,
+    )?;
+    let archive_label =
+        format!("BFV full-bootstrap release audit {context} evidence archive digest");
+    validate_nonzero_material_digest(&archive_label, audit_evidence_archive_digest)?;
+    validate_bfv_full_bootstrap_release_audit_external_artifact_digest_v1(
+        &archive_label,
+        audit_evidence_archive_digest,
+        BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_HEADER_V1,
+        BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_BODY_MIN_BYTES,
+    )?;
+    if audit_report_digest == audit_evidence_archive_digest {
+        return Err(BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap release audit {context} report and evidence archive digests must be distinct"
+        )));
+    }
+    Ok(())
+}
+
 fn validate_bfv_full_bootstrap_release_audit_reviewer_id(
     reviewer_id: &str,
 ) -> Result<(), BfvError> {
@@ -11819,6 +11876,19 @@ fn validate_no_full_bootstrap_placeholder_release_audit_signed_commitments(
         let full_label = format!("BFV full-bootstrap release audit {context} {label}");
         validate_no_full_bootstrap_placeholder_material_digest(&full_label, commitment)?;
     }
+    Ok(())
+}
+
+fn validate_bfv_full_bootstrap_release_audit_trusted_reviewer_inputs_v1(
+    reviewer_id: &str,
+    reviewer_public_key: &PublicKey,
+) -> Result<(), BfvError> {
+    validate_bfv_full_bootstrap_release_audit_reviewer_id(reviewer_id)?;
+    reviewer_public_key.try_algorithm().map_err(|err| {
+        BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap release audit trusted reviewer public key is invalid: {err}"
+        ))
+    })?;
     Ok(())
 }
 
@@ -20800,6 +20870,11 @@ fn validate_bfv_full_bootstrap_native_stark_fri_common_profile_v1(
             "{label} n_log2 {n_log2} does not match canonical {BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_N_LOG2_V1}"
         )));
     }
+    if blowup_log2 > n_log2 {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} blowup_log2 {blowup_log2} exceeds n_log2 {n_log2}"
+        )));
+    }
     if blowup_log2 != BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_BLOWUP_LOG2_V1 {
         return Err(BfvError::InvalidParameters(format!(
             "{label} blowup_log2 {blowup_log2} does not match canonical {BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_BLOWUP_LOG2_V1}"
@@ -24231,6 +24306,20 @@ mod tests {
             ),
             "SHA-256",
             "native verifier material must reject non-SHA STARK payloads",
+        );
+
+        let mut impossible_domain_payload: BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1 =
+            norito::decode_from_bytes(&verifier_payload).expect("decode verifier payload");
+        impossible_domain_payload.blowup_log2 = impossible_domain_payload.n_log2 + 1;
+        let impossible_domain_payload =
+            norito::to_bytes(&impossible_domain_payload).expect("encode impossible payload");
+        assert_error_contains(
+            encode_bfv_full_bootstrap_native_stark_fri_verifier_key_material_from_payload_v1(
+                circuit_id,
+                &impossible_domain_payload,
+            ),
+            "exceeds n_log2",
+            "native verifier material must reject impossible STARK blowup/domain geometry",
         );
 
         let mut drifted_backend_payload: BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1 =
@@ -28902,6 +28991,48 @@ mod tests {
             "placeholder",
             "release audit signoff payloads must reject placeholder proof-key pair commitments before signature checks",
         );
+        let signoff_placeholder_digest_setters: [(
+            &str,
+            fn(&mut BfvFullBootstrapReleaseAuditSignoffV1, Hash),
+        ); 8] = [
+            ("release evidence digest", |signoff, digest| {
+                signoff.payload.release_audit_evidence_digest = digest;
+            }),
+            ("artifact bundle digest", |signoff, digest| {
+                signoff.payload.artifact_bundle_digest = digest;
+            }),
+            ("evaluator artifact set digest", |signoff, digest| {
+                signoff.payload.evaluator_artifact_set_digest = digest;
+            }),
+            ("proof-key pair commitment", |signoff, digest| {
+                signoff.payload.proof_key_pair_commitment = digest;
+            }),
+            ("prover-key digest", |signoff, digest| {
+                signoff.payload.prover_key_digest = digest;
+            }),
+            ("verifier-key digest", |signoff, digest| {
+                signoff.payload.verifier_key_digest = digest;
+            }),
+            ("audit report digest", |signoff, digest| {
+                signoff.payload.audit_report_digest = digest;
+            }),
+            ("evidence archive digest", |signoff, digest| {
+                signoff.payload.audit_evidence_archive_digest = digest;
+            }),
+        ];
+        for (label, set_digest) in signoff_placeholder_digest_setters {
+            for placeholder_preimage in BFV_FULL_BOOTSTRAP_PLACEHOLDER_MATERIAL_DIGEST_PREIMAGES {
+                let mut placeholder_signoff = signoff.clone();
+                set_digest(&mut placeholder_signoff, Hash::new(placeholder_preimage));
+                let context =
+                    format!("release audit signoffs must reject placeholder {label} commitments");
+                assert_error_contains(
+                    validate_bfv_full_bootstrap_release_audit_signoff_v1(&placeholder_signoff),
+                    "placeholder",
+                    &context,
+                );
+            }
+        }
         let signoff_bytes = norito::to_bytes(&signoff).expect("encode audit signoff");
         let decoded_signoff =
             norito::decode_from_bytes::<BfvFullBootstrapReleaseAuditSignoffV1>(&signoff_bytes)
@@ -28930,6 +29061,35 @@ mod tests {
             &params, &material, &artifacts, &record,
         )
         .expect("release audit record matches governed artifacts");
+        let mut stale_material_for_record_builder_preflight = material.clone();
+        stale_material_for_record_builder_preflight.circuit_id =
+            "stale-bfv-full-bootstrap-circuit".to_owned();
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_record_v1(
+                &params,
+                &stale_material_for_record_builder_preflight,
+                &artifacts,
+                audit_report_digest,
+                audit_evidence_archive_digest,
+                " sora-zk-audit-wg-2026",
+                reviewer_key_pair.private_key(),
+            ),
+            "canonical",
+            "release audit record construction must reject malformed reviewer ids before evidence derivation",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_record_v1(
+                &params,
+                &stale_material_for_record_builder_preflight,
+                &artifacts,
+                Hash::prehashed([0_u8; Hash::LENGTH]),
+                audit_evidence_archive_digest,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.private_key(),
+            ),
+            "zero hash",
+            "release audit record construction must reject malformed report digests before evidence derivation",
+        );
         let record_bytes = norito::to_bytes(&record).expect("encode audit record");
         let decoded_record =
             norito::decode_from_bytes::<BfvFullBootstrapReleaseAuditRecordV1>(&record_bytes)
@@ -28964,6 +29124,19 @@ mod tests {
             reviewer_key_pair.private_key(),
         )
         .expect("build release audit package");
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_package_v1(
+                &params,
+                &material,
+                &artifacts,
+                b"",
+                &audit_evidence_archive_bytes,
+                " sora-zk-audit-wg-2026",
+                reviewer_key_pair.private_key(),
+            ),
+            "canonical",
+            "release audit package construction must reject malformed reviewer ids before audit byte validation",
+        );
         assert_eq!(package.record, record);
         let manifest = bfv_full_bootstrap_release_audit_manifest_v1(&record)
             .expect("build release audit manifest");
@@ -28990,6 +29163,59 @@ mod tests {
             "placeholder",
             "release audit manifests must reject placeholder proof-key digest commitments",
         );
+        let manifest_placeholder_digest_setters: [(
+            &str,
+            fn(&mut BfvFullBootstrapReleaseAuditManifestV1, Hash),
+        ); 9] = [
+            ("record digest", |manifest, digest| {
+                manifest.record_digest = digest;
+            }),
+            ("release evidence digest", |manifest, digest| {
+                manifest.release_audit_evidence_digest = digest;
+            }),
+            ("artifact bundle digest", |manifest, digest| {
+                manifest.artifact_bundle_digest = digest;
+            }),
+            ("evaluator artifact set digest", |manifest, digest| {
+                manifest.evaluator_artifact_set_digest = digest;
+            }),
+            ("proof-key pair commitment", |manifest, digest| {
+                manifest.proof_key_pair_commitment = digest;
+            }),
+            ("prover-key digest", |manifest, digest| {
+                manifest.prover_key_digest = digest;
+            }),
+            ("verifier-key digest", |manifest, digest| {
+                manifest.verifier_key_digest = digest;
+            }),
+            ("audit report digest", |manifest, digest| {
+                manifest.audit_report_digest = digest;
+            }),
+            ("evidence archive digest", |manifest, digest| {
+                manifest.audit_evidence_archive_digest = digest;
+            }),
+        ];
+        for (label, set_digest) in manifest_placeholder_digest_setters {
+            for placeholder_preimage in BFV_FULL_BOOTSTRAP_PLACEHOLDER_MATERIAL_DIGEST_PREIMAGES {
+                let mut placeholder_manifest = manifest.clone();
+                set_digest(&mut placeholder_manifest, Hash::new(placeholder_preimage));
+                let context =
+                    format!("release audit manifests must reject placeholder {label} commitments");
+                assert_error_contains(
+                    validate_bfv_full_bootstrap_release_audit_manifest_v1(&placeholder_manifest),
+                    "placeholder",
+                    &context,
+                );
+                let context = format!(
+                    "release audit manifest digesting must reject placeholder {label} commitments"
+                );
+                assert_error_contains(
+                    bfv_full_bootstrap_release_audit_manifest_digest_v1(&placeholder_manifest),
+                    "placeholder",
+                    &context,
+                );
+            }
+        }
         let manifest_digest = bfv_full_bootstrap_release_audit_manifest_digest_v1(&manifest)
             .expect("release audit manifest digest");
         assert_eq!(
@@ -29064,6 +29290,51 @@ mod tests {
             reviewer_key_pair.public_key(),
         )
         .expect("package matches trusted reviewer");
+        let mut stale_signoff_for_trusted_reviewer_preflight = signoff.clone();
+        stale_signoff_for_trusted_reviewer_preflight.version += 1;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_signoff_trusted_reviewer_v1(
+                &stale_signoff_for_trusted_reviewer_preflight,
+                " sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            ),
+            "canonical",
+            "trusted reviewer id preflight must reject malformed caller trust inputs before signoff validation",
+        );
+        let mut stale_record_for_trusted_reviewer_preflight = record.clone();
+        stale_record_for_trusted_reviewer_preflight.version += 1;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_record_trusted_reviewer_v1(
+                &stale_record_for_trusted_reviewer_preflight,
+                " sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            ),
+            "canonical",
+            "trusted reviewer id preflight must reject malformed caller trust inputs before record validation",
+        );
+        let mut stale_manifest_for_trusted_reviewer_preflight = manifest.clone();
+        stale_manifest_for_trusted_reviewer_preflight.field_count += 1;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_manifest_trusted_reviewer_v1(
+                &stale_manifest_for_trusted_reviewer_preflight,
+                " sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            ),
+            "canonical",
+            "trusted reviewer id preflight must reject malformed caller trust inputs before manifest validation",
+        );
+        let mut stale_package_for_direct_trusted_reviewer_preflight = package.clone();
+        stale_package_for_direct_trusted_reviewer_preflight.record_digest =
+            Hash::new(b"stale-release-audit-package-record-digest");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_trusted_reviewer_v1(
+                &stale_package_for_direct_trusted_reviewer_preflight,
+                " sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            ),
+            "canonical",
+            "trusted reviewer id preflight must reject malformed caller trust inputs before package validation",
+        );
         validate_bfv_full_bootstrap_release_audit_package_for_artifacts_and_trusted_reviewer_v1(
             &params,
             &material,
@@ -29073,6 +29344,21 @@ mod tests {
             reviewer_key_pair.public_key(),
         )
         .expect("package matches governed artifacts and trusted reviewer");
+        let mut stale_package_for_trusted_reviewer_preflight = package.clone();
+        stale_package_for_trusted_reviewer_preflight.record_digest =
+            Hash::new(b"stale-release-audit-package-record-digest");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_for_artifacts_and_trusted_reviewer_v1(
+                &params,
+                &material,
+                &artifacts,
+                &stale_package_for_trusted_reviewer_preflight,
+                " sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            ),
+            "canonical",
+            "trusted reviewer id preflight must reject malformed caller trust inputs before package validation",
+        );
         validate_bfv_full_bootstrap_release_audit_package_for_artifacts_trusted_reviewer_and_digest_v1(
             &params,
             &material,
@@ -29083,6 +29369,34 @@ mod tests {
             reviewer_key_pair.public_key(),
         )
         .expect("package matches governed artifacts, trusted reviewer, and pinned digest");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_for_artifacts_trusted_reviewer_and_digest_v1(
+                &params,
+                &material,
+                &artifacts,
+                &package,
+                Hash::prehashed([0_u8; Hash::LENGTH]),
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            ),
+            "zero hash",
+            "release audit packages must reject zero caller-pinned package digests before package comparison",
+        );
+        for placeholder_preimage in BFV_FULL_BOOTSTRAP_PLACEHOLDER_MATERIAL_DIGEST_PREIMAGES {
+            assert_error_contains(
+                validate_bfv_full_bootstrap_release_audit_package_for_artifacts_trusted_reviewer_and_digest_v1(
+                    &params,
+                    &material,
+                    &artifacts,
+                    &package,
+                    Hash::new(placeholder_preimage),
+                    "sora-zk-audit-wg-2026",
+                    reviewer_key_pair.public_key(),
+                ),
+                "placeholder",
+                "release audit packages must reject placeholder caller-pinned package digests before package comparison",
+            );
+        }
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_package_for_artifacts_trusted_reviewer_and_digest_v1(
                 &params,
@@ -29516,6 +29830,97 @@ mod tests {
             "evidence archive digest must be distinct from proof-key pair commitment",
             "release audit manifest digesting must reject external audit digest aliasing with signed proof-key commitments",
         );
+        let mut aliased_manifest_report_evidence_digest = manifest.clone();
+        aliased_manifest_report_evidence_digest.audit_report_digest =
+            aliased_manifest_report_evidence_digest.release_audit_evidence_digest;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_manifest_v1(
+                &aliased_manifest_report_evidence_digest,
+            ),
+            "external audit digests must be distinct from the release evidence digest",
+            "release audit manifests must reject report digests that alias signed release evidence",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_manifest_digest_v1(
+                &aliased_manifest_report_evidence_digest,
+            ),
+            "external audit digests must be distinct from the release evidence digest",
+            "release audit manifest digesting must reject report digests that alias signed release evidence",
+        );
+        let mut aliased_manifest_archive_evidence_digest = manifest.clone();
+        aliased_manifest_archive_evidence_digest.audit_evidence_archive_digest =
+            aliased_manifest_archive_evidence_digest.release_audit_evidence_digest;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_manifest_v1(
+                &aliased_manifest_archive_evidence_digest,
+            ),
+            "external audit digests must be distinct from the release evidence digest",
+            "release audit manifests must reject archive digests that alias signed release evidence",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_manifest_digest_v1(
+                &aliased_manifest_archive_evidence_digest,
+            ),
+            "external audit digests must be distinct from the release evidence digest",
+            "release audit manifest digesting must reject archive digests that alias signed release evidence",
+        );
+        let manifest_signed_commitment_aliases = [
+            ("record digest", manifest.record_digest),
+            ("artifact bundle digest", manifest.artifact_bundle_digest),
+            (
+                "evaluator artifact set digest",
+                manifest.evaluator_artifact_set_digest,
+            ),
+            (
+                "proof-key pair commitment",
+                manifest.proof_key_pair_commitment,
+            ),
+            ("prover-key digest", manifest.prover_key_digest),
+            ("verifier-key digest", manifest.verifier_key_digest),
+            (
+                "native circuit fingerprint",
+                manifest.native_circuit_fingerprint,
+            ),
+        ];
+        for (label, alias_digest) in manifest_signed_commitment_aliases {
+            let mut aliased_report_digest = manifest.clone();
+            aliased_report_digest.audit_report_digest = alias_digest;
+            let expected = format!("audit report digest must be distinct from {label}");
+            let context =
+                format!("release audit manifests must reject report digest aliasing with {label}");
+            assert_error_contains(
+                validate_bfv_full_bootstrap_release_audit_manifest_v1(&aliased_report_digest),
+                &expected,
+                &context,
+            );
+            let context = format!(
+                "release audit manifest digesting must reject report digest aliasing with {label}"
+            );
+            assert_error_contains(
+                bfv_full_bootstrap_release_audit_manifest_digest_v1(&aliased_report_digest),
+                &expected,
+                &context,
+            );
+
+            let mut aliased_archive_digest = manifest.clone();
+            aliased_archive_digest.audit_evidence_archive_digest = alias_digest;
+            let expected = format!("evidence archive digest must be distinct from {label}");
+            let context =
+                format!("release audit manifests must reject archive digest aliasing with {label}");
+            assert_error_contains(
+                validate_bfv_full_bootstrap_release_audit_manifest_v1(&aliased_archive_digest),
+                &expected,
+                &context,
+            );
+            let context = format!(
+                "release audit manifest digesting must reject archive digest aliasing with {label}"
+            );
+            assert_error_contains(
+                bfv_full_bootstrap_release_audit_manifest_digest_v1(&aliased_archive_digest),
+                &expected,
+                &context,
+            );
+        }
         let mut stale_manifest_reviewer_id_package = package.clone();
         stale_manifest_reviewer_id_package.manifest.reviewer_id =
             "sora-zk-audit-wg-2026-alt".to_owned();
@@ -29548,6 +29953,41 @@ mod tests {
             "release audit packages must reject manifest reviewer-key drift",
         );
 
+        let mut stale_evidence_for_payload_preflight = evidence.clone();
+        stale_evidence_for_payload_preflight.version += 1;
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_signoff_payload_v1(
+                &stale_evidence_for_payload_preflight,
+                audit_report_digest,
+                audit_evidence_archive_digest,
+                " sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            ),
+            "canonical",
+            "release audit signoff payloads must reject malformed reviewer ids before evidence validation",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_signoff_payload_v1(
+                &stale_evidence_for_payload_preflight,
+                Hash::prehashed([0_u8; Hash::LENGTH]),
+                audit_evidence_archive_digest,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            ),
+            "zero hash",
+            "release audit signoff payloads must reject zero report digests before evidence validation",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_signoff_payload_v1(
+                &stale_evidence_for_payload_preflight,
+                audit_report_digest,
+                audit_report_digest,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            ),
+            "distinct",
+            "release audit signoff payloads must reject reused report/archive digests before evidence validation",
+        );
         assert_error_contains(
             bfv_full_bootstrap_release_audit_signoff_payload_v1(
                 &evidence,
@@ -29570,6 +30010,28 @@ mod tests {
             "distinct",
             "release audit signoff payloads must reject reused report/archive digests",
         );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_signoff_payload_v1(
+                &evidence,
+                digest,
+                audit_evidence_archive_digest,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            ),
+            "external audit digests must be distinct from the release evidence digest",
+            "release audit signoff payloads must reject report digests that alias signed release evidence",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_signoff_payload_v1(
+                &evidence,
+                audit_report_digest,
+                digest,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            ),
+            "external audit digests must be distinct from the release evidence digest",
+            "release audit signoff payloads must reject archive digests that alias signed release evidence",
+        );
         let mut aliased_signoff_report_digest = signoff.clone();
         aliased_signoff_report_digest.payload.audit_report_digest =
             aliased_signoff_report_digest.payload.artifact_bundle_digest;
@@ -29578,6 +30040,126 @@ mod tests {
             "audit report digest must be distinct from artifact bundle digest",
             "release audit signoffs must reject external audit digest aliasing with signed artifact commitments",
         );
+        let mut aliased_signoff_archive_digest = signoff.clone();
+        aliased_signoff_archive_digest
+            .payload
+            .audit_evidence_archive_digest = aliased_signoff_archive_digest
+            .payload
+            .artifact_bundle_digest;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_signoff_v1(&aliased_signoff_archive_digest),
+            "evidence archive digest must be distinct from artifact bundle digest",
+            "release audit signoffs must reject archive digest aliasing with signed artifact commitments",
+        );
+        let signoff_signed_commitment_aliases = [
+            (
+                "artifact bundle digest",
+                signoff.payload.artifact_bundle_digest,
+            ),
+            (
+                "evaluator artifact set digest",
+                signoff.payload.evaluator_artifact_set_digest,
+            ),
+            (
+                "proof-key pair commitment",
+                signoff.payload.proof_key_pair_commitment,
+            ),
+            ("prover-key digest", signoff.payload.prover_key_digest),
+            ("verifier-key digest", signoff.payload.verifier_key_digest),
+            (
+                "native circuit fingerprint",
+                signoff.payload.native_circuit_fingerprint,
+            ),
+        ];
+        for (label, alias_digest) in signoff_signed_commitment_aliases {
+            let mut aliased_report_digest = signoff.clone();
+            aliased_report_digest.payload.audit_report_digest = alias_digest;
+            let expected = format!("audit report digest must be distinct from {label}");
+            let context =
+                format!("release audit signoffs must reject report digest aliasing with {label}");
+            assert_error_contains(
+                validate_bfv_full_bootstrap_release_audit_signoff_v1(&aliased_report_digest),
+                &expected,
+                &context,
+            );
+
+            let mut aliased_archive_digest = signoff.clone();
+            aliased_archive_digest.payload.audit_evidence_archive_digest = alias_digest;
+            let expected = format!("evidence archive digest must be distinct from {label}");
+            let context =
+                format!("release audit signoffs must reject archive digest aliasing with {label}");
+            assert_error_contains(
+                validate_bfv_full_bootstrap_release_audit_signoff_v1(&aliased_archive_digest),
+                &expected,
+                &context,
+            );
+        }
+        let record_external_digest_aliases = [
+            ("release evidence digest", digest),
+            (
+                "artifact bundle digest",
+                signoff.payload.artifact_bundle_digest,
+            ),
+            (
+                "evaluator artifact set digest",
+                signoff.payload.evaluator_artifact_set_digest,
+            ),
+            (
+                "proof-key pair commitment",
+                signoff.payload.proof_key_pair_commitment,
+            ),
+            ("prover-key digest", signoff.payload.prover_key_digest),
+            ("verifier-key digest", signoff.payload.verifier_key_digest),
+            (
+                "native circuit fingerprint",
+                signoff.payload.native_circuit_fingerprint,
+            ),
+        ];
+        for (label, alias_digest) in record_external_digest_aliases {
+            let expected = if label == "release evidence digest" {
+                "external audit digests must be distinct from the release evidence digest"
+                    .to_owned()
+            } else {
+                format!("audit report digest must be distinct from {label}")
+            };
+            let context =
+                format!("release audit records must reject report digest aliasing with {label}");
+            assert_error_contains(
+                bfv_full_bootstrap_release_audit_record_v1(
+                    &params,
+                    &material,
+                    &artifacts,
+                    alias_digest,
+                    audit_evidence_archive_digest,
+                    "sora-zk-audit-wg-2026",
+                    reviewer_key_pair.private_key(),
+                ),
+                &expected,
+                &context,
+            );
+
+            let expected = if label == "release evidence digest" {
+                "external audit digests must be distinct from the release evidence digest"
+                    .to_owned()
+            } else {
+                format!("evidence archive digest must be distinct from {label}")
+            };
+            let context =
+                format!("release audit records must reject archive digest aliasing with {label}");
+            assert_error_contains(
+                bfv_full_bootstrap_release_audit_record_v1(
+                    &params,
+                    &material,
+                    &artifacts,
+                    audit_report_digest,
+                    alias_digest,
+                    "sora-zk-audit-wg-2026",
+                    reviewer_key_pair.private_key(),
+                ),
+                &expected,
+                &context,
+            );
+        }
         assert_error_contains(
             bfv_full_bootstrap_release_audit_record_v1(
                 &params,
@@ -30337,6 +30919,46 @@ mod tests {
             ),
             "distinct from evidence archive body",
             "release audit package builder must reject copied report/archive bodies",
+        );
+        let mut stale_material_for_copied_body_preflight = material.clone();
+        stale_material_for_copied_body_preflight.circuit_id =
+            "stale-bfv-full-bootstrap-circuit".to_owned();
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_package_v1(
+                &params,
+                &stale_material_for_copied_body_preflight,
+                &artifacts,
+                &copied_body_audit_report_bytes,
+                &copied_body_audit_archive_bytes,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.private_key(),
+            ),
+            "distinct from evidence archive body",
+            "release audit package construction must reject copied report/archive bodies before evidence derivation",
+        );
+        let whitespace_decorated_copied_audit_body = [
+            b" \n\t".as_slice(),
+            copied_audit_body.as_slice(),
+            b"\t\n ".as_slice(),
+        ]
+        .concat();
+        let whitespace_copied_body_audit_archive_bytes =
+            bfv_full_bootstrap_release_audit_archive_bytes_v1(
+                &whitespace_decorated_copied_audit_body,
+            )
+            .expect("canonical whitespace-decorated copied-body archive bytes");
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_package_v1(
+                &params,
+                &material,
+                &artifacts,
+                &copied_body_audit_report_bytes,
+                &whitespace_copied_body_audit_archive_bytes,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.private_key(),
+            ),
+            "edge-whitespace normalization",
+            "release audit package builder must reject whitespace-decorated copied report/archive bodies",
         );
         let signed_package_with_audit_artifacts =
             |audit_report_bytes: Vec<u8>,
@@ -31168,6 +31790,17 @@ mod tests {
             validate_bfv_full_bootstrap_release_audit_evidence_v1(&wrong_hash_profile_evidence),
             "SHA-256",
             "release audit evidence validation must reject proof profile hash-function drift",
+        );
+
+        let mut impossible_domain_profile_evidence = evidence.clone();
+        impossible_domain_profile_evidence.proof_profile.blowup_log2 =
+            impossible_domain_profile_evidence.proof_profile.n_log2 + 1;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_evidence_v1(
+                &impossible_domain_profile_evidence,
+            ),
+            "exceeds n_log2",
+            "release audit evidence validation must reject impossible STARK blowup/domain geometry",
         );
 
         let mut stale_public_input_profile_evidence = evidence.clone();
@@ -37929,6 +38562,100 @@ mod tests {
         );
         assert_eq!(transcript_digest, legacy_transcript_digest);
 
+        let transcript_statement = bundle
+            .bootstrap_key_zero_refresh_proof_statement_digest_for_transcript(
+                &material.params,
+                &material.public_key,
+                &rotation_transcripts,
+                bootstrap_transcript,
+            )
+            .expect("transcript-bound bootstrap proof statement")
+            .expect("bundle carries a bootstrap key");
+        assert_eq!(
+            transcript_statement,
+            bundle
+                .bootstrap_key_zero_refresh_proof_statement_digest_for_transcript(
+                    &material.params,
+                    &material.public_key,
+                    &rotation_transcripts,
+                    bootstrap_transcript,
+                )
+                .expect("repeat transcript-bound bootstrap proof statement")
+                .expect("bundle carries a bootstrap key")
+        );
+        let raw_bootstrap_statement = bootstrap_key_zero_refresh_proof_statement_digest(
+            &material.params,
+            &material.public_key,
+            bundle
+                .bootstrap_key
+                .as_ref()
+                .expect("bundle carries a bootstrap key"),
+        )
+        .expect("raw bootstrap proof statement");
+        assert_ne!(
+            transcript_statement, raw_bootstrap_statement,
+            "transcript-bound proof statements must bind transcript inventory, not only bootstrap key bytes"
+        );
+        let bootstrap_key = bundle
+            .bootstrap_key
+            .as_ref()
+            .expect("bundle carries a bootstrap key");
+        let (bootstrap_round_count, zero_refresh_digest, bootstrap_round_digests) =
+            bootstrap_key_refresh_digest_summary_v1(bootstrap_key)
+                .expect("exact bootstrap key refresh summary");
+        let statement_material = BfvBootstrapKeyTranscriptProofStatementMaterial {
+            version: BFV_BOOTSTRAP_KEY_TRANSCRIPT_PROOF_STATEMENT_MATERIAL_VERSION_V1,
+            field_count: BFV_BOOTSTRAP_KEY_TRANSCRIPT_PROOF_STATEMENT_MATERIAL_FIELD_COUNT_V1,
+            params: material.params,
+            public_key: material.public_key.clone(),
+            evaluation_key_digest: bundle
+                .digest(&material.params)
+                .expect("evaluation-key digest"),
+            refresh_transcript_digest: transcript_digest,
+            bootstrap_transcript: BfvBootstrapKeyTranscriptDigestMaterial {
+                key_id: "bootstrap-refresh-key".to_owned(),
+                max_refresh_rounds: 2,
+                seed: bootstrap_seed.to_vec(),
+            },
+            bootstrap_round_count,
+            zero_refresh_digest,
+            bootstrap_round_digests,
+            bootstrap_key: bootstrap_key.clone(),
+        };
+        let statement_bytes = norito::to_bytes(&statement_material)
+            .expect("encode exact transcript-bound bootstrap statement material");
+        assert_eq!(
+            transcript_statement,
+            Hash::new_from_chunks(&[
+                BFV_BOOTSTRAP_KEY_TRANSCRIPT_ZERO_REFRESH_PROOF_STATEMENT_DOMAIN,
+                statement_bytes.as_slice(),
+            ])
+        );
+        assert_ne!(
+            transcript_statement,
+            Hash::new_from_chunks(&[
+                BFV_BOUNDED_NOISE_BOOTSTRAP_KEY_TRANSCRIPT_ZERO_REFRESH_PROOF_STATEMENT_DOMAIN,
+                statement_bytes.as_slice(),
+            ]),
+            "exact transcript proof statements must not alias bounded-noise transcript statements"
+        );
+
+        let mut drifted_inventory_bundle = bundle.clone();
+        drifted_inventory_bundle.galois_keys.clear();
+        let drifted_inventory_statement = drifted_inventory_bundle
+            .bootstrap_key_zero_refresh_proof_statement_digest_for_transcript(
+                &material.params,
+                &material.public_key,
+                &rotation_transcripts,
+                bootstrap_transcript,
+            )
+            .expect("drifted but shape-valid exact bundle statement")
+            .expect("bundle carries a bootstrap key");
+        assert_ne!(
+            transcript_statement, drifted_inventory_statement,
+            "exact proof statements must bind the full evaluation-key bundle digest"
+        );
+
         let mut stale_public_key_digest_bundle = bundle.clone();
         stale_public_key_digest_bundle
             .bootstrap_key
@@ -37955,6 +38682,17 @@ mod tests {
             "public-key digest",
             "bundle transcript digesting must reject stale bootstrap public-key digest metadata",
         );
+        assert_error_contains(
+            stale_public_key_digest_bundle
+                .bootstrap_key_zero_refresh_proof_statement_digest_for_transcript(
+                    &material.params,
+                    &material.public_key,
+                    &rotation_transcripts,
+                    bootstrap_transcript,
+                ),
+            "public-key digest",
+            "transcript-bound proof statements must reject stale bootstrap public-key digest metadata",
+        );
 
         let err = bundle
             .validate_refresh_transcripts(
@@ -37976,6 +38714,18 @@ mod tests {
                 bootstrap_transcript,
             )
             .expect_err("digest must reject missing rotation transcript seeds");
+        assert!(
+            err.to_string().contains("expected 1 rotation"),
+            "unexpected error: {err}"
+        );
+        let err = bundle
+            .bootstrap_key_zero_refresh_proof_statement_digest_for_transcript(
+                &material.params,
+                &material.public_key,
+                &[],
+                bootstrap_transcript,
+            )
+            .expect_err("statement digest must reject missing rotation transcript seeds");
         assert!(
             err.to_string().contains("expected 1 rotation"),
             "unexpected error: {err}"
@@ -38009,6 +38759,18 @@ mod tests {
             err.to_string().contains("missing rotation key"),
             "unexpected error: {err}"
         );
+        let err = bundle
+            .bootstrap_key_zero_refresh_proof_statement_digest_for_transcript(
+                &material.params,
+                &material.public_key,
+                &wrong_rotation_transcripts,
+                bootstrap_transcript,
+            )
+            .expect_err("statement digest must reject unmatched rotation transcript seeds");
+        assert!(
+            err.to_string().contains("missing rotation key"),
+            "unexpected error: {err}"
+        );
 
         let wrong_bootstrap_seed = Some(BfvBootstrapKeyTranscriptSeed {
             key_id: "bootstrap-refresh-key",
@@ -38023,6 +38785,19 @@ mod tests {
                 wrong_bootstrap_seed,
             )
             .expect_err("bundle transcript validation must reject wrong bootstrap seed");
+        assert!(
+            err.to_string()
+                .contains("deterministic encrypted-zero transcript"),
+            "unexpected error: {err}"
+        );
+        let err = bundle
+            .bootstrap_key_zero_refresh_proof_statement_digest_for_transcript(
+                &material.params,
+                &material.public_key,
+                &rotation_transcripts,
+                wrong_bootstrap_seed,
+            )
+            .expect_err("statement digest must reject wrong bootstrap seed");
         assert!(
             err.to_string()
                 .contains("deterministic encrypted-zero transcript"),
@@ -38046,6 +38821,18 @@ mod tests {
             err.to_string().contains("metadata"),
             "unexpected error: {err}"
         );
+        let err = bundle
+            .bootstrap_key_zero_refresh_proof_statement_digest_for_transcript(
+                &material.params,
+                &material.public_key,
+                &rotation_transcripts,
+                drifted_bootstrap_metadata,
+            )
+            .expect_err("statement digest must reject bootstrap metadata drift");
+        assert!(
+            err.to_string().contains("metadata"),
+            "unexpected error: {err}"
+        );
 
         let err = bundle
             .validate_refresh_transcripts(
@@ -38055,6 +38842,18 @@ mod tests {
                 None,
             )
             .expect_err("bundle transcript validation must require bootstrap seed");
+        assert!(
+            err.to_string().contains("bootstrap key"),
+            "unexpected error: {err}"
+        );
+        let err = bundle
+            .bootstrap_key_zero_refresh_proof_statement_digest_for_transcript(
+                &material.params,
+                &material.public_key,
+                &rotation_transcripts,
+                None,
+            )
+            .expect_err("statement digest must require bootstrap seed");
         assert!(
             err.to_string().contains("bootstrap key"),
             "unexpected error: {err}"
@@ -38476,6 +39275,100 @@ mod tests {
         assert_eq!(bounded_digest, expected_bounded_digest);
         assert_ne!(bounded_digest, exact_domain_digest);
 
+        let bounded_statement = bundle
+            .bounded_noise_bootstrap_key_zero_refresh_proof_statement_digest_for_transcript(
+                &params,
+                &public_key,
+                &rotation_transcripts,
+                bootstrap_transcript,
+            )
+            .expect("bounded-noise transcript-bound bootstrap proof statement")
+            .expect("bundle carries a bootstrap key");
+        assert_eq!(
+            bounded_statement,
+            bundle
+                .bounded_noise_bootstrap_key_zero_refresh_proof_statement_digest_for_transcript(
+                    &params,
+                    &public_key,
+                    &rotation_transcripts,
+                    bootstrap_transcript,
+                )
+                .expect("repeat bounded-noise transcript-bound bootstrap proof statement")
+                .expect("bundle carries a bootstrap key")
+        );
+        let bounded_raw_statement =
+            bootstrap_key_bounded_noise_zero_refresh_proof_statement_digest(
+                &params,
+                &public_key,
+                bundle
+                    .bootstrap_key
+                    .as_ref()
+                    .expect("bundle carries a bootstrap key"),
+            )
+            .expect("bounded-noise raw bootstrap-key proof statement");
+        assert_ne!(
+            bounded_statement, bounded_raw_statement,
+            "bounded proof statements must bind the transcript inventory, not only bootstrap key bytes"
+        );
+        let evaluation_key_digest = bundle.digest(&params).expect("evaluation-key digest");
+        let bootstrap_key = bundle
+            .bootstrap_key
+            .as_ref()
+            .expect("bundle carries a bootstrap key");
+        let (bootstrap_round_count, zero_refresh_digest, bootstrap_round_digests) =
+            bootstrap_key_refresh_digest_summary_v1(bootstrap_key)
+                .expect("bounded bootstrap key refresh summary");
+        let bounded_statement_material = BfvBootstrapKeyTranscriptProofStatementMaterial {
+            version: BFV_BOOTSTRAP_KEY_TRANSCRIPT_PROOF_STATEMENT_MATERIAL_VERSION_V1,
+            field_count: BFV_BOOTSTRAP_KEY_TRANSCRIPT_PROOF_STATEMENT_MATERIAL_FIELD_COUNT_V1,
+            params,
+            public_key: public_key.clone(),
+            evaluation_key_digest,
+            refresh_transcript_digest: bounded_digest,
+            bootstrap_transcript: BfvBootstrapKeyTranscriptDigestMaterial {
+                key_id: "bounded-bootstrap-refresh-key".to_owned(),
+                max_refresh_rounds: 2,
+                seed: bootstrap_seed.to_vec(),
+            },
+            bootstrap_round_count,
+            zero_refresh_digest,
+            bootstrap_round_digests,
+            bootstrap_key: bootstrap_key.clone(),
+        };
+        let bounded_statement_bytes = norito::to_bytes(&bounded_statement_material)
+            .expect("encode bounded transcript-bound bootstrap statement material");
+        assert_eq!(
+            bounded_statement,
+            Hash::new_from_chunks(&[
+                BFV_BOUNDED_NOISE_BOOTSTRAP_KEY_TRANSCRIPT_ZERO_REFRESH_PROOF_STATEMENT_DOMAIN,
+                bounded_statement_bytes.as_slice(),
+            ])
+        );
+        assert_ne!(
+            bounded_statement,
+            Hash::new_from_chunks(&[
+                BFV_BOOTSTRAP_KEY_TRANSCRIPT_ZERO_REFRESH_PROOF_STATEMENT_DOMAIN,
+                bounded_statement_bytes.as_slice(),
+            ]),
+            "bounded transcript proof statements must not alias exact transcript statements"
+        );
+
+        let mut drifted_inventory_bundle = bundle.clone();
+        drifted_inventory_bundle.galois_keys.clear();
+        let drifted_inventory_statement = drifted_inventory_bundle
+            .bounded_noise_bootstrap_key_zero_refresh_proof_statement_digest_for_transcript(
+                &params,
+                &public_key,
+                &rotation_transcripts,
+                bootstrap_transcript,
+            )
+            .expect("drifted but shape-valid bounded bundle statement")
+            .expect("bundle carries a bootstrap key");
+        assert_ne!(
+            bounded_statement, drifted_inventory_statement,
+            "bounded proof statements must bind the full evaluation-key bundle digest"
+        );
+
         let err = bundle
             .validate_refresh_transcripts(
                 &params,
@@ -38502,6 +39395,19 @@ mod tests {
                 .contains("deterministic encrypted-zero transcript"),
             "unexpected error: {err}"
         );
+        let err = bundle
+            .bootstrap_key_zero_refresh_proof_statement_digest_for_transcript(
+                &params,
+                &public_key,
+                &rotation_transcripts,
+                bootstrap_transcript,
+            )
+            .expect_err("exact proof statement must reject bounded-noise masks");
+        assert!(
+            err.to_string()
+                .contains("deterministic encrypted-zero transcript"),
+            "unexpected error: {err}"
+        );
 
         let wrong_rotation_transcripts = [BfvRotationKeyTranscriptSeed {
             rotation_steps: 1,
@@ -38517,6 +39423,45 @@ mod tests {
             .expect_err("wrong bounded-noise rotation seed must be rejected");
         assert!(
             err.to_string().contains("bounded-noise rotation key"),
+            "unexpected error: {err}"
+        );
+        let wrong_bootstrap_transcript = Some(BfvBootstrapKeyTranscriptSeed {
+            key_id: "bounded-bootstrap-refresh-key",
+            max_refresh_rounds: 2,
+            seed: b"bfv-bounded-bundle-wrong-bootstrap",
+        });
+        let err = bundle
+            .bounded_noise_bootstrap_key_zero_refresh_proof_statement_digest_for_transcript(
+                &params,
+                &public_key,
+                &rotation_transcripts,
+                wrong_bootstrap_transcript,
+            )
+            .expect_err("wrong bounded-noise bootstrap seed must be rejected");
+        assert!(
+            err.to_string().contains("bounded-noise bootstrap key"),
+            "unexpected error: {err}"
+        );
+
+        let mut stale_public_key_digest_bundle = bundle.clone();
+        let stale_public_key_digest = Hash::new(b"stale-bounded-bootstrap-proof-public-key-digest");
+        stale_public_key_digest_bundle
+            .bootstrap_key
+            .as_mut()
+            .expect("bundle carries a bootstrap key")
+            .public_key_digest = Some(stale_public_key_digest);
+        let err = stale_public_key_digest_bundle
+            .bounded_noise_bootstrap_key_zero_refresh_proof_statement_digest_for_transcript(
+                &params,
+                &public_key,
+                &rotation_transcripts,
+                bootstrap_transcript,
+            )
+            .expect_err(
+                "bounded transcript-bound proof statements must reject stale public-key digest",
+            );
+        assert!(
+            err.to_string().contains("public-key digest"),
             "unexpected error: {err}"
         );
 
@@ -39918,6 +40863,15 @@ mod tests {
                 .map(|_| ()),
             "full bootstrap mode must not produce a refresh proof statement",
         );
+        assert_full_mode_rejected(
+            bootstrap_key_bounded_noise_zero_refresh_proof_statement_digest(
+                &params,
+                &public_key,
+                &bootstrap_key,
+            )
+            .map(|_| ()),
+            "full bootstrap mode must not produce a bounded-noise refresh proof statement",
+        );
     }
 
     #[test]
@@ -39969,6 +40923,16 @@ mod tests {
             ),
             expected,
             "transcript-bound bootstrap proof statement must reject reserved full bootstrap mode",
+        );
+        assert_error_contains(
+            bundle.bounded_noise_bootstrap_key_zero_refresh_proof_statement_digest_for_transcript(
+                &material.params,
+                &material.public_key,
+                &rotation_transcripts,
+                bootstrap_transcript,
+            ),
+            expected,
+            "transcript-bound bounded-noise bootstrap proof statement must reject reserved full bootstrap mode",
         );
         assert_error_contains(
             bundle.full_bootstrap_material_proof_statement_digest(
@@ -40613,6 +41577,15 @@ mod tests {
             bootstrap_key_zero_refresh_proof_statement_digest(&params, &public_key, &bootstrap_key),
             "requires governed full-bootstrap circuit artifacts",
             "full-bootstrap keys must not use the zero-refresh proof statement",
+        );
+        assert_error_contains(
+            bootstrap_key_bounded_noise_zero_refresh_proof_statement_digest(
+                &params,
+                &public_key,
+                &bootstrap_key,
+            ),
+            "requires governed full-bootstrap circuit artifacts",
+            "full-bootstrap keys must not use the bounded-noise zero-refresh proof statement",
         );
     }
 

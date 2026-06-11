@@ -477,8 +477,8 @@ class _Native:
         if archives and all(_is_malformed_probe_archive(archive) for archive in archives):
             raise ValueError(f"invalid Kagemusha {context} probe archive")
 
-    def kagemusha_recursive_spend_bridge_abi_version(self) -> int:
-        return kagemusha.KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION + 1
+    def kagemusha_recursive_spend_native_bridge_abi_version(self) -> int:
+        return kagemusha.KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION + 1
 
     def kagemusha_prove_verified_compact_payment_token_with_records(
         self,
@@ -1358,14 +1358,14 @@ def test_recursive_kagemusha_shared_abi6_fixture_matches_sdk_surface() -> None:
         kagemusha.KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1
         == "recursive_compact_v1"
     )
-    assert kagemusha.KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION == 7
+    assert kagemusha.KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION == 7
     assert (
         kagemusha.KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1
         == "kagemusha-recursive-compact-v1"
     )
     assert (
-        manifest["bridge_abi_version"]
-        == kagemusha.KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION
+        manifest["native_bridge_abi_version"]
+        == kagemusha.KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION
     )
     assert manifest["operation_count"] == 9
 
@@ -2016,6 +2016,22 @@ def test_recursive_kagemusha_lineage_key_artifacts_validate_inputs() -> None:
             duplicate_cid_verifier_key,
             init_proving_key_archive,
         )
+    whitespace_cid_verifier_key = _kagemusha_lineage_verifier_key(
+        f" {kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1} ",
+        0xA5,
+    )
+    whitespace_cid_proving_key_archive = _kagemusha_lineage_proving_key_archive(
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+        whitespace_cid_verifier_key,
+        0xA6,
+    )
+    with pytest.raises(ValueError, match="lineage_verifier_key"):
+        kagemusha.kagemusha_recursive_spend_lineage_key_artifacts_for_init(
+            128,
+            kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+            whitespace_cid_verifier_key,
+            whitespace_cid_proving_key_archive,
+        )
     with pytest.raises(ValueError, match="lineage_proving_key_archive"):
         kagemusha.kagemusha_recursive_spend_lineage_key_artifacts_for_init(
             128,
@@ -2403,7 +2419,7 @@ def test_recursive_kagemusha_lineage_key_artifacts_validate_inputs() -> None:
 
 
 def test_recursive_kagemusha_exports_stable_circuit_ids() -> None:
-    assert kagemusha.KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION == 6
+    assert kagemusha.KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION == 6
     assert kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND == "halo2/ipa"
     assert (
         kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
@@ -2901,7 +2917,7 @@ def test_recursive_kagemusha_availability_requires_bridge_abi_6(
         10**100,
     ):
         native = _Native()
-        native.kagemusha_recursive_spend_bridge_abi_version = (
+        native.kagemusha_recursive_spend_native_bridge_abi_version = (
             lambda abi_version=abi_version: abi_version
         )
         setattr(native, RECURSIVE_COMPACT_METHOD, lambda record, pallas, key_artifacts: b"compact")
@@ -2933,7 +2949,7 @@ def test_recursive_kagemusha_availability_rejects_broken_abi_probe(
     def broken_abi_probe() -> int:
         raise OSError("bridge denied")
 
-    native.kagemusha_recursive_spend_bridge_abi_version = broken_abi_probe
+    native.kagemusha_recursive_spend_native_bridge_abi_version = broken_abi_probe
     monkeypatch.setattr(kagemusha, "load_crypto_extension", lambda: native)
 
     assert kagemusha.is_kagemusha_recursive_spend_available() is False
@@ -2949,7 +2965,7 @@ def test_recursive_kagemusha_helpers_require_complete_abi_surface(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class PartialNative:
-        def kagemusha_recursive_spend_bridge_abi_version(self) -> int:
+        def kagemusha_recursive_spend_native_bridge_abi_version(self) -> int:
             return 6
 
         def kagemusha_recursive_spend_init(self, request: bytes) -> bytes:

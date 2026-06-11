@@ -34,7 +34,7 @@ class OfflineCashConfigurationSnapshot:
     asset_definition_id: str
     offline_payments_enabled: bool
     issuer_public_key_base64: Optional[str]
-    bridge_abi_version: Optional[int] = None
+    native_bridge_abi_version: Optional[int] = None
     artifact_set_id: Optional[str] = None
     circuit_id: Optional[str] = None
     created_at_ms: int = 0
@@ -44,7 +44,7 @@ class OfflineCashConfigurationSnapshot:
         self,
         *,
         now_ms: int,
-        required_bridge_abi_version: Optional[int] = None,
+        required_native_bridge_abi_version: Optional[int] = None,
     ) -> None:
         if not self.offline_payments_enabled:
             raise OfflineCashConfigurationSnapshotError(
@@ -62,12 +62,12 @@ class OfflineCashConfigurationSnapshot:
                 f"Offline cash configuration snapshot expired at {self.expires_at_ms}.",
             )
         if (
-            required_bridge_abi_version is not None
-            and (self.bridge_abi_version or -1) < required_bridge_abi_version
+            required_native_bridge_abi_version is not None
+            and (self.native_bridge_abi_version or -1) < required_native_bridge_abi_version
         ):
             raise OfflineCashConfigurationSnapshotError(
-                "unsupported_bridge_abi",
-                f"Offline cash requires bridge ABI {required_bridge_abi_version}.",
+                "unsupported_native_bridge_abi",
+                f"Offline cash requires native bridge ABI {required_native_bridge_abi_version}.",
             )
 
 

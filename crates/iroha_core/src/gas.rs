@@ -233,17 +233,49 @@ fn anonymous_escrow_proof_gas(any: &dyn std::any::Any) -> Option<u64> {
 }
 
 fn gas_for_recursive_kagemusha_redeem(redeem: &dm_isi::offline::RedeemKagemushaRecursive) -> u64 {
-    let mut gas = gas_for_proof_attachment(&redeem.redeem_proof, 1, 0);
+    let redeem_nullifiers = redeem
+        .bundle
+        .accumulator
+        .topup_anchor_nullifiers
+        .len()
+        .saturating_add(1);
+    let mut gas = gas_for_proof_attachment(&redeem.redeem_proof, redeem_nullifiers, 0);
     let recursive_proof_bytes =
         u64::try_from(redeem.bundle.recursive_proof.proof.bytes.len()).unwrap_or(u64::MAX);
     gas = gas.saturating_add(zk_gas_base_verify());
     gas = gas.saturating_add(zk_gas_per_proof_byte().saturating_mul(recursive_proof_bytes));
-    gas.saturating_add(
+    gas = gas.saturating_add(
         zk_gas_per_public_input().saturating_mul(
             u64::try_from(crate::zk::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS)
                 .unwrap_or(u64::MAX),
         ),
-    )
+    );
+    if let Some(witness) = &redeem.lineage_witness {
+        for step in &witness.record_bundle.bundle.steps {
+            gas = gas.saturating_add(gas_for_proof_attachment(
+                &step.attachment,
+                step.input_nullifiers.len(),
+                step.output_commitments.len(),
+            ));
+        }
+        for proof in &witness.previous_recursive_proofs {
+            let proof_bytes = u64::try_from(proof.proof.bytes.len()).unwrap_or(u64::MAX);
+            gas = gas.saturating_add(zk_gas_base_verify());
+            gas = gas.saturating_add(zk_gas_per_proof_byte().saturating_mul(proof_bytes));
+            gas = gas.saturating_add(
+                zk_gas_per_public_input().saturating_mul(
+                    u64::try_from(
+                        crate::zk::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS,
+                    )
+                    .unwrap_or(u64::MAX),
+                ),
+            );
+        }
+        let pallas_archive_bytes =
+            u64::try_from(witness.pallas_open_envelopes_archive.len()).unwrap_or(u64::MAX);
+        gas = gas.saturating_add(zk_gas_per_proof_byte().saturating_mul(pallas_archive_bytes));
+    }
+    gas
 }
 
 /// Compute gas for a single instruction using a simple schedule.
@@ -426,12 +458,11 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
             transfer.outputs.len(),
         );
     }
-    if let Some(transfer) = any.downcast_ref::<dm_isi::offline::KagemushaTransfer>() {
-        return gas_for_proof_attachment(
-            &transfer.proof,
-            transfer.inputs.len(),
-            transfer.outputs.len(),
-        );
+    if any
+        .downcast_ref::<dm_isi::offline::KagemushaTransfer>()
+        .is_some()
+    {
+        return 0;
     }
     if let Some(redeem) = any.downcast_ref::<dm_isi::offline::RedeemKagemushaRecursive>() {
         return gas_for_recursive_kagemusha_redeem(redeem);
@@ -490,12 +521,11 @@ pub fn confidential_gas_cost(instr: &InstructionBox) -> u64 {
             transfer.outputs.len(),
         );
     }
-    if let Some(transfer) = any.downcast_ref::<dm_isi::offline::KagemushaTransfer>() {
-        return gas_for_proof_attachment(
-            &transfer.proof,
-            transfer.inputs.len(),
-            transfer.outputs.len(),
-        );
+    if any
+        .downcast_ref::<dm_isi::offline::KagemushaTransfer>()
+        .is_some()
+    {
+        return 0;
     }
     if let Some(redeem) = any.downcast_ref::<dm_isi::offline::RedeemKagemushaRecursive>() {
         return gas_for_recursive_kagemusha_redeem(redeem);
@@ -527,6 +557,103 @@ mod tests {
 
     fn sample_account() -> AccountId {
         gen_account_in("wonderland").0
+    }
+
+    fn gas_test_proof_attachment(label: &str, proof_len: usize) -> ProofAttachment {
+        use iroha_data_model::proof::{ProofBox, VerifyingKeyId};
+
+        let backend = "halo2/ipa".parse().expect("backend ident");
+        let proof = ProofBox::new(backend, vec![0xA5; proof_len]);
+        ProofAttachment::new_ref(
+            proof.backend.clone(),
+            proof,
+            VerifyingKeyId::new("halo2/ipa", label),
+        )
+    }
+
+    fn gas_test_recursive_proof(
+        label: &str,
+        proof_len: usize,
+    ) -> iroha_data_model::offline::KagemushaRecursiveAggregationProof {
+        use iroha_crypto::Hash;
+        use iroha_data_model::{
+            offline::KagemushaRecursiveAggregationProofPublicInputs,
+            proof::{ProofBox, VerifyingKeyId},
+        };
+
+        let backend = "halo2/ipa".parse().expect("backend ident");
+        iroha_data_model::offline::KagemushaRecursiveAggregationProof {
+            verifier_key_id: VerifyingKeyId::new("halo2/ipa", label),
+            public_inputs: KagemushaRecursiveAggregationProofPublicInputs {
+                domain: format!("gas:{label}"),
+                evidence_digest: [0x01; 32],
+                folded_public_inputs_hash: [0x02; 32],
+                aggregation_transcript_digest: [0x03; 32],
+                verifier_params_fingerprint: [0x04; 32],
+                fixed_window_table_schedule_digest: [0x05; 32],
+                fixed_window_shared_table_manifest_digest: [0x06; 32],
+                fixed_window_table_base_digest: [0x07; 32],
+                verifier_witness_batch_digest: [0x08; 32],
+                recursive_proof_chain_digest: [0x09; 32],
+                transition_profile_binding_digest: [0x0A; 32],
+                append_opening_preflight_digest: [0x0B; 32],
+                append_boundary_digest: [0x0C; 32],
+                recursive_verifier_scalar_projection_digest: [0x0D; 32],
+                verifier_opening_len: 4,
+                verifier_witness_count: 1,
+                hop_count: 1,
+            },
+            public_inputs_hash: Hash::new(format!("gas:{label}:inputs")),
+            proof: ProofBox::new(backend, vec![0x5A; proof_len]),
+        }
+    }
+
+    fn gas_test_recursive_bundle(
+        recursive_proof_len: usize,
+        topup_anchor_nullifiers: Vec<[u8; 32]>,
+    ) -> iroha_data_model::offline::KagemushaRecursiveSpendBundleV1 {
+        use iroha_crypto::Hash;
+        use iroha_data_model::offline::{
+            KagemushaRecursiveSpendAccumulatorV1, KagemushaRecursiveSpendBundleV1,
+            KagemushaSpendableNoteDescriptorV1,
+        };
+
+        let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            DomainId::try_new("domain", "universal").unwrap(),
+            "shield".parse().unwrap(),
+        );
+        KagemushaRecursiveSpendBundleV1 {
+            accumulator: KagemushaRecursiveSpendAccumulatorV1 {
+                domain: "iroha:kagemusha:v1:recursive-spend-accumulator".to_owned(),
+                chain_id: ChainId::from("gas-chain"),
+                asset,
+                initial_root: [0x10; 32],
+                final_root: [0x11; 32],
+                topup_anchor_nullifiers,
+                hop_count: 1,
+                lineage_digest: [0x12; 32],
+                aggregation_transcript_digest: [0x13; 32],
+                nullifier_digest: Hash::new("gas:nullifiers"),
+                output_commitment_digest: Hash::new("gas:outputs"),
+                fold_digest: Hash::new("gas:fold"),
+                recursive_proof_chain_digest: [0x14; 32],
+                transition_profile_binding_digest: [0x15; 32],
+                append_opening_preflight_digest: [0x16; 32],
+                append_boundary_digest: [0x17; 32],
+                verifier_params_fingerprint: [0x18; 32],
+                fixed_window_table_schedule_digest: [0x19; 32],
+                fixed_window_shared_table_manifest_digest: [0x1A; 32],
+                fixed_window_table_base_digest: [0x1B; 32],
+                verifier_witness_batch_digest: [0x1C; 32],
+                verifier_opening_len: 4,
+                current_note: KagemushaSpendableNoteDescriptorV1 {
+                    note_commitment: [0x20; 32],
+                    spend_nullifier: [0x21; 32],
+                    amount: Numeric::new(42, 0),
+                },
+            },
+            recursive_proof: gas_test_recursive_proof("recursive", recursive_proof_len),
+        }
     }
 
     #[test]
@@ -795,7 +922,7 @@ mod tests {
     }
 
     #[test]
-    fn kagemusha_transfer_gas_matches_shielded_transfer_metering() {
+    fn kagemusha_transfer_is_unmetered_offline_offline() {
         let _gas_lock = super::lock_confidential_gas_for_tests();
         use iroha_data_model::{
             isi::offline::KagemushaTransfer, prelude::AssetDefinitionId, proof::VerifyingKeyId,
@@ -810,8 +937,6 @@ mod tests {
             proof_box,
             VerifyingKeyId::new("halo2/ipa", "vk-kagemusha-transfer"),
         );
-        let proof_bytes = attachment.proof.bytes.len() as u64;
-        let public_inputs = (fixture.public_inputs.len() / super::FIELD_ELEMENT_BYTES) as u64;
         let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
             DomainId::try_new("domain", "universal").unwrap(),
             "shield".parse().unwrap(),
@@ -825,13 +950,94 @@ mod tests {
         );
         let transfer_instr = InstructionBox::from(transfer);
         let gas = meter_instruction(&transfer_instr);
-        let expected = schedule.base_verify
-            + schedule.per_public_input.saturating_mul(public_inputs)
-            + schedule.per_proof_byte.saturating_mul(proof_bytes)
-            + schedule.per_nullifier.saturating_mul(2)
-            + schedule.per_commitment.saturating_mul(2);
-        assert_eq!(gas, expected);
-        assert_eq!(confidential_gas_cost(&transfer_instr), expected);
+        assert_eq!(gas, 0);
+        assert_eq!(confidential_gas_cost(&transfer_instr), 0);
+    }
+
+    #[test]
+    fn recursive_kagemusha_redeem_gas_accounts_for_chain_submitted_material() {
+        let _gas_lock = super::lock_confidential_gas_for_tests();
+        use iroha_data_model::{
+            isi::offline::RedeemKagemushaRecursive,
+            offline::{
+                KagemushaVerifiedFoldBundle, KagemushaVerifiedFoldRecordBundle,
+                KagemushaVerifiedFoldStep,
+            },
+            proof::VerifyingKeyBox,
+        };
+
+        let schedule = super::ConfidentialGasSchedule {
+            base_verify: 10,
+            per_public_input: 2,
+            per_proof_byte: 3,
+            per_nullifier: 5,
+            per_commitment: 7,
+        };
+        super::configure_confidential_gas(schedule);
+        let topup_anchor_nullifiers = vec![[0x31; 32], [0x32; 32]];
+        let bundle = gas_test_recursive_bundle(13, topup_anchor_nullifiers);
+        let recipient = sample_account();
+        let redeem_proof = gas_test_proof_attachment("redeem", 11);
+        let hop_attachment = gas_test_proof_attachment("hop", 17);
+        let hop_step = KagemushaVerifiedFoldStep {
+            root_before: [0x40; 32],
+            input_nullifiers: vec![[0x41; 32], [0x42; 32]],
+            output_commitments: vec![[0x43; 32]],
+            root_after: [0x44; 32],
+            attachment: hop_attachment,
+            verifier_key: VerifyingKeyBox::new("halo2/ipa".parse().unwrap(), vec![0x45; 9]),
+        };
+        let previous_recursive_proof = gas_test_recursive_proof("previous", 19);
+        let lineage_witness = iroha_data_model::offline::KagemushaRecursiveSpendLineageWitnessV1 {
+            record_bundle: KagemushaVerifiedFoldRecordBundle {
+                bundle: KagemushaVerifiedFoldBundle {
+                    chain_id: ChainId::from("gas-chain"),
+                    asset: bundle.accumulator.asset.clone(),
+                    steps: vec![hop_step],
+                },
+                verifier_records: Vec::new(),
+            },
+            pallas_open_envelopes_archive: vec![0x46; 23],
+            current_notes: vec![bundle.accumulator.current_note.clone()],
+            previous_recursive_proofs: vec![previous_recursive_proof],
+        };
+        let instruction = RedeemKagemushaRecursive::new_with_lineage_witness(
+            bundle,
+            recipient,
+            42,
+            redeem_proof,
+            Some(lineage_witness),
+        );
+        let instruction_box = InstructionBox::from(instruction);
+        let recursive_public_inputs =
+            u64::try_from(crate::zk::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS)
+                .unwrap();
+        let expected = (schedule.base_verify
+            + schedule.per_proof_byte.saturating_mul(11)
+            + schedule.per_nullifier.saturating_mul(3))
+        .saturating_add(
+            schedule.base_verify
+                + schedule.per_proof_byte.saturating_mul(13)
+                + schedule
+                    .per_public_input
+                    .saturating_mul(recursive_public_inputs),
+        )
+        .saturating_add(
+            schedule.base_verify
+                + schedule.per_proof_byte.saturating_mul(17)
+                + schedule.per_nullifier.saturating_mul(2)
+                + schedule.per_commitment,
+        )
+        .saturating_add(
+            schedule.base_verify
+                + schedule.per_proof_byte.saturating_mul(19)
+                + schedule
+                    .per_public_input
+                    .saturating_mul(recursive_public_inputs),
+        )
+        .saturating_add(schedule.per_proof_byte.saturating_mul(23));
+        assert_eq!(meter_instruction(&instruction_box), expected);
+        assert_eq!(confidential_gas_cost(&instruction_box), expected);
     }
 
     #[test]

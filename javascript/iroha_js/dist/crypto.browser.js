@@ -348,8 +348,8 @@ export function deriveConfidentialNullifierV2() {
 export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1 = "recursive_compact_v1";
 export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1 = "recursive_spend_v1";
 export const KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1 = "checked_prefold_v1";
-export const KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION = 6;
-export const KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION = 7;
+export const KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 6;
+export const KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 7;
 export const KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1 = "kagemusha-recursive-compact-v1";
 export const KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT =
   "recursive compact Kagemusha payment-token multi-hop proving requires the append verifier batch";
@@ -650,7 +650,7 @@ function kagemushaLineageVerifierKeyEnvelopeCircuitId(lineageVerifierKey) {
       if (circuitId !== null || payload.some((byte) => byte < 0x20 || byte > 0x7e)) {
         throw new TypeError("lineage_verifier_key");
       }
-      circuitId = payload.toString("utf8").trim();
+      circuitId = payload.toString("utf8");
       if (circuitId.length === 0) {
         throw new TypeError("lineage_verifier_key");
       }

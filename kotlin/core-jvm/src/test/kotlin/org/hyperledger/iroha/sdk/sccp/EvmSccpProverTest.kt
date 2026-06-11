@@ -1166,6 +1166,76 @@ class EvmSccpProverTest {
                 ("native_prover_self_test" to selfTestFixtureHash),
             expectedDestinationBindingHash = artifactBinding.hash,
         )
+        fun hashConsistentNativeEvmProverBundle(
+            proofArtifactBytesOverride: ByteArray? = null,
+            provingKeyBytesOverride: ByteArray? = null,
+            verifierKeyBytesOverride: ByteArray? = null,
+            implementationBytesOverride: ByteArray? = null,
+            crossSdkFixtureParityBytesOverride: ByteArray? = null,
+            nativeProverSelfTestBytesOverride: ByteArray? = null,
+        ): Triple<SccpEvm.EthereumMainnetNativeEvmProverBundle, ByteArray, ByteArray> {
+            val selectedProofArtifactBytes = proofArtifactBytesOverride ?: proofArtifactBytes
+            val selectedProvingKeyBytes = provingKeyBytesOverride ?: provingKeyBytes
+            val selectedVerifierKeyBytes = verifierKeyBytesOverride ?: verifierKeyBytes
+            val selectedImplementationBytes = implementationBytesOverride ?: implementationBytes
+            val selectedProofArtifactHash = sha256Hex(selectedProofArtifactBytes)
+            val selectedProvingKeyHash = sha256Hex(selectedProvingKeyBytes)
+            val selectedVerifierKeyHash = sha256Hex(selectedVerifierKeyBytes)
+            val selectedImplementationHash = sha256Hex(selectedImplementationBytes)
+            val draftBundle = SccpEvm.EthereumMainnetNativeEvmProverBundle(
+                proofArtifact = "artifacts/eth-mainnet/proof-artifact.bin",
+                proofArtifactHash = selectedProofArtifactHash,
+                provingKey = "artifacts/eth-mainnet/proving-key.bin",
+                provingKeyHash = selectedProvingKeyHash,
+                verifierKey = "artifacts/eth-mainnet/verifier-key.bin",
+                verifierKeyHash = selectedVerifierKeyHash,
+                destinationBindingHash = artifactBinding.hash,
+                nativeSdkArtifacts = SccpEvm.ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1
+                    .entries
+                    .sortedBy { it.key }
+                    .mapIndexed { index, entry ->
+                        SccpEvm.EthereumMainnetNativeEvmProverBundleSdkArtifact(
+                            sdk = entry.key,
+                            implementation = entry.value,
+                            proofArtifactHash = selectedProofArtifactHash,
+                            provingKeyHash = selectedProvingKeyHash,
+                            implementationArtifact = "artifacts/eth-mainnet/${entry.key}-implementation.bin",
+                            implementationHash = if (entry.key == "kotlin") {
+                                selectedImplementationHash
+                            } else {
+                                "0x" + (index + 1).toString(16).padStart(2, '0').repeat(32)
+                            },
+                        )
+                    },
+                crossSdkFixtureParityArtifact = "artifacts/eth-mainnet/cross-sdk-fixture-parity.json",
+                nativeProverSelfTestArtifact = "artifacts/eth-mainnet/native-prover-self-test.json",
+                auditHashes = sampleEthereumNativeAuditHashes(),
+                expectedDestinationBindingHash = artifactBinding.hash,
+            )
+            val selectedParityFixtureBytes = crossSdkFixtureParityBytesOverride
+                ?: sampleEthereumNativeEvmProverParityFixtureJson(draftBundle)
+                    .toByteArray(Charsets.UTF_8)
+            val selectedSelfTestFixtureBytes = nativeProverSelfTestBytesOverride
+                ?: sampleEthereumNativeEvmProverSelfTestFixtureJson(draftBundle)
+                    .toByteArray(Charsets.UTF_8)
+            val selectedBundle = SccpEvm.EthereumMainnetNativeEvmProverBundle(
+                proofArtifact = "artifacts/eth-mainnet/proof-artifact.bin",
+                proofArtifactHash = selectedProofArtifactHash,
+                provingKey = "artifacts/eth-mainnet/proving-key.bin",
+                provingKeyHash = selectedProvingKeyHash,
+                verifierKey = "artifacts/eth-mainnet/verifier-key.bin",
+                verifierKeyHash = selectedVerifierKeyHash,
+                destinationBindingHash = artifactBinding.hash,
+                nativeSdkArtifacts = draftBundle.nativeSdkArtifacts,
+                crossSdkFixtureParityArtifact = "artifacts/eth-mainnet/cross-sdk-fixture-parity.json",
+                nativeProverSelfTestArtifact = "artifacts/eth-mainnet/native-prover-self-test.json",
+                auditHashes = sampleEthereumNativeAuditHashes() +
+                    ("cross_sdk_fixture_parity" to sha256Hex(selectedParityFixtureBytes)) +
+                    ("native_prover_self_test" to sha256Hex(selectedSelfTestFixtureBytes)),
+                expectedDestinationBindingHash = artifactBinding.hash,
+            )
+            return Triple(selectedBundle, selectedParityFixtureBytes, selectedSelfTestFixtureBytes)
+        }
         val verifiedArtifacts = verifiedBundle.verifiedArtifacts(
             proofArtifactBytes = proofArtifactBytes,
             provingKeyBytes = provingKeyBytes,
@@ -1465,9 +1535,9 @@ class EvmSccpProverTest {
             auditHashes = sampleEthereumNativeAuditHashes(),
             expectedDestinationBindingHash = artifactBinding.hash,
         )
-        val tinyParityFixtureBytes = sampleEthereumNativeEvmProverParityFixtureJson(draftTinyBundle)
+        val tinyProofArtifactParityFixtureBytes = sampleEthereumNativeEvmProverParityFixtureJson(draftTinyBundle)
             .toByteArray(Charsets.UTF_8)
-        val tinySelfTestFixtureBytes = sampleEthereumNativeEvmProverSelfTestFixtureJson(draftTinyBundle)
+        val tinyProofArtifactSelfTestFixtureBytes = sampleEthereumNativeEvmProverSelfTestFixtureJson(draftTinyBundle)
             .toByteArray(Charsets.UTF_8)
         val tinyBundle = SccpEvm.EthereumMainnetNativeEvmProverBundle(
             proofArtifact = "artifacts/eth-mainnet/proof-artifact.bin",
@@ -1481,8 +1551,8 @@ class EvmSccpProverTest {
             crossSdkFixtureParityArtifact = "artifacts/eth-mainnet/cross-sdk-fixture-parity.json",
             nativeProverSelfTestArtifact = "artifacts/eth-mainnet/native-prover-self-test.json",
             auditHashes = sampleEthereumNativeAuditHashes() +
-                ("cross_sdk_fixture_parity" to sha256Hex(tinyParityFixtureBytes)) +
-                ("native_prover_self_test" to sha256Hex(tinySelfTestFixtureBytes)),
+                ("cross_sdk_fixture_parity" to sha256Hex(tinyProofArtifactParityFixtureBytes)) +
+                ("native_prover_self_test" to sha256Hex(tinyProofArtifactSelfTestFixtureBytes)),
             expectedDestinationBindingHash = artifactBinding.hash,
         )
         assertFailsWith<IllegalArgumentException> {
@@ -1492,11 +1562,95 @@ class EvmSccpProverTest {
                 verifierKeyBytes = verifierKeyBytes,
                 sdk = "kotlin",
                 implementationBytes = implementationBytes,
+                crossSdkFixtureParityBytes = tinyProofArtifactParityFixtureBytes,
+                nativeProverSelfTestBytes = tinyProofArtifactSelfTestFixtureBytes,
+            )
+        }.also { error ->
+            assertTrue(error.message?.contains("proofArtifactBytes must be at least 65536 bytes") == true)
+        }
+        val tinyProvingKeyBytes = byteArrayOf(8, 9, 10, 11)
+        val (tinyProvingKeyBundle, tinyProvingKeyParityBytes, tinyProvingKeySelfTestBytes) =
+            hashConsistentNativeEvmProverBundle(provingKeyBytesOverride = tinyProvingKeyBytes)
+        assertFailsWith<IllegalArgumentException> {
+            tinyProvingKeyBundle.verifiedArtifacts(
+                proofArtifactBytes = proofArtifactBytes,
+                provingKeyBytes = tinyProvingKeyBytes,
+                verifierKeyBytes = verifierKeyBytes,
+                sdk = "kotlin",
+                implementationBytes = implementationBytes,
+                crossSdkFixtureParityBytes = tinyProvingKeyParityBytes,
+                nativeProverSelfTestBytes = tinyProvingKeySelfTestBytes,
+            )
+        }.also { error ->
+            assertTrue(error.message?.contains("provingKeyBytes must be at least 65536 bytes") == true)
+        }
+        val tinyVerifierKeyBytes = byteArrayOf(12, 13, 14, 15)
+        val (tinyVerifierKeyBundle, tinyVerifierKeyParityBytes, tinyVerifierKeySelfTestBytes) =
+            hashConsistentNativeEvmProverBundle(verifierKeyBytesOverride = tinyVerifierKeyBytes)
+        assertFailsWith<IllegalArgumentException> {
+            tinyVerifierKeyBundle.verifiedArtifacts(
+                proofArtifactBytes = proofArtifactBytes,
+                provingKeyBytes = provingKeyBytes,
+                verifierKeyBytes = tinyVerifierKeyBytes,
+                sdk = "kotlin",
+                implementationBytes = implementationBytes,
+                crossSdkFixtureParityBytes = tinyVerifierKeyParityBytes,
+                nativeProverSelfTestBytes = tinyVerifierKeySelfTestBytes,
+            )
+        }.also { error ->
+            assertTrue(error.message?.contains("verifierKeyBytes must be at least 128 bytes") == true)
+        }
+        val tinyParityFixtureBytes = "{}".toByteArray(Charsets.UTF_8)
+        val (tinyParityBundle, _, tinyParitySelfTestBytes) =
+            hashConsistentNativeEvmProverBundle(
+                crossSdkFixtureParityBytesOverride = tinyParityFixtureBytes,
+            )
+        assertFailsWith<IllegalArgumentException> {
+            tinyParityBundle.verifiedArtifacts(
+                proofArtifactBytes = proofArtifactBytes,
+                provingKeyBytes = provingKeyBytes,
+                verifierKeyBytes = verifierKeyBytes,
+                sdk = "kotlin",
+                implementationBytes = implementationBytes,
                 crossSdkFixtureParityBytes = tinyParityFixtureBytes,
+                nativeProverSelfTestBytes = tinyParitySelfTestBytes,
+            )
+        }.also { error ->
+            assertTrue(error.message?.contains("crossSdkFixtureParityBytes must be at least 128 bytes") == true)
+        }
+        val tinySelfTestFixtureBytes = "{}".toByteArray(Charsets.UTF_8)
+        val (tinySelfTestBundle, tinySelfTestParityBytes, _) =
+            hashConsistentNativeEvmProverBundle(
+                nativeProverSelfTestBytesOverride = tinySelfTestFixtureBytes,
+            )
+        assertFailsWith<IllegalArgumentException> {
+            tinySelfTestBundle.verifiedArtifacts(
+                proofArtifactBytes = proofArtifactBytes,
+                provingKeyBytes = provingKeyBytes,
+                verifierKeyBytes = verifierKeyBytes,
+                sdk = "kotlin",
+                implementationBytes = implementationBytes,
+                crossSdkFixtureParityBytes = tinySelfTestParityBytes,
                 nativeProverSelfTestBytes = tinySelfTestFixtureBytes,
             )
         }.also { error ->
-            assertTrue(error.message?.contains("proofArtifactBytes must be at least 256 bytes") == true)
+            assertTrue(error.message?.contains("nativeProverSelfTestBytes must be at least 128 bytes") == true)
+        }
+        val tinyImplementationBytes = byteArrayOf(16, 17, 18, 19)
+        val (tinyImplementationBundle, tinyImplementationParityBytes, tinyImplementationSelfTestBytes) =
+            hashConsistentNativeEvmProverBundle(implementationBytesOverride = tinyImplementationBytes)
+        assertFailsWith<IllegalArgumentException> {
+            tinyImplementationBundle.verifiedArtifacts(
+                proofArtifactBytes = proofArtifactBytes,
+                provingKeyBytes = provingKeyBytes,
+                verifierKeyBytes = verifierKeyBytes,
+                sdk = "kotlin",
+                implementationBytes = tinyImplementationBytes,
+                crossSdkFixtureParityBytes = tinyImplementationParityBytes,
+                nativeProverSelfTestBytes = tinyImplementationSelfTestBytes,
+            )
+        }.also { error ->
+            assertTrue(error.message?.contains("implementationBytes must be at least 1024 bytes") == true)
         }
         assertFailsWith<IllegalArgumentException> {
             verifiedBundle.verifiedArtifacts(
@@ -4982,9 +5136,9 @@ class EvmSccpProverTest {
         return out
     }
 
-    private fun nativeEvmProverArtifactBytes(label: String): ByteArray {
+    private fun nativeEvmProverArtifactBytes(label: String, size: Int = 64 * 1024): ByteArray {
         val labelBytes = label.toByteArray(Charsets.UTF_8)
-        val bytes = ByteArray(256) { index ->
+        val bytes = ByteArray(size) { index ->
             ((index * 37 + labelBytes.size * 11) and 0xff).toByte()
         }
         labelBytes.copyInto(bytes, endIndex = labelBytes.size.coerceAtMost(bytes.size))

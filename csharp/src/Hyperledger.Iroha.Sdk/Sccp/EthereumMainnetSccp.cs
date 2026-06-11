@@ -28,7 +28,11 @@ public static class EthereumMainnetSccp
     public const string EthNativeEvmProverBundleIdV1 =
         "sccp:eth:native-evm-groth16-prover:ethereum-mainnet:v1";
     public const string NativeEvmProverArtifactHashAlgorithmV1 = "sha256";
-    internal const int NativeEvmProverMinArtifactBytesV1 = 256;
+    internal const int NativeEvmProverMinSupportArtifactBytesV1 = 128;
+    internal const int NativeEvmProverMinImplementationBytesV1 = 1024;
+    internal const int NativeEvmProverMinProofArtifactBytesV1 = 64 * 1024;
+    internal const int NativeEvmProverMinProvingKeyBytesV1 = 64 * 1024;
+    internal const int NativeEvmProverMinVerifierKeyBytesV1 = 128;
     public const string StarkFriProofFamily = "stark-fri-v1";
     public const string ContractCallAbiTuple = "abi_tuple_v1";
     public const string LocalAdmissionEnvelopeEncoding = "norito:sccp-local-admission:v1";
@@ -5704,9 +5708,24 @@ public sealed record EthereumMainnetNativeEvmProverBundle
                 nameof(nativeProverSelfTestBytes));
         }
 
-        RequireNativeEvmProverProductionArtifactSize(proofArtifactBytes, nameof(proofArtifactBytes));
-        RequireNativeEvmProverProductionArtifactSize(provingKeyBytes, nameof(provingKeyBytes));
-        RequireNativeEvmProverProductionArtifactSize(verifierKeyBytes, nameof(verifierKeyBytes));
+        RequireNativeEvmProverProductionArtifactSize(
+            proofArtifactBytes,
+            nameof(proofArtifactBytes),
+            EthereumMainnetSccp.NativeEvmProverMinProofArtifactBytesV1);
+        RequireNativeEvmProverProductionArtifactSize(
+            provingKeyBytes,
+            nameof(provingKeyBytes),
+            EthereumMainnetSccp.NativeEvmProverMinProvingKeyBytesV1);
+        RequireNativeEvmProverProductionArtifactSize(
+            verifierKeyBytes,
+            nameof(verifierKeyBytes),
+            EthereumMainnetSccp.NativeEvmProverMinVerifierKeyBytesV1);
+        RequireNativeEvmProverProductionArtifactSize(
+            crossSdkFixtureParityBytes,
+            nameof(crossSdkFixtureParityBytes));
+        RequireNativeEvmProverProductionArtifactSize(
+            nativeProverSelfTestBytes,
+            nameof(nativeProverSelfTestBytes));
         RejectNativeEvmProverForbiddenArtifactMarkers(proofArtifactBytes, nameof(proofArtifactBytes));
         RejectNativeEvmProverForbiddenArtifactMarkers(provingKeyBytes, nameof(provingKeyBytes));
         RejectNativeEvmProverForbiddenArtifactMarkers(verifierKeyBytes, nameof(verifierKeyBytes));
@@ -5753,7 +5772,8 @@ public sealed record EthereumMainnetNativeEvmProverBundle
 
         RequireNativeEvmProverProductionArtifactSize(
             implementationBytes,
-            nameof(implementationBytes));
+            nameof(implementationBytes),
+            EthereumMainnetSccp.NativeEvmProverMinImplementationBytesV1);
         RejectNativeEvmProverForbiddenArtifactMarkers(
             implementationBytes,
             nameof(implementationBytes));
@@ -6058,12 +6078,13 @@ public sealed record EthereumMainnetNativeEvmProverBundle
 
     private static void RequireNativeEvmProverProductionArtifactSize(
         byte[] bytes,
-        string parameterName)
+        string parameterName,
+        int minBytes = EthereumMainnetSccp.NativeEvmProverMinSupportArtifactBytesV1)
     {
-        if (bytes.Length < EthereumMainnetSccp.NativeEvmProverMinArtifactBytesV1)
+        if (bytes.Length < minBytes)
         {
             throw new ArgumentException(
-                $"{parameterName} must be at least {EthereumMainnetSccp.NativeEvmProverMinArtifactBytesV1} bytes.",
+                $"{parameterName} must be at least {minBytes} bytes.",
                 parameterName);
         }
     }

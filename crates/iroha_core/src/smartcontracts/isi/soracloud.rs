@@ -16073,7 +16073,8 @@ fn prove_soracloud_fhe_full_bootstrap_material_proof_from_input_material_for_eva
 /// # Errors
 /// Returns an execution error when the evaluation keys are not governed
 /// `FullBootstrapV1` keys, the release audit package does not match the
-/// governed artifacts or trusted reviewer, or material proof generation fails.
+/// governed artifacts, trusted reviewer, or caller-pinned package digest, or
+/// material proof generation fails.
 #[cfg(feature = "zk-stark")]
 #[allow(clippy::too_many_arguments)]
 pub fn prove_soracloud_fhe_full_bootstrap_material_proof_for_evaluation_keys_with_release_audit_v1(
@@ -16275,8 +16276,8 @@ fn prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_v1(
 /// # Errors
 /// Returns an execution error when the evaluation keys are not governed
 /// `FullBootstrapV1` keys, the release audit package does not match the
-/// governed artifacts or trusted reviewer, or the underlying native proof
-/// generation fails.
+/// governed artifacts, trusted reviewer, or caller-pinned package digest, or
+/// the underlying native proof generation fails.
 #[cfg(feature = "zk-stark")]
 #[allow(clippy::too_many_arguments)]
 pub fn prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
@@ -19848,6 +19849,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "zk-stark")]
     #[track_caller]
     fn assert_bfv_error_contains(err: &iroha_crypto::fhe_bfv::BfvError, expected: &str) {
         let debug = format!("{err:?}");
@@ -24532,6 +24534,33 @@ mod tests {
             .expect_err("release audit package digest drift must fail before material proof generation");
         assert_invalid_parameter_contains(err, "release audit package digest mismatch");
 
+        for (digest, expected) in [
+            (Hash::prehashed([0_u8; Hash::LENGTH]), "zero hash"),
+            (
+                Hash::new(b"pending BFV full-bootstrap proof-key pair commitment"),
+                "placeholder",
+            ),
+        ] {
+            let err =
+                prove_soracloud_fhe_full_bootstrap_material_proof_for_evaluation_keys_with_release_audit_v1(
+                    &params,
+                    &evaluation_keys,
+                    &artifacts,
+                    &transcript,
+                    &vk_box,
+                    &release_audit_package,
+                    digest,
+                    "sora-zk-audit-wg-2026",
+                    reviewer_key_pair.public_key(),
+                )
+                .expect_err("noncanonical release audit package digest must fail before material proof generation");
+            assert_invalid_parameter_contains(
+                err.clone(),
+                "release audit package failed validation",
+            );
+            assert_invalid_parameter_contains(err, expected);
+        }
+
         let err =
             prove_soracloud_fhe_full_bootstrap_material_proof_for_evaluation_keys_with_release_audit_v1(
                 &params,
@@ -25114,6 +25143,38 @@ mod tests {
         )
         .expect_err("material proof wrapper must reject wrong native AIR transcript labels");
         assert_invalid_parameter_contains(err, "native AIR transcript label mismatch");
+    }
+
+    #[cfg(feature = "zk-stark")]
+    #[test]
+    fn full_bootstrap_material_prover_rejects_input_material_digest_aliases() {
+        let vk_box = sample_fhe_full_bootstrap_material_stark_vk_box();
+        let input_material = sample_full_bootstrap_material_proof_input_material();
+        let canonical_digest =
+            bfv_full_bootstrap_material_proof_input_material_digest_v1(&input_material)
+                .expect("hash canonical material proof input package");
+
+        for (digest, label) in [
+            (input_material.statement_hash, "public statement hash"),
+            (Hash::prehashed([0_u8; Hash::LENGTH]), "zero digest"),
+            (
+                Hash::new(b"stale-soracloud-material-proof-input-package-digest"),
+                "stale package digest",
+            ),
+        ] {
+            assert_ne!(
+                digest, canonical_digest,
+                "{label} must not equal the canonical material input package digest",
+            );
+            let err =
+                prove_soracloud_fhe_full_bootstrap_material_proof_from_input_material_with_digest_v1(
+                    &input_material,
+                    &vk_box,
+                    digest,
+                )
+                .expect_err("digest alias must fail before native AIR generation");
+            assert_invalid_parameter_contains(err, "input material digest mismatch");
+        }
     }
 
     #[cfg(feature = "zk-stark")]
@@ -28202,6 +28263,38 @@ mod tests {
             )
             .expect_err("release audit package digest drift must fail before proof generation");
         assert_invalid_parameter_contains(err, "release audit package digest mismatch");
+
+        for (digest, expected) in [
+            (Hash::prehashed([0_u8; Hash::LENGTH]), "zero hash"),
+            (
+                Hash::new(b"pending BFV full-bootstrap proof-key pair commitment"),
+                "placeholder",
+            ),
+        ] {
+            let err =
+                prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
+                    &params,
+                    &evaluation_keys,
+                    &transcript,
+                    &artifacts,
+                    &input,
+                    &output,
+                    BfvCiphertextBoundModeV1::ExactResidualMultiple,
+                    input_bound,
+                    output_bound,
+                    &vk_box,
+                    &release_audit_package,
+                    digest,
+                    "sora-zk-audit-wg-2026",
+                    reviewer_key_pair.public_key(),
+                )
+                .expect_err("noncanonical release audit package digest must fail before execution proof generation");
+            assert_invalid_parameter_contains(
+                err.clone(),
+                "release audit package failed validation",
+            );
+            assert_invalid_parameter_contains(err, expected);
+        }
 
         let err =
             prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(

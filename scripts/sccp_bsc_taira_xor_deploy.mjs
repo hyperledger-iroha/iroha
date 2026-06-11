@@ -737,9 +737,12 @@ export function bscDestinationBindingKey({
 }
 
 function pickField(record, names, label) {
+  if (!isRecord(record)) {
+    throw new Error(`verifier material is missing ${label}`);
+  }
   for (const name of names) {
-    if (record[name] !== undefined) {
-      return record[name];
+    if (hasOwn(record, name) && ownValue(record, name) !== undefined) {
+      return ownValue(record, name);
     }
   }
   throw new Error(`verifier material is missing ${label}`);
@@ -866,33 +869,36 @@ export function normalizeVerifierMaterial(
     throw new Error("verifier material must be a JSON object.");
   }
   const proofFamily = String(
-    material.proofFamily ?? SCCP_PROOF_FAMILY_STARK_FRI,
+    readFirstValue(material, "proofFamily") ?? SCCP_PROOF_FAMILY_STARK_FRI,
   );
   if (proofFamily !== SCCP_PROOF_FAMILY_STARK_FRI) {
     throw new Error("proofFamily must be stark-fri-v1 for BSC SCCP.");
   }
   const networkId = normalizeHex32(
-    material.networkId ?? profile.networkIdHex,
+    readFirstValue(material, "networkId") ?? profile.networkIdHex,
     "networkId",
   );
   if (networkId !== profile.networkIdHex) {
     throw new Error(`networkId must be ${profile.label} for ${ROUTE_ID}.`);
   }
   const sourceDomain = normalizeUint32(
-    material.sourceDomain ?? SCCP_DOMAIN_SORA,
+    readFirstValue(material, "sourceDomain") ?? SCCP_DOMAIN_SORA,
     "sourceDomain",
   );
   const targetDomain = normalizeUint32(
-    material.targetDomain ?? SCCP_DOMAIN_BSC,
+    readFirstValue(material, "targetDomain") ?? SCCP_DOMAIN_BSC,
     "targetDomain",
   );
   if (sourceDomain !== SCCP_DOMAIN_SORA || targetDomain !== SCCP_DOMAIN_BSC) {
     throw new Error("destination verifier domains must be SORA -> BSC.");
   }
   const expectedVerifierKeyHash = normalizeHex32(
-    material.expectedVerifierKeyHash ??
-      material.verifierKeyHash ??
-      material.verifyingKeyHash,
+    readFirstValue(
+      material,
+      "expectedVerifierKeyHash",
+      "verifierKeyHash",
+      "verifyingKeyHash",
+    ),
     "expectedVerifierKeyHash",
   );
   const normalizedMaterial = {
@@ -967,6 +973,10 @@ function hasOwn(record, key) {
   return Object.prototype.hasOwnProperty.call(record, key);
 }
 
+function ownValue(record, key) {
+  return hasOwn(record, key) ? record[key] : undefined;
+}
+
 function canonicalRecordString(value, label) {
   if (typeof value !== "string" || value.length === 0) {
     return "";
@@ -982,7 +992,10 @@ function readFirstString(record, ...keys) {
     return "";
   }
   for (const key of keys) {
-    const value = canonicalRecordString(record[key], key);
+    if (!hasOwn(record, key)) {
+      continue;
+    }
+    const value = canonicalRecordString(ownValue(record, key), key);
     if (value) {
       return value;
     }
@@ -995,7 +1008,10 @@ function readFirstRecord(record, ...keys) {
     return null;
   }
   for (const key of keys) {
-    const value = record[key];
+    if (!hasOwn(record, key)) {
+      continue;
+    }
+    const value = ownValue(record, key);
     if (isRecord(value)) {
       return value;
     }
@@ -1009,7 +1025,7 @@ function readFirstValue(record, ...keys) {
   }
   for (const key of keys) {
     if (hasOwn(record, key)) {
-      return record[key];
+      return ownValue(record, key);
     }
   }
   return undefined;
@@ -1030,12 +1046,12 @@ function diagnosticFlagReason(record, pathName) {
     return "";
   }
   for (const key of DIAGNOSTIC_FLAG_KEYS) {
-    if (record[key] === true) {
+    if (hasOwn(record, key) && ownValue(record, key) === true) {
       return `${pathName}.${key}=true`;
     }
   }
   for (const key of DIAGNOSTIC_TEXT_KEYS) {
-    if (diagnosticTextValue(record[key])) {
+    if (hasOwn(record, key) && diagnosticTextValue(ownValue(record, key))) {
       return `${pathName}.${key} mentions diagnostic verifier material`;
     }
   }
@@ -1065,7 +1081,10 @@ export function isCanonicalBscProductionArtifactPath(pathName) {
 }
 
 function routeManifestProductionProblems(record, label) {
-  if (!isRecord(record) || record.schema !== ROUTE_MANIFEST_SCHEMA) {
+  if (
+    !isRecord(record) ||
+    readFirstString(record, "schema") !== ROUTE_MANIFEST_SCHEMA
+  ) {
     return [];
   }
   const problems = [];
@@ -1079,7 +1098,8 @@ function routeManifestProductionProblems(record, label) {
       }`,
     );
   }
-  const productionReady = record.productionReady === true;
+  const productionReady =
+    readFirstValue(record, "productionReady", "production_ready") === true;
   if (!productionReady) {
     problems.push(`${label} is not productionReady true`);
   }
@@ -1284,7 +1304,7 @@ function postDeployLiveEvidenceProductionBlockers(record) {
       continue;
     }
     for (const blocker of normalizeCanonicalStringList(
-      record[key],
+      ownValue(record, key),
       `route manifest postDeployLiveEvidence.${key}`,
     )) {
       blockers.push(`${key}: ${blocker}`);
@@ -2133,9 +2153,8 @@ function attachNativeProverBundleToManifest(manifest, bundle) {
   const nativeEvmProverBundleHash =
     canonicalBscNativeEvmProverBundleHash(normalizedBundle);
   const destinationRollout = {
-    ...(isRecord(manifest.destinationRollout)
-      ? manifest.destinationRollout
-      : {}),
+    ...(readFirstRecord(manifest, "destinationRollout", "destination_rollout") ??
+      {}),
     proofArtifactHash: bundle.proof_artifact_hash,
     provingKeyHash: bundle.proving_key_hash,
     nativeEvmProverBundleHash,
@@ -2603,7 +2622,13 @@ function readConsistentString(record, keys, label) {
   let selected = "";
   let selectedKey = "";
   for (const key of keys) {
-    const value = canonicalRecordString(record[key], `${label}.${key}`);
+    if (!hasOwn(record, key)) {
+      continue;
+    }
+    const value = canonicalRecordString(
+      ownValue(record, key),
+      `${label}.${key}`,
+    );
     if (!value) {
       continue;
     }
@@ -2628,7 +2653,13 @@ function collectStringEntries(record, keys, pathName) {
   }
   const entries = [];
   for (const key of keys) {
-    const value = canonicalRecordString(record[key], `${pathName}.${key}`);
+    if (!hasOwn(record, key)) {
+      continue;
+    }
+    const value = canonicalRecordString(
+      ownValue(record, key),
+      `${pathName}.${key}`,
+    );
     if (value) {
       entries.push({
         key,
@@ -2646,7 +2677,10 @@ function collectRecordEntries(record, keys, pathName) {
   }
   const entries = [];
   for (const key of keys) {
-    const value = record[key];
+    if (!hasOwn(record, key)) {
+      continue;
+    }
+    const value = ownValue(record, key);
     if (isRecord(value)) {
       entries.push({
         key,
@@ -2714,7 +2748,10 @@ function assertSingleValueAlias(record, keys, pathName, label) {
     return;
   }
   const presentKeys = keys.filter((key) => {
-    const value = record[key];
+    if (!hasOwn(record, key)) {
+      return false;
+    }
+    const value = ownValue(record, key);
     return (
       (typeof value === "string" && value.trim()) ||
       typeof value === "boolean"
@@ -2757,7 +2794,7 @@ function readConsistentBoolean(record, keys, label) {
     if (!hasOwn(record, key)) {
       continue;
     }
-    const value = record[key];
+    const value = ownValue(record, key);
     if (typeof value !== "boolean") {
       throw new Error(`${label}.${key} must be boolean.`);
     }
@@ -2864,7 +2901,7 @@ function normalizeBscRouteNativeEvmProverBundle({
 
 function normalizeRouteManifestForConfig(manifest) {
   const record = routeConfigRequiredRecord(manifest, "route manifest");
-  if (record.schema !== ROUTE_MANIFEST_SCHEMA) {
+  if (readFirstString(record, "schema") !== ROUTE_MANIFEST_SCHEMA) {
     throw new Error(`route manifest schema must be ${ROUTE_MANIFEST_SCHEMA}.`);
   }
   const reason = unsafeSecretReason(record, "route manifest");
@@ -3022,10 +3059,15 @@ function normalizeRouteManifestForConfig(manifest) {
     );
   }
 
-  if (record.productionReady !== true && record.productionReady !== false) {
+  const productionReadyValue = readFirstValue(
+    record,
+    "productionReady",
+    "production_ready",
+  );
+  if (productionReadyValue !== true && productionReadyValue !== false) {
     throw new Error("route manifest productionReady must be true or false.");
   }
-  const productionReady = record.productionReady === true;
+  const productionReady = productionReadyValue === true;
   const explorerUrlSources = [
     {
       record,
@@ -3681,11 +3723,16 @@ function normalizeRouteManifestForConfig(manifest) {
       offlineFullTomlSha256: offlineFullTomlSha256 || null,
     };
   }
+  const disabledReasonValue = readFirstValue(
+    record,
+    "disabledReason",
+    "disabled_reason",
+  );
   const explicitDisabledReason =
-    record.disabledReason === undefined && record.disabled_reason === undefined
+    disabledReasonValue === undefined
       ? null
       : normalizeNonEmptyText(
-          readFirstValue(record, "disabledReason", "disabled_reason"),
+          disabledReasonValue,
           "route manifest disabledReason",
         );
   if (productionReady && explicitDisabledReason) {
@@ -4201,13 +4248,14 @@ async function commandRouteConfig(options) {
     wrote: out,
     mode: baseConfigPath ? "merged-full-config" : "overlay",
     baseConfig: baseConfigPath ? resolve(baseConfigPath) : null,
-    routeId: manifest.routeId ?? manifest.route_id,
-    assetKey: manifest.assetKey ?? manifest.asset_key,
-    productionReady: manifest.productionReady ?? manifest.production_ready,
+    routeId: readFirstValue(manifest, "routeId", "route_id") ?? null,
+    assetKey: readFirstValue(manifest, "assetKey", "asset_key") ?? null,
+    productionReady:
+      readFirstValue(manifest, "productionReady", "production_ready") ?? null,
     allowUnready: optionEnabled(
       options,
       "allow-unready",
-      (manifest.productionReady ?? manifest.production_ready) !== true,
+      readFirstValue(manifest, "productionReady", "production_ready") !== true,
     ),
     nextStep: baseConfigPath
       ? "Deploy this merged TAIRA node config on every public validator and restart Torii/Iroha before rerunning the BSC SCCP preflight without --manifest-file."

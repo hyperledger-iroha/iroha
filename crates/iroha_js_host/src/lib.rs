@@ -10596,11 +10596,11 @@ const PRIVACY_ALGORITHM_ENTRIES: &[PrivacyAlgorithmEntry] = &[
         backend_family: "verange",
         sdk_entrypoints: &[
             "buildRangeCommitment",
+            "buildVeRangeDevProofFixture",
             "buildVeRangeProofEnvelope",
-            "buildVeRangeProofV1",
-            "verifyVeRangeProofV1",
+            "verifyVeRangeProofLocally",
         ],
-        planned_entrypoints: &[],
+        planned_entrypoints: &["buildVeRangeProofV1"],
     },
     PrivacyAlgorithmEntry {
         id: "zkat-policy-private-auth-v1",

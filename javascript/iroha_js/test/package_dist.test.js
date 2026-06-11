@@ -35,8 +35,8 @@ import {
   KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1,
   KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_UNAVAILABLE_FRAGMENT,
   KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT,
-  KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION,
-  KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION,
+  KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
+  KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
   KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
   KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
   KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
@@ -1087,11 +1087,11 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     "KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1",
     "KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1",
     "KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1",
-    "KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION",
+    "KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION",
     "KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1",
     "KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT",
     "KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_UNAVAILABLE_FRAGMENT",
-    "KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION",
+    "KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION",
     "KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND",
     "KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1",
     "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1",
@@ -1165,7 +1165,7 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
   assert.equal(KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1, "recursive_compact_v1");
   assert.equal(KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1, "recursive_spend_v1");
   assert.equal(KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1, "checked_prefold_v1");
-  assert.equal(KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION, 7);
+  assert.equal(KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION, 7);
   assert.equal(KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1, "kagemusha-recursive-compact-v1");
   assert.equal(
     KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT,
@@ -1185,7 +1185,7 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     isKagemushaRecursiveCompactUnavailable("recursive compact proof composition unavailable"),
     false,
   );
-  assert.equal(KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION, 6);
+  assert.equal(KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION, 6);
   assert.equal(KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND, "halo2/ipa");
   assert.equal(
     KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
@@ -2021,7 +2021,7 @@ test("package dist Kagemusha recursive compact requires key packages before nati
   try {
     globalThis.__IROHA_NATIVE_BINDING__ = {
       connectNoritoBridgeAbiVersion() {
-        return KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION;
+        return KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION;
       },
       kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
         ...args
@@ -3765,9 +3765,9 @@ test("package dist privacyProofRequestV1 clears component copies after native di
     };
     assert.deepEqual(
       privacyProofRequestV1({
-        algorithmId: "verange-transparent-range-v1",
-        entrypoint: "buildVeRangeProofV1",
-        vkRef: "bulletproofs:verange_transparent_range_v1",
+        algorithmId: "zk-ace-pq-authorization-v0",
+        entrypoint: "buildZkAceAuthorizationProofV1",
+        vkRef: "stark-fri:zk_ace_pq_authorization_v0",
         publicInputs,
         witness,
         proof,
@@ -3785,9 +3785,9 @@ test("package dist privacyProofRequestV1 clears component copies after native di
     let error;
     try {
       privacyProofRequestV1({
-        algorithmId: "verange-transparent-range-v1",
-        entrypoint: "buildVeRangeProofV1",
-        vkRef: "bulletproofs:verange_transparent_range_v1",
+        algorithmId: "zk-ace-pq-authorization-v0",
+        entrypoint: "buildZkAceAuthorizationProofV1",
+        vkRef: "stark-fri:zk_ace_pq_authorization_v0",
         publicInputs,
         witness,
         proof,
@@ -5747,6 +5747,63 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
   const selfTestFixtureBytes = Buffer.from(JSON.stringify(selfTestFixture), "utf8");
   const selfTestFixtureHash = sha256Hex(selfTestFixtureBytes);
   nativeProverBundle.audit_hashes.native_prover_self_test = selfTestFixtureHash;
+  const hashConsistentNativeProverBundle = ({
+    proofArtifactBytes: selectedProofArtifactBytes = proofArtifactBytes,
+    provingKeyBytes: selectedProvingKeyBytes = provingKeyBytes,
+    verifierKeyBytes: selectedVerifierKeyBytes = verifierKeyBytes,
+    implementationBytes: selectedImplementationBytes = implementationBytes,
+    crossSdkFixtureParityBytes: overrideParityFixtureBytes,
+    nativeProverSelfTestBytes: overrideSelfTestFixtureBytes,
+  } = {}) => {
+    const selectedProofArtifactHash = sha256Hex(selectedProofArtifactBytes);
+    const selectedProvingKeyHash = sha256Hex(selectedProvingKeyBytes);
+    const selectedVerifierKeyHash = sha256Hex(selectedVerifierKeyBytes);
+    const selectedImplementationHash = sha256Hex(selectedImplementationBytes);
+    const selectedBundle = {
+      ...nativeProverBundle,
+      proof_artifact_hash: selectedProofArtifactHash,
+      proving_key_hash: selectedProvingKeyHash,
+      verifier_key_hash: selectedVerifierKeyHash,
+      native_sdk_artifacts: nativeProverBundle.native_sdk_artifacts.map((artifact, index) => ({
+        ...artifact,
+        prover_artifact_hash: selectedProofArtifactHash,
+        proving_key_hash: selectedProvingKeyHash,
+        implementation_hash: artifact.sdk === "javascript"
+          ? selectedImplementationHash
+          : `0x${(index + 1).toString(16).padStart(2, "0").repeat(32)}`,
+      })),
+    };
+    const selectedParityFixtureBytes =
+      overrideParityFixtureBytes ?? Buffer.from(
+        JSON.stringify({
+          ...parityFixture,
+          proof_artifact_hash: selectedProofArtifactHash,
+          proving_key_hash: selectedProvingKeyHash,
+          verifier_key_hash: selectedVerifierKeyHash,
+        }),
+        "utf8",
+      );
+    const selectedSelfTestFixtureBytes =
+      overrideSelfTestFixtureBytes ?? Buffer.from(
+        JSON.stringify({
+          ...selfTestFixture,
+          proof_artifact_hash: selectedProofArtifactHash,
+          proving_key_hash: selectedProvingKeyHash,
+          verifier_key_hash: selectedVerifierKeyHash,
+        }),
+        "utf8",
+      );
+    selectedBundle.audit_hashes = {
+      ...nativeProverBundle.audit_hashes,
+      cross_sdk_fixture_parity: sha256Hex(selectedParityFixtureBytes),
+      native_prover_self_test: sha256Hex(selectedSelfTestFixtureBytes),
+    };
+    return {
+      bundle: selectedBundle,
+      parityFixtureBytes: selectedParityFixtureBytes,
+      selfTestFixtureBytes: selectedSelfTestFixtureBytes,
+    };
+  };
   assert.equal(
     validateEthereumMainnetNativeEvmProverBundle(nativeProverBundle, {
       destinationBinding: ethereumMainnetBinding,
@@ -5877,6 +5934,20 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     )).implementationHash,
     implementationHash,
   );
+  await assert.rejects(
+    () =>
+      verifyEthereumMainnetNativeEvmProverArtifactsFromBundle(
+        {
+          nativeProverBundle,
+          sdk: " javascript ",
+          artifactResolver(path) {
+            return nativeArtifactBytes.get(path);
+          },
+        },
+        { destinationBinding: ethereumMainnetBinding },
+      ),
+    /nativeProverArtifacts\.sdk must be a non-empty canonical string/u,
+  );
   let factoryRequest;
   const factorySdk = await EthereumMainnetSccp.fromNativeProverBundle({
     destinationBinding: ethereumMainnetBinding,
@@ -5947,6 +6018,111 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
         { destinationBinding: ethereumMainnetBinding },
       ),
     /proofArtifactBytes must be at least 65536 bytes/u,
+  );
+  const tinyProvingKeyBytes = Buffer.from("tiny package proving key\n", "utf8");
+  const tinyProvingKeyBundle = hashConsistentNativeProverBundle({
+    provingKeyBytes: tinyProvingKeyBytes,
+  });
+  assert.throws(
+    () =>
+      verifyEthereumMainnetNativeEvmProverArtifacts(
+        {
+          nativeProverBundle: tinyProvingKeyBundle.bundle,
+          proofArtifactBytes,
+          provingKeyBytes: tinyProvingKeyBytes,
+          verifierKeyBytes,
+          crossSdkFixtureParityBytes: tinyProvingKeyBundle.parityFixtureBytes,
+          nativeProverSelfTestBytes: tinyProvingKeyBundle.selfTestFixtureBytes,
+          sdk: "javascript",
+          implementationBytes,
+        },
+        { destinationBinding: ethereumMainnetBinding },
+      ),
+    /provingKeyBytes must be at least 65536 bytes/u,
+  );
+  const tinyVerifierKeyBytes = Buffer.from("tiny package verifier key\n", "utf8");
+  const tinyVerifierKeyBundle = hashConsistentNativeProverBundle({
+    verifierKeyBytes: tinyVerifierKeyBytes,
+  });
+  assert.throws(
+    () =>
+      verifyEthereumMainnetNativeEvmProverArtifacts(
+        {
+          nativeProverBundle: tinyVerifierKeyBundle.bundle,
+          proofArtifactBytes,
+          provingKeyBytes,
+          verifierKeyBytes: tinyVerifierKeyBytes,
+          crossSdkFixtureParityBytes: tinyVerifierKeyBundle.parityFixtureBytes,
+          nativeProverSelfTestBytes: tinyVerifierKeyBundle.selfTestFixtureBytes,
+          sdk: "javascript",
+          implementationBytes,
+        },
+        { destinationBinding: ethereumMainnetBinding },
+      ),
+    /verifierKeyBytes must be at least 128 bytes/u,
+  );
+  const tinyParityFixtureBytesForFloor = Buffer.from("{}", "utf8");
+  const tinyParityBundle = hashConsistentNativeProverBundle({
+    crossSdkFixtureParityBytes: tinyParityFixtureBytesForFloor,
+  });
+  assert.throws(
+    () =>
+      verifyEthereumMainnetNativeEvmProverArtifacts(
+        {
+          nativeProverBundle: tinyParityBundle.bundle,
+          proofArtifactBytes,
+          provingKeyBytes,
+          verifierKeyBytes,
+          crossSdkFixtureParityBytes: tinyParityFixtureBytesForFloor,
+          nativeProverSelfTestBytes: tinyParityBundle.selfTestFixtureBytes,
+          sdk: "javascript",
+          implementationBytes,
+        },
+        { destinationBinding: ethereumMainnetBinding },
+      ),
+    /crossSdkFixtureParityBytes must be at least 128 bytes/u,
+  );
+  const tinySelfTestFixtureBytesForFloor = Buffer.from("{}", "utf8");
+  const tinySelfTestBundle = hashConsistentNativeProverBundle({
+    nativeProverSelfTestBytes: tinySelfTestFixtureBytesForFloor,
+  });
+  assert.throws(
+    () =>
+      verifyEthereumMainnetNativeEvmProverArtifacts(
+        {
+          nativeProverBundle: tinySelfTestBundle.bundle,
+          proofArtifactBytes,
+          provingKeyBytes,
+          verifierKeyBytes,
+          crossSdkFixtureParityBytes: tinySelfTestBundle.parityFixtureBytes,
+          nativeProverSelfTestBytes: tinySelfTestFixtureBytesForFloor,
+          sdk: "javascript",
+          implementationBytes,
+        },
+        { destinationBinding: ethereumMainnetBinding },
+      ),
+    /nativeProverSelfTestBytes must be at least 128 bytes/u,
+  );
+  const tinyImplementationBytes = Buffer.from("tiny package implementation\n", "utf8");
+  const tinyImplementationBundle = hashConsistentNativeProverBundle({
+    implementationBytes: tinyImplementationBytes,
+  });
+  assert.throws(
+    () =>
+      verifyEthereumMainnetNativeEvmProverArtifacts(
+        {
+          nativeProverBundle: tinyImplementationBundle.bundle,
+          proofArtifactBytes,
+          provingKeyBytes,
+          verifierKeyBytes,
+          crossSdkFixtureParityBytes: tinyImplementationBundle.parityFixtureBytes,
+          nativeProverSelfTestBytes: tinyImplementationBundle.selfTestFixtureBytes,
+          sdk: "javascript",
+          implementationBytes: tinyImplementationBytes,
+        },
+        { destinationBinding: ethereumMainnetBinding },
+      ),
+    /implementationBytes must be at least 1024 bytes/u,
   );
   assert.throws(
     () =>

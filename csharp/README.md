@@ -54,12 +54,12 @@ var snapshot = new OfflineCashConfigurationSnapshot(
     AssetDefinitionId: "pkr#sbp",
     OfflinePaymentsEnabled: true,
     IssuerPublicKeyBase64: cachedIssuerPublicKeyBase64,
-    BridgeAbiVersion: 7,
+    NativeBridgeAbiVersion: 7,
     CreatedAtMs: cachedAtMs,
     ExpiresAtMs: expiresAtMs);
 snapshot.RequireUsableForOfflineExchange(
     nowMs: currentTimeMs,
-    requiredBridgeAbiVersion: 7);
+    requiredNativeBridgeAbiVersion: 7);
 
 var controller = new OfflineCashLifecycleController(
     offlineWallet,
@@ -105,7 +105,7 @@ await torii.RegisterVerifyingKeyAsync(new ToriiVerifyingKeyRegisterRequest
 
 The optional `Hyperledger.Iroha.Offline.KagemushaRecursiveSpendNative` wrapper
 calls the ABI-6 `connect_norito_bridge` recursive spend surface. `IsAvailable()`
-requires bridge ABI 6 or later plus `init`, `append`, both transition-profile
+requires native bridge ABI 6 or later plus `init`, `append`, both transition-profile
 helpers, the append-boundary helper, both lineage-witness helpers, `verify`,
 and `redeem` before reporting recursive spend support. Each entry point accepts
 raw Norito request archives and returns raw Norito archive bytes; the C# SDK does

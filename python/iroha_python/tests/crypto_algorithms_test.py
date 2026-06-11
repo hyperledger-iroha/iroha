@@ -788,9 +788,9 @@ def test_privacy_native_availability_requires_complete_method_surface(
         match="privacy FFI requires complete native method surface; missing privacy_verify_proof_v1",
     ):
         privacy_proof_request_v1(
-            algorithm_id="verange-transparent-range-v1",
-            entrypoint="buildVeRangeProofV1",
-            vk_ref="bulletproofs:verange_transparent_range_v1",
+            algorithm_id="zk-ace-pq-authorization-v0",
+            entrypoint="buildZkAceAuthorizationProofV1",
+            vk_ref="stark-fri:zk_ace_pq_authorization_v0",
             public_inputs=b"public-inputs",
         )
     with pytest.raises(
@@ -870,9 +870,9 @@ def test_privacy_native_availability_probes_use_norito_request_archives(
     assert is_privacy_native_available() is True
 
     assert native.proof_request_call == (
-        "verange-transparent-range-v1",
-        "buildVeRangeProofV1",
-        "bulletproofs:verange_transparent_range_v1",
+        "zk-ace-pq-authorization-v0",
+        "buildZkAceAuthorizationProofV1",
+        "stark-fri:zk_ace_pq_authorization_v0",
         b"public-inputs",
         b"",
         b"",
@@ -1192,18 +1192,18 @@ def test_privacy_proof_request_v1_forwards_validated_binary_fields(
     monkeypatch.setattr(crypto_module, "_crypto", native)
 
     archive = privacy_proof_request_v1(
-        algorithm_id="verange-transparent-range-v1",
-        entrypoint="buildVeRangeProofV1",
-        vk_ref="bulletproofs:verange_transparent_range_v1",
+        algorithm_id="zk-ace-pq-authorization-v0",
+        entrypoint="buildZkAceAuthorizationProofV1",
+        vk_ref="stark-fri:zk_ace_pq_authorization_v0",
         public_inputs=memoryview(b"public-inputs"),
         witness=bytearray(b"secret-witness"),
     )
 
     assert archive == _PRIVACY_REQUEST_ARCHIVE
     assert native.call == (
-        "verange-transparent-range-v1",
-        "buildVeRangeProofV1",
-        "bulletproofs:verange_transparent_range_v1",
+        "zk-ace-pq-authorization-v0",
+        "buildZkAceAuthorizationProofV1",
+        "stark-fri:zk_ace_pq_authorization_v0",
         b"public-inputs",
         b"secret-witness",
         b"",
@@ -1217,40 +1217,40 @@ def test_privacy_proof_request_v1_rejects_text_and_signed_byte_fields(
 
     with pytest.raises(TypeError, match="public_inputs must be bytes-like, not a string"):
         privacy_proof_request_v1(
-            algorithm_id="verange-transparent-range-v1",
-            entrypoint="buildVeRangeProofV1",
-            vk_ref="bulletproofs:verange_transparent_range_v1",
+            algorithm_id="zk-ace-pq-authorization-v0",
+            entrypoint="buildZkAceAuthorizationProofV1",
+            vk_ref="stark-fri:zk_ace_pq_authorization_v0",
             public_inputs="public-inputs",  # type: ignore[arg-type]
         )
     with pytest.raises(TypeError, match="witness must use unsigned byte elements"):
         privacy_proof_request_v1(
-            algorithm_id="verange-transparent-range-v1",
-            entrypoint="buildVeRangeProofV1",
-            vk_ref="bulletproofs:verange_transparent_range_v1",
+            algorithm_id="zk-ace-pq-authorization-v0",
+            entrypoint="buildZkAceAuthorizationProofV1",
+            vk_ref="stark-fri:zk_ace_pq_authorization_v0",
             public_inputs=b"public-inputs",
             witness=_signed_byte_array(b"witness"),  # type: ignore[arg-type]
         )
     with pytest.raises(ValueError, match="public_inputs must not be empty"):
         privacy_proof_request_v1(
-            algorithm_id="verange-transparent-range-v1",
-            entrypoint="buildVeRangeProofV1",
-            vk_ref="bulletproofs:verange_transparent_range_v1",
+            algorithm_id="zk-ace-pq-authorization-v0",
+            entrypoint="buildZkAceAuthorizationProofV1",
+            vk_ref="stark-fri:zk_ace_pq_authorization_v0",
             public_inputs=b"",
         )
 
 
 def test_privacy_proof_request_v1_roundtrips_through_native_build_and_verify() -> None:
     build_request = privacy_proof_request_v1(
-        algorithm_id="verange-transparent-range-v1",
-        entrypoint="buildVeRangeProofV1",
-        vk_ref="bulletproofs:verange_transparent_range_v1",
+        algorithm_id="zk-ace-pq-authorization-v0",
+        entrypoint="buildZkAceAuthorizationProofV1",
+        vk_ref="stark-fri:zk_ace_pq_authorization_v0",
         public_inputs=b"public-inputs",
         witness=b"secret-witness",
     )
     verify_request = privacy_proof_request_v1(
-        algorithm_id="verange-transparent-range-v1",
-        entrypoint="buildVeRangeProofV1",
-        vk_ref="bulletproofs:verange_transparent_range_v1",
+        algorithm_id="zk-ace-pq-authorization-v0",
+        entrypoint="buildZkAceAuthorizationProofV1",
+        vk_ref="stark-fri:zk_ace_pq_authorization_v0",
         public_inputs=b"public-inputs",
         proof=b"proof-bytes",
     )

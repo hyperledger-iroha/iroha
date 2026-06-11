@@ -10284,7 +10284,7 @@ const verifyNativeEvmProverArtifacts = (
   );
   if (typeof sdk !== "string" || sdk.length === 0 || sdk.trim() !== sdk) {
     throw new TypeError(
-      "sdk must be a non-empty canonical string for nativeProverBundle implementation binding",
+      "nativeProverArtifacts.sdk must be a non-empty canonical string",
     );
   }
   if (implementationBytes === undefined) {
@@ -10421,7 +10421,7 @@ const verifyNativeEvmProverArtifactsFromBundle = async (
   const sdk = strictOptionalResultField(input, "sdk", "sdk");
   if (typeof sdk !== "string" || sdk.length === 0 || sdk.trim() !== sdk) {
     throw new TypeError(
-      "sdk must be a non-empty canonical string for nativeProverBundle implementation binding",
+      "nativeProverArtifacts.sdk must be a non-empty canonical string",
     );
   }
   const resolver = strictOptionalResultField(

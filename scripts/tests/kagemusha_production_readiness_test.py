@@ -95,6 +95,24 @@ slot_helpers = importlib.util.module_from_spec(SLOT_HELPER_SPEC)
 SLOT_HELPER_SPEC.loader.exec_module(slot_helpers)  # type: ignore[misc]
 
 
+_MISSING_PATH_METHOD = object()
+_PATH_TYPE = type(Path("."))
+_PATH_TYPE_METHODS = ("exists", "is_symlink", "lstat", "mkdir", "rglob", "stat")
+_ORIGINAL_PATH_TYPE_METHODS = {
+    name: _PATH_TYPE.__dict__.get(name, _MISSING_PATH_METHOD)
+    for name in _PATH_TYPE_METHODS
+}
+
+
+def restore_path_type_method_shadows() -> None:
+    for name, original in _ORIGINAL_PATH_TYPE_METHODS.items():
+        if original is _MISSING_PATH_METHOD:
+            if name in _PATH_TYPE.__dict__:
+                delattr(_PATH_TYPE, name)
+        else:
+            setattr(_PATH_TYPE, name, original)
+
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -794,6 +812,12 @@ def build_release_bundle_from_fixture(
 
 
 class KagemushaProductionReadinessTest(unittest.TestCase):
+    def setUp(self) -> None:
+        restore_path_type_method_shadows()
+
+    def tearDown(self) -> None:
+        restore_path_type_method_shadows()
+
     def test_complete_signed_android_matrix_passes_rollup(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / "slots"
@@ -5019,6 +5043,9 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertIn("--out must not be hardlinked", stderr.getvalue())
 
     def test_kagemusha_release_bundle_rejects_output_parent_symlink_after_create(self) -> None:
+        path_type = type(Path("."))
+        original_mkdir = path_type.mkdir
+
         with tempfile.TemporaryDirectory() as temp:
             fixture = create_ready_release_bundle_fixture(Path(temp))
             bundle_root = fixture["bundle_root"]
@@ -5027,7 +5054,6 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             out = out_parent / "kagemusha-production-release-bundle.json"
             external_parent = Path(temp) / "external-release-out"
             external_parent.mkdir()
-            original_mkdir = Path.mkdir
 
             def replacing_mkdir(
                 path: Path,
@@ -5041,7 +5067,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 original_mkdir(path, mode=mode, parents=parents, exist_ok=exist_ok)
 
             stderr = io.StringIO()
-            with mock.patch.object(Path, "mkdir", replacing_mkdir):
+            with mock.patch.object(path_type, "mkdir", replacing_mkdir):
                 with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
                     status = release_bundle.main(release_bundle_args(fixture, out=out))
 
@@ -5846,7 +5872,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             repo = Path(temp) / "repo"
             manifest = {
                 "schema": "iroha.kagemusha.recursive_spend.abi6.fixture_manifest.v1",
-                "bridge_abi_version": 6,
+                "native_bridge_abi_version": 6,
                 "operation_count": 8,
                 "operations": [{"symbol": symbol} for symbol in readiness.ABI6_OPERATION_SYMBOLS],
                 "limits": readiness.EXPECTED_ABI6_LIMITS,
@@ -5873,7 +5899,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 repo = Path(temp) / "repo"
                 manifest = {
                     "schema": "iroha.kagemusha.recursive_spend.abi6.fixture_manifest.v1",
-                    "bridge_abi_version": 6,
+                    "native_bridge_abi_version": 6,
                     "operation_count": len(readiness.ABI6_OPERATION_SYMBOLS),
                     "operations": [
                         {"symbol": symbol} for symbol in readiness.ABI6_OPERATION_SYMBOLS
@@ -5912,7 +5938,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             external_manifest = root / "external-manifest.json"
             manifest = {
                 "schema": "iroha.kagemusha.recursive_spend.abi6.fixture_manifest.v1",
-                "bridge_abi_version": 6,
+                "native_bridge_abi_version": 6,
                 "operation_count": len(readiness.ABI6_OPERATION_SYMBOLS),
                 "operations": [
                     {"symbol": symbol} for symbol in readiness.ABI6_OPERATION_SYMBOLS
@@ -5956,7 +5982,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             external_manifest = root / "external-manifest.json"
             manifest = {
                 "schema": "iroha.kagemusha.recursive_spend.abi6.fixture_manifest.v1",
-                "bridge_abi_version": 6,
+                "native_bridge_abi_version": 6,
                 "operation_count": len(readiness.ABI6_OPERATION_SYMBOLS),
                 "operations": [
                     {"symbol": symbol} for symbol in readiness.ABI6_OPERATION_SYMBOLS
@@ -6022,7 +6048,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             replacement_manifest = root / "replacement-manifest.json"
             manifest = {
                 "schema": "iroha.kagemusha.recursive_spend.abi6.fixture_manifest.v1",
-                "bridge_abi_version": 6,
+                "native_bridge_abi_version": 6,
                 "operation_count": len(readiness.ABI6_OPERATION_SYMBOLS),
                 "operations": [
                     {"symbol": symbol} for symbol in readiness.ABI6_OPERATION_SYMBOLS
@@ -6079,7 +6105,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             repo = real_parent / "repo"
             manifest = {
                 "schema": "iroha.kagemusha.recursive_spend.abi6.fixture_manifest.v1",
-                "bridge_abi_version": 6,
+                "native_bridge_abi_version": 6,
                 "operation_count": len(readiness.ABI6_OPERATION_SYMBOLS),
                 "operations": [
                     {"symbol": symbol} for symbol in readiness.ABI6_OPERATION_SYMBOLS
@@ -6116,7 +6142,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             external_manifest = root / "external-manifest.json"
             manifest = {
                 "schema": "iroha.kagemusha.recursive_spend.abi6.fixture_manifest.v1",
-                "bridge_abi_version": 6,
+                "native_bridge_abi_version": 6,
                 "operation_count": len(readiness.ABI6_OPERATION_SYMBOLS),
                 "operations": [
                     {"symbol": symbol} for symbol in readiness.ABI6_OPERATION_SYMBOLS
@@ -6223,7 +6249,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 manifest_path.write_text("{not-json", encoding="utf-8")
 
                 def failing_stat(path: Path, *args, **kwargs):
-                    if path == manifest_path:
+                    if path == manifest_path and kwargs.get("follow_symlinks", True):
                         raise OSError("simulated release JSON hardlink metadata failure")
                     return original_stat(path, *args, **kwargs)
 
@@ -6466,7 +6492,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 )
 
                 def failing_stat(path: Path, *args, **kwargs):
-                    if path == marker_path:
+                    if path == marker_path and kwargs.get("follow_symlinks", True):
                         raise OSError("simulated source marker hardlink metadata failure")
                     return original_stat(path, *args, **kwargs)
 
@@ -8664,6 +8690,71 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(errors, ["copy drift"])
         self.assertEqual(remaining, [])
 
+    def test_compact_key_staged_finalizer_reports_partial_publish_cleanup_failure(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            stage_dir = root / "stage"
+            artifact_dir = root / "published"
+            stage_dir.mkdir()
+            artifact_dir.mkdir()
+            names = compact_key_finalizer._required_publish_filenames()
+            for name in names:
+                (stage_dir / name).write_bytes(b"partial")
+            first_name = names[0]
+            calls = 0
+
+            def fake_copy(
+                _source: Path,
+                destination: Path,
+                _label: str,
+            ) -> tuple[list[str], tuple[int, int] | None]:
+                nonlocal calls
+                calls += 1
+                destination.write_bytes(b"partial")
+                destination_identity = compact_key_finalizer._file_identity(
+                    destination.lstat()
+                )
+                if calls == 2:
+                    return ["copy drift"], destination_identity
+                return [], destination_identity
+
+            real_unlink = compact_key_finalizer.os.unlink
+
+            def flaky_unlink(path: str, *args: object, **kwargs: object) -> None:
+                if path == first_name:
+                    raise OSError("simulated rollback cleanup failure")
+                real_unlink(path, *args, **kwargs)
+
+            with (
+                mock.patch.object(
+                    compact_key_finalizer,
+                    "_copy_validated_file",
+                    side_effect=fake_copy,
+                ),
+                mock.patch.object(
+                    compact_key_finalizer.os,
+                    "unlink",
+                    side_effect=flaky_unlink,
+                ),
+            ):
+                errors = compact_key_finalizer.publish_stage(
+                    stage_dir=stage_dir,
+                    artifact_dir=artifact_dir,
+                    replace=False,
+                )
+            leftover_exists = (artifact_dir / first_name).is_file()
+
+        self.assertEqual(
+            errors,
+            [
+                "copy drift",
+                f"published {first_name} rollback cleanup could not remove file",
+            ],
+        )
+        self.assertTrue(leftover_exists)
+
     def test_compact_key_staged_finalizer_unlink_preserves_swapped_published_file(
         self,
     ) -> None:
@@ -8809,6 +8900,58 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
 
         self.assertTrue(victim_survived)
         self.assertTrue(original_survived)
+
+    def test_compact_key_staged_finalizer_reports_temp_parent_cleanup_failure(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged"
+            artifact_dir = root / "published"
+            exit_file = root / "staged.exit"
+            staged_artifact_dir.mkdir()
+            artifact_dir.mkdir()
+            exit_file.write_text("0\n", encoding="utf-8")
+            args = compact_key_finalizer.parse_args(
+                compact_key_finalizer_args(
+                    staged_artifact_dir=staged_artifact_dir,
+                    exit_file=exit_file,
+                    artifact_dir=artifact_dir,
+                )
+            )
+
+            with (
+                mock.patch.object(
+                    compact_key_finalizer,
+                    "validate_staged_run_report",
+                    return_value=[],
+                ),
+                mock.patch.object(
+                    compact_key_finalizer,
+                    "stage_compact_key_evidence",
+                    return_value=({}, []),
+                ),
+                mock.patch.object(
+                    compact_key_finalizer,
+                    "publish_stage",
+                    return_value=[],
+                ),
+                mock.patch.object(
+                    compact_key_finalizer,
+                    "_cleanup_temp_parent",
+                    return_value=[
+                        "staged finalizer temporary directory could not be removed"
+                    ],
+                ),
+            ):
+                status, final_path, errors = compact_key_finalizer.finalize_staged_run(args)
+
+        self.assertEqual(status, 1)
+        self.assertIsNone(final_path)
+        self.assertEqual(
+            errors,
+            ["staged finalizer temporary directory could not be removed"],
+        )
 
     def test_compact_key_staged_runner_outputs_finalize_successfully(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -10413,6 +10556,58 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertTrue(victim_survived)
         self.assertTrue(original_survived)
 
+    def test_lineage_proof_staged_finalizer_reports_temp_parent_cleanup_failure(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged"
+            artifact_dir = root / "published"
+            exit_file = root / "staged.exit"
+            staged_artifact_dir.mkdir()
+            artifact_dir.mkdir()
+            exit_file.write_text("0\n", encoding="utf-8")
+            args = lineage_finalizer.parse_args(
+                lineage_finalizer_args(
+                    staged_artifact_dir=staged_artifact_dir,
+                    exit_file=exit_file,
+                    artifact_dir=artifact_dir,
+                )
+            )
+
+            with (
+                mock.patch.object(
+                    lineage_finalizer,
+                    "validate_staged_run_report",
+                    return_value=[],
+                ),
+                mock.patch.object(
+                    lineage_finalizer,
+                    "stage_lineage_proof_evidence",
+                    return_value=({}, []),
+                ),
+                mock.patch.object(
+                    lineage_finalizer,
+                    "publish_stage",
+                    return_value=[],
+                ),
+                mock.patch.object(
+                    lineage_finalizer,
+                    "_cleanup_temp_parent",
+                    return_value=[
+                        "staged finalizer temporary directory could not be removed"
+                    ],
+                ),
+            ):
+                status, final_path, errors = lineage_finalizer.finalize_staged_run(args)
+
+        self.assertEqual(status, 1)
+        self.assertIsNone(final_path)
+        self.assertEqual(
+            errors,
+            ["staged finalizer temporary directory could not be removed"],
+        )
+
     def test_lineage_proof_staged_finalizer_defaults_out_under_artifact_dir(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             artifact_dir = Path(temp) / "published"
@@ -10491,6 +10686,71 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
 
         self.assertEqual(errors, ["copy drift"])
         self.assertEqual(remaining, [])
+
+    def test_lineage_proof_staged_finalizer_reports_partial_publish_cleanup_failure(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            stage_dir = root / "stage"
+            artifact_dir = root / "published"
+            stage_dir.mkdir()
+            artifact_dir.mkdir()
+            names = lineage_finalizer._required_publish_filenames()
+            for name in names:
+                (stage_dir / name).write_bytes(b"partial")
+            first_name = names[0]
+            calls = 0
+
+            def fake_copy(
+                _source: Path,
+                destination: Path,
+                _label: str,
+            ) -> tuple[list[str], tuple[int, int] | None]:
+                nonlocal calls
+                calls += 1
+                destination.write_bytes(b"partial")
+                destination_identity = lineage_finalizer._file_identity(
+                    destination.lstat()
+                )
+                if calls == 2:
+                    return ["copy drift"], destination_identity
+                return [], destination_identity
+
+            real_unlink = lineage_finalizer.os.unlink
+
+            def flaky_unlink(path: str, *args: object, **kwargs: object) -> None:
+                if path == first_name:
+                    raise OSError("simulated rollback cleanup failure")
+                real_unlink(path, *args, **kwargs)
+
+            with (
+                mock.patch.object(
+                    lineage_finalizer,
+                    "_copy_validated_file",
+                    side_effect=fake_copy,
+                ),
+                mock.patch.object(
+                    lineage_finalizer.os,
+                    "unlink",
+                    side_effect=flaky_unlink,
+                ),
+            ):
+                errors = lineage_finalizer.publish_stage(
+                    stage_dir=stage_dir,
+                    artifact_dir=artifact_dir,
+                    replace=False,
+                )
+            leftover_exists = (artifact_dir / first_name).is_file()
+
+        self.assertEqual(
+            errors,
+            [
+                "copy drift",
+                f"published {first_name} rollback cleanup could not remove file",
+            ],
+        )
+        self.assertTrue(leftover_exists)
 
     def test_lineage_proof_staged_finalizer_unlink_preserves_swapped_published_file(
         self,
@@ -12277,7 +12537,8 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
     def test_compact_key_output_preflight_rejects_parent_create_failure_before_write(
         self,
     ) -> None:
-        original_mkdir = Path.mkdir
+        path_type = type(Path("."))
+        original_mkdir = path_type.mkdir
 
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -12288,7 +12549,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                     raise OSError("simulated compact output parent create failure")
                 return original_mkdir(path, *args, **kwargs)
 
-            with mock.patch.object(Path, "mkdir", failing_mkdir):
+            with mock.patch.object(path_type, "mkdir", failing_mkdir):
                 errors = compact_key_helper.preflight_output_path(out, "--out")
             parent_exists = out.parent.exists()
             output_exists = out.exists()
@@ -12300,7 +12561,8 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
     def test_compact_key_output_preflight_rejects_file_metadata_failure_before_write(
         self,
     ) -> None:
-        original_lstat = Path.lstat
+        path_type = type(Path("."))
+        original_lstat = path_type.lstat
 
         with tempfile.TemporaryDirectory() as temp:
             out = Path(temp) / readiness.COMPACT_KEY_EVIDENCE_FILENAME
@@ -12311,7 +12573,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                     raise OSError("simulated compact output file metadata failure")
                 return original_lstat(path, *args, **kwargs)
 
-            with mock.patch.object(Path, "lstat", failing_lstat):
+            with mock.patch.object(path_type, "lstat", failing_lstat):
                 errors = compact_key_helper.preflight_output_path(out, "--out")
             output_text = out.read_text(encoding="utf-8")
 
@@ -12321,18 +12583,19 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
     def test_compact_key_output_preflight_rejects_hardlink_metadata_failure_before_write(
         self,
     ) -> None:
-        original_stat = Path.stat
+        path_type = type(Path("."))
+        original_stat = path_type.stat
 
         with tempfile.TemporaryDirectory() as temp:
             out = Path(temp) / readiness.COMPACT_KEY_EVIDENCE_FILENAME
             out.write_text("existing evidence\n", encoding="utf-8")
 
             def failing_stat(path: Path, *args, **kwargs):
-                if path == out:
+                if path == out and kwargs.get("follow_symlinks", True):
                     raise OSError("simulated compact output hardlink metadata failure")
                 return original_stat(path, *args, **kwargs)
 
-            with mock.patch.object(Path, "stat", failing_stat):
+            with mock.patch.object(path_type, "stat", failing_stat):
                 errors = compact_key_helper.preflight_output_path(out, "--out")
             output_text = out.read_text(encoding="utf-8")
 
@@ -12788,8 +13051,9 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             artifact_dir = Path(temp) / "compact"
 
+            path_type = type(Path("."))
             with mock.patch.object(
-                Path,
+                path_type,
                 "mkdir",
                 side_effect=OSError("simulated compact artifact dir create failure"),
             ):
@@ -12999,7 +13263,8 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
     def test_compact_key_artifact_dir_validator_rejects_metadata_failure_directly(
         self,
     ) -> None:
-        original_lstat = Path.lstat
+        path_type = type(Path("."))
+        original_lstat = path_type.lstat
 
         with tempfile.TemporaryDirectory() as temp:
             artifact_dir = Path(temp) / "compact"
@@ -13009,7 +13274,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                     raise OSError("simulated compact artifact dir metadata failure")
                 return original_lstat(path, *args, **kwargs)
 
-            with mock.patch.object(Path, "lstat", failing_lstat):
+            with mock.patch.object(path_type, "lstat", failing_lstat):
                 errors = compact_key_helper.validate_artifact_dir_path(artifact_dir)
 
         self.assertEqual(errors, ["--artifact-dir metadata could not be read"])
@@ -14426,7 +14691,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 artifact.write_bytes(b"lineage artifact bytes\n")
 
                 def failing_stat(path: Path, *args, **kwargs):
-                    if path == artifact:
+                    if path == artifact and kwargs.get("follow_symlinks", True):
                         raise OSError("simulated lineage local hardlink metadata failure")
                     return original_stat(path, *args, **kwargs)
 
@@ -14814,8 +15079,9 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             artifact_dir = Path(temp) / "artifacts"
 
+            path_type = type(Path("."))
             with mock.patch.object(
-                Path,
+                path_type,
                 "mkdir",
                 side_effect=OSError("simulated artifact dir create failure"),
             ):
@@ -16061,23 +16327,19 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         path_type = type(Path("."))
         original_mkdir = path_type.mkdir
 
-        try:
-            with tempfile.TemporaryDirectory() as temp:
-                root = Path(temp)
-                out = root / "missing-lineage" / "lineage-proof-evidence.json"
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            out = root / "missing-lineage" / "lineage-proof-evidence.json"
 
-                def failing_mkdir(path: Path, *args, **kwargs):
-                    if path == out.parent:
-                        raise OSError("simulated lineage output parent create failure")
-                    return original_mkdir(path, *args, **kwargs)
+            def failing_mkdir(path: Path, *args, **kwargs):
+                if path == out.parent:
+                    raise OSError("simulated lineage output parent create failure")
+                return original_mkdir(path, *args, **kwargs)
 
-                path_type.mkdir = failing_mkdir
-
+            with mock.patch.object(path_type, "mkdir", failing_mkdir):
                 errors = evidence_helper.preflight_output_path(out, "--out")
                 parent_exists = out.parent.exists()
                 output_exists = out.exists()
-        finally:
-            path_type.mkdir = original_mkdir
 
         self.assertEqual(errors, ["--out parent directory could not be created"])
         self.assertFalse(parent_exists)
@@ -16089,24 +16351,20 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         path_type = type(Path("."))
         original_mkdir = path_type.mkdir
 
-        try:
-            with tempfile.TemporaryDirectory() as temp:
-                root = Path(temp)
-                out = root / "late-linked-lineage" / "lineage-proof-evidence.json"
-                alias_target = root / "external-lineage"
-                alias_target.mkdir()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            out = root / "late-linked-lineage" / "lineage-proof-evidence.json"
+            alias_target = root / "external-lineage"
+            alias_target.mkdir()
 
-                def replacing_mkdir(path: Path, *args, **kwargs):
-                    if path == out.parent:
-                        slot_helpers.create_dir_symlink(self, path, alias_target)
-                        return None
-                    return original_mkdir(path, *args, **kwargs)
+            def replacing_mkdir(path: Path, *args, **kwargs):
+                if path == out.parent:
+                    slot_helpers.create_dir_symlink(self, path, alias_target)
+                    return None
+                return original_mkdir(path, *args, **kwargs)
 
-                path_type.mkdir = replacing_mkdir
-
+            with mock.patch.object(path_type, "mkdir", replacing_mkdir):
                 errors = evidence_helper.preflight_output_path(out, "--out")
-        finally:
-            path_type.mkdir = original_mkdir
 
         self.assertEqual(errors, ["--out parent directory must not be a symlink"])
         self.assertFalse((alias_target / "lineage-proof-evidence.json").exists())
@@ -16138,15 +16396,14 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                         out.parent.rmdir()
                     return errors
 
-                path_type.mkdir = failing_second_mkdir
                 evidence_helper.preflight_output_path = removing_preflight
 
-                errors = evidence_helper.validate_output_path(out, "--out")
+                with mock.patch.object(path_type, "mkdir", failing_second_mkdir):
+                    errors = evidence_helper.validate_output_path(out, "--out")
                 parent_exists = out.parent.exists()
                 output_exists = out.exists()
         finally:
             evidence_helper.preflight_output_path = original_preflight
-            path_type.mkdir = original_mkdir
 
         self.assertEqual(errors, ["--out parent directory could not be created"])
         self.assertFalse(parent_exists)
@@ -16190,7 +16447,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 out.write_text("existing evidence\n", encoding="utf-8")
 
                 def failing_stat(path: Path, *args, **kwargs):
-                    if path == out:
+                    if path == out and kwargs.get("follow_symlinks", True):
                         raise OSError("simulated lineage output hardlink metadata failure")
                     return original_stat(path, *args, **kwargs)
 
@@ -18122,23 +18379,19 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         path_type = type(Path("."))
         original_mkdir = path_type.mkdir
 
-        try:
-            with tempfile.TemporaryDirectory() as temp:
-                summary_path = Path(temp) / "missing-summary-parent" / "summary.json"
+        with tempfile.TemporaryDirectory() as temp:
+            summary_path = Path(temp) / "missing-summary-parent" / "summary.json"
 
-                def failing_mkdir(path: Path, *args, **kwargs):
-                    if path == summary_path.parent:
-                        raise OSError("simulated readiness summary parent mkdir failure")
-                    return original_mkdir(path, *args, **kwargs)
+            def failing_mkdir(path: Path, *args, **kwargs):
+                if path == summary_path.parent:
+                    raise OSError("simulated readiness summary parent mkdir failure")
+                return original_mkdir(path, *args, **kwargs)
 
-                path_type.mkdir = failing_mkdir
-
+            with mock.patch.object(path_type, "mkdir", failing_mkdir):
                 errors = readiness.write_summary(
                     summary_path,
                     {"schema": readiness.SUMMARY_SCHEMA, "ready": False},
                 )
-        finally:
-            path_type.mkdir = original_mkdir
 
         self.assertFalse(summary_path.exists())
         self.assertEqual(
@@ -18155,27 +18408,23 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         path_type = type(Path("."))
         original_mkdir = path_type.mkdir
 
-        try:
-            with tempfile.TemporaryDirectory() as temp:
-                root = Path(temp)
-                summary_path = root / "late-linked-summary" / "summary.json"
-                alias_target = root / "external-summary"
-                alias_target.mkdir()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            summary_path = root / "late-linked-summary" / "summary.json"
+            alias_target = root / "external-summary"
+            alias_target.mkdir()
 
-                def replacing_mkdir(path: Path, *args, **kwargs):
-                    if path == summary_path.parent:
-                        slot_helpers.create_dir_symlink(self, path, alias_target)
-                        return None
-                    return original_mkdir(path, *args, **kwargs)
+            def replacing_mkdir(path: Path, *args, **kwargs):
+                if path == summary_path.parent:
+                    slot_helpers.create_dir_symlink(self, path, alias_target)
+                    return None
+                return original_mkdir(path, *args, **kwargs)
 
-                path_type.mkdir = replacing_mkdir
-
+            with mock.patch.object(path_type, "mkdir", replacing_mkdir):
                 errors = readiness.write_summary(
                     summary_path,
                     {"schema": readiness.SUMMARY_SCHEMA, "ready": False},
                 )
-        finally:
-            path_type.mkdir = original_mkdir
 
         self.assertEqual(
             errors,

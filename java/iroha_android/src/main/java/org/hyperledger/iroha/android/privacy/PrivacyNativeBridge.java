@@ -345,10 +345,10 @@ public final class PrivacyNativeBridge {
   }
 
   private static boolean proofRequestOutputProbe() {
-    final byte[] algorithmId = "verange-transparent-range-v1".getBytes(StandardCharsets.UTF_8);
-    final byte[] entrypoint = "buildVeRangeProofV1".getBytes(StandardCharsets.UTF_8);
+    final byte[] algorithmId = "zk-ace-pq-authorization-v0".getBytes(StandardCharsets.UTF_8);
+    final byte[] entrypoint = "buildZkAceAuthorizationProofV1".getBytes(StandardCharsets.UTF_8);
     final byte[] vkRef =
-        "bulletproofs:verange_transparent_range_v1".getBytes(StandardCharsets.UTF_8);
+        "stark-fri:zk_ace_pq_authorization_v0".getBytes(StandardCharsets.UTF_8);
     final byte[] publicInputs = "public-inputs".getBytes(StandardCharsets.UTF_8);
     try {
       return returnsOutputProbe(

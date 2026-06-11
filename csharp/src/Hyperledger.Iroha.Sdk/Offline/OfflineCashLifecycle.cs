@@ -49,7 +49,7 @@ public sealed record class OfflineCashConfigurationSnapshot(
     string AssetDefinitionId,
     bool OfflinePaymentsEnabled,
     string? IssuerPublicKeyBase64,
-    uint? BridgeAbiVersion = null,
+    uint? NativeBridgeAbiVersion = null,
     string? ArtifactSetId = null,
     string? CircuitId = null,
     ulong CreatedAtMs = 0,
@@ -57,7 +57,7 @@ public sealed record class OfflineCashConfigurationSnapshot(
 {
     public void RequireUsableForOfflineExchange(
         ulong nowMs,
-        uint? requiredBridgeAbiVersion = null)
+        uint? requiredNativeBridgeAbiVersion = null)
     {
         if (!OfflinePaymentsEnabled)
         {
@@ -80,12 +80,12 @@ public sealed record class OfflineCashConfigurationSnapshot(
                 $"Offline cash configuration snapshot expired at {expiresAtMs}.");
         }
 
-        if (requiredBridgeAbiVersion is { } required
-            && (!BridgeAbiVersion.HasValue || BridgeAbiVersion.Value < required))
+        if (requiredNativeBridgeAbiVersion is { } required
+            && (!NativeBridgeAbiVersion.HasValue || NativeBridgeAbiVersion.Value < required))
         {
             throw new OfflineCashConfigurationSnapshotException(
-                "unsupported_bridge_abi",
-                $"Offline cash requires bridge ABI {required}.");
+                "unsupported_native_bridge_abi",
+                $"Offline cash requires native bridge ABI {required}.");
         }
     }
 }

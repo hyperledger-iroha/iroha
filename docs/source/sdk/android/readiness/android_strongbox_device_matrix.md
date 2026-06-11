@@ -48,10 +48,14 @@ Production release criteria:
   `attestation/report.json`, `queue/pending_queue.json`, and
   `logs/runtime.log`; signed evidence rejects refreshed manifests that omit any
   of those base artifacts. Those required base artifacts must be non-empty and
-  no larger than 16 MiB each. Telemetry JSON must bind to the slot id,
+  no larger than 16 MiB each. Telemetry JSON must bind exactly to the slot id
+  without trimming whitespace,
   status NDJSON must include an `ok` status and no failure status, and
   `logs/runtime.log` must carry the Kagemusha device-lab completion marker
-  without build/test failure markers.
+  without build/test failure markers. Attestation harness, result, and
+  verifier-report strings are exact: slot bindings, status values, identity
+  digests, and StrongBox labels are rejected if they require whitespace
+  trimming, case normalization, or control-character filtering.
   The device-lab root, operator-supplied root ancestors, slot parent
 	  directories, slot path ancestors, slot directories, slot metadata, the
 	  SHA-256 manifest, evidence directories, and artifact files must be ordinary
@@ -83,7 +87,9 @@ Production release criteria:
 	  D2D queue digest binding, and the signed-evidence artifact binding also
 	  classify artifacts with `lstat()` before any `is_file()` preflight, and
 	  signed-evidence `artifact_digests` bind each hashed artifact to the opened
-	  file identity.
+	  file identity. Signed-evidence string fields are exact: surrounding
+	  whitespace and non-printing control characters are rejected before matching
+	  them against `slot.json` or signature metadata.
 	  Direct SHA-256 manifest parser and verifier helper calls reject
 	  secret-looking slot paths, unreadable slot-root metadata, symlinked slot
 	  roots, and symlinked slot ancestors before parsing `sha256sum.txt` or
@@ -138,8 +144,11 @@ Production release criteria:
   Generate that closed report from the host-side StrongBox verifier output with
   `python3 scripts/kagemusha_android_attestation_report.py --harness-result <android_keystore_attestation_result.json> --slot-id <slot-id> --device-fingerprint <adb-ro.build.fingerprint> --os-build-id <adb-ro.build.id> --attestation-certificate-chain <chain.pem> --physical-device-attestation --out <report.json>`.
   The writer refuses non-StrongBox verifier results, unexpected verifier-result fields,
-  challenge digest drift, unsafe chain paths, and reports that do not
-  carry an explicit physical-device assertion. It writes the report through a
+  noncanonical harness or expected challenge hex, whitespace-normalized identity
+  arguments, normalized StrongBox/KeyMint level labels, challenge digest drift,
+  PEM chain-length mismatches, whitespace-normalized or unsafe chain paths, and
+  reports that do not carry an explicit physical-device assertion. It writes the
+  report through a
   fsynced same-directory temporary file, atomically replaces the output,
   identity-checks failed temporary cleanup, syncs the captured output-parent
   identity, and then reads the report back before success.
@@ -241,17 +250,22 @@ Production release criteria:
   KeyMint/security levels must be exact `STRONGBOX`. The puller also parses
   `queue/pending_queue.json`, `telemetry/telemetry.json`,
   `handoff/d2d-payment.json`, and `wallet/integrity.json` as strict JSON before
-  assembly: each slot-bound artifact must match the selected slot id, D2D
+  assembly: each slot-bound artifact must match the selected slot id exactly, D2D
   transcript booleans must prove offline payer/payee transport and double-spend
   rejection, and wallet integrity must prove one-use key rotation plus rollback
   rejection. `telemetry/status.ndjson` is parsed line-by-line with duplicate-key
   rejection, must not report failure statuses, and must bind status records to
   the selected slot id when present; `logs/runtime.log` must contain the
   completion marker and must not contain build, test, panic, traceback, or fatal
-  exception markers. Harness strings must be
-  canonical: aliases cannot carry surrounding whitespace, StrongBox levels must
-  use exact accepted labels, and `challenge_hex` must be lowercase hexadecimal
-  without whitespace. When `--summary-out` is supplied, the raw-pull summary is
+  exception markers. Harness strings must be canonical before raw pulls,
+  signed-slot assembly, or signed-slot scanning can accept them: aliases cannot
+  carry surrounding whitespace, StrongBox levels must use exact accepted labels,
+  and `challenge_hex` must be lowercase hexadecimal without whitespace. The host attestation report renderer enforces the same
+  canonical challenge format, including `--expected-challenge-hex`, and rejects
+  whitespace-normalized slot id, device fingerprint, OS build, app package,
+  verifier names, StrongBox/KeyMint level labels, and PEM certificate-count
+  mismatches before writing `attestation/report.json`. When `--summary-out`
+  is supplied, the raw-pull summary is
   serialized as strict JSON, capped before temporary-file creation, atomically
   replaced after fsync, read back through an opened-file identity binding that
   rejects symlinks, hardlinks, and path swaps, and followed by an
@@ -278,7 +292,10 @@ Production release criteria:
   descriptors pinned to the captured device-lab root, temp-parent, and
   staged-slot identities and fsyncs the root descriptor, so path swaps before
   final publish fail closed. Temporary staging cleanup also checks the captured
-  temp-parent identity before removing anything.
+  temp-parent identity before removing anything. The preserved
+  `attestation/harness-result.json` is revalidated during assembly with the
+  same exact-string StrongBox level and lowercase challenge-hex policy enforced
+  by the raw puller and production scanner.
 - Generate signed lab evidence from an already completed slot with
   `python3 scripts/sign_android_device_lab_evidence.py --slot artifacts/android/device_lab/<slot-id> --private-key <runtime-only-lab-private-key.pem> --public-key <lab-public-key.pem> --signer-key-id <lab-signer-id>`.
   Before signing or writing outputs, the helper validates the preserved
@@ -314,9 +331,10 @@ Production release criteria:
 		  aliases are rejected before the scanner writes a summary.
 		  The shared slot JSON loader binds parsed JSON bytes to the preflight
 		  `lstat()` identity so post-preflight regular-file swaps fail closed.
-		  Discovered slot directory names that contain
-		  secret-looking material are rejected and redacted before artifact traversal
-	  or summary serialization. The helper also rechecks the signed-evidence and
+		  Discovered slot directory names that contain whitespace,
+		  non-printing control characters, or secret-looking material are rejected
+		  before artifact traversal; unsafe names are redacted before summary
+		  serialization. The helper also rechecks the signed-evidence and
 	  SHA-256 manifest output ancestors, parents, and leaves immediately before
 	  writing, so symlinked, hardlinked, or non-regular output aliases are rejected
 	  even if earlier slot validation has already passed; missing output parents
@@ -375,7 +393,8 @@ Production release criteria:
 - Production lab bundles must pass
   `python3 scripts/check_android_device_lab_slot.py --root artifacts/android/device_lab --require-slot --require-kagemusha-production-evidence --require-kagemusha-standard-matrix --trusted-signer-public-key <lab-public-key.pem>`.
   When selecting explicit slots, each `--slot` value must be a single safe slot
-  directory name under the lab root, not a filesystem path.
+  directory name under the lab root, not a filesystem path, and it must not
+  contain whitespace.
   Release evidence rollups should then run
   `python3 scripts/kagemusha_production_readiness.py --device-lab-root artifacts/android/device_lab --trusted-signer-public-key <lab-public-key.pem> --min-signed-at-utc 2026-06-06T00:00:00Z --max-signed-at-future-skew-seconds 300 --max-lineage-proof-evidence-future-skew-seconds 300 --max-compact-key-evidence-future-skew-seconds 300 --summary-out dist/kagemusha-production-readiness.json`,
   which combines the ABI-6 Reserved-lineage manifest, ABI-7 fail-closed
@@ -583,7 +602,8 @@ Production release criteria:
   probe state (`abi7_recursive_compact_jni_probe = one_hop_verified` and
   `abi7_recursive_compact_prover_state = multi_hop_proof_composed`),
   raw test commands, signed evidence artifact path, and signed evidence artifact
-  hash.
+  hash. Required `slot.json` string fields are exact: surrounding whitespace and
+  non-printing control characters are rejected before path or digest validation.
   Production `slot.json` is a closed schema: unexpected fields are rejected
   before signed evidence can pass or be generated.
   The release APK path and SHA-256 plus native bridge ABI version are
