@@ -28996,9 +28996,7 @@ mod tests {
         nested_header_report_signoff.payload.audit_report_digest =
             nested_header_audit_report_digest;
         assert_error_contains(
-            validate_bfv_full_bootstrap_release_audit_signoff_v1(
-                &nested_header_report_signoff,
-            ),
+            validate_bfv_full_bootstrap_release_audit_signoff_v1(&nested_header_report_signoff),
             "nested-header",
             "release audit signoffs must reject nested-header audit report digests",
         );
@@ -29062,9 +29060,7 @@ mod tests {
         nested_header_archive_manifest.audit_evidence_archive_digest =
             nested_header_audit_archive_digest;
         assert_error_contains(
-            validate_bfv_full_bootstrap_release_audit_manifest_v1(
-                &nested_header_archive_manifest,
-            ),
+            validate_bfv_full_bootstrap_release_audit_manifest_v1(&nested_header_archive_manifest),
             "nested-header",
             "release audit manifests must reject nested-header evidence archive digests",
         );
