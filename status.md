@@ -18,6 +18,20 @@ Last updated: 2026-06-11
   - `cargo test -p iroha_core --features zk-stark soracloud_fhe_full_bootstrap_material_proof_rejects_bfv_native_air_without_context -- --nocapture`
   - `cargo test -p iroha_core --features zk-stark zk_ace -- --nocapture`
 
+## 2026-06-11 SCCP BSC explorer binding metadata
+
+- Hardened `scripts/sccp_bsc_taira_xor_deploy.mjs` so BSC deployment evidence,
+  route-config normalization, and generated TAIRA route TOML carry canonical
+  profile-bound `explorerUrl` / `explorerHost` metadata for BSC testnet and
+  mainnet.
+- Production-ready BSC route manifests now fail route-config generation unless
+  they explicitly declare the expected explorer URL and host. Disabled legacy
+  drafts can still be normalized, but contradictory explorer metadata is
+  rejected before operator overlays are written.
+- Validation passed:
+  - `node --test scripts/sccp_bsc_taira_xor_deploy.test.mjs` (`28 passed`)
+  - `git diff --check`
+
 ## 2026-06-11 Governance ZK default test fixture alignment
 
 - Updated the default-feature governance ZK tests to use the production-shaped
