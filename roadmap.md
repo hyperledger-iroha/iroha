@@ -562,9 +562,13 @@ and completed history lives in [`status.md`](./status.md).
   post-deploy transaction ids, offline TOML hashes, uppercase bytes32 metadata,
   uppercase or `0X` EVM address metadata, and non-lowercase `bscNetwork`,
   `chain`, or `chainIdHex` values are rejected instead of being normalized into
-  accepted production metadata. Release-readiness and bundle verification now
-  pin those BSC route-config implementation and adversarial-test markers as a
-  required source-inventory gate before production evidence can pass.
+  accepted production metadata. Route-config generation also requires
+  production-ready BSC manifests to carry profile-bound `explorerUrl` and
+  `explorerHost` metadata, while disabled legacy drafts can be backfilled to
+  the selected profile and contradictory explorer aliases still fail closed.
+  Release-readiness and bundle verification now pin those BSC route-config
+  implementation and adversarial-test markers as a required source-inventory
+  gate before production evidence can pass.
 - SCCP TRON TAIRA XOR route-config generation follows the same canonical
   manifest text policy before TOML rendering. Padded route ids, asset keys,
   network ids, destination rollout network ids, post-deploy transaction ids,

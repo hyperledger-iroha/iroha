@@ -8366,6 +8366,13 @@ const normalizeNativeEvmProverArtifactPath = (value, label) => {
   return value;
 };
 
+const requireNativeEvmProverArtifactPathExtension = (value, label, extension) => {
+  if (!value.toLowerCase().endsWith(extension)) {
+    throw new TypeError(`${label} must reference a ${extension} artifact`);
+  }
+  return value;
+};
+
 const NON_PRODUCTION_NATIVE_EVM_PROVER_ARTIFACT_PATH_PATTERN =
   /(?:^|[/._-])(?:dev[-_]?only|diagnostic|dummy|fixture|fixtures|mock|placeholder|sample|stub|test[-_]?only)(?:[/._-]|$)/iu;
 
@@ -8727,18 +8734,22 @@ const validateNativeEvmProverBundle = (
     ),
     "proofArtifactHash",
   );
-  const proofArtifact = normalizeNativeEvmProverArtifactPath(
-    requiredNativeEvmProverBundleField(
-      manifest,
+  const proofArtifact = requireNativeEvmProverArtifactPathExtension(
+    normalizeNativeEvmProverArtifactPath(
+      requiredNativeEvmProverBundleField(
+        manifest,
+        "proofArtifact",
+        "proofArtifact",
+        "proof_artifact",
+        "proverArtifact",
+        "prover_artifact",
+        "circuitArtifact",
+        "circuit_artifact",
+      ),
       "proofArtifact",
-      "proofArtifact",
-      "proof_artifact",
-      "proverArtifact",
-      "prover_artifact",
-      "circuitArtifact",
-      "circuit_artifact",
     ),
     "proofArtifact",
+    ".r1cs",
   );
   rejectNonProductionNativeEvmProverArtifactPath(
     proofArtifact,
@@ -8753,14 +8764,18 @@ const validateNativeEvmProverBundle = (
     ),
     "provingKeyHash",
   );
-  const provingKey = normalizeNativeEvmProverArtifactPath(
-    requiredNativeEvmProverBundleField(
-      manifest,
+  const provingKey = requireNativeEvmProverArtifactPathExtension(
+    normalizeNativeEvmProverArtifactPath(
+      requiredNativeEvmProverBundleField(
+        manifest,
+        "provingKey",
+        "provingKey",
+        "proving_key",
+      ),
       "provingKey",
-      "provingKey",
-      "proving_key",
     ),
     "provingKey",
+    ".zkey",
   );
   rejectNonProductionNativeEvmProverArtifactPath(provingKey, "provingKey");
   const verifierKeyHash = normalizeCanonicalNativeEvmProverBundleHex32(
@@ -8807,26 +8822,36 @@ const validateNativeEvmProverBundle = (
     "auditHashes",
     "audit_hashes",
   );
-  const crossSdkFixtureParityArtifact = normalizeNativeEvmProverArtifactPath(
-    requiredNativeEvmProverBundleField(
-      manifest,
+  const crossSdkFixtureParityArtifact =
+    requireNativeEvmProverArtifactPathExtension(
+      normalizeNativeEvmProverArtifactPath(
+        requiredNativeEvmProverBundleField(
+          manifest,
+          "crossSdkFixtureParityArtifact",
+          "crossSdkFixtureParityArtifact",
+          "cross_sdk_fixture_parity_artifact",
+        ),
+        "crossSdkFixtureParityArtifact",
+      ),
       "crossSdkFixtureParityArtifact",
-      "crossSdkFixtureParityArtifact",
-      "cross_sdk_fixture_parity_artifact",
-    ),
-    "crossSdkFixtureParityArtifact",
-  );
-  const nativeProverSelfTestArtifact = normalizeNativeEvmProverArtifactPath(
-    requiredNativeEvmProverBundleField(
-      manifest,
+      ".json",
+    );
+  const nativeProverSelfTestArtifact =
+    requireNativeEvmProverArtifactPathExtension(
+      normalizeNativeEvmProverArtifactPath(
+        requiredNativeEvmProverBundleField(
+          manifest,
+          "nativeProverSelfTestArtifact",
+          "nativeProverSelfTestArtifact",
+          "native_prover_self_test_artifact",
+          "selfTestArtifact",
+          "self_test_artifact",
+        ),
+        "nativeProverSelfTestArtifact",
+      ),
       "nativeProverSelfTestArtifact",
-      "nativeProverSelfTestArtifact",
-      "native_prover_self_test_artifact",
-      "selfTestArtifact",
-      "self_test_artifact",
-    ),
-    "nativeProverSelfTestArtifact",
-  );
+      ".json",
+    );
   requireNativeEvmProverBundleObject(auditHashesInput, "auditHashes");
   requireNativeEvmProverBundleKnownFields(
     auditHashesInput,
@@ -9936,9 +9961,25 @@ const SCCP_NATIVE_EVM_PROVER_MIN_PROVING_KEY_BYTES_V1 = 64 * 1024;
 const SCCP_NATIVE_EVM_PROVER_MIN_VERIFIER_KEY_BYTES_V1 = 128;
 const SCCP_NATIVE_EVM_PROVER_MIN_SUPPORT_ARTIFACT_BYTES_V1 = 128;
 const SCCP_NATIVE_EVM_PROVER_MIN_IMPLEMENTATION_BYTES_V1 = 1024;
+const SCCP_NATIVE_EVM_SNARKJS_R1CS_MAGIC = Object.freeze([
+  0x72,
+  0x31,
+  0x63,
+  0x73,
+]);
+const SCCP_NATIVE_EVM_SNARKJS_ZKEY_MAGIC = Object.freeze([
+  0x7a,
+  0x6b,
+  0x65,
+  0x79,
+]);
 
 const nativeEvmProverLowerAsciiByte = (byte) =>
   byte >= 0x41 && byte <= 0x5a ? byte + 0x20 : byte;
+
+const nativeEvmProverBytesStartWith = (bytes, prefix) =>
+  bytes.length >= prefix.length &&
+  prefix.every((byte, index) => bytes[index] === byte);
 
 function nativeEvmProverArtifactContainsMarker(bytes, marker) {
   for (let offset = 0; offset <= bytes.length - marker.length; offset += 1) {
@@ -9984,6 +10025,74 @@ function assertNativeEvmProverArtifactHasProductionSize(
       `${label} must be at least ${minBytes} bytes`,
     );
   }
+}
+
+function assertNativeEvmSnarkjsBinaryFormat(bytes, label, magic, formatLabel) {
+  if (bytes.length < 12) {
+    throw new TypeError(`${label} ${formatLabel} header is truncated`);
+  }
+  if (!nativeEvmProverBytesStartWith(bytes, magic)) {
+    throw new TypeError(`${label} must start with ${formatLabel} magic bytes`);
+  }
+  const version = readU32LeAt(bytes, 4, `${label} ${formatLabel}`);
+  const sectionCount = readU32LeAt(bytes, 8, `${label} ${formatLabel}`);
+  if (version < 1 || version > 2) {
+    throw new TypeError(`${label} ${formatLabel} version is unsupported`);
+  }
+  if (sectionCount < 1 || sectionCount > 128) {
+    throw new TypeError(`${label} ${formatLabel} section count is invalid`);
+  }
+  let offset = 12;
+  const sectionIds = new Set();
+  for (let index = 0; index < sectionCount; index += 1) {
+    if (offset + 12 > bytes.length) {
+      throw new TypeError(`${label} ${formatLabel} section table is truncated`);
+    }
+    const sectionId = readU32LeAt(bytes, offset, `${label} ${formatLabel}`);
+    const sectionSize = readU64LeAt(
+      bytes,
+      offset + 4,
+      `${label} ${formatLabel}`,
+    );
+    offset += 12;
+    if (sectionId === 0) {
+      throw new TypeError(`${label} ${formatLabel} section id must be non-zero`);
+    }
+    if (sectionIds.has(sectionId)) {
+      throw new TypeError(`${label} ${formatLabel} section ids must be unique`);
+    }
+    sectionIds.add(sectionId);
+    if (sectionSize === 0n) {
+      throw new TypeError(`${label} ${formatLabel} section size is invalid`);
+    }
+    if (sectionSize > BigInt(bytes.length - offset)) {
+      throw new TypeError(`${label} ${formatLabel} section exceeds file size`);
+    }
+    offset += Number(sectionSize);
+  }
+  if (offset !== bytes.length) {
+    throw new TypeError(
+      `${label} ${formatLabel} section table does not consume the full file`,
+    );
+  }
+}
+
+function assertNativeEvmProofArtifactFormat(bytes, label) {
+  assertNativeEvmSnarkjsBinaryFormat(
+    bytes,
+    label,
+    SCCP_NATIVE_EVM_SNARKJS_R1CS_MAGIC,
+    ".r1cs",
+  );
+}
+
+function assertNativeEvmProvingKeyFormat(bytes, label) {
+  assertNativeEvmSnarkjsBinaryFormat(
+    bytes,
+    label,
+    SCCP_NATIVE_EVM_SNARKJS_ZKEY_MAGIC,
+    ".zkey",
+  );
 }
 
 const verifyNativeEvmProverArtifacts = (
@@ -10125,6 +10234,11 @@ const verifyNativeEvmProverArtifacts = (
     "nativeProverSelfTestBytes",
     SCCP_NATIVE_EVM_PROVER_MIN_SUPPORT_ARTIFACT_BYTES_V1,
   );
+  assertNativeEvmProofArtifactFormat(
+    proofArtifactBytes,
+    "proofArtifactBytes",
+  );
+  assertNativeEvmProvingKeyFormat(provingKeyBytes, "provingKeyBytes");
   assertNativeEvmProverArtifactHasNoForbiddenDependencyMarkers(
     proofArtifactBytes,
     "proofArtifactBytes",

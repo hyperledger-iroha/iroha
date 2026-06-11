@@ -5391,6 +5391,12 @@ impl SccpRouteManifest {
                 ],
             );
         }
+        if !self.production_ready && self.post_deploy_full_toml_ready == Some(true) {
+            assert!(
+                post_deploy_offline_full_toml_sha256.is_some(),
+                "SCCP route manifest post_deploy_full_toml_ready = true requires post_deploy_offline_full_toml_sha256"
+            );
+        }
         let disabled_reason = if !self.production_ready
             && uses_diagnostic_verifier_key_hash
             && self.disabled_reason.is_none()
@@ -6224,6 +6230,32 @@ mod sccp_route_manifest_user_config_tests {
     #[should_panic(expected = "production_ready requires post_deploy_offline_full_toml_sha256")]
     fn production_ready_bsc_route_requires_offline_full_toml_hash() {
         let mut manifest = production_ready_route_manifest();
+        manifest.post_deploy_offline_full_toml_sha256 = None;
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "post_deploy_full_toml_ready = true requires post_deploy_offline_full_toml_sha256"
+    )]
+    fn disabled_bsc_route_claiming_full_toml_ready_requires_offline_full_toml_hash() {
+        let mut manifest = route_manifest();
+        manifest.post_deploy_full_toml_ready = Some(true);
+        manifest.post_deploy_offline_full_toml_sha256 = None;
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "post_deploy_full_toml_ready = true requires post_deploy_offline_full_toml_sha256"
+    )]
+    fn disabled_tron_route_claiming_full_toml_ready_requires_offline_full_toml_hash() {
+        let mut manifest = production_ready_tron_route_manifest();
+        manifest.production_ready = false;
+        manifest.disabled_reason = Some("diagnostic route".to_owned());
+        manifest.post_deploy_full_toml_ready = Some(true);
         manifest.post_deploy_offline_full_toml_sha256 = None;
 
         let _ = manifest.parse();

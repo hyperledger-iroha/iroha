@@ -5587,8 +5587,47 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     }
     return out;
   };
-  const proofArtifactBytes = nativeArtifactPayloadBytes("sccp package proof artifact v1");
-  const provingKeyBytes = nativeArtifactPayloadBytes("sccp package proving key v1");
+  const nativeSnarkjsArtifactPayloadBytes = (
+    label,
+    magic,
+    sectionCount,
+    size = 96 * 1024,
+  ) => {
+    const out = nativeArtifactPayloadBytes(label, size);
+    const headerBytes = 12;
+    const sectionHeaderBytes = sectionCount * 12;
+    const payloadBytes = out.length - headerBytes - sectionHeaderBytes;
+    if (payloadBytes < sectionCount) {
+      throw new Error("native EVM SnarkJS fixture is too small");
+    }
+    out.set(Buffer.from(magic, "ascii"), 0);
+    out.writeUInt32LE(1, 4);
+    out.writeUInt32LE(sectionCount, 8);
+    let offset = headerBytes;
+    for (let index = 0; index < sectionCount; index += 1) {
+      const sectionSize =
+        Math.floor(payloadBytes / sectionCount) +
+        (index < payloadBytes % sectionCount ? 1 : 0);
+      out.writeUInt32LE(index + 1, offset);
+      out.writeUInt32LE(sectionSize, offset + 4);
+      out.writeUInt32LE(0, offset + 8);
+      offset += 12 + sectionSize;
+    }
+    if (offset !== out.length) {
+      throw new Error("native EVM SnarkJS fixture sections do not fill the file");
+    }
+    return out;
+  };
+  const proofArtifactBytes = nativeSnarkjsArtifactPayloadBytes(
+    "sccp package proof artifact v1",
+    "r1cs",
+    3,
+  );
+  const provingKeyBytes = nativeSnarkjsArtifactPayloadBytes(
+    "sccp package proving key v1",
+    "zkey",
+    10,
+  );
   const verifierKeyBytes = nativeArtifactPayloadBytes("sccp package verifier key v1");
   const implementationBytes = nativeArtifactPayloadBytes(
     "sccp package pure typescript prover artifact v1",
@@ -5610,9 +5649,9 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     domain: SCCP_DOMAIN_ETH,
     chain: "eth",
     proof_backend: SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
-    proof_artifact: "artifacts/eth-mainnet/proof-artifact.bin",
+    proof_artifact: "artifacts/eth-mainnet/proof-artifact.r1cs",
     proof_artifact_hash: proofArtifactHash,
-    proving_key: "artifacts/eth-mainnet/proving-key.bin",
+    proving_key: "artifacts/eth-mainnet/proving-key.zkey",
     proving_key_hash: provingKeyHash,
     verifier_key: "artifacts/eth-mainnet/verifier-key.bin",
     verifier_key_hash: verifierKeyHash,
@@ -5723,7 +5762,7 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
   assert.throws(
     () =>
       validateEthereumMainnetNativeEvmProverBundle(
-        { ...nativeProverBundle, proof_artifact: "ipfs:proof-artifact.bin" },
+        { ...nativeProverBundle, proof_artifact: "ipfs:proof-artifact.r1cs" },
         { destinationBinding: ethereumMainnetBinding },
       ),
     /proofArtifact must not contain URI schemes or drive prefixes/u,
@@ -5738,6 +5777,22 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
         { destinationBinding: ethereumMainnetBinding },
       ),
     /proofArtifact path contains forbidden prover dependency marker: wasm/u,
+  );
+  assert.throws(
+    () =>
+      validateEthereumMainnetNativeEvmProverBundle(
+        { ...nativeProverBundle, proof_artifact: "artifacts/eth-mainnet/proof-artifact.bin" },
+        { destinationBinding: ethereumMainnetBinding },
+      ),
+    /proofArtifact must reference a \.r1cs artifact/u,
+  );
+  assert.throws(
+    () =>
+      validateEthereumMainnetNativeEvmProverBundle(
+        { ...nativeProverBundle, proving_key: "artifacts/eth-mainnet/proving-key.bin" },
+        { destinationBinding: ethereumMainnetBinding },
+      ),
+    /provingKey must reference a \.zkey artifact/u,
   );
   assert.equal(
     validateEthereumMainnetNativeEvmProverParityFixture(
@@ -5956,8 +6011,8 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     bundle_id: SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
     domain: SCCP_DOMAIN_BSC,
     chain: "bsc-mainnet",
-    proof_artifact: "artifacts/bsc-mainnet/proof-artifact.bin",
-    proving_key: "artifacts/bsc-mainnet/proving-key.bin",
+    proof_artifact: "artifacts/bsc-mainnet/proof-artifact.r1cs",
+    proving_key: "artifacts/bsc-mainnet/proving-key.zkey",
     verifier_key: "artifacts/bsc-mainnet/verifier-key.bin",
     destination_binding_hash: bscMainnetBinding.bindingHash,
     cross_sdk_fixture_parity_artifact:
@@ -6081,8 +6136,8 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     bundle_id: SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
     domain: SCCP_DOMAIN_BSC,
     chain: "bsc-testnet",
-    proof_artifact: "artifacts/bsc-testnet/proof-artifact.bin",
-    proving_key: "artifacts/bsc-testnet/proving-key.bin",
+    proof_artifact: "artifacts/bsc-testnet/proof-artifact.r1cs",
+    proving_key: "artifacts/bsc-testnet/proving-key.zkey",
     verifier_key: "artifacts/bsc-testnet/verifier-key.bin",
     destination_binding_hash: bscTestnetBinding.bindingHash,
     cross_sdk_fixture_parity_artifact: "artifacts/bsc-testnet/cross-sdk-fixture-parity.json",

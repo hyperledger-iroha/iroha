@@ -2,6 +2,20 @@
 
 Last updated: 2026-06-11
 
+## 2026-06-11 SCCP BSC explorer binding metadata
+
+- Hardened `scripts/sccp_bsc_taira_xor_deploy.mjs` so BSC deployment evidence,
+  route-config normalization, and generated TAIRA route TOML carry canonical
+  profile-bound `explorerUrl` / `explorerHost` metadata for BSC testnet and
+  mainnet.
+- Production-ready BSC route manifests now fail route-config generation unless
+  they explicitly declare the expected explorer URL and host. Disabled legacy
+  drafts can still be normalized, but contradictory explorer metadata is
+  rejected before operator overlays are written.
+- Validation passed:
+  - `node --test scripts/sccp_bsc_taira_xor_deploy.test.mjs` (`28 passed`)
+  - `git diff --check`
+
 ## 2026-06-11 Kagemusha Android raw-puller temp cleanup identity
 
 - Hardened the Android raw puller's host `latest-slot.txt` and raw-pull

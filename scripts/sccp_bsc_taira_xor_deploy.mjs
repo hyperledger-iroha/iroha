@@ -68,6 +68,7 @@ export const BSC_NETWORK_PROFILES = Object.freeze({
     networkIdHex: BSC_TESTNET_NETWORK_ID_HEX,
     defaultRpcUrl: DEFAULT_BSC_RPC_URL,
     explorerUrl: "https://testnet.bscscan.com",
+    explorerHost: "testnet.bscscan.com",
   }),
   mainnet: Object.freeze({
     key: "mainnet",
@@ -78,6 +79,7 @@ export const BSC_NETWORK_PROFILES = Object.freeze({
     networkIdHex: BSC_MAINNET_NETWORK_ID_HEX,
     defaultRpcUrl: DEFAULT_BSC_MAINNET_RPC_URL,
     explorerUrl: "https://bscscan.com",
+    explorerHost: "bscscan.com",
   }),
 });
 export const BSC_EVM_GROTH16_BACKEND = "evm-groth16-bn254-v1";
@@ -94,6 +96,9 @@ const SMOKE_FIXTURE_G2 = Object.freeze([
 ]);
 const SMOKE_FIXTURE_IC = Object.freeze(
   Array.from({ length: 10 }, () => SMOKE_FIXTURE_G1).flat(),
+);
+const BN254_FIELD_MODULUS = BigInt(
+  "21888242871839275222246405745257275088548364400416034343698204186575808495617",
 );
 export const DEPLOYMENT_EVIDENCE_SCHEMA =
   "iroha-sccp-bsc-taira-xor-deployment-evidence/v1";
@@ -571,7 +576,7 @@ function normalizeBscExplorerTxUrl(
   }
   if (
     url.protocol !== "https:" ||
-    url.hostname !== new URL(profile.explorerUrl).hostname ||
+    url.hostname !== profile.explorerHost ||
     url.username ||
     url.password ||
     url.search ||
@@ -593,6 +598,55 @@ function normalizeBscExplorerTxUrl(
     throw new Error(`${label} transaction hash must match ${expected}.`);
   }
   return `${profile.explorerUrl}/tx/${expected}`;
+}
+
+function normalizeBscExplorerBaseUrl(
+  value,
+  label,
+  profile = BSC_NETWORK_PROFILES.testnet,
+) {
+  const text = normalizeNonEmptyText(value, label).replace(/\/+$/u, "");
+  let url;
+  try {
+    url = new URL(text);
+  } catch (_error) {
+    throw new Error(`${label} must be a valid URL.`);
+  }
+  if (
+    url.protocol !== "https:" ||
+    url.hostname !== profile.explorerHost ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash ||
+    (url.pathname && url.pathname !== "/")
+  ) {
+    throw new Error(
+      `${label} must be the HTTPS ${profile.label} explorer origin without credentials, path, query, or fragment.`,
+    );
+  }
+  return profile.explorerUrl;
+}
+
+function normalizeBscExplorerHost(
+  value,
+  label,
+  profile = BSC_NETWORK_PROFILES.testnet,
+) {
+  const text = normalizeNonEmptyText(value, label).toLowerCase();
+  if (text.includes("://") || /[/?#@]/u.test(text)) {
+    throw new Error(`${label} must be a hostname, not a URL.`);
+  }
+  let url;
+  try {
+    url = new URL(`https://${text}`);
+  } catch (_error) {
+    throw new Error(`${label} must be a valid hostname.`);
+  }
+  if (url.host !== profile.explorerHost) {
+    throw new Error(`${label} must be ${profile.explorerHost}.`);
+  }
+  return profile.explorerHost;
 }
 
 function abiWordBytes(bytes, label, byteLength) {
@@ -706,6 +760,45 @@ function normalizeUint256Array(value, label, expectedLength) {
     throw new Error(`${label} must contain ${expectedLength} uint256 values.`);
   }
   return values;
+}
+
+function normalizeBn254FieldElement(value, label) {
+  const parsed = BigInt(value);
+  if (parsed < 0n || parsed >= BN254_FIELD_MODULUS) {
+    throw new Error(`${label} must be a BN254 field element.`);
+  }
+  return parsed;
+}
+
+function bn254Mod(value) {
+  const remainder = value % BN254_FIELD_MODULUS;
+  return remainder >= 0n ? remainder : remainder + BN254_FIELD_MODULUS;
+}
+
+function assertBn254G1Point(point, label) {
+  if (point.length !== 2) {
+    throw new Error(`${label} must contain two BN254 G1 coordinates.`);
+  }
+  const x = normalizeBn254FieldElement(point[0], `${label}.x`);
+  const y = normalizeBn254FieldElement(point[1], `${label}.y`);
+  if (x === 0n && y === 0n) {
+    throw new Error(`${label} must not be the BN254 point at infinity.`);
+  }
+  if (bn254Mod(y * y) !== bn254Mod(x * x * x + 3n)) {
+    throw new Error(`${label} must be on the BN254 G1 curve.`);
+  }
+}
+
+function assertBn254G1VectorPairs(values, label) {
+  if (values.length % 2 !== 0) {
+    throw new Error(`${label} must contain complete BN254 G1 coordinate pairs.`);
+  }
+  for (let offset = 0; offset < values.length; offset += 2) {
+    assertBn254G1Point(
+      values.slice(offset, offset + 2),
+      `${label}[${offset / 2}]`,
+    );
+  }
 }
 
 const sameVector = (actual, expected) =>
@@ -843,6 +936,8 @@ export function normalizeVerifierMaterial(
   };
   const fixtureShaped =
     isNormalizedSmokeFixtureGroth16VerifierMaterial(normalizedMaterial);
+  assertBn254G1Point(normalizedMaterial.alpha1, "alpha1");
+  assertBn254G1VectorPairs(normalizedMaterial.ic, "ic");
   const diagnosticVerifierReasons = [
     diagnosticFlagReason(material, "verifier material"),
     fixtureShaped
@@ -1586,7 +1681,6 @@ const PRODUCTION_PROOF_MATERIAL_MAX_REPEATED_PATTERN_BYTES = 64;
 const PRODUCTION_PROOF_MATERIAL_MAX_DOMINANT_BYTE_FRACTION = 0.98;
 const SNARKJS_R1CS_MAGIC = [0x72, 0x31, 0x63, 0x73];
 const SNARKJS_ZKEY_MAGIC = [0x7a, 0x6b, 0x65, 0x79];
-const WASM_MAGIC = [0x00, 0x61, 0x73, 0x6d];
 
 function repeatedPrefixPatternLength(
   bytes,
@@ -1645,6 +1739,13 @@ function u32le(bytes, offset) {
   ) >>> 0;
 }
 
+function u64leSafe(bytes, offset) {
+  const low = u32le(bytes, offset);
+  const high = u32le(bytes, offset + 4);
+  const value = high * 0x100000000 + low;
+  return Number.isSafeInteger(value) ? value : null;
+}
+
 function hasBytePrefix(bytes, prefix) {
   return prefix.every((byte, index) => bytes[index] === byte);
 }
@@ -1665,18 +1766,34 @@ function assertSnarkjsBinaryHeader(artifact, label, magic, formatLabel) {
   if (sectionCount < 1 || sectionCount > 128) {
     throw new Error(`${label} ${formatLabel} section count is invalid.`);
   }
-}
-
-function assertWasmHeader(artifact, label) {
-  const bytes = artifact.bytes;
-  if (bytes.length < 8) {
-    throw new Error(`${label} WebAssembly header is truncated.`);
+  let offset = 12;
+  const sectionIds = new Set();
+  for (let index = 0; index < sectionCount; index += 1) {
+    if (offset + 12 > bytes.length) {
+      throw new Error(`${label} ${formatLabel} section table is truncated.`);
+    }
+    const sectionId = u32le(bytes, offset);
+    const sectionSize = u64leSafe(bytes, offset + 4);
+    offset += 12;
+    if (sectionId === 0) {
+      throw new Error(`${label} ${formatLabel} section id must be non-zero.`);
+    }
+    if (sectionIds.has(sectionId)) {
+      throw new Error(`${label} ${formatLabel} section ids must be unique.`);
+    }
+    sectionIds.add(sectionId);
+    if (sectionSize === null || sectionSize <= 0) {
+      throw new Error(`${label} ${formatLabel} section size is invalid.`);
+    }
+    if (sectionSize > bytes.length - offset) {
+      throw new Error(`${label} ${formatLabel} section exceeds file size.`);
+    }
+    offset += sectionSize;
   }
-  if (!hasBytePrefix(bytes, WASM_MAGIC)) {
-    throw new Error(`${label} must start with WebAssembly magic bytes.`);
-  }
-  if (u32le(bytes, 4) !== 1) {
-    throw new Error(`${label} WebAssembly version is unsupported.`);
+  if (offset !== bytes.length) {
+    throw new Error(
+      `${label} ${formatLabel} section table does not consume the full file.`,
+    );
   }
 }
 
@@ -1687,12 +1804,8 @@ function assertProductionProofMaterialFormat(artifact, label, kind) {
       assertSnarkjsBinaryHeader(artifact, label, SNARKJS_R1CS_MAGIC, ".r1cs");
       return;
     }
-    if (extension === ".wasm") {
-      assertWasmHeader(artifact, label);
-      return;
-    }
     throw new Error(
-      `${label} must be a .r1cs or .wasm artifact; received ${artifact.path}.`,
+      `${label} must be a .r1cs artifact; received ${artifact.path}.`,
     );
   }
   if (kind === "proving-key") {
@@ -2413,6 +2526,8 @@ export function buildDeploymentEvidence({
     chain: profile.chain,
     chainIdHex: profile.chainIdHex,
     networkIdHex: profile.networkIdHex,
+    explorerUrl: profile.explorerUrl,
+    explorerHost: profile.explorerHost,
     bscBridgeAddress: addresses.bridge,
     bscTokenAddress: addresses.token,
     sccpBscSourceBridgeAddress: addresses.sourceBridge,
@@ -2911,6 +3026,56 @@ function normalizeRouteManifestForConfig(manifest) {
     throw new Error("route manifest productionReady must be true or false.");
   }
   const productionReady = record.productionReady === true;
+  const explorerUrlSources = [
+    {
+      record,
+      keys: [
+        "explorerUrl",
+        "explorer_url",
+        "bscExplorerUrl",
+        "bsc_explorer_url",
+      ],
+      pathName: "route manifest",
+    },
+  ];
+  assertSingleStringAliasPerSource(
+    explorerUrlSources,
+    "route manifest BSC explorerUrl",
+  );
+  const declaredExplorerUrl = readConsistentNormalizedString(
+    explorerUrlSources,
+    "route manifest BSC explorerUrl",
+    (value, label) => normalizeBscExplorerBaseUrl(value, label, bscProfile),
+  );
+  const explorerHostSources = [
+    {
+      record,
+      keys: [
+        "explorerHost",
+        "explorer_host",
+        "bscExplorerHost",
+        "bsc_explorer_host",
+      ],
+      pathName: "route manifest",
+    },
+  ];
+  assertSingleStringAliasPerSource(
+    explorerHostSources,
+    "route manifest BSC explorerHost",
+  );
+  const declaredExplorerHost = readConsistentNormalizedString(
+    explorerHostSources,
+    "route manifest BSC explorerHost",
+    (value, label) => normalizeBscExplorerHost(value, label, bscProfile),
+  );
+  if (productionReady && !declaredExplorerUrl) {
+    throw new Error("route manifest productionReady requires explorerUrl.");
+  }
+  if (productionReady && !declaredExplorerHost) {
+    throw new Error("route manifest productionReady requires explorerHost.");
+  }
+  const explorerUrl = declaredExplorerUrl || bscProfile.explorerUrl;
+  const explorerHost = declaredExplorerHost || bscProfile.explorerHost;
   const tokenAddressSources = [
     {
       record,
@@ -3495,6 +3660,11 @@ function normalizeRouteManifestForConfig(manifest) {
         "route manifest productionReady requires postDeployLiveEvidence.routeCanaryExplorerUrl.",
       );
     }
+    if (fullTomlReady && !offlineFullTomlSha256) {
+      throw new Error(
+        "route manifest postDeployLiveEvidence.fullTomlReady requires postDeployLiveEvidence.offlineFullTomlSha256.",
+      );
+    }
     if (productionReady && !offlineFullTomlSha256) {
       throw new Error(
         "route manifest productionReady requires postDeployLiveEvidence.offlineFullTomlSha256.",
@@ -3535,6 +3705,8 @@ function normalizeRouteManifestForConfig(manifest) {
     legacyTronNetwork: chain,
     chain,
     chainIdHex,
+    explorerUrl,
+    explorerHost,
     counterpartyDomain,
     verifierTarget,
     productionReady,
@@ -3634,6 +3806,8 @@ export function buildBscTairaXorRouteConfigToml(manifest, options = {}) {
     `tron_network = ${tomlString(route.legacyTronNetwork, "tron_network")}`,
     `chain = ${tomlString(route.chain, "chain")}`,
     `chain_id_hex = ${tomlString(route.chainIdHex, "chain_id_hex")}`,
+    `explorer_url = ${tomlString(route.explorerUrl, "explorer_url")}`,
+    `explorer_host = ${tomlString(route.explorerHost, "explorer_host")}`,
     `counterparty_domain = ${route.counterpartyDomain}`,
     `verifier_target = ${tomlString(route.verifierTarget, "verifier_target")}`,
     `production_ready = ${route.productionReady ? "true" : "false"}`,
