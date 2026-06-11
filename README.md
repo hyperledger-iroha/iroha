@@ -47,10 +47,14 @@ Notes:
 - Plain `cargo test` from the repository root runs the default workspace
   members; use `cargo test --workspace` when an explicit full-workspace run is
   needed. Use `cargo test -p <crate>` for a focused crate suite.
-- The repo-local Cargo config caps default build parallelism at `jobs = 2` so
+- The repo-local Cargo config caps default build parallelism at `jobs = 1` so
   large Rust test builds do not overcommit WSL or memory-constrained VMs. On a
   high-memory machine, override this with `cargo test -j <N>` or
   `CARGO_BUILD_JOBS=<N> cargo test`.
+- Plain `cargo test` skips the oversized private Sumeragi main-loop unit-test
+  harness so local WSL runs do not need a ~10 GiB `iroha_core --test` compile.
+  Run `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests` on a
+  high-memory host when changing that private consensus harness.
 - Full workspace build can take about 20 minutes.
 - Full workspace tests can take multiple hours.
 - On WSL, make sure the Windows-side `.wslconfig` gives the VM enough memory,

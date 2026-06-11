@@ -2654,9 +2654,16 @@ function productionEvidenceRows(value) {
 
 function productionEvidenceChainId(options) {
   if (!isPlainObject(options)) {
-    return null;
+    return undefined;
   }
-  return evidenceChainIdValue(options.chainId ?? options.chain_id) || null;
+  if (!Object.hasOwn(options, "chainId") && !Object.hasOwn(options, "chain_id")) {
+    return undefined;
+  }
+  const requested = options.chainId ?? options.chain_id;
+  if (requested === undefined || requested === null) {
+    return undefined;
+  }
+  return evidenceChainIdValue(requested) || null;
 }
 
 function trustedProductionEvidence(descriptor, evidenceRows, options = undefined) {
@@ -2669,7 +2676,11 @@ function trustedProductionEvidence(descriptor, evidenceRows, options = undefined
   }
   const expectedChainId = productionEvidenceChainId(options);
   const evidenceChainId = evidenceChainIdValue(source.chain_id);
-  if (!evidenceChainId || (expectedChainId !== null && evidenceChainId !== expectedChainId)) {
+  if (
+    !evidenceChainId ||
+    expectedChainId === null ||
+    (expectedChainId !== undefined && evidenceChainId !== expectedChainId)
+  ) {
     return null;
   }
   const reviewerIdentity = evidenceTextValue(source.reviewer_identity, 160);

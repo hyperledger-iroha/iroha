@@ -342,11 +342,40 @@ def test_sccp_production_corridor_kotlin_phase_covers_sccp_package() -> None:
 
     assert "==> SCCP production corridor: kotlin-sdk" in completed.stdout
     assert "JAVA_HOME=" in completed.stdout
+    assert "GRADLE_OPTS=-Dorg.gradle.jvmargs=-Xmx6g" in completed.stdout
+    assert "-Dkotlin.daemon.jvmargs=-Xmx6g" in completed.stdout
+    assert "-Dkotlin.daemon.jvm.options=-Xmx6g" in completed.stdout
     assert "java -version" in completed.stdout
     assert "./gradlew :core-jvm:test --console=plain --tests" in completed.stdout
     assert "org.hyperledger.iroha.sdk.sccp." in completed.stdout
     assert "org.hyperledger.iroha.sdk.sccp.TonSccpProverTest" in completed.stdout
     assert "SCCP production corridor dry run completed." in completed.stdout
+
+
+def test_sccp_production_corridor_gradle_opts_override_is_preserved() -> None:
+    """Operator-supplied Gradle memory settings must override corridor defaults."""
+
+    env = os.environ.copy()
+    env["GRADLE_OPTS"] = "-Dorg.gradle.jvmargs=-Xmx3g -Dcustom.flag=true"
+    completed = subprocess.run(
+        [
+            "bash",
+            str(SCRIPT),
+            "--dry-run",
+            "--phase",
+            "kotlin-sdk",
+        ],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+    )
+
+    assert "GRADLE_OPTS=-Dorg.gradle.jvmargs=-Xmx3g\\ -Dcustom.flag=true" in (
+        completed.stdout
+    )
+    assert "-Dkotlin.daemon.jvmargs=-Xmx6g" not in completed.stdout
 
 
 def test_sccp_production_corridor_dry_run_prints_selected_phase_commands() -> None:
@@ -638,6 +667,7 @@ def test_sccp_production_corridor_dry_run_skips_mobile_toolchain_resolution() ->
     assert "./gradlew :core:test --console=plain --tests" in completed.stdout
     assert "java -version" in completed.stdout
     assert "ANDROID_HOME=" in completed.stdout
+    assert "GRADLE_OPTS=-Dorg.gradle.jvmargs=-Xmx6g" in completed.stdout
     assert "SCCP production corridor dry run completed." in completed.stdout
 
 

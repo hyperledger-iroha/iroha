@@ -1,5 +1,9 @@
 //! The main event loop that powers sumeragi.
 #![cfg_attr(test, allow(unnameable_test_items))]
+#![cfg_attr(
+    all(test, not(feature = "sumeragi-main-loop-tests")),
+    allow(dead_code, unused_imports)
+)]
 use std::{
     borrow::Cow,
     cell::Cell,
@@ -46383,5 +46387,5 @@ fn validate_da_bundle_caps(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sumeragi-main-loop-tests"))]
 mod tests;

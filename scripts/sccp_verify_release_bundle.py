@@ -433,6 +433,7 @@ READINESS_MARKDOWN_REQUIRED_RELEASE_EVIDENCE_MARKERS = (
     "Ethereum no-proxy data-collection source inventory",
     "Ethereum inbound adversarial source inventory",
     "BSC inbound adversarial source inventory",
+    "TRON inbound adversarial source inventory",
     "Ethereum outbound pre-callback source inventory",
     "Ethereum outbound provider-validation source inventory",
     "Ethereum local-admission source inventory",
@@ -462,6 +463,8 @@ READINESS_MARKDOWN_REQUIRED_RELEASE_EVIDENCE_MARKERS = (
     "Ethereum route-canary finalized receipt-block source inventory",
     "Ethereum EVM block-tag metadata source inventory",
     "SCCP native no-WASM/no-remote source inventory",
+    "SCCP source-material template rejection source inventory",
+    "SCCP source-material role validation source inventory",
     "canonical native EVM prover SDK-id rejection",
     "padded-SDK adversarial tests",
     "SCCP BSC route-config canonical-manifest source inventory",
@@ -716,6 +719,7 @@ SOURCE_INVENTORY_REQUIRED_GATES = {
     "ethereum_data_collection_no_proxy_gate",
     "ethereum_inbound_adversarial_gate",
     "bsc_inbound_adversarial_gate",
+    "tron_inbound_adversarial_gate",
     "bsc_route_config_canonical_manifest_gate",
     "tron_route_config_canonical_manifest_gate",
     "tron_runtime_route_manifest_gate",
@@ -744,6 +748,8 @@ SOURCE_INVENTORY_REQUIRED_GATES = {
     "ethereum_sync_committee_roster_gate",
     "ethereum_source_bridge_config_gate",
     "ethereum_evm_source_adapter_deployment_gate",
+    "source_material_template_rejection_gate",
+    "source_material_role_validation_gate",
     "contract_smoke_eth_mainnet_network_id_gate",
     "contract_smoke_evm_production_surface_gate",
     "ethereum_core_range_finality_binding_gate",
@@ -3225,6 +3231,302 @@ ETHEREUM_SOURCE_BRIDGE_CONFIG_MARKERS = (
         ),
     ),
 )
+SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS = (
+    (
+        "scripts/sccp_eth_source_bridge_evidence.py",
+        (
+            "ETH_TEMPLATE_COMPONENTS = {",
+            "def _evm_family_template_component_hash(",
+            "template-derived {label} is not deployable",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_eth_source_bridge_evidence_test.py",
+        (
+            "test_eth_direct_record_hashes_reject_template_component_hashes",
+            "test_eth_source_evidence_rejects_template_component_hashes",
+            "ETH material hash accepted template",
+            "ETH deployment hash accepted template",
+            "template ETH {label} was accepted",
+        ),
+    ),
+    (
+        "scripts/sccp_bsc_source_bridge_evidence.py",
+        (
+            "BSC_TEMPLATE_COMPONENTS = {",
+            "def bsc_template_components(",
+            "template-derived {label} is not deployable",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_bsc_source_bridge_evidence_test.py",
+        (
+            "test_bsc_direct_record_hashes_reject_template_component_hashes",
+            "test_bsc_source_evidence_rejects_template_component_hashes",
+            "BSC {bsc_network} material hash accepted template",
+            "BSC {bsc_network} deployment hash accepted template",
+            "template BSC {bsc_network} {label} was accepted",
+        ),
+    ),
+    (
+        "scripts/sccp_solana_source_state_evidence.py",
+        (
+            "def solana_template_component_hash(",
+            "def _reject_template_hashes(",
+            "must be deployed evidence, not the Solana template hash",
+            "built-in template material",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_solana_source_state_evidence_test.py",
+        (
+            "test_direct_record_hashes_reject_template_component_hashes",
+            "test_solana_template_component_hashes_are_rejected",
+            "test_solana_cli_rejects_full_light_client_audit_hash_reusing_template_material",
+            "Solana material hash accepted template",
+            "Solana deployment hash accepted template",
+            "Solana template {field} was accepted",
+            "Solana full-light-client audit hash reused template material",
+        ),
+    ),
+    (
+        "scripts/sccp_ton_source_state_evidence.py",
+        (
+            "TON_TEMPLATE_COMPONENTS = {",
+            "def _ton_template_component_hash(",
+            "template-derived {label} is not deployable",
+            "built-in template material",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_ton_source_state_evidence_test.py",
+        (
+            "test_ton_direct_record_hashes_reject_template_component_hashes",
+            "test_ton_source_evidence_rejects_template_component_hashes",
+            "test_ton_cli_rejects_full_light_client_audit_hash_reusing_template_material",
+            "TON material hash accepted template",
+            "TON deployment hash accepted template",
+            "template TON {label} was accepted",
+            "TON full light-client audit hash reused template material",
+        ),
+    ),
+    (
+        "scripts/sccp_tron_source_bridge_evidence.py",
+        (
+            "TRON_TEMPLATE_COMPONENTS = {",
+            "def _tron_template_component_hash(",
+            "template-derived {label} is not deployable",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_tron_source_bridge_evidence_test.py",
+        (
+            "test_toml_rendering_rejects_template_source_component_hashes",
+            "test_direct_record_hashes_reject_template_source_component_hashes",
+            "direct material hash accepted template",
+            "direct deployment hash accepted template",
+            "template-derived TRON {label} was accepted",
+        ),
+    ),
+    (
+        "scripts/sccp_release_readiness_report.py",
+        (
+            "def _sccp_source_material_template_rejection_gate_inventory_errors(",
+            '"source_material_template_rejection_gate"',
+            "SCCP source-material template rejection source inventory",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+        (
+            "def test_release_readiness_report_guards_sccp_source_material_template_rejection_gate_inventory",
+            "def test_release_readiness_report_blocks_missing_sccp_source_material_template_rejection_gate",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "def test_release_bundle_verifier_guards_sccp_source_material_template_rejection_inventory",
+        ),
+    ),
+)
+SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
+    (
+        "scripts/sccp_eth_source_bridge_evidence.py",
+        (
+            "def _require_nonzero_fixed_bytes(",
+            "def _require_canonical_adapter_verifier_vk_hash(",
+            "def _require_source_role_hash_separation(",
+            "ETH source-adapter verifier profile",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_eth_source_bridge_evidence_test.py",
+        (
+            "test_eth_direct_record_hashes_reject_reused_role_hashes",
+            "test_eth_direct_record_hashes_reject_zero_production_inputs",
+            "test_eth_source_deployment_hash_rejects_noncanonical_adapter_vk_hash",
+            "test_eth_source_evidence_rejects_adapter_verifier_vk_hash_mismatch",
+            "ETH material hash accepted zero {field}",
+            "ETH deployment hash accepted zero {field}",
+            "ETH TOML accepted reused source-adapter role hashes",
+            "ETH material hash accepted reused role hashes",
+            "ETH deployment hash accepted reused role hashes",
+            "noncanonical ETH adapter vk hash was accepted",
+            "mismatched ETH adapter verifier vk hash was accepted",
+        ),
+    ),
+    (
+        "scripts/sccp_bsc_source_bridge_evidence.py",
+        (
+            "def _require_nonzero_fixed_bytes(",
+            "def _require_canonical_adapter_verifier_vk_hash(",
+            "def _require_source_role_hash_separation(",
+            "BSC source-adapter verifier profile",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_bsc_source_bridge_evidence_test.py",
+        (
+            "test_bsc_direct_record_hashes_reject_reused_role_hashes",
+            "test_bsc_direct_record_hashes_reject_zero_production_inputs",
+            "test_bsc_source_deployment_hash_rejects_noncanonical_adapter_vk_hash",
+            "test_bsc_source_evidence_rejects_adapter_verifier_vk_hash_mismatch",
+            "BSC material hash accepted zero {field}",
+            "BSC deployment hash accepted zero {field}",
+            "BSC TOML accepted reused source-adapter role hashes",
+            "BSC material hash accepted reused role hashes",
+            "BSC deployment hash accepted reused role hashes",
+            "noncanonical BSC adapter vk hash was accepted",
+            "mismatched BSC adapter verifier vk hash was accepted",
+        ),
+    ),
+    (
+        "scripts/sccp_solana_source_state_evidence.py",
+        (
+            "def _require_nonzero_fixed_bytes(",
+            "def _require_source_role_hash_separation(",
+            "def _require_light_client_evidence_role_separation(",
+            "def _require_canonical_adapter_verifier_vk_hash(",
+            "Solana full-light-client verifier hashes must be role-separated",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_solana_source_state_evidence_test.py",
+        (
+            "test_solana_direct_record_hashes_reject_reused_role_hashes",
+            "test_direct_record_hashes_reject_zero_component_hashes",
+            "test_solana_source_deployment_hash_rejects_noncanonical_adapter_vk_hash",
+            "test_solana_source_evidence_rejects_adapter_verifier_vk_hash_mismatch",
+            "test_solana_cli_rejects_duplicate_full_light_client_audit_hashes",
+            "Solana material hash accepted zero {field}",
+            "Solana deployment hash accepted zero {field}",
+            "Solana audit gate accepted zero {field}",
+            "Solana TOML accepted reused source-adapter role hashes",
+            "Solana material hash accepted reused role hashes",
+            "Solana deployment hash accepted reused role hashes",
+            "noncanonical Solana adapter vk hash was accepted",
+            "mismatched Solana adapter verifier vk hash was accepted",
+            "duplicate Solana full-light-client audit hashes were accepted",
+        ),
+    ),
+    (
+        "scripts/sccp_ton_source_state_evidence.py",
+        (
+            "def _require_nonzero_fixed_bytes(",
+            "def _require_source_role_hash_separation(",
+            "def _require_light_client_evidence_role_separation(",
+            "def _require_canonical_adapter_verifier_vk_hash(",
+            "TON full-light-client verifier hashes must be role-separated",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_ton_source_state_evidence_test.py",
+        (
+            "test_ton_direct_record_hashes_reject_reused_role_hashes",
+            "test_ton_direct_record_hashes_reject_zero_production_hashes",
+            "test_ton_source_deployment_hash_rejects_noncanonical_adapter_vk_hash",
+            "test_ton_source_evidence_rejects_adapter_verifier_vk_hash_mismatch",
+            "test_ton_toml_rendering_rejects_reused_audit_role_hashes",
+            "TON material hash accepted zero {field}",
+            "TON deployment hash accepted zero {field}",
+            "TON TOML accepted reused source-adapter role hashes",
+            "TON material hash accepted reused role hashes",
+            "TON deployment hash accepted reused role hashes",
+            "noncanonical TON adapter vk hash was accepted",
+            "mismatched TON adapter verifier vk hash was accepted",
+            "TON TOML accepted reused full-light-client audit hashes",
+        ),
+    ),
+    (
+        "scripts/sccp_tron_source_bridge_evidence.py",
+        (
+            "def _require_fixed_bytes(",
+            "def apply_source_adapter_verifier_vk_hash(",
+            "def _require_source_role_hash_separation(",
+            "TRON source-adapter verifier profile",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_tron_source_bridge_evidence_test.py",
+        (
+            "test_direct_record_hashes_reject_reused_source_role_hashes",
+            "test_tron_direct_record_hashes_reject_zero_production_inputs",
+            "test_tron_source_deployment_hash_rejects_noncanonical_adapter_vk_hash",
+            "test_toml_rendering_rejects_reused_source_role_hashes",
+            "test_cli_rejects_adapter_verifier_vk_hash_mismatch",
+            "TRON material hash accepted zero {field}",
+            "TRON deployment hash accepted zero {field}",
+            "TRON TOML accepted reused source-adapter role hashes",
+            "TRON material hash accepted reused role hashes",
+            "TRON deployment hash accepted reused role hashes",
+            "noncanonical adapter verifier vk hash was accepted",
+            "mismatched adapter verifier vk hash was accepted",
+        ),
+    ),
+    (
+        "crates/iroha_sccp/src/lib.rs",
+        (
+            "EVM-family source material constructors must reject all-zero role hashes",
+            "EVM-family source material constructors must reject reused role hashes",
+            "Solana source material constructors must reject all-zero role hashes",
+            "Solana full-light-client audit hashes must be pairwise role-separated",
+            "TON source material constructors must reject all-zero role hashes",
+            "TON full-light-client audit hashes must be pairwise role-separated",
+            "TRON source material constructors must reject all-zero role hashes",
+            "TRON source material constructors must reject reused role hashes",
+            "source_state_proof_preflight_requires_canonical_present_capsules",
+            "canonical source-state preflight FASTPQ parameter set",
+            "canonical open proof with opaque backend",
+            "canonical open proof with compressed backend",
+            "adapter verifier commitment helper must reject opaque nested FastPQ proof bytes",
+            "adapter verifier commitment helper must verify canonical nested FastPQ proof bytes",
+            "adapter verifier commitment helper must reject stale adapter transcript hashes",
+            "deployment matcher must reject replayed adapter verifier key hashes",
+        ),
+    ),
+    (
+        "scripts/sccp_release_readiness_report.py",
+        (
+            "def _sccp_source_material_role_validation_gate_inventory_errors(",
+            '"source_material_role_validation_gate"',
+            "SCCP source-material role validation source inventory",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+        (
+            "def test_release_readiness_report_guards_sccp_source_material_role_validation_gate_inventory",
+            "def test_release_readiness_report_blocks_missing_sccp_source_material_role_validation_gate",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "def test_release_bundle_verifier_guards_sccp_source_material_role_validation_inventory",
+        ),
+    ),
+)
 ETHEREUM_EVM_SOURCE_LIVE_PRODUCTION_MARKERS = (
     (
         "scripts/sccp_evm_source_live_evidence.py",
@@ -3979,6 +4281,85 @@ ALL_LANES_EVIDENCE_ROOT_SCHEMA_MARKERS = (
         ),
     ),
     (
+        "scripts/sccp_release_bundle.py",
+        (
+            "ALL_LANES_SUMMARY_FIELDS",
+            "ALL_LANES_LANE_FIELDS",
+            "ALL_LANES_RECORD_FIELDS",
+            "def _all_lanes_summary_bundle_errors(",
+            "def _all_lanes_summary_output_bundle_errors(",
+            "def _copied_evidence_binding_bundle_errors(",
+            "does not match bundled report evidence",
+            "does not match copied evidence inputs",
+            "must be a list of integers",
+            "must be true or false",
+            "def _all_lanes_nested_field_sets(",
+            "def _all_lanes_route_canary_fields(",
+            "def _unknown_public_field_error(",
+            "def _all_lanes_nested_bundle_errors(",
+            "source_adapter_gate audit_hashes",
+            "def _source_adapter_gate_semantic_errors(",
+            "required must be false ",
+            "required must be true for this lane domain",
+            "audit_hashes must not be empty ",
+            "unexpected field: {key}",
+            "audit_hashes missing field",
+            "gate_hash must match one ",
+            "gate_hash must match ",
+            "blockers must be empty when ready",
+            "blockers must be empty ",
+            "when gate is required",
+            "def _route_canary_common_semantic_errors(",
+            "status must be passed",
+            "evidence_source must be {expected_source}",
+            "evidence_bound must be true",
+            "hash role",
+            "evidence_hash",
+            "def _all_lanes_route_canary_cross_lane_bundle_errors(",
+            "evidence_hash must be distinct from ",
+            "evidence_hash must not reuse ",
+            "route_allowlist_hash must match lane ",
+            "destination_binding_hash must match lane ",
+            "def _route_canary_evm_semantic_errors(",
+            "transcript hash",
+            "receipt_block_number must be a positive integer",
+            "target_domain",
+            "the lane domain",
+            "proof_version",
+            "proof_source_domain",
+            "SORA",
+            "message_proof_used",
+            "receipt_block_finalized",
+            "def _route_canary_tron_semantic_errors(",
+            "transaction_owner_address",
+            "signature_recovered_address must match ",
+            "block_number",
+            "block_timestamp",
+            "TRON",
+            "raw_data_owner_matches_transaction",
+            "signature_recovers_to_owner",
+            "def _route_canary_solana_semantic_errors(",
+            "solana_programdata_address",
+            "solana_programdata_slot",
+            "def _route_canary_ton_semantic_errors(",
+            "ton_account_state_hash",
+            "ton_last_transaction_hash",
+            "ton_last_transaction_lt",
+            "expected_destination_binding_hash must match destination_binding_hash",
+            "expected_route_allowlist_hash must match route_allowlist_hash",
+            "expected_route_allowlist_hash_matches",
+            "recomputed",
+            "source_rpc_chain_id",
+            "destination_rpc_chain_id",
+            "must be canonical chain id {expected_chain_id}",
+            "source_block_tag",
+            "destination_block_tag",
+            "must be finalized for Ethereum mainnet",
+            "route_allowlist.route_canary",
+            "non-zero canonical ",
+        ),
+    ),
+    (
         "pytests/scripts/sccp_release_readiness_report_test.py",
         (
             "def test_release_readiness_report_guards_all_lanes_evidence_root_schema_gate_inventory",
@@ -3992,6 +4373,18 @@ ALL_LANES_EVIDENCE_ROOT_SCHEMA_MARKERS = (
             "def test_release_bundle_verifier_guards_all_lanes_evidence_root_schema_inventory",
             "def test_release_bundle_verifier_runs_all_lanes_evidence_root_schema_inventory_sweep",
             "def test_release_bundle_verifier_rejects_missing_all_lanes_evidence_root_schema_inventory_gate",
+            "def test_release_bundle_rejects_malformed_copied_evidence_before_render",
+            "def test_release_bundle_rejects_malformed_copied_evidence_nested_maps_before_render",
+            "def test_release_bundle_rejects_copied_evidence_summary_binding_before_render",
+            "def test_release_bundle_rejects_copied_evidence_expected_hash_drift_before_render",
+            "def test_release_bundle_rejects_copied_evidence_evm_live_metadata_drift_before_render",
+            "def test_release_bundle_rejects_copied_evidence_source_gate_drift_before_render",
+            "def test_release_bundle_rejects_copied_evidence_route_canary_drift_before_render",
+            "def test_release_bundle_rejects_copied_evidence_route_canary_evidence_hash_replay_before_render",
+            "def test_release_bundle_rejects_copied_evidence_evm_route_canary_transcript_drift_before_render",
+            "def test_release_bundle_rejects_copied_evidence_tron_route_canary_transcript_drift_before_render",
+            "def test_release_bundle_rejects_copied_evidence_solana_ton_route_canary_drift_before_render",
+            "def test_release_bundle_rejects_summary_drift_before_write",
         ),
     ),
 )
@@ -4321,6 +4714,7 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
             "def test_release_bundle_verifier_guards_all_lanes_release_checklist_exact_boolean_inventory",
+            "def test_release_bundle_verifier_guards_all_lanes_route_canary_sdk_role_inventory",
             "def test_release_bundle_verifier_rejects_missing_all_lanes_release_checklist_exact_boolean_inventory_gate",
         ),
     ),
@@ -4360,9 +4754,13 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
         (
             "RELEASE_CHECKLIST_FIELDS",
             "RELEASE_CHECKLIST_ITEM_FIELDS",
+            "def _release_checklist_bundle_errors(",
+            "def _release_checklist_binding_bundle_errors(",
+            "def _checklist_item_id_error(",
             "_unknown_report_field_errors(",
-            "f\"{label}.release_checklist\"",
-            "f\"{label}.release_checklist.items[{index}]\"",
+            "release_checklist does not match embedded evidence",
+            "ready must be true",
+            "blockers must be empty",
         ),
     ),
     (
@@ -4391,6 +4789,8 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "def test_release_bundle_verifier_rejects_release_checklist_field_type_drift",
             "def test_release_bundle_verifier_rejects_release_checklist_malformed_unknown_fields",
             "def test_release_bundle_rejects_unknown_copied_checklist_fields_before_render",
+            "def test_release_bundle_rejects_malformed_copied_checklist_before_render",
+            "def test_release_bundle_rejects_copied_checklist_binding_before_render",
             "def test_release_bundle_verifier_rejects_malformed_active_launch_blockers",
         ),
     ),
@@ -4850,6 +5250,13 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "SccpMessageProofBundles.requireMatchesPublicInputs",
             "throw new IllegalArgumentException(\"sourceDomain must be SORA\")",
             "bundleBytes.sourceDomain must match sourceDomain",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "def test_release_bundle_verifier_guards_sccp_proof_request_bundle_gate_inventory",
+            "def test_release_bundle_verifier_guards_sccp_proof_request_native_sdk_inventory",
         ),
     ),
     (
@@ -5546,6 +5953,15 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
         ),
     ),
     (
+        "scripts/sccp_release_bundle.py",
+        (
+            "def _corridor_phase_transcript_bundle_errors(",
+            "phase evidence cannot be checked: missing bundle directory",
+            "verifier._phase_transcript_errors(",
+            "_corridor_phase_transcript_bundle_errors(",
+        ),
+    ),
+    (
         "pytests/scripts/sccp_release_readiness_report_test.py",
         (
             "test_release_readiness_report_guards_release_corridor_phase_transcript_gate_inventory",
@@ -5597,6 +6013,7 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
         (
             "test_release_bundle_verifier_guards_release_corridor_phase_transcript_inventory",
             "test_release_bundle_verifier_rejects_missing_release_corridor_phase_transcript_inventory_gate",
+            "test_release_bundle_rejects_copied_phase_transcript_before_render",
             "test_release_bundle_verifier_rejects_forged_phase_log",
             "test_release_bundle_verifier_rejects_output_before_phase_marker",
             "test_release_bundle_verifier_rejects_prefix_alias_phase_marker",
@@ -5751,10 +6168,35 @@ SCCP_RELEASE_NATIVE_PROVER_BUNDLE_SCHEMA_MARKERS = (
         ),
     ),
     (
+        "scripts/sccp_release_bundle.py",
+        (
+            "NATIVE_EVM_PROVER_BUNDLE_SUMMARY_FIELDS",
+            "NATIVE_EVM_PROVER_SDK_ARTIFACT_SUMMARY_FIELDS",
+            "def _native_evm_required_implementations(",
+            "def _native_evm_required_audit_hashes(",
+            "def _native_evm_artifact_summary_errors(",
+            "def _native_evm_summary_path_role_errors(",
+            "def _native_evm_prover_summary_errors(",
+            "def _native_evm_prover_binding_bundle_errors(",
+            "must be a canonical non-zero 32-byte hex value",
+            "sha256 must match implementation_hash",
+            "audit_hashes missing field",
+            "sdk_artifacts missing sdk",
+            "validation_status must be passed",
+            "validation_blockers must be empty",
+            "validation_blockers must be empty when validation_status is passed",
+            "does not match bundled native prover manifest",
+        ),
+    ),
+    (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
             "test_release_bundle_verifier_guards_release_native_prover_bundle_schema_inventory",
             "test_release_bundle_verifier_rejects_missing_release_native_prover_bundle_schema_inventory_gate",
+            "test_release_bundle_rejects_malformed_copied_native_evm_summary_before_render",
+            "test_release_bundle_rejects_blocked_copied_native_evm_summary_before_render",
+            "test_release_bundle_rejects_malformed_copied_native_evm_artifacts_before_render",
+            "test_release_bundle_rejects_copied_native_evm_summary_binding_before_render",
             "test_release_bundle_verifier_rejects_native_evm_prover_unknown_root_and_audit_fields",
             "test_release_bundle_verifier_rejects_duplicate_native_evm_prover_nested_json_keys",
             "test_release_bundle_rejects_native_evm_prover_malformed_duplicate_json_keys",
@@ -5954,6 +6396,12 @@ SCCP_RELEASE_INPUT_PROVENANCE_SCHEMA_MARKERS = (
     (
         "scripts/sccp_release_bundle.py",
         (
+            "def _canonical_copied_input_path_errors(",
+            "def _copied_input_layout_errors(",
+            "def _copied_input_provenance_bundle_errors(",
+            "must be a non-empty list of canonical paths",
+            "contains duplicate path",
+            "do not match copied input_artifacts",
             "def _release_report_bundle_errors(",
             '"inputs"',
             'f"{label}.inputs"',
@@ -5965,6 +6413,7 @@ SCCP_RELEASE_INPUT_PROVENANCE_SCHEMA_MARKERS = (
             "test_release_bundle_verifier_guards_release_input_provenance_schema_inventory",
             "test_release_bundle_verifier_rejects_missing_release_input_provenance_schema_inventory_gate",
             "test_release_bundle_rejects_missing_copied_report_inputs_before_render",
+            "test_release_bundle_rejects_malformed_copied_input_provenance_before_render",
             "test_release_bundle_verifier_rejects_input_path_drift",
             "test_release_bundle_verifier_rejects_input_provenance_schema_drift",
             "test_release_bundle_verifier_rejects_report_artifact_path_drift",
@@ -6016,9 +6465,12 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
         "scripts/sccp_release_bundle.py",
         (
             "READINESS_REPORT_ROOT_FIELDS",
+            "SOURCE_INVENTORY_FIELDS",
             "def _unknown_report_field_errors(",
+            "def _source_inventory_gate_key_error(",
             "contains unknown field",
             "_unknown_report_field_errors(payload, label, READINESS_REPORT_ROOT_FIELDS)",
+            "validation_status must be passed",
         ),
     ),
     (
@@ -6027,6 +6479,7 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
             "test_release_bundle_verifier_guards_release_public_json_root_schema_inventory",
             "test_release_bundle_verifier_rejects_missing_release_public_json_root_schema_inventory_gate",
             "test_release_bundle_rejects_unknown_copied_report_root_before_render",
+            "test_release_bundle_rejects_malformed_copied_source_inventory_before_render",
             "test_release_bundle_verifier_rejects_noncanonical_json_serialization",
             "test_release_bundle_verifier_rejects_duplicate_json_keys",
             "test_release_bundle_verifier_rejects_report_summary_duplicate_json_keys",
@@ -6111,10 +6564,28 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
         ),
     ),
     (
+        "scripts/sccp_release_bundle.py",
+        (
+            "CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS",
+            "f\"{label}.cryptographic_evidence[{index}]\"",
+            "_unknown_report_field_errors(",
+            "def _cryptographic_evidence_row_bundle_errors(",
+            "def _cryptographic_evidence_lane_binding_bundle_errors(",
+            "must cover every embedded lane",
+            "must match {lane_label}",
+            "def _source_adapter_gate_audit_key_error(",
+            "contains audit field name with",
+            "must be empty, null, or a canonical bytes32 hex string",
+        ),
+    ),
+    (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
             "test_release_bundle_verifier_guards_release_public_crypto_evidence_binding_inventory",
             "test_release_bundle_verifier_rejects_missing_release_public_crypto_evidence_binding_inventory_gate",
+            "test_release_bundle_rejects_unknown_copied_crypto_evidence_before_render",
+            "test_release_bundle_rejects_malformed_copied_crypto_evidence_before_render",
+            "test_release_bundle_rejects_copied_crypto_evidence_lane_binding_before_render",
             "test_release_bundle_verifier_rejects_unbound_crypto_evidence",
             "test_release_bundle_verifier_rejects_crypto_evidence_hash_drift",
             "test_release_bundle_verifier_expected_crypto_evidence_preserves_malformed_values",
@@ -6162,10 +6633,37 @@ SCCP_RELEASE_PUBLIC_SUBMISSION_SURFACE_BINDING_MARKERS = (
         ),
     ),
     (
+        "scripts/sccp_release_bundle.py",
+        (
+            "USER_PROVER_SUBMISSION_SURFACE_FIELDS",
+            "sdk_helper_symbols_by_sdk",
+            "validation_blockers",
+            "f\"{label}.user_prover_submission_surfaces[{index}]\"",
+            "_unknown_report_field_errors(",
+            "def _submission_surface_known_sdks(",
+            "def _submission_surface_known_required_phases(",
+            "def _submission_surface_sdk_key_error(",
+            "def _submission_surface_row_bundle_errors(",
+            "validation_status must be passed",
+            "validation_blockers must be empty",
+            "def _submission_surface_binding_bundle_errors(",
+            "_expected_submission_surfaces(report)",
+            "must match copied corridor phases",
+            "contains duplicate ",
+            "required helper:",
+            "contains SDK key with",
+            "contains phase with",
+        ),
+    ),
+    (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
             "test_release_bundle_verifier_guards_release_public_submission_surface_binding_inventory",
             "test_release_bundle_verifier_rejects_missing_release_public_submission_surface_binding_inventory_gate",
+            "test_release_bundle_rejects_unknown_copied_submission_surface_before_render",
+            "test_release_bundle_rejects_malformed_copied_submission_surface_before_render",
+            "test_release_bundle_rejects_blocked_copied_submission_surface_before_render",
+            "test_release_bundle_rejects_copied_submission_surface_binding_before_render",
             "test_release_bundle_verifier_required_helper_inventory_matches_report",
             "test_release_bundle_verifier_expected_submission_surfaces_are_independent",
             "test_release_bundle_verifier_helper_inventory_is_independent",
@@ -6196,6 +6694,12 @@ SCCP_RELEASE_MANIFEST_READINESS_FLAGS_MARKERS = (
             '"production_ready": report["production_ready"]',
             '"release_checklist_ready": report["release_checklist"]["ready"]',
             '"corridor_ready": report["corridor"]["production_ready"]',
+            "def _release_bundle_manifest_errors(",
+            '_boolean_field_errors("manifest", manifest, "production_ready")',
+            '_boolean_field_errors("manifest", manifest, "release_checklist_ready")',
+            '_boolean_field_errors("manifest", manifest, "corridor_ready")',
+            "manifest release_checklist_ready is not true",
+            "readiness report release_checklist",
         ),
     ),
     (
@@ -6229,6 +6733,7 @@ SCCP_RELEASE_MANIFEST_READINESS_FLAGS_MARKERS = (
             "def test_release_bundle_manifest_preserves_malformed_readiness_values",
             "def test_release_bundle_verifier_rejects_readiness_boolean_type_drift",
             "def test_release_bundle_verifier_rejects_manifest_readiness_claim_drift",
+            "def test_release_bundle_rejects_manifest_drift_before_write",
             "def test_release_bundle_verifier_compares_summary_launch_ready_exactly",
             "def test_release_bundle_verifier_rejects_missing_release_manifest_readiness_flags_inventory_gate",
         ),
@@ -6245,6 +6750,16 @@ SCCP_RELEASE_MANIFEST_ARTIFACT_SET_ORDER_MARKERS = (
     (
         "scripts/sccp_release_bundle.py",
         (
+            "ARTIFACT_FIELDS",
+            "def _artifact_row_errors(",
+            "bytes must be a non-negative integer",
+            "sha256 must be a canonical SHA-256 hex string",
+            "def _bundled_artifact_integrity_errors(",
+            "artifact byte length mismatch for",
+            "artifact sha256 mismatch for",
+            "def _release_report_artifact_integrity_bundle_errors(",
+            "def _release_bundle_manifest_errors(",
+            "manifest artifact order does not match canonical release bundle order",
             "def _release_bundle_manifest(",
             "artifact_paths: list[Path]",
             '"artifacts": _bundle_artifacts(output_dir, artifact_paths)',
@@ -6296,6 +6811,9 @@ SCCP_RELEASE_MANIFEST_ARTIFACT_SET_ORDER_MARKERS = (
             "def test_release_bundle_verifier_rejects_unknown_phase_artifact_reference",
             "def test_release_bundle_verifier_rejects_manifest_artifact_order_drift",
             "def test_release_bundle_verifier_rejects_malformed_artifact_fields",
+            "def test_release_bundle_rejects_malformed_copied_artifacts_before_render",
+            "def test_release_bundle_rejects_copied_artifact_hash_drift_before_render",
+            "def test_release_bundle_rejects_manifest_drift_before_write",
         ),
     ),
     (
@@ -6346,6 +6864,12 @@ SCCP_RELEASE_PUBLIC_BLOCKER_LIST_SCHEMA_MARKERS = (
             "must not contain duplicate strings",
             '_string_list_field_errors(label, payload, "blockers", allow_empty=True)',
             "blockers must be empty when production_ready is true",
+            "CORRIDOR_FIELDS",
+            'f"{label}.corridor"',
+            "production corridor is not ready",
+            "require_phase_evidence must be true or false",
+            "does not require hashed phase evidence",
+            "blockers must be empty when production_ready is true",
         ),
     ),
     (
@@ -6354,6 +6878,8 @@ SCCP_RELEASE_PUBLIC_BLOCKER_LIST_SCHEMA_MARKERS = (
             "def test_release_bundle_verifier_guards_release_public_blocker_list_schema_inventory",
             "def test_release_bundle_verifier_rejects_missing_release_public_blocker_list_schema_inventory_gate",
             "def test_release_bundle_allow_not_ready_rejects_noncanonical_root_blockers",
+            "def test_release_bundle_rejects_malformed_copied_corridor_before_render",
+            "def test_release_bundle_rejects_copied_corridor_not_ready_before_render",
             "def test_release_bundle_verifier_rejects_all_lanes_list_scalar_type_drift",
             "def test_release_bundle_verifier_rejects_padded_public_blocker_strings",
             "def test_release_bundle_verifier_rejects_duplicate_public_blocker_strings",
@@ -6409,6 +6935,21 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
         ),
     ),
     (
+        "scripts/sccp_release_bundle.py",
+        (
+            "def _cryptographic_evidence_row_bundle_errors(",
+            "route_canary_evidence_source must be a non-empty string",
+            "def _source_adapter_gate_audit_key_error(",
+            "def _submission_surface_row_bundle_errors(",
+            "def _submission_surface_sdk_key_error(",
+            "def _corridor_phase_names(",
+            "def _corridor_phase_key_error(",
+            "phase status must be passed or blocked",
+            "has evidence artifact for unknown phase",
+            "has no hashed evidence artifact",
+        ),
+    ),
+    (
         "scripts/sccp_release_readiness_report.py",
         (
             "def _sccp_release_public_scalar_text_schema_gate_inventory_errors(",
@@ -6431,6 +6972,9 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def test_release_bundle_verifier_rejects_submission_surface_field_type_drift",
             "def test_release_bundle_verifier_rejects_corridor_malformed_unknown_fields",
             "def test_release_bundle_verifier_rejects_corridor_malformed_phase_keys",
+            "def test_release_bundle_rejects_malformed_copied_corridor_phase_map_before_render",
+            "def test_release_bundle_rejects_malformed_copied_crypto_evidence_before_render",
+            "def test_release_bundle_rejects_malformed_copied_submission_surface_before_render",
         ),
     ),
     (
@@ -6446,6 +6990,10 @@ SCCP_RELEASE_NOTES_ATTACHMENT_INVARIANTS_MARKERS = (
         "scripts/sccp_release_bundle.py",
         (
             "def _release_notes_attachment(",
+            "def _release_notes_attachment_bundle_errors(",
+            "_release_notes_attachment_invariant_errors(",
+            "_expected_release_notes_attachment(",
+            "release notes attachment does not match manifest and report",
             'status = "READY" if report["production_ready"] is True else "NOT READY"',
             "# SCCP Public Release Notes Attachment",
             "Attach `manifest.json` plus every artifact below",
@@ -6481,6 +7029,7 @@ SCCP_RELEASE_NOTES_ATTACHMENT_INVARIANTS_MARKERS = (
         (
             "def test_release_bundle_verifier_requires_manifest_handoff_note",
             "def test_release_bundle_verifier_rejects_release_notes_drift",
+            "def test_release_bundle_rejects_release_notes_drift_before_write",
             "def test_release_bundle_verifier_release_notes_renderer_is_independent",
             "def test_release_bundle_verifier_release_notes_invariants_require_status_and_blockers",
             "def test_release_bundle_verifier_rejects_release_notes_status_drift",
@@ -6530,11 +7079,22 @@ SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS = (
         ),
     ),
     (
+        "scripts/sccp_release_bundle.py",
+        (
+            "def _readiness_markdown_bundle_errors(",
+            "_readiness_markdown_invariant_errors(report, markdown)",
+            "_expected_readiness_markdown(report)",
+            "readiness report Markdown does not match readiness report JSON",
+            "_readiness_markdown_bundle_errors(",
+        ),
+    ),
+    (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
             "def test_release_bundle_verifier_rejects_markdown_report_drift",
             "def test_release_bundle_verifier_readiness_markdown_renderer_matches_report",
             "def test_release_bundle_verifier_readiness_markdown_renderer_is_independent",
+            "def test_release_bundle_rejects_markdown_drift_before_write",
             "def test_release_bundle_verifier_markdown_invariants_require_public_sections",
             "def test_release_bundle_verifier_markdown_invariants_require_blocker_text",
             "def test_release_bundle_verifier_markdown_invariants_require_invalid_blocker_markers",
@@ -6777,6 +7337,42 @@ BSC_INBOUND_ADVERSARIAL_SDK_TEST_MARKERS = (
             "extraTopicBscSourceReceipt",
             "nonEmptyDataBscSourceReceipt",
             "missingBscSourceContextLog",
+        ),
+    ),
+)
+
+
+TRON_INBOUND_ADVERSARIAL_MARKERS = (
+    (
+        "scripts/sccp_release_readiness_report.py",
+        (
+            "def _tron_inbound_adversarial_gate_inventory_errors(",
+            '"tron_inbound_adversarial_gate"',
+            "SCCP TRON inbound adversarial source inventory",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+        (
+            "def test_release_readiness_report_guards_tron_inbound_adversarial_gate_inventory",
+            "def test_release_readiness_report_blocks_missing_tron_inbound_adversarial_gate",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "def test_release_bundle_verifier_rejects_missing_tron_inbound_adversarial_inventory_gate",
+            "def test_release_bundle_verifier_guards_tron_inbound_adversarial_inventory",
+        ),
+    ),
+    (
+        "crates/iroha_sccp/src/lib.rs",
+        (
+            "fn tron_transaction_info_mpt_value_binds_successful_sccp_log()",
+            "if matched {",
+            "TRON transaction-info receipts must not contain duplicate matching SCCP logs",
+            "TRON placeholder receipt admission must still reject duplicate matching SCCP logs",
+            "TRON production receipt admission must reject duplicate matching SCCP logs",
         ),
     ),
 )
@@ -8473,6 +9069,32 @@ def _ethereum_source_bridge_config_inventory_errors(
     )
 
 
+def _sccp_source_material_template_rejection_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return inventory errors for source-material template-hash rejection guards."""
+
+    if inventory is None:
+        inventory = SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS
+    return _source_marker_inventory_errors(
+        inventory,
+        label="SCCP source-material template rejection",
+    )
+
+
+def _sccp_source_material_role_validation_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return inventory errors for source-material role-validation guards."""
+
+    if inventory is None:
+        inventory = SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS
+    return _source_marker_inventory_errors(
+        inventory,
+        label="SCCP source-material role validation",
+    )
+
+
 def _ethereum_evm_source_live_production_inventory_errors(
     inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
 ) -> list[str]:
@@ -9006,6 +9628,19 @@ def _bsc_inbound_adversarial_sdk_test_inventory_errors(
     return _sdk_test_inventory_errors(
         inventory,
         label="BSC mainnet inbound adversarial",
+    )
+
+
+def _tron_inbound_adversarial_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return inventory errors for TRON inbound adversarial guards."""
+
+    if inventory is None:
+        inventory = TRON_INBOUND_ADVERSARIAL_MARKERS
+    return _source_marker_inventory_errors(
+        inventory,
+        label="TRON mainnet inbound adversarial",
     )
 
 
@@ -12451,6 +13086,7 @@ def _render_readiness_markdown(
             "- SCCP Ethereum no-proxy data-collection source inventory must pin app-owned execution/Beacon provider reads and reject Torii proxy or embedded HTTP-client fallbacks across public SDKs.",
             "- SCCP Ethereum inbound adversarial source inventory must pin public SDK regressions for failed receipts, source-event drift, hash-only proof bypasses, immutable evidence snapshots, oversized proof bytes, finality mismatches, sync-committee quorum checks, and wrong-domain receipt transcripts before inbound source proofs can be accepted.",
             "- SCCP BSC inbound adversarial source inventory must pin public SDK regressions for hash-only proof bypasses, receipt-proof metadata binding, source-event digest drift, malformed source logs, and missing source-event validation before BSC inbound source proofs can be accepted.",
+            "- SCCP TRON inbound adversarial source inventory must pin runtime duplicate source-event log rejection before TRON transaction-info receipts can satisfy inbound source-proof admission.",
             "- SCCP BSC route-config canonical-manifest source inventory must pin canonical JSON string, lowercase bytes32, lowercase EVM address, and network metadata rejection before governed TAIRA XOR overlays can satisfy production readiness.",
             "- SCCP TRON route-config canonical-manifest source inventory must pin canonical JSON string, lowercase bytes32, canonical Base58 address, and network metadata rejection before governed TAIRA XOR overlays can satisfy production readiness.",
             "- SCCP TRON runtime route-manifest source inventory must pin the TRON runtime route-manifest parser, mainnet metadata checks, dynamic destination-binding recomputation, and post-deploy anchor rejection before runtime config evidence can satisfy production readiness.",
@@ -12485,6 +13121,8 @@ def _render_readiness_markdown(
             "- SCCP Ethereum sync-committee roster source inventory must pin exact 512-authority mainnet rosters, unit validator weights, 342-participant quorum fixtures, and 81,925-byte next-sync-committee payload vectors across public SDKs before local finality evidence can be accepted.",
             "- SCCP Ethereum source-bridge config source inventory must pin bridge-address/network/code-hash config hashing and negative config-drift tests.",
             "- SCCP Ethereum EVM source-adapter deployment source inventory must pin the active deployment gate, source-bridge network/config binding, and negative drift tests.",
+            "- SCCP source-material template rejection source inventory must pin ETH, BSC, Solana, TON, and TRON evidence-script guards and negative tests that reject built-in template verifier hashes before source material can satisfy production readiness.",
+            "- SCCP source-material role validation source inventory must pin ETH, BSC, Solana, TON, and TRON zero-hash, role-reuse, canonical adapter-verifier, and full-light-client audit role-separation guards before source material can satisfy production readiness.",
             "- SCCP EVM contract smoke Ethereum mainnet network-id source inventory must pin ETH chain-id vectors, BSC rejection vectors, and accepted-event network-id assertions.",
             "- SCCP EVM contract smoke production-surface source inventory must pin verifier-code/key, destination-binding, domain-overflow, proof-shape, cross-deployment, and replay rejection smoke coverage.",
             "- SCCP Ethereum core range/finality binding source inventory must pin finality-height range binding in Core and negative outer-range replay tests.",
@@ -16515,6 +17153,8 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
     errors.extend(_ethereum_sync_committee_roster_inventory_errors())
     errors.extend(_ethereum_source_bridge_config_inventory_errors())
     errors.extend(_ethereum_evm_source_adapter_deployment_gate_inventory_errors())
+    errors.extend(_sccp_source_material_template_rejection_inventory_errors())
+    errors.extend(_sccp_source_material_role_validation_inventory_errors())
     errors.extend(_ethereum_launch_policy_selector_inventory_errors())
     errors.extend(_ethereum_launch_policy_documentation_inventory_errors())
     errors.extend(_sccp_public_discovery_documentation_inventory_errors())
@@ -16550,6 +17190,7 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
     errors.extend(_sccp_readiness_markdown_invariants_inventory_errors())
     errors.extend(_ethereum_data_collection_no_proxy_inventory_errors())
     errors.extend(_bsc_inbound_adversarial_sdk_test_inventory_errors())
+    errors.extend(_tron_inbound_adversarial_inventory_errors())
     errors.extend(_bsc_route_config_canonical_manifest_inventory_errors())
     errors.extend(_tron_route_config_canonical_manifest_inventory_errors())
     errors.extend(_tron_runtime_route_manifest_inventory_errors())

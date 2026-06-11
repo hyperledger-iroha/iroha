@@ -313,6 +313,155 @@ final class OfflineNoteTests: XCTestCase {
         }
     }
 
+    func testOfflineNoteWalletRejectsBearerTrailRootWithOwnerSignedSenderCertificate() throws {
+        let fixture = try Self.loadFixture()
+        let derivation = fixture.chainVectors.derivation
+        let recipientCertificate = try Self.certificate(fixture.paymentToken.recipientKeyCertificate)
+        let token = try OfflineNotePaymentTokenCodec.decodeNorito(
+            Self.base64(fixture.sdkInterop.paymentTokenNoritoBase64)
+        )
+        let sourceAccountId = Self.accountId(fromAssetId: token.audit.inputClaims[0].assetId)
+        let ownerSigner = try SoftwareOwnerCertificateSigner(privateKeyByte: 0x6D)
+        let forgedOwnerCertificate = try ownerSigner.ownerSignedCertificate(accountId: sourceAccountId)
+        let forgedToken = try Self.paymentTokenReplacingSenderCertificate(token, certificate: forgedOwnerCertificate)
+        var ownerCertificateHashes = try Self.certificateHashes([recipientCertificate, forgedOwnerCertificate])
+        ownerCertificateHashes.formUnion(try Self.certificateHashes(forgedToken.audit.outputClaims.map(\.keyCertificate)))
+        let recipientWallet = OfflineNoteWallet(
+            chainId: derivation.chainId,
+            accountId: fixture.paymentToken.recipientAccountId,
+            attestationProvider: StaticAttestationProvider(certificate: recipientCertificate),
+            transactionSubmitter: RecordingTransactionSubmitter(),
+            proofProvider: BindingProofProvider(),
+            proofVerifier: BindingProofVerifier(),
+            certificateVerifier: ScriptedCertificateVerifier(
+                issuerCertificateHashes: [],
+                ownerCertificateHashes: ownerCertificateHashes
+            ),
+            ownerCertificateSigner: StaticOwnerCertificateSigner(certificate: recipientCertificate),
+            randomSource: QueueRandomSource(values: [
+                try Self.hex(derivation.recipientNoteSecretHex)
+            ]),
+            idGenerator: FixedIdGenerator(id: derivation.paymentRequestId),
+            clock: { 1_700_000_011_400 }
+        )
+        _ = try recipientWallet.prepareReceive(
+            assetDefinitionId: Self.assetDefinition(fromAssetId: fixture.chainVectors.issue.assetId),
+            amount: fixture.chainVectors.redeem.amount
+        )
+
+        XCTAssertThrowsError(try recipientWallet.accept(forgedToken)) { error in
+            XCTAssertEqual(error as? OfflineNoteWalletError, .certificateVerificationFailed)
+        }
+    }
+
+    func testOfflineNoteWalletAcceptsOwnerSignedInputAnchoredToPriorAuditOutput() throws {
+        let fixture = try Self.loadFixture()
+        let derivation = fixture.chainVectors.derivation
+        let issuerCertificate = try Self.certificate(fixture.paymentToken.senderKeyCertificate)
+        let recipientCertificate = try Self.certificate(fixture.paymentToken.recipientKeyCertificate)
+        let token = try OfflineNotePaymentTokenCodec.decodeNorito(
+            Self.base64(fixture.sdkInterop.paymentTokenNoritoBase64)
+        )
+        let sourceAccountId = Self.accountId(fromAssetId: token.audit.inputClaims[0].assetId)
+        let ownerSigner = try SoftwareOwnerCertificateSigner(privateKeyByte: 0x6E)
+        let ownerCertificate = try ownerSigner.ownerSignedCertificate(accountId: sourceAccountId)
+        let terminalToken = try Self.paymentTokenReplacingSenderCertificate(token, certificate: ownerCertificate)
+        let ancestor = try Self.ancestorAuditProducingFirstInput(
+            for: terminalToken.audit,
+            senderKeyCertificate: issuerCertificate,
+            seed: 0xD0
+        )
+        let anchoredToken = Self.paymentTokenReplacingBearerAuditTrail(
+            terminalToken,
+            bearerAuditTrail: [ancestor, terminalToken.audit]
+        )
+        var ownerCertificateHashes = try Self.certificateHashes([recipientCertificate, ownerCertificate])
+        ownerCertificateHashes.formUnion(try Self.certificateHashes(terminalToken.audit.outputClaims.map(\.keyCertificate)))
+        let recipientWallet = OfflineNoteWallet(
+            chainId: derivation.chainId,
+            accountId: fixture.paymentToken.recipientAccountId,
+            attestationProvider: StaticAttestationProvider(certificate: recipientCertificate),
+            transactionSubmitter: RecordingTransactionSubmitter(),
+            proofProvider: BindingProofProvider(),
+            proofVerifier: BindingProofVerifier(),
+            certificateVerifier: ScriptedCertificateVerifier(
+                issuerCertificateHashes: try Self.certificateHashes([issuerCertificate]),
+                ownerCertificateHashes: ownerCertificateHashes
+            ),
+            ownerCertificateSigner: StaticOwnerCertificateSigner(certificate: recipientCertificate),
+            randomSource: QueueRandomSource(values: [
+                try Self.hex(derivation.recipientNoteSecretHex)
+            ]),
+            idGenerator: FixedIdGenerator(id: derivation.paymentRequestId),
+            clock: { 1_700_000_011_500 }
+        )
+        _ = try recipientWallet.prepareReceive(
+            assetDefinitionId: Self.assetDefinition(fromAssetId: fixture.chainVectors.issue.assetId),
+            amount: fixture.chainVectors.redeem.amount
+        )
+
+        let accepted = try recipientWallet.accept(anchoredToken)
+
+        XCTAssertEqual(accepted.state, .spendable)
+        XCTAssertEqual(accepted.bearerAuditTrail.map(\.tokenId), [ancestor.tokenId, terminalToken.tokenId])
+    }
+
+    func testOfflineNoteWalletRejectsDuplicateOutputCertificateAcrossBearerTrail() throws {
+        let fixture = try Self.loadFixture()
+        let derivation = fixture.chainVectors.derivation
+        let issuerCertificate = try Self.certificate(fixture.paymentToken.senderKeyCertificate)
+        let recipientCertificate = try Self.certificate(fixture.paymentToken.recipientKeyCertificate)
+        let token = try OfflineNotePaymentTokenCodec.decodeNorito(
+            Self.base64(fixture.sdkInterop.paymentTokenNoritoBase64)
+        )
+        XCTAssertGreaterThanOrEqual(token.audit.outputClaims.count, 2)
+        let sourceAccountId = Self.accountId(fromAssetId: token.audit.inputClaims[0].assetId)
+        let ownerSigner = try SoftwareOwnerCertificateSigner(privateKeyByte: 0x6F)
+        let ownerCertificate = try ownerSigner.ownerSignedCertificate(accountId: sourceAccountId)
+        let terminalToken = try Self.paymentTokenReplacingSenderCertificate(token, certificate: ownerCertificate)
+        let ancestor = try Self.ancestorAuditProducingFirstInput(
+            for: terminalToken.audit,
+            senderKeyCertificate: issuerCertificate,
+            seed: 0xE0
+        )
+        let duplicateOutputToken = try Self.paymentTokenReplacingLastOutputCertificate(
+            terminalToken,
+            certificate: ownerCertificate
+        )
+        let forgedToken = Self.paymentTokenReplacingBearerAuditTrail(
+            duplicateOutputToken,
+            bearerAuditTrail: [ancestor, duplicateOutputToken.audit]
+        )
+        var ownerCertificateHashes = try Self.certificateHashes([recipientCertificate, ownerCertificate])
+        ownerCertificateHashes.formUnion(try Self.certificateHashes(forgedToken.audit.outputClaims.map(\.keyCertificate)))
+        let recipientWallet = OfflineNoteWallet(
+            chainId: derivation.chainId,
+            accountId: fixture.paymentToken.recipientAccountId,
+            attestationProvider: StaticAttestationProvider(certificate: recipientCertificate),
+            transactionSubmitter: RecordingTransactionSubmitter(),
+            proofProvider: BindingProofProvider(),
+            proofVerifier: BindingProofVerifier(),
+            certificateVerifier: ScriptedCertificateVerifier(
+                issuerCertificateHashes: try Self.certificateHashes([issuerCertificate]),
+                ownerCertificateHashes: ownerCertificateHashes
+            ),
+            ownerCertificateSigner: StaticOwnerCertificateSigner(certificate: recipientCertificate),
+            randomSource: QueueRandomSource(values: [
+                try Self.hex(derivation.recipientNoteSecretHex)
+            ]),
+            idGenerator: FixedIdGenerator(id: derivation.paymentRequestId),
+            clock: { 1_700_000_011_600 }
+        )
+        _ = try recipientWallet.prepareReceive(
+            assetDefinitionId: Self.assetDefinition(fromAssetId: fixture.chainVectors.issue.assetId),
+            amount: fixture.chainVectors.redeem.amount
+        )
+
+        XCTAssertThrowsError(try recipientWallet.accept(forgedToken)) { error in
+            XCTAssertEqual(error as? OfflineNoteWalletError, .certificateVerificationFailed)
+        }
+    }
+
     func testOfflineNoteModelsMatchRustNoritoVectors() throws {
         let fixture = try Self.loadFixture()
 
@@ -4369,8 +4518,20 @@ final class OfflineNoteTests: XCTestCase {
         for child: OfflineNoteAuditBundle,
         seed: UInt8
     ) throws -> OfflineNoteAuditBundle {
+        try ancestorAuditProducingFirstInput(
+            for: child,
+            senderKeyCertificate: child.senderKeyCertificate,
+            seed: seed
+        )
+    }
+
+    private static func ancestorAuditProducingFirstInput(
+        for child: OfflineNoteAuditBundle,
+        senderKeyCertificate: OfflineNoteKeyCertificate,
+        seed: UInt8
+    ) throws -> OfflineNoteAuditBundle {
         let childInput = child.inputClaims[0]
-        let senderHash = try child.senderKeyCertificate.payloadHash()
+        let senderHash = try senderKeyCertificate.payloadHash()
         let parentInput = try OfflineNoteIssuedClaim(
             noteCommitment: Data(repeating: (seed | 1), count: 32),
             keyCertificatePayloadHash: senderHash,
@@ -4396,7 +4557,7 @@ final class OfflineNoteTests: XCTestCase {
         )
         let draft = try OfflineNoteAuditBundle(
             tokenId: tokenId,
-            senderKeyCertificate: child.senderKeyCertificate,
+            senderKeyCertificate: senderKeyCertificate,
             inputNullifiers: inputNullifiers,
             inputClaims: [parentInput],
             outputCommitments: outputCommitments,
@@ -4427,6 +4588,14 @@ final class OfflineNoteTests: XCTestCase {
             oneUse: json.oneUse,
             issuerSignature: base64(json.issuerSignatureBase64)
         )
+    }
+
+    private static func certificateHashes(_ certificates: [OfflineNoteKeyCertificate]) throws -> Set<String> {
+        var hashes = Set<String>()
+        for certificate in certificates {
+            hashes.insert(try certificate.payloadHash().hexLowercased())
+        }
+        return hashes
     }
 
     private static func certificateVerifier(_ fixture: OfflineInteropFixture) throws -> Ed25519OfflineNoteCertificateVerifier {
@@ -5108,6 +5277,19 @@ final class OfflineNoteTests: XCTestCase {
         func verifyOwnerCertificate(_ certificate: OfflineNoteKeyCertificate) throws -> Bool {
             try delegate.verifyOwnerCertificate(certificate)
                 || delegate.verifyIssuerCertificate(certificate)
+        }
+    }
+
+    private struct ScriptedCertificateVerifier: OfflineNoteCertificateVerifier {
+        let issuerCertificateHashes: Set<String>
+        let ownerCertificateHashes: Set<String>
+
+        func verifyIssuerCertificate(_ certificate: OfflineNoteKeyCertificate) throws -> Bool {
+            issuerCertificateHashes.contains(try certificate.payloadHash().hexLowercased())
+        }
+
+        func verifyOwnerCertificate(_ certificate: OfflineNoteKeyCertificate) throws -> Bool {
+            ownerCertificateHashes.contains(try certificate.payloadHash().hexLowercased())
         }
     }
 

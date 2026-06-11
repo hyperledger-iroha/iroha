@@ -522,6 +522,63 @@ def test_tron_source_deployment_hash_rejects_noncanonical_adapter_vk_hash():
         raise AssertionError("noncanonical adapter verifier vk hash was accepted")
 
 
+def test_tron_direct_record_hashes_reject_zero_production_inputs():
+    module = load_evidence_module()
+    config_hash = bytes.fromhex(TRON_SOURCE_CONFIG_VECTOR)
+    material_fields = (
+        "source_trust_anchor_hash",
+        "consensus_verifier_hash",
+        "message_inclusion_verifier_hash",
+        "source_bridge_emitter_code_hash",
+        "finality_policy_hash",
+        "bridge_address",
+        "network_id",
+        "owner_address",
+    )
+    deployment_fields = (
+        *material_fields,
+        "adapter_verifier_vk_hash",
+        "deployment_receipt_hash",
+    )
+
+    for field in material_fields:
+        args = sample_full_toml_args()
+        byte_length = 20 if field in {"bridge_address", "owner_address"} else 32
+        setattr(args, field, bytes(byte_length))
+        try:
+            module.tron_source_verifier_material_record_hash(args, config_hash)
+        except ValueError as exc:
+            assert f"{field} must not be zero" in str(exc)
+        else:
+            raise AssertionError(f"TRON material hash accepted zero {field}")
+
+    for field in deployment_fields:
+        args = sample_full_toml_args()
+        byte_length = 20 if field in {"bridge_address", "owner_address"} else 32
+        setattr(args, field, bytes(byte_length))
+        try:
+            module.tron_source_adapter_engine_deployment_record_hash(args, config_hash)
+        except ValueError as exc:
+            assert f"{field} must not be zero" in str(exc)
+        else:
+            raise AssertionError(f"TRON deployment hash accepted zero {field}")
+
+    args = sample_full_toml_args()
+    try:
+        module.tron_source_verifier_material_record_hash(args, bytes(32))
+    except ValueError as exc:
+        assert "source_bridge_config_hash must not be zero" in str(exc)
+    else:
+        raise AssertionError("TRON material hash accepted zero source config")
+
+    try:
+        module.tron_source_adapter_engine_deployment_record_hash(args, bytes(32))
+    except ValueError as exc:
+        assert "source_bridge_config_hash must not be zero" in str(exc)
+    else:
+        raise AssertionError("TRON deployment hash accepted zero source config")
+
+
 def test_tron_source_bridge_config_hash_rejects_malformed_direct_material():
     module = load_evidence_module()
 

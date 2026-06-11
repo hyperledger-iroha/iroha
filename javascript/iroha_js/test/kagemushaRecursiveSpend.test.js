@@ -252,6 +252,14 @@ function kagemushaOverlongCompactLength(value) {
   return Buffer.from([value | 0x80, 0x00]);
 }
 
+function kagemushaOversizedTerminalCompactLength() {
+  return Buffer.concat([Buffer.alloc(9, 0x80), Buffer.from([0x02])]);
+}
+
+function kagemushaHugeCanonicalCompactLength() {
+  return Buffer.concat([Buffer.alloc(9, 0x80), Buffer.from([0x01])]);
+}
+
 function kagemushaNoritoField(payload, flags = TEST_NORITO_COMPACT_LEN_FLAG) {
   const bytes = Buffer.from(payload);
   return Buffer.concat([kagemushaNoritoLength(bytes.length, flags), bytes]);
@@ -1932,6 +1940,56 @@ test("Kagemusha recursive spend exports stable proof circuit ids", () => {
         KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
         initVerifierKey,
         overlongVersionLengthArchive,
+      ),
+    /lineage_proving_key_archive/,
+  );
+  const oversizedTerminalCompactLengthArchive = kagemushaNoritoFrameFromSchemaHash(
+    KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH,
+    Buffer.concat([
+      kagemushaOversizedTerminalCompactLength(),
+      Buffer.from([1, 0]),
+      kagemushaNoritoField(
+        kagemushaNoritoString(
+          KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+        ),
+      ),
+      kagemushaNoritoField(kagemushaVerifierKeyCommitment(initVerifierKey)),
+      kagemushaNoritoField(kagemushaNoritoByteVec(Buffer.alloc(64, 0xb0))),
+    ]),
+    TEST_NORITO_COMPACT_LEN_FLAG,
+  );
+  assert.throws(
+    () =>
+      kagemushaRecursiveSpendLineageKeyArtifactsForInit(
+        128,
+        KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+        initVerifierKey,
+        oversizedTerminalCompactLengthArchive,
+      ),
+    /lineage_proving_key_archive/,
+  );
+  const hugeCanonicalCompactLengthArchive = kagemushaNoritoFrameFromSchemaHash(
+    KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH,
+    Buffer.concat([
+      kagemushaHugeCanonicalCompactLength(),
+      Buffer.from([1, 0]),
+      kagemushaNoritoField(
+        kagemushaNoritoString(
+          KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+        ),
+      ),
+      kagemushaNoritoField(kagemushaVerifierKeyCommitment(initVerifierKey)),
+      kagemushaNoritoField(kagemushaNoritoByteVec(Buffer.alloc(64, 0xb1))),
+    ]),
+    TEST_NORITO_COMPACT_LEN_FLAG,
+  );
+  assert.throws(
+    () =>
+      kagemushaRecursiveSpendLineageKeyArtifactsForInit(
+        128,
+        KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+        initVerifierKey,
+        hugeCanonicalCompactLengthArchive,
       ),
     /lineage_proving_key_archive/,
   );
