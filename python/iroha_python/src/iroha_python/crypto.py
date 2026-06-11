@@ -1539,9 +1539,9 @@ def _privacy_proof_request_native_probe_returns_bytes(module: object) -> bool:
     try:
         result = _call_privacy_native_method(
             method,
-            "verange-transparent-range-v1",
-            "buildVeRangeProofV1",
-            "bulletproofs:verange_transparent_range_v1",
+            _ZK_ACE_ALGORITHM_ID,
+            _ZK_ACE_PRODUCTION_ENTRYPOINT,
+            _ZK_ACE_PRODUCTION_VK_REF,
             public_inputs,
             b"",
             b"",

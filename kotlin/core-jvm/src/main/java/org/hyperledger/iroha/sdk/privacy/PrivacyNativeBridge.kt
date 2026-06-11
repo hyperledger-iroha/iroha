@@ -287,9 +287,9 @@ class PrivacyNativeBridge private constructor() {
         }
 
         private fun proofRequestOutputProbe(): Boolean {
-            val algorithmId = "verange-transparent-range-v1".toByteArray(Charsets.UTF_8)
-            val entrypoint = "buildVeRangeProofV1".toByteArray(Charsets.UTF_8)
-            val vkRef = "bulletproofs:verange_transparent_range_v1".toByteArray(Charsets.UTF_8)
+            val algorithmId = "zk-ace-pq-authorization-v0".toByteArray(Charsets.UTF_8)
+            val entrypoint = "buildZkAceAuthorizationProofV1".toByteArray(Charsets.UTF_8)
+            val vkRef = "stark-fri:zk_ace_pq_authorization_v0".toByteArray(Charsets.UTF_8)
             val publicInputs = "public-inputs".toByteArray(Charsets.UTF_8)
             return try {
                 returnsOutputProbe(PRIVACY_SCHEMA_REQUEST) {

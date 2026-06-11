@@ -19484,12 +19484,6 @@ export function buildVeRangeProofEnvelope(
   input: VeRangeProofEnvelopeInput,
 ): Buffer;
 
-export function buildVeRangeProofV1(input: VeRangeProofV1Input): Buffer;
-
-export function verifyVeRangeProofV1(
-  input: VeRangeProofV1VerificationInput | BinaryLike,
-): VeRangeProofV1VerificationResult;
-
 export function verifyVeRangeProofLocally(
   input: VeRangeLocalVerificationInput | BinaryLike,
 ): VeRangeLocalVerificationResult;

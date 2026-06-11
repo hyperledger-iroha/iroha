@@ -781,10 +781,10 @@ def test_verange_package_root_exports_component_entrypoint_aliases() -> None:
     assert decoded["backend"] == "Stark"
     assert iroha_python.buildVeRangeDevProofFixture is verange_module.buildVeRangeDevProofFixture
     assert iroha_python.verifyVeRangeProofLocally is verange_module.verifyVeRangeProofLocally
-    assert iroha_python.buildVeRangeProofV1 is verange_module.buildVeRangeProofV1
-    assert iroha_python.verifyVeRangeProofV1 is verange_module.verifyVeRangeProofV1
-    assert iroha_python.build_verange_proof_v1 is verange_module.build_verange_proof_v1
-    assert iroha_python.verify_verange_proof_v1 is verange_module.verify_verange_proof_v1
+    assert not hasattr(iroha_python, "buildVeRangeProofV1")
+    assert not hasattr(iroha_python, "verifyVeRangeProofV1")
+    assert not hasattr(iroha_python, "build_verange_proof_v1")
+    assert not hasattr(iroha_python, "verify_verange_proof_v1")
     fixture = iroha_python.buildVeRangeDevProofFixture(
         {
             "commitments": [commitment["commitment"]],

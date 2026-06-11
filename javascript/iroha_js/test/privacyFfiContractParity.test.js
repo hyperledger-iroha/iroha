@@ -6352,7 +6352,7 @@ test("privacy native availability proof probes use shared Norito request archive
         "function hasPrivacyNative",
         `${label} privacy proof-request native probe`,
       ),
-      /native\.privacyProofRequestV1\([\s\S]*"verange-transparent-range-v1"[\s\S]*"buildVeRangeProofV1"[\s\S]*"bulletproofs:verange_transparent_range_v1"[\s\S]*publicInputs/,
+      /native\.privacyProofRequestV1\([\s\S]*ZK_ACE_ALGORITHM_ID[\s\S]*ZK_ACE_PRODUCTION_ENTRYPOINT[\s\S]*ZK_ACE_PRODUCTION_VK_REF[\s\S]*publicInputs/,
       `${label} privacy availability must build a typed request archive through the native request builder`,
     );
     assert.match(

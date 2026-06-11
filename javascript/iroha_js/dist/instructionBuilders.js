@@ -15903,7 +15903,7 @@ export function buildVeRangeProofEnvelope(options) {
  * @param {object} options
  * @returns {Buffer}
  */
-export function buildVeRangeProofV1(options) {
+function buildVeRangeProofV1(options) {
   const source = assertPlainObject(options, "veRangeProofV1");
   assertAllowedFields(
     source,
@@ -16182,7 +16182,7 @@ export function verifyVeRangeProofLocally(options) {
  * @param {object|Buffer|string} options
  * @returns {object}
  */
-export function verifyVeRangeProofV1(options) {
+function verifyVeRangeProofV1(options) {
   const source =
     options &&
     typeof options === "object" &&

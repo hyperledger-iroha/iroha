@@ -5563,18 +5563,18 @@ descriptorTest("privacy algorithm descriptors expose 2025-2026 BOI research targ
   assert.deepEqual(anonymousPgc.plannedSdkEntrypoints, []);
 
   assert.equal(verange.category, "proof_backend");
-  assert.equal(verange.implementationStage, "production-hardened");
+  assert.equal(verange.implementationStage, "component");
   assert.equal(
     verange.publicInputsSchema,
     "commitments,range_parameters,aggregation_count,domain_separator,payload_digest",
   );
   assert.deepEqual(verange.sdkEntrypoints, [
     "buildRangeCommitment",
+    "buildVeRangeDevProofFixture",
     "buildVeRangeProofEnvelope",
-    "buildVeRangeProofV1",
-    "verifyVeRangeProofV1",
+    "verifyVeRangeProofLocally",
   ]);
-  assert.deepEqual(verange.plannedSdkEntrypoints, []);
+  assert.deepEqual(verange.plannedSdkEntrypoints, ["buildVeRangeProofV1"]);
   assert.equal(verange.coveredCriteria.includes("hide_amount"), true);
   assert.equal(zkat.category, "authorization");
   assert.equal(zkat.implementationStage, "production-hardened");

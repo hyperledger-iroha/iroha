@@ -16633,9 +16633,14 @@ fn record_hint_skip(skips: &mut IndexSet<String>, reason: &str) {
 
 fn production_allows_incomplete_access_hints(skipped_reasons: &[String]) -> bool {
     !skipped_reasons.is_empty()
-        && skipped_reasons
-            .iter()
-            .all(|reason| reason == HINT_SKIP_CONTRACT_CALL_TARGET)
+        && skipped_reasons.iter().all(|reason| {
+            matches!(
+                reason.as_str(),
+                HINT_SKIP_CONTRACT_CALL_TARGET
+                    | HINT_SKIP_DYNAMIC_STATE_PATH
+                    | HINT_SKIP_OPAQUE_ISI
+            )
+        })
 }
 
 fn derive_state_access_hints(

@@ -241,6 +241,20 @@ def _cleanup_validation_temp_output(
     return []
 
 
+def _validation_temp_identity(handle: Any, path: Path) -> tuple[int, int] | None:
+    try:
+        return _file_identity(os.fstat(handle.fileno()))
+    except (AttributeError, OSError):
+        pass
+    try:
+        path_stat = path.lstat()
+    except OSError:
+        return None
+    if not stat.S_ISREG(path_stat.st_mode):
+        return None
+    return _file_identity(path_stat)
+
+
 def build_evidence(
     *,
     artifact_dir: Path,
@@ -396,11 +410,11 @@ def validate_evidence_document(evidence: dict[str, Any], artifact_dir: Path) -> 
             delete=False,
         ) as handle:
             path = Path(handle.name)
-            tmp_identity = _file_identity(os.fstat(handle.fileno()))
+            tmp_identity = _validation_temp_identity(handle, path)
             handle.write(evidence_text)
             handle.flush()
             os.fsync(handle.fileno())
-    except OSError:
+    except (AttributeError, OSError):
         errors = ["recursive compact key evidence validation file could not be written"]
         if path is not None:
             errors.extend(_cleanup_validation_temp_output(path, tmp_identity))

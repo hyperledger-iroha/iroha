@@ -713,9 +713,12 @@ def validate_slot_ids(slot_ids: Iterable[str] | None) -> tuple[list[str] | None,
     errors: list[str] = []
     normalised: list[str] = []
     for index, raw_slot_id in enumerate(slot_ids):
-        slot_id = raw_slot_id.strip()
+        slot_id = raw_slot_id
         if not slot_id:
             errors.append(f"slot id {index} must be a non-empty string")
+            continue
+        if any(character.isspace() for character in slot_id):
+            errors.append(f"slot id {index} must not contain whitespace")
             continue
         if SECRET_RE.search(slot_id):
             errors.append(f"slot id {index} must not contain secret-looking material")
@@ -785,12 +788,25 @@ def _append_error_once(errors: list[str], message: str) -> None:
 def _slot_tree_entries(
     dir_path: Path, label: str, errors: list[str]
 ) -> list[Path] | None:
-    try:
-        return list(dir_path.rglob("*"))
-    except OSError:
-        _append_error_once(errors, f"{label} could not be listed")
-        return None
-
+    entries: list[Path] = []
+    pending = [dir_path]
+    while pending:
+        current = pending.pop()
+        try:
+            scanned = sorted(os.scandir(current), key=lambda entry: entry.name)
+        except OSError:
+            _append_error_once(errors, f"{label} could not be listed")
+            return None
+        for entry in scanned:
+            entry_path = Path(entry.path)
+            entries.append(entry_path)
+            try:
+                entry_mode = entry.stat(follow_symlinks=False).st_mode
+            except OSError:
+                continue
+            if stat.S_ISDIR(entry_mode):
+                pending.append(entry_path)
+    return entries
 
 def validate_no_symlink_ancestors(path: Path, label: str) -> list[str]:
     """Reject symlinked parent directories without leaking local paths."""
@@ -1904,12 +1920,17 @@ def _attestation_harness_result_string(
     if not isinstance(value, str) or not value.strip():
         errors.append(f"attestation/harness-result.json {key} must be a non-empty string")
         return None
+    if value != value.strip():
+        errors.append(
+            f"attestation/harness-result.json {key} must not have surrounding whitespace"
+        )
+        return None
     if SECRET_RE.search(value):
         errors.append(
             f"attestation/harness-result.json {key} must not contain secret-looking material"
         )
         return None
-    return value.strip()
+    return value
 
 
 def _certificate_chain_pem_count(payload: bytes) -> int:
@@ -1944,7 +1965,7 @@ def validate_attestation_harness_result(
     _attestation_harness_result_string(result, "alias", errors)
     for key in ("attestation_security_level", "keymaster_security_level"):
         level = _attestation_harness_result_string(result, key, errors)
-        if level is not None and level.upper() not in STRONGBOX_LEVELS:
+        if level is not None and level not in STRONGBOX_LEVELS:
             errors.append(f"attestation/harness-result.json {key} must be STRONGBOX")
 
     if result.get("strongbox_attestation") is not True:
@@ -1953,7 +1974,15 @@ def validate_attestation_harness_result(
     challenge_hex = _attestation_harness_result_string(result, "challenge_hex", errors)
     challenge: bytes | None = None
     if challenge_hex is not None:
-        if len(challenge_hex) % 2 != 0:
+        if (
+            challenge_hex != challenge_hex.lower()
+            or any(ch.isspace() for ch in challenge_hex)
+            or not all(ch in "0123456789abcdef" for ch in challenge_hex)
+        ):
+            errors.append(
+                "attestation/harness-result.json challenge_hex must be lowercase hexadecimal without whitespace"
+            )
+        elif len(challenge_hex) % 2 != 0:
             errors.append("attestation/harness-result.json challenge_hex must be even-length hex")
         else:
             try:
@@ -2805,7 +2834,7 @@ def _validate_required_telemetry_artifact(slot_path: Path, errors: list[str]) ->
     if telemetry.get("schema_version") != 1:
         errors.append("telemetry/telemetry.json schema_version must be 1")
     slot_id = telemetry.get("slot_id")
-    if not isinstance(slot_id, str) or slot_id.strip() != slot_path.name:
+    if not isinstance(slot_id, str) or slot_id != slot_path.name:
         errors.append("telemetry/telemetry.json slot_id must match the slot directory name")
     suite = telemetry.get("suite")
     if not isinstance(suite, str) or not suite.strip():

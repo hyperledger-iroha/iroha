@@ -2152,9 +2152,9 @@ function privacyNativeProofRequestProbeReturnsBytes(native) {
   try {
     publicInputs = Buffer.from("privacy-native-availability-public-input-v1", "utf8");
     const result = native.privacyProofRequestV1(
-      "verange-transparent-range-v1",
-      "buildVeRangeProofV1",
-      "bulletproofs:verange_transparent_range_v1",
+      ZK_ACE_ALGORITHM_ID,
+      ZK_ACE_PRODUCTION_ENTRYPOINT,
+      ZK_ACE_PRODUCTION_VK_REF,
       publicInputs,
       Buffer.alloc(0),
       Buffer.alloc(0),

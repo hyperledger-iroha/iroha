@@ -312,11 +312,11 @@ def _cleanup_temp_parent(
     temp_parent: Path,
     *,
     expected_identity: tuple[int, int],
-) -> None:
+) -> list[str]:
     try:
         parent_fd = os.open(temp_parent.parent, _directory_open_flags())
     except OSError:
-        return
+        return ["staged slot temporary directory cleanup parent could not be opened"]
     try:
         try:
             temp_parent_stat = os.stat(
@@ -324,16 +324,22 @@ def _cleanup_temp_parent(
                 dir_fd=parent_fd,
                 follow_symlinks=False,
             )
+        except FileNotFoundError:
+            return []
         except OSError:
-            return
+            return ["staged slot temporary directory metadata could not be read"]
         if (
             not stat.S_ISDIR(temp_parent_stat.st_mode)
             or _file_identity(temp_parent_stat) != expected_identity
         ):
-            return
-        shutil.rmtree(temp_parent.name, ignore_errors=True, dir_fd=parent_fd)
+            return []
+        try:
+            shutil.rmtree(temp_parent.name, dir_fd=parent_fd)
+        except OSError:
+            return ["staged slot temporary directory could not be removed"]
     finally:
         os.close(parent_fd)
+    return []
 
 
 def _sha256_bytes(data: bytes) -> str:
@@ -495,10 +501,13 @@ def _require_source_string(
     if not isinstance(value, str) or not value.strip():
         errors.append(f"{label} {key} must be a non-empty string")
         return None
+    if value != value.strip():
+        errors.append(f"{label} {key} must not have surrounding whitespace")
+        return None
     if device_lab.SECRET_RE.search(value):
         errors.append(f"{label} {key} must not contain secret-looking material")
         return None
-    return value.strip()
+    return value
 
 
 def _require_source_true(
@@ -656,7 +665,7 @@ def validate_attestation_harness_source_claims(
             "attestation harness result",
             errors,
         )
-        if level is not None and level.upper() not in device_lab.STRONGBOX_LEVELS:
+        if level is not None and level not in device_lab.STRONGBOX_LEVELS:
             errors.append(f"attestation harness result {key} must be STRONGBOX")
 
     _require_source_true(
@@ -674,7 +683,15 @@ def validate_attestation_harness_source_claims(
     )
     challenge: bytes | None = None
     if challenge_hex is not None:
-        if len(challenge_hex) % 2 != 0:
+        if (
+            challenge_hex != challenge_hex.lower()
+            or any(ch.isspace() for ch in challenge_hex)
+            or not all(ch in "0123456789abcdef" for ch in challenge_hex)
+        ):
+            errors.append(
+                "attestation harness result challenge_hex must be lowercase hexadecimal without whitespace"
+            )
+        elif len(challenge_hex) % 2 != 0:
             errors.append("attestation harness result challenge_hex must be even-length hex")
         else:
             try:
@@ -891,7 +908,10 @@ def assemble_slot(args: argparse.Namespace) -> tuple[int, Path | None, list[str]
     except OSError:
         return 1, None, ["staged slot parent metadata could not be read"]
     stage_slot = temp_parent / slot_id
-    try:
+
+    def _stage_and_publish() -> tuple[int, Path | None, list[str]]:
+        nonlocal result, report
+
         chain_name = args.attestation_certificate_chain.name
         if Path(chain_name).suffix.lower() not in device_lab.ATTESTATION_CERTIFICATE_CHAIN_SUFFIXES:
             errors.append("attestation certificate chain source must end in .pem or .der")
@@ -1074,8 +1094,20 @@ def assemble_slot(args: argparse.Namespace) -> tuple[int, Path | None, list[str]
         if publish_errors:
             return 1, None, publish_errors
         return 0, final_slot, []
+
+    stage_status = 1
+    stage_output: Path | None = None
+    stage_errors: list[str] = []
+    try:
+        stage_status, stage_output, stage_errors = _stage_and_publish()
     finally:
-        _cleanup_temp_parent(temp_parent, expected_identity=temp_parent_identity)
+        cleanup_errors = _cleanup_temp_parent(
+            temp_parent,
+            expected_identity=temp_parent_identity,
+        )
+    if stage_errors or cleanup_errors:
+        return 1, stage_output, [*stage_errors, *cleanup_errors]
+    return stage_status, stage_output, stage_errors
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:

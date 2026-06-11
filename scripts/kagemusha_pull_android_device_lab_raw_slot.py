@@ -1235,41 +1235,47 @@ def _remove_created_slot(
     expected_identity: tuple[int, int],
     parent_path: Path,
     parent_identity: tuple[int, int],
-) -> None:
+) -> list[str]:
     try:
         parent_fd = os.open(parent_path, _directory_open_flags())
     except OSError:
-        return
+        return ["raw slot partial install cleanup parent could not be opened"]
     try:
         try:
             parent_stat = os.fstat(parent_fd)
         except OSError:
-            return
+            return ["raw slot partial install cleanup parent metadata could not be read"]
         if _file_identity(parent_stat) != parent_identity:
-            return
+            return []
         try:
             path_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            return []
         except OSError:
-            return
+            return ["raw slot partial install cleanup metadata could not be read"]
         if (
             not stat.S_ISLNK(path_stat.st_mode)
             and stat.S_ISDIR(path_stat.st_mode)
             and _file_identity(path_stat) == expected_identity
         ):
-            shutil.rmtree(path.name, ignore_errors=True, dir_fd=parent_fd)
+            try:
+                shutil.rmtree(path.name, dir_fd=parent_fd)
+            except OSError:
+                return ["raw slot partial install could not be removed"]
     finally:
         os.close(parent_fd)
+    return []
 
 
 def _cleanup_temp_parent(
     temp_parent: Path,
     *,
     expected_identity: tuple[int, int],
-) -> None:
+) -> list[str]:
     try:
         parent_fd = os.open(temp_parent.parent, _directory_open_flags())
     except OSError:
-        return
+        return ["raw pull temporary directory cleanup parent could not be opened"]
     try:
         try:
             temp_parent_stat = os.stat(
@@ -1277,16 +1283,22 @@ def _cleanup_temp_parent(
                 dir_fd=parent_fd,
                 follow_symlinks=False,
             )
+        except FileNotFoundError:
+            return []
         except OSError:
-            return
+            return ["raw pull temporary directory metadata could not be read"]
         if (
             not stat.S_ISDIR(temp_parent_stat.st_mode)
             or _file_identity(temp_parent_stat) != expected_identity
         ):
-            return
-        shutil.rmtree(temp_parent.name, ignore_errors=True, dir_fd=parent_fd)
+            return []
+        try:
+            shutil.rmtree(temp_parent.name, dir_fd=parent_fd)
+        except OSError:
+            return ["raw pull temporary directory could not be removed"]
     finally:
         os.close(parent_fd)
+    return []
 
 
 def _open_verified_directory(
@@ -1389,7 +1401,10 @@ def _install_validated_slot(
     assert final_slot_identity is not None
 
     installed = False
-    try:
+
+    def _install_contents() -> list[str]:
+        nonlocal installed
+
         stage_fd, stage_slot_identity, stage_errors = _open_verified_directory(
             stage_slot,
             "raw slot directory could not be installed",
@@ -1493,15 +1508,21 @@ def _install_validated_slot(
         if sync_errors:
             return sync_errors
         installed = True
+        return []
+
+    install_errors: list[str] = []
+    try:
+        install_errors = _install_contents()
     finally:
+        cleanup_errors: list[str] = []
         if not installed:
-            _remove_created_slot(
+            cleanup_errors = _remove_created_slot(
                 final_slot,
                 final_slot_identity,
                 output_root,
                 output_root_identity,
             )
-    return []
+    return [*install_errors, *cleanup_errors]
 
 
 def pull_raw_slot(
@@ -1574,23 +1595,38 @@ def pull_raw_slot(
         temp_parent_identity = _file_identity(temp_parent.lstat())
     except OSError:
         return 1, None, ["raw pull temporary directory metadata could not be read"]
+    pull_status = 1
+    pull_slot: Path | None = None
+    pull_errors: list[str] = []
     try:
         extract_errors = extract_raw_slot_tar(tar_bytes, temp_parent, slot_id)
         if extract_errors:
-            return 1, None, extract_errors
-        stage_slot = temp_parent / slot_id
-        validate_errors = _validate_raw_slot_files(
-            stage_slot,
-            slot_id,
-            temp_parent / "latest-slot.txt",
-        )
-        if validate_errors:
-            return 1, None, validate_errors
-        install_errors = _install_validated_slot(stage_slot, final_slot, output_root)
-        if install_errors:
-            return 1, None, install_errors
+            pull_errors = extract_errors
+        else:
+            stage_slot = temp_parent / slot_id
+            validate_errors = _validate_raw_slot_files(
+                stage_slot,
+                slot_id,
+                temp_parent / "latest-slot.txt",
+            )
+            if validate_errors:
+                pull_errors = validate_errors
+            else:
+                install_errors = _install_validated_slot(stage_slot, final_slot, output_root)
+                if install_errors:
+                    pull_errors = install_errors
+                else:
+                    pull_status = 0
+                    pull_slot = final_slot
     finally:
-        _cleanup_temp_parent(temp_parent, expected_identity=temp_parent_identity)
+        cleanup_errors = _cleanup_temp_parent(
+            temp_parent,
+            expected_identity=temp_parent_identity,
+        )
+    if pull_errors or cleanup_errors:
+        return 1, pull_slot, [*pull_errors, *cleanup_errors]
+    if pull_status != 0:
+        return pull_status, pull_slot, pull_errors
 
     latest_errors = _write_latest_slot(output_root, slot_id)
     if latest_errors:

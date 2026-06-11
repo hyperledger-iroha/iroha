@@ -1129,11 +1129,11 @@ const PRIVACY_ALGORITHM_ENTRIES: &[PrivacyAlgorithmEntry] = &[
         backend_family: "verange",
         sdk_entrypoints: &[
             "buildRangeCommitment",
+            "buildVeRangeDevProofFixture",
             "buildVeRangeProofEnvelope",
-            "buildVeRangeProofV1",
-            "verifyVeRangeProofV1",
+            "verifyVeRangeProofLocally",
         ],
-        planned_entrypoints: &[],
+        planned_entrypoints: &["buildVeRangeProofV1"],
     },
     PrivacyAlgorithmEntry {
         id: "zkat-policy-private-auth-v1",
@@ -26363,9 +26363,9 @@ mod tests {
 
     #[test]
     fn privacy_proof_request_v1_encodes_norito_request_archive() {
-        let algorithm_id = b"verange-transparent-range-v1";
-        let entrypoint = b"buildVeRangeProofV1";
-        let vk_ref = b"bulletproofs:verange_transparent_range_v1";
+        let algorithm_id = b"zk-ace-pq-authorization-v0";
+        let entrypoint = b"buildZkAceAuthorizationProofV1";
+        let vk_ref = b"stark-fri:zk_ace_pq_authorization_v0";
         let public_inputs = b"public-inputs";
         let witness = b"secret-witness";
         let proof = b"candidate-proof";
@@ -26393,9 +26393,9 @@ mod tests {
         assert_eq!(rc, 0);
         let request: PrivacyProofRequestV1 = take_privacy_output(out_ptr, out_len);
 
-        assert_eq!(request.algorithm_id, "verange-transparent-range-v1");
-        assert_eq!(request.entrypoint, "buildVeRangeProofV1");
-        assert_eq!(request.vk_ref, "bulletproofs:verange_transparent_range_v1");
+        assert_eq!(request.algorithm_id, "zk-ace-pq-authorization-v0");
+        assert_eq!(request.entrypoint, "buildZkAceAuthorizationProofV1");
+        assert_eq!(request.vk_ref, "stark-fri:zk_ace_pq_authorization_v0");
         assert_eq!(request.public_inputs, public_inputs);
         assert_eq!(request.witness, witness);
         assert_eq!(request.proof, proof);
@@ -26403,9 +26403,9 @@ mod tests {
 
     #[test]
     fn privacy_proof_request_v1_rejects_invalid_components_without_output() {
-        let algorithm_id = b"verange-transparent-range-v1";
-        let entrypoint = b"buildVeRangeProofV1";
-        let vk_ref = b"bulletproofs:verange_transparent_range_v1";
+        let algorithm_id = b"zk-ace-pq-authorization-v0";
+        let entrypoint = b"buildZkAceAuthorizationProofV1";
+        let vk_ref = b"stark-fri:zk_ace_pq_authorization_v0";
         let witness = b"secret-witness";
         let mut out_ptr: *mut c_uchar = ptr::null_mut();
         let mut out_len: c_ulong = 0;

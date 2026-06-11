@@ -456,8 +456,6 @@ export {
   buildRangeCommitment,
   buildVeRangeDevProofFixture,
   buildVeRangeProofEnvelope,
-  buildVeRangeProofV1,
-  verifyVeRangeProofV1,
   verifyVeRangeProofLocally,
   buildPrivacyProofEnvelope,
   buildRegisterPrivacyVerifierKeyInstruction,

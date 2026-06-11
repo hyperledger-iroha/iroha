@@ -3765,9 +3765,9 @@ test("package dist privacyProofRequestV1 clears component copies after native di
     };
     assert.deepEqual(
       privacyProofRequestV1({
-        algorithmId: "verange-transparent-range-v1",
-        entrypoint: "buildVeRangeProofV1",
-        vkRef: "bulletproofs:verange_transparent_range_v1",
+        algorithmId: "zk-ace-pq-authorization-v0",
+        entrypoint: "buildZkAceAuthorizationProofV1",
+        vkRef: "stark-fri:zk_ace_pq_authorization_v0",
         publicInputs,
         witness,
         proof,
@@ -3785,9 +3785,9 @@ test("package dist privacyProofRequestV1 clears component copies after native di
     let error;
     try {
       privacyProofRequestV1({
-        algorithmId: "verange-transparent-range-v1",
-        entrypoint: "buildVeRangeProofV1",
-        vkRef: "bulletproofs:verange_transparent_range_v1",
+        algorithmId: "zk-ace-pq-authorization-v0",
+        entrypoint: "buildZkAceAuthorizationProofV1",
+        vkRef: "stark-fri:zk_ace_pq_authorization_v0",
         publicInputs,
         witness,
         proof,

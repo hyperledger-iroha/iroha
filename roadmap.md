@@ -105,8 +105,9 @@ and completed history lives in [`status.md`](./status.md).
   parent fsync, and opened-file readback before manifesting. It publishes the completed stage through directory file
   descriptors pinned to the captured device-lab root, temp-parent, and
   staged-slot identities, and cleanup checks the captured temp-parent identity
-  before removing staging directories, so path swaps before final fsync or
-  cleanup fail closed. Fresh
+  before removing staging directories, reporting removal failures while
+  preserving identity-swapped staging directories, so path swaps before final
+  fsync or cleanup fail closed. Fresh
   raw exports now include `attestation/harness-result.json`, and the raw puller
   requires that harness result to match the slot challenge before the host
   verifier report and signed slot can be assembled. The raw puller also
@@ -115,7 +116,8 @@ and completed history lives in [`status.md`](./status.md).
   rejecting whitespace-normalized matches, reports tar directory collisions
   as structured blockers instead of tracebacks, moves top-level raw artifacts
   through opened stage/final directory descriptors, and revalidates the
-  captured temporary extraction directory identity before cleanup. It also rejects unreviewed
+  captured temporary extraction directory identity before cleanup while
+  reporting removal failures before latest-slot or summary publication. It also rejects unreviewed
   extra files or directories under the raw slot, requires both `slot` and
   `slot_id` in raw `attestation/result.json` to match the selected slot id, and
   requires canonical lowercase SHA-256 chain/challenge digests matching the
@@ -144,26 +146,38 @@ and completed history lives in [`status.md`](./status.md).
   and slot fsync, binds the output-root identity through the parent fsync, and
   removes partial installs through the identity-bound output-root file
   descriptor only when the destination entry still names the directory created
-  by the puller. The host `latest-slot.txt` writer now follows the same
+  by the puller, reporting cleanup removal failures with the install error. The
+  host `latest-slot.txt` writer now follows the same
   output-readback contract, with byte fsync, atomic replace, opened-file
   identity readback that rejects symlinks, hardlinks, and path swaps, and an
   identity-bound output-root fsync. The raw puller's host `latest-slot.txt` and
   summary writers now also report identity-bound temp cleanup failures and
   refuse to unlink a temp output whose file identity changed before cleanup.
+  Explicit scanner `--slot` values now fail closed unless they are already
+  exact safe single-directory names without whitespace, so whitespace-normalized
+  slot selection cannot choose a production evidence bundle.
   Signed slots now preserve the same `attestation/harness-result.json`, include
   it in signed
-  `artifact_digests`, and reject legacy signed evidence that drops the raw
-  StrongBox harness output. The standalone Android scanner also rejects copied
+  `artifact_digests`, reject legacy signed evidence that drops the raw
+  StrongBox harness output, and require preserved harness aliases, StrongBox
+  levels, and challenge hex to be exact canonical strings during both assembly
+  and scan. The standalone Android scanner also rejects copied
   Kagemusha matrix rows by reporting hash-only duplicate device fingerprints or
   attestation challenges across otherwise-valid slots, and the production
   readiness rollup mirrors that non-secret duplicate inventory with
   release-bundle schema validation, verify-existing validation, exact standard
   matrix and signer-pin manifest checks, drift checks, and an identity-bound
-  scanner JSON summary parent sync. The Android attestation report writer and
-  signed-evidence helper also identity-bind their post-replace output-parent
-  syncs before accepting local JSON or manifest outputs, and the signed-slot
-  assembler now identity-binds local JSON temp cleanup before accepting slot
-  metadata outputs. The lineage plus
+  scanner JSON summary parent sync. The Android attestation report writer now
+  rejects whitespace-normalized or uppercase attestation challenge hex, including
+  noncanonical `--expected-challenge-hex`, and whitespace-normalized
+  slot id, device fingerprint, OS build, app package, verifier,
+  StrongBox/KeyMint level labels, PEM chain-length mismatches, and
+  `--attestation-certificate-chain-path` values before writing
+  `attestation/report.json`. The report writer and signed-evidence helper also
+  identity-bind their
+  post-replace output-parent syncs before accepting local JSON or manifest
+  outputs, and the signed-slot assembler now identity-binds local JSON temp
+  cleanup before accepting slot metadata outputs. The lineage plus
   compact-key staged runners apply the same gate to their child-log installs,
   marker, and metadata outputs before readback. Those staged runners also
   identity-bind resume/replace cleanup and temporary log/output cleanup before
@@ -173,7 +187,10 @@ and completed history lives in [`status.md`](./status.md).
   identity-bind the published artifact directory before their final fsync and
   revalidate temporary staging directory identity before cleanup, and their
   rollback cleanup unlinks only published files whose current identity still
-  matches the identity captured immediately after install. The
+  matches the identity captured immediately after install while reporting
+  rollback unlink failures with the original publish failure. Finalizer
+  temporary staging cleanup now also reports removal failures while preserving a
+  temp directory whose identity changed before removal. The
   latest attached Pixel 6 / Android 16 slot
   `google-pixel-6-6a-physical-1781077370103` verifies and signs successfully
   through the lab-app path; remaining Android release work is evidence

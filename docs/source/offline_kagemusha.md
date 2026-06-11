@@ -428,8 +428,11 @@ directory plus its parent with `lstat()` so unreadable slot or parent metadata
 fails closed before metadata-derived output paths, signatures, or manifest
 refreshes can start from an aliased slot bundle. The shared Android device-lab
 signing path also validates the preserved `attestation/harness-result.json`
-against the slot challenge and copied certificate-chain count before producing
-or binding signed evidence. The shared Android device-lab
+against the slot challenge, copied certificate-chain count, exact StrongBox
+level labels, and canonical lowercase challenge hex before producing or binding
+signed evidence. The slot assembler and scanner apply the same exact-string
+harness policy, so whitespace-normalized harness aliases or level labels cannot
+become signed production evidence. The shared Android device-lab
 JSON loader rejects duplicate keys and non-standard `NaN`/`Infinity` constants
 before slot metadata, attestation, signed evidence, D2D handoff, or
 wallet-integrity schema validation, and caps those JSON inputs at 16 MiB from
@@ -912,6 +915,12 @@ The Android device-lab summary writer, Android signed-evidence helper, and
 signed-slot assembler JSON metadata writer also report identity-checked
 temporary-file cleanup failures after write or post-stage output-validation
 errors instead of swallowing failed cleanup.
+The Android raw puller and signed-slot assembler now also report temporary
+staging directory removal failures and block success when the original staging
+directory cannot be removed; identity-swapped staging directories are still
+preserved instead of removed.
+Raw partial-install cleanup also reports removal failures, so a failed install
+cannot hide an unremoved partially-created slot directory.
 All of these release-output writers also fail closed if the parent-directory
 sync after atomic replacement fails, so a release/readiness artifact is not
 accepted as durable when the directory entry cannot be fsynced. The readiness
@@ -920,6 +929,11 @@ before that fsync, so a replaced output cannot be accepted after its target
 directory has been exchanged. The staged lineage and compact-key finalizers use
 the same identity discipline for rollback cleanup: failed publish paths are
 removed only while their publish-time identity is still present.
+If a staged finalizer cannot remove a publish-time file during rollback, that
+cleanup failure is returned with the original publish failure instead of being
+silently swallowed. Finalizer temporary staging directory cleanup also reports
+removal failures and can block success; cleanup still preserves a directory
+whose identity changed before removal.
 Android signed-evidence canonical signature payloads also serialize with strict
 JSON before hashing, signing, or verification, so non-standard constants cannot
 become signed bytes.
