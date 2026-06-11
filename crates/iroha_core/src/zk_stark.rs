@@ -579,6 +579,36 @@ fn validate_stark_opening_commitment_params_v1(
 mod tests {
     use super::*;
 
+    fn attach_valid_auxiliary_composition_values(envelope: &mut StarkVerifyEnvelopeV1) {
+        let query_count = envelope.proof.queries.len();
+        let leaf = 30_u64;
+        let (comp_root, path) =
+            stark_merkle_root_and_path_from_field_values_v1(&envelope.params, &[leaf], 0)
+                .expect("derive auxiliary composition root");
+        let comp_values = (0..query_count)
+            .map(|_| StarkCompositionValueV1 {
+                leaf,
+                constant: 7,
+                z_coeff: 0,
+                aux_terms: vec![
+                    StarkCompositionTermV1 {
+                        wire_index: 1,
+                        value: 5,
+                        coeff: 3,
+                    },
+                    StarkCompositionTermV1 {
+                        wire_index: 3,
+                        value: 2,
+                        coeff: 4,
+                    },
+                ],
+                path: path.clone(),
+            })
+            .collect();
+        envelope.proof.commits.comp_root = Some(comp_root);
+        envelope.proof.comp_values = Some(comp_values);
+    }
+
     #[test]
     fn fq_addition_wraps_correctly() {
         let a = Fq::from_canonical_u64(MOD_P_U64 - 1).unwrap();
@@ -1465,6 +1495,22 @@ mod tests {
         );
         assert!(!verify_stark_fri_envelope(&bytes));
 
+        let mut auxiliary_envelope: StarkVerifyEnvelopeV1 =
+            norito::decode_from_bytes(&bytes).expect("decode zero-composition AIR envelope");
+        attach_valid_auxiliary_composition_values(&mut auxiliary_envelope);
+        let auxiliary_bytes =
+            norito::to_bytes(&auxiliary_envelope).expect("encode auxiliary AIR envelope");
+        assert!(
+            !verify_stark_fri_air_envelope_from_rows_and_composition_values(
+                &auxiliary_bytes,
+                circuit_id,
+                &public_digest,
+                &rows,
+                &composition_values,
+            ),
+            "caller-owned explicit AIR must reject auxiliary generic composition commitments"
+        );
+
         let mut drifted_rows = rows.clone();
         drifted_rows[0][0] ^= 1;
         assert!(
@@ -1879,6 +1925,19 @@ mod tests {
                 .all(|&index| zk_ace_air_opening_is_safe(index, domain)),
             "ZK-ACE prover must not open private witness rows"
         );
+        let mut auxiliary_envelope = envelope.clone();
+        attach_valid_auxiliary_composition_values(&mut auxiliary_envelope);
+        let auxiliary_bytes =
+            norito::to_bytes(&auxiliary_envelope).expect("encode auxiliary ZK-ACE AIR envelope");
+        assert!(
+            !verify_stark_fri_zk_ace_envelope_with_limits(
+                &auxiliary_bytes,
+                &StarkVerifierLimits::default(),
+                &public_inputs,
+            ),
+            "ZK-ACE AIR must reject auxiliary generic composition commitments"
+        );
+
         envelope.proof.air.as_mut().expect("AIR section").circuit_id =
             "stark/fri/zk-ace-pq-authorization-v0:wrong".to_owned();
         let wrong_circuit =
@@ -2883,6 +2942,10 @@ enum StarkAirVerificationContext<'a> {
 }
 
 impl StarkAirVerificationContext<'_> {
+    fn allows_auxiliary_composition(self) -> bool {
+        matches!(self, Self::Binding)
+    }
+
     fn trace_width(self) -> usize {
         match self {
             Self::Binding => stark_air_trace_width(),
@@ -4205,6 +4268,11 @@ fn verify_stark_fri_envelope_with_context(
         None => return false,
     };
     if env.proof.commits.comp_root.is_some() != env.proof.comp_values.is_some() {
+        return false;
+    }
+    if !context.allows_auxiliary_composition()
+        && (env.proof.commits.comp_root.is_some() || env.proof.comp_values.is_some())
+    {
         return false;
     }
     if let Some(values) = env.proof.comp_values.as_ref() {

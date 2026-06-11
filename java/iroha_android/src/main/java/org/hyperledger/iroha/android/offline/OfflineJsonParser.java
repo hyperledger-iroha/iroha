@@ -23,11 +23,12 @@ public final class OfflineJsonParser {
         asOptionalBoolean(object.get("offline_fountain_qr"), false),
         asOptionalBoolean(object.get("offline_sync_optional"), false),
         asBoolean(object.get("offline_telemetry"), "offline_telemetry"),
-        asOptionalBoolean(object.get("offline_kagemusha_abi7"), false),
-        asNullableString(object.get("offline_kagemusha_abi7_mode")),
-        asOptionalInteger(object.get("offline_kagemusha_abi7_bridge_abi_version")),
-        asNullableString(object.get("offline_kagemusha_abi7_circuit_id")),
-        asOptionalBoolean(object.get("offline_kagemusha_abi7_artifacts"), false));
+        asOptionalBoolean(object.get("offline_kagemusha_recursive_compact_available"), false),
+        asNullableString(object.get("offline_kagemusha_recursive_compact_mode")),
+        asOptionalInteger(
+            object.get("offline_kagemusha_recursive_compact_required_native_bridge_abi_version")),
+        asNullableString(object.get("offline_kagemusha_recursive_compact_circuit_id")),
+        asOptionalBoolean(object.get("offline_kagemusha_recursive_compact_artifacts_available"), false));
   }
 
   public static OfflineV2Readiness parseOfflineV2Readiness(final byte[] payload) {
@@ -35,11 +36,12 @@ public final class OfflineJsonParser {
     final Map<String, Object> object = expectObject(root, "root");
     return new OfflineV2Readiness(
         asBoolean(object.get("offline_telemetry"), "offline_telemetry"),
-        asOptionalBoolean(object.get("offline_kagemusha_abi7"), false),
-        asNullableString(object.get("offline_kagemusha_abi7_mode")),
-        asOptionalInteger(object.get("offline_kagemusha_abi7_bridge_abi_version")),
-        asNullableString(object.get("offline_kagemusha_abi7_circuit_id")),
-        asOptionalBoolean(object.get("offline_kagemusha_abi7_artifacts"), false));
+        asOptionalBoolean(object.get("offline_kagemusha_recursive_compact_available"), false),
+        asNullableString(object.get("offline_kagemusha_recursive_compact_mode")),
+        asOptionalInteger(
+            object.get("offline_kagemusha_recursive_compact_required_native_bridge_abi_version")),
+        asNullableString(object.get("offline_kagemusha_recursive_compact_circuit_id")),
+        asOptionalBoolean(object.get("offline_kagemusha_recursive_compact_artifacts_available"), false));
   }
 
   public static String canonicalJson(final byte[] payload) {

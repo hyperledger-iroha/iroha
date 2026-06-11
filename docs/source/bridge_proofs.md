@@ -2536,7 +2536,10 @@ governed source/deployment/destination hashes, route allowlist binding, and
 route-canary transaction evidence, so hand-edited truthy or malformed values
 cannot satisfy manifest-vs-summary readiness comparisons. Release-readiness and
 bundle verification pin that active checklist schema as source inventory before
-production evidence can pass. The
+production evidence can pass. Required-record summary unknown keys are classified
+before checklist text is rendered, so padded, control-character, whitespace,
+Markdown-unsafe, or Unicode-confusable local record names become category-only
+blockers instead of raw public diagnostics. The
 verifier recomputes the all-lanes
 summary by loading the all-lanes evidence validator directly against the copied
 TOML evidence files before comparing it with the standalone summary and
@@ -2783,7 +2786,13 @@ Release-readiness and bundle verification also pin the public JSON-root schema
 as required source inventory, so canonical manifest/readiness/all-lanes JSON
 serialization, duplicate-key rejection with malformed-key classification,
 non-UTF-8 diagnostics, and malformed manifest/readiness root-field
-classification cannot be dropped before public bundle readiness passes. The
+classification cannot be dropped before public bundle readiness passes.
+Copied readiness-report root unknown field names are classified before bundle
+rendering, so padded, control-character, whitespace, Markdown-unsafe, or
+Unicode-confusable local root claims become category-only blockers instead of
+raw public diagnostics. Copied source-inventory row unknown fields use the same
+classifier before source-inventory blocker rendering, preserving readable
+operator notes while suppressing hostile row names. The
 strict verifier also reports duplicate integer entries in copied all-lanes
 domain lists directly, so duplicated `supported_launch_domains` or
 `unsupported_launch_domains` fail before relying only on later launch-scope set
@@ -2801,6 +2810,10 @@ The cryptographic-evidence source inventory also pins row-key and audit-key
 classification, including safe diagnostics for readable operator fields,
 category-only diagnostics for malformed or Unicode-confusable row names, and
 Markdown suppression for malformed row domains or source-adapter audit keys.
+The release-bundle builder applies the same row-key classifier to copied
+cryptographic-evidence rows before Markdown rendering, so padded,
+control-character, whitespace, Markdown-unsafe, or Unicode-confusable local
+row claims become category-only blockers instead of raw diagnostics.
 Release-readiness and bundle verification also pin public cryptographic-evidence
 binding as required source inventory, so production-domain row inventory,
 lane-field binding, active-row audit-key classification, canonical row
@@ -2811,6 +2824,11 @@ Release-readiness and bundle verification also pin public submission-surface
 binding as required source inventory, so lane/backend inventory, per-SDK helper
 inventory, verifier-owned surface recomputation, and corridor-phase binding
 cannot be dropped before public bundle readiness passes.
+Unknown submission-surface row fields use the same structured field-name
+classification in the verifier and the release-bundle builder before Markdown
+rendering, so safe operator notes remain readable while padded,
+control-character, whitespace, Markdown-unsafe, or Unicode-confusable row
+claims become category-only blockers.
 Submission-surface lane labels are schema-classified before lane inventory,
 backend matching, helper inventory, or Markdown-presence diagnostics run, so
 padded, control-character, whitespace, Markdown-unsafe, malformed, or

@@ -2,6 +2,124 @@
 
 Last updated: 2026-06-11
 
+## 2026-06-11 SCCP active required-record key hardening
+
+- Tightened active-launch required-record checklist diagnostics in both
+  release-readiness generation and strict bundle verification so unknown record
+  summary keys use the public field-name classifier. Safe operator fields stay
+  readable, while padded, control-character, whitespace, Markdown-unsafe, and
+  Unicode-confusable names become category-only blockers.
+- Added readiness and verifier recomputation regressions for malformed
+  required-record keys, including a `secret-token` marker, and pinned the
+  classifier helper in the active-launch checklist schema source inventory.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_blocks_malformed_active_required_record_metadata pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_classifies_malformed_active_required_record_fields pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_classifies_malformed_active_required_record_fields pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_active_launch_checklist_schema_inventory -vv`
+    (`4` passed)
+
+## 2026-06-11 Shared STARK AIR auxiliary composition scoping
+
+- Tightened shared native STARK/AIR verification so auxiliary generic
+  composition-value commitments (`comp_root`/`comp_values`) remain accepted only
+  for the generic binding AIR context. Caller-owned explicit AIR and ZK-ACE AIR
+  now reject those auxiliary payloads before row/composition replay can treat
+  them as additional acceptance material.
+- Validation:
+  - `cargo test -j 1 -p iroha_core --features zk-stark explicit_composition_air_envelope_binds_caller_rows_to_fri_queries --lib -- --nocapture`
+    (`1` passed, `5046` filtered out)
+  - `cargo test -j 1 -p iroha_core --features zk-stark zk_ace_air_prover_self_verifies_generated_envelope --lib -- --nocapture`
+    (`1` passed, `5046` filtered out)
+  - `cargo fmt --package iroha_core -- --check`
+  - `cargo clippy -j 1 -p iroha_core --lib --features zk-stark -- -D warnings`
+
+## 2026-06-11 STARK AIR first-FRI opening index binding
+
+- Tightened the reusable native STARK/AIR first-FRI value helper so it now
+  rejects openings whose advertised AIR index does not match the sampled FRI
+  base index before checking the parity-selected first-layer value. This keeps
+  helper-level replay fail-closed even outside the full verifier path that
+  already compares sampled query indices.
+- Validation:
+  - `cargo test -j 1 -p iroha_core --features zk-stark air_opening_first_fri_value_binding_uses_sampled_parity --lib -- --nocapture`
+    (`1` passed, `5044` filtered out)
+  - `cargo test -j 1 -p iroha_core --features zk-stark explicit_composition_air_envelope_binds_caller_rows_to_fri_queries --lib -- --nocapture`
+    (`1` passed, `5046` filtered out)
+  - `cargo fmt --package iroha_core -- --check`
+  - `cargo clippy -j 1 -p iroha_core --lib --features zk-stark -- -D warnings`
+
+## 2026-06-11 SCCP copied source-inventory field-name hardening
+
+- Tightened the release-bundle builder so copied `source_inventory` gate row
+  fields use the public unknown-field classifier before Markdown rendering.
+  Safe operator fields stay readable, while padded, control-character,
+  whitespace, Markdown-unsafe, and Unicode-confusable names become
+  category-only blockers.
+- Extended copied source-inventory pre-render coverage with hostile gate-row
+  field names, including a `secret-token` marker, and pinned the classifier
+  usage in the public JSON-root schema source inventory.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_rejects_malformed_copied_source_inventory_before_render pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_source_inventory_gate_malformed_unknown_fields pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_json_root_schema_inventory -vv`
+    (`3` passed)
+
+## 2026-06-11 SCCP copied report-root field-name hardening
+
+- Tightened the release-bundle builder so copied readiness-report root fields
+  use the public unknown-field classifier before Markdown rendering. Safe
+  operator fields stay readable, while padded, control-character, whitespace,
+  Markdown-unsafe, and Unicode-confusable names become category-only blockers.
+- Extended copied report-root pre-render coverage with hostile root field names,
+  including a `secret-token` marker, and pinned the classifier usage in the
+  public JSON-root schema source inventory.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_rejects_unknown_copied_report_root_before_render pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_malformed_root_json_fields pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_json_root_schema_inventory -vv`
+    (`3` passed)
+
+## 2026-06-11 SCCP copied submission row field-name hardening
+
+- Tightened the release-bundle builder so copied
+  `user_prover_submission_surfaces` row fields use the public unknown-field
+  classifier before Markdown rendering. Safe operator fields stay readable,
+  while padded, control-character, whitespace, Markdown-unsafe, and
+  Unicode-confusable names become category-only blockers.
+- Extended copied submission-surface pre-render coverage with hostile row field
+  names, including a `secret-token` marker, and pinned the classifier usage in
+  the public submission-surface binding source inventory.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_rejects_malformed_copied_submission_surface_before_render pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_submission_surface_malformed_unknown_fields pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_submission_surface_binding_inventory -vv`
+    (`3` passed)
+
+## 2026-06-11 BFV native STARK profile blowup/domain hardening
+
+- Made BFV full-bootstrap native STARK/FRI profile validation explicitly reject
+  `blowup_log2 > n_log2` before canonical v1 profile comparison. Native
+  verifier payload admission and release-audit proof-profile evidence now fail
+  closed on impossible FRI geometry before key material or audit evidence can be
+  admitted.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-native-stark-geometry CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto --lib full_bootstrap_proof_native_key_material_is_typed_and_profile_bound -- --nocapture`
+    (`1` passed, `692` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-native-stark-geometry CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto --lib full_bootstrap_release_audit_evidence_binds_generated_artifacts -- --nocapture`
+    (`1` passed, `692` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-native-stark-geometry CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --lib -- -D warnings`
+
+## 2026-06-11 SCCP copied crypto evidence field-name hardening
+
+- Tightened the release-bundle builder so copied `cryptographic_evidence` row
+  fields use the public unknown-field classifier before Markdown rendering.
+  Safe operator fields stay readable, while padded, control-character,
+  whitespace, Markdown-unsafe, and Unicode-confusable names become
+  category-only blockers.
+- Extended copied-crypto pre-render coverage with hostile row field names,
+  including a `secret-token` marker, and pinned the classifier usage in the
+  public cryptographic-evidence binding source inventory.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_rejects_malformed_copied_crypto_evidence_before_render pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_crypto_evidence_malformed_unknown_fields pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_crypto_evidence_binding_inventory -vv`
+    (`3` passed)
+
 ## 2026-06-11 SCCP copied artifact field-name hardening
 
 - Tightened the release-bundle builder so copied `input_artifacts` row fields
@@ -11,7 +129,10 @@ Last updated: 2026-06-11
 - Extended copied-artifact pre-render coverage with hostile field names,
   including a `secret-token` marker, and pinned the classifier usage in the
   release manifest artifact-set/order source inventory.
-- Validation: pending.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_rejects_malformed_copied_artifacts_before_render pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_malformed_artifact_fields pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_manifest_artifact_set_order_inventory -vv`
+    (`3` passed)
 
 ## 2026-06-11 STARK AIR opening root parameter preflight
 
@@ -959,6 +1080,769 @@ Last updated: 2026-06-11
   - `git diff --name-only -z | xargs -0 rg -n "^(<<<<<<<( |$)|=======$|>>>>>>>( |$))"`
     (no output)
 
+## 2026-06-11 Kagemusha ABI-7 readiness alias compatibility (superseded)
+
+- Superseded by the Kagemusha native bridge ABI validation entry below: the
+  short `offline_kagemusha_abi7*` response/parser aliases and the Android Java
+  bridge-ABI alias were removed. Current Torii and SDK readiness surfaces use
+  the recursive-compact native bridge ABI field names only.
+
+## 2026-06-11 Kagemusha recursive public-input policy repair
+
+- Restored the recursive aggregation proof public-input guard that rejects a
+  non-zero `append_opening_preflight_digest` when `hop_count <= 1`, so one-hop
+  proofs fail at the public-input layer before proof-envelope binding.
+- Realigned the Kagemusha offline docs and roadmap wording with the ABI-6
+  previous-proof opening SDK-host boundary policy guard.
+- Validation passed:
+  - `cargo test -p iroha_data_model kagemusha_recursive_public_inputs_reject_one_hop_append_opening_preflight --lib`
+    (`1` passed, `1534` filtered out)
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-public-input-one-hop-append-opening`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-semantic-proof-append-opening`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-previous-proof-opening-bundle-binding`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `git diff --check`
+
+## 2026-06-11 Kagemusha native bridge ABI and gas validation
+
+- Renamed the Kagemusha/offline-cash public ABI labels to native bridge ABI
+  across SDKs, Torii readiness payloads, fixture metadata, release guards, and
+  documentation while leaving the low-level `connect_norito_bridge_abi_version`
+  symbol unchanged.
+- Removed the old `offline_kagemusha_abi7*` readiness response/parser aliases
+  and the Android Java `RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION` alias so
+  the current public surface uses the native bridge ABI names only.
+- `KagemushaTransfer` is now unmetered as offline-offline state movement.
+  Recursive Kagemusha redemption gas now accounts for redeem nullifiers,
+  recursive proof bytes/public inputs, optional lineage witness hop proof
+  attachments, previous recursive proofs, and Pallas open-envelope archive
+  bytes.
+- Validation passed:
+  - `cargo test -p iroha_core gas::tests:: -- --nocapture` (`14` tests; existing
+    `soracloud.rs` unused-function warning)
+  - `cargo test -p iroha_torii --test torii_nexus_sorafs readiness_is_mounted -- --nocapture`
+    (`2` tests)
+  - `node --test javascript/iroha_js/test/offlineCashLifecycle.test.js javascript/iroha_js/test/kagemushaRecursiveSpend.test.js javascript/iroha_js/test/kagemushaFfiContractParity.test.js javascript/iroha_js/test/package_dist.test.js`
+    (`152` tests)
+  - `PYTHONPATH=python/iroha_python/src /var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q python/iroha_python/tests/offline_cash_test.py python/iroha_python/tests/kagemusha_test.py`
+    (`49` tests)
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/kagemusha_release_bundle.py scripts/tests/kagemusha_production_readiness_test.py python/iroha_python/src/iroha_python/offline_cash.py python/iroha_python/src/iroha_python/kagemusha.py`
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `./gradlew :core-jvm:test --console=plain --tests org.hyperledger.iroha.sdk.offline.OfflineCashLifecycleTest --tests org.hyperledger.iroha.sdk.client.OfflineToriiClientReadinessTest --tests org.hyperledger.iroha.sdk.client.OfflineToriiClientV2ReadinessTest --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendProverTest --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest`
+  - `./gradlew :core-jvm:test --console=plain --tests org.hyperledger.iroha.sdk.client.OfflineToriiClientReadinessTest --tests org.hyperledger.iroha.sdk.client.OfflineToriiClientV2ReadinessTest`
+    after the canonical-only readiness cleanup
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew test`
+    from `java/iroha_android`
+  - `swift test --filter OfflineCashLifecycleTests`
+  - `swift test --filter KagemushaRecursiveSpendProverTests`
+
+## 2026-06-11 Kagemusha SDK native bridge ABI naming validation
+
+- Updated the SDK parity guard and JavaScript parity meta-test to pin the
+  current `requiredNativeBridgeAbiVersion` / `REQUIRED_NATIVE_BRIDGE_ABI_VERSION`
+  naming. The later canonical-only cleanup removed the earlier Android Java
+  ABI-7 compatibility alias binding.
+- Revalidated the non-C# SDK lanes after the native bridge ABI naming drift:
+  Swift parsing, JavaScript focused tests, Python native extension tests, and
+  Kotlin/JVM plus Android Java harness checks all pass. The C# source remains a
+  Windows-machine validation follow-up.
+- Validation passed:
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "recursive Kagemusha ABI-7 compact verifier surface stays in parity|recursive Kagemusha ABI-6 availability probes require transition-profile, boundary, and lineage-witness helpers|recursive Kagemusha SDK parity negative controls fail when drift is undetected"`
+    (`39` tests)
+  - `bash ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `bash ci/check_kagemusha_recursive_spend_js_sdk.sh`
+    (`216` tests, `39` pass, `177` skipped)
+  - `bash ci/check_kagemusha_recursive_spend_python_sdk.sh`
+    (`837` tests)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home bash ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+
+## 2026-06-11 Kagemusha Android harness canonicalization
+
+- Hardened the signed-slot assembler and production slot scanner so preserved
+  `attestation/harness-result.json` strings are accepted only in their exact
+  canonical form. Slot aliases cannot carry surrounding whitespace,
+  StrongBox/KeyMint level labels must already match the accepted labels, and
+  harness `challenge_hex` must be lowercase hexadecimal without whitespace.
+  This keeps raw pulls, signed-slot assembly, the attestation report renderer,
+  and production scanning aligned on one fail-closed harness policy.
+- Replaced the scanner's slot-tree traversal with a direct `os.scandir` walker
+  that records each no-follow directory entry and reports traversal failures as
+  `slot directory could not be listed`, without depending on `Path.rglob()` or
+  `Path.is_dir()` behavior.
+- Tightened explicit scanner `--slot` selection so supplied slot IDs must
+  already be exact safe directory names without whitespace or non-printing
+  control characters; unsafe values are rejected before path join instead of
+  being trimmed or echoed.
+- Tightened discovered scanner slot-name handling so whitespace-bearing and
+  control-character-bearing slot directory names are rejected before metadata
+  traversal, matching explicit `--slot` canonicalization and redacting unsafe
+  labels in diagnostics and summaries.
+- Tightened raw-puller and production telemetry validation so
+  `telemetry/telemetry.json` `slot_id` must exactly match the slot directory
+  name; whitespace-normalized telemetry bindings are rejected before raw-slot
+  assembly or production scanning.
+- Tightened production `slot.json` required string validation so path, digest,
+  and identity fields are rejected if they require surrounding-whitespace
+  trimming or contain non-printing control characters.
+- Tightened signed-evidence string validation so slot-bound values and
+  signature metadata are rejected if they require whitespace trimming or carry
+  non-printing control characters before comparison or verification.
+- Tightened production `attestation/result.json` string validation so slot
+  bindings, status values, identity digests, and StrongBox labels are exact and
+  cannot rely on trimming or case normalization.
+- Tightened production `attestation/report.json` string validation so verifier
+  status, verifier labels, and slot-bound identity fields follow the same exact
+  no-trim/no-case-normalization policy.
+- Tightened preserved `attestation/harness-result.json` string validation so
+  non-printing control characters are rejected before raw-slot assembly or
+  production scanning trusts aliases, StrongBox labels, or challenge text.
+- Wired source markers, the PR workflow, and production-readiness negative
+  controls for the scanner and slot-assembler harness canonicalization gates.
+- Validation passed:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/kagemusha_android_device_lab_slot.py scripts/kagemusha_android_attestation_report.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/kagemusha_pull_android_device_lab_raw_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py && /var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/check_android_device_lab_slot_test.py -k 'explicit_unsafe_slot_id_rejected_before_path_join or explicit_slot_id_rejects_surrounding_whitespace_before_path_join or explicit_slot_id_rejects_newline_before_path_join or explicit_slot_id_rejects_internal_whitespace_before_path_join or explicit_slot_id_rejects_control_character_before_path_join or explicit_secret_looking_slot_id_is_not_echoed or discovered_secret_looking_slot_directory_is_not_echoed or discovered_whitespace_slot_directory_is_rejected_before_metadata or discovered_control_slot_directory_is_rejected_without_echo or scan_slot_rejects_control_slot_directory_before_metadata or scan_slot_rejects_newline_slot_directory_before_metadata'`
+    (`11 passed, 519 deselected`)
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py && /var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/check_android_device_lab_slot_test.py -k 'raw_puller_rejects_telemetry_slot_mismatch or raw_puller_rejects_whitespace_normalized_telemetry_slot or production_metadata_rejects_telemetry_slot_mismatch or production_metadata_rejects_whitespace_normalized_telemetry_slot or production_metadata_rejects_failed_status_ndjson'`
+    (`5 passed, 525 deselected`)
+  - `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/check_android_device_lab_slot_test.py -k 'production_metadata_rejects_unsafe_signed_evidence_path or production_metadata_rejects_whitespace_normalized_signed_evidence_path or production_metadata_rejects_control_signed_evidence_path or production_metadata_rejects_whitespace_normalized_signed_evidence_digest or production_metadata_rejects_signed_evidence_artifact_outside_evidence or production_metadata_rejects_noncanonical_signed_evidence_filename'`
+    (`6 passed, 524 deselected`)
+  - `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/check_android_device_lab_slot_test.py -k 'production_metadata_rejects_signed_evidence_slot_mismatch or production_metadata_rejects_whitespace_normalized_signed_evidence_slot_field or production_metadata_rejects_control_signed_evidence_slot_field or production_metadata_rejects_whitespace_normalized_signed_evidence_algorithm or production_metadata_rejects_signed_evidence_payload_hash_drift or production_metadata_rejects_signed_evidence_signature_drift'`
+    (`6 passed, 524 deselected`)
+  - `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/check_android_device_lab_slot_test.py -k 'production_metadata_rejects_noncanonical_signed_evidence_timestamp or production_metadata_rejects_whitespace_normalized_signed_evidence_slot_field or production_metadata_rejects_control_signed_evidence_slot_field or production_metadata_rejects_whitespace_normalized_signed_evidence_algorithm'`
+    (`4 passed, 526 deselected, 2 subtests passed`)
+  - `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/check_android_device_lab_slot_test.py -k 'production_metadata_rejects_attestation_result_challenge_mismatch or production_metadata_rejects_attestation_result_chain_digest_mismatch or production_metadata_rejects_attestation_slot_alias_mismatch or production_metadata_rejects_whitespace_normalized_attestation_slot_alias or production_metadata_rejects_noncanonical_attestation_status or production_metadata_rejects_attestation_result_without_strongbox or production_metadata_rejects_whitespace_normalized_attestation_strongbox_level'`
+    (`7 passed, 526 deselected`)
+  - `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/check_android_device_lab_slot_test.py -k 'production_metadata_rejects_attestation_report_digest_mismatch or production_metadata_rejects_whitespace_normalized_attestation_report_binding or production_metadata_rejects_attestation_report_without_strongbox or production_metadata_rejects_whitespace_normalized_attestation_report_strongbox or production_metadata_rejects_attestation_report_unexpected_fields or production_metadata_rejects_attestation_report_weak_verifier_status or production_metadata_rejects_noncanonical_attestation_report_status'`
+    (`7 passed, 529 deselected`)
+  - `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/check_android_device_lab_slot_test.py -k 'attestation_report_writer or slot_assembler_rejects_noncanonical_harness_strings or scan_slot_rejects_noncanonical_attestation_harness_strings or android_raw_puller_rejects_noncanonical_harness_strings'`
+    (`18 passed, 496 deselected, 10 subtests passed`)
+  - `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/check_android_device_lab_slot_test.py -k 'kagemusha_android_raw_puller_rejects_noncanonical_harness_strings or kagemusha_android_raw_puller_rejects_control_harness_strings or scan_slot_rejects_noncanonical_attestation_harness_strings or scan_slot_rejects_control_attestation_harness_strings or kagemusha_android_raw_puller_rejects_harness_chain_length_mismatch or scan_slot_rejects_attestation_harness_challenge_mismatch'`
+    (`6 passed, 532 deselected`)
+  - `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/check_android_device_lab_slot_test.py`
+    (`538 passed, 12 subtests passed`)
+  - `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/kagemusha_production_readiness_test.py`
+    (`564 passed, 14 subtests passed`)
+  - `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py`
+    (`1102 passed, 26 subtests passed`)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-scanner-harness-canonical`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-harness-canonical`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-attestation-report-challenge-canonical`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-attestation-report-chain-path-canonical`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-attestation-report-slot-id-canonical`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-attestation-report-identity-canonical`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-attestation-report-strongbox-level-canonical`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-attestation-report-chain-length-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-harness-canonical`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-id-safety`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-name-safety`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `git diff --check -- .github/workflows/pr_kagemusha_payload_bench.yml ci/check_kagemusha_production_readiness.sh docs/source/offline_kagemusha.md docs/source/sdk/android/readiness/android_strongbox_device_matrix.md roadmap.md status.md scripts/check_android_device_lab_slot.py scripts/kagemusha_android_attestation_report.py scripts/kagemusha_android_device_lab_slot.py scripts/kagemusha_pull_android_device_lab_raw_slot.py scripts/kagemusha_finalize_lineage_proof_staged_run.py scripts/kagemusha_finalize_recursive_compact_key_staged_run.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_recursive_compact_key_evidence.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 scripts/check_android_device_lab_slot.py --root target/kagemusha-android-device-lab-physical-19181FDF600918-20260611-utc --require-kagemusha-production-evidence --trusted-signer-public-key target/kagemusha-android-lab-keys/lab-public.pem --json-out target/kagemusha-readiness-work/android-slot-check.json`
+    (`google-pixel-6-6a-physical-1781077370103: ok`)
+  - `python3 scripts/kagemusha_production_readiness.py --repo-root . --device-lab-root target/kagemusha-android-device-lab-physical-19181FDF600918-20260611-utc --trusted-signer-public-key target/kagemusha-android-lab-keys/lab-public.pem --summary-out dist/kagemusha-production-readiness.json`
+    (expected blocked summary: missing Reserved-lineage proof evidence, missing
+    ABI-7 recursive compact-key evidence, and incomplete Android standard
+    matrix)
+  - `python3 scripts/kagemusha_release_bundle.py --repo-root . --bundle-root . --device-lab-root target/kagemusha-android-device-lab-physical-19181FDF600918-20260611-utc --trusted-signer-public-key target/kagemusha-android-lab-keys/lab-public.pem --out target/kagemusha-readiness-work/kagemusha-production-release-bundle.physical-pixel6-utc.json`
+    (expected blockers remain: readiness summary not ready, missing
+    Reserved-lineage proof evidence, missing ABI-7 compact-key evidence, and
+    incomplete Android standard matrix)
+
+## 2026-06-11 Kagemusha evidence validator temp-file fallback
+
+- Hardened the Reserved-lineage proof and ABI-7 recursive compact evidence
+  document validators so temporary validation-file write failures are still
+  cleaned up when a wrapped temp-file object does not expose `fileno()`. The
+  normal production path continues to identity-bind cleanup through `fstat()`;
+  wrapped temp files fall back to regular-file `lstat()` identity before
+  returning the structured write-failure blocker.
+- Fixed an order-dependent scripts-test leak where direct monkeypatches on the
+  concrete `Path` class could shadow inherited `Path` methods after a test
+  restored them by assignment. The Android device-lab and Kagemusha readiness
+  test classes now clear those concrete method shadows before and after each
+  test, so later metadata-failure tests patch the intended filesystem branch.
+- Current artifact-generation state: the ABI-7 recursive compact key artifact
+  job and the Reserved-lineage init key-artifact job are still active and were
+  not interrupted. A read-only check found them still CPU-bound after roughly
+  13h50m and 14h27m respectively; the checked recursive-compact artifact
+  directory remains empty, and the lineage staged artifact directory still only
+  contains temporary log files, so neither job has published release files yet.
+- Audited the non-C# Kagemusha accumulator/SDK guard surface while the artifact
+  jobs run. The data-model accumulator tests already cover append-boundary
+  digest blanking, boundary-free public-input hashes, digest-only append
+  rejection, self-consistent forged boundaries, and semantic-vs-lineage
+  public-input mismatches, so this pass focused on proving the SDK guard rails
+  that keep accumulator digests native-owned across Swift, Kotlin/JVM, Android
+  Java, Python, JavaScript, and package declarations.
+- Validation passed:
+  - `PYTHONPYCACHEPREFIX=/tmp/iroha-pycache-codex PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_recursive_compact_key_evidence.py scripts/tests/kagemusha_production_readiness_test.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `PYTHONPYCACHEPREFIX=/tmp/iroha-pycache-codex PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test scripts.tests.check_android_device_lab_slot_test`
+    (`1076` tests)
+  - `PYTHONPYCACHEPREFIX=/tmp/iroha-pycache-codex PYTHONDONTWRITEBYTECODE=1 /var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-kagemusha-python-sdk-venv/bin/python -m unittest scripts.tests.check_android_device_lab_slot_test scripts.tests.kagemusha_production_readiness_test`
+    (`1078` tests)
+  - `PYTHONPYCACHEPREFIX=/tmp/iroha-pycache-codex PYTHONDONTWRITEBYTECODE=1 /var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-kagemusha-python-sdk-venv/bin/python -m unittest discover -s scripts/tests -p '*test.py'`
+    (`1118` tests)
+  - `bash -n ci/check_kagemusha_production_readiness.sh scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_recursive_compact_key_evidence.py scripts/kagemusha_finalize_lineage_proof_staged_run.py scripts/kagemusha_finalize_recursive_compact_key_staged_run.py scripts/kagemusha_android_attestation_report.py scripts/kagemusha_android_device_lab_slot.py scripts/kagemusha_pull_android_device_lab_raw_slot.py`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+    (rerun after the SDK parity meta-test audit)
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-proof-chain-accumulator-input`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-accumulator-digest-inputs`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-accumulator-boundary-digest-inputs`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-readme-proof-chain-accumulator`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-offline-doc-native-owned-accumulator-boundary`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-accumulator-digest-declarations`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-accumulator-digest-denylist`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-terminal-accumulator-digest-denylist`
+  - `bash ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `bash ci/check_kagemusha_recursive_spend_js_sdk.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected"`
+    (`39` tests)
+  - `git diff --check`
+
+## 2026-06-11 Kagemusha attestation report input canonicalization
+
+- Hardened the Android attestation verifier report renderer so
+  `attestation/harness-result.json` `challenge_hex` and
+  `--expected-challenge-hex` must already be lowercase hexadecimal without
+  whitespace; StrongBox/KeyMint level labels must be exact accepted labels;
+  PEM certificate-chain length must match the attestation harness `chain_length`;
+  slot id, device fingerprint, OS build, app package, and verifier arguments
+  must be exact whitespace-free strings; and
+  `--attestation-certificate-chain-path` must be an exact whitespace-free
+  slot-relative path. The renderer now rejects whitespace-normalized or
+  uppercase challenge input, normalized StrongBox/KeyMint level labels,
+  PEM chain-length mismatches, whitespace-normalized identity input, and
+  whitespace-normalized chain-path input before hashing it or writing
+  `attestation/report.json`,
+  matching the raw-puller and signed-slot scanner canonical challenge policy.
+- Wired source markers, the PR workflow, and production-readiness negative
+  controls for the standalone renderer's canonical challenge, StrongBox level,
+  chain-length, identity, and chain-path gates.
+- Validation passed:
+  - `python3 -m py_compile scripts/kagemusha_android_attestation_report.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/check_android_device_lab_slot_test.py -k 'attestation_report_writer'`
+    (`15 passed, 497 deselected, 10 subtests passed`)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-attestation-report-challenge-canonical`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-attestation-report-chain-path-canonical`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-attestation-report-slot-id-canonical`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-attestation-report-identity-canonical`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-attestation-report-strongbox-level-canonical`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-attestation-report-chain-length-binding`
+  - `python3 scripts/check_android_device_lab_slot.py --root target/kagemusha-android-device-lab-physical-19181FDF600918-20260611-utc --require-kagemusha-production-evidence --trusted-signer-public-key target/kagemusha-android-lab-keys/lab-public.pem --json-out target/kagemusha-readiness-work/android-slot-check.json`
+    (`google-pixel-6-6a-physical-1781077370103: ok`)
+  - `python3 scripts/kagemusha_production_readiness.py --repo-root . --device-lab-root target/kagemusha-android-device-lab-physical-19181FDF600918-20260611-utc --trusted-signer-public-key target/kagemusha-android-lab-keys/lab-public.pem --summary-out dist/kagemusha-production-readiness.json`
+    (expected blocked summary: missing Reserved-lineage proof evidence, missing
+    ABI-7 recursive compact-key evidence, and incomplete Android standard
+    matrix)
+  - `python3 scripts/kagemusha_release_bundle.py --repo-root . --bundle-root . --device-lab-root target/kagemusha-android-device-lab-physical-19181FDF600918-20260611-utc --trusted-signer-public-key target/kagemusha-android-lab-keys/lab-public.pem --out target/kagemusha-readiness-work/kagemusha-production-release-bundle.physical-pixel6-utc.json`
+    (expected blockers remain: readiness summary not ready, missing
+    Reserved-lineage proof evidence, missing ABI-7 compact-key evidence, and
+    incomplete Android standard matrix)
+
+## 2026-06-11 Kagemusha Android staging cleanup reporting
+
+- Hardened Android device-lab signed-slot assembly and raw-slot pulling so
+  temporary staging directory cleanup failures are returned as structured
+  errors instead of being swallowed by `ignore_errors=True`. Both paths still
+  preserve identity-swapped staging directories rather than removing the wrong
+  path; successful raw pulls now block `latest-slot.txt` and summary publication
+  if staging cleanup fails. Raw partial-install cleanup now also reports
+  removal failures with the original install error.
+- Wired source/test markers, workflow entries, and production-readiness
+  negative controls for raw-puller and slot-assembler temp cleanup reporting.
+- Validation passed:
+  - `python3 -m py_compile scripts/kagemusha_android_device_lab_slot.py scripts/kagemusha_pull_android_device_lab_raw_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/check_android_device_lab_slot_test.py -k 'slot_assembler_cleanup_removes_original_temp_parent or slot_assembler_cleanup_reports_temp_parent_failure or slot_assembler_cleanup_preserves_swapped_temp_parent or slot_assembler_reports_temp_parent_cleanup_failure or raw_puller_temp_cleanup_removes_original_parent or raw_puller_temp_cleanup_reports_failure or raw_puller_temp_cleanup_preserves_swapped_parent or raw_puller_reports_temp_cleanup_failure'`
+    (`8 passed, 496 deselected`)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-temp-cleanup-report`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-temp-cleanup-report`
+  - `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/check_android_device_lab_slot_test.py -k 'raw_puller_install_cleanup_preserves_swapped_destination or raw_puller_install_cleanup_uses_parent_dir_fd or raw_puller_install_cleanup_reports_failure or raw_puller_install_syncs_directories_and_cleans_failure or raw_puller_install_rejects_unexpected_top_level_entry'`
+    (`5 passed, 500 deselected`)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-cleanup-report`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-cleanup-dir-fd`
+  - `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py -k 'kagemusha_slot_assembler_json_write or kagemusha_slot_assembler_json_temp_cleanup or kagemusha_slot_assembler_cleanup_preserves_swapped_temp_parent or slot_assembler_cleanup_reports_temp_parent_failure or slot_assembler_reports_temp_parent_cleanup_failure or raw_puller_latest_writer_reports_temp_cleanup_failure or raw_puller_latest_writer_temp_cleanup_rejects_swap or raw_puller_summary_reports_temp_cleanup_failure or raw_puller_summary_temp_cleanup_rejects_swap or raw_puller_temp_cleanup or raw_puller_reports_temp_cleanup_failure or raw_puller_install_cleanup or raw_puller_install_moves_with_directory_fds or write_summary_temp_cleanup or signer_write_json_temp_cleanup or signer_write_json_reports_temp_cleanup or attestation_report_writer_temp_cleanup or write_release_bundle_temp_cleanup or write_release_bundle_reports_temp_cleanup or compact_key_write_evidence_temp_cleanup or compact_key_write_evidence_reports_temp_cleanup or lineage_proof_write_evidence_temp_cleanup or lineage_proof_write_evidence_reports_temp_cleanup or evidence_document_validator_reports_temp_cleanup_failure_after_write_failure or evidence_document_validator_rejects_temp_cleanup_failure or evidence_document_validator_temp_cleanup_rejects_swap or staged_finalizer_cleans_partial_publish_on_copy_error or staged_finalizer_reports_partial_publish_cleanup_failure or staged_finalizer_reports_temp_parent_cleanup_failure or staged_finalizer_unlink_preserves_swapped_published_file or staged_finalizer_verifies_published_stage_bytes or staged_runner_resume_cleanup_preserves_swapped_output or staged_runner_temp_cleanup_preserves_swapped_output or staged_runner_atomic_write_verifies_installed_bytes or staged_runner_log_install_rejects_parent_identity_swap or staged_runner_removes_temp_log_on_spawn_failure'`
+    (`60 passed, 1009 deselected`)
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/kagemusha_android_attestation_report.py scripts/kagemusha_android_device_lab_slot.py scripts/kagemusha_production_readiness.py scripts/kagemusha_release_bundle.py scripts/kagemusha_pull_android_device_lab_raw_slot.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_recursive_compact_key_evidence.py scripts/kagemusha_run_lineage_proof_staged.py scripts/kagemusha_run_recursive_compact_keygen_staged.py scripts/kagemusha_finalize_lineage_proof_staged_run.py scripts/kagemusha_finalize_recursive_compact_key_staged_run.py scripts/tests/kagemusha_production_readiness_test.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `git diff --check -- .github/workflows/pr_kagemusha_payload_bench.yml ci/check_kagemusha_production_readiness.sh docs/source/offline_kagemusha.md roadmap.md status.md scripts/kagemusha_android_device_lab_slot.py scripts/kagemusha_pull_android_device_lab_raw_slot.py scripts/tests/check_android_device_lab_slot_test.py scripts/kagemusha_finalize_lineage_proof_staged_run.py scripts/kagemusha_finalize_recursive_compact_key_staged_run.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 scripts/kagemusha_production_readiness.py --repo-root . --device-lab-root target/kagemusha-android-device-lab-physical-19181FDF600918-20260611-utc --trusted-signer-public-key target/kagemusha-android-lab-keys/lab-public.pem --summary-out dist/kagemusha-production-readiness.json`
+    (expected blocked summary: missing Reserved-lineage proof evidence, missing
+    ABI-7 recursive compact-key evidence, and incomplete Android standard
+    matrix)
+  - `python3 scripts/kagemusha_release_bundle.py --repo-root . --bundle-root . --device-lab-root target/kagemusha-android-device-lab-physical-19181FDF600918-20260611-utc --trusted-signer-public-key target/kagemusha-android-lab-keys/lab-public.pem --out /tmp/kagemusha-production-release-bundle.physical-pixel6-utc.json`
+    (expected blockers remain: readiness summary not ready, missing
+    Reserved-lineage proof evidence, missing ABI-7 compact-key evidence, and
+    incomplete Android standard matrix)
+
+## 2026-06-11 Kagemusha staged-finalizer rollback cleanup reporting
+
+- Hardened the Reserved-lineage proof and ABI-7 recursive compact staged
+  finalizers so partial-publish rollback cleanup failures are returned with the
+  original publish failure instead of being silently swallowed. Rollback cleanup
+  remains identity-bound, so swapped files are still preserved. Finalizer
+  temporary staging cleanup now also reports removal failures and can block
+  success while still preserving temp directories whose identity changed before
+  cleanup.
+- Wired source/test markers, workflow entries, and production-readiness
+  negative controls for both finalizers' rollback cleanup reporting.
+- Validation passed:
+  - `python3 -m py_compile scripts/kagemusha_finalize_lineage_proof_staged_run.py scripts/kagemusha_finalize_recursive_compact_key_staged_run.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/kagemusha_production_readiness_test.py -k 'compact_key_staged_finalizer_reports_partial_publish_cleanup_failure or lineage_proof_staged_finalizer_reports_partial_publish_cleanup_failure or compact_key_staged_finalizer_unlink_preserves_swapped_published_file or lineage_proof_staged_finalizer_unlink_preserves_swapped_published_file'`
+    (`4 passed, 558 deselected`)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-publish-rollback-cleanup-report`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-publish-rollback-cleanup-report`
+  - `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/kagemusha_production_readiness_test.py -k 'staged_finalizer'`
+    (`51 passed, 513 deselected`)
+  - `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/kagemusha_production_readiness_test.py -k 'compact_key_staged_finalizer_reports_temp_parent_cleanup_failure or lineage_proof_staged_finalizer_reports_temp_parent_cleanup_failure or compact_key_staged_finalizer_cleanup_preserves_swapped_temp_parent or lineage_proof_staged_finalizer_cleanup_preserves_swapped_temp_parent'`
+    (`4 passed, 560 deselected`)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-temp-cleanup-report`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-temp-cleanup-report`
+  - `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py -k 'kagemusha_slot_assembler_json_write or kagemusha_slot_assembler_json_temp_cleanup or kagemusha_slot_assembler_cleanup_preserves_swapped_temp_parent or raw_puller_latest_writer_reports_temp_cleanup_failure or raw_puller_latest_writer_temp_cleanup_rejects_swap or raw_puller_summary_reports_temp_cleanup_failure or raw_puller_summary_temp_cleanup_rejects_swap or raw_puller_temp_cleanup or raw_puller_install_cleanup or raw_puller_install_moves_with_directory_fds or write_summary_temp_cleanup or signer_write_json_temp_cleanup or signer_write_json_reports_temp_cleanup or attestation_report_writer_temp_cleanup or write_release_bundle_temp_cleanup or write_release_bundle_reports_temp_cleanup or compact_key_write_evidence_temp_cleanup or compact_key_write_evidence_reports_temp_cleanup or lineage_proof_write_evidence_temp_cleanup or lineage_proof_write_evidence_reports_temp_cleanup or evidence_document_validator_reports_temp_cleanup_failure_after_write_failure or evidence_document_validator_rejects_temp_cleanup_failure or evidence_document_validator_temp_cleanup_rejects_swap or staged_finalizer_cleans_partial_publish_on_copy_error or staged_finalizer_reports_partial_publish_cleanup_failure or staged_finalizer_reports_temp_parent_cleanup_failure or staged_finalizer_unlink_preserves_swapped_published_file or staged_finalizer_verifies_published_stage_bytes or staged_runner_resume_cleanup_preserves_swapped_output or staged_runner_temp_cleanup_preserves_swapped_output or staged_runner_atomic_write_verifies_installed_bytes or staged_runner_log_install_rejects_parent_identity_swap or staged_runner_removes_temp_log_on_spawn_failure'`
+    (`55 passed, 1009 deselected`)
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/kagemusha_android_attestation_report.py scripts/kagemusha_android_device_lab_slot.py scripts/kagemusha_production_readiness.py scripts/kagemusha_release_bundle.py scripts/kagemusha_pull_android_device_lab_raw_slot.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_recursive_compact_key_evidence.py scripts/kagemusha_run_lineage_proof_staged.py scripts/kagemusha_run_recursive_compact_keygen_staged.py scripts/kagemusha_finalize_lineage_proof_staged_run.py scripts/kagemusha_finalize_recursive_compact_key_staged_run.py scripts/tests/kagemusha_production_readiness_test.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `git diff --check -- .github/workflows/pr_kagemusha_payload_bench.yml ci/check_kagemusha_production_readiness.sh docs/source/offline_kagemusha.md roadmap.md status.md scripts/kagemusha_finalize_lineage_proof_staged_run.py scripts/kagemusha_finalize_recursive_compact_key_staged_run.py scripts/tests/kagemusha_production_readiness_test.py scripts/kagemusha_pull_android_device_lab_raw_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 scripts/kagemusha_production_readiness.py --repo-root . --device-lab-root target/kagemusha-android-device-lab-physical-19181FDF600918-20260611-utc --trusted-signer-public-key target/kagemusha-android-lab-keys/lab-public.pem --summary-out dist/kagemusha-production-readiness.json`
+    (expected blocked summary: missing Reserved-lineage proof evidence, missing
+    ABI-7 recursive compact-key evidence, and incomplete Android standard
+    matrix)
+  - `python3 scripts/kagemusha_release_bundle.py --repo-root . --bundle-root . --device-lab-root target/kagemusha-android-device-lab-physical-19181FDF600918-20260611-utc --trusted-signer-public-key target/kagemusha-android-lab-keys/lab-public.pem --out /tmp/kagemusha-production-release-bundle.physical-pixel6-utc.json`
+    (expected blockers remain: readiness summary not ready, missing
+    Reserved-lineage proof evidence, missing ABI-7 compact-key evidence, and
+    incomplete Android standard matrix)
+
+## 2026-06-11 Kagemusha Android raw-puller temp cleanup identity
+
+- Hardened the Android raw puller's host `latest-slot.txt` and raw-pull
+  summary writers so failed writes report temp cleanup failures and cleanup
+  unlinks only a temp output whose parent-fd stat still matches the identity
+  captured from the original open temp file.
+- Wired the source/test markers, workflow invocation list, and production
+  readiness negative controls for both latest-slot and summary temp cleanup
+  identity regressions.
+- Validation passed:
+  - `python3 -m py_compile scripts/kagemusha_pull_android_device_lab_raw_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/check_android_device_lab_slot_test.py -k 'raw_puller_latest_writer_reports_temp_cleanup_failure or raw_puller_latest_writer_temp_cleanup_rejects_swap or raw_puller_summary_reports_temp_cleanup_failure or raw_puller_summary_temp_cleanup_rejects_swap'`
+    (`4 passed, 496 deselected`)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-latest-write-temp-cleanup-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-temp-cleanup-identity`
+  - `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py -k 'kagemusha_slot_assembler_json_write or kagemusha_slot_assembler_json_temp_cleanup or kagemusha_slot_assembler_cleanup_preserves_swapped_temp_parent or raw_puller_latest_writer_reports_temp_cleanup_failure or raw_puller_latest_writer_temp_cleanup_rejects_swap or raw_puller_summary_reports_temp_cleanup_failure or raw_puller_summary_temp_cleanup_rejects_swap or raw_puller_temp_cleanup or raw_puller_install_cleanup or raw_puller_install_moves_with_directory_fds or write_summary_temp_cleanup or signer_write_json_temp_cleanup or signer_write_json_reports_temp_cleanup or attestation_report_writer_temp_cleanup or write_release_bundle_temp_cleanup or write_release_bundle_reports_temp_cleanup or compact_key_write_evidence_temp_cleanup or compact_key_write_evidence_reports_temp_cleanup or lineage_proof_write_evidence_temp_cleanup or lineage_proof_write_evidence_reports_temp_cleanup or evidence_document_validator_reports_temp_cleanup_failure_after_write_failure or evidence_document_validator_rejects_temp_cleanup_failure or evidence_document_validator_temp_cleanup_rejects_swap or staged_finalizer_cleans_partial_publish_on_copy_error or staged_finalizer_unlink_preserves_swapped_published_file or staged_finalizer_verifies_published_stage_bytes or staged_runner_resume_cleanup_preserves_swapped_output or staged_runner_temp_cleanup_preserves_swapped_output or staged_runner_atomic_write_verifies_installed_bytes or staged_runner_log_install_rejects_parent_identity_swap or staged_runner_removes_temp_log_on_spawn_failure'`
+    (`51 passed, 1009 deselected`)
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/kagemusha_android_attestation_report.py scripts/kagemusha_android_device_lab_slot.py scripts/kagemusha_production_readiness.py scripts/kagemusha_release_bundle.py scripts/kagemusha_pull_android_device_lab_raw_slot.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_recursive_compact_key_evidence.py scripts/kagemusha_run_lineage_proof_staged.py scripts/kagemusha_run_recursive_compact_keygen_staged.py scripts/kagemusha_finalize_lineage_proof_staged_run.py scripts/kagemusha_finalize_recursive_compact_key_staged_run.py scripts/tests/kagemusha_production_readiness_test.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `git diff --check -- .github/workflows/pr_kagemusha_payload_bench.yml ci/check_kagemusha_production_readiness.sh docs/source/offline_kagemusha.md roadmap.md status.md scripts/kagemusha_pull_android_device_lab_raw_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 scripts/kagemusha_production_readiness.py --repo-root . --device-lab-root target/kagemusha-android-device-lab-physical-19181FDF600918-20260611-utc --trusted-signer-public-key target/kagemusha-android-lab-keys/lab-public.pem --summary-out dist/kagemusha-production-readiness.json`
+    (expected blocked summary: missing Reserved-lineage proof evidence, missing
+    ABI-7 recursive compact-key evidence, and incomplete Android standard
+    matrix)
+  - `python3 scripts/kagemusha_release_bundle.py --repo-root . --bundle-root . --device-lab-root target/kagemusha-android-device-lab-physical-19181FDF600918-20260611-utc --trusted-signer-public-key target/kagemusha-android-lab-keys/lab-public.pem --out /tmp/kagemusha-production-release-bundle.physical-pixel6-utc.json`
+    (expected blockers remain: readiness summary not ready, missing
+    Reserved-lineage proof evidence, missing ABI-7 compact-key evidence, and
+    incomplete Android standard matrix)
+
+## 2026-06-11 Kagemusha staged execution-report log digests
+
+- Added SHA-256 child-log binding to the staged execution reports used by the
+  Reserved-lineage init/append key-artifact phases and ABI-7 recursive compact
+  keygen. Resume now rejects execution reports whose `log_sha256` or
+  `generator_log_sha256` no longer matches the staged child log, instead of
+  trusting byte counts alone.
+- Pinned the behavior in the production-readiness guard, workflow negative
+  controls, roadmap, and offline Kagemusha docs.
+- Validation passed:
+  - `PYTHONPYCACHEPREFIX=/tmp/iroha-pycache-codex PYTHONDONTWRITEBYTECODE=1 /var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/kagemusha_production_readiness_test.py -k 'compact_key_staged_runner or lineage_proof_staged_runner'` (`32 passed, 504 deselected`)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-execution-log-sha256`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-execution-log-sha256`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `git diff --check`
+
+## 2026-06-11 Non-C# VeRange/Jindo SDK catalog quarantine
+
+- Kept VeRange as a component/dev-fixture SDK surface across JavaScript,
+  Python, and native Rust catalog mirrors: public/current entrypoints are
+  `buildRangeCommitment`, `buildVeRangeDevProofFixture`,
+  `buildVeRangeProofEnvelope`, and `verifyVeRangeProofLocally`; the production
+  helper remains planned as `buildVeRangeProofV1`.
+- Removed the public JS/Python package-root VeRange proof/verifier exports and
+  capability keys while keeping the private Python prototype helpers covered by
+  tests. C# public helper cleanup remains deferred to the Windows-machine TODO
+  in `roadmap.md`.
+- Hardened the Kagemusha staged keygen/proof runners so child process output is
+  written directly to the temp log file instead of a supervisor pipe, with
+  readiness negative controls covering compact and lineage staged runners.
+- Validation passed:
+  - `PYTHONPYCACHEPREFIX=/tmp/iroha-pycache-codex PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/Users/mtakemiya/dev/iroha/python/iroha_python/src:/Users/mtakemiya/dev/iroha/python/norito_py/src:/Users/mtakemiya/dev/iroha/python /var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q python/iroha_python/tests/jindo_test.py python/iroha_python/tests/verange_test.py python/iroha_python/tests/privacy_catalog_test.py` (`911 passed`)
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js` (`20 passed`)
+  - `node --test javascript/iroha_js/test/instructionBuilders.test.js` (`147 passed`)
+  - `node --test javascript/iroha_js/test/package_dist.test.js` (`80 passed`)
+  - `node --test --test-name-pattern "SDK privacy native bridges expose generic archive operations|native privacy FFI hosts reject proof/witness" javascript/iroha_js/test/privacyFfiContractParity.test.js` (`2 passed`)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `PYTHONPYCACHEPREFIX=/tmp/iroha-pycache-codex PYTHONDONTWRITEBYTECODE=1 /var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/kagemusha_production_readiness_test.py -k 'writes_child_output_directly_to_log_file or removes_temp_log_on_spawn_failure'` (`4 passed, 530 deselected`)
+  - `git diff --check`
+
+## 2026-06-11 Kagemusha production-width keygen memory reduction
+
+- Added lower-memory key-generation-only verifier-slice shape circuits for
+  Kagemusha Reserved-lineage one-hop init and append Halo2 IPA key derivation.
+  The production proving and verification circuits remain unchanged; the shape
+  wrappers reuse the same configuration and fixed-column/selector layout while
+  streaming small default sub-witnesses during VK/PK generation.
+- Switched the recursive spend lineage init/append verifier-key, proving-key,
+  and cached proving-key derivation paths to the keygen-shape wrappers so
+  production-width LEN=128 key-artifact generation no longer materializes the
+  full recursive verifier witness tree during keygen.
+- Added expensive ignored equivalence tests that compare processed verifier-key
+  bytes from the full one-hop/append circuits against the keygen-shape circuits.
+  These are ignored by default because the focused check takes about an hour on
+  this host, but they were run explicitly before being marked ignored.
+- Rebuilt the release `iroha` CLI with the new shape path and restarted the
+  staged Reserved-lineage LEN=128 init key-artifact run. As of the latest
+  read-only process check, the replacement init keygen is still CPU-bound and
+  has not produced final staged artifacts yet. The external ABI-7 recursive
+  compact keygen retry is also still running, so Android physical-device
+  evidence collection is deferred to avoid adding load while both crypto jobs
+  are active.
+- Hardened the staged Reserved-lineage and ABI-7 recursive compact runners so
+  long-running child commands write stdout/stderr directly to the identity-bound
+  temporary log file instead of through a supervisor-owned pipe. This preserves
+  the fail-closed staged-output contract while reducing the chance that an
+  interrupted supervisor leaves a crypto child with a broken output pipe. The
+  production-readiness guard now also forbids the old staged-runner
+  `subprocess.PIPE`, `process.stdout.read`, and `sys.stdout.buffer` patterns so
+  Python-side output mirroring cannot silently return.
+- Revalidated the existing Pixel 6 / Android 16 signed physical-device slot
+  with the pinned lab public key. The attached Pixel 6 also exported the
+  current raw device-lab slot into
+  `target/kagemusha-android-raw/google-pixel-6-6a-physical-1781077370103`;
+  the raw handoff, wallet-integrity, telemetry, queue, runtime log, StrongBox
+  harness, and certificate-chain artifacts byte-match the signed slot, and the
+  attestation result fields match after JSON formatting is ignored. The full
+  standard Android matrix is still incomplete: Pixel 7, Pixel 8, Pixel
+  Fold/Tablet, Samsung Galaxy S23, and Samsung Galaxy S24 production-evidence
+  slots are missing.
+- The Android signed-slot assembler now publishes completed staged slots
+  through directory file descriptors pinned to the captured device-lab root,
+  temp-parent, and staged-slot identities and fsyncs the root descriptor, so
+  path swaps before final publish fail closed. It also syncs copied-artifact
+  parents and reads staged copies back through opened-file identity bindings
+  before manifesting. Its normalized attestation and slot metadata JSON writes
+  now use fsynced temporary files, identity-bound parent fsync, and opened-file
+  readback before manifesting. Temporary staging cleanup now revalidates the
+  captured temp-parent identity before removing anything and reports removal
+  failures as structured blockers.
+- Tightened the Android raw-pull evidence chain so the tarred
+  `latest-slot.txt` and the initial `run-as cat` latest-slot query must both be
+  exactly the selected slot id plus a trailing newline; whitespace-normalized
+  matches are rejected before raw artifacts can be assembled into signed
+  production evidence. Tar directory entries that collide with extracted files
+  now return structured raw-puller errors instead of tracebacks, top-level raw
+  artifacts move through opened stage/final directory descriptors, temporary
+  extraction cleanup revalidates the captured temp-directory identity before
+  removal, and unreviewed
+  extra files or directories under the raw slot are rejected, and raw
+  `attestation/result.json` must carry both `slot` and `slot_id` matching the
+  selected slot id plus canonical lowercase SHA-256 chain/challenge digests
+  matching the pulled StrongBox certificate chain and challenge bytes. Raw
+  `attestation/result.json` is closed-schema, and the raw
+  `attestation/challenge.hex` file itself must be lowercase hexadecimal with
+  exactly one trailing newline; unexpected result fields, uppercase challenges,
+  whitespace-normalized challenge files, noncanonical raw identity strings,
+  malformed app-signing/policy digests, and downgraded raw StrongBox security
+  levels are rejected before evidence assembly. The puller also validates the
+  required queue, telemetry, D2D handoff, and wallet integrity JSON artifacts as
+  slot-bound strict JSON before assembly; D2D must remain offline-offline with
+  double-spend rejection, and wallet integrity must prove one-use key rotation
+  plus rollback rejection. Raw `telemetry/status.ndjson` is parsed with
+  duplicate-key and non-finite rejection, failure statuses are rejected, status
+  slot bindings must match when present, and `logs/runtime.log` must contain the
+  completion marker while excluding build/test/panic/traceback/fatal failure
+  markers. The raw-pull summary writer now rejects non-finite JSON and
+  oversized payloads before temporary-file creation, then fsyncs the summary
+  bytes, atomically replaces the destination, verifies readback through an
+  opened-file identity binding that rejects symlinks, hardlinks, and path swaps,
+  and fsyncs the identity-bound parent directory. Summary `artifact_sha256`
+  inventory must include every required raw artifact, and each digest is
+  collected through a separate opened-file identity binding that rejects
+  symlinks, hardlinks, and file swaps after raw slot validation. The raw slot
+  installer now rechecks the destination after validation, creates the final
+  slot directory exclusively with owner-only permissions, moves only expected top-level artifact
+  directories, binds the created slot-directory identity through each parent-fd
+  slot-entry stat, move, and slot fsync, binds the output-root identity through
+  the parent fsync, and deletes partial installs through the identity-bound
+  output-root file descriptor only when the destination entry still names the
+  directory created by the puller, reporting cleanup failures with the install
+  error. The raw `latest-slot.txt` writer also fsyncs
+  file bytes, atomically replaces the output, verifies readback through an
+  opened-file identity binding that rejects symlinks, hardlinks, and path
+  swaps, and fsyncs the identity-bound output root. The raw puller's host
+  `latest-slot.txt` and summary writers now also report identity-bound temp
+  cleanup failures and refuse to unlink a temp output whose file identity
+  changed before cleanup. The raw puller also reports temporary extraction
+  directory cleanup failures before publishing host `latest-slot.txt` or a
+  pull summary. The readiness summary and
+  release-bundle writers now also bind failed temporary cleanup and the output
+  parent directory identity before the post-replace fsync, rejecting temp/output
+  parent swaps before readback can publish a summary or manifest. The
+  Reserved-lineage proof evidence helper now applies the same identity-bound
+  temporary cleanup and parent sync before publishing
+  `lineage-proof-evidence.json`, and the ABI-7 compact-key evidence helper does
+  the same before publishing `recursive-compact-key-evidence.json`. The Android
+  device-lab scanner JSON summary writer also identity-binds failed temporary
+  cleanup and output-parent sync before accepting a local `--json-out` summary.
+  The Android attestation report writer and signed-evidence helper now
+  identity-bind failed temporary cleanup and use the same captured-parent
+  identity check before accepting `attestation/report.json`,
+  `evidence/signed-evidence.json`, or rewritten `sha256sum.txt` outputs. The
+  signed-slot assembler now applies the same identity-bound temp cleanup to
+  local slot metadata JSON outputs. The
+  lineage and compact-key staged runners also identity-bind parent fsyncs for
+  their child-log installs, exit markers, elapsed files, and JSON metadata
+  before readback, and now identity-bind resume/replace cleanup plus temporary
+  log/output cleanup before unlinking stale staged paths. The lineage and
+  compact-key evidence helpers now also identity-bind validation scratch-file
+  cleanup under `--artifact-dir`. Both staged finalizers
+  identity-bind the published
+  artifact directory before their final fsync and revalidate temporary staging
+  directory identity before cleanup. Finalizer rollback cleanup now also
+  removes only published files whose current identity still matches the
+  publish-time identity captured immediately after install, and rollback
+  cleanup failures are returned with the original publish failure. Finalizer
+  temporary staging cleanup now reports removal failures and can block success
+  while still preserving temp directories whose identity changed before
+  cleanup.
+- Validation:
+  - `CARGO_BUILD_JOBS=1 cargo test -p iroha_core --lib keygen_shape_matches_full_circuit_verifier_key -- --nocapture`
+    (`2` passed; explicit expensive VK-equivalence run)
+  - `CARGO_BUILD_JOBS=1 cargo test -p iroha_core --lib keygen_shape_matches_full_circuit_verifier_key -- --nocapture`
+    (`0` passed, `2` ignored after marking the expensive tests ignored by
+    default)
+  - `cargo fmt --all`
+  - `CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=/private/tmp/iroha-codex-release-target cargo build --release -p iroha_cli --bin iroha`
+  - `python3 -m py_compile scripts/kagemusha_run_lineage_proof_staged.py scripts/kagemusha_run_recursive_compact_keygen_staged.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m py_compile scripts/kagemusha_lineage_proof_evidence.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m py_compile scripts/kagemusha_recursive_compact_key_evidence.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m py_compile scripts/kagemusha_pull_android_device_lab_raw_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m py_compile scripts/kagemusha_release_bundle.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/kagemusha_android_attestation_report.py scripts/kagemusha_android_device_lab_slot.py scripts/kagemusha_production_readiness.py scripts/kagemusha_release_bundle.py scripts/kagemusha_pull_android_device_lab_raw_slot.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_recursive_compact_key_evidence.py scripts/kagemusha_run_lineage_proof_staged.py scripts/kagemusha_run_recursive_compact_keygen_staged.py scripts/kagemusha_finalize_lineage_proof_staged_run.py scripts/kagemusha_finalize_recursive_compact_key_staged_run.py scripts/tests/kagemusha_production_readiness_test.py scripts/tests/check_android_device_lab_slot_test.py`
+  - focused unittest slices for attestation-report, signer-output, scanner-output,
+    staged-runner parent-identity swaps, staged-runner log-install
+    parent-identity swaps, finalizer publish-directory swaps, and finalizer
+    temp-cleanup swaps (`18` selected tests passed)
+  - `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/kagemusha_production_readiness_test.py -k 'compact_key_staged_runner or lineage_proof_staged_runner'`
+    (`36` selected tests passed)
+  - `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/kagemusha_production_readiness_test.py -k 'staged_finalizer'`
+    (`45` selected tests passed)
+  - `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/check_android_device_lab_slot_test.py -k 'kagemusha_slot_assembler'`
+    (`15` selected tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - identity negative controls for Android scanner output, Android
+    signed-evidence output, Android attestation-report output, readiness
+    summary, release bundle, lineage evidence, compact-key evidence, and both
+    staged runners/finalizers
+  - pulled attached Pixel 6 raw slot
+    `google-pixel-6-6a-physical-1781077370103`, generated
+    `attestation/report.json`, assembled signed slot under
+    `target/kagemusha-android-device-lab-physical-19181FDF600918-20260611-utc`,
+    and validated it with `scripts/check_android_device_lab_slot.py`
+  - `python3 scripts/kagemusha_production_readiness.py --repo-root . --device-lab-root target/kagemusha-android-device-lab-physical-19181FDF600918-20260611-utc --trusted-signer-public-key target/kagemusha-android-lab-keys/lab-public.pem --summary-out dist/kagemusha-production-readiness.json`
+    (expected blocked summary: missing Reserved-lineage proof evidence, missing
+    ABI-7 compact-key evidence, and incomplete Android standard matrix)
+  - `python3 scripts/kagemusha_release_bundle.py --repo-root . --bundle-root . --device-lab-root target/kagemusha-android-device-lab-physical-19181FDF600918-20260611-utc --trusted-signer-public-key target/kagemusha-android-lab-keys/lab-public.pem --out /tmp/kagemusha-production-release-bundle.physical-pixel6-utc.json`
+    (expected blockers remain: readiness summary not ready, missing
+    Reserved-lineage proof evidence, missing ABI-7 compact-key evidence, and
+    incomplete Android standard matrix)
+  - `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/kagemusha_production_readiness_test.py -k 'writes_child_output_directly_to_log_file or removes_temp_log_on_spawn_failure'`
+    (`4` selected tests passed)
+  - `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/kagemusha_production_readiness_test.py -k 'write_summary'`
+    (`22` selected tests passed)
+  - `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/kagemusha_production_readiness_test.py -k 'lineage_proof_write_evidence'`
+    (`15` selected tests passed)
+  - `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/kagemusha_production_readiness_test.py -k 'compact_key_write_evidence'`
+    (`14` selected tests passed)
+  - `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/kagemusha_production_readiness_test.py -k 'write_release_bundle or kagemusha_release_bundle_rejects_output_overwriting_evidence'`
+    (`13` selected tests passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-parent-sync-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-evidence-output-parent-sync-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-parent-sync-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-parent-sync-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-child-log-file`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-child-log-file`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-log-install-parent-sync-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-log-install-parent-sync-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-copy-parent-sync-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-copy-readback`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-json-parent-sync-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-json-readback`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-json-temp-cleanup-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-publish-root-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-publish-stage-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-temp-cleanup-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-temp-cleanup-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-temp-cleanup-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-supervisor-output-pipe`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-supervisor-output-pipe`
+  - `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/check_android_device_lab_slot_test.py -k 'raw_puller_install_refuses_late_existing_slot or raw_puller_install_rejects_unexpected_top_level_entry or raw_puller_install_syncs_directories_and_cleans_failure or raw_puller_install_rejects_destination_identity_swap or raw_puller_install_rejects_output_root_identity_swap or raw_puller_install_rejects_parent_identity_before_slot_stat or raw_puller_install_cleanup_preserves_swapped_destination or raw_puller_install_cleanup_uses_parent_dir_fd or raw_puller_install_sync_rejects_identity_mismatch or raw_puller_summary_rejects_symlink_after_replace or raw_puller_summary_rejects_hardlink_after_replace or raw_puller_summary_rejects_readback_path_swap or raw_puller_summary_digest_rejects_symlinked_artifact or raw_puller_summary_digest_rejects_hardlinked_artifact or raw_puller_summary_rejects_nonfinite_json_before_tempfile or raw_puller_summary_rejects_oversized_json_before_tempfile or raw_puller_rejects_latest_slot_mismatch or raw_puller_rejects_noncanonical_latest_slot_query or raw_puller_rejects_noncanonical_latest_slot or raw_puller_rejects_noncanonical_challenge_file or raw_puller_requires_challenge_file_newline or raw_puller_rejects_unexpected_raw_artifact or raw_puller_rejects_tar_directory_collision or raw_puller_requires_result_slot_field or raw_puller_requires_result_chain_digest or raw_puller_requires_result_challenge_digest or raw_puller_rejects_result_extra_field or raw_puller_requires_result_identity_strings or raw_puller_requires_result_sdk_digests or raw_puller_requires_result_strongbox_levels or raw_puller_rejects_queue_slot_mismatch or raw_puller_rejects_telemetry_slot_mismatch or raw_puller_rejects_d2d_online_handoff or raw_puller_rejects_wallet_rollback_failure or raw_puller_rejects_failed_status_ndjson or raw_puller_rejects_status_slot_mismatch or raw_puller_rejects_runtime_failure_marker or raw_puller_reads_latest_and_installs_slot'`
+    (`38` selected tests passed)
+  - `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/check_android_device_lab_slot_test.py -k '<same focused raw-puller selection plus latest_writer_* tests>'`
+    (`42` selected tests passed)
+  - `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/check_android_device_lab_slot_test.py -k 'raw_puller_summary or raw_puller_latest_writer'`
+    (`12` selected tests passed)
+  - `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/check_android_device_lab_slot_test.py -k 'write_summary'`
+    (`21` selected tests passed)
+  - `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/check_android_device_lab_slot_test.py -k 'write_summary_temp_cleanup or signer_write_json_temp_cleanup or signer_write_json_reports_temp_cleanup or attestation_report_writer_temp_cleanup'`
+    (`5` selected tests passed)
+  - `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/kagemusha_production_readiness_test.py -k 'write_summary_temp_cleanup or write_summary_reports_temp_cleanup or write_release_bundle_temp_cleanup or write_release_bundle_reports_temp_cleanup'`
+    (`6` selected tests passed)
+  - `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/kagemusha_production_readiness_test.py -k 'compact_key_write_evidence_temp_cleanup or compact_key_write_evidence_reports_temp_cleanup or lineage_proof_write_evidence_temp_cleanup or lineage_proof_write_evidence_reports_temp_cleanup'`
+    (`6` selected tests passed)
+  - `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/check_android_device_lab_slot_test.py -k 'raw_puller_temp_cleanup or raw_puller_install_cleanup or raw_puller_install_moves_with_directory_fds'`
+    (`5` selected tests passed)
+  - `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/check_android_device_lab_slot_test.py -k 'raw_puller_reads_latest_and_installs_slot or raw_puller_install_moves_with_directory_fds'`
+    (`2` selected tests passed)
+  - `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/check_android_device_lab_slot_test.py -k 'kagemusha_slot_assembler_json_write or kagemusha_slot_assembler_json_temp_cleanup or kagemusha_slot_assembler_cleanup_preserves_swapped_temp_parent'`
+    (`5` selected tests passed)
+  - `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/kagemusha_production_readiness_test.py -k 'staged_finalizer_cleans_partial_publish_on_copy_error or staged_finalizer_unlink_preserves_swapped_published_file or staged_finalizer_verifies_published_stage_bytes'`
+    (`6` selected tests passed)
+  - `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/kagemusha_production_readiness_test.py -k 'staged_runner_resume_cleanup_preserves_swapped_output or staged_runner_temp_cleanup_preserves_swapped_output or staged_runner_atomic_write_verifies_installed_bytes or staged_runner_log_install_rejects_parent_identity_swap or staged_runner_removes_temp_log_on_spawn_failure'`
+    (`10` selected tests passed)
+  - `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/kagemusha_production_readiness_test.py -k 'evidence_document_validator_reports_temp_cleanup_failure_after_write_failure or evidence_document_validator_rejects_temp_cleanup_failure or evidence_document_validator_temp_cleanup_rejects_swap'`
+    (`6` selected tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-no-overwrite`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-top-level`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-parent-sync`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-directory-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-sync-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-cleanup-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-temp-cleanup-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-rename-dir-fd`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-output-root-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-cleanup-dir-fd`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-slot-entry-dir-fd`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-latest-slot-canonical`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-latest-query-canonical`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-latest-write-parent-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-latest-write-readback-symlink`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-latest-write-readback-hardlink`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-latest-write-readback-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-challenge-file-canonical`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-allowed-artifacts`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-json-slot-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-d2d-offline`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-wallet-rollback`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-status-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-runtime-failure-marker`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-strict-json`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-size-limit`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-parent-sync`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-parent-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-parent-sync-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-temp-cleanup-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-temp-cleanup-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-report-writer-temp-cleanup-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-temp-cleanup-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-temp-cleanup-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-temp-cleanup-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-temp-cleanup-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-validation-temp-cleanup-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-validation-temp-cleanup-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-publish-rollback-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-publish-rollback-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-cleanup-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-cleanup-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-readback-symlink`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-readback-hardlink`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-readback-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-digest-open-path`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-digest-inventory`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-directory-collision`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-result-slot-required`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-result-chain-digest-required`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-result-challenge-digest-required`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-result-closed-schema`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-result-identity-strings`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-result-sdk-digests`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-result-strongbox-levels`
+  - `python3 scripts/check_android_device_lab_slot.py --root target/kagemusha-android-device-lab-harness-v1 --slot google-pixel-6-6a-physical-1781077370103 --require-slot --require-kagemusha-production-evidence --trusted-signer-public-key target/kagemusha-android-lab-keys/lab-public.pem`
+    (`google-pixel-6-6a-physical-1781077370103: ok`)
+  - `python3 scripts/check_android_device_lab_slot.py --root target/kagemusha-android-device-lab-harness-v1 --require-slot --require-kagemusha-production-evidence --require-kagemusha-standard-matrix --trusted-signer-public-key target/kagemusha-android-lab-keys/lab-public.pem`
+    (expected failure: missing Pixel 7, Pixel 8, Pixel Fold/Tablet, Samsung
+    Galaxy S23, and Samsung Galaxy S24 slots; Pixel 6 still `ok`)
+  - `python3 scripts/kagemusha_pull_android_device_lab_raw_slot.py --serial 19181FDF600918 --summary-out target/kagemusha-android-raw/google-pixel-6-6a-physical-1781077370103/raw-pull-summary.json`
+    (`google-pixel-6-6a-physical-1781077370103` raw slot pulled from the
+    attached Pixel 6)
+  - `python3 scripts/kagemusha_release_bundle.py --repo-root . --bundle-root . --device-lab-root target/kagemusha-android-device-lab-harness-v1 --trusted-signer-public-key target/kagemusha-android-lab-keys/lab-public.pem --out /tmp/kagemusha-production-release-bundle.current.json`
+    (expected failure: readiness summary, Reserved-lineage proof evidence,
+    ABI-7 compact key evidence, release artifact inventories/logs, and Android
+    standard matrix evidence are still incomplete)
+
+## 2026-06-11 Jindo production privacy helper hardening
+
+- Added Python and JavaScript adversarial coverage for the production Jindo
+  lattice PCS helper boundary: production envelopes are rejected by the
+  dev-fixture verifier, dev-fixture envelopes are rejected by the production
+  verifier, dev fixture proof bytes cannot be repackaged under the production
+  backend, and explicit non-Jindo backend overrides fail closed.
+- Confirmed the Python privacy catalog now treats Jindo's exported production
+  builder/verifier entrypoints as the capability source instead of vacuously
+  passing on an empty planned-entrypoint list.
+- Kept VeRange production helpers internal while `buildVeRangeProofV1` remains
+  a planned entrypoint, preserving the invariant that planned production
+  privacy entrypoints are not package-root exports until gates pass.
+- Added focused Python coverage for the private VeRange production prototype
+  boundary and aligned the privacy SDK guard so VeRange remains a component
+  with dev-fixture/local-verifier exports plus a planned production builder.
+- Validation:
+  - `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=python/iroha_python/src:python/norito_py/src:python /var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q python/iroha_python/tests/jindo_test.py python/iroha_python/tests/privacy_catalog_test.py`
+    (`782` tests passed)
+  - `PYTHONPYCACHEPREFIX=$(mktemp -d ${TMPDIR:-/tmp}/iroha-pycache.XXXXXX) PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=python/iroha_python/src:python/norito_py/src:python /var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q python/iroha_python/tests/jindo_test.py python/iroha_python/tests/verange_test.py python/iroha_python/tests/privacy_catalog_test.py`
+    (`911` tests passed)
+  - `PYTHONPYCACHEPREFIX=$(mktemp -d ${TMPDIR:-/tmp}/iroha-pycache.XXXXXX) PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=python/iroha_python/src:python/norito_py/src:python /var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q python/iroha_python/tests/verange_test.py python/iroha_python/tests/privacy_catalog_test.py -k "verange or planned or capabilities"`
+    (`229` selected tests passed)
+  - Fresh-cache import probe confirmed `iroha_python.verange` and
+    `iroha_python` do not expose `buildVeRangeProofV1`,
+    `verifyVeRangeProofV1`, `build_verange_proof_v1`, or
+    `verify_verange_proof_v1`.
+  - `cd javascript/iroha_js && node --test --test-name-pattern "Jindo" test/instructionBuilders.test.js test/privacyCatalogParity.test.js`
+    (`5` selected tests passed on Node `v26.3.0`; the official Kagemusha JS
+    runner still requires Node 20, which is not installed on this host)
+  - `cd javascript/iroha_js && node --test test/instructionBuilders.test.js test/privacyCatalogParity.test.js`
+    (`163` tests passed on Node `v26.3.0`)
+  - `cd javascript/iroha_js && node --test test/package_dist.test.js`
+    (`75` tests passed on Node `v26.3.0`)
+  - `ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+    (Swift `6.3.2` parse runner passed)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home; OUT=$(mktemp -d ${TMPDIR:-/tmp}/iroha-privacy-java-test.XXXXXX); "$JAVA_HOME/bin/javac" -d "$OUT" java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridge.java java/iroha_android/src/test/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridgeTest.java && "$JAVA_HOME/bin/java" -ea -cp "$OUT" org.hyperledger.iroha.android.privacy.PrivacyNativeBridgeTest`
+    (`[IrohaAndroid] PrivacyNativeBridgeTest passed.`)
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+    (`recursive Kagemusha ABI-6/ABI-7 SDK parity is consistent`; NoritoBridge
+    XCFramework recursive Kagemusha symbols present)
+  - `cd javascript/iroha_js && node --test test/kagemushaFfiContractParity.test.js`
+    (`39` Kagemusha FFI/parity contract tests passed on Node `v26.3.0`)
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - `git diff --check`
 ## 2026-06-11 Core audited prover governed public-key digest preflight coverage
 
 - Added audited full-bootstrap material and execution release-prover regressions

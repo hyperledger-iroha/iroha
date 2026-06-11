@@ -104,6 +104,7 @@ const ZK_X509_MAX_POLICY_BYTES = 1024 * 1024;
 const ZK_X509_MAX_REVOCATION_BYTES = 1024 * 1024;
 const ZK_X509_MAX_SUBJECT_BYTES = 1024 * 1024;
 const JINDO_BACKEND = "unsupported";
+const JINDO_PRODUCTION_BACKEND = "lattice-pcs-sis";
 const JINDO_CIRCUIT_ID = "lattice/jindo-pcs-v0:jindo_lattice_pcs_zk_v0";
 const JINDO_DOMAIN_SEPARATOR = "iroha:jindo:lattice-pcs:v0";
 const JINDO_DEV_PROOF_PREFIX = Buffer.from(
@@ -115,6 +116,7 @@ const JINDO_MAX_OPENING_CLAIM_BYTES = 1024 * 1024;
 const JINDO_MAX_QUERY_SET_BYTES = 1024 * 1024;
 const JINDO_MAX_PARAMETER_BYTES = 1024 * 1024;
 const SIS_HINTS_BACKEND = "unsupported";
+const SIS_HINTS_PRODUCTION_BACKEND = "sis-with-hints";
 const SIS_HINTS_CIRCUIT_ID =
   "lattice/sis-hints-anoncred-v0:sis_hints_anoncred_pq_v0";
 const SIS_HINTS_DOMAIN_SEPARATOR = "iroha:sis-hints:anoncred:v0";
@@ -6078,6 +6080,21 @@ function normalizeJindoBackend(value, name) {
   return JINDO_BACKEND;
 }
 
+function normalizeProductionJindoBackend(value, name) {
+  const backendTag = normalizePrivacyBackendTag(
+    value ?? JINDO_PRODUCTION_BACKEND,
+    name,
+  );
+  if (backendTag !== "LatticePcsSis") {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must identify the production Jindo LatticePcsSis backend`,
+      name,
+    );
+  }
+  return JINDO_PRODUCTION_BACKEND;
+}
+
 function normalizeJindoCircuitId(value, name) {
   const circuitId = assertNonBlankString(value ?? JINDO_CIRCUIT_ID, name);
   if (
@@ -6469,7 +6486,7 @@ function normalizeJindoPublicInputs(value, name) {
 function normalizeJindoProofParts(
   source,
   context,
-  { requireProofBytes = true } = {},
+  { requireProofBytes = true, productionBackend = false } = {},
 ) {
   const backendAlias = readSingleAlias(
     source,
@@ -6519,7 +6536,9 @@ function normalizeJindoProofParts(
     ).values(),
   );
   return {
-    backend: normalizeJindoBackend(backendAlias.value, `${context}.backendTag`),
+    backend: productionBackend
+      ? normalizeProductionJindoBackend(backendAlias.value, `${context}.backendTag`)
+      : normalizeJindoBackend(backendAlias.value, `${context}.backendTag`),
     circuitId: normalizeJindoCircuitId(
       circuitAlias.value,
       `${context}.circuitId`,
@@ -6726,6 +6745,21 @@ function normalizeSisHintsBackend(value, name) {
     );
   }
   return SIS_HINTS_BACKEND;
+}
+
+function normalizeProductionSisHintsBackend(value, name) {
+  const backendTag = normalizePrivacyBackendTag(
+    value ?? SIS_HINTS_PRODUCTION_BACKEND,
+    name,
+  );
+  if (backendTag !== "SisWithHints") {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must identify the production SIS-with-hints backend`,
+      name,
+    );
+  }
+  return SIS_HINTS_PRODUCTION_BACKEND;
 }
 
 function normalizeSisHintsCircuitId(value, name) {
@@ -7131,7 +7165,7 @@ function normalizeSisHintsPublicInputs(value, name) {
 function normalizeSisHintsProofParts(
   source,
   context,
-  { requireProofBytes = true } = {},
+  { requireProofBytes = true, productionBackend = false } = {},
 ) {
   const backendAlias = readSingleAlias(
     source,
@@ -7181,7 +7215,12 @@ function normalizeSisHintsProofParts(
     ).values(),
   );
   return {
-    backend: normalizeSisHintsBackend(backendAlias.value, `${context}.backendTag`),
+    backend: productionBackend
+      ? normalizeProductionSisHintsBackend(
+          backendAlias.value,
+          `${context}.backendTag`,
+        )
+      : normalizeSisHintsBackend(backendAlias.value, `${context}.backendTag`),
     circuitId: normalizeSisHintsCircuitId(
       circuitAlias.value,
       `${context}.circuitId`,
@@ -8281,6 +8320,57 @@ function anonymousPgcDevProofBytes({ circuitId, vkHash, publicInputBytes }) {
   );
 }
 
+function anonymousPgcProofAllowedFields() {
+  return new Set([
+    "backend",
+    "backendTag",
+    "backend_tag",
+    "circuitId",
+    "circuit_id",
+    "vkHash",
+    "vk_hash",
+    "verifierKeyHash",
+    "verifyingKeyHash",
+    "receiverSet",
+    "receiver_set",
+    "version",
+    "threshold",
+    "k",
+    "receivers",
+    "anonymitySetRoot",
+    "anonymity_set_root",
+    "txDigest",
+    "tx_digest",
+    "payloadDigest",
+    "payload_digest",
+    "payload",
+    "payloadBytes",
+    "payload_bytes",
+    "payloadJson",
+    "payload_json",
+    "balanceCommitments",
+    "balance_commitments",
+    "linkTag",
+    "link_tag",
+    "rangeCommitments",
+    "range_commitments",
+    "chainId",
+    "chain_id",
+    "domainSeparator",
+    "domain_separator",
+    "proofBytes",
+    "proof_bytes",
+    "proof",
+    "aux",
+    "maxProofBytes",
+    "max_proof_bytes",
+    "maxPublicInputBytes",
+    "max_public_input_bytes",
+    "maxPayloadBytes",
+    "max_payload_bytes",
+  ]);
+}
+
 function parseAnonymousPgcPublicInputs(bytes, name) {
   let parsed;
   try {
@@ -8902,6 +8992,10 @@ function normalizeZkAcePublicInputs(value, name) {
 
 function fixedBytesEqual(left, right) {
   return left.length === right.length && left.every((byte, index) => byte === right[index]);
+}
+
+function startsWithBytes(value, prefix) {
+  return value.length >= prefix.length && prefix.every((byte, index) => value[index] === byte);
 }
 
 function ensureZkAceAuthorizationMatchesTransfer(publicInputs, payload, name) {
@@ -11735,6 +11829,88 @@ export function buildZkAtAuthenticatorEnvelope(options) {
 }
 
 /**
+ * Build canonical production zkAt policy proof envelope bytes.
+ * @param {object} options
+ * @returns {Buffer}
+ */
+export function buildZkAtPolicyProofV1(options) {
+  const source = assertPlainObject(options, "zkAtPolicyProofV1");
+  assertAllowedFields(
+    source,
+    new Set([
+      "backend",
+      "backendTag",
+      "backend_tag",
+      "circuitId",
+      "circuit_id",
+      "vkHash",
+      "vk_hash",
+      "verifierKeyHash",
+      "verifyingKeyHash",
+      "policyCommitment",
+      "policy_commitment",
+      "commitment",
+      "policy",
+      "policyBytes",
+      "policy_bytes",
+      "policyJson",
+      "policy_json",
+      "policyEpoch",
+      "policy_epoch",
+      "policySchema",
+      "policy_schema",
+      "txDigest",
+      "tx_digest",
+      "payloadDigest",
+      "payload_digest",
+      "payload",
+      "payloadBytes",
+      "payload_bytes",
+      "payloadJson",
+      "payload_json",
+      "accountId",
+      "account_id",
+      "actionClass",
+      "action_class",
+      "domainSeparator",
+      "domain_separator",
+      "proofBytes",
+      "proof_bytes",
+      "proof",
+      "aux",
+      "maxProofBytes",
+      "max_proof_bytes",
+      "maxPublicInputBytes",
+      "max_public_input_bytes",
+      "maxPayloadBytes",
+      "max_payload_bytes",
+      "maxPolicyBytes",
+      "max_policy_bytes",
+      "version",
+    ]),
+    "zkAtPolicyProofV1",
+  );
+  const parts = normalizeZkAtAuthenticatorParts(source, "zkAtPolicyProofV1");
+  if (startsWithBytes(parts.proofBytes, ZKAT_DEV_PROOF_PREFIX)) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "zkAtPolicyProofV1.proofBytes must not contain a dev fixture proof",
+      "zkAtPolicyProofV1.proofBytes",
+    );
+  }
+  return buildPrivacyProofEnvelopeWithOptionalLimits({
+    backend: parts.backend,
+    circuitId: parts.circuitId,
+    vkHash: parts.vkHash,
+    publicInputs: parts.publicInputBytes,
+    proofBytes: parts.proofBytes,
+    aux: source.aux,
+    maxProofBytes: parts.maxProofBytes,
+    maxPublicInputBytes: parts.maxPublicInputBytes,
+  });
+}
+
+/**
  * Build a deterministic zkAt dev proof fixture bound to an OpenVerify envelope.
  *
  * This fixture is only for SDK/dev-verifier public-input binding tests. It is
@@ -11947,6 +12123,121 @@ export function verifyZkAtAuthenticatorLocally(options) {
 }
 
 /**
+ * Validate a production zkAt policy proof envelope binding.
+ * @param {object|Buffer|string} options
+ * @returns {object}
+ */
+export function verifyZkAtPolicyProofV1(options) {
+  const source =
+    options &&
+    typeof options === "object" &&
+    !Array.isArray(options) &&
+    !Buffer.isBuffer(options) &&
+    !ArrayBuffer.isView(options) &&
+    !(options instanceof ArrayBuffer)
+      ? assertPlainObject(options, "zkAtPolicyProofV1Verification")
+      : { envelope: options };
+  assertAllowedFields(
+    source,
+    new Set([
+      "envelope",
+      "proofEnvelope",
+      "proof_envelope",
+      "bytes",
+      "policyCommitment",
+      "policy_commitment",
+      "commitment",
+      "policy",
+      "policyBytes",
+      "policy_bytes",
+      "policyJson",
+      "policy_json",
+      "policyEpoch",
+      "policy_epoch",
+      "policySchema",
+      "policy_schema",
+      "txDigest",
+      "tx_digest",
+      "payloadDigest",
+      "payload_digest",
+      "payload",
+      "payloadBytes",
+      "payload_bytes",
+      "payloadJson",
+      "payload_json",
+      "accountId",
+      "account_id",
+      "actionClass",
+      "action_class",
+      "domainSeparator",
+      "domain_separator",
+      "maxPayloadBytes",
+      "max_payload_bytes",
+      "maxPolicyBytes",
+      "max_policy_bytes",
+    ]),
+    "zkAtPolicyProofV1Verification",
+  );
+  const envelopeAlias = readSingleAlias(
+    source,
+    ["envelope", "proofEnvelope", "proof_envelope", "bytes"],
+    "zkAtPolicyProofV1Verification.envelope",
+    "proof envelope",
+  );
+  const decoded = decodeVeRangeEnvelope(
+    envelopeAlias.value,
+    "zkAtPolicyProofV1Verification.envelope",
+  );
+  if (decoded.backend !== "Stark") {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "zkAtPolicyProofV1Verification.envelope.backend must be Stark",
+      "zkAtPolicyProofV1Verification.envelope.backend",
+    );
+  }
+  const circuitId = normalizeZkAtCircuitId(
+    decoded.circuit_id,
+    "zkAtPolicyProofV1Verification.envelope.circuitId",
+  );
+  const vkHash = normalizeNonZeroFixedBytes(
+    decoded.vk_hash,
+    "zkAtPolicyProofV1Verification.envelope.vkHash",
+    32,
+  );
+  const publicInputs = parseZkAtPublicInputs(
+    decoded.public_inputs,
+    "zkAtPolicyProofV1Verification.publicInputs",
+  );
+  ensureZkAtVerificationExpectations(
+    source,
+    publicInputs,
+    "zkAtPolicyProofV1Verification",
+  );
+  if (startsWithBytes(decoded.proof_bytes, ZKAT_DEV_PROOF_PREFIX)) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "zkAtPolicyProofV1Verification proof bytes must not contain a zkAt dev fixture",
+      "zkAtPolicyProofV1Verification.proofBytes",
+    );
+  }
+  return {
+    ok: true,
+    production: true,
+    kind: "zkat-policy-private-auth-v1",
+    backend: "Stark",
+    circuit_id: circuitId,
+    verifier_key_hash: Buffer.from(vkHash).toString("hex"),
+    public_inputs: publicInputs,
+    public_input_bytes: decoded.public_inputs.length,
+    proof_bytes: decoded.proof_bytes.length,
+    aux_bytes: decoded.aux.length,
+    account_id: publicInputs.account_id,
+    action_class: publicInputs.action_class,
+    policy_epoch: publicInputs.policy_epoch,
+  };
+}
+
+/**
  * Normalize a ZK-AMS recursive anonymous admission batch and derive its root.
  *
  * The batch root binds issuer root, admission nullifiers, anonymous account
@@ -12066,6 +12357,85 @@ export function buildZkAmsAdmissionProofEnvelope(options) {
     source,
     "zkAmsAdmissionProofEnvelope",
   );
+  return buildPrivacyProofEnvelopeWithOptionalLimits({
+    backend: parts.backend,
+    circuitId: parts.circuitId,
+    vkHash: parts.vkHash,
+    publicInputs: parts.publicInputBytes,
+    proofBytes: parts.proofBytes,
+    aux: source.aux,
+    maxProofBytes: parts.maxProofBytes,
+    maxPublicInputBytes: parts.maxPublicInputBytes,
+  });
+}
+
+/**
+ * Build canonical production ZK-AMS recursive admission proof envelope bytes.
+ * @param {object} options
+ * @returns {Buffer}
+ */
+export function buildZkAmsAdmissionBatchProofV0(options) {
+  const source = assertPlainObject(options, "zkAmsAdmissionBatchProofV0");
+  assertAllowedFields(
+    source,
+    new Set([
+      "version",
+      "backend",
+      "backendTag",
+      "backend_tag",
+      "circuitId",
+      "circuit_id",
+      "vkHash",
+      "vk_hash",
+      "verifierKeyHash",
+      "verifyingKeyHash",
+      "issuerRoot",
+      "issuer_root",
+      "admissionBatchRoot",
+      "admission_batch_root",
+      "batchRoot",
+      "batch_root",
+      "admissionNullifiers",
+      "admission_nullifiers",
+      "nullifiers",
+      "anonymousAccountCommitments",
+      "anonymous_account_commitments",
+      "accountCommitments",
+      "account_commitments",
+      "recursiveProofDigest",
+      "recursive_proof_digest",
+      "recursiveProof",
+      "recursiveProofBytes",
+      "recursive_proof",
+      "recursive_proof_bytes",
+      "domainSeparator",
+      "domain_separator",
+      "proofBytes",
+      "proof_bytes",
+      "proof",
+      "aux",
+      "maxBatchSize",
+      "max_batch_size",
+      "maxRecursiveProofBytes",
+      "max_recursive_proof_bytes",
+      "maxProofBytes",
+      "max_proof_bytes",
+      "maxPublicInputBytes",
+      "max_public_input_bytes",
+    ]),
+    "zkAmsAdmissionBatchProofV0",
+  );
+  const parts = normalizeZkAmsAdmissionProofParts(
+    source,
+    "zkAmsAdmissionBatchProofV0",
+  );
+  if (startsWithBytes(parts.proofBytes, ZK_AMS_DEV_PROOF_PREFIX)) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "zkAmsAdmissionBatchProofV0.proofBytes must not contain a dev fixture proof",
+      "zkAmsAdmissionBatchProofV0.proofBytes",
+    );
+  }
   return buildPrivacyProofEnvelopeWithOptionalLimits({
     backend: parts.backend,
     circuitId: parts.circuitId,
@@ -12288,6 +12658,119 @@ export function verifyZkAmsAdmissionProofLocally(options) {
 }
 
 /**
+ * Verify production ZK-AMS recursive admission proof envelope structure.
+ * @param {object|Buffer|string} options
+ * @returns {object}
+ */
+export function verifyZkAmsAdmissionBatchProofV0(options) {
+  const source =
+    options &&
+    typeof options === "object" &&
+    !Array.isArray(options) &&
+    !Buffer.isBuffer(options) &&
+    !ArrayBuffer.isView(options) &&
+    !(options instanceof ArrayBuffer)
+      ? assertPlainObject(options, "zkAmsAdmissionBatchProofV0")
+      : { envelope: options };
+  assertAllowedFields(
+    source,
+    new Set([
+      "envelope",
+      "proofEnvelope",
+      "proof_envelope",
+      "bytes",
+      "issuerRoot",
+      "issuer_root",
+      "admissionBatchRoot",
+      "admission_batch_root",
+      "batchRoot",
+      "batch_root",
+      "admissionNullifiers",
+      "admission_nullifiers",
+      "nullifiers",
+      "anonymousAccountCommitments",
+      "anonymous_account_commitments",
+      "accountCommitments",
+      "account_commitments",
+      "recursiveProofDigest",
+      "recursive_proof_digest",
+      "recursiveProof",
+      "recursiveProofBytes",
+      "recursive_proof",
+      "recursive_proof_bytes",
+      "domainSeparator",
+      "domain_separator",
+      "maxBatchSize",
+      "max_batch_size",
+      "maxRecursiveProofBytes",
+      "max_recursive_proof_bytes",
+      "maxProofBytes",
+      "max_proof_bytes",
+      "maxPublicInputBytes",
+      "max_public_input_bytes",
+      "version",
+    ]),
+    "zkAmsAdmissionBatchProofV0",
+  );
+  const envelopeAlias = readSingleAlias(
+    source,
+    ["envelope", "proofEnvelope", "proof_envelope", "bytes"],
+    "zkAmsAdmissionBatchProofV0.envelope",
+    "proof envelope",
+  );
+  const decoded = decodeVeRangeEnvelope(
+    envelopeAlias.value,
+    "zkAmsAdmissionBatchProofV0.envelope",
+  );
+  if (decoded.backend !== "Stark") {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "zkAmsAdmissionBatchProofV0.envelope.backend must be Stark",
+      "zkAmsAdmissionBatchProofV0.envelope.backend",
+    );
+  }
+  const circuitId = normalizeZkAmsCircuitId(
+    decoded.circuit_id,
+    "zkAmsAdmissionBatchProofV0.envelope.circuitId",
+  );
+  const vkHash = normalizeNonZeroFixedBytes(
+    decoded.vk_hash,
+    "zkAmsAdmissionBatchProofV0.envelope.vkHash",
+    32,
+  );
+  const publicInputs = parseZkAmsPublicInputs(
+    decoded.public_inputs,
+    "zkAmsAdmissionBatchProofV0.publicInputs",
+  );
+  ensureZkAmsVerificationExpectations(
+    source,
+    publicInputs,
+    "zkAmsAdmissionBatchProofV0",
+  );
+  if (startsWithBytes(decoded.proof_bytes, ZK_AMS_DEV_PROOF_PREFIX)) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "zkAmsAdmissionBatchProofV0 proof bytes must not contain a ZK-AMS dev fixture",
+      "zkAmsAdmissionBatchProofV0.proofBytes",
+    );
+  }
+  return {
+    ok: true,
+    production: true,
+    kind: "zk-ams-recursive-admission-v0",
+    backend: "Stark",
+    circuit_id: circuitId,
+    verifier_key_hash: Buffer.from(vkHash).toString("hex"),
+    public_inputs: publicInputs,
+    public_input_bytes: decoded.public_inputs.length,
+    proof_bytes: decoded.proof_bytes.length,
+    aux_bytes: decoded.aux.length,
+    admission_batch_root: publicInputs.admission_batch_root,
+    batch_size: publicInputs.admission_nullifiers.length,
+  };
+}
+
+/**
  * Normalize a Vega credential predicate commitment descriptor.
  *
  * Supplying `predicateJson`/`predicateBytes` derives a deterministic dev
@@ -12396,6 +12879,95 @@ export function buildVegaCredentialProofEnvelope(options) {
     "vegaCredentialProofEnvelope",
   );
   const parts = normalizeVegaProofParts(source, "vegaCredentialProofEnvelope");
+  return buildPrivacyProofEnvelopeWithOptionalLimits({
+    backend: parts.backend,
+    circuitId: parts.circuitId,
+    vkHash: parts.vkHash,
+    publicInputs: parts.publicInputBytes,
+    proofBytes: parts.proofBytes,
+    aux: source.aux,
+    maxProofBytes: parts.maxProofBytes,
+    maxPublicInputBytes: parts.maxPublicInputBytes,
+  });
+}
+
+/**
+ * Build canonical production Vega credential predicate proof envelope bytes.
+ * @param {object} options
+ * @returns {Buffer}
+ */
+export function buildVegaCredentialPredicateProofV0(options) {
+  const source = assertPlainObject(options, "vegaCredentialPredicateProofV0");
+  assertAllowedFields(
+    source,
+    new Set([
+      "version",
+      "backend",
+      "backendTag",
+      "backend_tag",
+      "circuitId",
+      "circuit_id",
+      "vkHash",
+      "vk_hash",
+      "verifierKeyHash",
+      "verifyingKeyHash",
+      "issuerCommitment",
+      "issuer_commitment",
+      "issuer",
+      "issuerBytes",
+      "issuer_bytes",
+      "issuerJson",
+      "issuer_json",
+      "predicateCommitment",
+      "predicate_commitment",
+      "commitment",
+      "predicate",
+      "predicateBytes",
+      "predicate_bytes",
+      "predicateJson",
+      "predicate_json",
+      "credentialSchema",
+      "credential_schema",
+      "subjectBinding",
+      "subject_binding",
+      "identityCommitment",
+      "identity_commitment",
+      "accountCommitment",
+      "account_commitment",
+      "accountId",
+      "account_id",
+      "subjectAccountId",
+      "subject_account_id",
+      "expirationEpoch",
+      "expiration_epoch",
+      "domainSeparator",
+      "domain_separator",
+      "proofBytes",
+      "proof_bytes",
+      "proof",
+      "aux",
+      "maxIssuerBytes",
+      "max_issuer_bytes",
+      "maxPredicateBytes",
+      "max_predicate_bytes",
+      "maxProofBytes",
+      "max_proof_bytes",
+      "maxPublicInputBytes",
+      "max_public_input_bytes",
+    ]),
+    "vegaCredentialPredicateProofV0",
+  );
+  const parts = normalizeVegaProofParts(
+    source,
+    "vegaCredentialPredicateProofV0",
+  );
+  if (startsWithBytes(parts.proofBytes, VEGA_DEV_PROOF_PREFIX)) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "vegaCredentialPredicateProofV0.proofBytes must not contain a dev fixture proof",
+      "vegaCredentialPredicateProofV0.proofBytes",
+    );
+  }
   return buildPrivacyProofEnvelopeWithOptionalLimits({
     backend: parts.backend,
     circuitId: parts.circuitId,
@@ -12627,6 +13199,124 @@ export function verifyVegaCredentialProofLocally(options) {
   };
 }
 
+/**
+ * Validate a production Vega credential predicate proof envelope binding.
+ * @param {object|Buffer|string} options
+ * @returns {object}
+ */
+export function verifyVegaCredentialPredicateProofV0(options) {
+  const source =
+    options &&
+    typeof options === "object" &&
+    !Array.isArray(options) &&
+    !Buffer.isBuffer(options) &&
+    !ArrayBuffer.isView(options) &&
+    !(options instanceof ArrayBuffer)
+      ? assertPlainObject(options, "vegaCredentialPredicateProofV0")
+      : { envelope: options };
+  assertAllowedFields(
+    source,
+    new Set([
+      "envelope",
+      "proofEnvelope",
+      "proof_envelope",
+      "bytes",
+      "issuerCommitment",
+      "issuer_commitment",
+      "issuer",
+      "issuerBytes",
+      "issuer_bytes",
+      "issuerJson",
+      "issuer_json",
+      "predicateCommitment",
+      "predicate_commitment",
+      "commitment",
+      "predicate",
+      "predicateBytes",
+      "predicate_bytes",
+      "predicateJson",
+      "predicate_json",
+      "credentialSchema",
+      "credential_schema",
+      "subjectBinding",
+      "subject_binding",
+      "identityCommitment",
+      "identity_commitment",
+      "accountCommitment",
+      "account_commitment",
+      "accountId",
+      "account_id",
+      "subjectAccountId",
+      "subject_account_id",
+      "expirationEpoch",
+      "expiration_epoch",
+      "domainSeparator",
+      "domain_separator",
+      "maxIssuerBytes",
+      "max_issuer_bytes",
+      "maxPredicateBytes",
+      "max_predicate_bytes",
+    ]),
+    "vegaCredentialPredicateProofV0",
+  );
+  const envelopeAlias = readSingleAlias(
+    source,
+    ["envelope", "proofEnvelope", "proof_envelope", "bytes"],
+    "vegaCredentialPredicateProofV0.envelope",
+    "proof envelope",
+  );
+  const decoded = decodeVeRangeEnvelope(
+    envelopeAlias.value,
+    "vegaCredentialPredicateProofV0.envelope",
+  );
+  if (decoded.backend !== "Stark") {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "vegaCredentialPredicateProofV0.envelope.backend must be Stark",
+      "vegaCredentialPredicateProofV0.envelope.backend",
+    );
+  }
+  const circuitId = normalizeVegaCircuitId(
+    decoded.circuit_id,
+    "vegaCredentialPredicateProofV0.envelope.circuitId",
+  );
+  const vkHash = normalizeNonZeroFixedBytes(
+    decoded.vk_hash,
+    "vegaCredentialPredicateProofV0.envelope.vkHash",
+    32,
+  );
+  const publicInputs = parseVegaPublicInputs(
+    decoded.public_inputs,
+    "vegaCredentialPredicateProofV0.publicInputs",
+  );
+  ensureVegaVerificationExpectations(
+    source,
+    publicInputs,
+    "vegaCredentialPredicateProofV0",
+  );
+  if (startsWithBytes(decoded.proof_bytes, VEGA_DEV_PROOF_PREFIX)) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "vegaCredentialPredicateProofV0 proof bytes must not contain a Vega dev fixture",
+      "vegaCredentialPredicateProofV0.proofBytes",
+    );
+  }
+  return {
+    ok: true,
+    production: true,
+    kind: "vega-existing-credential-zk-v0",
+    backend: "Stark",
+    circuit_id: circuitId,
+    verifier_key_hash: Buffer.from(vkHash).toString("hex"),
+    public_inputs: publicInputs,
+    public_input_bytes: decoded.public_inputs.length,
+    proof_bytes: decoded.proof_bytes.length,
+    aux_bytes: decoded.aux.length,
+    credential_schema: publicInputs.credential_schema,
+    expiration_epoch: publicInputs.expiration_epoch,
+  };
+}
+
 const SILENT_THRESHOLD_COMMON_FIELDS = Object.freeze([
   "version",
   "issuerSetCommitment",
@@ -12771,6 +13461,63 @@ export function buildSilentThresholdCredentialEnvelope(options) {
     source,
     "silentThresholdCredentialEnvelope",
   );
+  return buildPrivacyProofEnvelopeWithOptionalLimits({
+    backend: parts.backend,
+    circuitId: parts.circuitId,
+    vkHash: parts.vkHash,
+    publicInputs: parts.publicInputBytes,
+    proofBytes: parts.proofBytes,
+    aux: source.aux,
+    maxProofBytes: parts.maxProofBytes,
+    maxPublicInputBytes: parts.maxPublicInputBytes,
+  });
+}
+
+/**
+ * Build canonical production silent-threshold credential showing proof envelope bytes.
+ * @param {object} options
+ * @returns {Buffer}
+ */
+export function buildSilentThresholdCredentialShowingProofV0(options) {
+  const source = assertPlainObject(
+    options,
+    "silentThresholdCredentialShowingProofV0",
+  );
+  assertAllowedFields(
+    source,
+    new Set([
+      ...SILENT_THRESHOLD_COMMON_FIELDS,
+      "backend",
+      "backendTag",
+      "backend_tag",
+      "circuitId",
+      "circuit_id",
+      "vkHash",
+      "vk_hash",
+      "verifierKeyHash",
+      "verifyingKeyHash",
+      "proofBytes",
+      "proof_bytes",
+      "proof",
+      "aux",
+      "maxProofBytes",
+      "max_proof_bytes",
+      "maxPublicInputBytes",
+      "max_public_input_bytes",
+    ]),
+    "silentThresholdCredentialShowingProofV0",
+  );
+  const parts = normalizeSilentThresholdProofParts(
+    source,
+    "silentThresholdCredentialShowingProofV0",
+  );
+  if (startsWithBytes(parts.proofBytes, SILENT_THRESHOLD_DEV_PROOF_PREFIX)) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "silentThresholdCredentialShowingProofV0.proofBytes must not contain a dev fixture proof",
+      "silentThresholdCredentialShowingProofV0.proofBytes",
+    );
+  }
   return buildPrivacyProofEnvelopeWithOptionalLimits({
     backend: parts.backend,
     circuitId: parts.circuitId,
@@ -12944,6 +13691,89 @@ export function verifySilentThresholdCredentialProofLocally(options) {
   };
 }
 
+/**
+ * Validate a production silent-threshold credential showing proof envelope binding.
+ * @param {object|Buffer|string} options
+ * @returns {object}
+ */
+export function verifySilentThresholdCredentialShowingProofV0(options) {
+  const source =
+    options &&
+    typeof options === "object" &&
+    !Array.isArray(options) &&
+    !Buffer.isBuffer(options) &&
+    !ArrayBuffer.isView(options) &&
+    !(options instanceof ArrayBuffer)
+      ? assertPlainObject(options, "silentThresholdCredentialShowingProofV0")
+      : { envelope: options };
+  assertAllowedFields(
+    source,
+    new Set([
+      ...SILENT_THRESHOLD_COMMON_FIELDS,
+      "envelope",
+      "proofEnvelope",
+      "proof_envelope",
+      "bytes",
+    ]),
+    "silentThresholdCredentialShowingProofV0",
+  );
+  const envelopeAlias = readSingleAlias(
+    source,
+    ["envelope", "proofEnvelope", "proof_envelope", "bytes"],
+    "silentThresholdCredentialShowingProofV0.envelope",
+    "proof envelope",
+  );
+  const decoded = decodeVeRangeEnvelope(
+    envelopeAlias.value,
+    "silentThresholdCredentialShowingProofV0.envelope",
+  );
+  if (decoded.backend !== "Stark") {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "silentThresholdCredentialShowingProofV0.envelope.backend must be Stark",
+      "silentThresholdCredentialShowingProofV0.envelope.backend",
+    );
+  }
+  const circuitId = normalizeSilentThresholdCircuitId(
+    decoded.circuit_id,
+    "silentThresholdCredentialShowingProofV0.envelope.circuitId",
+  );
+  const vkHash = normalizeNonZeroFixedBytes(
+    decoded.vk_hash,
+    "silentThresholdCredentialShowingProofV0.envelope.vkHash",
+    32,
+  );
+  const publicInputs = parseSilentThresholdPublicInputs(
+    decoded.public_inputs,
+    "silentThresholdCredentialShowingProofV0.publicInputs",
+  );
+  ensureSilentThresholdVerificationExpectations(
+    source,
+    publicInputs,
+    "silentThresholdCredentialShowingProofV0",
+  );
+  if (startsWithBytes(decoded.proof_bytes, SILENT_THRESHOLD_DEV_PROOF_PREFIX)) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "silentThresholdCredentialShowingProofV0 proof bytes must not contain a silent-threshold dev fixture",
+      "silentThresholdCredentialShowingProofV0.proofBytes",
+    );
+  }
+  return {
+    ok: true,
+    production: true,
+    kind: "silent-threshold-anoncred-v0",
+    backend: "Stark",
+    circuit_id: circuitId,
+    verifier_key_hash: Buffer.from(vkHash).toString("hex"),
+    public_inputs: publicInputs,
+    public_input_bytes: decoded.public_inputs.length,
+    proof_bytes: decoded.proof_bytes.length,
+    aux_bytes: decoded.aux.length,
+    showing_nullifier: publicInputs.showing_nullifier,
+  };
+}
+
 const ZK_X509_COMMON_FIELDS = Object.freeze([
   "version",
   "caRootCommitment",
@@ -13106,6 +13936,57 @@ export function buildZkX509IdentityEnvelope(options) {
 }
 
 /**
+ * Build canonical production ZK-X.509 identity proof envelope bytes.
+ * @param {object} options
+ * @returns {Buffer}
+ */
+export function buildZkX509IdentityProofV0(options) {
+  const source = assertPlainObject(options, "zkX509IdentityProofV0");
+  assertAllowedFields(
+    source,
+    new Set([
+      ...ZK_X509_COMMON_FIELDS,
+      "backend",
+      "backendTag",
+      "backend_tag",
+      "circuitId",
+      "circuit_id",
+      "vkHash",
+      "vk_hash",
+      "verifierKeyHash",
+      "verifyingKeyHash",
+      "proofBytes",
+      "proof_bytes",
+      "proof",
+      "aux",
+      "maxProofBytes",
+      "max_proof_bytes",
+      "maxPublicInputBytes",
+      "max_public_input_bytes",
+    ]),
+    "zkX509IdentityProofV0",
+  );
+  const parts = normalizeZkX509ProofParts(source, "zkX509IdentityProofV0");
+  if (startsWithBytes(parts.proofBytes, ZK_X509_DEV_PROOF_PREFIX)) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "zkX509IdentityProofV0.proofBytes must not contain a dev fixture proof",
+      "zkX509IdentityProofV0.proofBytes",
+    );
+  }
+  return buildPrivacyProofEnvelopeWithOptionalLimits({
+    backend: parts.backend,
+    circuitId: parts.circuitId,
+    vkHash: parts.vkHash,
+    publicInputs: parts.publicInputBytes,
+    proofBytes: parts.proofBytes,
+    aux: source.aux,
+    maxProofBytes: parts.maxProofBytes,
+    maxPublicInputBytes: parts.maxPublicInputBytes,
+  });
+}
+
+/**
  * Build a deterministic ZK-X.509 identity dev proof fixture.
  *
  * This fixture is only for SDK/dev-verifier public-input binding tests. It is
@@ -13253,6 +14134,89 @@ export function verifyZkX509IdentityProofLocally(options) {
     production: false,
     kind: "zk-x509-dev-fixture-v0",
     backend: ZK_X509_BACKEND,
+    circuit_id: circuitId,
+    verifier_key_hash: Buffer.from(vkHash).toString("hex"),
+    public_inputs: publicInputs,
+    public_input_bytes: decoded.public_inputs.length,
+    proof_bytes: decoded.proof_bytes.length,
+    aux_bytes: decoded.aux.length,
+    address_binding: publicInputs.address_binding,
+  };
+}
+
+/**
+ * Validate a production ZK-X.509 identity proof envelope binding.
+ * @param {object|Buffer|string} options
+ * @returns {object}
+ */
+export function verifyZkX509IdentityProofV0(options) {
+  const source =
+    options &&
+    typeof options === "object" &&
+    !Array.isArray(options) &&
+    !Buffer.isBuffer(options) &&
+    !ArrayBuffer.isView(options) &&
+    !(options instanceof ArrayBuffer)
+      ? assertPlainObject(options, "zkX509IdentityProofV0")
+      : { envelope: options };
+  assertAllowedFields(
+    source,
+    new Set([
+      ...ZK_X509_COMMON_FIELDS,
+      "envelope",
+      "proofEnvelope",
+      "proof_envelope",
+      "bytes",
+    ]),
+    "zkX509IdentityProofV0",
+  );
+  const envelopeAlias = readSingleAlias(
+    source,
+    ["envelope", "proofEnvelope", "proof_envelope", "bytes"],
+    "zkX509IdentityProofV0.envelope",
+    "proof envelope",
+  );
+  const decoded = decodeVeRangeEnvelope(
+    envelopeAlias.value,
+    "zkX509IdentityProofV0.envelope",
+  );
+  if (decoded.backend !== "Stark") {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "zkX509IdentityProofV0.envelope.backend must be Stark",
+      "zkX509IdentityProofV0.envelope.backend",
+    );
+  }
+  const circuitId = normalizeZkX509CircuitId(
+    decoded.circuit_id,
+    "zkX509IdentityProofV0.envelope.circuitId",
+  );
+  const vkHash = normalizeNonZeroFixedBytes(
+    decoded.vk_hash,
+    "zkX509IdentityProofV0.envelope.vkHash",
+    32,
+  );
+  const publicInputs = parseZkX509PublicInputs(
+    decoded.public_inputs,
+    "zkX509IdentityProofV0.publicInputs",
+  );
+  ensureZkX509VerificationExpectations(
+    source,
+    publicInputs,
+    "zkX509IdentityProofV0",
+  );
+  if (startsWithBytes(decoded.proof_bytes, ZK_X509_DEV_PROOF_PREFIX)) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "zkX509IdentityProofV0 proof bytes must not contain a ZK-X.509 dev fixture",
+      "zkX509IdentityProofV0.proofBytes",
+    );
+  }
+  return {
+    ok: true,
+    production: true,
+    kind: "zk-x509-onchain-identity-v0",
+    backend: "Stark",
     circuit_id: circuitId,
     verifier_key_hash: Buffer.from(vkHash).toString("hex"),
     public_inputs: publicInputs,
@@ -13426,6 +14390,59 @@ export function buildJindoLatticeProofEnvelope(options) {
 }
 
 /**
+ * Build canonical production Jindo lattice PCS proof envelope bytes.
+ * @param {object} options
+ * @returns {Buffer}
+ */
+export function buildJindoLatticeProofV0(options) {
+  const source = assertPlainObject(options, "jindoLatticeProofV0");
+  assertAllowedFields(
+    source,
+    new Set([
+      ...JINDO_COMMON_FIELDS,
+      "backend",
+      "backendTag",
+      "backend_tag",
+      "circuitId",
+      "circuit_id",
+      "vkHash",
+      "vk_hash",
+      "verifierKeyHash",
+      "verifyingKeyHash",
+      "proofBytes",
+      "proof_bytes",
+      "proof",
+      "aux",
+      "maxProofBytes",
+      "max_proof_bytes",
+      "maxPublicInputBytes",
+      "max_public_input_bytes",
+    ]),
+    "jindoLatticeProofV0",
+  );
+  const parts = normalizeJindoProofParts(source, "jindoLatticeProofV0", {
+    productionBackend: true,
+  });
+  if (startsWithBytes(parts.proofBytes, JINDO_DEV_PROOF_PREFIX)) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "jindoLatticeProofV0.proofBytes must not contain a dev fixture proof",
+      "jindoLatticeProofV0.proofBytes",
+    );
+  }
+  return buildPrivacyProofEnvelopeWithOptionalLimits({
+    backend: parts.backend,
+    circuitId: parts.circuitId,
+    vkHash: parts.vkHash,
+    publicInputs: parts.publicInputBytes,
+    proofBytes: parts.proofBytes,
+    aux: source.aux,
+    maxProofBytes: parts.maxProofBytes,
+    maxPublicInputBytes: parts.maxPublicInputBytes,
+  });
+}
+
+/**
  * Build a deterministic Jindo lattice PCS dev proof fixture.
  *
  * This fixture is only for public-input binding and SDK packaging tests. It is
@@ -13565,6 +14582,89 @@ export function verifyJindoLatticeProofLocally(options) {
     production: false,
     kind: "jindo-lattice-dev-fixture-v0",
     backend: JINDO_BACKEND,
+    circuit_id: circuitId,
+    verifier_key_hash: Buffer.from(vkHash).toString("hex"),
+    public_inputs: publicInputs,
+    public_input_bytes: decoded.public_inputs.length,
+    proof_bytes: decoded.proof_bytes.length,
+    aux_bytes: decoded.aux.length,
+    parameter_hash: publicInputs.parameter_hash,
+  };
+}
+
+/**
+ * Validate a production Jindo lattice PCS proof envelope binding.
+ * @param {object|Buffer|string} options
+ * @returns {object}
+ */
+export function verifyJindoPolynomialCommitmentV0(options) {
+  const source =
+    options &&
+    typeof options === "object" &&
+    !Array.isArray(options) &&
+    !Buffer.isBuffer(options) &&
+    !ArrayBuffer.isView(options) &&
+    !(options instanceof ArrayBuffer)
+      ? assertPlainObject(options, "jindoPolynomialCommitmentV0")
+      : { envelope: options };
+  assertAllowedFields(
+    source,
+    new Set([
+      ...JINDO_COMMON_FIELDS,
+      "envelope",
+      "proofEnvelope",
+      "proof_envelope",
+      "bytes",
+    ]),
+    "jindoPolynomialCommitmentV0",
+  );
+  const envelopeAlias = readSingleAlias(
+    source,
+    ["envelope", "proofEnvelope", "proof_envelope", "bytes"],
+    "jindoPolynomialCommitmentV0.envelope",
+    "proof envelope",
+  );
+  const decoded = decodeVeRangeEnvelope(
+    envelopeAlias.value,
+    "jindoPolynomialCommitmentV0.envelope",
+  );
+  if (decoded.backend !== "LatticePcsSis") {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "jindoPolynomialCommitmentV0.envelope.backend must be LatticePcsSis",
+      "jindoPolynomialCommitmentV0.envelope.backend",
+    );
+  }
+  const circuitId = normalizeJindoCircuitId(
+    decoded.circuit_id,
+    "jindoPolynomialCommitmentV0.envelope.circuitId",
+  );
+  const vkHash = normalizeNonZeroFixedBytes(
+    decoded.vk_hash,
+    "jindoPolynomialCommitmentV0.envelope.vkHash",
+    32,
+  );
+  const publicInputs = parseJindoPublicInputs(
+    decoded.public_inputs,
+    "jindoPolynomialCommitmentV0.publicInputs",
+  );
+  ensureJindoVerificationExpectations(
+    source,
+    publicInputs,
+    "jindoPolynomialCommitmentV0",
+  );
+  if (startsWithBytes(decoded.proof_bytes, JINDO_DEV_PROOF_PREFIX)) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "jindoPolynomialCommitmentV0 proof bytes must not contain a Jindo dev fixture",
+      "jindoPolynomialCommitmentV0.proofBytes",
+    );
+  }
+  return {
+    ok: true,
+    production: true,
+    kind: "jindo-lattice-pcs-zk-v0",
+    backend: "LatticePcsSis",
     circuit_id: circuitId,
     verifier_key_hash: Buffer.from(vkHash).toString("hex"),
     public_inputs: publicInputs,
@@ -13750,6 +14850,64 @@ export function buildSisHintsCredentialEnvelope(options) {
 }
 
 /**
+ * Build canonical production SIS-with-hints anonymous credential proof envelope bytes.
+ * @param {object} options
+ * @returns {Buffer}
+ */
+export function buildSisHintsAnonymousCredentialProofV0(options) {
+  const source = assertPlainObject(
+    options,
+    "sisHintsAnonymousCredentialProofV0",
+  );
+  assertAllowedFields(
+    source,
+    new Set([
+      ...SIS_HINTS_COMMON_FIELDS,
+      "backend",
+      "backendTag",
+      "backend_tag",
+      "circuitId",
+      "circuit_id",
+      "vkHash",
+      "vk_hash",
+      "verifierKeyHash",
+      "verifyingKeyHash",
+      "proofBytes",
+      "proof_bytes",
+      "proof",
+      "aux",
+      "maxProofBytes",
+      "max_proof_bytes",
+      "maxPublicInputBytes",
+      "max_public_input_bytes",
+    ]),
+    "sisHintsAnonymousCredentialProofV0",
+  );
+  const parts = normalizeSisHintsProofParts(
+    source,
+    "sisHintsAnonymousCredentialProofV0",
+    { productionBackend: true },
+  );
+  if (startsWithBytes(parts.proofBytes, SIS_HINTS_DEV_PROOF_PREFIX)) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "sisHintsAnonymousCredentialProofV0.proofBytes must not contain a dev fixture proof",
+      "sisHintsAnonymousCredentialProofV0.proofBytes",
+    );
+  }
+  return buildPrivacyProofEnvelopeWithOptionalLimits({
+    backend: parts.backend,
+    circuitId: parts.circuitId,
+    vkHash: parts.vkHash,
+    publicInputs: parts.publicInputBytes,
+    proofBytes: parts.proofBytes,
+    aux: source.aux,
+    maxProofBytes: parts.maxProofBytes,
+    maxPublicInputBytes: parts.maxPublicInputBytes,
+  });
+}
+
+/**
  * Build a deterministic SIS-with-hints credential dev proof fixture.
  *
  * This fixture is only for public-input binding and SDK packaging tests. It is
@@ -13910,6 +15068,89 @@ export function verifySisHintsCredentialProofLocally(options) {
 }
 
 /**
+ * Validate a production SIS-with-hints anonymous credential proof envelope binding.
+ * @param {object|Buffer|string} options
+ * @returns {object}
+ */
+export function verifySisHintsAnonymousCredentialProofV0(options) {
+  const source =
+    options &&
+    typeof options === "object" &&
+    !Array.isArray(options) &&
+    !Buffer.isBuffer(options) &&
+    !ArrayBuffer.isView(options) &&
+    !(options instanceof ArrayBuffer)
+      ? assertPlainObject(options, "sisHintsAnonymousCredentialProofV0")
+      : { envelope: options };
+  assertAllowedFields(
+    source,
+    new Set([
+      ...SIS_HINTS_COMMON_FIELDS,
+      "envelope",
+      "proofEnvelope",
+      "proof_envelope",
+      "bytes",
+    ]),
+    "sisHintsAnonymousCredentialProofV0",
+  );
+  const envelopeAlias = readSingleAlias(
+    source,
+    ["envelope", "proofEnvelope", "proof_envelope", "bytes"],
+    "sisHintsAnonymousCredentialProofV0.envelope",
+    "proof envelope",
+  );
+  const decoded = decodeVeRangeEnvelope(
+    envelopeAlias.value,
+    "sisHintsAnonymousCredentialProofV0.envelope",
+  );
+  if (decoded.backend !== "SisWithHints") {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "sisHintsAnonymousCredentialProofV0.envelope.backend must be SisWithHints",
+      "sisHintsAnonymousCredentialProofV0.envelope.backend",
+    );
+  }
+  const circuitId = normalizeSisHintsCircuitId(
+    decoded.circuit_id,
+    "sisHintsAnonymousCredentialProofV0.envelope.circuitId",
+  );
+  const vkHash = normalizeNonZeroFixedBytes(
+    decoded.vk_hash,
+    "sisHintsAnonymousCredentialProofV0.envelope.vkHash",
+    32,
+  );
+  const publicInputs = parseSisHintsPublicInputs(
+    decoded.public_inputs,
+    "sisHintsAnonymousCredentialProofV0.publicInputs",
+  );
+  ensureSisHintsVerificationExpectations(
+    source,
+    publicInputs,
+    "sisHintsAnonymousCredentialProofV0",
+  );
+  if (startsWithBytes(decoded.proof_bytes, SIS_HINTS_DEV_PROOF_PREFIX)) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "sisHintsAnonymousCredentialProofV0 proof bytes must not contain a SIS-with-hints dev fixture",
+      "sisHintsAnonymousCredentialProofV0.proofBytes",
+    );
+  }
+  return {
+    ok: true,
+    production: true,
+    kind: "sis-hints-anoncred-pq-v0",
+    backend: "SisWithHints",
+    circuit_id: circuitId,
+    verifier_key_hash: Buffer.from(vkHash).toString("hex"),
+    public_inputs: publicInputs,
+    public_input_bytes: decoded.public_inputs.length,
+    proof_bytes: decoded.proof_bytes.length,
+    aux_bytes: decoded.aux.length,
+    parameter_hash: publicInputs.parameter_hash,
+  };
+}
+
+/**
  * Normalize an Anonymous PGC receiver set and derive its deterministic set commitment.
  *
  * This helper binds receiver account commitments and receiver ciphertext
@@ -13990,6 +15231,98 @@ export function buildAnonymousPgcReceiverSet(options, context = "anonymousPgcRec
   };
   receiverSet.receiver_set_commitment = anonymousPgcReceiverSetCommitment(receiverSet);
   return receiverSet;
+}
+
+/**
+ * Build a production Anonymous PGC proof envelope from prover output.
+ *
+ * The caller must provide proof bytes from an Anonymous PGC prover. Dev-fixture
+ * proof bytes are rejected before envelope construction.
+ * @param {object} options
+ * @returns {Buffer}
+ */
+export function buildAnonymousPgcKOutOfNProofV1(options) {
+  const source = assertPlainObject(options, "anonymousPgcKOutOfNProofV1");
+  assertAllowedFields(
+    source,
+    anonymousPgcProofAllowedFields(),
+    "anonymousPgcKOutOfNProofV1",
+  );
+  const parts = normalizeAnonymousPgcProofParts(
+    source,
+    "anonymousPgcKOutOfNProofV1",
+    { requireProofBytes: true },
+  );
+  if (startsWithBytes(parts.proofBytes, ANON_PGC_DEV_PROOF_PREFIX)) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "anonymousPgcKOutOfNProofV1.proofBytes must not contain an Anonymous PGC dev fixture",
+      "anonymousPgcKOutOfNProofV1.proofBytes",
+    );
+  }
+  return buildPrivacyProofEnvelopeWithOptionalLimits({
+    backend: parts.backend,
+    circuitId: parts.circuitId,
+    vkHash: parts.vkHash,
+    publicInputs: parts.publicInputBytes,
+    proofBytes: parts.proofBytes,
+    aux: source.aux,
+    maxProofBytes: parts.maxProofBytes,
+    maxPublicInputBytes: parts.maxPublicInputBytes,
+  });
+}
+
+/**
+ * Build a typed Anonymous PGC account-commitment instruction model.
+ * @param {object} options
+ * @returns {object}
+ */
+export function buildAnonymousPgcAccountCommitmentInstruction(options) {
+  const source = assertPlainObject(options, "anonymousPgcAccountCommitmentInstruction");
+  assertAllowedFields(
+    source,
+    new Set([
+      "accountCommitment",
+      "account_commitment",
+      "anonymitySetRoot",
+      "anonymity_set_root",
+      "chainId",
+      "chain_id",
+      "domainSeparator",
+      "domain_separator",
+    ]),
+    "anonymousPgcAccountCommitmentInstruction",
+  );
+  const accountCommitment = normalizeNonZeroFixedBytes(
+    source.accountCommitment ?? source.account_commitment,
+    "anonymousPgcAccountCommitmentInstruction.accountCommitment",
+    32,
+  );
+  const anonymitySetRoot = normalizeNonZeroFixedBytes(
+    source.anonymitySetRoot ?? source.anonymity_set_root,
+    "anonymousPgcAccountCommitmentInstruction.anonymitySetRoot",
+    32,
+  );
+  const payload = {
+    kind: "zk::RegisterAnonymousPgcAccountCommitment",
+    version: 1,
+    account_commitment: Buffer.from(accountCommitment).toString("hex"),
+    anonymity_set_root: Buffer.from(anonymitySetRoot).toString("hex"),
+    chain_id: assertNonBlankString(
+      source.chainId ?? source.chain_id,
+      "anonymousPgcAccountCommitmentInstruction.chainId",
+    ),
+    domain_separator: assertNonBlankString(
+      source.domainSeparator ?? source.domain_separator ?? ANON_PGC_DOMAIN_SEPARATOR,
+      "anonymousPgcAccountCommitmentInstruction.domainSeparator",
+    ),
+  };
+  payload.instruction_digest = createHash("sha256")
+    .update("iroha:anonymous-pgc:account-commitment-instruction:v1", "utf8")
+    .update(Buffer.from([0]))
+    .update(Buffer.from(canonicalJsonStringify(payload, "anonymousPgcInstruction"), "utf8"))
+    .digest("hex");
+  return payload;
 }
 
 /**
@@ -14199,6 +15532,198 @@ export function verifyAnonymousPgcDevProofLocally(options) {
 }
 
 /**
+ * Verify a production Anonymous PGC proof envelope binding.
+ * @param {object|Buffer|string} options
+ * @returns {object}
+ */
+export function verifyAnonymousPgcKOutOfNProofV1(options) {
+  const source =
+    options &&
+    typeof options === "object" &&
+    !Array.isArray(options) &&
+    !Buffer.isBuffer(options) &&
+    !ArrayBuffer.isView(options) &&
+    !(options instanceof ArrayBuffer)
+      ? assertPlainObject(options, "anonymousPgcKOutOfNProofV1Verification")
+      : { envelope: options };
+  assertAllowedFields(
+    source,
+    new Set([
+      "envelope",
+      "proofEnvelope",
+      "proof_envelope",
+      "bytes",
+      "receiverSet",
+      "receiver_set",
+      "version",
+      "threshold",
+      "k",
+      "receivers",
+      "anonymitySetRoot",
+      "anonymity_set_root",
+      "txDigest",
+      "tx_digest",
+      "payloadDigest",
+      "payload_digest",
+      "payload",
+      "payloadBytes",
+      "payload_bytes",
+      "payloadJson",
+      "payload_json",
+      "balanceCommitments",
+      "balance_commitments",
+      "linkTag",
+      "link_tag",
+      "rangeCommitments",
+      "range_commitments",
+      "chainId",
+      "chain_id",
+      "domainSeparator",
+      "domain_separator",
+      "maxPayloadBytes",
+      "max_payload_bytes",
+    ]),
+    "anonymousPgcKOutOfNProofV1Verification",
+  );
+  const envelopeAlias = readSingleAlias(
+    source,
+    ["envelope", "proofEnvelope", "proof_envelope", "bytes"],
+    "anonymousPgcKOutOfNProofV1Verification.envelope",
+    "proof envelope",
+  );
+  const decoded = decodeVeRangeEnvelope(
+    envelopeAlias.value,
+    "anonymousPgcKOutOfNProofV1Verification.envelope",
+  );
+  if (decoded.backend !== "Stark") {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "anonymousPgcKOutOfNProofV1Verification.envelope.backend must be Stark",
+      "anonymousPgcKOutOfNProofV1Verification.envelope.backend",
+    );
+  }
+  const circuitId = normalizeAnonymousPgcCircuitId(
+    decoded.circuit_id,
+    "anonymousPgcKOutOfNProofV1Verification.envelope.circuitId",
+  );
+  const vkHash = normalizeNonZeroFixedBytes(
+    decoded.vk_hash,
+    "anonymousPgcKOutOfNProofV1Verification.envelope.vkHash",
+    32,
+  );
+  const publicInputs = parseAnonymousPgcPublicInputs(
+    decoded.public_inputs,
+    "anonymousPgcKOutOfNProofV1Verification.publicInputs",
+  );
+  ensureAnonymousPgcVerificationExpectations(
+    source,
+    publicInputs,
+    "anonymousPgcKOutOfNProofV1Verification",
+  );
+  if (startsWithBytes(decoded.proof_bytes, ANON_PGC_DEV_PROOF_PREFIX)) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "anonymousPgcKOutOfNProofV1Verification proof bytes must not contain an Anonymous PGC dev fixture",
+      "anonymousPgcKOutOfNProofV1Verification.proofBytes",
+    );
+  }
+  return {
+    ok: true,
+    production: true,
+    kind: "anonymous-pgc-k-out-of-n-v1",
+    backend: ANON_PGC_BACKEND,
+    circuit_id: circuitId,
+    verifier_key_hash: Buffer.from(vkHash).toString("hex"),
+    public_inputs: publicInputs,
+    public_input_bytes: decoded.public_inputs.length,
+    proof_bytes: decoded.proof_bytes.length,
+    aux_bytes: decoded.aux.length,
+    receiver_count: publicInputs.receiver_count,
+    receiver_threshold: publicInputs.receiver_threshold,
+  };
+}
+
+/**
+ * Build a typed Anonymous PGC transfer instruction model.
+ * @param {object} options
+ * @returns {object}
+ */
+export function buildAnonymousPgcTransferInstruction(options) {
+  const source = assertPlainObject(options, "anonymousPgcTransferInstruction");
+  assertAllowedFields(
+    source,
+    new Set([
+      "proofEnvelope",
+      "proof_envelope",
+      "envelope",
+      "bytes",
+      "receiverSet",
+      "receiver_set",
+      "payload",
+      "payloadBytes",
+      "payload_bytes",
+      "payloadJson",
+      "payload_json",
+      "txDigest",
+      "tx_digest",
+      "payloadDigest",
+      "payload_digest",
+      "anonymitySetRoot",
+      "anonymity_set_root",
+      "balanceCommitments",
+      "balance_commitments",
+      "linkTag",
+      "link_tag",
+      "rangeCommitments",
+      "range_commitments",
+      "chainId",
+      "chain_id",
+      "domainSeparator",
+      "domain_separator",
+    ]),
+    "anonymousPgcTransferInstruction",
+  );
+  const verified = verifyAnonymousPgcKOutOfNProofV1(source);
+  const envelopeAlias = readSingleAlias(
+    source,
+    ["proofEnvelope", "proof_envelope", "envelope", "bytes"],
+    "anonymousPgcTransferInstruction.proofEnvelope",
+    "proof envelope",
+  );
+  const envelope = normalizeBoundedByteArray(
+    envelopeAlias.value,
+    "anonymousPgcTransferInstruction.proofEnvelope",
+    { maxBytes: DEFAULT_PRIVACY_MAX_PROOF_BYTES },
+  );
+  const publicInputs = verified.public_inputs;
+  const payload = {
+    kind: "zk::SubmitAnonymousPgcTransfer",
+    version: 1,
+    proof_envelope: Buffer.from(envelope),
+    anonymity_set_root: publicInputs.anonymity_set_root,
+    tx_digest: publicInputs.tx_digest,
+    receiver_set_commitment: publicInputs.receiver_set_commitment,
+    receiver_threshold: publicInputs.receiver_threshold,
+    receiver_count: publicInputs.receiver_count,
+    link_tag: publicInputs.link_tag,
+    chain_id: publicInputs.chain_id,
+    domain_separator: publicInputs.domain_separator,
+  };
+  const digestPayload = {
+    ...payload,
+    proof_envelope: undefined,
+    proof_envelope_sha256: createHash("sha256").update(Buffer.from(envelope)).digest("hex"),
+  };
+  delete digestPayload.proof_envelope;
+  payload.instruction_digest = createHash("sha256")
+    .update("iroha:anonymous-pgc:transfer-instruction:v1", "utf8")
+    .update(Buffer.from([0]))
+    .update(Buffer.from(canonicalJsonStringify(digestPayload, "anonymousPgcInstruction"), "utf8"))
+    .digest("hex");
+  return payload;
+}
+
+/**
  * Normalize a prepared VeRange commitment descriptor.
  *
  * This builder does not create a cryptographic commitment; callers must pass
@@ -14361,6 +15886,84 @@ export function buildVeRangeProofEnvelope(options) {
     source,
     "veRangeProofEnvelope",
   );
+  return buildPrivacyProofEnvelopeWithOptionalLimits({
+    backend: parts.backend,
+    circuitId: parts.circuitId,
+    vkHash: parts.vkHash,
+    publicInputs: parts.publicInputBytes,
+    proofBytes: parts.proofBytes,
+    aux: source.aux,
+    maxProofBytes: parts.maxProofBytes,
+    maxPublicInputBytes: parts.maxPublicInputBytes,
+  });
+}
+
+/**
+ * Build canonical production VeRange proof envelope bytes.
+ * @param {object} options
+ * @returns {Buffer}
+ */
+function buildVeRangeProofV1(options) {
+  const source = assertPlainObject(options, "veRangeProofV1");
+  assertAllowedFields(
+    source,
+    new Set([
+      "backend",
+      "backendTag",
+      "backend_tag",
+      "circuitId",
+      "circuit_id",
+      "vkHash",
+      "vk_hash",
+      "verifierKeyHash",
+      "verifyingKeyHash",
+      "commitments",
+      "rangeCommitments",
+      "range_commitments",
+      "commitment",
+      "rangeCommitment",
+      "range_commitment",
+      "valueCommitment",
+      "value_commitment",
+      "bitLength",
+      "bit_length",
+      "aggregationCount",
+      "aggregation_count",
+      "commitmentScheme",
+      "commitment_scheme",
+      "domainSeparator",
+      "domain_separator",
+      "payloadDigest",
+      "payload_digest",
+      "txDigest",
+      "tx_digest",
+      "payload",
+      "payloadBytes",
+      "payload_bytes",
+      "payloadJson",
+      "payload_json",
+      "proofBytes",
+      "proof_bytes",
+      "proof",
+      "aux",
+      "maxProofBytes",
+      "max_proof_bytes",
+      "maxPublicInputBytes",
+      "max_public_input_bytes",
+      "maxPayloadBytes",
+      "max_payload_bytes",
+      "version",
+    ]),
+    "veRangeProofV1",
+  );
+  const parts = normalizeVeRangeProofEnvelopeParts(source, "veRangeProofV1");
+  if (startsWithBytes(parts.proofBytes, VERANGE_DEV_PROOF_PREFIX)) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "veRangeProofV1.proofBytes must not contain a dev fixture proof",
+      "veRangeProofV1.proofBytes",
+    );
+  }
   return buildPrivacyProofEnvelopeWithOptionalLimits({
     backend: parts.backend,
     circuitId: parts.circuitId,
@@ -14575,6 +16178,117 @@ export function verifyVeRangeProofLocally(options) {
 }
 
 /**
+ * Validate a production VeRange proof envelope binding.
+ * @param {object|Buffer|string} options
+ * @returns {object}
+ */
+function verifyVeRangeProofV1(options) {
+  const source =
+    options &&
+    typeof options === "object" &&
+    !Array.isArray(options) &&
+    !Buffer.isBuffer(options) &&
+    !ArrayBuffer.isView(options) &&
+    !(options instanceof ArrayBuffer)
+      ? assertPlainObject(options, "veRangeProofV1Verification")
+      : { envelope: options };
+  assertAllowedFields(
+    source,
+    new Set([
+      "envelope",
+      "proofEnvelope",
+      "proof_envelope",
+      "bytes",
+      "payloadDigest",
+      "payload_digest",
+      "txDigest",
+      "tx_digest",
+      "payload",
+      "payloadBytes",
+      "payload_bytes",
+      "payloadJson",
+      "payload_json",
+      "commitments",
+      "rangeCommitments",
+      "range_commitments",
+      "commitment",
+      "rangeCommitment",
+      "range_commitment",
+      "valueCommitment",
+      "value_commitment",
+      "bitLength",
+      "bit_length",
+      "aggregationCount",
+      "aggregation_count",
+      "commitmentScheme",
+      "commitment_scheme",
+      "domainSeparator",
+      "domain_separator",
+      "maxPayloadBytes",
+      "max_payload_bytes",
+    ]),
+    "veRangeProofV1Verification",
+  );
+  const envelopeAlias = readSingleAlias(
+    source,
+    ["envelope", "proofEnvelope", "proof_envelope", "bytes"],
+    "veRangeProofV1Verification.envelope",
+    "proof envelope",
+  );
+  const decoded = decodeVeRangeEnvelope(
+    envelopeAlias.value,
+    "veRangeProofV1Verification.envelope",
+  );
+  if (decoded.backend !== "Stark") {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "veRangeProofV1Verification.envelope.backend must be Stark",
+      "veRangeProofV1Verification.envelope.backend",
+    );
+  }
+  const circuitId = normalizeVeRangeCircuitId(
+    decoded.circuit_id,
+    "veRangeProofV1Verification.envelope.circuitId",
+  );
+  const vkHash = normalizeNonZeroFixedBytes(
+    decoded.vk_hash,
+    "veRangeProofV1Verification.envelope.vkHash",
+    32,
+  );
+  const publicInputs = parseVeRangePublicInputs(
+    decoded.public_inputs,
+    "veRangeProofV1Verification.publicInputs",
+  );
+  ensureVeRangeVerificationExpectations(
+    source,
+    publicInputs,
+    "veRangeProofV1Verification",
+  );
+  if (startsWithBytes(decoded.proof_bytes, VERANGE_DEV_PROOF_PREFIX)) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "veRangeProofV1Verification proof bytes must not contain a VeRange dev fixture",
+      "veRangeProofV1Verification.proofBytes",
+    );
+  }
+  return {
+    ok: true,
+    production: true,
+    kind: "verange-transparent-range-v1",
+    backend: "Stark",
+    circuit_id: circuitId,
+    verifier_key_hash: Buffer.from(vkHash).toString("hex"),
+    public_inputs: publicInputs,
+    public_input_bytes: decoded.public_inputs.length,
+    proof_bytes: decoded.proof_bytes.length,
+    aux_bytes: decoded.aux.length,
+    aggregation_count: publicInputs.aggregation_count,
+    bit_length: publicInputs.range_parameters.bit_length,
+    commitment_scheme: publicInputs.range_parameters.commitment_scheme,
+  };
+}
+
+/**
  * Build canonical Norito bytes for an open-verify proof envelope.
  * @param {object} options
  * @returns {Buffer}
@@ -14736,6 +16450,241 @@ function buildPrivacyProofEnvelopeWithOptionalLimits(options) {
       envelopeOptions.backend === JINDO_BACKEND ||
       envelopeOptions.backend === SIS_HINTS_BACKEND,
   });
+}
+
+const RESEARCH_PROTOCOL_SPECS = Object.freeze({
+  orchard: Object.freeze({
+    algorithmId: "orchard-halo2-actions-v1",
+    backend: "halo2-pasta-action-bundle",
+    circuitId: "orchard_halo2_action_bundle_v1",
+    instruction: "zk::SubmitOrchardActionBundle",
+  }),
+  penumbraSpend: Object.freeze({
+    algorithmId: "penumbra-masp-v1",
+    backend: "groth16-bls12-377-decaf377",
+    circuitId: "penumbra_masp_spend_v1",
+    instruction: "zk::SubmitPenumbraShieldedPoolTransaction",
+  }),
+  penumbraOutput: Object.freeze({
+    algorithmId: "penumbra-masp-v1",
+    backend: "groth16-bls12-377-decaf377",
+    circuitId: "penumbra_masp_output_v1",
+    instruction: "zk::SubmitPenumbraShieldedPoolTransaction",
+  }),
+  fcmp: Object.freeze({
+    algorithmId: "monero-fcmp-plus-plus-v1",
+    backend: "fcmp-plus-plus-curve-trees-bulletproofs",
+    circuitId: "monero_fcmp_plus_plus_v1",
+    instruction: "zk::SubmitFcmpPlusPlusTransfer",
+  }),
+  miden: Object.freeze({
+    algorithmId: "miden-stark-note-v1",
+    backend: "stark-vm-note-transaction",
+    circuitId: "miden_stark_note_v1",
+    instruction: "zk::SubmitMidenNoteTransaction",
+  }),
+  aztec: Object.freeze({
+    algorithmId: "aztec-private-rollup-v1",
+    backend: "plonkish-private-kernel-rollup",
+    circuitId: "aztec_private_kernel_v1",
+    instruction: "zk::SubmitAztecPrivateRollupTransaction",
+  }),
+  pqMasp: Object.freeze({
+    algorithmId: "pq-masp-stark-v0",
+    backend: "stark-fri",
+    circuitId: "pq_masp_stark_v0",
+    instruction: "zk::SubmitPqMaspStarkTransfer",
+  }),
+});
+
+function rejectDevProofMarkers(value, name) {
+  const lowered = Buffer.from(value).toString("utf8").toLowerCase();
+  if (
+    lowered.includes("dev-fixture") ||
+    lowered.includes("mock") ||
+    lowered.includes("fixture") ||
+    lowered.includes("local-only")
+  ) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name} must not contain dev fixture or mock bytes`,
+      name,
+    );
+  }
+}
+
+function buildResearchProtocolProof(options, specName) {
+  const spec = RESEARCH_PROTOCOL_SPECS[specName];
+  const source = assertPlainObject(options, specName);
+  assertAllowedFields(
+    source,
+    new Set([
+      "vkHash",
+      "vk_hash",
+      "verifierKeyHash",
+      "verifyingKeyHash",
+      "publicInputs",
+      "public_inputs",
+      "proofBytes",
+      "proof_bytes",
+      "proof",
+      "aux",
+      "maxProofBytes",
+      "max_proof_bytes",
+      "maxPublicInputBytes",
+      "max_public_input_bytes",
+    ]),
+    specName,
+  );
+  const proofAlias = readSingleAlias(
+    source,
+    ["proofBytes", "proof_bytes", "proof"],
+    `${specName}.proofBytes`,
+    "proof bytes",
+  );
+  const proofBytes = normalizeOpenVerifyByteArray(
+    proofAlias.value,
+    `${specName}.proofBytes`,
+    {
+      maxBytes:
+        source.maxProofBytes ??
+        source.max_proof_bytes ??
+        DEFAULT_PRIVACY_MAX_PROOF_BYTES,
+    },
+  );
+  rejectDevProofMarkers(proofBytes, `${specName}.proofBytes`);
+  return buildPrivacyProofEnvelopeWithOptionalLimits({
+    backend: spec.backend,
+    circuitId: spec.circuitId,
+    vkHash:
+      source.vkHash ??
+      source.vk_hash ??
+      source.verifierKeyHash ??
+      source.verifyingKeyHash,
+    publicInputs: source.publicInputs ?? source.public_inputs,
+    proofBytes,
+    aux: source.aux ?? Buffer.alloc(0),
+    maxProofBytes: source.maxProofBytes ?? source.max_proof_bytes,
+    maxPublicInputBytes: source.maxPublicInputBytes ?? source.max_public_input_bytes,
+  });
+}
+
+function buildResearchProtocolInstruction(options, specName) {
+  const spec = RESEARCH_PROTOCOL_SPECS[specName];
+  const source = assertPlainObject(options, specName);
+  assertAllowedFields(
+    source,
+    new Set([
+      "proofEnvelope",
+      "proof_envelope",
+      "proofBytes",
+      "proof_bytes",
+      "proof",
+      "vkHash",
+      "vk_hash",
+      "verifierKeyHash",
+      "verifyingKeyHash",
+      "publicInputs",
+      "public_inputs",
+      "aux",
+      "metadata",
+      "maxProofBytes",
+      "max_proof_bytes",
+      "maxPublicInputBytes",
+      "max_public_input_bytes",
+    ]),
+    specName,
+  );
+  const envelopeAlias = readSingleAlias(
+    source,
+    ["proofEnvelope", "proof_envelope"],
+    `${specName}.proofEnvelope`,
+    "proof envelope",
+  );
+  const proofEnvelope =
+    envelopeAlias.key === null
+      ? buildResearchProtocolProof(source, specName)
+      : normalizeOpenVerifyByteArray(
+          envelopeAlias.value,
+          `${specName}.proofEnvelope`,
+          {
+            maxBytes:
+              DEFAULT_PRIVACY_MAX_PROOF_BYTES +
+              DEFAULT_PRIVACY_MAX_PUBLIC_INPUT_BYTES,
+          },
+        );
+  rejectDevProofMarkers(proofEnvelope, `${specName}.proofEnvelope`);
+  return Object.freeze({
+    algorithm_id: spec.algorithmId,
+    instruction: spec.instruction,
+    proof_envelope: Buffer.from(proofEnvelope),
+    proof_envelope_sha256: createHash("sha256").update(proofEnvelope).digest("hex"),
+    metadata: Object.freeze(normalizeMetadata(source.metadata)),
+  });
+}
+
+export function buildOrchardActionBundleProofV1(options) {
+  return buildResearchProtocolProof(options, "orchard");
+}
+
+export function buildOrchardActionBundleInstruction(options) {
+  return buildResearchProtocolInstruction(options, "orchard");
+}
+
+export function buildPenumbraSpendProofV1(options) {
+  return buildResearchProtocolProof(options, "penumbraSpend");
+}
+
+export function buildPenumbraOutputProofV1(options) {
+  return buildResearchProtocolProof(options, "penumbraOutput");
+}
+
+export function buildPenumbraShieldedPoolTransaction(options) {
+  return buildResearchProtocolInstruction(options, "penumbraSpend");
+}
+
+export function buildFcmpPlusPlusMembershipProofV1(options) {
+  return buildResearchProtocolProof(options, "fcmp");
+}
+
+export function buildFcmpPlusPlusTransferInstruction(options) {
+  return buildResearchProtocolInstruction(options, "fcmp");
+}
+
+export function buildMidenStarkTransactionProofV1(options) {
+  return buildResearchProtocolProof(options, "miden");
+}
+
+export function buildMidenNoteTransactionInstruction(options) {
+  return buildResearchProtocolInstruction(options, "miden");
+}
+
+export function buildAztecPrivateKernelProofV1(options) {
+  return buildResearchProtocolProof(options, "aztec");
+}
+
+export function buildAztecPrivateRollupTransactionInstruction(options) {
+  return buildResearchProtocolInstruction(options, "aztec");
+}
+
+export function buildPqMaspStarkTransferProofV0(options) {
+  return buildResearchProtocolProof(options, "pqMasp");
+}
+
+export function buildPqMaspStarkRegisterPoolInstruction(options) {
+  return buildResearchProtocolInstruction(options, "pqMasp");
+}
+
+export function buildPqMaspStarkTransferInstruction(options) {
+  return buildResearchProtocolInstruction(options, "pqMasp");
+}
+
+export function generateMlDsaKeyPair() {
+  throw new Error("ML-DSA key generation requires a native PQ provider");
+}
+
+export function encapsulateMlKem() {
+  throw new Error("ML-KEM encapsulation requires a native PQ provider");
 }
 
 /**

@@ -145,6 +145,129 @@ def validate_output_file_path(path: Path, label: str, *, replace: bool) -> list[
     return []
 
 
+def _file_identity(file_stat: os.stat_result) -> tuple[int, int]:
+    return file_stat.st_dev, file_stat.st_ino
+
+
+def _directory_open_flags() -> int:
+    flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        flags |= os.O_DIRECTORY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    return flags
+
+
+def _sync_output_parent(
+    parent: Path,
+    label: str,
+    *,
+    expected_identity: tuple[int, int] | None,
+) -> list[str]:
+    try:
+        parent_fd = os.open(parent, _directory_open_flags())
+    except OSError:
+        return [f"{label} parent directory could not be synced"]
+    try:
+        parent_stat = os.fstat(parent_fd)
+        if not stat.S_ISDIR(parent_stat.st_mode):
+            return [f"{label} parent directory could not be synced"]
+        if expected_identity is not None and _file_identity(parent_stat) != expected_identity:
+            return [f"{label} parent directory changed before sync"]
+        os.fsync(parent_fd)
+    except OSError:
+        return [f"{label} parent directory could not be synced"]
+    finally:
+        os.close(parent_fd)
+    return []
+
+
+def _regular_file_identity_for_unlink(
+    path: Path,
+    label: str,
+) -> tuple[tuple[int, int] | None, list[str]]:
+    try:
+        path_stat = path.lstat()
+    except FileNotFoundError:
+        return None, []
+    except OSError:
+        return None, [f"{label} metadata could not be read"]
+    if stat.S_ISLNK(path_stat.st_mode):
+        return None, [f"{label} must not be a symlink"]
+    if not stat.S_ISREG(path_stat.st_mode):
+        return None, [f"{label} must be a regular file"]
+    if path_stat.st_nlink > 1:
+        return None, [f"{label} must not be hardlinked"]
+    return _file_identity(path_stat), []
+
+
+def _unlink_file_if_identity(
+    path: Path,
+    expected_identity: tuple[int, int],
+    *,
+    changed_message: str,
+    failure_message: str,
+) -> list[str]:
+    try:
+        parent_fd = os.open(path.parent, _directory_open_flags())
+    except OSError:
+        return [failure_message]
+    try:
+        try:
+            path_stat = os.stat(
+                path.name,
+                dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            return []
+        except OSError:
+            return [failure_message]
+        if (
+            not stat.S_ISREG(path_stat.st_mode)
+            or path_stat.st_nlink > 1
+            or _file_identity(path_stat) != expected_identity
+        ):
+            return [changed_message]
+        try:
+            os.unlink(path.name, dir_fd=parent_fd)
+        except OSError:
+            return [failure_message]
+    finally:
+        os.close(parent_fd)
+    return []
+
+
+def _unlink_output_for_replace(path: Path, label: str) -> list[str]:
+    errors = validate_output_file_path(path, label, replace=True)
+    if errors:
+        return errors
+    expected_identity, identity_errors = _regular_file_identity_for_unlink(path, label)
+    if identity_errors or expected_identity is None:
+        return identity_errors
+    return _unlink_file_if_identity(
+        path,
+        expected_identity,
+        changed_message=f"{label} changed before cleanup",
+        failure_message=f"{label} could not be replaced",
+    )
+
+
+def _cleanup_temp_output(
+    path: Path,
+    label: str,
+    expected_identity: tuple[int, int] | None,
+) -> list[str]:
+    if expected_identity is None:
+        return []
+    return _unlink_file_if_identity(
+        path,
+        expected_identity,
+        changed_message=f"{label} temporary output changed before cleanup",
+        failure_message=f"{label} temporary output could not be removed",
+    )
+
+
 def _staged_root_from_artifact_dir(path: Path) -> tuple[Path | None, list[str]]:
     if path.name != "kagemusha" or path.parent.name != "artifacts":
         return None, ["--staged-artifact-dir must end with artifacts/kagemusha"]
@@ -254,10 +377,9 @@ def _unlink_replace_outputs(staged_artifact_dir: Path) -> list[str]:
         RUN_REPORT_FILENAME,
     ):
         path = staged_artifact_dir / name
-        try:
-            path.unlink(missing_ok=True)
-        except OSError:
-            errors.append(f"staged lineage proof output {name} could not be replaced")
+        errors.extend(
+            _unlink_output_for_replace(path, f"staged lineage proof output {name}")
+        )
     return errors
 
 
@@ -275,10 +397,7 @@ def _unlink_resume_outputs(entries: tuple[tuple[Path, str], ...]) -> list[str]:
     if errors:
         return errors
     for path, label in entries:
-        try:
-            path.unlink(missing_ok=True)
-        except OSError:
-            errors.append(f"{label} could not be replaced")
+        errors.extend(_unlink_output_for_replace(path, label))
     return errors
 
 
@@ -303,11 +422,23 @@ def _write_text_atomic(path: Path, text: str, label: str, *, replace: bool) -> l
         path.parent.mkdir(parents=True, exist_ok=True)
     except OSError:
         return [f"{label} parent directory could not be created"]
+    errors = validate_directory_path(path.parent, f"{label} parent", must_exist=True)
+    if errors:
+        return errors
+    try:
+        parent_stat = path.parent.lstat()
+    except OSError:
+        return [f"{label} parent metadata could not be read"]
+    if stat.S_ISLNK(parent_stat.st_mode) or not stat.S_ISDIR(parent_stat.st_mode):
+        return [f"{label} parent directory could not be synced"]
+    parent_identity = _file_identity(parent_stat)
     tmp_path = path.parent / f".{path.name}.staged-runner.tmp"
+    tmp_identity: tuple[int, int] | None = None
     try:
         if tmp_path.exists() or tmp_path.is_symlink():
             return [f"{label} temporary output already exists"]
         with tmp_path.open("xb") as handle:
+            tmp_identity = _file_identity(os.fstat(handle.fileno()))
             handle.write(expected_bytes)
             handle.flush()
             os.fsync(handle.fileno())
@@ -315,14 +446,16 @@ def _write_text_atomic(path: Path, text: str, label: str, *, replace: bool) -> l
             os.replace(tmp_path, path)
         else:
             tmp_path.rename(path)
-        dir_fd = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(dir_fd)
-        finally:
-            os.close(dir_fd)
+        sync_errors = _sync_output_parent(
+            path.parent,
+            label,
+            expected_identity=parent_identity,
+        )
+        if sync_errors:
+            return sync_errors
     except OSError:
-        tmp_path.unlink(missing_ok=True)
-        return [f"{label} could not be written"]
+        cleanup_errors = _cleanup_temp_output(tmp_path, label, tmp_identity)
+        return [f"{label} could not be written", *cleanup_errors]
     return _verify_written_text_file(path, expected_bytes, label)
 
 
@@ -418,42 +551,64 @@ def _strict_json_loads(text: str, label: str) -> tuple[object | None, list[str]]
 
 
 def _run_command_to_log(command: list[str], cwd: Path, log_path: Path) -> int:
-    """Run the canonical proof command and stream combined output to ``log_path``."""
+    """Run the canonical proof command with child output owned by ``log_path``."""
 
     with log_path.open("xb") as log_handle:
         process = subprocess.Popen(
             command,
             cwd=cwd,
-            stdout=subprocess.PIPE,
+            stdout=log_handle,
             stderr=subprocess.STDOUT,
         )
-        assert process.stdout is not None
-        for chunk in iter(lambda: process.stdout.read(1024 * 1024), b""):
-            log_handle.write(chunk)
-            log_handle.flush()
-            os.fsync(log_handle.fileno())
-            sys.stdout.buffer.write(chunk)
-            sys.stdout.buffer.flush()
-        return process.wait()
+        exit_code = process.wait()
+        log_handle.flush()
+        os.fsync(log_handle.fileno())
+        return exit_code
 
 
 def _install_log_temp(temp_log: Path, final_log: Path, label: str, *, replace: bool) -> list[str]:
+    temp_identity, temp_identity_errors = _regular_file_identity_for_unlink(
+        temp_log,
+        f"{label} temporary output",
+    )
+    if temp_identity_errors:
+        return temp_identity_errors
     errors = validate_output_file_path(final_log, label, replace=replace)
     if errors:
-        return errors
+        return [
+            *errors,
+            *_cleanup_temp_output(temp_log, label, temp_identity),
+        ]
+    try:
+        log_parent_stat = final_log.parent.lstat()
+    except OSError:
+        return [
+            f"{label} parent metadata could not be read",
+            *_cleanup_temp_output(temp_log, label, temp_identity),
+        ]
+    if stat.S_ISLNK(log_parent_stat.st_mode) or not stat.S_ISDIR(log_parent_stat.st_mode):
+        return [
+            f"{label} parent directory could not be synced",
+            *_cleanup_temp_output(temp_log, label, temp_identity),
+        ]
+    log_parent_identity = _file_identity(log_parent_stat)
     try:
         if replace:
             os.replace(temp_log, final_log)
         else:
             temp_log.rename(final_log)
-        dir_fd = os.open(final_log.parent, os.O_RDONLY)
-        try:
-            os.fsync(dir_fd)
-        finally:
-            os.close(dir_fd)
+        sync_errors = _sync_output_parent(
+            final_log.parent,
+            label,
+            expected_identity=log_parent_identity,
+        )
+        if sync_errors:
+            return sync_errors
     except OSError:
-        temp_log.unlink(missing_ok=True)
-        return [f"{label} could not be installed"]
+        return [
+            f"{label} could not be installed",
+            *_cleanup_temp_output(temp_log, label, temp_identity),
+        ]
     return []
 
 
@@ -467,6 +622,13 @@ def _write_execution_report(
     log_path: Path,
     replace: bool,
 ) -> list[str]:
+    log_digest, digest_errors = lineage_evidence._sha256_file(
+        log_path,
+        f"staged {phase} execution log",
+    )
+    if digest_errors:
+        return digest_errors
+    assert log_digest is not None
     try:
         log_size = log_path.stat().st_size
     except OSError:
@@ -478,6 +640,7 @@ def _write_execution_report(
         "exit_code": exit_code,
         "elapsed_seconds": round(max(elapsed_seconds, 0.0), 6),
         "log_path": log_path.name,
+        "log_sha256": log_digest,
         "log_size_bytes": log_size,
     }
     try:
@@ -544,6 +707,7 @@ def _validate_reusable_execution_report(
         "exit_code",
         "elapsed_seconds",
         "log_path",
+        "log_sha256",
         "log_size_bytes",
     }
     extra_keys = sorted(set(document) - allowed_keys)
@@ -574,11 +738,28 @@ def _validate_reusable_execution_report(
         return [f"{label} elapsed_seconds must be a finite positive number"]
     if document["log_path"] != log_name:
         return [f"{label} log_path must be {log_name}"]
+    log_digest = document["log_sha256"]
+    if (
+        not isinstance(log_digest, str)
+        or len(log_digest) != 64
+        or any(char not in "0123456789abcdef" for char in log_digest)
+    ):
+        return [f"{label} log_sha256 must be a SHA-256 hex digest"]
     log_size = document["log_size_bytes"]
     if isinstance(log_size, bool) or not isinstance(log_size, int) or log_size <= 0:
         return [f"{label} log_size_bytes must be a positive integer"]
+    log_path = staged_artifact_dir / log_name
+    actual_log_digest, digest_errors = lineage_evidence._sha256_file(
+        log_path,
+        f"staged {profile} lineage key artifact execution report log",
+    )
+    if digest_errors:
+        return digest_errors
+    assert actual_log_digest is not None
+    if log_digest != actual_log_digest:
+        return [f"{label} log_sha256 must match staged {profile} lineage key artifact log SHA-256"]
     try:
-        actual_log_size = (staged_artifact_dir / log_name).stat().st_size
+        actual_log_size = log_path.stat().st_size
     except OSError:
         return [f"{label} log size could not be checked"]
     if log_size != actual_log_size:
@@ -659,8 +840,19 @@ def _run_lineage_key_artifact_command(
             else _run_command_to_log(shlex.split(command), staged_root, temp_log)
         )
     except OSError as exc:
-        temp_log.unlink(missing_ok=True)
-        return 1, [f"staged {profile} lineage key artifact command could not be run: {exc}"]
+        temp_identity, temp_identity_errors = _regular_file_identity_for_unlink(
+            temp_log,
+            f"staged {profile} lineage key artifact log temporary output",
+        )
+        return 1, [
+            f"staged {profile} lineage key artifact command could not be run: {exc}",
+            *temp_identity_errors,
+            *_cleanup_temp_output(
+                temp_log,
+                f"staged {profile} lineage key artifact log",
+                temp_identity,
+            ),
+        ]
     elapsed_seconds = max(time.monotonic() - start, 0.000001)
     log_errors = _install_log_temp(
         temp_log,
@@ -809,8 +1001,15 @@ def run_staged_lineage_proof(
             else _run_command_to_log(command, args.repo_root, temp_log)
         )
     except OSError as exc:
-        temp_log.unlink(missing_ok=True)
-        return 1, [f"staged lineage proof command could not be run: {exc}"]
+        temp_identity, temp_identity_errors = _regular_file_identity_for_unlink(
+            temp_log,
+            "staged proof log temporary output",
+        )
+        return 1, [
+            f"staged lineage proof command could not be run: {exc}",
+            *temp_identity_errors,
+            *_cleanup_temp_output(temp_log, "staged proof log", temp_identity),
+        ]
     elapsed_seconds = max(monotonic() - start, 0.000001)
 
     log_errors = _install_log_temp(

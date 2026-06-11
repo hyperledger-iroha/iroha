@@ -107,7 +107,7 @@ public enum KagemushaRecursiveCompactPaymentTokenProverError: Error, Equatable, 
 }
 
 public enum KagemushaRecursiveCompactPaymentTokenProver {
-    public static let requiredBridgeAbiVersion: UInt32 = 7
+    public static let requiredNativeBridgeAbiVersion: UInt32 = 7
     public static let nativeArchiveMaxBytes = 64 * 1024 * 1024
     public static let recursiveCompactCircuitIdV1 = "kagemusha-recursive-compact-v1"
     private static let maxNoritoHeaderPaddingBytes = 64

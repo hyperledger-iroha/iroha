@@ -131,22 +131,33 @@ def test_python_component_modules_match_cataloged_sdk_builder_surface() -> None:
             *(_python_entrypoint_name_variants(name) for name in planned_entrypoints)
         )
 
-        assert descriptor["implementation_stage"] in {"component", "sdk-builder"}
+        implementation_stage = descriptor["implementation_stage"]
+        assert implementation_stage in {
+            "component",
+            "sdk-builder",
+            "production-hardened",
+        }
         assert descriptor["sdk_entrypoints"], f"{algorithm_id} must expose dev builder entrypoints"
-        assert descriptor["planned_sdk_entrypoints"], (
-            f"{algorithm_id} must keep production entrypoints planned until gates pass"
-        )
+        if implementation_stage == "production-hardened":
+            assert descriptor["planned_sdk_entrypoints"] == [], (
+                f"{algorithm_id} must not retain planned entrypoints after production hardening"
+            )
+        else:
+            assert descriptor["planned_sdk_entrypoints"], (
+                f"{algorithm_id} must keep production entrypoints planned until gates pass"
+            )
         for entrypoint in descriptor["sdk_entrypoints"]:
             assert entrypoint in exports, f"{module_name}.__all__ dropped {entrypoint}"
             assert callable(getattr(module, entrypoint)), f"{module_name}.{entrypoint} is not callable"
 
-        assert planned_names.isdisjoint(exports), (
-            f"{module_name} must not export planned production entrypoints until gates pass"
-        )
-        for entrypoint in planned_names:
-            assert not hasattr(module, entrypoint), (
-                f"{module_name}.{entrypoint} is planned production surface and must remain absent"
+        if planned_names:
+            assert planned_names.isdisjoint(exports), (
+                f"{module_name} must not export planned production entrypoints until gates pass"
             )
+            for entrypoint in planned_names:
+                assert not hasattr(module, entrypoint), (
+                    f"{module_name}.{entrypoint} is planned production surface and must remain absent"
+                )
 
 
 def test_python_package_root_matches_cataloged_component_sdk_surface() -> None:

@@ -3017,8 +3017,6 @@ def test_release_bundle_rejects_malformed_copied_report_before_render(
     evidence = tmp_path / "evidence.toml"
     evidence.write_text("[zk]\n", encoding="utf-8")
     output_dir = tmp_path / "bundle"
-    markdown_field = "operator|secret-token"
-    confusable_field = "operat\u043er_artifact_note"
 
     class FakeReportModule:
         def __init__(self) -> None:
@@ -3225,6 +3223,8 @@ def test_release_bundle_rejects_unknown_copied_report_root_before_render(
     evidence = tmp_path / "evidence.toml"
     evidence.write_text("[zk]\n", encoding="utf-8")
     output_dir = tmp_path / "bundle"
+    markdown_field = "operator|secret-token"
+    confusable_field = "operat\u043er_attestation"
 
     class FakeReportModule:
         def __init__(self) -> None:
@@ -3238,6 +3238,11 @@ def test_release_bundle_rejects_unknown_copied_report_root_before_render(
             report = minimal_release_bundle_report()
             if self.calls == 2:
                 report["operator_attestation"] = "approved outside evidence"
+                report[" operator_attestation "] = "padded local claim"
+                report["operator\nattestation"] = "control local claim"
+                report["operator attestation"] = "whitespace local claim"
+                report[markdown_field] = "markdown local claim"
+                report[confusable_field] = "confusable local claim"
             return report
 
         def _render_markdown(self, *args, **kwargs) -> str:
@@ -3266,6 +3271,25 @@ def test_release_bundle_rejects_unknown_copied_report_root_before_render(
     assert (
         "bundled report contains unknown field: operator_attestation"
     ) in captured.err
+    assert (
+        "bundled report contains unknown field name with surrounding whitespace"
+        in captured.err
+    )
+    assert (
+        "bundled report contains unknown field name with control character"
+        in captured.err
+    )
+    assert "bundled report contains unknown field name with whitespace" in captured.err
+    assert (
+        "bundled report contains unknown field name with Markdown-unsafe character"
+        in captured.err
+    )
+    assert (
+        "bundled report contains unknown field name with non-ASCII character"
+        in captured.err
+    )
+    assert markdown_field not in captured.err
+    assert confusable_field not in captured.err
     assert fake_report_module.calls == 2
     assert not (output_dir / "sccp-release-readiness.md").exists()
 
@@ -3281,6 +3305,8 @@ def test_release_bundle_rejects_malformed_copied_artifacts_before_render(
     evidence = tmp_path / "evidence.toml"
     evidence.write_text("[zk]\n", encoding="utf-8")
     output_dir = tmp_path / "bundle"
+    markdown_field = "operator|secret-token"
+    confusable_field = "operat\u043er_artifact_note"
 
     class FakeReportModule:
         def __init__(self) -> None:
@@ -4419,6 +4445,8 @@ def test_release_bundle_rejects_malformed_copied_crypto_evidence_before_render(
     evidence.write_text("[zk]\n", encoding="utf-8")
     output_dir = tmp_path / "bundle"
     confusable_audit_key = "aud\u0456t_note"
+    markdown_field = "operator|secret-token"
+    confusable_field = "operat\u043er_attestation"
 
     class FakeReportModule:
         def __init__(self) -> None:
@@ -4438,6 +4466,11 @@ def test_release_bundle_rejects_malformed_copied_crypto_evidence_before_render(
                     {
                         "domain": "1",
                         "chain": " eth ",
+                        " operator_attestation ": "padded local claim",
+                        "operator\nattestation": "control local claim",
+                        "operator attestation": "whitespace local claim",
+                        markdown_field: "markdown local claim",
+                        confusable_field: "confusable local claim",
                         "evm_source_rpc_chain_id": 1,
                         "evm_source_block_tag": True,
                         "evm_destination_rpc_chain_id": False,
@@ -4497,6 +4530,20 @@ def test_release_bundle_rejects_malformed_copied_crypto_evidence_before_render(
     label = "bundled report.cryptographic_evidence[0]"
     audit_label = f"{label} source_adapter_gate_audit_hashes"
     assert "malformed SCCP release readiness report" in captured.err
+    assert (
+        f"{label} contains unknown field name with surrounding whitespace"
+        in captured.err
+    )
+    assert f"{label} contains unknown field name with control character" in (
+        captured.err
+    )
+    assert f"{label} contains unknown field name with whitespace" in captured.err
+    assert f"{label} contains unknown field name with Markdown-unsafe character" in (
+        captured.err
+    )
+    assert f"{label} contains unknown field name with non-ASCII character" in (
+        captured.err
+    )
     assert f"{label} domain must be an integer" in captured.err
     assert (
         f"{label} chain must be a non-empty string with no surrounding whitespace"
@@ -4564,6 +4611,8 @@ def test_release_bundle_rejects_malformed_copied_crypto_evidence_before_render(
         in captured.err
     )
     assert confusable_audit_key not in captured.err
+    assert markdown_field not in captured.err
+    assert confusable_field not in captured.err
     assert fake_report_module.calls == 2
     assert not (output_dir / "sccp-release-readiness.md").exists()
 
@@ -4847,6 +4896,8 @@ def test_release_bundle_rejects_malformed_copied_submission_surface_before_rende
     markdown_submission = "submit|with secret-token"
     markdown_helper = "build|ProofSecret"
     markdown_sdk_helpers = "forged|UiSecret"
+    markdown_field = "operator|secret-token"
+    confusable_field = "operat\u043er_attestation"
 
     class FakeReportModule:
         def __init__(self) -> None:
@@ -4862,6 +4913,11 @@ def test_release_bundle_rejects_malformed_copied_submission_surface_before_rende
                 surface = {
                     "lanes": " eth,bsc ",
                     "proof_backend": markdown_backend,
+                    " operator_attestation ": "padded local claim",
+                    "operator\nattestation": "control local claim",
+                    "operator attestation": "whitespace local claim",
+                    markdown_field: "markdown local claim",
+                    confusable_field: "confusable local claim",
                     "sdk_helper_symbols": [
                         "buildBridgeProofSubmission",
                         markdown_helper,
@@ -4931,6 +4987,20 @@ def test_release_bundle_rejects_malformed_copied_submission_surface_before_rende
         "must be a list of non-empty strings with no surrounding whitespace"
     )
     assert "malformed SCCP release readiness report" in captured.err
+    assert (
+        f"{label} contains unknown field name with surrounding whitespace"
+        in captured.err
+    )
+    assert f"{label} contains unknown field name with control character" in (
+        captured.err
+    )
+    assert f"{label} contains unknown field name with whitespace" in captured.err
+    assert f"{label} contains unknown field name with Markdown-unsafe character" in (
+        captured.err
+    )
+    assert f"{label} contains unknown field name with non-ASCII character" in (
+        captured.err
+    )
     assert f"{label} lanes contains surrounding whitespace" in captured.err
     assert f"{label} proof_backend contains Markdown-unsafe character" in captured.err
     assert f"{label} on_chain_submission contains Markdown-unsafe character" in (
@@ -4979,6 +5049,8 @@ def test_release_bundle_rejects_malformed_copied_submission_surface_before_rende
     assert markdown_submission not in captured.err
     assert markdown_helper not in captured.err
     assert markdown_sdk_helpers not in captured.err
+    assert markdown_field not in captured.err
+    assert confusable_field not in captured.err
     assert fake_report_module.calls == 2
     assert not (output_dir / "sccp-release-readiness.md").exists()
 
@@ -7417,6 +7489,8 @@ def test_release_bundle_rejects_malformed_copied_source_inventory_before_render(
     evidence = tmp_path / "evidence.toml"
     evidence.write_text("[zk]\n", encoding="utf-8")
     output_dir = tmp_path / "bundle"
+    markdown_field = "operator|secret-token"
+    confusable_field = "operat\u043er_note"
 
     class FakeReportModule:
         def __init__(self) -> None:
@@ -7438,6 +7512,11 @@ def test_release_bundle_rejects_malformed_copied_source_inventory_before_render(
                             "missing marker",
                         ],
                         "operator_attestation": "reviewed outside evidence",
+                        " operator_note ": "padded local claim",
+                        "operator\nnote": "control local claim",
+                        "operator note": "whitespace local claim",
+                        markdown_field: "markdown local claim",
+                        confusable_field: "confusable local claim",
                     },
                     "operator attestation": {
                         "validation_status": "passed",
@@ -7490,6 +7569,26 @@ def test_release_bundle_rejects_malformed_copied_source_inventory_before_render(
     ) in captured.err
     assert (
         "bundled report.source_inventory['release_public_json_root_schema_gate'] "
+        "contains unknown field name with surrounding whitespace"
+    ) in captured.err
+    assert (
+        "bundled report.source_inventory['release_public_json_root_schema_gate'] "
+        "contains unknown field name with control character"
+    ) in captured.err
+    assert (
+        "bundled report.source_inventory['release_public_json_root_schema_gate'] "
+        "contains unknown field name with whitespace"
+    ) in captured.err
+    assert (
+        "bundled report.source_inventory['release_public_json_root_schema_gate'] "
+        "contains unknown field name with Markdown-unsafe character"
+    ) in captured.err
+    assert (
+        "bundled report.source_inventory['release_public_json_root_schema_gate'] "
+        "contains unknown field name with non-ASCII character"
+    ) in captured.err
+    assert (
+        "bundled report.source_inventory['release_public_json_root_schema_gate'] "
         "validation_status must be passed"
     ) in captured.err
     assert (
@@ -7505,6 +7604,8 @@ def test_release_bundle_rejects_malformed_copied_source_inventory_before_render(
         "bundled report.source_inventory['release_public_json_root_schema_gate'] "
         "validation_blockers must be empty"
     ) in captured.err
+    assert markdown_field not in captured.err
+    assert confusable_field not in captured.err
     assert fake_report_module.calls == 2
     assert not (output_dir / "sccp-release-readiness.md").exists()
 
@@ -17006,6 +17107,68 @@ def test_release_bundle_verifier_recomputes_active_checklist_rejects_malformed_c
             in blocker
             for blocker in route_canary_item["blockers"]
         ), repr(source)
+
+
+def test_release_bundle_verifier_classifies_malformed_active_required_record_fields(
+    tmp_path: Path,
+) -> None:
+    """Verifier recomputed checklist must not leak malformed record keys."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    summary_payload = (output_dir / "sccp-all-lanes-summary.json").read_text(
+        encoding="utf-8"
+    )
+    confusable_field = "operat\u043er_override"
+    markdown_field = "operator|secret-token"
+    cases = (
+        (
+            " operator_override ",
+            "required record summary contains unknown field name with surrounding whitespace",
+        ),
+        (
+            "operator\noverride",
+            "required record summary contains unknown field name with control character",
+        ),
+        (
+            "operator override",
+            "required record summary contains unknown field name with whitespace",
+        ),
+        (
+            markdown_field,
+            "required record summary contains unknown field name with Markdown-unsafe character",
+        ),
+        (
+            confusable_field,
+            "required record summary contains unknown field name with non-ASCII character",
+        ),
+    )
+
+    for field, expected_blocker in cases:
+        summary = json.loads(summary_payload)
+        active_lane = next(
+            lane
+            for lane in summary["lanes"]
+            if lane["domain"] == verifier.ACTIVE_LAUNCH_DOMAIN
+        )
+        active_lane["records"][field] = True
+
+        checklist = verifier._active_launch_release_checklist(
+            summary,
+            report["native_evm_prover_bundle"],
+        )
+        item_by_id = {item["id"]: item for item in checklist["items"]}
+        records_item = item_by_id["all_required_lane_records"]
+        blockers = "\n".join(records_item["blockers"])
+
+        assert checklist["ready"] is False, field
+        assert records_item["ready"] is False, field
+        assert expected_blocker in blockers, field
+        assert markdown_field not in blockers
+        assert confusable_field not in blockers
 
 
 def test_release_bundle_verifier_classifies_malformed_active_lane_blockers(

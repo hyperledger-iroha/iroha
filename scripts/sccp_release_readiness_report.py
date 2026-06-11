@@ -2866,6 +2866,17 @@ def _native_evm_prover_field_name_blocker(
     return f"{label} contains {field_kind} field: {key}"
 
 
+def _required_record_summary_unknown_field_blocker(
+    lane_label: str,
+    key: Any,
+) -> str:
+    return _native_evm_prover_field_name_blocker(
+        f"{lane_label}: required record summary",
+        key,
+        "unknown",
+    )
+
+
 def _native_evm_prover_duplicate_json_key_blocker(label: str, key: Any) -> str:
     if not isinstance(key, str) or not key:
         return f"{label} JSON contains malformed duplicate key"
@@ -4828,7 +4839,7 @@ def _active_launch_required_record_metadata_blockers(
     if not isinstance(records, dict):
         return blockers + [f"{lane_label}: required record summary is missing"]
     for key in sorted(set(records) - set(record_labels)):
-        blockers.append(f"{lane_label}: required record summary has unknown field {key}")
+        blockers.append(_required_record_summary_unknown_field_blocker(lane_label, key))
     for key, label in record_labels.items():
         if records.get(key) is not True:
             blockers.append(f"{lane_label}: missing {label}")

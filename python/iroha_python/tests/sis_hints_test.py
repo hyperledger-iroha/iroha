@@ -5,13 +5,17 @@ import json
 import pytest
 
 from iroha_python import (
+    buildSisHintsAnonymousCredentialProofV0,
     buildSisHintsCredentialCommitments,
     buildSisHintsCredentialDevProofFixture,
     buildSisHintsCredentialEnvelope,
+    build_sis_hints_anonymous_credential_proof_v0,
     build_sis_hints_credential_commitments,
     build_sis_hints_credential_dev_proof_fixture,
     build_sis_hints_credential_envelope,
+    verifySisHintsAnonymousCredentialProofV0,
     verifySisHintsCredentialProofLocally,
+    verify_sis_hints_anonymous_credential_proof_v0,
     verify_sis_hints_credential_proof_locally,
 )
 from iroha_python.verange import (
@@ -113,6 +117,71 @@ def test_sis_hints_builders_normalize_commitments_and_envelopes() -> None:
     assert verified["public_inputs"] == fixture["public_inputs"]
 
 
+def test_sis_hints_production_builder_and_verifier_reject_dev_fixtures() -> None:
+    base = _base()
+    proof = build_sis_hints_anonymous_credential_proof_v0(
+        {
+            **base,
+            "vkHash": bytes([0xBB]) * 32,
+            "proofBytes": b"production-sis-hints-proof",
+        }
+    )
+    decoded = decode_privacy_proof_envelope(proof)
+    assert decoded["backend"] == "SisWithHints"
+
+    verified = verify_sis_hints_anonymous_credential_proof_v0(
+        {"envelope": proof, **base}
+    )
+    assert verified["ok"] is True
+    assert verified["production"] is True
+    assert verified["backend"] == "SisWithHints"
+    assert verified["kind"] == "sis-hints-anoncred-pq-v0"
+
+    with pytest.raises(ValueError, match="must be Unsupported"):
+        verify_sis_hints_credential_proof_locally({"envelope": proof, **base})
+
+    fixture = build_sis_hints_credential_dev_proof_fixture(
+        {**base, "vkHash": bytes([0xBB]) * 32}
+    )
+    with pytest.raises(ValueError, match="unsupported tag|SisWithHints"):
+        verify_sis_hints_anonymous_credential_proof_v0(
+            {"envelope": fixture["envelope"], **base}
+        )
+    with pytest.raises(ValueError, match="dev fixture"):
+        build_sis_hints_anonymous_credential_proof_v0(
+            {
+                **base,
+                "vkHash": bytes([0xBB]) * 32,
+                "proofBytes": fixture["proofBytes"],
+            }
+        )
+
+    dev_encoded_as_sis_hints = _build_privacy_proof_envelope_internal(
+        {
+            "backend": "sis-with-hints",
+            "circuitId": decoded["circuit_id"],
+            "vkHash": bytes([0xBB]) * 32,
+            "publicInputs": decoded["public_inputs"],
+            "proofBytes": fixture["proofBytes"],
+        }
+    )
+    with pytest.raises(ValueError, match="dev fixture"):
+        verify_sis_hints_anonymous_credential_proof_v0(
+            {"envelope": dev_encoded_as_sis_hints, **base}
+        )
+
+    for backend in ("unsupported", "stark/fri/sha256-goldilocks"):
+        with pytest.raises(ValueError, match="backend"):
+            build_sis_hints_anonymous_credential_proof_v0(
+                {
+                    **base,
+                    "backend": backend,
+                    "vkHash": bytes([0xBB]) * 32,
+                    "proofBytes": b"production-sis-hints-proof",
+                }
+            )
+
+
 def test_sis_hints_package_root_exports_catalog_entrypoint_aliases() -> None:
     base = _base()
     commitments = buildSisHintsCredentialCommitments(base)
@@ -129,6 +198,17 @@ def test_sis_hints_package_root_exports_catalog_entrypoint_aliases() -> None:
     )["proof_bytes"] == (
         b"prepared-sis-hints-proof"
     )
+    production_proof = buildSisHintsAnonymousCredentialProofV0(
+        {
+            **base,
+            "vkHash": bytes([0xBB]) * 32,
+            "proofBytes": b"production-sis-hints-proof",
+        }
+    )
+    production_verified = verifySisHintsAnonymousCredentialProofV0(
+        {"envelope": production_proof, **base}
+    )
+    assert production_verified["production"] is True
 
     fixture = buildSisHintsCredentialDevProofFixture(
         {**base, "vkHash": bytes([0xBB]) * 32}

@@ -156,6 +156,8 @@ __all__ = [
     "buildConfidentialTransferProofV2",
     "build_confidential_unshield_proof_v3",
     "buildConfidentialUnshieldProofV3",
+    "build_confidential_asset_hidden_transfer_proof_v1",
+    "buildConfidentialAssetHiddenTransferProofV1",
     "build_zk_ace_authorization_proof_v1",
     "zk_ace_build_transfer_authorization_v1",
     "privacy_bridge_abi_version",
@@ -1101,8 +1103,47 @@ def build_confidential_unshield_proof_v3(
     return _confidential_native_result(result, "confidential unshield v3 prover")
 
 
+def build_confidential_asset_hidden_transfer_proof_v1(
+    *,
+    chain_id: str,
+    pool_id: str,
+    asset_set_root: bytes | bytearray | memoryview | str,
+    input_commitments: Iterable[bytes | bytearray | memoryview | str],
+    nullifiers: Iterable[bytes | bytearray | memoryview | str],
+    output_commitments: Iterable[bytes | bytearray | memoryview | str],
+    root_hint: bytes | bytearray | memoryview | str,
+    verifying_key: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """Build an asset-hidden transfer v1 proof envelope with the native Halo2 prover."""
+
+    if not hasattr(_crypto, "build_confidential_asset_hidden_transfer_proof_v1"):
+        raise RuntimeError(
+            "iroha_python._crypto is missing asset-hidden transfer v1 prover support; rebuild the extension"
+        )
+    vk_backend, vk_circuit_id, vk_bytes = _confidential_verifying_key_parts(
+        verifying_key,
+        "verifying_key",
+    )
+    result = _crypto.build_confidential_asset_hidden_transfer_proof_v1(
+        str(chain_id),
+        str(pool_id),
+        asset_set_root,
+        list(input_commitments),
+        list(nullifiers),
+        list(output_commitments),
+        root_hint,
+        vk_backend,
+        vk_circuit_id,
+        vk_bytes,
+    )
+    return _confidential_native_result(result, "asset-hidden transfer v1 prover")
+
+
 buildConfidentialTransferProofV2 = build_confidential_transfer_proof_v2
 buildConfidentialUnshieldProofV3 = build_confidential_unshield_proof_v3
+buildConfidentialAssetHiddenTransferProofV1 = (
+    build_confidential_asset_hidden_transfer_proof_v1
+)
 
 
 def zk_ace_build_transfer_authorization_v1(
@@ -1498,9 +1539,9 @@ def _privacy_proof_request_native_probe_returns_bytes(module: object) -> bool:
     try:
         result = _call_privacy_native_method(
             method,
-            "verange-transparent-range-v1",
-            "buildVeRangeProofV1",
-            "bulletproofs:verange_transparent_range_v1",
+            _ZK_ACE_ALGORITHM_ID,
+            _ZK_ACE_PRODUCTION_ENTRYPOINT,
+            _ZK_ACE_PRODUCTION_VK_REF,
             public_inputs,
             b"",
             b"",

@@ -3849,6 +3849,13 @@ impl KagemushaRecursiveAggregationProofPublicInputs {
         }
         validate_kagemusha_recursive_aggregation_proof_public_input_digests(self)?;
         validate_kagemusha_recursive_aggregation_proof_public_input_counts(self)?;
+        if self.append_opening_preflight_digest != [0u8; Hash::LENGTH] && self.hop_count <= 1 {
+            return Err(
+                KagemushaFoldError::RecursiveAggregationProofPublicInputMismatch {
+                    field: "append_opening_preflight_digest",
+                },
+            );
+        }
         Ok(())
     }
 
@@ -10204,7 +10211,7 @@ mod offline_note_tests {
                 "{{\n",
                 "  \"schema\": \"iroha.kagemusha.recursive_spend.abi6.archive_fixtures.v1\",\n",
                 "  \"fixture_kind\": \"norito_archives\",\n",
-                "  \"bridge_abi_version\": 6,\n",
+                "  \"native_bridge_abi_version\": 6,\n",
                 "{request_archive_fields},\n",
                 "  \"archives\": [\n",
                 "{entries}\n",

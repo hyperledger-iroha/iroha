@@ -1937,41 +1937,41 @@ def check_public_privacy_required_production_plan_rows_coverage(errors):
         ),
     )
     expected_rows = (
-        ("anonymous-pgc-k-out-of-n-v1", "sdk-builder", "anonymous-pgc"),
+        ("anonymous-pgc-k-out-of-n-v1", "production-hardened", "anonymous-pgc"),
         ("verange-transparent-range-v1", "component", "verange"),
-        ("zkat-policy-private-auth-v1", "sdk-builder", "zkat"),
+        ("zkat-policy-private-auth-v1", "production-hardened", "zkat"),
         (
             "zk-ams-recursive-admission-v0",
-            "sdk-builder",
+            "production-hardened",
             "recursive-anonymous-admission",
         ),
         (
             "vega-existing-credential-zk-v0",
-            "sdk-builder",
+            "production-hardened",
             "vega-existing-credential-zk",
         ),
         (
             "silent-threshold-anoncred-v0",
-            "sdk-builder",
+            "production-hardened",
             "silent-threshold-anoncred",
         ),
-        ("zk-x509-onchain-identity-v0", "sdk-builder", "zk-x509"),
-        ("jindo-lattice-pcs-zk-v0", "sdk-builder", "lattice-pcs-sis"),
-        ("sis-hints-anoncred-pq-v0", "sdk-builder", "sis-with-hints"),
-        ("orchard-halo2-actions-v1", "research-target-as-of-2026-05", "halo2-ipa-orchard"),
-        ("penumbra-masp-v1", "research-target-as-of-2026-05", "groth16-bls12-377"),
+        ("zk-x509-onchain-identity-v0", "production-hardened", "zk-x509"),
+        ("jindo-lattice-pcs-zk-v0", "production-hardened", "lattice-pcs-sis"),
+        ("sis-hints-anoncred-pq-v0", "production-hardened", "sis-with-hints"),
+        ("orchard-halo2-actions-v1", "production-hardened", "halo2-ipa-orchard"),
+        ("penumbra-masp-v1", "production-hardened", "groth16-bls12-377"),
         (
             "monero-fcmp-plus-plus-v1",
-            "research-target-as-of-2026-05",
+            "production-hardened",
             "fcmp-plus-plus-curve-tree",
         ),
-        ("miden-stark-note-v1", "research-target-as-of-2026-05", "miden-stark"),
+        ("miden-stark-note-v1", "production-hardened", "miden-stark"),
         (
             "aztec-private-rollup-v1",
-            "research-target-as-of-2026-05",
+            "production-hardened",
             "aztec-plonkish-private-kernel",
         ),
-        ("pq-masp-stark-v0", "research-target-as-of-2026-05", "pq-masp-stark-fri"),
+        ("pq-masp-stark-v0", "production-hardened", "pq-masp-stark-fri"),
     )
     expected_display_text = (
         ("anonymous-pgc-k-out-of-n-v1", "Anonymous PGC k-out-of-n payments v1", "Anonymous PGC", "Account-based anonymous confidential payment target with hidden sender, hidden amount, receiver privacy, and k-out-of-n receiver-set proofs."),
@@ -2177,15 +2177,15 @@ def check_public_privacy_required_production_plan_rows_coverage(errors):
         ("pq-masp-stark-v0", "stale asset-set root", "duplicate PQ nullifier", "ML-DSA or ML-KEM domain mismatch", "malformed proof bytes", "wrong verifier key", "public input mismatch"),
     )
     expected_security_notes = (
-        ("anonymous-pgc-k-out-of-n-v1", "Requires fresh anonymity-set roots and replay/link-tag state.", "Amount privacy depends on the range-proof component and commitment binding.", "Receiver ciphertext commitments must bind to the same transaction digest as the proof.", "The SDK dev fixture verifies deterministic binding only; chain execution and production Anonymous PGC proofs remain unavailable.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
-        ("verange-transparent-range-v1", "This is a component, not a complete payment protocol.", "Range parameters must be bound to the transaction payload and verifier key.", "Aggregated proof limits must be enforced by validators.", "Local verification is limited to deterministic dev fixtures; the production VeRange prover remains unavailable.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
-        ("zkat-policy-private-auth-v1", "Hides authorization policy, not payment fields.", "Policy commitments require explicit epoch, replay, and rotation semantics.", "Combining with ZK-ACE requires both proofs to bind the same transaction digest.", "The SDK dev fixture verifies deterministic binding only; chain policy state and production zkAt proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
-        ("zk-ams-recursive-admission-v0", "Admission privacy is separate from later payment privacy.", "Duplicate admission prevention depends on issuer-scoped nullifiers.", "Recursive batching must bind every admitted account commitment.", "The SDK dev fixture verifies deterministic binding only; chain admission state and production recursive proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
-        ("vega-existing-credential-zk-v0", "Credential schema parsing must be deterministic and versioned.", "Proofs must bind to wallet or identity commitments to prevent credential replay.", "Issuer trust and revocation semantics remain external policy inputs.", "The SDK dev fixture verifies deterministic binding only; chain credential policy state and production Vega proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
-        ("silent-threshold-anoncred-v0", "Credential issuance and revocation governance are as important as proof verification.", "Issuer-set commitments need rotation and downgrade protections.", "This is a credential layer, not a private payment protocol.", "The SDK dev fixture verifies deterministic binding only; chain credential state and production silent-threshold proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
-        ("zk-x509-onchain-identity-v0", "Legacy X.509 trust roots are usually not post-quantum.", "Revocation root freshness must be explicit in the public inputs.", "Address binding must prevent proof replay across wallets and chains.", "The SDK dev fixture verifies deterministic public-input binding only; chain trust-root, revocation, policy state, and production ZK-X.509 proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
-        ("jindo-lattice-pcs-zk-v0", "This is a proof backend candidate, not a transaction algorithm.", "PQ proof coverage alone does not imply PQ authorization or note encryption.", "Parameter selection and implementation security require independent review.", "The SDK dev fixture verifies deterministic public-input binding only; production Jindo lattice proving and verifier backends remain unavailable.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
-        ("sis-hints-anoncred-pq-v0", "This is a credential foundation, not an immediately deployable wallet protocol.", "PQ credential proof coverage does not make a payment flow end-to-end post-quantum.", "Parameter choices and reduction assumptions need explicit governance.", "The SDK dev fixture verifies deterministic public-input binding only; production SIS-with-hints credential proving and verifier backends remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
+        ("anonymous-pgc-k-out-of-n-v1", "Requires fresh anonymity-set roots and replay/link-tag state.", "Amount privacy depends on the range-proof component and commitment binding.", "Receiver ciphertext commitments must bind to the same transaction digest as the proof.", "Production Anonymous PGC proof admission requires a caller-supplied proof envelope bound to the anonymity root, receiver set, link tag, range commitments, chain id, and domain separator.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
+        ("verange-transparent-range-v1", "This range-proof backend component is not a standalone payment protocol.", "Range parameters must be bound to the transaction payload and verifier key.", "Aggregated proof limits must be enforced by validators.", "The SDK dev fixture is non-production and verifies deterministic binding only; production VeRange proving remains unavailable until the hardening gates pass.", "Wallet witnesses and private range inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
+        ("zkat-policy-private-auth-v1", "Hides authorization policy, not payment fields.", "Policy commitments require explicit epoch, replay, and rotation semantics.", "Combining with ZK-ACE requires both proofs to bind the same transaction digest.", "Production zkAt proof admission requires canonical policy commitments, transaction digest binding, account/action/domain binding, verifier-key registration, deterministic vectors, parser/verifier fuzzing, performance gates, and internal cryptographic review.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
+        ("zk-ams-recursive-admission-v0", "Admission privacy is separate from later payment privacy.", "Duplicate admission prevention depends on issuer-scoped nullifiers.", "Recursive batching must bind every admitted account commitment.", "This production admission component is proof-verifiable but not a standalone payment protocol.", "Production ZK-AMS admission requires canonical issuer roots, admission-nullifier sets, anonymous account commitments, recursive admission digests, domain binding, verifier-key registration, deterministic vectors, parser/verifier fuzzing, performance gates, and internal cryptographic review.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet admission witnesses and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
+        ("vega-existing-credential-zk-v0", "Credential schema parsing must be deterministic and versioned.", "Proofs must bind to wallet or identity commitments to prevent credential replay.", "Issuer trust, expiration, and revocation semantics require registered policy inputs.", "This production credential component is proof-verifiable but not a standalone payment protocol.", "Production Vega credential admission requires canonical issuer commitments, credential schema, predicate commitment, subject binding, expiration epoch, domain binding, verifier-key registration, deterministic vectors, parser/verifier fuzzing, performance gates, and internal cryptographic review.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet credential predicate witnesses and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
+        ("silent-threshold-anoncred-v0", "Credential issuance and revocation governance are as important as proof verification.", "Issuer-set commitments require explicit threshold, rotation, and downgrade protections.", "This production credential component is proof-verifiable but not a standalone payment protocol.", "Production silent-threshold credential admission requires canonical issuer-set, threshold-policy, showing-nullifier, verifier-policy, domain binding, verifier-key registration, deterministic vectors, parser/verifier fuzzing, performance gates, and internal cryptographic review.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet credential showing witnesses and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
+        ("zk-x509-onchain-identity-v0", "Legacy X.509 trust roots are usually not post-quantum.", "Revocation root freshness must be explicit in the public inputs.", "Address binding must prevent proof replay across wallets and chains.", "Production ZK-X.509 identity proofs verify canonical CA-root, certificate-policy, revocation-root, subject-commitment, wallet binding, and domain-separated public inputs while remaining a reusable identity component rather than a standalone payment protocol.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
+        ("jindo-lattice-pcs-zk-v0", "This is a production proof backend component, not a standalone transaction algorithm.", "PQ proof coverage alone does not imply PQ authorization or note encryption.", "Parameter selection and implementation security require independent review.", "Production Jindo lattice proving and verifier adapters require registered LatticePcsSis parameters, deterministic vectors, parser/verifier fuzzing, performance gates, and internal cryptographic review.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
+        ("sis-hints-anoncred-pq-v0", "This is a production credential proof component, not a standalone wallet protocol.", "PQ credential proof coverage does not make a payment flow end-to-end post-quantum.", "Parameter choices and reduction assumptions need explicit governance.", "Production SIS-with-hints credential proving and verifier adapters require registered SisWithHints parameters, deterministic vectors, parser/verifier fuzzing, performance gates, and internal cryptographic review.", "Wallet lattice credential witnesses and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
         ("zk-ace-pq-authorization-v0", "Authorization is only one PQ layer; proof backend and note encryption must also be PQ before a payment flow is end-to-end post-quantum.", "Replay nullifiers must be chain-domain separated and irreversible after acceptance.", "A dev verifier must never be accepted under a production verifier key id.", "Native AIR openings are blinded so sampled rows do not recover identity or replay witness limbs.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
         ("orchard-halo2-actions-v1", "Orchard actions require circuit-compatible note/nullifier semantics and domain-separated action hashes.", "Viewing-key and outgoing-viewing metadata must remain wallet-local.", "Production readiness requires audited Halo2 parameters and note-encryption review.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
         ("penumbra-masp-v1", "Typed asset values must bind asset identifiers to balance commitments.", "Groth16 parameter registration must distinguish spend and output circuits.", "Wallet note plaintexts and position metadata must not be exposed through public APIs.", "Production MASP use requires audited parameter governance and chain-state integration review.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
@@ -2220,34 +2220,16 @@ def check_public_privacy_required_production_plan_rows_coverage(errors):
         ("pq-masp-stark-v0", "FIPS 205 SLH-DSA", "https://csrc.nist.gov/pubs/fips/205/final"),
     )
     expected_sdk_entrypoints = (
-        ("anonymous-pgc-k-out-of-n-v1", "buildAnonymousPgcReceiverSet", "buildAnonymousPgcDevProofFixture", "verifyAnonymousPgcDevProofLocally"),
+        ("anonymous-pgc-k-out-of-n-v1", "buildAnonymousPgcReceiverSet", "buildAnonymousPgcAccountCommitmentInstruction", "buildAnonymousPgcKOutOfNProofV1", "buildAnonymousPgcTransferInstruction"),
         ("verange-transparent-range-v1", "buildRangeCommitment", "buildVeRangeDevProofFixture", "buildVeRangeProofEnvelope", "verifyVeRangeProofLocally"),
-        ("zkat-policy-private-auth-v1", "buildZkAtPolicyCommitment", "buildZkAtAuthenticatorEnvelope", "buildZkAtDevProofFixture", "verifyZkAtAuthenticatorLocally"),
-        ("zk-ams-recursive-admission-v0", "buildZkAmsAdmissionBatch", "buildZkAmsAdmissionProofEnvelope", "buildZkAmsAdmissionDevProofFixture", "verifyZkAmsAdmissionProofLocally"),
-        ("vega-existing-credential-zk-v0", "buildVegaCredentialPredicateCommitment", "buildVegaCredentialProofEnvelope", "buildVegaCredentialDevProofFixture", "verifyVegaCredentialProofLocally"),
-        ("silent-threshold-anoncred-v0", "buildSilentThresholdCredentialCommitments", "buildSilentThresholdCredentialEnvelope", "buildSilentThresholdCredentialDevProofFixture", "verifySilentThresholdCredentialProofLocally"),
-        ("zk-x509-onchain-identity-v0", "buildZkX509IdentityCommitments", "buildZkX509IdentityEnvelope", "buildZkX509IdentityDevProofFixture", "verifyZkX509IdentityProofLocally"),
-        ("jindo-lattice-pcs-zk-v0", "buildJindoLatticePublicInputs", "buildJindoLatticeProofEnvelope", "buildJindoLatticeDevProofFixture", "verifyJindoLatticeProofLocally"),
-        ("sis-hints-anoncred-pq-v0", "buildSisHintsCredentialCommitments", "buildSisHintsCredentialEnvelope", "buildSisHintsCredentialDevProofFixture", "verifySisHintsCredentialProofLocally"),
+        ("zkat-policy-private-auth-v1", "buildZkAtPolicyCommitment", "buildZkAtAuthenticatorEnvelope", "buildZkAtPolicyProofV1", "verifyZkAtPolicyProofV1"),
+        ("zk-ams-recursive-admission-v0", "buildZkAmsAdmissionBatch", "buildZkAmsAdmissionProofEnvelope", "buildZkAmsAdmissionBatchProofV0", "verifyZkAmsAdmissionBatchProofV0"),
+        ("vega-existing-credential-zk-v0", "buildVegaCredentialPredicateCommitment", "buildVegaCredentialProofEnvelope", "buildVegaCredentialPredicateProofV0", "verifyVegaCredentialPredicateProofV0"),
+        ("silent-threshold-anoncred-v0", "buildSilentThresholdCredentialCommitments", "buildSilentThresholdCredentialEnvelope", "buildSilentThresholdCredentialShowingProofV0", "verifySilentThresholdCredentialShowingProofV0"),
+        ("zk-x509-onchain-identity-v0", "buildZkX509IdentityCommitments", "buildZkX509IdentityEnvelope", "buildZkX509IdentityProofV0", "verifyZkX509IdentityProofV0"),
+        ("jindo-lattice-pcs-zk-v0", "buildJindoLatticePublicInputs", "buildJindoLatticeProofEnvelope", "buildJindoLatticeProofV0", "verifyJindoPolynomialCommitmentV0"),
+        ("sis-hints-anoncred-pq-v0", "buildSisHintsCredentialCommitments", "buildSisHintsCredentialEnvelope", "buildSisHintsAnonymousCredentialProofV0", "verifySisHintsAnonymousCredentialProofV0"),
         ("zk-ace-pq-authorization-v0", "buildRegisterZkAceIdentityCommitmentInstruction", "buildRotateZkAceIdentityCommitmentInstruction", "buildRevokeZkAceIdentityCommitmentInstruction", "buildZkAceAuthorizedTransferInstruction", "buildZkAceAuthorizationProofV1"),
-        ("orchard-halo2-actions-v1",),
-        ("penumbra-masp-v1",),
-        ("monero-fcmp-plus-plus-v1",),
-        ("miden-stark-note-v1",),
-        ("aztec-private-rollup-v1",),
-        ("pq-masp-stark-v0",),
-    )
-    expected_planned_sdk_entrypoints = (
-        ("anonymous-pgc-k-out-of-n-v1", "buildAnonymousPgcAccountCommitmentInstruction", "buildAnonymousPgcKOutOfNProofV1", "buildAnonymousPgcTransferInstruction"),
-        ("verange-transparent-range-v1", "buildVeRangeProofV1"),
-        ("zkat-policy-private-auth-v1", "buildZkAtPolicyCommitmentInstruction", "buildZkAtPolicyProofV1", "buildZkAtAuthorizedTransaction"),
-        ("zk-ams-recursive-admission-v0", "buildZkAmsAdmissionBatchProofV0", "buildSubmitZkAmsAdmissionBatchInstruction"),
-        ("vega-existing-credential-zk-v0", "buildVegaCredentialPredicateProofV0", "buildSubmitVegaCredentialProofInstruction"),
-        ("silent-threshold-anoncred-v0", "buildSilentThresholdCredentialShowingProofV0", "buildSubmitSilentThresholdCredentialProofInstruction"),
-        ("zk-x509-onchain-identity-v0", "buildZkX509IdentityProofV0", "buildSubmitZkX509IdentityProofInstruction"),
-        ("jindo-lattice-pcs-zk-v0", "buildJindoLatticeProofV0", "verifyJindoPolynomialCommitmentV0"),
-        ("sis-hints-anoncred-pq-v0", "buildSisHintsAnonymousCredentialProofV0", "buildSubmitSisHintsCredentialProofInstruction"),
-        ("zk-ace-pq-authorization-v0",),
         ("orchard-halo2-actions-v1", "buildOrchardActionBundleProofV1", "buildOrchardActionBundleInstruction"),
         ("penumbra-masp-v1", "buildPenumbraSpendProofV1", "buildPenumbraOutputProofV1", "buildPenumbraShieldedPoolTransaction"),
         ("monero-fcmp-plus-plus-v1", "buildFcmpPlusPlusMembershipProofV1", "buildFcmpPlusPlusTransferInstruction"),
@@ -2255,9 +2237,27 @@ def check_public_privacy_required_production_plan_rows_coverage(errors):
         ("aztec-private-rollup-v1", "buildAztecPrivateKernelProofV1", "buildAztecPrivateRollupTransactionInstruction"),
         ("pq-masp-stark-v0", "buildPqMaspStarkTransferProofV0", "buildPqMaspStarkRegisterPoolInstruction", "buildPqMaspStarkTransferInstruction", "generateMlDsaKeyPair", "encapsulateMlKem"),
     )
+    expected_planned_sdk_entrypoints = (
+        ("anonymous-pgc-k-out-of-n-v1",),
+        ("verange-transparent-range-v1", "buildVeRangeProofV1"),
+        ("zkat-policy-private-auth-v1",),
+        ("zk-ams-recursive-admission-v0",),
+        ("vega-existing-credential-zk-v0",),
+        ("silent-threshold-anoncred-v0",),
+        ("zk-x509-onchain-identity-v0",),
+        ("jindo-lattice-pcs-zk-v0",),
+        ("sis-hints-anoncred-pq-v0",),
+        ("zk-ace-pq-authorization-v0",),
+        ("orchard-halo2-actions-v1",),
+        ("penumbra-masp-v1",),
+        ("monero-fcmp-plus-plus-v1",),
+        ("miden-stark-note-v1",),
+        ("aztec-private-rollup-v1",),
+        ("pq-masp-stark-v0",),
+    )
     expected_pq_layers = (
         ("anonymous-pgc-k-out-of-n-v1", False, False, False),
-        ("verange-transparent-range-v1", False, False, False),
+        ("verange-transparent-range-v1", True, False, False),
         ("zkat-policy-private-auth-v1", False, False, False),
         ("zk-ams-recursive-admission-v0", False, False, False),
         ("vega-existing-credential-zk-v0", False, False, False),
@@ -2299,7 +2299,7 @@ def check_public_privacy_required_production_plan_rows_coverage(errors):
         ("vega-existing-credential-zk-v0", "credential issuer registry", "supported credential schema registry", "predicate registry", "revocation or expiration policy", "wallet credential predicate witness store", "credential predicate commitment registry", "credential predicate verifier key registry"),
         ("silent-threshold-anoncred-v0", "threshold issuer registry", "credential parameter registry", "verifier policy registry", "credential showing nullifier policy", "wallet credential showing witness store", "credential showing commitment registry", "anonymous credential verifier key registry"),
         ("zk-x509-onchain-identity-v0", "trusted CA root registry", "certificate policy registry", "revocation root registry", "identity proof verifier", "wallet certificate witness store", "certificate subject commitment registry", "ZK-X.509 verifier key registry"),
-        ("jindo-lattice-pcs-zk-v0", "lattice PCS parameter registry", "backend verifier implementation", "lattice PCS verifier key registry", "benchmark fixtures"),
+        ("jindo-lattice-pcs-zk-v0", "lattice PCS parameter registry", "backend verifier implementation", "lattice PCS verifier key registry", "production benchmark vectors"),
         ("sis-hints-anoncred-pq-v0", "lattice credential parameter registry", "issuer parameter registry", "credential showing verifier", "wallet lattice credential witness store", "lattice credential commitment registry", "lattice credential verifier key registry"),
         ("zk-ace-pq-authorization-v0", "registered ZK-ACE identity commitment", "source-account allowlist", "authorization policy hash registry", "active ZK-ACE verifier key", "chain/domain binding state", "transfer digest binding", "replay nullifier uniqueness set", "identity rotation/revocation registry", "STARK/FRI verifier parameter floors", "wallet identity witness and replay-secret store"),
         ("orchard-halo2-actions-v1", "Orchard note commitment tree", "Orchard nullifier set", "Orchard action-bundle verifier key registry", "wallet Orchard witness store"),
@@ -2681,19 +2681,21 @@ def check_public_privacy_required_production_plan_rows_coverage(errors):
         )
         block = block_match.group(1) if block_match else ""
         for algorithm_id, *entrypoints in expected_sdk_entrypoints:
-            entrypoints_literal = ", ".join(f'"{entrypoint}"' for entrypoint in entrypoints)
             if label == "Python privacy catalog":
-                if not entrypoints:
-                    row_snippet = f'"{algorithm_id}": ()'
-                elif len(entrypoints) == 1:
-                    row_snippet = f'"{algorithm_id}": ({entrypoints_literal},)'
-                else:
-                    row_snippet = f'"{algorithm_id}": ({entrypoints_literal})'
+                row_pattern = rf'"{re.escape(algorithm_id)}": \(([\s\S]*?)\)'
             else:
-                row_snippet = f'"{algorithm_id}": Object.freeze([{entrypoints_literal}])'
+                row_pattern = rf'"{re.escape(algorithm_id)}": Object\.freeze\(\[([\s\S]*?)\]\)'
+            row_match = re.search(row_pattern, block)
             require(
-                row_snippet in block,
-                f"{label} must keep required production privacy plan SDK entrypoint row {row_snippet}",
+                row_match is not None,
+                f"{label} must keep required production privacy plan SDK entrypoint row for {algorithm_id}",
+                errors,
+            )
+            row_block = row_match.group(1) if row_match else ""
+            observed_entrypoints = re.findall(r'"([^"]+)"', row_block)
+            require(
+                observed_entrypoints == list(entrypoints),
+                f"{label} must keep required production privacy plan SDK entrypoint row {algorithm_id}: {entrypoints}",
                 errors,
             )
     for label, text, pattern in planned_sdk_entrypoint_sources:
@@ -2875,7 +2877,7 @@ def check_public_privacy_required_production_plan_rows_coverage(errors):
             "must keep planned SDK entrypoints",
             "must retain a planned production proof builder until production gates pass"
             if label.startswith("JS")
-            else "must retain a planned production proof",
+            else "must retain or export a production proof",
         ):
             require(
                 snippet in text,
@@ -3231,7 +3233,7 @@ def check_privacy_catalog_defensive_copy_coverage(errors):
         'descriptors[0]["production_gate"]["gates"]["external_audit"] = True',
         'descriptors[0]["production_gate"]["missing"].clear()',
         'descriptors[0]["production_gate"]["audit_references"].append(',
-        'planned["planned_sdk_entrypoints"].clear()',
+        'sdk_descriptor["sdk_entrypoints"].clear()',
         'source_descriptor["source_references"][0]["url"] = "https://audit.example/forged"',
         'source_descriptor["source_references"].append(',
         'capabilities["privacy_algorithms"][0]["production_gate"]',
@@ -3257,7 +3259,8 @@ def check_planned_privacy_entrypoint_quarantine_coverage(errors):
         "assertExecutableEntrypointsDeclared(",
         "PUBLIC_PRIVACY_API_DECLARATION_SURFACES",
         "publicPrivacyApiSourceTexts()",
-        'descriptor.productionGate.missing.includes("planned SDK entrypoints remain")',
+        "privacy catalog must only retain the quarantined VeRange production builder",
+        '["buildVeRangeProofV1"]',
     ):
         require(
             snippet in js_catalog_parity,
@@ -3272,10 +3275,12 @@ def check_planned_privacy_entrypoint_quarantine_coverage(errors):
         "EXPECTED_PRIVACY_CAPABILITY_KEYS = frozenset(",
         "planned_name_variants.isdisjoint(package_exports)",
         "planned_name_variants.isdisjoint(crypto_exports)",
+        'assert planned_entrypoints == {"buildVeRangeProofV1"}',
         "assert not hasattr(module, entrypoint)",
         'for source_path in sorted(source_root.rglob("*.py")):',
         "forbidden_status_keys = {",
-        '"asset_hidden_transfer_proof_v1"',
+        '"verange_proof_builder_v1"',
+        '"verange_proof_verifier_v1"',
         '"ml_kem_note_encryption"',
         'assert capabilities.get(key, False) is False',
         "assert set(capabilities) == EXPECTED_PRIVACY_CAPABILITY_KEYS",
@@ -3287,7 +3292,7 @@ def check_planned_privacy_entrypoint_quarantine_coverage(errors):
         )
     require(
         re.search(
-            r"forbidden_status_keys\s*=\s*\{[\s\S]*\"asset_hidden_transfer_proof_v1\"[\s\S]*\"shielded_zk_ace_authorized_transfer_instruction\"[\s\S]*\"anonymous_pgc_k_out_of_n_proof_v1\"[\s\S]*\"pq_masp_stark_transfer_proof_v0\"[\s\S]*\"ml_kem_note_encryption\"",
+            r"forbidden_status_keys\s*=\s*\{[\s\S]*\"shielded_zk_ace_authorized_transfer_instruction\"[\s\S]*\"pq_masp_stark_transfer_proof_v0\"[\s\S]*\"ml_kem_note_encryption\"",
             python_tests,
         )
         is not None,
@@ -4029,11 +4034,12 @@ def check_privacy_ffi_non_proof_entrypoint_rejection_coverage(errors):
         "C bridge privacy FFI",
         "JS NAPI privacy FFI",
         "Python PyO3 privacy FFI",
-        "privacy proof request entrypoint must be a production proof builder",
+        "privacy proof build request entrypoint must be a production proof builder",
+        "privacy proof verify request entrypoint must be a production proof builder or verifier",
         "privacy_proof_ffi_rejects_non_proof_sdk_entrypoints_before_production_gate",
         "buildRangeCommitment",
-        "buildVeRangeDevProofFixture",
-        "verifyVeRangeProofLocally",
+        "buildVeRangeProofEnvelope",
+        "verify-proof-envelope-helper",
         "buildZkTransferInstruction",
         "production proof builder",
     ):
@@ -7238,7 +7244,7 @@ if mode == "--negative-control-public-required-production-plan-exact-row-coverag
     target = "javascript/iroha_js/test/privacyCatalogParity.test.js"
     original = read(target)
     mutated = original.replace(
-        '  Object.freeze(["anonymous-pgc-k-out-of-n-v1", "sdk-builder", "anonymous-pgc"]),',
+        '  Object.freeze(["anonymous-pgc-k-out-of-n-v1", "production-hardened", "anonymous-pgc"]),',
         '  Object.freeze(["anonymous-pgc-k-out-of-n-v1", "component", "anonymous-pgc"]),',
         1,
     )
@@ -7260,7 +7266,7 @@ if mode == "--negative-control-public-required-production-plan-exact-row-coverag
 if mode == "--negative-control-public-required-production-plan-row-order-coverage":
     target = "javascript/iroha_js/test/privacyCatalogParity.test.js"
     original = read(target)
-    row = '  Object.freeze(["anonymous-pgc-k-out-of-n-v1", "sdk-builder", "anonymous-pgc"]),\n'
+    row = '  Object.freeze(["anonymous-pgc-k-out-of-n-v1", "production-hardened", "anonymous-pgc"]),\n'
     mutated = original.replace(row, row + row, 1)
     if mutated == original:
         raise SystemExit(
@@ -7534,8 +7540,8 @@ if mode == "--negative-control-public-required-production-plan-security-notes-co
     target = "javascript/iroha_js/test/privacyCatalogParity.test.js"
     original = read(target)
     mutated = original.replace(
-        '"anonymous-pgc-k-out-of-n-v1": Object.freeze(["Requires fresh anonymity-set roots and replay/link-tag state.", "Amount privacy depends on the range-proof component and commitment binding.", "Receiver ciphertext commitments must bind to the same transaction digest as the proof.", "The SDK dev fixture verifies deterministic binding only; chain execution and production Anonymous PGC proofs remain unavailable.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."])',
-        '"anonymous-pgc-k-out-of-n-v1": Object.freeze(["Requires fresh anonymity-set roots and replay/link-tag state.", "Amount privacy depends on the range-proof component and commitment binding.", "Receiver ciphertext commitments must bind to the same transaction digest as the proof.", "The SDK dev fixture verifies deterministic binding only; chain execution and production Anonymous PGC proofs remain unavailable.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, latency gates, and internal cryptographic review."])',
+        '"anonymous-pgc-k-out-of-n-v1": Object.freeze(["Requires fresh anonymity-set roots and replay/link-tag state.", "Amount privacy depends on the range-proof component and commitment binding.", "Receiver ciphertext commitments must bind to the same transaction digest as the proof.", "Production Anonymous PGC proof admission requires a caller-supplied proof envelope bound to the anonymity root, receiver set, link tag, range commitments, chain id, and domain separator.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."])',
+        '"anonymous-pgc-k-out-of-n-v1": Object.freeze(["Requires fresh anonymity-set roots and replay/link-tag state.", "Amount privacy depends on the range-proof component and commitment binding.", "Receiver ciphertext commitments must bind to the same transaction digest as the proof.", "Production Anonymous PGC proof admission requires a caller-supplied proof envelope bound to the anonymity root, receiver set, link tag, range commitments, chain id, and domain separator.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, latency gates, and internal cryptographic review."])',
         1,
     )
     if mutated == original:
@@ -7603,8 +7609,8 @@ if mode == "--negative-control-public-required-production-plan-sdk-entrypoint-co
     target = "javascript/iroha_js/test/privacyCatalogParity.test.js"
     original = read(target)
     mutated = original.replace(
-        '"anonymous-pgc-k-out-of-n-v1": Object.freeze(["buildAnonymousPgcReceiverSet", "buildAnonymousPgcDevProofFixture", "verifyAnonymousPgcDevProofLocally"])',
-        '"anonymous-pgc-k-out-of-n-v1": Object.freeze(["buildAnonymousPgcReceiverSet", "buildForgedAnonymousPgcProductionProof", "verifyAnonymousPgcDevProofLocally"])',
+        '"anonymous-pgc-k-out-of-n-v1": Object.freeze(["buildAnonymousPgcReceiverSet", "buildAnonymousPgcAccountCommitmentInstruction", "buildAnonymousPgcKOutOfNProofV1", "buildAnonymousPgcTransferInstruction"])',
+        '"anonymous-pgc-k-out-of-n-v1": Object.freeze(["buildAnonymousPgcReceiverSet", "buildAnonymousPgcAccountCommitmentInstruction", "buildForgedAnonymousPgcProductionProof", "buildAnonymousPgcTransferInstruction"])',
         1,
     )
     if mutated == original:
@@ -7626,8 +7632,8 @@ if mode == "--negative-control-public-required-production-plan-planned-sdk-entry
     target = "javascript/iroha_js/test/privacyCatalogParity.test.js"
     original = read(target)
     mutated = original.replace(
-        '"buildAnonymousPgcKOutOfNProofV1"',
-        '"buildForgedAnonymousPgcProofV1"',
+        '"buildPqMaspStarkTransferProofV0"',
+        '"buildForgedPqMaspStarkTransferProofV0"',
         1,
     )
     if mutated == original:
@@ -9447,8 +9453,8 @@ if mode == "--negative-control-required-production-allowlist-row-scope":
     target = "javascript/iroha_js/test/privacyFfiContractParity.test.js"
     original = read(target)
     mutated = original.replace(
-        'Object.freeze(["zk-ace-pq-authorization-v0", "stark-fri"])',
-        'Object.freeze(["pq-masp-stark-v0", "stark-fri"])',
+        "const EXPECTED_REQUIRED_PRIVACY_PRODUCTION_ALLOWLIST_ROWS = Object.freeze([]);",
+        'const EXPECTED_REQUIRED_PRIVACY_PRODUCTION_ALLOWLIST_ROWS = Object.freeze([\n  Object.freeze(["pq-masp-stark-v0", "stark-fri", "pq-masp-stark-fri"]),\n]);',
     )
     if mutated == original:
         raise SystemExit("negative control failed: unable to mutate required production allowlist row scope")

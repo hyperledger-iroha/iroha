@@ -1734,7 +1734,7 @@ test("recursive Kagemusha ABI-7 compact verifier surface stays in parity", () =>
     assertContainsAll(
       source(relative),
       [
-        "KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION = 7",
+        "KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 7",
         "KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1",
         "isKagemushaRecursiveCompactPaymentTokenNativeAvailable",
         "isKagemushaRecursiveCompactPaymentTokenVerifierNativeAvailable",
@@ -1857,7 +1857,7 @@ test("recursive Kagemusha ABI-7 compact verifier surface stays in parity", () =>
   assertContainsAll(
     source("python/iroha_python/src/iroha_python/kagemusha.py"),
     [
-      "KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION = 7",
+      "KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 7",
       "KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1",
       "is_kagemusha_recursive_compact_payment_token_prover_available",
       "is_kagemusha_recursive_compact_payment_token_verifier_available",
@@ -1934,7 +1934,7 @@ test("recursive Kagemusha ABI-7 compact verifier surface stays in parity", () =>
   assertContainsAll(
     source("IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveCompactPaymentTokenProver.swift"),
     [
-      "requiredBridgeAbiVersion: UInt32 = 7",
+      "requiredNativeBridgeAbiVersion: UInt32 = 7",
       'recursiveCompactCircuitIdV1 = "kagemusha-recursive-compact-v1"',
       "public static var isVerifierNativeAvailable",
       "public static var isProjectionNativeAvailable",
@@ -2028,7 +2028,7 @@ test("recursive Kagemusha ABI-7 compact verifier surface stays in parity", () =>
   assertContainsAll(
     source("kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveCompactPaymentTokenProver.kt"),
     [
-      "REQUIRED_BRIDGE_ABI_VERSION: Int = 7",
+      "REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 7",
       "fun isVerifierNativeAvailable(): Boolean",
       "fun isProjectionVerifierNativeAvailable(): Boolean",
       "fun verifyRecursiveCompactPaymentToken(",
@@ -2060,6 +2060,7 @@ test("recursive Kagemusha ABI-7 compact verifier surface stays in parity", () =>
     source("java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveCompactPaymentTokenProver.java"),
     [
       "REQUIRED_BRIDGE_ABI_VERSION = 7",
+      "REQUIRED_NATIVE_BRIDGE_ABI_VERSION = REQUIRED_BRIDGE_ABI_VERSION",
       "public static boolean isVerifierNativeAvailable()",
       "public static boolean isProjectionVerifierNativeAvailable()",
       "public static boolean verifyRecursiveCompactPaymentToken(",
@@ -2089,7 +2090,7 @@ test("recursive Kagemusha ABI-7 compact verifier surface stays in parity", () =>
   assertContainsAll(
     source("csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs"),
     [
-      "RecursiveCompactRequiredBridgeAbiVersion = 7",
+      "RecursiveCompactRequiredNativeBridgeAbiVersion = 7",
       "IsRecursiveCompactPaymentTokenVerifierAvailable",
       "IsRecursiveSpendCompactPaymentTokenProjectionVerifierAvailable",
       "public static bool VerifyRecursiveCompactPaymentToken(",
@@ -2372,10 +2373,10 @@ test("recursive Kagemusha ABI probes reject unsafe and out-of-range versions", (
     assertContainsAll(
       source(relative),
       [
-        "const KAGEMUSHA_MAX_BRIDGE_ABI_VERSION = 0xffff_ffff",
+        "const KAGEMUSHA_MAX_NATIVE_BRIDGE_ABI_VERSION = 0xffff_ffff",
         "Number.isSafeInteger(version)",
         "version >= 0",
-        "version <= KAGEMUSHA_MAX_BRIDGE_ABI_VERSION",
+        "version <= KAGEMUSHA_MAX_NATIVE_BRIDGE_ABI_VERSION",
       ],
       `${relative} Kagemusha ABI probe bounds`,
     );
@@ -2403,11 +2404,11 @@ test("recursive Kagemusha ABI probes reject unsafe and out-of-range versions", (
   assertContainsAll(
     source("python/iroha_python/src/iroha_python/kagemusha.py"),
     [
-      "KAGEMUSHA_MAX_BRIDGE_ABI_VERSION = 0xFFFF_FFFF",
+      "KAGEMUSHA_MAX_NATIVE_BRIDGE_ABI_VERSION = 0xFFFF_FFFF",
       "isinstance(version, bool)",
       "not isinstance(version, int)",
       "version < 0",
-      "version > KAGEMUSHA_MAX_BRIDGE_ABI_VERSION",
+      "version > KAGEMUSHA_MAX_NATIVE_BRIDGE_ABI_VERSION",
     ],
     "Python Kagemusha ABI probe bounds",
   );

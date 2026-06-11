@@ -11818,7 +11818,7 @@ def test_release_readiness_report_blocks_malformed_active_required_record_metada
         (
             "records.operator_override",
             True,
-            "required record summary has unknown field operator_override",
+            "required record summary contains unknown field: operator_override",
         ),
     )
 
@@ -11854,6 +11854,64 @@ def test_release_readiness_report_blocks_malformed_active_required_record_metada
         assert any(
             expected_blocker in blocker for blocker in records_item["blockers"]
         ), path
+
+
+def test_release_readiness_report_classifies_malformed_active_required_record_fields(
+    tmp_path: Path,
+) -> None:
+    """Malformed active required-record keys must not leak through checklist text."""
+
+    report = load_report_module()
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    confusable_field = "operat\u043er_override"
+    markdown_field = "operator|secret-token"
+    cases = (
+        (
+            " operator_override ",
+            "required record summary contains unknown field name with surrounding whitespace",
+        ),
+        (
+            "operator\noverride",
+            "required record summary contains unknown field name with control character",
+        ),
+        (
+            "operator override",
+            "required record summary contains unknown field name with whitespace",
+        ),
+        (
+            markdown_field,
+            "required record summary contains unknown field name with Markdown-unsafe character",
+        ),
+        (
+            confusable_field,
+            "required record summary contains unknown field name with non-ASCII character",
+        ),
+    )
+
+    for field, expected_blocker in cases:
+        evidence_summary = report._load_evidence_summary([evidence])
+        native_status = report._native_evm_prover_bundle_status(
+            native_bundle,
+            evidence_summary,
+        )
+        active_lane = report._active_launch_lane(evidence_summary)
+        assert active_lane is not None
+        active_lane["records"][field] = True
+
+        checklist = report._active_launch_release_checklist(
+            evidence_summary,
+            native_status,
+        )
+        item_by_id = {item["id"]: item for item in checklist["items"]}
+        records_item = item_by_id["all_required_lane_records"]
+        blockers = "\n".join(records_item["blockers"])
+
+        assert checklist["ready"] is False, field
+        assert records_item["ready"] is False, field
+        assert expected_blocker in blockers, field
+        assert markdown_field not in blockers
+        assert confusable_field not in blockers
 
 
 def test_release_readiness_report_blocks_active_lane_unresolved_blockers(

@@ -60,6 +60,7 @@ object OfflineNote {
         "iroha_data_model::offline::model::OfflineNoteAuditOutputClaim"
     private const val RECURSIVE_PROOF_SCHEMA =
         "iroha_data_model::offline::model::OfflineNoteRecursiveProof"
+    private const val VERIFYING_KEY_BOX_SCHEMA = "iroha_data_model::proof::VerifyingKeyBox"
     private const val REDEEM_SCHEMA = "iroha_data_model::offline::model::OfflineNoteRedeem"
     private const val REDEEM_PUBLIC_INPUTS_SCHEMA =
         "iroha_data_model::offline::model::OfflineNoteRedeemPublicInputs"
@@ -99,6 +100,10 @@ object OfflineNote {
     @JvmStatic
     fun encodeRedeem(value: Redeem): ByteArray =
         encodeWithHeader(value, REDEEM_SCHEMA, RedeemAdapter)
+
+    @JvmStatic
+    fun encodeVerifyingKeyBox(value: VerifyingKeyBox): ByteArray =
+        encodeWithHeader(value, VERIFYING_KEY_BOX_SCHEMA, VerifyingKeyBoxAdapter)
 
     @JvmStatic
     fun encodeRedeemPublicInputs(value: RedeemPublicInputs): ByteArray =
@@ -141,12 +146,12 @@ object OfflineNote {
         decodeWithHeader(bytes, ISSUED_CLAIM_SCHEMA, IssuedClaimAdapter)
 
     @JvmStatic
-    fun decodeRecursiveProof(bytes: ByteArray): RecursiveProof =
-        decodeWithHeader(bytes, RECURSIVE_PROOF_SCHEMA, RecursiveProofAdapter)
-
-    @JvmStatic
     fun decodeRedeem(bytes: ByteArray): Redeem =
         decodeWithHeader(bytes, REDEEM_SCHEMA, RedeemAdapter)
+
+    @JvmStatic
+    fun decodeRecursiveProof(bytes: ByteArray): RecursiveProof =
+        decodeWithHeader(bytes, RECURSIVE_PROOF_SCHEMA, RecursiveProofAdapter)
 
     @JvmStatic
     fun decodeRedeemPublicInputs(bytes: ByteArray): RedeemPublicInputs =
@@ -365,6 +370,21 @@ object OfflineNote {
         }
 
         fun bytes(): ByteArray = _bytes.copyOf()
+    }
+
+    class VerifyingKeyBox(backend: String, bytes: ByteArray) {
+        val backend: String
+        private val _bytes = bytes.copyOf()
+
+        init {
+            val normalizedBackend = backend.trim()
+            require(normalizedBackend.isNotEmpty()) { "verifying key backend must not be empty" }
+            require(_bytes.isNotEmpty()) { "verifying key bytes must not be empty" }
+            this.backend = normalizedBackend
+        }
+
+        fun bytes(): ByteArray = _bytes.copyOf()
+        fun noritoEncoded(): ByteArray = encodeVerifyingKeyBox(this)
     }
 
     class RecursiveProof @JvmOverloads constructor(
@@ -1077,6 +1097,19 @@ object OfflineNote {
                 verifierKeyId = readField(decoder) { readVerifyingKeyId(it) },
                 publicInputsHash = readField(decoder) { readHash(it, "public_inputs_hash") },
                 proof = readField(decoder) { readProofBox(it) },
+            )
+    }
+
+    private object VerifyingKeyBoxAdapter : TypeAdapter<VerifyingKeyBox> {
+        override fun encode(encoder: NoritoEncoder, value: VerifyingKeyBox) {
+            writeField(encoder) { writeString(it, value.backend) }
+            writeField(encoder) { writeBytesVec(it, value.bytes()) }
+        }
+
+        override fun decode(decoder: org.hyperledger.iroha.sdk.norito.NoritoDecoder): VerifyingKeyBox =
+            VerifyingKeyBox(
+                backend = readField(decoder) { readString(it) },
+                bytes = readField(decoder) { readBytesVec(it) },
             )
     }
 

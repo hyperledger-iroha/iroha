@@ -3766,9 +3766,9 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         }
         var outPtr: UnsafeMutablePointer<UInt8>? = nil
         var outLen: CUnsignedLong = 0
-        var algorithmId = Array("verange-transparent-range-v1".utf8)
-        var entrypoint = Array("buildVeRangeProofV1".utf8)
-        var vkRef = Array("bulletproofs:verange_transparent_range_v1".utf8)
+        var algorithmId = Array("zk-ace-pq-authorization-v0".utf8)
+        var entrypoint = Array("buildZkAceAuthorizationProofV1".utf8)
+        var vkRef = Array("stark-fri:zk_ace_pq_authorization_v0".utf8)
         var publicInputs = Array("public-inputs".utf8)
         defer {
             Self.clearTemporaryPrivacyRequestArchive(&algorithmId)

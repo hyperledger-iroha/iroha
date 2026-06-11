@@ -986,7 +986,11 @@ redistributable schemas, and official trust/revocation bundles.
 						  nonce-bound material domain tags derived from the statement hash and
 						  caller-bound material-input digest. The ZK-ACE native AIR prover uses the
 						  same duplicate-free query validator plus encoded-envelope
-						  self-verification before returning proof bytes. Governed full-bootstrap material admission rejects
+						  self-verification before returning proof bytes. BFV native
+						  STARK/FRI proof-key material, verifier payloads, and release-audit
+						  proof profiles also reject blowup/domain parameter pairs where
+						  `blowup_log2` exceeds `n_log2` before key material or evidence can be
+						  admitted. Governed full-bootstrap material admission rejects
 						  known nonzero pending/placeholder digest literals before artifact,
 						  proof-key pair, key-material, or release-audit evidence commitments
 						  can be accepted, including standalone release-audit signoff and

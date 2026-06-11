@@ -43,7 +43,7 @@ public final class KagemushaRecursiveSpendProverTest {
   }
 
   private static void exposesStableModesAndCircuitIds() {
-    assert KagemushaRecursiveSpendProver.REQUIRED_BRIDGE_ABI_VERSION == 6;
+    assert KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION == 6;
     assert "kagemusha-recursive-aggregation-v1"
         .equals(KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1);
     assert "kagemusha-recursive-spend-lineage-v1"
@@ -305,7 +305,7 @@ public final class KagemushaRecursiveSpendProverTest {
         == KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V1;
     assert KagemushaRecursiveSpendProver.preferredMode(false)
         == KagemushaRecursiveSpendProver.Mode.CHECKED_PREFOLD_V1;
-    assert KagemushaRecursiveCompactPaymentTokenProver.REQUIRED_BRIDGE_ABI_VERSION == 7;
+    assert KagemushaRecursiveCompactPaymentTokenProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION == 7;
     assert "kagemusha-recursive-compact-v1"
         .equals(KagemushaRecursiveCompactPaymentTokenProver.RECURSIVE_COMPACT_CIRCUIT_ID_V1);
     final boolean verifierNativeAvailable =
@@ -681,6 +681,26 @@ public final class KagemushaRecursiveSpendProverTest {
                 KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND,
                 duplicateCidVerifierKey,
                 initProvingKeyArchive));
+    final byte[] whitespaceCidVerifierKey =
+        lineageVerifierKey(
+            " "
+                + KagemushaRecursiveSpendProver
+                    .RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1
+                + " ",
+            (byte) 0xA5);
+    final byte[] whitespaceCidProvingKeyArchive =
+        lineageProvingKeyArchive(
+            KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+            whitespaceCidVerifierKey,
+            (byte) 0xA6);
+    assertThrows(
+        "lineage_verifier_key",
+        () ->
+            KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
+                2,
+                KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND,
+                whitespaceCidVerifierKey,
+                whitespaceCidProvingKeyArchive));
     assertThrows(
         "lineage_proving_key_archive",
         () ->
@@ -1023,7 +1043,7 @@ public final class KagemushaRecursiveSpendProverTest {
     assertContains(manifest, "\"schema\": \"iroha.kagemusha.recursive_spend.abi6.fixture_manifest.v1\"");
     assertContains(
         manifest,
-        "\"bridge_abi_version\": " + KagemushaRecursiveSpendProver.REQUIRED_BRIDGE_ABI_VERSION);
+        "\"native_bridge_abi_version\": " + KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION);
     assertContains(manifest, "\"operation_count\": 9");
     assertContains(
         manifest,

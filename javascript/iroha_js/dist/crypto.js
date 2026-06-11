@@ -25,7 +25,7 @@ export const PRIVACY_FFI_ERROR_UNSUPPORTED_ALGORITHM = 3;
 export const PRIVACY_FFI_ERROR_PRODUCTION_DISABLED = 4;
 export const PRIVACY_FFI_ERROR_INVALID_REQUEST = 5;
 const PRIVACY_MAX_BRIDGE_ABI_VERSION = 0xffff_ffff;
-const KAGEMUSHA_MAX_BRIDGE_ABI_VERSION = 0xffff_ffff;
+const KAGEMUSHA_MAX_NATIVE_BRIDGE_ABI_VERSION = 0xffff_ffff;
 const ZK_ACE_ALGORITHM_ID = "zk-ace-pq-authorization-v0";
 const ZK_ACE_PRODUCTION_ENTRYPOINT = "buildZkAceAuthorizationProofV1";
 const ZK_ACE_PRODUCTION_VK_REF = "stark-fri:zk_ace_pq_authorization_v0";
@@ -813,11 +813,11 @@ export function deriveConfidentialNullifierV2(input) {
 }
 
 function hasKagemushaRecursiveSpendNative(native) {
-  const abiVersion = kagemushaRecursiveSpendBridgeAbiVersion(native);
+  const abiVersion = kagemushaRecursiveSpendNativeBridgeAbiVersion(native);
   if (
     !native ||
     !Number.isInteger(abiVersion) ||
-    abiVersion < KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION ||
+    abiVersion < KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION ||
     typeof native.kagemushaRecursiveSpendInit !== "function" ||
     typeof native.kagemushaRecursiveSpendAppend !== "function" ||
     typeof native.kagemushaRecursiveSpendTransitionProfileInit !== "function" ||
@@ -834,11 +834,11 @@ function hasKagemushaRecursiveSpendNative(native) {
 }
 
 function hasKagemushaRecursiveCompactPaymentTokenNative(native) {
-  const abiVersion = kagemushaRecursiveSpendBridgeAbiVersion(native);
+  const abiVersion = kagemushaRecursiveSpendNativeBridgeAbiVersion(native);
   if (
     !native ||
     !Number.isInteger(abiVersion) ||
-    abiVersion < KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION ||
+    abiVersion < KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION ||
     typeof native
       .kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes !==
       "function"
@@ -857,11 +857,11 @@ function hasKagemushaRecursiveCompactPaymentTokenNative(native) {
 }
 
 function hasKagemushaRecursiveCompactPaymentTokenVerifierNative(native) {
-  const abiVersion = kagemushaRecursiveSpendBridgeAbiVersion(native);
+  const abiVersion = kagemushaRecursiveSpendNativeBridgeAbiVersion(native);
   if (
     !native ||
     !Number.isInteger(abiVersion) ||
-    abiVersion < KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION ||
+    abiVersion < KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION ||
     typeof native.kagemushaVerifyRecursiveCompactPaymentToken !== "function"
   ) {
     return false;
@@ -875,11 +875,11 @@ function hasKagemushaRecursiveCompactPaymentTokenVerifierNative(native) {
 }
 
 function hasKagemushaRecursiveSpendCompactPaymentTokenProjectionNative(native) {
-  const abiVersion = kagemushaRecursiveSpendBridgeAbiVersion(native);
+  const abiVersion = kagemushaRecursiveSpendNativeBridgeAbiVersion(native);
   if (
     !native ||
     !Number.isInteger(abiVersion) ||
-    abiVersion < KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION ||
+    abiVersion < KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION ||
     typeof native.kagemushaRecursiveSpendCompactPaymentTokenFromBundle !== "function"
   ) {
     return false;
@@ -892,11 +892,11 @@ function hasKagemushaRecursiveSpendCompactPaymentTokenProjectionNative(native) {
 }
 
 function hasKagemushaRecursiveSpendCompactPaymentTokenProjectionVerifierNative(native) {
-  const abiVersion = kagemushaRecursiveSpendBridgeAbiVersion(native);
+  const abiVersion = kagemushaRecursiveSpendNativeBridgeAbiVersion(native);
   if (
     !native ||
     !Number.isInteger(abiVersion) ||
-    abiVersion < KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION ||
+    abiVersion < KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION ||
     typeof native.kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection !== "function" ||
     typeof native.kagemushaVerifyRecursiveSpendCompactPaymentTokenProjectionAtHeight !== "function"
   ) {
@@ -920,11 +920,11 @@ function hasKagemushaRecursiveSpendCompactPaymentTokenProjectionVerifierNative(n
 }
 
 function hasKagemushaCompactPaymentTokenNative(native) {
-  const abiVersion = kagemushaRecursiveSpendBridgeAbiVersion(native);
+  const abiVersion = kagemushaRecursiveSpendNativeBridgeAbiVersion(native);
   if (
     !native ||
     !Number.isInteger(abiVersion) ||
-    abiVersion < KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION ||
+    abiVersion < KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION ||
     typeof native.kagemushaProveVerifiedCompactPaymentTokenWithRecords !== "function"
   ) {
     return false;
@@ -937,11 +937,11 @@ function hasKagemushaCompactPaymentTokenNative(native) {
 }
 
 function hasKagemushaRecursiveAggregationProofBundleNative(native) {
-  const abiVersion = kagemushaRecursiveSpendBridgeAbiVersion(native);
+  const abiVersion = kagemushaRecursiveSpendNativeBridgeAbiVersion(native);
   if (
     !native ||
     !Number.isInteger(abiVersion) ||
-    abiVersion < KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION ||
+    abiVersion < KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION ||
     typeof native
       .kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes !==
       "function"
@@ -956,7 +956,7 @@ function hasKagemushaRecursiveAggregationProofBundleNative(native) {
   );
 }
 
-function kagemushaRecursiveSpendBridgeAbiVersion(native) {
+function kagemushaRecursiveSpendNativeBridgeAbiVersion(native) {
   if (typeof native?.connectNoritoBridgeAbiVersion !== "function") {
     return 0;
   }
@@ -965,7 +965,7 @@ function kagemushaRecursiveSpendBridgeAbiVersion(native) {
     return typeof version === "number" &&
       Number.isSafeInteger(version) &&
       version >= 0 &&
-      version <= KAGEMUSHA_MAX_BRIDGE_ABI_VERSION
+      version <= KAGEMUSHA_MAX_NATIVE_BRIDGE_ABI_VERSION
       ? version
       : 0;
   } catch {
@@ -1024,8 +1024,8 @@ function probeKagemushaRecursiveSpendNative(native) {
 export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1 = "recursive_compact_v1";
 export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1 = "recursive_spend_v1";
 export const KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1 = "checked_prefold_v1";
-export const KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION = 6;
-export const KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION = 7;
+export const KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 6;
+export const KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 7;
 export const KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1 = "kagemusha-recursive-compact-v1";
 export const KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT =
   "recursive compact Kagemusha payment-token multi-hop proving requires the append verifier batch";
@@ -1326,7 +1326,7 @@ function kagemushaLineageVerifierKeyEnvelopeCircuitId(lineageVerifierKey) {
       if (circuitId !== null || payload.some((byte) => byte < 0x20 || byte > 0x7e)) {
         throw new TypeError("lineage_verifier_key");
       }
-      circuitId = payload.toString("utf8").trim();
+      circuitId = payload.toString("utf8");
       if (circuitId.length === 0) {
         throw new TypeError("lineage_verifier_key");
       }
@@ -2152,9 +2152,9 @@ function privacyNativeProofRequestProbeReturnsBytes(native) {
   try {
     publicInputs = Buffer.from("privacy-native-availability-public-input-v1", "utf8");
     const result = native.privacyProofRequestV1(
-      "verange-transparent-range-v1",
-      "buildVeRangeProofV1",
-      "bulletproofs:verange_transparent_range_v1",
+      ZK_ACE_ALGORITHM_ID,
+      ZK_ACE_PRODUCTION_ENTRYPOINT,
+      ZK_ACE_PRODUCTION_VK_REF,
       publicInputs,
       Buffer.alloc(0),
       Buffer.alloc(0),

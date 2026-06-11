@@ -1751,17 +1751,6 @@ def _require_report_fields(
             errors.append(f"{label} missing field: {field}")
 
 
-def _unknown_report_field_errors(
-    payload: dict[str, Any],
-    label: str,
-    allowed_fields: tuple[str, ...],
-) -> list[str]:
-    return [
-        f"{label} contains unknown field: {field}"
-        for field in sorted(set(payload) - set(allowed_fields), key=str)
-    ]
-
-
 def _string_list_field_errors(
     label: str,
     payload: dict[str, Any],
@@ -2714,7 +2703,7 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
         return errors
 
     errors.extend(
-        _unknown_report_field_errors(
+        _unknown_public_field_errors(
             payload,
             label,
             CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS,
@@ -2951,7 +2940,7 @@ def _submission_surface_row_bundle_errors(surface: Any, label: str) -> list[str]
         return errors
 
     errors.extend(
-        _unknown_report_field_errors(
+        _unknown_public_field_errors(
             payload,
             label,
             USER_PROVER_SUBMISSION_SURFACE_FIELDS,
@@ -4079,7 +4068,7 @@ def _release_report_bundle_errors(
         return errors
 
     errors.extend(
-        _unknown_report_field_errors(payload, label, READINESS_REPORT_ROOT_FIELDS)
+        _unknown_public_field_errors(payload, label, READINESS_REPORT_ROOT_FIELDS)
     )
     _require_report_fields(payload, label, READINESS_REPORT_BUNDLE_FIELDS, errors)
 
@@ -4296,7 +4285,7 @@ def _release_report_bundle_errors(
             if not isinstance(inventory, dict):
                 continue
             errors.extend(
-                _unknown_report_field_errors(
+                _unknown_public_field_errors(
                     inventory_payload,
                     inventory_label,
                     SOURCE_INVENTORY_FIELDS,

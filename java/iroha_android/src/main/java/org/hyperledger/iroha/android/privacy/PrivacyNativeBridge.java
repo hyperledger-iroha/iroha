@@ -168,8 +168,56 @@ public final class PrivacyNativeBridge {
     return buildProof(requestArchive);
   }
 
+  public static byte[] buildJindoLatticeProofV0(final byte[] requestArchive) {
+    return buildProof(requestArchive);
+  }
+
+  public static byte[] buildSisHintsAnonymousCredentialProofV0(final byte[] requestArchive) {
+    return buildProof(requestArchive);
+  }
+
+  public static byte[] buildSilentThresholdCredentialShowingProofV0(final byte[] requestArchive) {
+    return buildProof(requestArchive);
+  }
+
+  public static byte[] buildVegaCredentialPredicateProofV0(final byte[] requestArchive) {
+    return buildProof(requestArchive);
+  }
+
+  public static byte[] buildZkAmsAdmissionBatchProofV0(final byte[] requestArchive) {
+    return buildProof(requestArchive);
+  }
+
+  public static byte[] buildZkAtPolicyProofV1(final byte[] requestArchive) {
+    return buildProof(requestArchive);
+  }
+
   public static byte[] verifyProof(final byte[] requestArchive) {
     return call("verify proof", requestArchive, PrivacyNativeBridge::nativeVerifyProof);
+  }
+
+  public static byte[] verifyJindoPolynomialCommitmentV0(final byte[] requestArchive) {
+    return verifyProof(requestArchive);
+  }
+
+  public static byte[] verifySisHintsAnonymousCredentialProofV0(final byte[] requestArchive) {
+    return verifyProof(requestArchive);
+  }
+
+  public static byte[] verifySilentThresholdCredentialShowingProofV0(final byte[] requestArchive) {
+    return verifyProof(requestArchive);
+  }
+
+  public static byte[] verifyVegaCredentialPredicateProofV0(final byte[] requestArchive) {
+    return verifyProof(requestArchive);
+  }
+
+  public static byte[] verifyZkAmsAdmissionBatchProofV0(final byte[] requestArchive) {
+    return verifyProof(requestArchive);
+  }
+
+  public static byte[] verifyZkAtPolicyProofV1(final byte[] requestArchive) {
+    return verifyProof(requestArchive);
   }
 
   static byte[] call(
@@ -297,10 +345,10 @@ public final class PrivacyNativeBridge {
   }
 
   private static boolean proofRequestOutputProbe() {
-    final byte[] algorithmId = "verange-transparent-range-v1".getBytes(StandardCharsets.UTF_8);
-    final byte[] entrypoint = "buildVeRangeProofV1".getBytes(StandardCharsets.UTF_8);
+    final byte[] algorithmId = "zk-ace-pq-authorization-v0".getBytes(StandardCharsets.UTF_8);
+    final byte[] entrypoint = "buildZkAceAuthorizationProofV1".getBytes(StandardCharsets.UTF_8);
     final byte[] vkRef =
-        "bulletproofs:verange_transparent_range_v1".getBytes(StandardCharsets.UTF_8);
+        "stark-fri:zk_ace_pq_authorization_v0".getBytes(StandardCharsets.UTF_8);
     final byte[] publicInputs = "public-inputs".getBytes(StandardCharsets.UTF_8);
     try {
       return returnsOutputProbe(

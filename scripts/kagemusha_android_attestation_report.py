@@ -48,11 +48,20 @@ def _json_dumps(payload: dict[str, Any]) -> str:
     return json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n"
 
 
+def _reject_whitespace(value: str, label: str, errors: list[str]) -> bool:
+    if value != value.strip() or any(ch.isspace() for ch in value):
+        errors.append(f"{label} must not contain whitespace")
+        return True
+    return False
+
+
 def _safe_single_name(value: str, label: str, errors: list[str]) -> str | None:
     if not isinstance(value, str) or not value.strip():
         errors.append(f"{label} must be a non-empty string")
         return None
-    candidate = PurePosixPath(value.strip())
+    if _reject_whitespace(value, label, errors):
+        return None
+    candidate = PurePosixPath(value)
     if (
         device_lab.SECRET_RE.search(value)
         or candidate.is_absolute()
@@ -69,10 +78,12 @@ def _string_value(value: str | None, label: str, errors: list[str]) -> str | Non
     if not isinstance(value, str) or not value.strip():
         errors.append(f"{label} must be a non-empty string")
         return None
+    if _reject_whitespace(value, label, errors):
+        return None
     if device_lab.SECRET_RE.search(value):
         errors.append(f"{label} must not contain secret-looking material")
         return None
-    return value.strip()
+    return value
 
 
 def _normalise_strongbox_level(
@@ -84,30 +95,44 @@ def _normalise_strongbox_level(
     if not isinstance(value, str) or not value.strip():
         errors.append(f"{label} must be a non-empty string")
         return None
-    level = value.strip().upper()
-    if level not in device_lab.STRONGBOX_LEVELS:
+    if _reject_whitespace(value, label, errors):
+        return None
+    if value not in device_lab.STRONGBOX_LEVELS:
         errors.append(strongbox_error or f"{label} must be STRONGBOX")
         return None
     return "STRONGBOX"
 
 
-def _decode_challenge_hex(value: Any, errors: list[str]) -> bytes | None:
+def _decode_challenge_hex(
+    value: Any,
+    errors: list[str],
+    label: str = "attestation harness result challenge_hex",
+) -> bytes | None:
     if not isinstance(value, str) or not value.strip():
-        errors.append("attestation harness result challenge_hex must be a non-empty string")
+        errors.append(f"{label} must be a non-empty string")
         return None
-    normalized = "".join(value.split())
-    if len(normalized) % 2 != 0:
-        errors.append("attestation harness result challenge_hex must have even length")
+    if value != value.strip() or any(ch.isspace() for ch in value):
+        errors.append(f"{label} must be lowercase hexadecimal without whitespace")
+        return None
+    if any(ch not in "0123456789abcdef" for ch in value):
+        errors.append(f"{label} must be lowercase hexadecimal without whitespace")
+        return None
+    if len(value) % 2 != 0:
+        errors.append(f"{label} must have even length")
         return None
     try:
-        decoded = bytes.fromhex(normalized)
+        decoded = bytes.fromhex(value)
     except ValueError:
-        errors.append("attestation harness result challenge_hex must be hex")
+        errors.append(f"{label} must be hex")
         return None
     if not decoded:
-        errors.append("attestation harness result challenge_hex must be non-empty")
+        errors.append(f"{label} must be non-empty")
         return None
     return decoded
+
+
+def _pem_certificate_count(payload: bytes) -> int:
+    return payload.count(b"-----BEGIN CERTIFICATE-----")
 
 
 def _slot_relative_chain_path(
@@ -115,9 +140,12 @@ def _slot_relative_chain_path(
     requested: str | None,
     errors: list[str],
 ) -> str | None:
-    raw = requested.strip() if isinstance(requested, str) and requested.strip() else None
+    raw = requested if isinstance(requested, str) and requested != "" else None
     if raw is None:
         raw = f"attestation/{source.name}"
+    elif raw != raw.strip() or any(ch.isspace() for ch in raw):
+        errors.append("attestation certificate chain path must not contain whitespace")
+        return None
     if device_lab.SECRET_RE.search(raw):
         errors.append("attestation certificate chain path must not contain secret-looking material")
         return None
@@ -270,23 +298,38 @@ def build_report(args: argparse.Namespace) -> tuple[dict[str, Any] | None, list[
     chain_length = result.get("chain_length")
     if not isinstance(chain_length, int) or chain_length < 2:
         errors.append("attestation harness result chain_length must be at least 2")
+    elif chain_relative.endswith(".pem"):
+        certificate_count = _pem_certificate_count(chain_data)
+        if certificate_count < 2:
+            errors.append(
+                "attestation certificate chain PEM must contain at least two certificates"
+            )
+        elif chain_length != certificate_count:
+            errors.append(
+                "attestation harness result chain_length must match "
+                "attestation certificate-chain certificate count"
+            )
     challenge = _decode_challenge_hex(result.get("challenge_hex"), errors)
     if challenge is not None:
         computed_challenge_sha256 = hashlib.sha256(challenge).hexdigest()
         expected_challenge_hex = (
-            args.expected_challenge_hex.strip()
+            args.expected_challenge_hex
             if isinstance(args.expected_challenge_hex, str)
-            and args.expected_challenge_hex.strip()
+            and args.expected_challenge_hex != ""
             else None
         )
         if expected_challenge_hex is not None:
-            expected_bytes = _decode_challenge_hex(expected_challenge_hex, errors)
+            expected_bytes = _decode_challenge_hex(
+                expected_challenge_hex,
+                errors,
+                "--expected-challenge-hex",
+            )
             if expected_bytes is not None and expected_bytes != challenge:
                 errors.append("attestation harness result challenge_hex must match --expected-challenge-hex")
         expected_digest = (
-            args.attestation_challenge_sha256.strip()
+            args.attestation_challenge_sha256
             if isinstance(args.attestation_challenge_sha256, str)
-            and args.attestation_challenge_sha256.strip()
+            and args.attestation_challenge_sha256 != ""
             else None
         )
         if expected_digest is not None:
@@ -334,13 +377,41 @@ def build_report(args: argparse.Namespace) -> tuple[dict[str, Any] | None, list[
     )
 
 
-def _cleanup_temp_output(path: Path, label: str) -> list[str]:
+def _cleanup_temp_output(
+    path: Path,
+    label: str,
+    expected_identity: tuple[int, int] | None,
+) -> list[str]:
+    if expected_identity is None:
+        return [f"{label} temporary file metadata could not be read"]
     try:
-        path.unlink()
-    except FileNotFoundError:
-        return []
+        parent_fd = os.open(path.parent, device_lab._directory_open_flags())
     except OSError:
         return [f"{label} temporary file could not be removed"]
+    try:
+        try:
+            temp_stat = os.stat(
+                path.name,
+                dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            return []
+        except OSError:
+            return [f"{label} temporary file could not be removed"]
+        if (
+            not stat.S_ISREG(temp_stat.st_mode)
+            or device_lab._file_identity(temp_stat) != expected_identity
+        ):
+            return [f"{label} temporary file changed before cleanup"]
+        try:
+            os.unlink(path.name, dir_fd=parent_fd)
+        except FileNotFoundError:
+            return []
+        except OSError:
+            return [f"{label} temporary file could not be removed"]
+    finally:
+        os.close(parent_fd)
     return []
 
 
@@ -352,6 +423,13 @@ def write_report(path: Path, payload: dict[str, Any]) -> list[str]:
     if errors:
         return errors
     try:
+        parent_stat = path.parent.lstat()
+    except OSError:
+        return [f"{label} parent directory metadata could not be read"]
+    if stat.S_ISLNK(parent_stat.st_mode) or not stat.S_ISDIR(parent_stat.st_mode):
+        return [f"{label} parent directory could not be synced"]
+    parent_identity = device_lab._file_identity(parent_stat)
+    try:
         text = _json_dumps(payload)
     except ValueError:
         return [f"{label} is not strict JSON"]
@@ -362,6 +440,7 @@ def write_report(path: Path, payload: dict[str, Any]) -> list[str]:
         ]
 
     tmp_path: Path | None = None
+    tmp_identity: tuple[int, int] | None = None
     write_errors: list[str] = []
     try:
         with tempfile.NamedTemporaryFile(
@@ -373,6 +452,7 @@ def write_report(path: Path, payload: dict[str, Any]) -> list[str]:
             delete=False,
         ) as handle:
             tmp_path = Path(handle.name)
+            tmp_identity = device_lab._file_identity(os.fstat(handle.fileno()))
             handle.write(text)
             handle.flush()
             os.fsync(handle.fileno())
@@ -386,23 +466,20 @@ def write_report(path: Path, payload: dict[str, Any]) -> list[str]:
         write_errors.append(f"{label} could not be written")
     finally:
         if tmp_path is not None:
-            write_errors.extend(_cleanup_temp_output(tmp_path, label))
+            write_errors.extend(_cleanup_temp_output(tmp_path, label, tmp_identity))
     if write_errors:
         return write_errors
 
     errors = device_lab.validate_summary_output_path(path, label)
     if errors:
         return errors
-    try:
-        parent_fd = os.open(path.parent, os.O_RDONLY)
-    except OSError:
-        return [f"{label} parent directory could not be synced"]
-    try:
-        os.fsync(parent_fd)
-    except OSError:
-        return [f"{label} parent directory could not be synced"]
-    finally:
-        os.close(parent_fd)
+    sync_errors = device_lab._sync_summary_output_parent(
+        path.parent,
+        label,
+        expected_identity=parent_identity,
+    )
+    if sync_errors:
+        return sync_errors
     errors = device_lab.validate_summary_output_path(path, label)
     if errors:
         return errors

@@ -33,11 +33,11 @@ public final class OfflineToriiClientTests {
             """
             {
               "offline_telemetry": true,
-              "offline_kagemusha_abi7": true,
-              "offline_kagemusha_abi7_mode": "recursive_compact_v1",
-              "offline_kagemusha_abi7_bridge_abi_version": 7,
-              "offline_kagemusha_abi7_circuit_id": "kagemusha-recursive-compact-v1",
-              "offline_kagemusha_abi7_artifacts": true
+              "offline_kagemusha_recursive_compact_available": true,
+              "offline_kagemusha_recursive_compact_mode": "recursive_compact_v1",
+              "offline_kagemusha_recursive_compact_required_native_bridge_abi_version": 7,
+              "offline_kagemusha_recursive_compact_circuit_id": "kagemusha-recursive-compact-v1",
+              "offline_kagemusha_recursive_compact_artifacts_available": true
             }
             """);
     final OfflineToriiClient client =
@@ -61,15 +61,15 @@ public final class OfflineToriiClientTests {
     assert !readiness.offlineFountainQr() : "offline_fountain_qr mismatch";
     assert !readiness.offlineSyncOptional() : "offline_sync_optional mismatch";
     assert readiness.offlineTelemetry() : "offline_telemetry mismatch";
-    assert readiness.offlineKagemushaAbi7() : "offline_kagemusha_abi7 mismatch";
-    assert "recursive_compact_v1".equals(readiness.offlineKagemushaAbi7Mode())
-        : "offline_kagemusha_abi7_mode mismatch";
-    assert Integer.valueOf(7).equals(readiness.offlineKagemushaAbi7BridgeAbiVersion())
-        : "offline_kagemusha_abi7_bridge_abi_version mismatch";
-    assert "kagemusha-recursive-compact-v1".equals(readiness.offlineKagemushaAbi7CircuitId())
-        : "offline_kagemusha_abi7_circuit_id mismatch";
-    assert readiness.offlineKagemushaAbi7Artifacts()
-        : "offline_kagemusha_abi7_artifacts mismatch";
+    assert readiness.offlineKagemushaRecursiveCompactAvailable() : "offline_kagemusha_recursive_compact_available mismatch";
+    assert "recursive_compact_v1".equals(readiness.offlineKagemushaRecursiveCompactMode())
+        : "offline_kagemusha_recursive_compact_mode mismatch";
+    assert Integer.valueOf(7).equals(readiness.offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion())
+        : "offline_kagemusha_recursive_compact_required_native_bridge_abi_version mismatch";
+    assert "kagemusha-recursive-compact-v1".equals(readiness.offlineKagemushaRecursiveCompactCircuitId())
+        : "offline_kagemusha_recursive_compact_circuit_id mismatch";
+    assert readiness.offlineKagemushaRecursiveCompactArtifactsAvailable()
+        : "offline_kagemusha_recursive_compact_artifacts_available mismatch";
   }
 
   private static void v2ReadinessUsesCanonicalGetPathAndParsesResponse() {
@@ -79,11 +79,11 @@ public final class OfflineToriiClientTests {
             """
             {
               "offline_telemetry": true,
-              "offline_kagemusha_abi7": true,
-              "offline_kagemusha_abi7_mode": "recursive_compact_v1",
-              "offline_kagemusha_abi7_bridge_abi_version": 7,
-              "offline_kagemusha_abi7_circuit_id": "kagemusha-recursive-compact-v1",
-              "offline_kagemusha_abi7_artifacts": true
+              "offline_kagemusha_recursive_compact_available": true,
+              "offline_kagemusha_recursive_compact_mode": "recursive_compact_v1",
+              "offline_kagemusha_recursive_compact_required_native_bridge_abi_version": 7,
+              "offline_kagemusha_recursive_compact_circuit_id": "kagemusha-recursive-compact-v1",
+              "offline_kagemusha_recursive_compact_artifacts_available": true
             }
             """);
     final OfflineToriiClient client =
@@ -101,15 +101,15 @@ public final class OfflineToriiClientTests {
     assert "application/json".equals(firstHeader(executor.lastRequest, "Accept"))
         : "v2 accept header mismatch";
     assert readiness.offlineTelemetry() : "offline_telemetry mismatch";
-    assert readiness.offlineKagemushaAbi7() : "offline_kagemusha_abi7 mismatch";
-    assert "recursive_compact_v1".equals(readiness.offlineKagemushaAbi7Mode())
-        : "offline_kagemusha_abi7_mode mismatch";
-    assert Integer.valueOf(7).equals(readiness.offlineKagemushaAbi7BridgeAbiVersion())
-        : "offline_kagemusha_abi7_bridge_abi_version mismatch";
-    assert "kagemusha-recursive-compact-v1".equals(readiness.offlineKagemushaAbi7CircuitId())
-        : "offline_kagemusha_abi7_circuit_id mismatch";
-    assert readiness.offlineKagemushaAbi7Artifacts()
-        : "offline_kagemusha_abi7_artifacts mismatch";
+    assert readiness.offlineKagemushaRecursiveCompactAvailable() : "offline_kagemusha_recursive_compact_available mismatch";
+    assert "recursive_compact_v1".equals(readiness.offlineKagemushaRecursiveCompactMode())
+        : "offline_kagemusha_recursive_compact_mode mismatch";
+    assert Integer.valueOf(7).equals(readiness.offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion())
+        : "offline_kagemusha_recursive_compact_required_native_bridge_abi_version mismatch";
+    assert "kagemusha-recursive-compact-v1".equals(readiness.offlineKagemushaRecursiveCompactCircuitId())
+        : "offline_kagemusha_recursive_compact_circuit_id mismatch";
+    assert readiness.offlineKagemushaRecursiveCompactArtifactsAvailable()
+        : "offline_kagemusha_recursive_compact_artifacts_available mismatch";
   }
 
   private static void propagatesNon2xxResponses() {

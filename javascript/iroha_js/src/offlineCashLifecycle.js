@@ -19,7 +19,7 @@ export class OfflineCashConfigurationSnapshotError extends Error {
 
 export function assertOfflineCashConfigurationSnapshotUsable(
   snapshot,
-  { nowMs = Date.now(), requiredBridgeAbiVersion = null } = {},
+  { nowMs = Date.now(), requiredNativeBridgeAbiVersion = null } = {},
 ) {
   if (!snapshot || typeof snapshot !== "object") {
     throw new TypeError("offline cash configuration snapshot must be an object");
@@ -51,22 +51,22 @@ export function assertOfflineCashConfigurationSnapshotUsable(
       `Offline cash configuration snapshot expired at ${expiresAtMs}.`,
     );
   }
-  const bridgeAbiVersion = snapshot.bridgeAbiVersion;
-  const checkedBridgeAbiVersion =
-    bridgeAbiVersion === null || bridgeAbiVersion === undefined
+  const nativeBridgeAbiVersion = snapshot.nativeBridgeAbiVersion;
+  const checkedNativeBridgeAbiVersion =
+    nativeBridgeAbiVersion === null || nativeBridgeAbiVersion === undefined
       ? null
-      : finiteOfflineCashSnapshotNumber(bridgeAbiVersion, "bridgeAbiVersion");
-  const checkedRequiredBridgeAbiVersion =
-    requiredBridgeAbiVersion === null || requiredBridgeAbiVersion === undefined
+      : finiteOfflineCashSnapshotNumber(nativeBridgeAbiVersion, "nativeBridgeAbiVersion");
+  const checkedRequiredNativeBridgeAbiVersion =
+    requiredNativeBridgeAbiVersion === null || requiredNativeBridgeAbiVersion === undefined
       ? null
-      : finiteOfflineCashSnapshotNumber(requiredBridgeAbiVersion, "requiredBridgeAbiVersion");
+      : finiteOfflineCashSnapshotNumber(requiredNativeBridgeAbiVersion, "requiredNativeBridgeAbiVersion");
   if (
-    checkedRequiredBridgeAbiVersion !== null &&
-    (checkedBridgeAbiVersion === null || checkedBridgeAbiVersion < checkedRequiredBridgeAbiVersion)
+    checkedRequiredNativeBridgeAbiVersion !== null &&
+    (checkedNativeBridgeAbiVersion === null || checkedNativeBridgeAbiVersion < checkedRequiredNativeBridgeAbiVersion)
   ) {
     throw new OfflineCashConfigurationSnapshotError(
-      "unsupported_bridge_abi",
-      `Offline cash requires bridge ABI ${requiredBridgeAbiVersion}.`,
+      "unsupported_native_bridge_abi",
+      `Offline cash requires native bridge ABI ${requiredNativeBridgeAbiVersion}.`,
     );
   }
   return true;

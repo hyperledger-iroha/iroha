@@ -2135,6 +2135,65 @@ export function buildConfidentialTransferProofV2({
 }
 
 /**
+ * Build an asset-hidden transfer v1 proof envelope.
+ */
+export function buildConfidentialAssetHiddenTransferProofV1({
+  chainId,
+  poolId,
+  assetSetRootHex,
+  assetSetRoot,
+  inputCommitments,
+  inputCommitmentsHex,
+  nullifiers,
+  nullifiersHex,
+  outputCommitments,
+  outputCommitmentsHex,
+  rootHintHex,
+  rootHint,
+  verifyingKey,
+}) {
+  const native = resolveNativeBinding();
+  if (!native || typeof native.buildConfidentialAssetHiddenTransferProofV1 !== "function") {
+    throw new Error(
+      "native binding 'buildConfidentialAssetHiddenTransferProofV1' is unavailable",
+    );
+  }
+  const vk = normalizeInlineVerifyingKeyRecord(
+    verifyingKey,
+    "confidentialAssetHiddenTransferProofV1",
+  );
+  const normalizeList = (values, context) =>
+    Array.isArray(values)
+      ? values.map((entry, index) => normalizeFixed32HexInput(entry, `${context}[${index}]`))
+      : [];
+  const result = native.buildConfidentialAssetHiddenTransferProofV1(
+    String(chainId ?? "").trim(),
+    String(poolId ?? "").trim(),
+    normalizeFixed32HexInput(assetSetRootHex ?? assetSetRoot, "assetSetRoot"),
+    normalizeList(inputCommitmentsHex ?? inputCommitments, "inputCommitments"),
+    normalizeList(nullifiersHex ?? nullifiers, "nullifiers"),
+    normalizeList(outputCommitmentsHex ?? outputCommitments, "outputCommitments"),
+    normalizeFixed32HexInput(rootHintHex ?? rootHint, "rootHint"),
+    vk.backend,
+    vk.circuitId,
+    vk.bytes,
+  );
+  return {
+    inputCommitments: Array.isArray(result.inputCommitments ?? result.input_commitments)
+      ? (result.inputCommitments ?? result.input_commitments).map((entry) => Buffer.from(entry))
+      : [],
+    nullifiers: Array.isArray(result.nullifiers)
+      ? result.nullifiers.map((entry) => Buffer.from(entry))
+      : [],
+    outputCommitments: Array.isArray(result.outputCommitments ?? result.output_commitments)
+      ? (result.outputCommitments ?? result.output_commitments).map((entry) => Buffer.from(entry))
+      : [],
+    root: Buffer.from(result.root),
+    proof: Buffer.from(result.proof),
+  };
+}
+
+/**
  * Build a confidential unshield v2 proof envelope.
  */
 export function buildConfidentialUnshieldProofV2({

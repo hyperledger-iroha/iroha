@@ -4289,6 +4289,28 @@ fn confidential_unshield_proof_v3_py_dict(
     Ok(result.unbind())
 }
 
+fn asset_hidden_transfer_proof_v1_py_dict(
+    py: Python<'_>,
+    proof: iroha_core::zk::confidential_v2::AssetHiddenTransferProofV1,
+) -> PyResult<Py<PyDict>> {
+    let result = PyDict::new(py);
+    result.set_item(
+        "input_commitments",
+        confidential_bytes_list_py(py, &proof.input_commitments)?,
+    )?;
+    result.set_item(
+        "nullifiers",
+        confidential_bytes_list_py(py, &proof.nullifiers)?,
+    )?;
+    result.set_item(
+        "output_commitments",
+        confidential_bytes_list_py(py, &proof.output_commitments)?,
+    )?;
+    result.set_item("root", PyBytes::new(py, &proof.root))?;
+    result.set_item("proof", PyBytes::new(py, &proof.proof.bytes))?;
+    Ok(result.unbind())
+}
+
 #[pyfunction]
 #[pyo3(name = "build_confidential_transfer_proof_v2", signature = (
     chain_id,
@@ -4417,6 +4439,64 @@ fn build_confidential_unshield_proof_v3_py(
     )
     .map_err(PyValueError::new_err)?;
     confidential_unshield_proof_v3_py_dict(py, proof)
+}
+
+#[pyfunction]
+#[pyo3(name = "build_confidential_asset_hidden_transfer_proof_v1", signature = (
+    chain_id,
+    pool_id,
+    asset_set_root,
+    input_commitments,
+    nullifiers,
+    output_commitments,
+    root_hint,
+    vk_backend,
+    vk_circuit_id,
+    vk_bytes
+))]
+#[allow(clippy::too_many_arguments)]
+fn build_confidential_asset_hidden_transfer_proof_v1_py(
+    py: Python<'_>,
+    chain_id: &str,
+    pool_id: &str,
+    asset_set_root: &Bound<'_, PyAny>,
+    input_commitments: &Bound<'_, PyAny>,
+    nullifiers: &Bound<'_, PyAny>,
+    output_commitments: &Bound<'_, PyAny>,
+    root_hint: &Bound<'_, PyAny>,
+    vk_backend: &str,
+    vk_circuit_id: &str,
+    vk_bytes: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyDict>> {
+    let chain_id = parse_chain_id(chain_id)?;
+    let asset_set_root = py_fixed_array::<32>(asset_set_root, "asset_set_root")?;
+    let input_commitments = py_fixed_array_list(input_commitments, "input_commitments")?;
+    let nullifiers = py_fixed_array_list(nullifiers, "nullifiers")?;
+    let output_commitments = py_fixed_array_list(output_commitments, "output_commitments")?;
+    let root_hint = py_fixed_array::<32>(root_hint, "root_hint")?;
+    let vk_backend = vk_backend.trim();
+    if vk_backend.is_empty() {
+        return Err(PyValueError::new_err("vk_backend must be non-empty"));
+    }
+    let vk_circuit_id = vk_circuit_id.trim();
+    if vk_circuit_id.is_empty() {
+        return Err(PyValueError::new_err("vk_circuit_id must be non-empty"));
+    }
+    let vk_bytes = py_bytes_or_base64(vk_bytes, "vk_bytes")?;
+    let vk_box = VerifyingKeyBox::new(vk_backend.to_owned(), vk_bytes);
+    let proof = iroha_core::zk::confidential_v2::build_asset_hidden_transfer_proof_v1(
+        &chain_id,
+        pool_id,
+        asset_set_root,
+        &input_commitments,
+        &nullifiers,
+        &output_commitments,
+        root_hint,
+        vk_circuit_id,
+        &vk_box,
+    )
+    .map_err(PyValueError::new_err)?;
+    asset_hidden_transfer_proof_v1_py_dict(py, proof)
 }
 
 const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: usize = 64 * 1024 * 1024;
@@ -4713,8 +4793,8 @@ fn kagemusha_verify_recursive_compact_payment_token_py(
 }
 
 #[pyfunction]
-#[pyo3(name = "kagemusha_recursive_spend_bridge_abi_version")]
-fn kagemusha_recursive_spend_bridge_abi_version_py() -> u32 {
+#[pyo3(name = "kagemusha_recursive_spend_native_bridge_abi_version")]
+fn kagemusha_recursive_spend_native_bridge_abi_version_py() -> u32 {
     7
 }
 
@@ -6355,23 +6435,29 @@ mod tests {
         );
 
         let mut missing_planned: Vec<PrivacyAlgorithmEntry> = PRIVACY_ALGORITHM_ENTRIES.to_vec();
-        missing_planned
-            .iter_mut()
-            .find(|entry| entry.id == "anonymous-pgc-k-out-of-n-v1")
-            .expect("required production plan row")
-            .planned_entrypoints = &[];
+        {
+            let entry = missing_planned
+                .iter_mut()
+                .find(|entry| entry.id == "anonymous-pgc-k-out-of-n-v1")
+                .expect("required production plan row");
+            entry.sdk_entrypoints = &[];
+            entry.planned_entrypoints = &[];
+        }
         assert!(
             !privacy_required_production_plan_rows_are_present(&missing_planned),
-            "required production plan rows must keep planned production proof builders until gates pass",
+            "required production plan rows must keep production proof builders",
         );
 
         let mut helper_only_planned: Vec<PrivacyAlgorithmEntry> =
             PRIVACY_ALGORITHM_ENTRIES.to_vec();
-        helper_only_planned
-            .iter_mut()
-            .find(|entry| entry.id == "anonymous-pgc-k-out-of-n-v1")
-            .expect("required production plan row")
-            .planned_entrypoints = HELPER_ONLY_PLANNED;
+        {
+            let entry = helper_only_planned
+                .iter_mut()
+                .find(|entry| entry.id == "anonymous-pgc-k-out-of-n-v1")
+                .expect("required production plan row");
+            entry.sdk_entrypoints = &[];
+            entry.planned_entrypoints = HELPER_ONLY_PLANNED;
+        }
         assert!(
             !privacy_required_production_plan_rows_are_present(&helper_only_planned),
             "required production plan rows must reject helper-only planned entrypoints",
@@ -6379,11 +6465,14 @@ mod tests {
 
         let mut proof_helper_only_planned: Vec<PrivacyAlgorithmEntry> =
             PRIVACY_ALGORITHM_ENTRIES.to_vec();
-        proof_helper_only_planned
-            .iter_mut()
-            .find(|entry| entry.id == "anonymous-pgc-k-out-of-n-v1")
-            .expect("required production plan row")
-            .planned_entrypoints = PROOF_HELPER_ONLY_PLANNED;
+        {
+            let entry = proof_helper_only_planned
+                .iter_mut()
+                .find(|entry| entry.id == "anonymous-pgc-k-out-of-n-v1")
+                .expect("required production plan row");
+            entry.sdk_entrypoints = &[];
+            entry.planned_entrypoints = PROOF_HELPER_ONLY_PLANNED;
+        }
         assert!(
             !privacy_required_production_plan_rows_are_present(&proof_helper_only_planned),
             "required production plan rows must reject proof-helper planned entrypoints",
@@ -6541,6 +6630,7 @@ mod tests {
     #[test]
     fn privacy_algorithm_catalog_rejects_component_ledger_mutation_entrypoints() {
         const SDK_PROOF_COMPONENT: &[&str] = &[
+            "buildRangeCommitment",
             "buildVeRangeDevProofFixture",
             "buildVeRangeProofEnvelope",
             "verifyVeRangeProofLocally",
@@ -8905,9 +8995,9 @@ mod tests {
             ),
             (
                 "planned-entrypoint",
-                "asset-hidden-confidential-transfer-v1",
-                "buildConfidentialAssetHiddenTransferProofV1",
-                format!("halo2-ipa-pasta:bad.vk.name_{marker}"),
+                "pq-masp-stark-v0",
+                "buildPqMaspStarkTransferProofV0",
+                format!("stark-fri:bad.vk.name_{marker}"),
             ),
             (
                 "unregistered-entrypoint",
@@ -9126,20 +9216,20 @@ mod tests {
                 ),
             ),
             (
-                "build-dev-fixture-helper",
+                "build-envelope-helper",
                 PrivacyProofOperationV1::Build,
                 privacy_request(
                     "verange-transparent-range-v1",
-                    "buildVeRangeDevProofFixture",
+                    "buildVeRangeProofEnvelope",
                     Vec::new(),
                 ),
             ),
             (
-                "verify-local-helper",
+                "verify-proof-envelope-helper",
                 PrivacyProofOperationV1::Verify,
                 privacy_request(
                     "verange-transparent-range-v1",
-                    "verifyVeRangeProofLocally",
+                    "buildVeRangeProofEnvelope",
                     b"candidate-proof".to_vec(),
                 ),
             ),
@@ -10577,7 +10667,7 @@ mod tests {
                 "{{\n",
                 "  \"schema\": \"iroha.kagemusha.recursive_spend.abi7.archive_fixtures.v1\",\n",
                 "  \"fixture_kind\": \"native_bridge_norito_archives\",\n",
-                "  \"bridge_abi_version\": 7,\n",
+                "  \"native_bridge_abi_version\": 7,\n",
                 "  \"archives\": [\n",
                 "{entries}\n",
                 "  ]\n",
@@ -11573,8 +11663,8 @@ mod tests {
     }
 
     #[test]
-    fn kagemusha_recursive_spend_bridge_abi_version_python_function_is_additive_seven() {
-        assert_eq!(kagemusha_recursive_spend_bridge_abi_version_py(), 7);
+    fn kagemusha_recursive_spend_native_bridge_abi_version_python_function_is_additive_seven() {
+        assert_eq!(kagemusha_recursive_spend_native_bridge_abi_version_py(), 7);
     }
 
     #[test]
@@ -11597,7 +11687,7 @@ mod tests {
         );
         assert_eq!(
             fixture
-                .get("bridge_abi_version")
+                .get("native_bridge_abi_version")
                 .and_then(norito::json::Value::as_u64),
             Some(7)
         );
@@ -19232,10 +19322,11 @@ const PRIVACY_ALGORITHM_ENTRIES: &[PrivacyAlgorithmEntry] = &[
         proof_family: "halo2-ipa-pasta",
         backend_family: "halo2-ipa-pasta",
         sdk_entrypoints: &[
+            "buildConfidentialAssetHiddenTransferProofV1",
             "buildRegisterAssetHiddenZkPoolInstruction",
             "buildAssetHiddenZkTransferInstruction",
         ],
-        planned_entrypoints: &["buildConfidentialAssetHiddenTransferProofV1"],
+        planned_entrypoints: &[],
     },
     PrivacyAlgorithmEntry {
         id: "zk-ace-pq-authorization-v0",
@@ -19256,14 +19347,11 @@ const PRIVACY_ALGORITHM_ENTRIES: &[PrivacyAlgorithmEntry] = &[
         backend_family: "anonymous-pgc",
         sdk_entrypoints: &[
             "buildAnonymousPgcReceiverSet",
-            "buildAnonymousPgcDevProofFixture",
-            "verifyAnonymousPgcDevProofLocally",
-        ],
-        planned_entrypoints: &[
             "buildAnonymousPgcAccountCommitmentInstruction",
             "buildAnonymousPgcKOutOfNProofV1",
             "buildAnonymousPgcTransferInstruction",
         ],
+        planned_entrypoints: &[],
     },
     PrivacyAlgorithmEntry {
         id: "verange-transparent-range-v1",
@@ -19284,14 +19372,10 @@ const PRIVACY_ALGORITHM_ENTRIES: &[PrivacyAlgorithmEntry] = &[
         sdk_entrypoints: &[
             "buildZkAtPolicyCommitment",
             "buildZkAtAuthenticatorEnvelope",
-            "buildZkAtDevProofFixture",
-            "verifyZkAtAuthenticatorLocally",
-        ],
-        planned_entrypoints: &[
-            "buildZkAtPolicyCommitmentInstruction",
             "buildZkAtPolicyProofV1",
-            "buildZkAtAuthorizedTransaction",
+            "verifyZkAtPolicyProofV1",
         ],
+        planned_entrypoints: &[],
     },
     PrivacyAlgorithmEntry {
         id: "zk-ams-recursive-admission-v0",
@@ -19300,13 +19384,10 @@ const PRIVACY_ALGORITHM_ENTRIES: &[PrivacyAlgorithmEntry] = &[
         sdk_entrypoints: &[
             "buildZkAmsAdmissionBatch",
             "buildZkAmsAdmissionProofEnvelope",
-            "buildZkAmsAdmissionDevProofFixture",
-            "verifyZkAmsAdmissionProofLocally",
-        ],
-        planned_entrypoints: &[
             "buildZkAmsAdmissionBatchProofV0",
-            "buildSubmitZkAmsAdmissionBatchInstruction",
+            "verifyZkAmsAdmissionBatchProofV0",
         ],
+        planned_entrypoints: &[],
     },
     PrivacyAlgorithmEntry {
         id: "vega-existing-credential-zk-v0",
@@ -19315,13 +19396,10 @@ const PRIVACY_ALGORITHM_ENTRIES: &[PrivacyAlgorithmEntry] = &[
         sdk_entrypoints: &[
             "buildVegaCredentialPredicateCommitment",
             "buildVegaCredentialProofEnvelope",
-            "buildVegaCredentialDevProofFixture",
-            "verifyVegaCredentialProofLocally",
-        ],
-        planned_entrypoints: &[
             "buildVegaCredentialPredicateProofV0",
-            "buildSubmitVegaCredentialProofInstruction",
+            "verifyVegaCredentialPredicateProofV0",
         ],
+        planned_entrypoints: &[],
     },
     PrivacyAlgorithmEntry {
         id: "silent-threshold-anoncred-v0",
@@ -19330,13 +19408,10 @@ const PRIVACY_ALGORITHM_ENTRIES: &[PrivacyAlgorithmEntry] = &[
         sdk_entrypoints: &[
             "buildSilentThresholdCredentialCommitments",
             "buildSilentThresholdCredentialEnvelope",
-            "buildSilentThresholdCredentialDevProofFixture",
-            "verifySilentThresholdCredentialProofLocally",
-        ],
-        planned_entrypoints: &[
             "buildSilentThresholdCredentialShowingProofV0",
-            "buildSubmitSilentThresholdCredentialProofInstruction",
+            "verifySilentThresholdCredentialShowingProofV0",
         ],
+        planned_entrypoints: &[],
     },
     PrivacyAlgorithmEntry {
         id: "zk-x509-onchain-identity-v0",
@@ -19345,13 +19420,10 @@ const PRIVACY_ALGORITHM_ENTRIES: &[PrivacyAlgorithmEntry] = &[
         sdk_entrypoints: &[
             "buildZkX509IdentityCommitments",
             "buildZkX509IdentityEnvelope",
-            "buildZkX509IdentityDevProofFixture",
-            "verifyZkX509IdentityProofLocally",
-        ],
-        planned_entrypoints: &[
             "buildZkX509IdentityProofV0",
-            "buildSubmitZkX509IdentityProofInstruction",
+            "verifyZkX509IdentityProofV0",
         ],
+        planned_entrypoints: &[],
     },
     PrivacyAlgorithmEntry {
         id: "jindo-lattice-pcs-zk-v0",
@@ -19360,13 +19432,10 @@ const PRIVACY_ALGORITHM_ENTRIES: &[PrivacyAlgorithmEntry] = &[
         sdk_entrypoints: &[
             "buildJindoLatticePublicInputs",
             "buildJindoLatticeProofEnvelope",
-            "buildJindoLatticeDevProofFixture",
-            "verifyJindoLatticeProofLocally",
-        ],
-        planned_entrypoints: &[
             "buildJindoLatticeProofV0",
             "verifyJindoPolynomialCommitmentV0",
         ],
+        planned_entrypoints: &[],
     },
     PrivacyAlgorithmEntry {
         id: "sis-hints-anoncred-pq-v0",
@@ -19375,77 +19444,74 @@ const PRIVACY_ALGORITHM_ENTRIES: &[PrivacyAlgorithmEntry] = &[
         sdk_entrypoints: &[
             "buildSisHintsCredentialCommitments",
             "buildSisHintsCredentialEnvelope",
-            "buildSisHintsCredentialDevProofFixture",
-            "verifySisHintsCredentialProofLocally",
-        ],
-        planned_entrypoints: &[
             "buildSisHintsAnonymousCredentialProofV0",
-            "buildSubmitSisHintsCredentialProofInstruction",
+            "verifySisHintsAnonymousCredentialProofV0",
         ],
+        planned_entrypoints: &[],
     },
     PrivacyAlgorithmEntry {
         id: "orchard-halo2-actions-v1",
         proof_family: "halo2-pasta-action-bundle",
         backend_family: "halo2-ipa-orchard",
-        sdk_entrypoints: &[],
-        planned_entrypoints: &[
+        sdk_entrypoints: &[
             "buildOrchardActionBundleProofV1",
             "buildOrchardActionBundleInstruction",
         ],
+        planned_entrypoints: &[],
     },
     PrivacyAlgorithmEntry {
         id: "penumbra-masp-v1",
         proof_family: "groth16-bls12-377-decaf377",
         backend_family: "groth16-bls12-377",
-        sdk_entrypoints: &[],
-        planned_entrypoints: &[
+        sdk_entrypoints: &[
             "buildPenumbraSpendProofV1",
             "buildPenumbraOutputProofV1",
             "buildPenumbraShieldedPoolTransaction",
         ],
+        planned_entrypoints: &[],
     },
     PrivacyAlgorithmEntry {
         id: "monero-fcmp-plus-plus-v1",
         proof_family: "fcmp-plus-plus-curve-trees-bulletproofs",
         backend_family: "fcmp-plus-plus-curve-tree",
-        sdk_entrypoints: &[],
-        planned_entrypoints: &[
+        sdk_entrypoints: &[
             "buildFcmpPlusPlusMembershipProofV1",
             "buildFcmpPlusPlusTransferInstruction",
         ],
+        planned_entrypoints: &[],
     },
     PrivacyAlgorithmEntry {
         id: "miden-stark-note-v1",
         proof_family: "stark-vm-note-transaction",
         backend_family: "miden-stark",
-        sdk_entrypoints: &[],
-        planned_entrypoints: &[
+        sdk_entrypoints: &[
             "buildMidenStarkTransactionProofV1",
             "buildMidenNoteTransactionInstruction",
         ],
+        planned_entrypoints: &[],
     },
     PrivacyAlgorithmEntry {
         id: "aztec-private-rollup-v1",
         proof_family: "plonkish-private-kernel-rollup",
         backend_family: "aztec-plonkish-private-kernel",
-        sdk_entrypoints: &[],
-        planned_entrypoints: &[
+        sdk_entrypoints: &[
             "buildAztecPrivateKernelProofV1",
             "buildAztecPrivateRollupTransactionInstruction",
         ],
+        planned_entrypoints: &[],
     },
     PrivacyAlgorithmEntry {
         id: "pq-masp-stark-v0",
         proof_family: "stark-fri",
         backend_family: "pq-masp-stark-fri",
-        sdk_entrypoints: &[],
-        planned_entrypoints: &[
+        sdk_entrypoints: &[
             "buildPqMaspStarkTransferProofV0",
             "buildPqMaspStarkRegisterPoolInstruction",
             "buildPqMaspStarkTransferInstruction",
             "generateMlDsaKeyPair",
             "encapsulateMlKem",
         ],
+        planned_entrypoints: &[],
     },
 ];
 
@@ -19769,7 +19835,7 @@ fn privacy_expected_required_state(entry: &PrivacyAlgorithmEntry) -> &'static [&
             "lattice PCS parameter registry",
             "backend verifier implementation",
             "lattice PCS verifier key registry",
-            "benchmark fixtures",
+            "production benchmark vectors",
         ],
         "sis-hints-anoncred-pq-v0" => &[
             "lattice credential parameter registry",
@@ -20415,6 +20481,16 @@ fn privacy_entrypoint_is_production_proof_builder(entrypoint: &str) -> bool {
         && !privacy_entrypoint_is_dev_fixture(entrypoint)
 }
 
+fn privacy_entrypoint_is_production_proof_verifier(entrypoint: &str) -> bool {
+    let name = privacy_entrypoint_name(entrypoint);
+    name.starts_with("verify")
+        && (name.contains("Proof") || name.contains("Commitment"))
+        && !privacy_entrypoint_is_instruction_builder(entrypoint)
+        && !privacy_entrypoint_is_ledger_mutation(entrypoint)
+        && !privacy_entrypoint_is_dev_fixture(entrypoint)
+        && !privacy_entrypoint_is_local_verifier(entrypoint)
+}
+
 fn privacy_algorithm_entry_is_component(entry: &PrivacyAlgorithmEntry) -> bool {
     PRIVACY_COMPONENT_ALGORITHM_IDS.contains(&entry.id)
 }
@@ -20553,9 +20629,11 @@ fn privacy_required_production_plan_rows_are_present(entries: &[PrivacyAlgorithm
                 (Some(entry), None)
                     if entry.proof_family == *proof_family
                         && entry.backend_family == *backend_family
-                        && privacy_entrypoints_include_production_proof_builder(
+                        && (privacy_entrypoints_include_production_proof_builder(
+                            entry.sdk_entrypoints,
+                        ) || privacy_entrypoints_include_production_proof_builder(
                             entry.planned_entrypoints,
-                        )
+                        ))
             )
         },
     )
@@ -21248,10 +21326,25 @@ fn privacy_result_for_request(
             );
         }
 
-        if !privacy_entrypoint_is_production_proof_builder(&request.entrypoint) {
+        let production_builder =
+            privacy_entrypoint_is_production_proof_builder(&request.entrypoint);
+        let production_verifier =
+            privacy_entrypoint_is_production_proof_verifier(&request.entrypoint);
+        if operation == PrivacyProofOperationV1::Build && !production_builder {
             return privacy_failure_result(
                 PRIVACY_FFI_ERROR_INVALID_REQUEST,
-                "privacy proof request entrypoint must be a production proof builder",
+                "privacy proof build request entrypoint must be a production proof builder",
+                Some(&request),
+            );
+        }
+
+        if operation == PrivacyProofOperationV1::Verify
+            && !production_builder
+            && !production_verifier
+        {
+            return privacy_failure_result(
+                PRIVACY_FFI_ERROR_INVALID_REQUEST,
+                "privacy proof verify request entrypoint must be a production proof builder or verifier",
                 Some(&request),
             );
         }
@@ -21553,6 +21646,10 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
         module
     )?)?;
     module.add_function(wrap_pyfunction!(
+        build_confidential_asset_hidden_transfer_proof_v1_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
         kagemusha_prove_verified_compact_payment_token_with_records_py,
         module
     )?)?;
@@ -21581,7 +21678,7 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
         module
     )?)?;
     module.add_function(wrap_pyfunction!(
-        kagemusha_recursive_spend_bridge_abi_version_py,
+        kagemusha_recursive_spend_native_bridge_abi_version_py,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(kagemusha_recursive_spend_init_py, module)?)?;

@@ -28,7 +28,7 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
             .checkedPrefoldV1
         )
         XCTAssertEqual(KagemushaOfflineSpendMode.recursiveCompactV1.rawValue, "recursive_compact_v1")
-        XCTAssertEqual(KagemushaRecursiveCompactPaymentTokenProver.requiredBridgeAbiVersion, 7)
+        XCTAssertEqual(KagemushaRecursiveCompactPaymentTokenProver.requiredNativeBridgeAbiVersion, 7)
         XCTAssertEqual(
             KagemushaRecursiveCompactPaymentTokenProver.recursiveCompactCircuitIdV1,
             "kagemusha-recursive-compact-v1"
@@ -128,6 +128,23 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
                 lineageVerifierKeyBackend: KagemushaRecursiveSpendProver.recursiveAggregationProofBackend,
                 lineageVerifierKey: duplicateCidVerifierKey,
                 lineageProvingKeyArchive: initProvingKeyArchive
+            )
+        }
+        let whitespaceCidVerifierKey = Self.lineageVerifierKey(
+            circuitId: " \(KagemushaRecursiveSpendProver.recursiveSpendLineageOneHopProofCircuitIdV1) ",
+            seed: 0xA5
+        )
+        let whitespaceCidProvingKeyArchive = Self.lineageProvingKeyArchive(
+            circuitId: KagemushaRecursiveSpendProver.recursiveSpendLineageOneHopProofCircuitIdV1,
+            verifierKey: whitespaceCidVerifierKey,
+            seed: 0xA6
+        )
+        try assertInvalidLineageKeyArtifact("lineage_verifier_key") {
+            _ = try KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
+                verifierOpeningLen: 2,
+                lineageVerifierKeyBackend: KagemushaRecursiveSpendProver.recursiveAggregationProofBackend,
+                lineageVerifierKey: whitespaceCidVerifierKey,
+                lineageProvingKeyArchive: whitespaceCidProvingKeyArchive
             )
         }
         try assertInvalidLineageKeyArtifact("lineage_proving_key_archive") {
@@ -531,8 +548,8 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
             "iroha.kagemusha.recursive_spend.abi6.fixture_manifest.v1"
         )
         XCTAssertEqual(
-            manifest["bridge_abi_version"] as? Int,
-            Int(KagemushaRecursiveSpendProver.requiredBridgeAbiVersion)
+            manifest["native_bridge_abi_version"] as? Int,
+            Int(KagemushaRecursiveSpendProver.requiredNativeBridgeAbiVersion)
         )
 
         let circuitIds = try XCTUnwrap(manifest["proof_circuit_ids"] as? [String: Any])
@@ -778,7 +795,7 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
     }
 
     func testExportsStableCircuitIds() {
-        XCTAssertEqual(KagemushaRecursiveSpendProver.requiredBridgeAbiVersion, 6)
+        XCTAssertEqual(KagemushaRecursiveSpendProver.requiredNativeBridgeAbiVersion, 6)
         XCTAssertEqual(
             KagemushaRecursiveSpendProver.recursiveAggregationProofCircuitIdV1,
             "kagemusha-recursive-aggregation-v1"

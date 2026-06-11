@@ -8,11 +8,11 @@ public final class OfflineReadiness {
   private final boolean offlineFountainQr;
   private final boolean offlineSyncOptional;
   private final boolean offlineTelemetry;
-  private final boolean offlineKagemushaAbi7;
-  private final String offlineKagemushaAbi7Mode;
-  private final Integer offlineKagemushaAbi7BridgeAbiVersion;
-  private final String offlineKagemushaAbi7CircuitId;
-  private final boolean offlineKagemushaAbi7Artifacts;
+  private final boolean offlineKagemushaRecursiveCompactAvailable;
+  private final String offlineKagemushaRecursiveCompactMode;
+  private final Integer offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion;
+  private final String offlineKagemushaRecursiveCompactCircuitId;
+  private final boolean offlineKagemushaRecursiveCompactArtifactsAvailable;
 
   public OfflineReadiness(
       final boolean offlineNote,
@@ -42,22 +42,22 @@ public final class OfflineReadiness {
       final boolean offlineFountainQr,
       final boolean offlineSyncOptional,
       final boolean offlineTelemetry,
-      final boolean offlineKagemushaAbi7,
-      final String offlineKagemushaAbi7Mode,
-      final Integer offlineKagemushaAbi7BridgeAbiVersion,
-      final String offlineKagemushaAbi7CircuitId,
-      final boolean offlineKagemushaAbi7Artifacts) {
+      final boolean offlineKagemushaRecursiveCompactAvailable,
+      final String offlineKagemushaRecursiveCompactMode,
+      final Integer offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion,
+      final String offlineKagemushaRecursiveCompactCircuitId,
+      final boolean offlineKagemushaRecursiveCompactArtifactsAvailable) {
     this.offlineNote = offlineNote;
     this.offlineOneUseKeys = offlineOneUseKeys;
     this.offlineRecursiveNoteProof = offlineRecursiveNoteProof;
     this.offlineFountainQr = offlineFountainQr;
     this.offlineSyncOptional = offlineSyncOptional;
     this.offlineTelemetry = offlineTelemetry;
-    this.offlineKagemushaAbi7 = offlineKagemushaAbi7;
-    this.offlineKagemushaAbi7Mode = offlineKagemushaAbi7Mode;
-    this.offlineKagemushaAbi7BridgeAbiVersion = offlineKagemushaAbi7BridgeAbiVersion;
-    this.offlineKagemushaAbi7CircuitId = offlineKagemushaAbi7CircuitId;
-    this.offlineKagemushaAbi7Artifacts = offlineKagemushaAbi7Artifacts;
+    this.offlineKagemushaRecursiveCompactAvailable = offlineKagemushaRecursiveCompactAvailable;
+    this.offlineKagemushaRecursiveCompactMode = offlineKagemushaRecursiveCompactMode;
+    this.offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion = offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion;
+    this.offlineKagemushaRecursiveCompactCircuitId = offlineKagemushaRecursiveCompactCircuitId;
+    this.offlineKagemushaRecursiveCompactArtifactsAvailable = offlineKagemushaRecursiveCompactArtifactsAvailable;
   }
 
   public boolean offlineNote() {
@@ -84,23 +84,23 @@ public final class OfflineReadiness {
     return offlineTelemetry;
   }
 
-  public boolean offlineKagemushaAbi7() {
-    return offlineKagemushaAbi7;
+  public boolean offlineKagemushaRecursiveCompactAvailable() {
+    return offlineKagemushaRecursiveCompactAvailable;
   }
 
-  public String offlineKagemushaAbi7Mode() {
-    return offlineKagemushaAbi7Mode;
+  public String offlineKagemushaRecursiveCompactMode() {
+    return offlineKagemushaRecursiveCompactMode;
   }
 
-  public Integer offlineKagemushaAbi7BridgeAbiVersion() {
-    return offlineKagemushaAbi7BridgeAbiVersion;
+  public Integer offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion() {
+    return offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion;
   }
 
-  public String offlineKagemushaAbi7CircuitId() {
-    return offlineKagemushaAbi7CircuitId;
+  public String offlineKagemushaRecursiveCompactCircuitId() {
+    return offlineKagemushaRecursiveCompactCircuitId;
   }
 
-  public boolean offlineKagemushaAbi7Artifacts() {
-    return offlineKagemushaAbi7Artifacts;
+  public boolean offlineKagemushaRecursiveCompactArtifactsAvailable() {
+    return offlineKagemushaRecursiveCompactArtifactsAvailable;
   }
 }

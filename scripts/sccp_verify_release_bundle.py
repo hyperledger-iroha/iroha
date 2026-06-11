@@ -4816,6 +4816,8 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "def _active_launch_lane_blockers_for_checklist(",
             "lane_blocker_schema_errors",
             "def _active_launch_source_record_hash_role_blockers(",
+            "def _required_record_summary_unknown_field_blocker(",
+            "f\"{lane_label}: required record summary\"",
             "source verifier material hash must not reuse source adapter engine deployment hash",
             "_active_launch_route_allowlist_binding_blockers(lane_label, lane)",
             "_active_launch_route_canary_metadata_blockers(lane_label, canary)",
@@ -4834,6 +4836,8 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "readiness report release_checklist does not match embedded evidence",
             "all-lanes summary active {ACTIVE_LAUNCH_DISPLAY} release checklist is not ready",
             "release_checklist contains unknown field name with non-ASCII character",
+            "def _required_record_summary_unknown_field_blocker(",
+            "f\"{lane_label}: required record summary\"",
             "def _active_launch_checklist_schema_inventory_errors(",
         ),
     ),
@@ -4864,6 +4868,7 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "route allowlist source verifier material hash must not reuse source adapter engine deployment hash",
             "governed deployment source verifier material hash must not reuse source adapter engine deployment hash",
             "def test_release_readiness_report_blocks_malformed_active_required_record_metadata",
+            "def test_release_readiness_report_classifies_malformed_active_required_record_fields",
             "def test_release_readiness_report_classifies_malformed_active_lane_blockers",
         ),
     ),
@@ -4874,6 +4879,7 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "def test_release_bundle_verifier_rejects_missing_active_launch_checklist_schema_inventory_gate",
             "def test_release_bundle_verifier_rejects_readiness_boolean_type_drift",
             "def test_release_bundle_verifier_recomputes_active_checklist_rejects_malformed_canary_source",
+            "def test_release_bundle_verifier_classifies_malformed_active_required_record_fields",
             "def test_release_bundle_verifier_classifies_malformed_active_lane_blockers",
             "def test_release_bundle_verifier_rejects_release_checklist_field_type_drift",
             "def test_release_bundle_verifier_rejects_release_checklist_malformed_unknown_fields",
@@ -6821,10 +6827,12 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
         (
             "READINESS_REPORT_ROOT_FIELDS",
             "SOURCE_INVENTORY_FIELDS",
-            "def _unknown_report_field_errors(",
+            "def _unknown_public_field_errors(",
             "def _source_inventory_gate_key_error(",
             "contains unknown field",
-            "_unknown_report_field_errors(payload, label, READINESS_REPORT_ROOT_FIELDS)",
+            "_unknown_public_field_errors(payload, label, READINESS_REPORT_ROOT_FIELDS)",
+            "_unknown_public_field_errors(",
+            "SOURCE_INVENTORY_FIELDS,",
             "validation_status must be passed",
         ),
     ),
@@ -6834,6 +6842,7 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
             "test_release_bundle_verifier_guards_release_public_json_root_schema_inventory",
             "test_release_bundle_verifier_rejects_missing_release_public_json_root_schema_inventory_gate",
             "test_release_bundle_rejects_unknown_copied_report_root_before_render",
+            "operator|secret-token",
             "test_release_bundle_rejects_malformed_copied_source_inventory_before_render",
             "test_release_bundle_verifier_rejects_noncanonical_json_serialization",
             "test_release_bundle_verifier_rejects_duplicate_json_keys",
@@ -6923,7 +6932,8 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
         (
             "CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS",
             "f\"{label}.cryptographic_evidence[{index}]\"",
-            "_unknown_report_field_errors(",
+            "_unknown_public_field_errors(",
+            "CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS,",
             "def _cryptographic_evidence_row_bundle_errors(",
             "def _cryptographic_evidence_lane_binding_bundle_errors(",
             "must cover every embedded lane",
@@ -6950,6 +6960,7 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
             "test_release_bundle_verifier_rejects_crypto_evidence_malformed_source_adapter_gate_audit_keys",
             "test_release_bundle_verifier_suppresses_crypto_evidence_malformed_markdown_leaks",
             "test_release_bundle_verifier_rejects_crypto_evidence_malformed_unknown_fields",
+            "operator|secret-token",
         ),
     ),
     (
@@ -7007,7 +7018,8 @@ SCCP_RELEASE_PUBLIC_SUBMISSION_SURFACE_BINDING_MARKERS = (
             "sdk_helper_symbols_by_sdk",
             "validation_blockers",
             "f\"{label}.user_prover_submission_surfaces[{index}]\"",
-            "_unknown_report_field_errors(",
+            "_unknown_public_field_errors(",
+            "USER_PROVER_SUBMISSION_SURFACE_FIELDS,",
             "def _submission_surface_known_sdks(",
             "def _submission_surface_known_required_phases(",
             "def _submission_surface_sdk_key_error(",
@@ -7058,6 +7070,7 @@ SCCP_RELEASE_PUBLIC_SUBMISSION_SURFACE_BINDING_MARKERS = (
             "test_release_bundle_verifier_rejects_submission_surface_malformed_sdk_helper_map_keys",
             "test_release_bundle_verifier_rejects_submission_surface_malformed_required_phases",
             "test_release_bundle_verifier_rejects_submission_surface_malformed_unknown_fields",
+            "operator|secret-token",
         ),
     ),
     (
@@ -11313,9 +11326,7 @@ def _active_launch_required_record_metadata_blockers(
     if not isinstance(records, dict):
         return blockers + [f"{lane_label}: required record summary is missing"]
     for key in sorted(set(records) - set(record_labels)):
-        blockers.append(
-            f"{lane_label}: required record summary has unknown field {key}"
-        )
+        blockers.append(_required_record_summary_unknown_field_blocker(lane_label, key))
     for key, field_label in record_labels.items():
         if records.get(key) is not True:
             blockers.append(f"{lane_label}: missing {field_label}")
@@ -11722,6 +11733,17 @@ def _native_evm_prover_field_name_blocker(
             "character"
         )
     return f"{label} contains {field_kind} field: {key}"
+
+
+def _required_record_summary_unknown_field_blocker(
+    lane_label: str,
+    key: Any,
+) -> str:
+    return _native_evm_prover_field_name_blocker(
+        f"{lane_label}: required record summary",
+        key,
+        "unknown",
+    )
 
 
 def _native_evm_prover_duplicate_json_key_blocker(label: str, key: Any) -> str:
