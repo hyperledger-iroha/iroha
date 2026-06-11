@@ -274,6 +274,31 @@ class OfflineNoteTest {
     }
 
     @Test
+    fun verifyingKeyBoxCanonicalEncodingMatchesStandaloneCodec() {
+        val sourceBytes = byteArrayOf(1, 2, 3)
+        val verifyingKey = OfflineNote.VerifyingKeyBox(" halo2/ipa ", sourceBytes)
+        sourceBytes[0] = 0x7f.toByte()
+
+        assertEquals("halo2/ipa", verifyingKey.backend)
+        assertContentEquals(byteArrayOf(1, 2, 3), verifyingKey.bytes())
+
+        val returnedBytes = verifyingKey.bytes()
+        returnedBytes[1] = 0x7e.toByte()
+        assertContentEquals(byteArrayOf(1, 2, 3), verifyingKey.bytes())
+
+        val expected = VerifyingKeyBoxCodec.encodeNorito("halo2/ipa", byteArrayOf(1, 2, 3))
+        assertContentEquals(expected, OfflineNote.encodeVerifyingKeyBox(verifyingKey))
+        assertContentEquals(expected, verifyingKey.noritoEncoded())
+
+        assertIllegalArgumentContains("verifying key backend must not be empty") {
+            OfflineNote.VerifyingKeyBox(" ", byteArrayOf(1))
+        }
+        assertIllegalArgumentContains("verifying key bytes must not be empty") {
+            OfflineNote.VerifyingKeyBox("halo2/ipa", ByteArray(0))
+        }
+    }
+
+    @Test
     fun kagemushaRecursiveSpendNativeProverValidatesInput() {
         assertEquals(
             "recursive_spend_v1",
