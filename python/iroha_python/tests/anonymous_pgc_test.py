@@ -5,13 +5,21 @@ import json
 import pytest
 
 from iroha_python import (
+    buildAnonymousPgcAccountCommitmentInstruction,
     buildAnonymousPgcDevProofFixture,
+    buildAnonymousPgcKOutOfNProofV1,
     buildAnonymousPgcReceiverSet,
+    buildAnonymousPgcTransferInstruction,
     build_anonymous_pgc_dev_proof_fixture,
+    build_anonymous_pgc_account_commitment_instruction,
+    build_anonymous_pgc_k_out_of_n_proof_v1,
     build_anonymous_pgc_receiver_set,
+    build_anonymous_pgc_transfer_instruction,
     decode_privacy_proof_envelope,
+    verifyAnonymousPgcKOutOfNProofV1,
     verifyAnonymousPgcDevProofLocally,
     verify_anonymous_pgc_dev_proof_locally,
+    verify_anonymous_pgc_k_out_of_n_proof_v1,
 )
 from iroha_python.verange import build_privacy_proof_envelope
 
@@ -113,6 +121,101 @@ def test_anonymous_pgc_builders_normalize_receiver_sets_and_dev_fixture() -> Non
     assert verified["public_inputs"] == fixture["public_inputs"]
     assert verified["public_input_bytes"] == len(fixture["public_input_bytes"])
     assert verified["proof_bytes"] == len(fixture["proof_bytes"])
+
+
+def _production_transfer_input(envelope: bytes) -> dict[str, object]:
+    fixture = _base_fixture()
+    return {
+        "proofEnvelope": envelope,
+        "receiverSet": fixture["receiverSet"],
+        "payload": fixture["payload"],
+        "anonymitySetRoot": fixture["anonymitySetRoot"],
+        "balanceCommitments": fixture["balanceCommitments"],
+        "linkTag": fixture["linkTag"],
+        "rangeCommitments": fixture["rangeCommitments"],
+        "chainId": fixture["chainId"],
+        "domainSeparator": fixture["domainSeparator"],
+    }
+
+
+def test_anonymous_pgc_production_proof_and_instruction_builders_roundtrip() -> None:
+    proof_bytes = b"external-anonymous-pgc-proof-v1"
+    envelope = build_anonymous_pgc_k_out_of_n_proof_v1(
+        {**_base_fixture(), "proofBytes": proof_bytes}
+    )
+
+    decoded = decode_privacy_proof_envelope(envelope)
+    assert decoded["backend"] == "Stark"
+    assert decoded["proof_bytes"] == proof_bytes
+
+    verified = verify_anonymous_pgc_k_out_of_n_proof_v1(
+        _production_transfer_input(envelope)
+    )
+    assert verified["ok"] is True
+    assert verified["production"] is True
+    assert verified["kind"] == "anonymous-pgc-k-out-of-n-v1"
+    assert verified["receiver_count"] == 2
+    assert verified["receiver_threshold"] == 1
+
+    account_instruction = build_anonymous_pgc_account_commitment_instruction(
+        {
+            "accountCommitment": bytes([0x21]) * 32,
+            "anonymitySetRoot": bytes([0x41]) * 32,
+            "chainId": "boi-localnet",
+            "domainSeparator": "boi:anonymous-pgc:v1",
+        }
+    )
+    assert account_instruction["kind"] == "zk::RegisterAnonymousPgcAccountCommitment"
+    assert len(account_instruction["instruction_digest"]) == 64
+
+    transfer_instruction = build_anonymous_pgc_transfer_instruction(
+        _production_transfer_input(envelope)
+    )
+    assert transfer_instruction["kind"] == "zk::SubmitAnonymousPgcTransfer"
+    assert transfer_instruction["proof_envelope"] == envelope
+    assert transfer_instruction["receiver_count"] == 2
+    assert len(transfer_instruction["instruction_digest"]) == 64
+
+
+def test_anonymous_pgc_package_root_exports_production_entrypoint_aliases() -> None:
+    envelope = buildAnonymousPgcKOutOfNProofV1(
+        {**_base_fixture(), "proofBytes": b"external-anonymous-pgc-proof-v1"}
+    )
+    verified = verifyAnonymousPgcKOutOfNProofV1(_production_transfer_input(envelope))
+    account_instruction = buildAnonymousPgcAccountCommitmentInstruction(
+        {
+            "accountCommitment": bytes([0x21]) * 32,
+            "anonymitySetRoot": bytes([0x41]) * 32,
+            "chainId": "boi-localnet",
+            "domainSeparator": "boi:anonymous-pgc:v1",
+        }
+    )
+    transfer_instruction = buildAnonymousPgcTransferInstruction(
+        _production_transfer_input(envelope)
+    )
+
+    assert verified["production"] is True
+    assert account_instruction["kind"] == "zk::RegisterAnonymousPgcAccountCommitment"
+    assert transfer_instruction["kind"] == "zk::SubmitAnonymousPgcTransfer"
+
+
+def test_anonymous_pgc_production_helpers_reject_dev_fixture_bytes() -> None:
+    fixture = build_anonymous_pgc_dev_proof_fixture(_base_fixture())
+
+    with pytest.raises(ValueError, match="dev fixture"):
+        build_anonymous_pgc_k_out_of_n_proof_v1(
+            {**_base_fixture(), "proofBytes": fixture["proof_bytes"]}
+        )
+
+    with pytest.raises(ValueError, match="dev fixture"):
+        verify_anonymous_pgc_k_out_of_n_proof_v1(
+            _production_transfer_input(fixture["envelope"])
+        )
+
+    with pytest.raises(ValueError, match="dev fixture"):
+        build_anonymous_pgc_transfer_instruction(
+            _production_transfer_input(fixture["envelope"])
+        )
 
 
 def test_anonymous_pgc_package_root_exports_catalog_entrypoint_aliases() -> None:

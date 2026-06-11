@@ -642,7 +642,12 @@ NATIVE_EVM_PROVER_FORBIDDEN_PATH_MARKERS = (
     "prover_endpoint",
     "prover endpoint",
 )
-NATIVE_EVM_PROVER_MIN_PAYLOAD_BYTES = 256
+NATIVE_EVM_PROVER_MIN_SUPPORT_ARTIFACT_BYTES = 128
+NATIVE_EVM_PROVER_MIN_IMPLEMENTATION_BYTES = 1024
+NATIVE_EVM_PROVER_MIN_PROOF_ARTIFACT_BYTES = 64 * 1024
+NATIVE_EVM_PROVER_MIN_PROVING_KEY_BYTES = 64 * 1024
+NATIVE_EVM_PROVER_MIN_VERIFIER_KEY_BYTES = 128
+NATIVE_EVM_PROVER_MIN_PAYLOAD_BYTES = NATIVE_EVM_PROVER_MIN_SUPPORT_ARTIFACT_BYTES
 NATIVE_EVM_PROVER_BUNDLE_SUMMARY_KEYS = {
     "required",
     "schema",
@@ -1219,6 +1224,68 @@ ETHEREUM_OUTBOUND_PRECALLBACK_SDK_TEST_MARKERS = (
             "destinationBindingHash must match destinationBinding",
             "outbound_prover_called = False",
             "assert not outbound_prover_called",
+            "proof_artifact_hash",
+            "proofResult proofArtifactHash and provingKeyHash must be supplied together",
+            "proofResult proofArtifactHash and provingKeyHash must match request",
+        ),
+    ),
+    (
+        "javascript/iroha_js/src/sccp.js",
+        (
+            "const proverArtifactRequestBytes =",
+            "hexToBytes(proofArtifactHash, \"proofArtifactHash\", 32)",
+            "...proverArtifactRequestBytes,\n        ...publicSignalWordBytes,",
+            "proofResult proofArtifactHash and provingKeyHash must match request",
+        ),
+    ),
+    (
+        "javascript/iroha_js/dist/sccp.js",
+        (
+            "const proverArtifactRequestBytes =",
+            "hexToBytes(proofArtifactHash, \"proofArtifactHash\", 32)",
+            "...proverArtifactRequestBytes,\n        ...publicSignalWordBytes,",
+            "proofResult proofArtifactHash and provingKeyHash must match request",
+        ),
+    ),
+    (
+        "python/iroha_torii_client/sccp.py",
+        (
+            "def _normalize_optional_groth16_prover_artifacts(",
+            'prover_artifacts = _normalize_optional_groth16_prover_artifacts(\n        value,\n        "proof request",\n    )',
+            'prover_artifacts["proof_artifact_hash"]',
+            "proofResult proofArtifactHash and provingKeyHash must match request",
+        ),
+    ),
+    (
+        "IrohaSwift/Sources/IrohaSwift/SccpEvmProver.swift",
+        (
+            "let proverArtifacts = try normalizeOptionalEvmGroth16ProverArtifacts(",
+            "if let proverArtifacts {\n        try preimage.append(evmBytesFromHex32(proverArtifacts.proofArtifactHash",
+            "for signal in publicSignalWords {",
+        ),
+    ),
+    (
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/EvmSccpProver.kt",
+        (
+            "val proverArtifacts = normalizeOptionalGroth16ProverArtifacts(",
+            'preimage.write(hex32Bytes(proverArtifacts.proofArtifactHash, "proofArtifactHash"))',
+            'publicSignalWords.forEach { preimage.write(hex32Bytes(it, "publicSignalWords")) }',
+        ),
+    ),
+    (
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/EvmSccpProver.java",
+        (
+            "final Groth16ProverArtifacts proverArtifacts =",
+            'write(preimage, hex32Bytes(proverArtifacts.proofArtifactHash(), "proofArtifactHash"))',
+            "for (final String signal : publicSignalWords) {",
+        ),
+    ),
+    (
+        "csharp/src/Hyperledger.Iroha.Sdk/Sccp/EthereumMainnetSccp.cs",
+        (
+            "var proverArtifacts = NormalizeOptionalGroth16ProverArtifacts(proofArtifactHash, provingKeyHash);",
+            "payload.Write(HexToBytes(proverArtifacts.ProofArtifactHash, 32));",
+            "foreach (var word in publicSignalWords)",
         ),
     ),
     (
@@ -1845,6 +1912,12 @@ ETHEREUM_RECEIPT_SOURCE_EVENT_CONTEXT_MARKERS = (
         (
             "test_collect_receipt_proof_rejects_source_event_missing_context_fields",
             'for field in ("transactionHash", "blockHash", "blockNumber")',
+        ),
+    ),
+    (
+        "crates/iroha_sccp/src/lib.rs",
+        (
+            "EVM source receipts must not contain duplicate matching SCCP logs",
         ),
     ),
     (
@@ -3891,9 +3964,14 @@ ETHEREUM_EVM_SOURCE_ADAPTER_DEPLOYMENT_GATE_MARKERS = (
             "deployment.source_bridge_network_id == material.source_bridge_network_id",
             "deployment.source_bridge_config_hash == material.source_bridge_config_hash",
             "sccp_source_bridge_config_hash_is_production_ready(material)",
+            "sccp_source_adapter_engine_deployment_role_hashes_are_separated(&deployment)",
+            "source adapter deployment receipts must not reuse source verifier role hashes",
+            "source adapter deployment metadata must keep adapter VK and receipt hashes separated",
             "wrong_network_deployment.source_bridge_network_id = sccp_bsc_mainnet_network_id_word_v1();",
             "wrong_config_deployment.source_bridge_config_hash[0] ^= 0x01;",
             "wrong_emitter_deployment.source_bridge_emitter_address = [0x99; 20].to_vec();",
+            "BSC facade must reject replayed deployment receipts",
+            "ETH facade must reject replayed deployment receipts",
         ),
     ),
     (
@@ -4270,6 +4348,8 @@ ALL_LANES_EVIDENCE_ROOT_SCHEMA_MARKERS = (
         (
             "def _all_lanes_evidence_root_schema_inventory_errors(",
             "errors.extend(_all_lanes_evidence_root_schema_inventory_errors())",
+            "def _integer_list_field_errors(",
+            "must not contain duplicate integers",
         ),
     ),
     (
@@ -4287,6 +4367,10 @@ ALL_LANES_EVIDENCE_ROOT_SCHEMA_MARKERS = (
             "ALL_LANES_LANE_FIELDS",
             "ALL_LANES_RECORD_FIELDS",
             "def _all_lanes_summary_bundle_errors(",
+            "_unknown_public_field_errors(payload, label, ALL_LANES_SUMMARY_FIELDS)",
+            "ALL_LANES_LANE_FIELDS",
+            "_unknown_public_field_errors(",
+            "ALL_LANES_RECORD_FIELDS",
             "def _all_lanes_summary_output_bundle_errors(",
             "def _copied_evidence_binding_bundle_errors(",
             "does not match bundled report evidence",
@@ -4385,6 +4469,10 @@ ALL_LANES_EVIDENCE_ROOT_SCHEMA_MARKERS = (
             "def test_release_bundle_rejects_copied_evidence_tron_route_canary_transcript_drift_before_render",
             "def test_release_bundle_rejects_copied_evidence_solana_ton_route_canary_drift_before_render",
             "def test_release_bundle_rejects_summary_drift_before_write",
+            "supported_launch_domains must not contain duplicate integers",
+            "unsupported_launch_domains must not contain duplicate integers",
+            "operator|secret-token",
+            "contains unknown field name with Markdown-unsafe ",
         ),
     ),
 )
@@ -4728,6 +4816,8 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "def _active_launch_lane_blockers_for_checklist(",
             "lane_blocker_schema_errors",
             "def _active_launch_source_record_hash_role_blockers(",
+            "def _required_record_summary_unknown_field_blocker(",
+            "f\"{lane_label}: required record summary\"",
             "source verifier material hash must not reuse source adapter engine deployment hash",
             "_active_launch_route_allowlist_binding_blockers(lane_label, lane)",
             "_active_launch_route_canary_metadata_blockers(lane_label, canary)",
@@ -4746,6 +4836,8 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "readiness report release_checklist does not match embedded evidence",
             "all-lanes summary active {ACTIVE_LAUNCH_DISPLAY} release checklist is not ready",
             "release_checklist contains unknown field name with non-ASCII character",
+            "def _required_record_summary_unknown_field_blocker(",
+            "f\"{lane_label}: required record summary\"",
             "def _active_launch_checklist_schema_inventory_errors(",
         ),
     ),
@@ -4757,7 +4849,8 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "def _release_checklist_bundle_errors(",
             "def _release_checklist_binding_bundle_errors(",
             "def _checklist_item_id_error(",
-            "_unknown_report_field_errors(",
+            "_unknown_public_field_errors(payload, label, RELEASE_CHECKLIST_FIELDS)",
+            "RELEASE_CHECKLIST_ITEM_FIELDS",
             "release_checklist does not match embedded evidence",
             "ready must be true",
             "blockers must be empty",
@@ -4775,6 +4868,7 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "route allowlist source verifier material hash must not reuse source adapter engine deployment hash",
             "governed deployment source verifier material hash must not reuse source adapter engine deployment hash",
             "def test_release_readiness_report_blocks_malformed_active_required_record_metadata",
+            "def test_release_readiness_report_classifies_malformed_active_required_record_fields",
             "def test_release_readiness_report_classifies_malformed_active_lane_blockers",
         ),
     ),
@@ -4785,10 +4879,12 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "def test_release_bundle_verifier_rejects_missing_active_launch_checklist_schema_inventory_gate",
             "def test_release_bundle_verifier_rejects_readiness_boolean_type_drift",
             "def test_release_bundle_verifier_recomputes_active_checklist_rejects_malformed_canary_source",
+            "def test_release_bundle_verifier_classifies_malformed_active_required_record_fields",
             "def test_release_bundle_verifier_classifies_malformed_active_lane_blockers",
             "def test_release_bundle_verifier_rejects_release_checklist_field_type_drift",
             "def test_release_bundle_verifier_rejects_release_checklist_malformed_unknown_fields",
             "def test_release_bundle_rejects_unknown_copied_checklist_fields_before_render",
+            "operator|secret-token",
             "def test_release_bundle_rejects_malformed_copied_checklist_before_render",
             "def test_release_bundle_rejects_copied_checklist_binding_before_render",
             "def test_release_bundle_verifier_rejects_malformed_active_launch_blockers",
@@ -5022,6 +5118,10 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "toBytes(sourceProofBytes, \"sourceProofBytes\").length === 0",
             "sourceProofBytes required for non-SORA source bundle",
             "bundleBytes.sourceDomain must match sourceDomain",
+            "export function wrapTonSccpSourceStateVerificationProof(proofBytes, request) {\n"
+            "  const proofRequest = normalizeTonSourceStateProofRequestForWrapping(request);\n"
+            "  const proof = copyBytes(toBytes(proofBytes, \"proofBytes\"));\n"
+            "  requireSourceStateProofBytes(proof, \"proofBytes\");",
         ),
     ),
     (
@@ -5034,6 +5134,10 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "toBytes(sourceProofBytes, \"sourceProofBytes\").length === 0",
             "sourceProofBytes required for non-SORA source bundle",
             "bundleBytes.sourceDomain must match sourceDomain",
+            "export function wrapTonSccpSourceStateVerificationProof(proofBytes, request) {\n"
+            "  const proofRequest = normalizeTonSourceStateProofRequestForWrapping(request);\n"
+            "  const proof = copyBytes(toBytes(proofBytes, \"proofBytes\"));\n"
+            "  requireSourceStateProofBytes(proof, \"proofBytes\");",
         ),
     ),
     (
@@ -5045,6 +5149,8 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "rejects non-empty all-zero source proof bytes in SCCP proof requests",
             "bundleBytes must match publicInputs",
             "bundleBytes\\.sourceDomain must match sourceDomain",
+            "oversizedTonSourceStateProofBytes",
+            "oversizedTonCallbackProver",
         ),
     ),
     (
@@ -5053,7 +5159,35 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "sampleEvmFamilyProofBundleFixture",
             "package dist entrypoint exports SCCP TRON Groth16 helpers",
             "package dist entrypoint exports SCCP EVM-family Groth16 helpers",
+            "package dist entrypoint enforces TON source-state proof cap",
             "canonicalSccpMessageProofBundleBytes",
+            "oversizedTonDistSourceStateProofBytes",
+            "oversizedTonDistCallbackProver",
+        ),
+    ),
+    (
+        "javascript/iroha_js/test/sccpPackageExports.test.js",
+        (
+            "published package root enforces TON source-state proof cap",
+            "samplePackageRootTonShardStateSourceStateInput",
+            "oversizedTonPackageRootSourceStateProofBytes",
+            "oversizedTonPackageRootCallbackProver",
+        ),
+    ),
+    (
+        "javascript/iroha_js/test/sccpBscMainnet.test.js",
+        (
+            "tamperedBscBase64ProofResult",
+            "sdk.buildBscCalldata({ proofResult: tamperedBscBase64ProofResult })",
+            "proofResult\\.proofBase64 must match proofResult\\.proofBytes",
+        ),
+    ),
+    (
+        "javascript/iroha_js/test/sccpEthereumMainnet.test.js",
+        (
+            "tamperedEthereumBase64ProofResult",
+            "sdk.buildEthereumCalldata({ proofResult: tamperedEthereumBase64ProofResult })",
+            "proofResult\\.proofBase64 must match proofResult\\.proofBytes",
         ),
     ),
     (
@@ -5066,6 +5200,8 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "def build_evm_sccp_proof_request",
             "def build_tron_sccp_proof_request",
             "bundleBytes.sourceDomain must match sourceDomain",
+            "def wrap_ton_sccp_source_state_verification_proof",
+            "_require_source_state_proof_bytes(proof)",
         ),
     ),
     (
@@ -5085,6 +5221,20 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             'match="bundleBytes must not be all zero"',
             "wrap_evm_sccp_proof_result",
             "wrap_tron_sccp_proof_result",
+            "def test_package_root_ton_source_state_cap_uses_public_exports",
+            "oversized_package_root_ton_source_state_proof",
+            "def test_ton_source_state_prover_wraps_shard_and_full_light_audit_role_proofs",
+            'oversized_proof_bytes = b"\\x01" * (SCCP_SOURCE_STATE_MAX_PROOF_BYTES + 1)',
+            "prove=lambda _request, _options: oversized_proof_bytes",
+            "def sample_token_add_bundle_fixture",
+            "lowercase_required_eip55_recipient",
+            "lowercase_required_eip55_sender",
+            "nul_prefixed_symbol_bundle",
+            "tampered_bsc_base64_proof_result",
+            "build_bsc_mainnet_sccp_destination_submission",
+            "tampered_ethereum_base64_proof_result",
+            "build_ethereum_calldata",
+            "proofResult\\.proofBase64 must match proofResult\\.proofBytes",
         ),
     ),
     (
@@ -5093,6 +5243,12 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "private fun requireSccpProofRequestBundleMatchesPublicInputs",
             "summary.sourceDomain == SccpSolana.DOMAIN_SORA || sourceProofBytes.isNotEmpty()",
             "sourceProofBytes required for non-SORA source bundle",
+            "validateCanonicalEvmHexAddress(decodeCanonicalUtf8Bytes(raw, label), label)",
+            "$label must be a canonical EIP-55 EVM address",
+            "raw.indexOf(0.toByte())",
+            "SOURCE_STATE_MAX_PROOF_BYTES: Int = NATIVE_RECURSIVE_MAX_PROOF_BYTES",
+            "proof.proofBytes.size <= SOURCE_STATE_MAX_PROOF_BYTES",
+            "proofBytes.size <= SOURCE_STATE_MAX_PROOF_BYTES",
         ),
     ),
     (
@@ -5101,6 +5257,13 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "sourceProofBytes required for non-SORA",
             "strippedSourceProof",
             "proofRequestHashMatchesCrossSdkVector",
+            "nulPrefixedNameBundle",
+            "sampleTonTokenAddBundleFixture",
+            "canonicalEip55Sender",
+            "bundleBytes.payload.sender",
+            "oversizedSourceStateProofBytes = ByteArray(SccpTon.SOURCE_STATE_MAX_PROOF_BYTES + 1)",
+            "oversizedCallbackProver",
+            "proofBytes must be at most",
         ),
     ),
     (
@@ -5109,6 +5272,12 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "private static SccpBundleSummary requireSccpProofRequestBundleMatchesPublicInputs",
             "summary.sourceDomain != SolanaSccpProver.DOMAIN_SORA && sourceProofBytes.length == 0",
             "sourceProofBytes required for non-SORA source bundle",
+            "validateCanonicalEvmHexAddress(decodeCanonicalUtf8Bytes(raw, label), label)",
+            "must be a canonical EIP-55 EVM address",
+            "raw[index] == 0",
+            "SOURCE_STATE_MAX_PROOF_BYTES = NATIVE_RECURSIVE_MAX_PROOF_BYTES",
+            "proof.proofBytes().length > SOURCE_STATE_MAX_PROOF_BYTES",
+            "normalizedProofBytes.length > SOURCE_STATE_MAX_PROOF_BYTES",
         ),
     ),
     (
@@ -5117,6 +5286,13 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "sourceProofBytes required for non-SORA source bundle",
             "TON proof-result submissions must reject stripped non-SORA source proofs",
             "proofRequestHashMatchesCrossSdkVector",
+            "nulPrefixedNameBundle",
+            "sampleTonTokenAddBundleFixture",
+            "canonicalEip55Sender",
+            "bundleBytes.payload.sender",
+            "oversizedSourceStateProofBytes",
+            "TonSccpProver.SOURCE_STATE_MAX_PROOF_BYTES + 1",
+            "oversizedCallbackProver",
         ),
     ),
     (
@@ -5126,6 +5302,9 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "func decodeSccpMessageProofBundleSummary",
             "summary.sourceDomain == sccpDomainSora || !sourceProofBytes.isEmpty",
             "SccpMessageProofBundleError.missingSourceProof",
+            "validateCanonicalSccpBundleEvmHexAddress",
+            "irohaKeccak256(Data(lowercasePayload))",
+            "raw.firstIndex(of: 0)",
         ),
     ),
     (
@@ -5151,6 +5330,12 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "func decodeCanonicalTonSccpMessageProofBundleSummary",
             "summary.sourceDomain == sccpDomainSora || !sourceProofBytes.isEmpty",
             "throw TonSccpProverError.invalidField(\"sourceProofBytes\")",
+            "tonFixedAsciiFieldIsNonEmpty",
+            "raw.firstIndex(of: 0)",
+            "tonValidateCanonicalEvmHexAddress",
+            "irohaKeccak256(Data(lowercasePayload))",
+            "proof.proofBytes.count <= sccpSourceStateMaxProofBytes",
+            "proofBytes.count <= sccpSourceStateMaxProofBytes",
         ),
     ),
     (
@@ -5164,6 +5349,18 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "strippedSourceProofResult",
             "func testTonProofRequestHashMatchesCrossSdkVector",
             "func testSccpProofRequestsRejectAllZeroSourceProofBytes",
+            "canonicalEip55Recipient",
+            "canonicalEip55Sender",
+            "nulPrefixedNameBundle",
+            "sampleEvmTokenAddBundleFixture",
+            "oversizedTonSourceStateProofBytes",
+            "sccpSourceStateMaxProofBytes + 1",
+            "oversizedTonCallbackProver",
+            "tamperedBscBase64ProofResult",
+            "tamperedEthereumBase64ProofResult",
+            "buildBscMainnetSccpDestinationSubmission(EvmSccpSubmissionInput(",
+            "buildEthereumCalldata(EvmSccpSubmissionInput(",
+            'invalidPublicInputs("proofResult.proofBase64")',
         ),
     ),
     (
@@ -5173,6 +5370,8 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "internal fun requireMatchesPublicInputs",
             "summary.sourceDomain == SccpSourceProofs.DOMAIN_SORA || sourceProofBytes.isNotEmpty()",
             "sourceProofBytes required for non-SORA source bundle",
+            "$label must be a canonical EIP-55 EVM address",
+            "raw.indexOf(0.toByte())",
         ),
     ),
     (
@@ -5198,6 +5397,14 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "publicInputs: EvmSccpPublicInputsInput = samplePublicInputs()",
             "hexWord(publicInputs.messageId.removePrefix(\"0x\"))",
             "proofResult.copy(sourceProofBytes = byteArrayOf(9, 11))",
+            "canonicalEip55Recipient",
+            "nulPrefixedNameBundle",
+            "sampleTokenAddBundleFixture",
+            "tamperedBscBase64ProofResultError",
+            "tamperedEthereumBase64ProofResultError",
+            "SccpBsc.buildSubmission",
+            "buildEthereumCalldata",
+            "proofBase64",
         ),
     ),
     (
@@ -5216,6 +5423,8 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "static BundleSummary requireMatchesPublicInputs",
             "summary.sourceDomain != SourceSccpProofs.DOMAIN_SORA && sourceProofBytes.length == 0",
             "sourceProofBytes required for non-SORA source bundle",
+            "must be a canonical EIP-55 EVM address",
+            "raw[index] == 0",
         ),
     ),
     (
@@ -5233,6 +5442,14 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "sampleGroth16ProofBytes(request.publicInputs())",
             "hexWord(stripHex(publicInputs.messageId()))",
             "evmResultWithSourceProofBytes(proofResult, new byte[] {9, 11})",
+            "canonicalEip55Recipient",
+            "nulPrefixedNameBundle",
+            "sampleTokenAddBundleFixture",
+            "tamperedBscBase64ProofResult",
+            "Ethereum mainnet calldata helper must reject tampered proofBase64",
+            "BscSccpProver.buildSubmission",
+            "evmResultWithProofBase64(artifactBoundResult, \"AAAA\")",
+            "proofBase64",
         ),
     ),
     (
@@ -5242,6 +5459,22 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "sampleGroth16ProofWords(samplePublicInputs(), TronSccpProver.DOMAIN_SORA)",
             "hexWord(stripHex(publicInputs.messageId()))",
             "tronResultWithSourceProofBytes(proofResult, new byte[] {9, 11})",
+        ),
+    ),
+    (
+        "csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpEthereumMainnetTests.cs",
+        (
+            "OutboundCallbackAndSubmissionSnapshotsRejectMutation",
+            "EthereumMainnetSccp.BuildEthereumCalldata",
+            "ProofBase64 = Convert.ToBase64String(mutatedProofBytes)",
+        ),
+    ),
+    (
+        "csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpBscMainnetTests.cs",
+        (
+            "OutboundCallbackAndSubmissionSnapshotsRejectMutation",
+            "BscMainnetSccp.BuildBscCalldata",
+            "ProofBase64 = Convert.ToBase64String(mutatedProofBytes)",
         ),
     ),
     (
@@ -5387,6 +5620,11 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
         (
             "NATIVE_EVM_PROVER_FORBIDDEN_PAYLOAD_MARKERS = (",
             "NATIVE_EVM_PROVER_FORBIDDEN_PATH_MARKERS = (",
+            "NATIVE_EVM_PROVER_MIN_SUPPORT_ARTIFACT_BYTES",
+            "NATIVE_EVM_PROVER_MIN_IMPLEMENTATION_BYTES",
+            "NATIVE_EVM_PROVER_MIN_PROOF_ARTIFACT_BYTES",
+            "NATIVE_EVM_PROVER_MIN_PROVING_KEY_BYTES",
+            "NATIVE_EVM_PROVER_MIN_VERIFIER_KEY_BYTES",
             "NATIVE_EVM_PROVER_MIN_PAYLOAD_BYTES",
             "NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA",
             "NATIVE_EVM_PROVER_SELF_TEST_SCHEMA",
@@ -5506,6 +5744,7 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             'value.contains(":")',
             "forbiddenPathMarkers",
             "implementationBytes are required",
+            "local native EVM prover artifact byte verifier",
             "nativeProverArtifacts must bind sdk implementation and implementationHash",
             "nativeProverArtifacts verifierKeyHash must match nativeProverBundle",
             "nativeProverBundle.verifierKeyHash must match destinationBinding",
@@ -5550,6 +5789,8 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "def test_release_readiness_report_blocks_native_evm_prover_malformed_unknown_field_names",
             "def test_release_readiness_report_blocks_empty_native_evm_prover_payload",
             "def test_release_readiness_report_blocks_tiny_native_evm_prover_payload",
+            "def test_release_readiness_report_blocks_below_floor_native_evm_implementation",
+            "def test_release_readiness_report_blocks_below_floor_native_evm_support_roles",
             "def test_release_readiness_report_blocks_reused_native_evm_prover_role_hash",
             "def test_release_readiness_report_blocks_noncanonical_native_evm_prover_hash",
             "def test_release_readiness_report_blocks_duplicate_native_evm_prover_sdk_artifacts",
@@ -5626,7 +5867,27 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "sdk must be a non-empty canonical string",
             "nativeProverArtifacts\\.sdk must be a non-empty canonical string",
             "nativeSdkArtifacts\\[\\d+\\]\\.sdk must be a non-empty canonical string",
+            "forgedDescriptorSelfTestCalled",
+            "local native EVM prover artifact byte verifier",
+            "nativeProverArtifacts: { ...verified }",
             "paddedSelfTestHookCalled",
+            "unverifiedDescriptorMessage",
+        ),
+    ),
+    (
+        "javascript/iroha_js/test/sccpBscMainnet.test.js",
+        (
+            "BSC native prover artifact descriptors must be verifier-owned before callbacks run",
+            "unverifiedDescriptorMessage",
+            "local native EVM prover artifact byte verifier",
+            "mainnetSelfTestCalled",
+            "mainnetProverCalled",
+            "testnetSelfTestCalled",
+            "testnetProverCalled",
+            "nativeProverArtifacts: { ...mainnetFixture.nativeProverArtifacts }",
+            "nativeProverArtifacts: { ...testnetFixture.nativeProverArtifacts }",
+            "runNativeProverSelfTest",
+            "proveOutboundToBsc",
         ),
     ),
     (
@@ -5680,6 +5941,12 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "SCCP_NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1",
             "ipfs:proof-artifact.bin",
             "artifacts/eth-mainnet/proof.wasm",
+            "proofArtifactBytes must be at least 65536 bytes",
+            "provingKeyBytes must be at least 65536 bytes",
+            "verifierKeyBytes must be at least 128 bytes",
+            "crossSdkFixtureParityBytes must be at least 128 bytes",
+            "nativeProverSelfTestBytes must be at least 128 bytes",
+            "implementationBytes must be at least 1024 bytes",
             "WebAssembly.compile(bytes)",
             "import './proof.wasm'",
             "fallback remote prover",
@@ -5702,6 +5969,8 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "def test_release_bundle_rejects_native_evm_prover_forbidden_path_marker_before_copy",
             "def test_release_bundle_verifier_rejects_empty_native_evm_prover_payload",
             "def test_release_bundle_verifier_rejects_tiny_native_evm_prover_payload",
+            "def test_release_bundle_verifier_rejects_below_floor_native_evm_proving_key",
+            "def test_release_bundle_verifier_rejects_below_floor_native_evm_support_roles",
             "def test_release_bundle_verifier_rejects_reused_native_evm_prover_role_hash",
             "def test_release_bundle_verifier_rejects_noncanonical_native_evm_prover_hash",
             "def test_release_bundle_verifier_rejects_duplicate_native_evm_prover_sdk_artifacts",
@@ -5750,6 +6019,23 @@ SCCP_PHASE_EVIDENCE_SOURCE_MARKERS = (
             "already set by",
             "cannot set from",
             "source_labels",
+            "def _phase_evidence_source_label(",
+            "--phase-evidence {name}=<path>",
+            "def _phase_log_from_dir(",
+            "checked standard phase log layouts",
+            "def _parse_phase_assignment_name(",
+            "unknown SCCP corridor phase",
+            "phase result must use NAME=STATUS syntax",
+            "phase result name contains surrounding whitespace",
+            "phase result name contains Markdown-unsafe character",
+            "phase result name contains malformed phase",
+            "phase result status contains surrounding whitespace",
+            "phase result status must be passed, failed, skipped, or missing",
+            "phase evidence must use NAME=PATH syntax",
+            "phase evidence path must not be empty",
+            "phase evidence name contains surrounding whitespace",
+            "phase evidence name contains Markdown-unsafe character",
+            "phase evidence name contains malformed phase",
         ),
     ),
     (
@@ -5759,6 +6045,17 @@ SCCP_PHASE_EVIDENCE_SOURCE_MARKERS = (
             "already set by",
             "cannot set from",
             "source_labels",
+            "def _phase_evidence_source_label(",
+            "--phase-evidence {name}=<path>",
+            "def _phase_log_from_dir(",
+            "checked standard phase log layouts",
+            "unknown SCCP corridor phase",
+            "phase evidence must use NAME=PATH syntax",
+            "phase evidence path must not be empty",
+            "_corridor_phase_key_error(name, \"phase evidence\")",
+            "phase evidence contains phase with surrounding whitespace",
+            "phase evidence contains phase with Markdown-unsafe character",
+            "phase evidence contains malformed phase",
         ),
     ),
     (
@@ -5767,9 +6064,41 @@ SCCP_PHASE_EVIDENCE_SOURCE_MARKERS = (
             "test_release_readiness_report_guards_sccp_phase_evidence_source_gate_inventory",
             "test_release_readiness_report_blocks_missing_sccp_phase_evidence_source_gate",
             "test_release_readiness_report_rejects_duplicate_phase_evidence_assignment",
+            "test_release_readiness_report_suppresses_duplicate_phase_evidence_paths",
+            "test_release_readiness_report_suppresses_missing_phase_evidence_dir_path",
             "test_release_readiness_report_rejects_phase_evidence_dir_override",
+            "test_release_readiness_report_rejects_padded_phase_result_name",
+            "test_release_readiness_report_suppresses_phase_result_syntax_input",
+            "test_release_readiness_report_rejects_markdown_phase_result_name",
+            "test_release_readiness_report_rejects_malformed_phase_result_name",
+            "test_release_readiness_report_suppresses_unknown_phase_result_name",
+            "test_release_readiness_report_rejects_padded_phase_result_status",
+            "test_release_readiness_report_suppresses_unknown_phase_result_status",
+            "test_release_readiness_report_rejects_padded_phase_evidence_name",
+            "test_release_readiness_report_suppresses_phase_evidence_syntax_input",
+            "test_release_readiness_report_rejects_empty_phase_evidence_path",
+            "test_release_readiness_report_rejects_markdown_phase_evidence_name",
+            "test_release_readiness_report_rejects_malformed_phase_evidence_name",
+            "test_release_readiness_report_suppresses_unknown_phase_evidence_name",
             "already set by --phase-evidence-dir",
             "cannot set from --phase-evidence rust-sccp=",
+            "already set by --phase-evidence rust-sccp=<path>",
+            "secret-token",
+            "checked standard phase log layouts",
+            "unknown SCCP corridor phase",
+            "phase result must use NAME=STATUS syntax",
+            "phase result name contains surrounding whitespace",
+            "phase result name contains Markdown-unsafe character",
+            "phase result name contains malformed phase",
+            "phase result status contains surrounding whitespace",
+            "passed|failed",
+            "phase evidence must use NAME=PATH syntax",
+            "phase evidence path must not be empty",
+            "phase evidence name contains surrounding whitespace",
+            "phase evidence name contains Markdown-unsafe character",
+            "phase evidence name contains malformed phase",
+            "rust|sccp",
+            "rust_sccp",
         ),
     ),
     (
@@ -5778,9 +6107,41 @@ SCCP_PHASE_EVIDENCE_SOURCE_MARKERS = (
             "test_release_bundle_verifier_guards_sccp_phase_evidence_source_inventory",
             "test_release_bundle_verifier_rejects_missing_phase_evidence_source_inventory_gate",
             "test_release_bundle_rejects_duplicate_phase_evidence_assignment_before_copy",
+            "test_release_bundle_suppresses_duplicate_phase_evidence_paths_before_copy",
+            "test_release_bundle_suppresses_missing_phase_evidence_dir_path_before_copy",
             "test_release_bundle_rejects_phase_evidence_dir_override_before_copy",
+            "test_release_bundle_rejects_padded_phase_result_name_before_render",
+            "test_release_bundle_suppresses_phase_result_syntax_input_before_render",
+            "test_release_bundle_rejects_markdown_phase_result_name_before_render",
+            "test_release_bundle_rejects_malformed_phase_result_name_before_render",
+            "test_release_bundle_suppresses_unknown_phase_result_name_before_render",
+            "test_release_bundle_rejects_padded_phase_result_status_before_render",
+            "test_release_bundle_suppresses_unknown_phase_result_status_before_render",
+            "test_release_bundle_rejects_padded_phase_evidence_name_before_copy",
+            "test_release_bundle_suppresses_phase_evidence_syntax_input_before_copy",
+            "test_release_bundle_rejects_empty_phase_evidence_path_before_copy",
+            "test_release_bundle_rejects_markdown_phase_evidence_name_before_copy",
+            "test_release_bundle_rejects_malformed_phase_evidence_name_before_copy",
+            "test_release_bundle_suppresses_unknown_phase_evidence_name_before_copy",
             "already set by --phase-evidence-dir",
             "cannot set from --phase-evidence rust-sccp=",
+            "already set by --phase-evidence all=<path>",
+            "secret-token",
+            "checked standard phase log layouts",
+            "unknown SCCP corridor phase",
+            "phase result must use NAME=STATUS syntax",
+            "phase result name contains surrounding whitespace",
+            "phase result name contains Markdown-unsafe character",
+            "phase result name contains malformed phase",
+            "phase result status contains surrounding whitespace",
+            "passed|failed",
+            "phase evidence must use NAME=PATH syntax",
+            "phase evidence path must not be empty",
+            "phase evidence contains phase with surrounding whitespace",
+            "phase evidence contains phase with Markdown-unsafe character",
+            "phase evidence contains malformed phase",
+            "rust|sccp",
+            "rust_sccp",
         ),
     ),
 )
@@ -6466,10 +6827,12 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
         (
             "READINESS_REPORT_ROOT_FIELDS",
             "SOURCE_INVENTORY_FIELDS",
-            "def _unknown_report_field_errors(",
+            "def _unknown_public_field_errors(",
             "def _source_inventory_gate_key_error(",
             "contains unknown field",
-            "_unknown_report_field_errors(payload, label, READINESS_REPORT_ROOT_FIELDS)",
+            "_unknown_public_field_errors(payload, label, READINESS_REPORT_ROOT_FIELDS)",
+            "_unknown_public_field_errors(",
+            "SOURCE_INVENTORY_FIELDS,",
             "validation_status must be passed",
         ),
     ),
@@ -6479,6 +6842,7 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
             "test_release_bundle_verifier_guards_release_public_json_root_schema_inventory",
             "test_release_bundle_verifier_rejects_missing_release_public_json_root_schema_inventory_gate",
             "test_release_bundle_rejects_unknown_copied_report_root_before_render",
+            "operator|secret-token",
             "test_release_bundle_rejects_malformed_copied_source_inventory_before_render",
             "test_release_bundle_verifier_rejects_noncanonical_json_serialization",
             "test_release_bundle_verifier_rejects_duplicate_json_keys",
@@ -6568,7 +6932,8 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
         (
             "CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS",
             "f\"{label}.cryptographic_evidence[{index}]\"",
-            "_unknown_report_field_errors(",
+            "_unknown_public_field_errors(",
+            "CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS,",
             "def _cryptographic_evidence_row_bundle_errors(",
             "def _cryptographic_evidence_lane_binding_bundle_errors(",
             "must cover every embedded lane",
@@ -6595,6 +6960,7 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
             "test_release_bundle_verifier_rejects_crypto_evidence_malformed_source_adapter_gate_audit_keys",
             "test_release_bundle_verifier_suppresses_crypto_evidence_malformed_markdown_leaks",
             "test_release_bundle_verifier_rejects_crypto_evidence_malformed_unknown_fields",
+            "operator|secret-token",
         ),
     ),
     (
@@ -6621,6 +6987,16 @@ SCCP_RELEASE_PUBLIC_SUBMISSION_SURFACE_BINDING_MARKERS = (
             "sdk_helper_symbols_by_sdk contains SDK key with",
             "def _submission_surface_required_phase_blocker(",
             "required_phases contains phase with",
+            "def _submission_surface_lanes_blocker(",
+            "lanes contains Markdown-unsafe character",
+            "def _submission_surface_proof_backend_blocker(",
+            "proof_backend contains Markdown-unsafe character",
+            "def _submission_surface_submission_text_blocker(",
+            "must match expected submission text",
+            "def _submission_surface_helper_symbol_blocker(",
+            "contains helper symbol with Markdown-unsafe character",
+            "def _submission_surface_sdk_helpers_text_blocker(",
+            "<invalid sdk_helper_symbols_by_sdk>",
             "contains unknown field name with non-ASCII character",
         ),
     ),
@@ -6628,6 +7004,9 @@ SCCP_RELEASE_PUBLIC_SUBMISSION_SURFACE_BINDING_MARKERS = (
         "scripts/sccp_release_readiness_report.py",
         (
             "def _sccp_release_public_submission_surface_binding_gate_inventory_errors(",
+            "def _helper_symbol_is_markdown_safe(",
+            "def _sdk_helper_sets_cell(",
+            "<invalid sdk_helper_symbols_by_sdk>",
             '"release_public_submission_surface_binding_gate"',
             "SCCP release public submission-surface binding source inventory",
         ),
@@ -6639,10 +7018,16 @@ SCCP_RELEASE_PUBLIC_SUBMISSION_SURFACE_BINDING_MARKERS = (
             "sdk_helper_symbols_by_sdk",
             "validation_blockers",
             "f\"{label}.user_prover_submission_surfaces[{index}]\"",
-            "_unknown_report_field_errors(",
+            "_unknown_public_field_errors(",
+            "USER_PROVER_SUBMISSION_SURFACE_FIELDS,",
             "def _submission_surface_known_sdks(",
             "def _submission_surface_known_required_phases(",
             "def _submission_surface_sdk_key_error(",
+            "def _submission_surface_lanes_key_error(",
+            "def _submission_surface_proof_backend_key_error(",
+            "def _submission_surface_submission_text_error(",
+            "def _submission_surface_helper_symbol_error(",
+            "def _submission_surface_sdk_helpers_text_error(",
             "def _submission_surface_row_bundle_errors(",
             "validation_status must be passed",
             "validation_blockers must be empty",
@@ -6653,6 +7038,11 @@ SCCP_RELEASE_PUBLIC_SUBMISSION_SURFACE_BINDING_MARKERS = (
             "required helper:",
             "contains SDK key with",
             "contains phase with",
+            "lanes contains Markdown-unsafe character",
+            "proof_backend contains Markdown-unsafe character",
+            "must match expected submission text",
+            "contains helper symbol with Markdown-unsafe character",
+            "sdk_helpers contains Markdown-unsafe character",
         ),
     ),
     (
@@ -6670,11 +7060,17 @@ SCCP_RELEASE_PUBLIC_SUBMISSION_SURFACE_BINDING_MARKERS = (
             "test_release_bundle_verifier_rejects_submission_surface_drift",
             "test_release_bundle_verifier_rejects_submission_surface_duplicate_lanes",
             "test_release_bundle_verifier_rejects_submission_surface_unknown_lanes",
+            "test_release_bundle_verifier_rejects_submission_surface_malformed_lanes",
+            "test_release_bundle_verifier_rejects_submission_surface_malformed_proof_backend",
+            "test_release_bundle_verifier_rejects_submission_surface_malformed_on_chain_submission",
+            "test_release_bundle_verifier_rejects_submission_surface_malformed_helper_symbols",
+            "test_release_bundle_verifier_rejects_submission_surface_malformed_sdk_helpers_text",
             "test_release_bundle_verifier_rejects_submission_surface_backend_mismatch",
             "test_release_bundle_verifier_rejects_missing_required_submission_surface_helper",
             "test_release_bundle_verifier_rejects_submission_surface_malformed_sdk_helper_map_keys",
             "test_release_bundle_verifier_rejects_submission_surface_malformed_required_phases",
             "test_release_bundle_verifier_rejects_submission_surface_malformed_unknown_fields",
+            "operator|secret-token",
         ),
     ),
     (
@@ -6752,6 +7148,7 @@ SCCP_RELEASE_MANIFEST_ARTIFACT_SET_ORDER_MARKERS = (
         (
             "ARTIFACT_FIELDS",
             "def _artifact_row_errors(",
+            "_unknown_public_field_errors(artifact, label, ARTIFACT_FIELDS)",
             "bytes must be a non-negative integer",
             "sha256 must be a canonical SHA-256 hex string",
             "def _bundled_artifact_integrity_errors(",
@@ -6812,6 +7209,7 @@ SCCP_RELEASE_MANIFEST_ARTIFACT_SET_ORDER_MARKERS = (
             "def test_release_bundle_verifier_rejects_manifest_artifact_order_drift",
             "def test_release_bundle_verifier_rejects_malformed_artifact_fields",
             "def test_release_bundle_rejects_malformed_copied_artifacts_before_render",
+            "operator|secret-token",
             "def test_release_bundle_rejects_copied_artifact_hash_drift_before_render",
             "def test_release_bundle_rejects_manifest_drift_before_write",
         ),
@@ -6866,6 +7264,7 @@ SCCP_RELEASE_PUBLIC_BLOCKER_LIST_SCHEMA_MARKERS = (
             "blockers must be empty when production_ready is true",
             "CORRIDOR_FIELDS",
             'f"{label}.corridor"',
+            "_unknown_public_field_errors(",
             "production corridor is not ready",
             "require_phase_evidence must be true or false",
             "does not require hashed phase evidence",
@@ -6879,6 +7278,7 @@ SCCP_RELEASE_PUBLIC_BLOCKER_LIST_SCHEMA_MARKERS = (
             "def test_release_bundle_verifier_rejects_missing_release_public_blocker_list_schema_inventory_gate",
             "def test_release_bundle_allow_not_ready_rejects_noncanonical_root_blockers",
             "def test_release_bundle_rejects_malformed_copied_corridor_before_render",
+            "operator|secret-token",
             "def test_release_bundle_rejects_copied_corridor_not_ready_before_render",
             "def test_release_bundle_verifier_rejects_all_lanes_list_scalar_type_drift",
             "def test_release_bundle_verifier_rejects_padded_public_blocker_strings",
@@ -10926,9 +11326,7 @@ def _active_launch_required_record_metadata_blockers(
     if not isinstance(records, dict):
         return blockers + [f"{lane_label}: required record summary is missing"]
     for key in sorted(set(records) - set(record_labels)):
-        blockers.append(
-            f"{lane_label}: required record summary has unknown field {key}"
-        )
+        blockers.append(_required_record_summary_unknown_field_blocker(lane_label, key))
     for key, field_label in record_labels.items():
         if records.get(key) is not True:
             blockers.append(f"{lane_label}: missing {field_label}")
@@ -11098,6 +11496,7 @@ def _native_evm_prover_payload_artifact(
     path_field: str,
     hash_field: str,
     label: str,
+    min_bytes: int = NATIVE_EVM_PROVER_MIN_SUPPORT_ARTIFACT_BYTES,
 ) -> tuple[dict[str, Any] | None, list[str]]:
     if path_field not in payload:
         return None, []
@@ -11127,11 +11526,8 @@ def _native_evm_prover_payload_artifact(
 
     if artifact["bytes"] == 0:
         blockers.append(f"{prefix} must not be empty")
-    elif artifact["bytes"] < NATIVE_EVM_PROVER_MIN_PAYLOAD_BYTES:
-        blockers.append(
-            f"{prefix} must be at least "
-            f"{NATIVE_EVM_PROVER_MIN_PAYLOAD_BYTES} bytes"
-        )
+    elif artifact["bytes"] < min_bytes:
+        blockers.append(f"{prefix} must be at least {min_bytes} bytes")
 
     if isinstance(manifest_artifact, dict):
         manifest_artifact_path = manifest_artifact.get("path")
@@ -11206,6 +11602,7 @@ def _native_evm_prover_bundle_artifact_summary(
                 "implementation_artifact",
                 "implementation_hash",
                 f"{sdk} implementation_artifact",
+                NATIVE_EVM_PROVER_MIN_IMPLEMENTATION_BYTES,
             )
         )
         blockers.extend(artifact_blockers)
@@ -11338,6 +11735,17 @@ def _native_evm_prover_field_name_blocker(
     return f"{label} contains {field_kind} field: {key}"
 
 
+def _required_record_summary_unknown_field_blocker(
+    lane_label: str,
+    key: Any,
+) -> str:
+    return _native_evm_prover_field_name_blocker(
+        f"{lane_label}: required record summary",
+        key,
+        "unknown",
+    )
+
+
 def _native_evm_prover_duplicate_json_key_blocker(label: str, key: Any) -> str:
     if not isinstance(key, str) or not key:
         return f"{label} JSON contains malformed duplicate key"
@@ -11428,6 +11836,139 @@ def _submission_surface_required_phase_blocker(phase: Any) -> str | None:
     ):
         return f"{label} contains malformed phase"
     return None
+
+
+def _submission_surface_lanes_blocker(lanes: Any, label: str) -> str | None:
+    if not isinstance(lanes, str) or not lanes:
+        return (
+            f"{label} lanes must be a non-empty string "
+            "with no surrounding whitespace"
+        )
+    if _path_control_character(lanes) is not None:
+        return f"{label} lanes contains control character"
+    if not lanes.isascii():
+        return f"{label} lanes contains non-ASCII character"
+    if lanes.strip() != lanes:
+        return f"{label} lanes contains surrounding whitespace"
+    if any(character.isspace() for character in lanes):
+        return f"{label} lanes contains whitespace"
+    if _path_markdown_unsafe_character(lanes) is not None:
+        return f"{label} lanes contains Markdown-unsafe character"
+    allowed = set("abcdefghijklmnopqrstuvwxyz0123456789-,")
+    lane_parts = lanes.split(",")
+    if (
+        any(character not in allowed for character in lanes)
+        or any(
+            not part or part.startswith("-") or part.endswith("-")
+            for part in lane_parts
+        )
+    ):
+        return f"{label} lanes is malformed"
+    return None
+
+
+def _submission_surface_proof_backend_blocker(
+    proof_backend: Any,
+    label: str,
+) -> str | None:
+    if not isinstance(proof_backend, str) or not proof_backend:
+        return (
+            f"{label} proof_backend must be a non-empty string "
+            "with no surrounding whitespace"
+        )
+    if _path_control_character(proof_backend) is not None:
+        return f"{label} proof_backend contains control character"
+    if not proof_backend.isascii():
+        return f"{label} proof_backend contains non-ASCII character"
+    if proof_backend.strip() != proof_backend:
+        return f"{label} proof_backend contains surrounding whitespace"
+    if any(character.isspace() for character in proof_backend):
+        return f"{label} proof_backend contains whitespace"
+    if _path_markdown_unsafe_character(proof_backend) is not None:
+        return f"{label} proof_backend contains Markdown-unsafe character"
+    allowed = set("abcdefghijklmnopqrstuvwxyz0123456789-")
+    if (
+        any(character not in allowed for character in proof_backend)
+        or proof_backend.startswith("-")
+        or proof_backend.endswith("-")
+    ):
+        return f"{label} proof_backend is malformed"
+    return None
+
+
+def _submission_surface_submission_text_blocker(value: Any, label: str) -> str | None:
+    if not isinstance(value, str) or not value:
+        return (
+            f"{label} on_chain_submission must be a non-empty string "
+            "with no surrounding whitespace"
+        )
+    if _path_control_character(value) is not None:
+        return f"{label} on_chain_submission contains control character"
+    if not value.isascii():
+        return f"{label} on_chain_submission contains non-ASCII character"
+    if value.strip() != value:
+        return f"{label} on_chain_submission contains surrounding whitespace"
+    if _path_markdown_unsafe_character(value) is not None:
+        return f"{label} on_chain_submission contains Markdown-unsafe character"
+    return None
+
+
+def _submission_surface_helper_symbol_blocker(symbol: Any, label: str) -> str | None:
+    if not isinstance(symbol, str) or not symbol:
+        return f"{label} must be a list of non-empty strings"
+    if _path_control_character(symbol) is not None:
+        return f"{label} contains helper symbol with control character"
+    if not symbol.isascii():
+        return f"{label} contains helper symbol with non-ASCII character"
+    if symbol.strip() != symbol:
+        return f"{label} contains helper symbol with surrounding whitespace"
+    if any(character.isspace() for character in symbol):
+        return f"{label} contains helper symbol with whitespace"
+    if _path_markdown_unsafe_character(symbol) is not None:
+        return f"{label} contains helper symbol with Markdown-unsafe character"
+    allowed = set(
+        "abcdefghijklmnopqrstuvwxyz"
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        "0123456789"
+        "._:()"
+    )
+    if (
+        any(character not in allowed for character in symbol)
+        or not symbol[0].isalpha()
+    ):
+        return f"{label} contains malformed helper symbol"
+    return None
+
+
+def _submission_surface_sdk_helpers_text_blocker(value: Any, label: str) -> str | None:
+    if not isinstance(value, str) or not value:
+        return (
+            f"{label} sdk_helpers must be a non-empty string "
+            "with no surrounding whitespace"
+        )
+    if _path_control_character(value) is not None:
+        return f"{label} sdk_helpers contains control character"
+    if not value.isascii():
+        return f"{label} sdk_helpers contains non-ASCII character"
+    if value.strip() != value:
+        return f"{label} sdk_helpers contains surrounding whitespace"
+    if _path_markdown_unsafe_character(value) is not None:
+        return f"{label} sdk_helpers contains Markdown-unsafe character"
+    return None
+
+
+def _submission_surface_helper_symbol_list_errors(
+    value: Any,
+    label: str,
+) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    errors: list[str] = []
+    for symbol in value:
+        symbol_blocker = _submission_surface_helper_symbol_blocker(symbol, label)
+        if symbol_blocker is not None:
+            errors.append(symbol_blocker)
+    return errors
 
 
 def _corridor_phase_key_blocker(label: str, phase: Any) -> str | None:
@@ -11564,6 +12105,11 @@ def _native_evm_prover_parity_fixture_status(
 
     if artifact["bytes"] == 0:
         blockers.append(f"{prefix} must not be empty")
+    elif artifact["bytes"] < NATIVE_EVM_PROVER_MIN_SUPPORT_ARTIFACT_BYTES:
+        blockers.append(
+            f"{prefix} must be at least "
+            f"{NATIVE_EVM_PROVER_MIN_SUPPORT_ARTIFACT_BYTES} bytes"
+        )
 
     audit_hashes = payload.get("audit_hashes")
     expected_hash = (
@@ -11734,6 +12280,11 @@ def _native_evm_prover_self_test_status(
 
     if artifact["bytes"] == 0:
         blockers.append(f"{prefix} must not be empty")
+    elif artifact["bytes"] < NATIVE_EVM_PROVER_MIN_SUPPORT_ARTIFACT_BYTES:
+        blockers.append(
+            f"{prefix} must be at least "
+            f"{NATIVE_EVM_PROVER_MIN_SUPPORT_ARTIFACT_BYTES} bytes"
+        )
 
     audit_hashes = payload.get("audit_hashes")
     expected_hash = (
@@ -12148,6 +12699,7 @@ def _native_evm_prover_bundle_status_from_payload(
         "proof_artifact",
         "proof_artifact_hash",
         "proof_artifact",
+        NATIVE_EVM_PROVER_MIN_PROOF_ARTIFACT_BYTES,
     )
     blockers.extend(proof_artifact_blockers)
     proving_key, proving_key_blockers = _native_evm_prover_payload_artifact(
@@ -12157,6 +12709,7 @@ def _native_evm_prover_bundle_status_from_payload(
         "proving_key",
         "proving_key_hash",
         "proving_key",
+        NATIVE_EVM_PROVER_MIN_PROVING_KEY_BYTES,
     )
     blockers.extend(proving_key_blockers)
     verifier_key, verifier_key_blockers = _native_evm_prover_payload_artifact(
@@ -12166,6 +12719,7 @@ def _native_evm_prover_bundle_status_from_payload(
         "verifier_key",
         "verifier_key_hash",
         "verifier_key",
+        NATIVE_EVM_PROVER_MIN_VERIFIER_KEY_BYTES,
     )
     blockers.extend(verifier_key_blockers)
 
@@ -12708,7 +13262,7 @@ def _readiness_markdown_boolean_cell(value: Any) -> str:
 def _readiness_markdown_sdk_helper_sets_cell(surface: dict[str, Any]) -> str:
     helper_sets = surface.get("sdk_helper_symbols_by_sdk")
     if not isinstance(helper_sets, dict):
-        return surface["sdk_helpers"]
+        return "`<invalid sdk_helper_symbols_by_sdk>`"
     rows: list[str] = []
     lanes = surface.get("lanes")
     expected_helpers_by_sdk = (
@@ -12725,9 +13279,19 @@ def _readiness_markdown_sdk_helper_sets_cell(surface: dict[str, Any]) -> str:
         helpers = helper_sets.get(sdk)
         if not isinstance(helpers, list):
             continue
+        if any(
+            _submission_surface_helper_symbol_blocker(
+                helper,
+                "readiness report user prover submission surface row "
+                f"sdk_helper_symbols_by_sdk[{sdk}]",
+            )
+            is not None
+            for helper in helpers
+        ):
+            return "`<invalid sdk_helper_symbols_by_sdk>`"
         helper_text = ", ".join(f"`{helper}`" for helper in helpers)
         rows.append(f"`{sdk}`: {helper_text}")
-    return "<br>".join(rows) if rows else surface["sdk_helpers"]
+    return "<br>".join(rows) if rows else "`<invalid sdk_helper_symbols_by_sdk>`"
 
 
 def _readiness_markdown_string_list_cell(value: Any, *, field_label: str) -> str:
@@ -13664,7 +14228,39 @@ def _readiness_markdown_invariant_errors(
             if not isinstance(surface, dict):
                 continue
             lanes = surface.get("lanes")
+            if (
+                _submission_surface_lanes_blocker(
+                    lanes,
+                    "readiness report user prover submission surface row",
+                )
+                is not None
+            ):
+                continue
             for field in ("lanes", "proof_backend", "on_chain_submission"):
+                if field == "proof_backend" and (
+                    _submission_surface_proof_backend_blocker(
+                        surface.get(field),
+                        "readiness report user prover submission surface row",
+                    )
+                    is not None
+                ):
+                    continue
+                if field == "on_chain_submission":
+                    submission = surface.get(field)
+                    expected_submission = (
+                        USER_PROVER_ON_CHAIN_SUBMISSION_BY_LANE.get(lanes)
+                        if isinstance(lanes, str)
+                        else None
+                    )
+                    if (
+                        _submission_surface_submission_text_blocker(
+                            submission,
+                            "readiness report user prover submission surface row",
+                        )
+                        is not None
+                        or submission != expected_submission
+                    ):
+                        continue
                 errors.extend(
                     _markdown_missing_value_errors(
                         "User Prover Submission Surfaces",
@@ -13689,6 +14285,15 @@ def _readiness_markdown_invariant_errors(
                     if not isinstance(helpers, list):
                         continue
                     for helper in helpers:
+                        if (
+                            _submission_surface_helper_symbol_blocker(
+                                helper,
+                                "readiness report user prover submission surface row "
+                                f"sdk_helper_symbols_by_sdk[{sdk}]",
+                            )
+                            is not None
+                        ):
+                            continue
                         errors.extend(
                             _markdown_missing_value_errors(
                                 "User Prover Submission Surfaces",
@@ -14745,20 +15350,56 @@ def _integer_list_field_errors(
         not allow_empty and not value
     ) or any(type(item) is not int for item in value):
         return [f"{label} {field} must be a list of integers"]
+    if len(value) != len(set(value)):
+        return [f"{label} {field} must not contain duplicate integers"]
     return []
 
 
 def _submission_surface_row_schema_errors(row: dict[str, Any]) -> list[str]:
     label = "readiness report user prover submission surface row"
     errors: list[str] = []
-    for field in ("lanes", "proof_backend", "sdk_helpers", "on_chain_submission"):
-        errors.extend(_non_empty_string_field_errors(label, row, field))
+    if "lanes" in row:
+        lanes_blocker = _submission_surface_lanes_blocker(row.get("lanes"), label)
+        if lanes_blocker is not None:
+            errors.append(lanes_blocker)
+    if "proof_backend" in row:
+        proof_backend_blocker = _submission_surface_proof_backend_blocker(
+            row.get("proof_backend"),
+            label,
+        )
+        if proof_backend_blocker is not None:
+            errors.append(proof_backend_blocker)
+    if "on_chain_submission" in row:
+        submission_blocker = _submission_surface_submission_text_blocker(
+            row.get("on_chain_submission"),
+            label,
+        )
+        if submission_blocker is not None:
+            errors.append(submission_blocker)
+    if "sdk_helpers" in row:
+        sdk_helpers_blocker = _submission_surface_sdk_helpers_text_blocker(
+            row.get("sdk_helpers"),
+            label,
+        )
+        if sdk_helpers_blocker is not None:
+            errors.append(sdk_helpers_blocker)
     errors.extend(
         _string_list_field_errors(label, row, "sdk_helper_symbols", allow_empty=False)
     )
+    errors.extend(
+        _submission_surface_helper_symbol_list_errors(
+            row.get("sdk_helper_symbols"),
+            "readiness report user prover submission surface row sdk_helper_symbols",
+        )
+    )
     helper_symbols = row.get("sdk_helper_symbols")
     if isinstance(helper_symbols, list) and all(
-        isinstance(item, str) and item for item in helper_symbols
+        _submission_surface_helper_symbol_blocker(
+            item,
+            "readiness report user prover submission surface row sdk_helper_symbols",
+        )
+        is None
+        for item in helper_symbols
     ):
         if len(helper_symbols) != len(set(helper_symbols)):
             errors.append(
@@ -14817,6 +15458,17 @@ def _submission_surface_row_schema_errors(row: dict[str, Any]) -> list[str]:
                     f"sdk_helper_symbols_by_sdk[{sdk}] must be a list of "
                     "non-empty strings"
                 )
+                continue
+            helper_label = (
+                "readiness report user prover submission surface row "
+                f"sdk_helper_symbols_by_sdk[{sdk}]"
+            )
+            helper_symbol_errors = _submission_surface_helper_symbol_list_errors(
+                helpers,
+                helper_label,
+            )
+            if helper_symbol_errors:
+                errors.extend(helper_symbol_errors)
                 continue
             if any(item.strip() != item for item in helpers):
                 errors.append(
@@ -14925,7 +15577,9 @@ def _submission_surface_inventory_errors(surfaces: list[Any]) -> list[str]:
             continue
         lanes = row.get("lanes")
         proof_backend = row.get("proof_backend")
-        if not isinstance(lanes, str) or not lanes:
+        lanes_blocker = _submission_surface_lanes_blocker(lanes, label)
+        if lanes_blocker is not None:
+            errors.append(lanes_blocker)
             continue
         if lanes in seen_lanes:
             errors.append(f"{label} contains duplicate lanes row: {lanes}")
@@ -14936,12 +15590,26 @@ def _submission_surface_inventory_errors(surfaces: list[Any]) -> list[str]:
             if isinstance(lanes, str)
             else None
         )
+        proof_backend_blocker = _submission_surface_proof_backend_blocker(
+            proof_backend,
+            label,
+        )
         if expected_backend is None:
             errors.append(f"{label} contains unknown lanes row: {lanes}")
-        elif proof_backend != expected_backend:
+        elif proof_backend_blocker is None and proof_backend != expected_backend:
             errors.append(
                 f"{label} proof_backend mismatch for lanes {lanes}: "
                 f"expected {expected_backend}, got {proof_backend!r}"
+            )
+        submission = row.get("on_chain_submission")
+        expected_submission = USER_PROVER_ON_CHAIN_SUBMISSION_BY_LANE.get(lanes)
+        if (
+            _submission_surface_submission_text_blocker(submission, label) is None
+            and submission != expected_submission
+        ):
+            errors.append(
+                f"{label} on_chain_submission must match expected submission "
+                f"text for lanes {lanes}"
             )
         expected_helpers_by_sdk = (
             USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK.get(lanes)

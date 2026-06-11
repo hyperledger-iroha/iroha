@@ -48,8 +48,8 @@ public enum KagemushaOfflineSpendMode: String, Equatable {
 }
 
 public enum KagemushaRecursiveSpendProver {
-    public static let requiredBridgeAbiVersion: UInt32 = 6
-    public static let recursiveCompactRequiredBridgeAbiVersion: UInt32 = 7
+    public static let requiredNativeBridgeAbiVersion: UInt32 = 6
+    public static let recursiveCompactRequiredNativeBridgeAbiVersion: UInt32 = 7
     public static let recursiveAggregationProofCircuitIdV1 = "kagemusha-recursive-aggregation-v1"
     public static let recursiveCompactCircuitIdV1 = "kagemusha-recursive-compact-v1"
     public static let recursiveAggregationProofBackend = "halo2/ipa"
@@ -341,11 +341,7 @@ public enum KagemushaRecursiveSpendProver {
                 else {
                     throw KagemushaRecursiveSpendProverError.invalidLineageKeyArtifact("lineage_verifier_key")
                 }
-                let trimmed = decoded.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !trimmed.isEmpty else {
-                    throw KagemushaRecursiveSpendProverError.invalidLineageKeyArtifact("lineage_verifier_key")
-                }
-                circuitId = trimmed
+                circuitId = decoded
             } else if tag == kagemushaZk1TlvIpaK {
                 guard !sawIpaK, payload.count == 4 else {
                     throw KagemushaRecursiveSpendProverError.invalidLineageKeyArtifact("lineage_verifier_key")

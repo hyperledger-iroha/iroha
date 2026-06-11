@@ -2641,7 +2641,9 @@ class HttpClientTransportTest {
             "accumulator_digest_hex",
             "proof_public_input_schema_digest_hex",
             "prover_key_digest_hex",
+            "prover_key_material_commitment_hex",
             "verifier_key_digest_hex",
+            "verifier_key_material_commitment_hex",
             "vk_commitment_hex",
             "expected_material_digest_hex",
             "expected_statement_digest_hex",
@@ -2657,7 +2659,7 @@ class HttpClientTransportTest {
             "full-bootstrap RNS digest",
         )
         assertEquals(
-            string(material, "verifier_key_digest_hex"),
+            string(material, "verifier_key_material_commitment_hex"),
             string(material, "vk_commitment_hex"),
             "full-bootstrap verifier-key commitment",
         )

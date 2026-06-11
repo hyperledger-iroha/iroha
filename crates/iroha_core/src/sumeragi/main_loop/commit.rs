@@ -8399,6 +8399,15 @@ impl Actor {
         purge_persisted_sessions: bool,
     ) {
         let telemetry = self.telemetry_handle().cloned();
+        let live_session_keys: BTreeSet<_> = self
+            .subsystems
+            .da_rbc
+            .rbc
+            .sessions
+            .keys()
+            .filter(|(hash, _, _)| *hash == block_hash)
+            .copied()
+            .collect();
         let delivered_payload_fallbacks = self
             .subsystems
             .da_rbc
@@ -8406,10 +8415,12 @@ impl Actor {
             .sessions
             .iter()
             .filter_map(|(key, session)| {
-                ((*key).0 == block_hash).then_some(*key).and_then(|key| {
-                    self.rbc_session_authoritative_payload_bytes_for_telemetry(key, session)
-                        .map(|bytes| (key, bytes))
-                })
+                ((*key).0 == block_hash && session.delivered)
+                    .then_some(*key)
+                    .and_then(|key| {
+                        self.rbc_session_authoritative_payload_bytes_for_telemetry(key, session)
+                            .map(|bytes| (key, bytes))
+                    })
             })
             .collect();
         let pending_keys: Vec<_> = self
@@ -8454,7 +8465,11 @@ impl Actor {
             .into_iter()
             .collect();
         for key in orphan_keys {
-            self.refresh_retained_rbc_summary_from_local_payload(key);
+            let live_session_payload_verified =
+                !live_session_keys.contains(&key) || delivered_payload_fallbacks.contains_key(&key);
+            if live_session_payload_verified {
+                self.refresh_retained_rbc_summary_from_local_payload(key);
+            }
             // Commit cleanup retains the final status summary for observability and restart
             // recovery, while still clearing runtime-only RBC state. If the live session has
             // already retired, only local payload evidence can promote the retained summary to
@@ -8469,6 +8484,7 @@ impl Actor {
                     .unwrap_or(false)
                 });
                 let can_promote_from_local_payload = local_payload_matches_summary
+                    && live_session_payload_verified
                     && summary.total_chunks > 0
                     && summary.received_chunks <= summary.total_chunks;
                 let mut changed = false;
@@ -8489,7 +8505,9 @@ impl Actor {
                         .update(summary, SystemTime::now());
                 }
             }
-            self.maybe_record_rbc_payload_bytes_metric_for_retained_summary(key);
+            if live_session_payload_verified {
+                self.maybe_record_rbc_payload_bytes_metric_for_retained_summary(key);
+            }
             self.clear_rbc_runtime_state(key, false);
         }
 
@@ -12988,9 +13006,12 @@ mod tests {
         let roster = vec![PeerId::new(KeyPair::random().public_key().clone())];
         let roster_hash = super::rbc::rbc_roster_hash(&roster);
 
-        let (init, chunks) =
-            super::super::Actor::rbc_payload_bundle((block_hash, 5, 0), &session, &roster)
-                .expect("bundle");
+        let (init, chunks) = super::super::Actor::rbc_payload_bundle_from_cached_parts(
+            (block_hash, 5, 0),
+            &session,
+            &roster,
+        )
+        .expect("bundle");
 
         assert_eq!(init.block_hash, block_hash);
         assert_eq!(init.total_chunks, 2);
@@ -13025,9 +13046,12 @@ mod tests {
         session.test_set_block_header_and_signature(&block);
         let roster = vec![PeerId::new(KeyPair::random().public_key().clone())];
 
-        let (init, chunks) =
-            super::super::Actor::rbc_payload_bundle((block_hash, 7, 0), &session, &roster)
-                .expect("bundle");
+        let (init, chunks) = super::super::Actor::rbc_payload_bundle_from_cached_parts(
+            (block_hash, 7, 0),
+            &session,
+            &roster,
+        )
+        .expect("bundle");
 
         assert_eq!(init.total_chunks, 2);
         assert_eq!(init.chunk_root, chunk_root);

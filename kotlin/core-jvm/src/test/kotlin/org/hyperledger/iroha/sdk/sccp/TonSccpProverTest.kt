@@ -1055,6 +1055,11 @@ class TonSccpProverTest {
             SccpTon.wrapSourceStateVerificationProof(byteArrayOf(0, 0), shardRequest)
         }
         assertTrue(allZeroWrappedProof.message!!.contains("all zero"))
+        val oversizedSourceStateProofBytes = ByteArray(SccpTon.SOURCE_STATE_MAX_PROOF_BYTES + 1) { 1 }
+        val oversizedWrappedProof = assertFailsWith<IllegalArgumentException> {
+            SccpTon.wrapSourceStateVerificationProof(oversizedSourceStateProofBytes, shardRequest)
+        }
+        assertTrue(oversizedWrappedProof.message!!.contains("proofBytes must be at most"))
         val tamperedShardTransitions = shardRequest.fastpqTransitions.toMutableList()
         tamperedShardTransitions[0] = tamperedShardTransitions[0].copy(newValue = "0x00")
         val tamperedShardRequest = TonShardStateProofRequest(
@@ -1189,6 +1194,16 @@ class TonSccpProverTest {
         }
         assertTrue(auditPreflightError.message!!.contains("canonical TON source-state request"))
         assertFalse(preflightCallbackInvoked)
+
+        val oversizedCallbackProver = TonSccpSourceStateProver(
+            shardStateProofEngine = TonSccpShardStateProofEngine {
+                oversizedSourceStateProofBytes
+            },
+        )
+        val oversizedCallbackProof = assertFailsWith<IllegalArgumentException> {
+            oversizedCallbackProver.proveShardState(shardRequest)
+        }
+        assertTrue(oversizedCallbackProof.message!!.contains("proofBytes must be at most"))
 
         val seenRoles = mutableListOf<String>()
         val sourceStateProver = TonSccpSourceStateProver(
@@ -2520,6 +2535,31 @@ class TonSccpProverTest {
             unsupportedPayload.message?.contains("bundleBytes.payload contains unsupported SCCP payload kind") == true,
         )
 
+        val nulPrefixedNameBundle = sampleTonTokenAddBundleFixture(
+            name = byteArrayOf(0) + "Token".toByteArray(Charsets.UTF_8) + ByteArray(26),
+        )
+        val nulPrefixedName = assertFailsWith<IllegalArgumentException> {
+            SccpTon.buildProofRequest(
+                base.copy(
+                    publicInputs = nulPrefixedNameBundle.publicInputs,
+                    bundleBytes = nulPrefixedNameBundle.bundleBytes,
+                ),
+            )
+        }
+        assertTrue(nulPrefixedName.message?.contains("bundleBytes.payload.name") == true)
+        val nulPrefixedSymbolBundle = sampleTonTokenAddBundleFixture(
+            symbol = byteArrayOf(0) + "TOK".toByteArray(Charsets.UTF_8) + ByteArray(28),
+        )
+        val nulPrefixedSymbol = assertFailsWith<IllegalArgumentException> {
+            SccpTon.buildProofRequest(
+                base.copy(
+                    publicInputs = nulPrefixedSymbolBundle.publicInputs,
+                    bundleBytes = nulPrefixedSymbolBundle.bundleBytes,
+                ),
+            )
+        }
+        assertTrue(nulPrefixedSymbol.message?.contains("bundleBytes.payload.symbol") == true)
+
         val merkleProofWithTrailingByte = ranges.getValue("merkleProof").bytes + byteArrayOf(0)
         val trailingMerkleProof = assertFailsWith<IllegalArgumentException> {
             SccpTon.buildProofRequest(
@@ -2587,6 +2627,58 @@ class TonSccpProverTest {
             )
         }
         assertTrue(strippedSourceProof.message?.contains("sourceProofBytes required for non-SORA") == true)
+
+        val canonicalEip55Sender = "0x52908400098527886E0F7030069857D2E4169EE7"
+        val lowercaseRequiredEip55Sender = "0xde709f2102306220921060314715629080e2fb77"
+        val lowercaseRequiredEip55Source = sampleTonBundleFixture(
+            sourceDomain = SccpSourceProofs.DOMAIN_ETH,
+            senderCodec = SccpTon.CODEC_EVM_HEX,
+            sender = lowercaseRequiredEip55Sender,
+        )
+        SccpTon.buildProofRequest(
+            base.copy(
+                publicInputs = lowercaseRequiredEip55Source.publicInputs,
+                bundleBytes = lowercaseRequiredEip55Source.bundleBytes,
+                sourceProofBytes = byteArrayOf(9, 10),
+            ),
+        )
+        val noncanonicalEip55Source = sampleTonBundleFixture(
+            sourceDomain = SccpSourceProofs.DOMAIN_ETH,
+            senderCodec = SccpTon.CODEC_EVM_HEX,
+            sender = canonicalEip55Sender.lowercase(),
+        )
+        val noncanonicalEip55 = assertFailsWith<IllegalArgumentException> {
+            SccpTon.buildProofRequest(
+                base.copy(
+                    publicInputs = noncanonicalEip55Source.publicInputs,
+                    bundleBytes = noncanonicalEip55Source.bundleBytes,
+                    sourceProofBytes = byteArrayOf(9, 10),
+                ),
+            )
+        }
+        assertTrue(noncanonicalEip55.message?.contains("bundleBytes.payload.sender") == true)
+        assertTrue(noncanonicalEip55.message?.contains("EIP-55") == true)
+        for (invalidSender in listOf(
+            lowercaseRequiredEip55Sender.uppercase(),
+            "0X" + canonicalEip55Sender.drop(2),
+            "0x52908400098527886E0F7030069857D2E4169EEZ",
+        )) {
+            val invalidSource = sampleTonBundleFixture(
+                sourceDomain = SccpSourceProofs.DOMAIN_ETH,
+                senderCodec = SccpTon.CODEC_EVM_HEX,
+                sender = invalidSender,
+            )
+            val invalidEip55 = assertFailsWith<IllegalArgumentException> {
+                SccpTon.buildProofRequest(
+                    base.copy(
+                        publicInputs = invalidSource.publicInputs,
+                        bundleBytes = invalidSource.bundleBytes,
+                        sourceProofBytes = byteArrayOf(9, 10),
+                    ),
+                )
+            }
+            assertTrue(invalidEip55.message?.contains("bundleBytes.payload.sender") == true)
+        }
     }
 
     @Test
@@ -2792,6 +2884,73 @@ class TonSccpProverTest {
             ),
             bundleBytes = bundle.toByteArray(),
         )
+    }
+
+    private fun sampleTonTokenAddBundleFixture(
+        targetDomain: Int = SccpTon.DOMAIN_TON,
+        nonce: Long = 327L,
+        name: ByteArray = fixedTestAscii32("Token"),
+        symbol: ByteArray = fixedTestAscii32("TOK"),
+        finalityProof: ByteArray = byteArrayOf(0x71, 0x72),
+    ): SampleTonBundleFixture {
+        require(name.size == 32)
+        require(symbol.size == 32)
+
+        val payloadBody = ByteArrayOutputStream()
+        payloadBody.write(1)
+        writeTestU32Le(payloadBody, targetDomain)
+        writeTestU64Le(payloadBody, BigInteger.valueOf(nonce))
+        payloadBody.write(ByteArray(32) { 0x11.toByte() })
+        payloadBody.write(18)
+        payloadBody.write(name)
+        payloadBody.write(symbol)
+
+        val payloadBodyBytes = payloadBody.toByteArray()
+        val payloadBytes = byteArrayOf(0x03) + payloadBodyBytes
+        val messageId = "0x" + hexLower(prefixedKeccakBytes("sccp:token:add:v1", payloadBodyBytes))
+        val payloadHash = "0x" + hexLower(
+            Blake2b.digest256("sccp:payload:v1".toByteArray(Charsets.UTF_8) + payloadBytes),
+        )
+
+        val commitment = ByteArrayOutputStream()
+        commitment.write(1)
+        commitment.write(1)
+        writeTestU32Le(commitment, targetDomain)
+        commitment.write(hexBytes(messageId.removePrefix("0x")))
+        commitment.write(hexBytes(payloadHash.removePrefix("0x")))
+        val commitmentBytes = commitment.toByteArray()
+        val currentRoot = Blake2b.digest256("sccp:hub:leaf:v1".toByteArray(Charsets.UTF_8) + commitmentBytes)
+        val commitmentRoot = "0x" + hexLower(currentRoot)
+
+        val merkleProof = ByteArrayOutputStream()
+        writeTestU32Le(merkleProof, 0)
+
+        val bundle = ByteArrayOutputStream()
+        bundle.write(1)
+        bundle.write(currentRoot)
+        writeTestBytes(bundle, commitmentBytes)
+        writeTestBytes(bundle, merkleProof.toByteArray())
+        writeTestBytes(bundle, payloadBytes)
+        writeTestBytes(bundle, finalityProof)
+
+        return SampleTonBundleFixture(
+            publicInputs = TonSccpPublicInputsInput(
+                version = 1,
+                messageId = messageId,
+                payloadHash = payloadHash,
+                targetDomain = targetDomain,
+                commitmentRoot = commitmentRoot,
+                finalityHeight = "19",
+                finalityBlockHash = "aa".repeat(32),
+            ),
+            bundleBytes = bundle.toByteArray(),
+        )
+    }
+
+    private fun fixedTestAscii32(value: String): ByteArray {
+        val bytes = value.toByteArray(Charsets.UTF_8)
+        require(bytes.size <= 32)
+        return bytes.copyOf(32)
     }
 
     private fun splitTestSccpMessageProofBundleBytes(

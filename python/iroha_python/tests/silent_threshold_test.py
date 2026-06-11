@@ -8,11 +8,15 @@ from iroha_python import (
     buildSilentThresholdCredentialCommitments,
     buildSilentThresholdCredentialDevProofFixture,
     buildSilentThresholdCredentialEnvelope,
+    buildSilentThresholdCredentialShowingProofV0,
     build_silent_threshold_credential_commitments,
     build_silent_threshold_credential_dev_proof_fixture,
     build_silent_threshold_credential_envelope,
+    build_silent_threshold_credential_showing_proof_v0,
     decode_privacy_proof_envelope,
+    verifySilentThresholdCredentialShowingProofV0,
     verifySilentThresholdCredentialProofLocally,
+    verify_silent_threshold_credential_showing_proof_v0,
     verify_silent_threshold_credential_proof_locally,
 )
 from iroha_python.verange import build_privacy_proof_envelope
@@ -141,6 +145,63 @@ def test_silent_threshold_package_root_exports_catalog_entrypoint_aliases() -> N
     )
     assert verified["ok"] is True
     assert verified["showing_nullifier"] == commitments["showing_nullifier"].hex()
+
+    production_proof = buildSilentThresholdCredentialShowingProofV0(
+        {
+            **base,
+            "vkHash": bytes([0x88]) * 32,
+            "proofBytes": b"production-silent-threshold-showing-proof",
+        }
+    )
+    production_verified = verifySilentThresholdCredentialShowingProofV0(
+        {"envelope": production_proof, **base}
+    )
+    assert production_verified["ok"] is True
+    assert production_verified["production"] is True
+    assert production_verified["kind"] == "silent-threshold-anoncred-v0"
+    assert production_verified["showing_nullifier"] == commitments[
+        "showing_nullifier"
+    ].hex()
+
+
+def test_silent_threshold_production_builder_and_verifier_reject_dev_fixtures() -> None:
+    base = _base()
+    proof = build_silent_threshold_credential_showing_proof_v0(
+        {
+            **base,
+            "vkHash": bytes([0x88]) * 32,
+            "proofBytes": b"production-silent-threshold-showing-proof",
+        }
+    )
+    decoded = decode_privacy_proof_envelope(proof)
+    assert decoded["backend"] == "Stark"
+
+    verified = verify_silent_threshold_credential_showing_proof_v0(
+        {"envelope": proof, **base}
+    )
+    assert verified["production"] is True
+    assert verified["kind"] == "silent-threshold-anoncred-v0"
+
+    with pytest.raises(ValueError, match="valid silent-threshold dev fixture"):
+        verify_silent_threshold_credential_proof_locally(
+            {"envelope": proof, "credentialShowingJson": _credential_showing()}
+        )
+
+    fixture = build_silent_threshold_credential_dev_proof_fixture(
+        {**base, "vkHash": bytes([0x88]) * 32}
+    )
+    with pytest.raises(ValueError, match="dev fixture"):
+        verify_silent_threshold_credential_showing_proof_v0(
+            {"envelope": fixture["envelope"], **base}
+        )
+    with pytest.raises(ValueError, match="dev fixture proof"):
+        build_silent_threshold_credential_showing_proof_v0(
+            {
+                **base,
+                "vkHash": bytes([0x88]) * 32,
+                "proofBytes": fixture["proof_bytes"],
+            }
+        )
 
 
 @pytest.mark.parametrize(

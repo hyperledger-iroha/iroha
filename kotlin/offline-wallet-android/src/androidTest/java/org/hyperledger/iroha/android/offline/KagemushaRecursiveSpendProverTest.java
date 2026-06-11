@@ -17,9 +17,9 @@ public final class KagemushaRecursiveSpendProverTest {
 
   @Test
   public void productionHarnessResolvesKagemushaRecursiveSpendSurface() {
-    assertEquals(6, KagemushaRecursiveSpendProver.REQUIRED_BRIDGE_ABI_VERSION);
-    assertEquals(7, KagemushaRecursiveSpendProver.RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION);
-    assertEquals(7, KagemushaRecursiveCompactPaymentTokenProver.REQUIRED_BRIDGE_ABI_VERSION);
+    assertEquals(6, KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION);
+    assertEquals(7, KagemushaRecursiveSpendProver.RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION);
+    assertEquals(7, KagemushaRecursiveCompactPaymentTokenProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION);
     assertTrue(
         "ABI-6 recursive spend JNI bridge should load on the Android runtime",
         KagemushaRecursiveSpendProver.isNativeAvailable());

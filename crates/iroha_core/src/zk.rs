@@ -3994,6 +3994,7 @@ fn is_native_halo2_pasta_circuit_id(circuit_id: &str) -> bool {
             | "halo2/pasta/tiny-add3"
             | "halo2/pasta/tiny-add2inst-public"
             | "halo2/pasta/asset-hidden-transfer-public-test"
+            | "halo2/pasta/asset-hidden-transfer-public-v1"
             | "halo2/pasta/tiny-anon-transfer-2x2"
             | "halo2/pasta/kaigi-roster-v1"
             | "halo2/pasta/kaigi-usage-v1"
@@ -69074,6 +69075,25 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
                 }
             )
         }
+        "halo2/pasta/asset-hidden-transfer-public-v1" => {
+            if col_refs.len() < 10 || col_refs.iter().take(10).any(|col| col.len() != 1) {
+                return false;
+            }
+            cached_vk_for!(
+                &params,
+                normalized.as_str(),
+                vk_box,
+                pasta_tiny::AssetHiddenTransferPublic::default(),
+                |vk| {
+                    verify_halo2_ipa_payload_columns(
+                        &params,
+                        vk,
+                        proof_payload.as_slice(),
+                        &col_refs,
+                    )
+                }
+            )
+        }
         "halo2/pasta/tiny-anon-transfer-2x2" => {
             cached_vk_for!(
                 &params,
@@ -69336,6 +69356,22 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
             )
         }
         "halo2/pasta/asset-hidden-transfer-public-test" => {
+            let circuit = pasta_tiny::AssetHiddenTransferPublic::default();
+            let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
+                Ok(v) => v,
+                Err(_) => return false,
+            };
+            if col_refs.len() < 10 || col_refs.iter().take(10).any(|col| col.len() != 1) {
+                return false;
+            }
+            verify_halo2_ipa_payload_columns(
+                &params,
+                vk_h2.as_ref(),
+                proof_payload.as_slice(),
+                &col_refs,
+            )
+        }
+        "halo2/pasta/asset-hidden-transfer-public-v1" => {
             let circuit = pasta_tiny::AssetHiddenTransferPublic::default();
             let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
                 Ok(v) => v,
@@ -71087,11 +71123,11 @@ mod tests {
         use halo2_proofs::{dev::MockProver, halo2curves::pasta::Fp as Scalar};
 
         let circuit = crate::zk::pasta_tiny::CommitOpen::default();
-        let commitment = crate::zk::pasta_tiny::poseidon_pair(Scalar::from(7), Scalar::from(11));
+        let commitment = crate::zk::pasta_tiny::poseidon_pair(Scalar::from(11), Scalar::from(31));
         let prover = MockProver::run(5, &circuit, vec![vec![commitment]]).expect("mock prover");
         prover.assert_satisfied();
 
-        let additive_placeholder_commitment = Scalar::from(7 + 11);
+        let additive_placeholder_commitment = Scalar::from(11 + 31);
         let stale = MockProver::run(5, &circuit, vec![vec![additive_placeholder_commitment]])
             .expect("mock prover");
         assert!(

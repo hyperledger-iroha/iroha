@@ -203,15 +203,23 @@ def _copy_evidence_inputs(paths: list[Path], output_dir: Path) -> list[Path]:
 def _parse_phase_evidence_arg(raw: str) -> tuple[str, Path]:
     if "=" not in raw:
         raise argparse.ArgumentTypeError(
-            f"phase evidence must use NAME=PATH syntax: {raw}"
+            "phase evidence must use NAME=PATH syntax"
         )
     name, path_text = raw.split("=", 1)
-    name = name.strip()
-    if not name:
-        raise argparse.ArgumentTypeError(f"phase evidence name is empty: {raw}")
+    # Source-inventory markers:
+    # - phase evidence contains phase with surrounding whitespace
+    # - phase evidence contains phase with Markdown-unsafe character
+    # - phase evidence contains malformed phase
+    phase_name_error = _corridor_phase_key_error(name, "phase evidence")
+    if phase_name_error is not None:
+        raise argparse.ArgumentTypeError(phase_name_error)
     if not path_text:
-        raise argparse.ArgumentTypeError(f"phase evidence path is empty: {raw}")
+        raise argparse.ArgumentTypeError("phase evidence path must not be empty")
     return name, Path(path_text)
+
+
+def _phase_evidence_source_label(name: str) -> str:
+    return f"--phase-evidence {name}=<path>"
 
 
 def _phase_log_from_dir(directory: Path, phase: str) -> Path:
@@ -223,9 +231,9 @@ def _phase_log_from_dir(directory: Path, phase: str) -> Path:
     for candidate in candidates:
         if candidate.is_file():
             return candidate
-    expected = ", ".join(str(candidate) for candidate in candidates)
     raise FileNotFoundError(
-        f"missing SCCP corridor evidence log for phase {phase}; checked {expected}"
+        "missing SCCP corridor evidence log for phase "
+        f"{phase}; checked standard phase log layouts"
     )
 
 
@@ -256,13 +264,13 @@ def _phase_evidence_sources(
             )
     for raw in phase_evidence:
         name, path = _parse_phase_evidence_arg(raw)
-        label = f"--phase-evidence {raw}"
+        label = _phase_evidence_source_label(name)
         if name == "all":
             for phase in phases:
                 assign(phase, path, label)
             continue
         if name not in phases:
-            raise argparse.ArgumentTypeError(f"unknown SCCP corridor phase: {name}")
+            raise argparse.ArgumentTypeError("unknown SCCP corridor phase")
         assign(name, path, label)
     return sources
 
@@ -1581,6 +1589,139 @@ def _submission_surface_sdk_key_error(sdk: Any, label: str) -> str | None:
     return None
 
 
+def _submission_surface_lanes_key_error(lanes: Any, label: str) -> str | None:
+    if not isinstance(lanes, str) or not lanes:
+        return (
+            f"{label} lanes must be a non-empty string "
+            "with no surrounding whitespace"
+        )
+    if _path_control_character(lanes) is not None:
+        return f"{label} lanes contains control character"
+    if not lanes.isascii():
+        return f"{label} lanes contains non-ASCII character"
+    if lanes.strip() != lanes:
+        return f"{label} lanes contains surrounding whitespace"
+    if any(character.isspace() for character in lanes):
+        return f"{label} lanes contains whitespace"
+    if _path_markdown_unsafe_character(lanes) is not None:
+        return f"{label} lanes contains Markdown-unsafe character"
+    allowed = set("abcdefghijklmnopqrstuvwxyz0123456789-,")
+    lane_parts = lanes.split(",")
+    if (
+        any(character not in allowed for character in lanes)
+        or any(
+            not part or part.startswith("-") or part.endswith("-")
+            for part in lane_parts
+        )
+    ):
+        return f"{label} lanes is malformed"
+    return None
+
+
+def _submission_surface_proof_backend_key_error(
+    proof_backend: Any,
+    label: str,
+) -> str | None:
+    if not isinstance(proof_backend, str) or not proof_backend:
+        return (
+            f"{label} proof_backend must be a non-empty string "
+            "with no surrounding whitespace"
+        )
+    if _path_control_character(proof_backend) is not None:
+        return f"{label} proof_backend contains control character"
+    if not proof_backend.isascii():
+        return f"{label} proof_backend contains non-ASCII character"
+    if proof_backend.strip() != proof_backend:
+        return f"{label} proof_backend contains surrounding whitespace"
+    if any(character.isspace() for character in proof_backend):
+        return f"{label} proof_backend contains whitespace"
+    if _path_markdown_unsafe_character(proof_backend) is not None:
+        return f"{label} proof_backend contains Markdown-unsafe character"
+    allowed = set("abcdefghijklmnopqrstuvwxyz0123456789-")
+    if (
+        any(character not in allowed for character in proof_backend)
+        or proof_backend.startswith("-")
+        or proof_backend.endswith("-")
+    ):
+        return f"{label} proof_backend is malformed"
+    return None
+
+
+def _submission_surface_submission_text_error(value: Any, label: str) -> str | None:
+    if not isinstance(value, str) or not value:
+        return (
+            f"{label} on_chain_submission must be a non-empty string "
+            "with no surrounding whitespace"
+        )
+    if _path_control_character(value) is not None:
+        return f"{label} on_chain_submission contains control character"
+    if not value.isascii():
+        return f"{label} on_chain_submission contains non-ASCII character"
+    if value.strip() != value:
+        return f"{label} on_chain_submission contains surrounding whitespace"
+    if _path_markdown_unsafe_character(value) is not None:
+        return f"{label} on_chain_submission contains Markdown-unsafe character"
+    return None
+
+
+def _submission_surface_helper_symbol_error(symbol: Any, label: str) -> str | None:
+    if not isinstance(symbol, str) or not symbol:
+        return f"{label} must be a list of non-empty strings"
+    if _path_control_character(symbol) is not None:
+        return f"{label} contains helper symbol with control character"
+    if not symbol.isascii():
+        return f"{label} contains helper symbol with non-ASCII character"
+    if symbol.strip() != symbol:
+        return f"{label} contains helper symbol with surrounding whitespace"
+    if any(character.isspace() for character in symbol):
+        return f"{label} contains helper symbol with whitespace"
+    if _path_markdown_unsafe_character(symbol) is not None:
+        return f"{label} contains helper symbol with Markdown-unsafe character"
+    allowed = set(
+        "abcdefghijklmnopqrstuvwxyz"
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        "0123456789"
+        "._:()"
+    )
+    if (
+        any(character not in allowed for character in symbol)
+        or not symbol[0].isalpha()
+    ):
+        return f"{label} contains malformed helper symbol"
+    return None
+
+
+def _submission_surface_sdk_helpers_text_error(value: Any, label: str) -> str | None:
+    if not isinstance(value, str) or not value:
+        return (
+            f"{label} sdk_helpers must be a non-empty string "
+            "with no surrounding whitespace"
+        )
+    if _path_control_character(value) is not None:
+        return f"{label} sdk_helpers contains control character"
+    if not value.isascii():
+        return f"{label} sdk_helpers contains non-ASCII character"
+    if value.strip() != value:
+        return f"{label} sdk_helpers contains surrounding whitespace"
+    if _path_markdown_unsafe_character(value) is not None:
+        return f"{label} sdk_helpers contains Markdown-unsafe character"
+    return None
+
+
+def _submission_surface_helper_symbol_list_errors(
+    value: Any,
+    label: str,
+) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    errors: list[str] = []
+    for symbol in value:
+        symbol_error = _submission_surface_helper_symbol_error(symbol, label)
+        if symbol_error is not None:
+            errors.append(symbol_error)
+    return errors
+
+
 def _require_report_mapping(
     value: Any,
     label: str,
@@ -1608,17 +1749,6 @@ def _require_report_fields(
     for field in fields:
         if field not in payload:
             errors.append(f"{label} missing field: {field}")
-
-
-def _unknown_report_field_errors(
-    payload: dict[str, Any],
-    label: str,
-    allowed_fields: tuple[str, ...],
-) -> list[str]:
-    return [
-        f"{label} contains unknown field: {field}"
-        for field in sorted(set(payload) - set(allowed_fields), key=str)
-    ]
 
 
 def _string_list_field_errors(
@@ -1803,7 +1933,7 @@ def _unknown_public_field_error(field: Any, label: str) -> str:
 def _unknown_public_field_errors(
     payload: dict[str, Any],
     label: str,
-    allowed_fields: set[str] | frozenset[str],
+    allowed_fields: set[str] | frozenset[str] | tuple[str, ...],
 ) -> list[str]:
     return [
         _unknown_public_field_error(field, label)
@@ -1929,7 +2059,7 @@ def _artifact_row_errors(row: Any, label: str) -> list[str]:
     if errors:
         return errors
     require_bundle_relative_path = label.startswith("bundled report.")
-    errors.extend(_unknown_report_field_errors(artifact, label, ARTIFACT_FIELDS))
+    errors.extend(_unknown_public_field_errors(artifact, label, ARTIFACT_FIELDS))
     _require_report_fields(artifact, label, ARTIFACT_FIELDS, errors)
     artifact_path = artifact.get("path")
     if not isinstance(artifact_path, str) or not artifact_path:
@@ -2226,7 +2356,9 @@ def _release_checklist_bundle_errors(
     payload = _require_report_mapping(checklist, label, errors)
     if errors or not payload:
         return errors
-    errors.extend(_unknown_report_field_errors(payload, label, RELEASE_CHECKLIST_FIELDS))
+    errors.extend(
+        _unknown_public_field_errors(payload, label, RELEASE_CHECKLIST_FIELDS)
+    )
     _require_report_fields(payload, label, RELEASE_CHECKLIST_FIELDS, errors)
     if require_ready:
         if payload.get("ready") is not True:
@@ -2253,7 +2385,7 @@ def _release_checklist_bundle_errors(
                 errors.append(f"{label} contains duplicate item id: {item_id}")
             seen_item_ids.add(item_id)
         errors.extend(
-            _unknown_report_field_errors(
+            _unknown_public_field_errors(
                 item_payload,
                 item_label,
                 RELEASE_CHECKLIST_ITEM_FIELDS,
@@ -2571,7 +2703,7 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
         return errors
 
     errors.extend(
-        _unknown_report_field_errors(
+        _unknown_public_field_errors(
             payload,
             label,
             CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS,
@@ -2808,22 +2940,34 @@ def _submission_surface_row_bundle_errors(surface: Any, label: str) -> list[str]
         return errors
 
     errors.extend(
-        _unknown_report_field_errors(
+        _unknown_public_field_errors(
             payload,
             label,
             USER_PROVER_SUBMISSION_SURFACE_FIELDS,
         )
     )
     _require_report_fields(payload, label, USER_PROVER_SUBMISSION_SURFACE_FIELDS, errors)
-    for field in ("lanes", "proof_backend", "sdk_helpers", "on_chain_submission"):
-        value = payload.get(field)
-        if field in payload and (
-            not isinstance(value, str) or not value or value.strip() != value
-        ):
-            errors.append(
-                f"{label} {field} must be a non-empty string "
-                "with no surrounding whitespace"
-            )
+    lanes_error = _submission_surface_lanes_key_error(payload.get("lanes"), label)
+    if "lanes" in payload and lanes_error is not None:
+        errors.append(lanes_error)
+    proof_backend_error = _submission_surface_proof_backend_key_error(
+        payload.get("proof_backend"),
+        label,
+    )
+    if "proof_backend" in payload and proof_backend_error is not None:
+        errors.append(proof_backend_error)
+    submission_error = _submission_surface_submission_text_error(
+        payload.get("on_chain_submission"),
+        label,
+    )
+    if "on_chain_submission" in payload and submission_error is not None:
+        errors.append(submission_error)
+    sdk_helpers_error = _submission_surface_sdk_helpers_text_error(
+        payload.get("sdk_helpers"),
+        label,
+    )
+    if "sdk_helpers" in payload and sdk_helpers_error is not None:
+        errors.append(sdk_helpers_error)
 
     errors.extend(
         _string_list_field_errors(
@@ -2833,9 +2977,20 @@ def _submission_surface_row_bundle_errors(surface: Any, label: str) -> list[str]
             allow_empty=False,
         )
     )
+    errors.extend(
+        _submission_surface_helper_symbol_list_errors(
+            payload.get("sdk_helper_symbols"),
+            f"{label} sdk_helper_symbols",
+        )
+    )
     helper_symbols = payload.get("sdk_helper_symbols")
     if isinstance(helper_symbols, list) and all(
-        isinstance(item, str) and item for item in helper_symbols
+        _submission_surface_helper_symbol_error(
+            item,
+            f"{label} sdk_helper_symbols",
+        )
+        is None
+        for item in helper_symbols
     ):
         expected_helpers = ", ".join(helper_symbols)
         if payload.get("sdk_helpers") != expected_helpers:
@@ -2862,6 +3017,13 @@ def _submission_surface_row_bundle_errors(surface: Any, label: str) -> list[str]
                 continue
             if any(not isinstance(item, str) or not item for item in helpers):
                 errors.append(f"{row_label} must be a list of non-empty strings")
+                continue
+            helper_symbol_errors = _submission_surface_helper_symbol_list_errors(
+                helpers,
+                row_label,
+            )
+            if helper_symbol_errors:
+                errors.extend(helper_symbol_errors)
                 continue
             if any(item.strip() != item for item in helpers):
                 errors.append(
@@ -2960,7 +3122,12 @@ def _submission_surface_binding_bundle_errors(
         if not isinstance(surface, dict):
             continue
         lanes = surface.get("lanes")
-        if not isinstance(lanes, str) or not lanes:
+        lanes_error = _submission_surface_lanes_key_error(
+            lanes,
+            f"{label}.user_prover_submission_surfaces",
+        )
+        if lanes_error is not None:
+            errors.append(lanes_error)
             continue
         if lanes in seen_lanes:
             errors.append(
@@ -2976,11 +3143,32 @@ def _submission_surface_binding_bundle_errors(
                 f"lanes row: {lanes}"
             )
             continue
-        if surface.get("proof_backend") != expected.get("proof_backend"):
+        proof_backend = surface.get("proof_backend")
+        if (
+            _submission_surface_proof_backend_key_error(
+                proof_backend,
+                f"{label}.user_prover_submission_surfaces",
+            )
+            is None
+            and proof_backend != expected.get("proof_backend")
+        ):
             errors.append(
                 f"{label}.user_prover_submission_surfaces proof_backend mismatch "
                 f"for lanes {lanes}: expected {expected.get('proof_backend')}, "
-                f"got {surface.get('proof_backend')!r}"
+                f"got {proof_backend!r}"
+            )
+        submission = surface.get("on_chain_submission")
+        if (
+            _submission_surface_submission_text_error(
+                submission,
+                f"{label}.user_prover_submission_surfaces",
+            )
+            is None
+            and submission != expected.get("on_chain_submission")
+        ):
+            errors.append(
+                f"{label}.user_prover_submission_surfaces on_chain_submission "
+                f"must match expected submission text for lanes {lanes}"
             )
         helper_sets = surface.get("sdk_helper_symbols_by_sdk")
         expected_helper_sets = expected.get("sdk_helper_symbols_by_sdk")
@@ -3721,7 +3909,7 @@ def _all_lanes_summary_bundle_errors(summary: Any, label: str) -> list[str]:
     if errors:
         return errors
     errors.extend(
-        _unknown_report_field_errors(payload, label, ALL_LANES_SUMMARY_FIELDS)
+        _unknown_public_field_errors(payload, label, ALL_LANES_SUMMARY_FIELDS)
     )
     _require_report_fields(payload, label, ALL_LANES_SUMMARY_FIELDS, errors)
     if type(payload.get("production_ready")) is not bool:
@@ -3780,7 +3968,11 @@ def _all_lanes_summary_bundle_errors(summary: Any, label: str) -> list[str]:
         if not isinstance(lane, dict):
             continue
         errors.extend(
-            _unknown_report_field_errors(lane_payload, lane_label, ALL_LANES_LANE_FIELDS)
+            _unknown_public_field_errors(
+                lane_payload,
+                lane_label,
+                ALL_LANES_LANE_FIELDS,
+            )
         )
         _require_report_fields(lane_payload, lane_label, ALL_LANES_LANE_FIELDS, errors)
         if "domain" in lane_payload and type(lane_payload.get("domain")) is not int:
@@ -3821,7 +4013,7 @@ def _all_lanes_summary_bundle_errors(summary: Any, label: str) -> list[str]:
         )
         if records:
             errors.extend(
-                _unknown_report_field_errors(
+                _unknown_public_field_errors(
                     records,
                     f"{lane_label}.records",
                     ALL_LANES_RECORD_FIELDS,
@@ -3876,7 +4068,7 @@ def _release_report_bundle_errors(
         return errors
 
     errors.extend(
-        _unknown_report_field_errors(payload, label, READINESS_REPORT_ROOT_FIELDS)
+        _unknown_public_field_errors(payload, label, READINESS_REPORT_ROOT_FIELDS)
     )
     _require_report_fields(payload, label, READINESS_REPORT_BUNDLE_FIELDS, errors)
 
@@ -3905,7 +4097,7 @@ def _release_report_bundle_errors(
     corridor = _require_report_mapping(payload.get("corridor"), f"{label}.corridor", errors)
     if corridor:
         errors.extend(
-            _unknown_report_field_errors(
+            _unknown_public_field_errors(
                 corridor,
                 f"{label}.corridor",
                 CORRIDOR_FIELDS,
@@ -4093,7 +4285,7 @@ def _release_report_bundle_errors(
             if not isinstance(inventory, dict):
                 continue
             errors.extend(
-                _unknown_report_field_errors(
+                _unknown_public_field_errors(
                     inventory_payload,
                     inventory_label,
                     SOURCE_INVENTORY_FIELDS,

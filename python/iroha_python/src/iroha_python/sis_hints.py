@@ -1,4 +1,4 @@
-"""SIS-with-hints anonymous credential SDK dev-fixture helpers."""
+"""SIS-with-hints anonymous credential SDK helpers."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from .verange import (
     _canonical_json_bytes,
     _decode_privacy_proof_envelope_internal,
     _fixed_bytes,
+    _normalize_backend,
     _normalize_backend_allowing_unsupported,
     _positive_u32,
     _read_single_alias,
@@ -25,6 +26,7 @@ from .verange import (
 )
 
 SIS_HINTS_BACKEND = "unsupported"
+SIS_HINTS_PRODUCTION_BACKEND = "sis-with-hints"
 SIS_HINTS_CIRCUIT_ID = "lattice/sis-hints-anoncred-v0:sis_hints_anoncred_pq_v0"
 SIS_HINTS_DOMAIN_SEPARATOR = "iroha:sis-hints:anoncred:v0"
 SIS_HINTS_DEV_PROOF_PREFIX = b"iroha:sis-hints:dev-fixture:v0:"
@@ -35,15 +37,20 @@ SIS_HINTS_MAX_PARAMETER_BYTES = 1024 * 1024
 
 __all__ = [
     "SIS_HINTS_BACKEND",
+    "SIS_HINTS_PRODUCTION_BACKEND",
     "SIS_HINTS_CIRCUIT_ID",
     "SIS_HINTS_DOMAIN_SEPARATOR",
     "build_sis_hints_credential_commitments",
     "build_sis_hints_credential_envelope",
+    "build_sis_hints_anonymous_credential_proof_v0",
     "build_sis_hints_credential_dev_proof_fixture",
+    "verify_sis_hints_anonymous_credential_proof_v0",
     "verify_sis_hints_credential_proof_locally",
     "buildSisHintsCredentialCommitments",
     "buildSisHintsCredentialEnvelope",
+    "buildSisHintsAnonymousCredentialProofV0",
     "buildSisHintsCredentialDevProofFixture",
+    "verifySisHintsAnonymousCredentialProofV0",
     "verifySisHintsCredentialProofLocally",
 ]
 
@@ -65,6 +72,18 @@ def _normalize_backend_tag(value: Any, context: str) -> str:
             f"{context} must remain unsupported until a production SIS-with-hints backend is registered"
         )
     return SIS_HINTS_BACKEND
+
+
+def _normalize_production_backend_tag(value: Any, context: str) -> str:
+    _tag, decoded = _normalize_backend(
+        SIS_HINTS_PRODUCTION_BACKEND if value is _MISSING or value is None else value,
+        context,
+    )
+    if decoded != "SisWithHints":
+        raise ValueError(
+            f"{context} must identify the production SIS-with-hints backend"
+        )
+    return SIS_HINTS_PRODUCTION_BACKEND
 
 
 def _normalize_circuit_id(value: Any, context: str) -> str:
@@ -616,6 +635,7 @@ def _proof_parts(
     context: str,
     *,
     require_proof_bytes: bool,
+    production_backend: bool = False,
 ) -> dict[str, Any]:
     _backend_key, backend_value = _read_single_alias(
         source,
@@ -657,7 +677,11 @@ def _proof_parts(
         f"{context}.maxProofBytes",
     )
     return {
-        "backend": _normalize_backend_tag(backend_value, f"{context}.backendTag"),
+        "backend": (
+            _normalize_production_backend_tag(backend_value, f"{context}.backendTag")
+            if production_backend
+            else _normalize_backend_tag(backend_value, f"{context}.backendTag")
+        ),
         "circuit_id": _normalize_circuit_id(circuit_value, f"{context}.circuitId"),
         "vk_hash": _fixed_bytes(vk_hash_value, f"{context}.vkHash", 32, nonzero=True),
         "commitments": parts,
@@ -723,6 +747,37 @@ def build_sis_hints_credential_envelope(options: Mapping[str, Any]) -> bytes:
             "maxPublicInputBytes": parts["max_public_input_bytes"],
         },
         allow_unsupported_backend=True,
+    )
+
+
+def build_sis_hints_anonymous_credential_proof_v0(
+    options: Mapping[str, Any],
+) -> bytes:
+    """Build canonical production SIS-with-hints credential proof envelope bytes."""
+
+    source = _require_mapping(options, "sisHintsAnonymousCredentialProofV0")
+    _reject_unknown_fields(source, _ENVELOPE_FIELDS, "sisHintsAnonymousCredentialProofV0")
+    parts = _proof_parts(
+        source,
+        "sisHintsAnonymousCredentialProofV0",
+        require_proof_bytes=True,
+        production_backend=True,
+    )
+    if parts["proof_bytes"].startswith(SIS_HINTS_DEV_PROOF_PREFIX):
+        raise ValueError(
+            "sisHintsAnonymousCredentialProofV0.proofBytes must not contain a dev fixture proof"
+        )
+    return _build_privacy_proof_envelope_internal(
+        {
+            "backend": parts["backend"],
+            "circuitId": parts["circuit_id"],
+            "vkHash": parts["vk_hash"],
+            "publicInputs": parts["public_input_bytes"],
+            "proofBytes": parts["proof_bytes"],
+            "aux": source.get("aux", b""),
+            "maxProofBytes": parts["max_proof_bytes"],
+            "maxPublicInputBytes": parts["max_public_input_bytes"],
+        },
     )
 
 
@@ -1009,7 +1064,70 @@ def verify_sis_hints_credential_proof_locally(options: Any) -> dict[str, Any]:
     }
 
 
+def verify_sis_hints_anonymous_credential_proof_v0(options: Any) -> dict[str, Any]:
+    """Validate a production SIS-with-hints credential proof envelope binding."""
+
+    if isinstance(options, Mapping):
+        source = options
+    else:
+        source = {"envelope": options}
+    _reject_unknown_fields(
+        source,
+        _COMMON_FIELDS | {"envelope", "proofEnvelope", "proof_envelope", "bytes"},
+        "sisHintsAnonymousCredentialProofV0",
+    )
+    _envelope_key, envelope_value = _read_single_alias(
+        source,
+        ("envelope", "proofEnvelope", "proof_envelope", "bytes"),
+        "sisHintsAnonymousCredentialProofV0.envelope",
+        "proof envelope",
+    )
+    decoded = _decode_privacy_proof_envelope_internal(envelope_value)
+    if decoded["backend"] != "SisWithHints":
+        raise ValueError(
+            "sisHintsAnonymousCredentialProofV0.envelope.backend must be SisWithHints"
+        )
+    circuit_id = _normalize_circuit_id(
+        decoded["circuit_id"],
+        "sisHintsAnonymousCredentialProofV0.envelope.circuitId",
+    )
+    vk_hash = _fixed_bytes(
+        decoded["vk_hash"],
+        "sisHintsAnonymousCredentialProofV0.envelope.vkHash",
+        32,
+        nonzero=True,
+    )
+    public_inputs = _parse_public_inputs(
+        decoded["public_inputs"],
+        "sisHintsAnonymousCredentialProofV0.publicInputs",
+    )
+    _ensure_expectations(source, public_inputs, "sisHintsAnonymousCredentialProofV0")
+    if decoded["proof_bytes"].startswith(SIS_HINTS_DEV_PROOF_PREFIX):
+        raise ValueError(
+            "sisHintsAnonymousCredentialProofV0 proof bytes must not contain a SIS-with-hints dev fixture"
+        )
+    return {
+        "ok": True,
+        "production": True,
+        "kind": "sis-hints-anoncred-pq-v0",
+        "backend": "SisWithHints",
+        "circuit_id": circuit_id,
+        "verifier_key_hash": vk_hash.hex(),
+        "public_inputs": public_inputs,
+        "public_input_bytes": len(decoded["public_inputs"]),
+        "proof_bytes": len(decoded["proof_bytes"]),
+        "aux_bytes": len(decoded["aux"]),
+        "parameter_hash": public_inputs["parameter_hash"],
+    }
+
+
 buildSisHintsCredentialCommitments = build_sis_hints_credential_commitments
 buildSisHintsCredentialEnvelope = build_sis_hints_credential_envelope
+buildSisHintsAnonymousCredentialProofV0 = (
+    build_sis_hints_anonymous_credential_proof_v0
+)
 buildSisHintsCredentialDevProofFixture = build_sis_hints_credential_dev_proof_fixture
+verifySisHintsAnonymousCredentialProofV0 = (
+    verify_sis_hints_anonymous_credential_proof_v0
+)
 verifySisHintsCredentialProofLocally = verify_sis_hints_credential_proof_locally

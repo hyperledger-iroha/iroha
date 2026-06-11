@@ -540,6 +540,9 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "ethereumMainnetSccpConstructorOptionsFromBundleFactoryInput",
             "SCCP_NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1",
             "sha256Hex32",
+            "verifiedNativeEvmProverArtifacts = new WeakSet()",
+            "immutableVerifiedNativeEvmProverArtifacts",
+            "local native EVM prover artifact byte verifier",
             "implementationBytes sha256",
             "implementationBytes are required",
             "nativeProverArtifacts must bind sdk implementation and implementationHash",
@@ -558,6 +561,7 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "SCCP_NATIVE_EVM_PROVER_MIN_PROOF_ARTIFACT_BYTES_V1",
             "SCCP_NATIVE_EVM_PROVER_MIN_PROVING_KEY_BYTES_V1",
             "SCCP_NATIVE_EVM_PROVER_MIN_VERIFIER_KEY_BYTES_V1",
+            "SCCP_NATIVE_EVM_PROVER_MIN_IMPLEMENTATION_BYTES_V1",
             "SCCP_NATIVE_EVM_PROVER_MIN_SUPPORT_ARTIFACT_BYTES_V1",
             "assertNativeEvmProverArtifactHasProductionSize",
             "must be at least",
@@ -594,6 +598,7 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "SCCP_NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1",
             "sha256Hex32",
             "implementationBytes are required",
+            "local native EVM prover artifact byte verifier",
             "nativeProverArtifacts must bind sdk implementation and implementationHash",
             "nativeProverArtifacts verifierKeyHash must match nativeProverBundle",
             "crossSdkFixtureParityBytes",
@@ -610,6 +615,7 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "SCCP_NATIVE_EVM_PROVER_MIN_PROOF_ARTIFACT_BYTES_V1",
             "SCCP_NATIVE_EVM_PROVER_MIN_PROVING_KEY_BYTES_V1",
             "SCCP_NATIVE_EVM_PROVER_MIN_VERIFIER_KEY_BYTES_V1",
+            "SCCP_NATIVE_EVM_PROVER_MIN_IMPLEMENTATION_BYTES_V1",
             "SCCP_NATIVE_EVM_PROVER_MIN_SUPPORT_ARTIFACT_BYTES_V1",
             "assertNativeEvmProverArtifactHasProductionSize",
             "must be at least",
@@ -666,11 +672,13 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "verifyEthereumMainnetNativeEvmProverArtifactsFromBundle",
             "EthereumMainnetSccp.fromNativeProverBundle",
             "pass nativeProverArtifacts to the constructor directly",
+            "forgedDescriptorSelfTestCalled",
+            "local native EVM prover artifact byte verifier",
             "artifactResolver(path, metadata)",
             "implementationBytes sha256",
             "implementationBytes are required",
-            "nativeProverArtifacts.implementationHash is required",
-            "nativeProverArtifacts verifierKeyHash must match nativeProverBundle",
+            "unverifiedDescriptorMessage",
+            "nativeProverArtifacts: { ...verified }",
             "crossSdkFixtureParityBytes is required",
             "crossSdkFixtureParityBytes sha256",
             "crossSdkFixtureParityHash",
@@ -704,6 +712,19 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "nativeProverParityFixture contains duplicate JSON key",
             "nativeProverSelfTestFixture contains duplicate JSON key",
         ),
+        ROOT / "javascript" / "iroha_js" / "test" / "sccpBscMainnet.test.js": (
+            "BSC native prover artifact descriptors must be verifier-owned before callbacks run",
+            "unverifiedDescriptorMessage",
+            "local native EVM prover artifact byte verifier",
+            "mainnetSelfTestCalled",
+            "mainnetProverCalled",
+            "testnetSelfTestCalled",
+            "testnetProverCalled",
+            "nativeProverArtifacts: { ...mainnetFixture.nativeProverArtifacts }",
+            "nativeProverArtifacts: { ...testnetFixture.nativeProverArtifacts }",
+            "runNativeProverSelfTest",
+            "proveOutboundToBsc",
+        ),
         ROOT / "javascript" / "iroha_js" / "test" / "package_dist.test.js": (
             "verifyEthereumMainnetNativeEvmProverArtifacts",
             "verifyEthereumMainnetNativeEvmProverArtifactsFromBundle",
@@ -723,6 +744,11 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "ipfs:proof-artifact.bin",
             "artifacts/eth-mainnet/proof.wasm",
             "proofArtifactBytes must be at least 65536 bytes",
+            "provingKeyBytes must be at least 65536 bytes",
+            "verifierKeyBytes must be at least 128 bytes",
+            "crossSdkFixtureParityBytes must be at least 128 bytes",
+            "nativeProverSelfTestBytes must be at least 128 bytes",
+            "implementationBytes must be at least 1024 bytes",
         ),
     },
     "swift-sdk": {
@@ -738,7 +764,11 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "fromNativeProverBundle",
             "nativeProverBundle.verifiedArtifacts",
             "sccpNativeEvmProverArtifactSha256Hex",
-            "sccpNativeEvmProverMinArtifactBytesV1",
+            "sccpNativeEvmProverMinProofArtifactBytesV1",
+            "sccpNativeEvmProverMinProvingKeyBytesV1",
+            "sccpNativeEvmProverMinVerifierKeyBytesV1",
+            "sccpNativeEvmProverMinImplementationBytesV1",
+            "sccpNativeEvmProverMinSupportArtifactBytesV1",
             "sccpNativeEvmProverRequireProductionArtifactSize",
             ".minBytes",
             "implementationBytes",
@@ -799,7 +829,13 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "Data(\"{}\".utf8)",
             "nativeProverBundle.verifierKeyHash",
             "nativeEvmProverArtifactBytes",
+            "hashConsistentNativeEvmProverBundle",
             "proofArtifactBytes.minBytes",
+            "provingKeyBytes.minBytes",
+            "verifierKeyBytes.minBytes",
+            "crossSdkFixtureParityBytes.minBytes",
+            "nativeProverSelfTestBytes.minBytes",
+            "implementationBytes.minBytes",
             "proof.wasm",
             "flaggedArtifactBytes",
             "proofArtifactBytes.forbiddenMarker",
@@ -842,7 +878,11 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "fun fromNativeProverBundle(",
             "nativeProverBundle.verifiedArtifacts",
             'MessageDigest.getInstance("SHA-256")',
-            "NATIVE_EVM_PROVER_MIN_ARTIFACT_BYTES_V1",
+            "NATIVE_EVM_PROVER_MIN_PROOF_ARTIFACT_BYTES_V1",
+            "NATIVE_EVM_PROVER_MIN_PROVING_KEY_BYTES_V1",
+            "NATIVE_EVM_PROVER_MIN_VERIFIER_KEY_BYTES_V1",
+            "NATIVE_EVM_PROVER_MIN_IMPLEMENTATION_BYTES_V1",
+            "NATIVE_EVM_PROVER_MIN_SUPPORT_ARTIFACT_BYTES_V1",
             "requireNativeEvmProverProductionArtifactSize",
             "must be at least",
             "implementationBytes sha256",
@@ -902,7 +942,12 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "\"{}\".toByteArray()",
             "nativeProverBundle.verifierKeyHash",
             "nativeEvmProverArtifactBytes",
-            "proofArtifactBytes must be at least 256 bytes",
+            "proofArtifactBytes must be at least 65536 bytes",
+            "provingKeyBytes must be at least 65536 bytes",
+            "verifierKeyBytes must be at least 128 bytes",
+            "crossSdkFixtureParityBytes must be at least 128 bytes",
+            "nativeProverSelfTestBytes must be at least 128 bytes",
+            "implementationBytes must be at least 1024 bytes",
             "proof.wasm",
             "flaggedArtifactBytes",
             "proofArtifactBytes contains forbidden",
@@ -944,7 +989,11 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "NativeEvmProverArtifactResolver",
             "artifactResolver.resolveArtifact",
             'MessageDigest.getInstance("SHA-256")',
-            "NATIVE_EVM_PROVER_MIN_ARTIFACT_BYTES_V1",
+            "NATIVE_EVM_PROVER_MIN_PROOF_ARTIFACT_BYTES_V1",
+            "NATIVE_EVM_PROVER_MIN_PROVING_KEY_BYTES_V1",
+            "NATIVE_EVM_PROVER_MIN_VERIFIER_KEY_BYTES_V1",
+            "NATIVE_EVM_PROVER_MIN_IMPLEMENTATION_BYTES_V1",
+            "NATIVE_EVM_PROVER_MIN_SUPPORT_ARTIFACT_BYTES_V1",
             "requireNativeEvmProverProductionArtifactSize",
             "must be at least",
             "implementationBytes sha256",
@@ -1022,7 +1071,13 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "\"{}\".getBytes(StandardCharsets.UTF_8)",
             "nativeProverBundle.verifierKeyHash",
             "nativeEvmProverArtifactBytes",
-            "proofArtifactBytes must be at least 256 bytes",
+            "NativeEvmVerifierFixture",
+            "proofArtifactBytes must be at least 65536 bytes",
+            "provingKeyBytes must be at least 65536 bytes",
+            "verifierKeyBytes must be at least 128 bytes",
+            "crossSdkFixtureParityBytes must be at least 128 bytes",
+            "nativeProverSelfTestBytes must be at least 128 bytes",
+            "implementationBytes must be at least 1024 bytes",
             "proof.wasm",
             "flaggedArtifactBytes",
             "proofArtifactBytes contains forbidden",
@@ -1062,7 +1117,11 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "Func<string, byte[]> artifactResolver",
             "artifactResolver(ProofArtifact)",
             "SHA256.HashData",
-            "NativeEvmProverMinArtifactBytesV1",
+            "NativeEvmProverMinProofArtifactBytesV1",
+            "NativeEvmProverMinProvingKeyBytesV1",
+            "NativeEvmProverMinVerifierKeyBytesV1",
+            "NativeEvmProverMinImplementationBytesV1",
+            "NativeEvmProverMinSupportArtifactBytesV1",
             "RequireNativeEvmProverProductionArtifactSize",
             "must be at least",
             "implementationBytes sha256",
@@ -1119,7 +1178,13 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "Encoding.UTF8.GetBytes(\"{}\")",
             "nativeProverBundle.verifierKeyHash",
             "NativeEvmProverArtifactBytes",
-            "proofArtifactBytes must be at least 256 bytes",
+            "HashConsistentNativeEvmProverBundle",
+            "proofArtifactBytes must be at least 65536 bytes",
+            "provingKeyBytes must be at least 65536 bytes",
+            "verifierKeyBytes must be at least 128 bytes",
+            "crossSdkFixtureParityBytes must be at least 128 bytes",
+            "nativeProverSelfTestBytes must be at least 128 bytes",
+            "implementationBytes must be at least 1024 bytes",
             "proof.wasm",
             "flaggedArtifactBytes",
             "proofArtifactBytes contains forbidden",
@@ -1567,18 +1632,27 @@ def write_native_evm_prover_bundle(
             "0x" + hashlib.sha256(content).hexdigest(),
         )
 
-    def native_payload(label: str) -> bytes:
+    def native_payload(
+        label: str,
+        size: int = report.NATIVE_EVM_PROVER_MIN_PAYLOAD_BYTES,
+    ) -> bytes:
         content = (f"{label}\n").encode("utf-8")
-        repeats = report.NATIVE_EVM_PROVER_MIN_PAYLOAD_BYTES // len(content) + 1
-        return (content * repeats)[: report.NATIVE_EVM_PROVER_MIN_PAYLOAD_BYTES]
+        repeats = size // len(content) + 1
+        return (content * repeats)[:size]
 
     proof_artifact, proof_artifact_hash = write_artifact(
         "proof-artifact.bin",
-        native_payload("ethereum mainnet sccp proof artifact v1"),
+        native_payload(
+            "ethereum mainnet sccp proof artifact v1",
+            report.NATIVE_EVM_PROVER_MIN_PROOF_ARTIFACT_BYTES,
+        ),
     )
     proving_key, proving_key_hash = write_artifact(
         "proving-key.bin",
-        native_payload("ethereum mainnet sccp proving key v1"),
+        native_payload(
+            "ethereum mainnet sccp proving key v1",
+            report.NATIVE_EVM_PROVER_MIN_PROVING_KEY_BYTES,
+        ),
     )
     verifier_key, verifier_key_hash = write_artifact(
         "verifier-key.bin",
@@ -1592,7 +1666,8 @@ def write_native_evm_prover_bundle(
             f"{sdk}-implementation.bin",
             native_payload(
                 "ethereum mainnet sccp "
-                f"{sdk} {implementation} implementation v1"
+                f"{sdk} {implementation} implementation v1",
+                report.NATIVE_EVM_PROVER_MIN_IMPLEMENTATION_BYTES,
             ),
         )
         sdk_artifacts.append(
@@ -1943,51 +2018,65 @@ def test_release_readiness_report_guards_ethereum_data_collection_no_proxy_gate_
     verifier = load_verify_helpers()
     assert report._ethereum_data_collection_no_proxy_gate_inventory_errors() == []
 
-    sparse_sdk = tmp_path / "sccp.js"
-    sparse_sdk.write_text(
-        "  async validateExecutionProviderMainnet() {\n"
-        "    await provider.request({ method: \"eth_chainId\" });\n"
-        "    await provider.request({ method: \"eth_getTransactionReceipt\" });\n"
-        "    return Torii.proxy.fallback();\n"
-        "  }\n"
-        "  async submitInboundToIroha() {}\n",
-        encoding="utf-8",
-    )
+    regions = {}
+    for sdk, (_path, start_marker, end_marker, required_markers) in (
+        verifier.ETHEREUM_DATA_COLLECTION_REGIONS.items()
+    ):
+        sparse_sdk = tmp_path / f"{sdk}.txt"
+        sparse_sdk.write_text(
+            "\n".join(
+                (
+                    start_marker,
+                    required_markers[0],
+                    required_markers[1],
+                    "return Torii.proxy.fetch();",
+                    end_marker,
+                    "",
+                )
+            ),
+            encoding="utf-8",
+        )
+        regions[sdk] = (
+            sparse_sdk,
+            start_marker,
+            end_marker,
+            required_markers,
+        )
     errors = report._ethereum_data_collection_no_proxy_gate_inventory_errors(
-        {
-            "js-sdk": (
-                sparse_sdk,
-                "  async validateExecutionProviderMainnet",
-                "  async submitInboundToIroha",
-                verifier.ETHEREUM_DATA_COLLECTION_REGIONS["js-sdk"][3],
-            )
-        }
+        regions
     )
 
-    assert any(
-        "Ethereum mainnet js-sdk data collection source" in error
-        and str(sparse_sdk) in error
-        and "missing provider marker: eth_getBlockByHash" in error
-        for error in errors
-    )
-    assert any(
-        "Ethereum mainnet js-sdk data collection source" in error
-        and str(sparse_sdk) in error
-        and "missing provider marker: collectFinalityEvidence" in error
-        for error in errors
-    )
-    assert any(
-        "Ethereum mainnet js-sdk data collection source" in error
-        and str(sparse_sdk) in error
-        and "contains forbidden Torii" in error
-        for error in errors
-    )
-    assert any(
-        "Ethereum mainnet js-sdk data collection source" in error
-        and str(sparse_sdk) in error
-        and "contains forbidden proxy" in error
-        for error in errors
-    )
+    for sdk, (sparse_sdk, _start, _end, required_markers) in regions.items():
+        assert any(
+            f"Ethereum mainnet {sdk} data collection source" in error
+            and str(sparse_sdk) in error
+            and f"missing provider marker: {required_markers[2]}" in error
+            for error in errors
+        )
+        assert any(
+            f"Ethereum mainnet {sdk} data collection source" in error
+            and str(sparse_sdk) in error
+            and f"missing provider marker: {required_markers[3]}" in error
+            for error in errors
+        )
+        assert any(
+            f"Ethereum mainnet {sdk} data collection source" in error
+            and str(sparse_sdk) in error
+            and "contains forbidden Torii" in error
+            for error in errors
+        )
+        assert any(
+            f"Ethereum mainnet {sdk} data collection source" in error
+            and str(sparse_sdk) in error
+            and "contains forbidden proxy" in error
+            for error in errors
+        )
+        assert any(
+            f"Ethereum mainnet {sdk} data collection source" in error
+            and str(sparse_sdk) in error
+            and "contains forbidden embedded HTTP client" in error
+            for error in errors
+        )
 
 
 def test_release_readiness_report_guards_ethereum_native_receipt_finality_gate_inventory(
@@ -1998,33 +2087,48 @@ def test_release_readiness_report_guards_ethereum_native_receipt_finality_gate_i
     report = load_report_module()
     assert report._ethereum_native_receipt_finality_gate_inventory_errors() == []
 
-    sparse_source = tmp_path / "EvmSccpProver.kt"
-    sparse_source.write_text(
-        "beaconFinality.beaconSlot is required for receiptProof\n",
-        encoding="utf-8",
-    )
-    errors = report._ethereum_native_receipt_finality_gate_inventory_errors(
+    cases = (
         (
+            "EvmSccpProver.kt",
             (
-                sparse_source,
-                (
-                    "beaconFinality.beaconSlot is required for receiptProof",
-                    "beaconFinality.syncCommitteeRoot is required for receiptProof",
-                ),
+                "beaconFinality.beaconSlot is required for receiptProof",
+                "beaconFinality.syncCommitteeRoot is required for receiptProof",
             ),
-        )
+            "beaconFinality.syncCommitteeRoot is required for receiptProof",
+        ),
+        (
+            "SccpEvmProver.swift",
+            (
+                "guard let beaconSlotInput = try Self.strictFirstPresent(",
+                "guard let finalizedRootInput = try Self.strictFirstPresent(",
+            ),
+            "guard let finalizedRootInput = try Self.strictFirstPresent(",
+        ),
+        (
+            "EthereumMainnetSccp.cs",
+            (
+                "BeaconSlot = NormalizeUnsignedInteger(",
+                "BeaconFinalizedRoot = NormalizeRpcHex(",
+            ),
+            "BeaconFinalizedRoot = NormalizeRpcHex(",
+        ),
     )
+    for index, (filename, required_markers, removed_marker) in enumerate(cases):
+        sparse_source = tmp_path / f"{index}_{filename}"
+        sparse_source.write_text(
+            "\n".join(marker for marker in required_markers if marker != removed_marker),
+            encoding="utf-8",
+        )
+        errors = report._ethereum_native_receipt_finality_gate_inventory_errors(
+            ((sparse_source, required_markers),)
+        )
 
-    assert any(
-        "Ethereum mainnet native receipt finality source inventory" in error
-        and str(sparse_source) in error
-        and (
-            "missing marker: beaconFinality.syncCommitteeRoot "
-            "is required for receiptProof"
+        assert any(
+            "Ethereum mainnet native receipt finality source inventory" in error
+            and str(sparse_source) in error
+            and f"missing marker: {removed_marker}" in error
+            for error in errors
         )
-        in error
-        for error in errors
-    )
 
 
 def test_release_readiness_report_guards_ethereum_beacon_rest_finalized_header_shape_gate_inventory(
@@ -2117,36 +2221,69 @@ def test_release_readiness_report_guards_ethereum_inbound_adversarial_gate_inven
     report = load_report_module()
     assert report._ethereum_inbound_adversarial_gate_inventory_errors() == []
 
-    sparse_test = tmp_path / "sccpEthereumMainnet.test.js"
-    sparse_test.write_text("failedReceipt\n", encoding="utf-8")
-    errors = report._ethereum_inbound_adversarial_gate_inventory_errors(
+    cases = (
         (
+            "sccpEthereumMainnet.test.js",
+            "failedReceipt",
+            "duplicateReceipt",
+        ),
+        (
+            "sccp.py",
+            "_normalize_ethereum_mainnet_finality_branch",
+            "receiptProof.beaconFinalizedRoot must match beaconFinality.finalizedHeaderRoot",
+        ),
+        (
+            "sccp_test.py",
+            "ETHEREUM_FINALITY_BRANCH",
+            "test_ethereum_mainnet_sccp_inbound_prover_receives_immutable_evidence_snapshot",
+        ),
+        (
+            "SccpSolanaProverTests.swift",
+            'invalidPublicInputs("receipt.status")',
+            "testEthereumMainnetInboundProverReceivesCallbackEvidenceSnapshot",
+        ),
+        (
+            "SourceSccpProofHashesTest.kt",
+            "emptyEvmReceiptNodes",
+            "sourceDomain must be ETH",
+        ),
+        (
+            "EvmSccpProverTest.kt",
+            'receipt + ("status" to "0x0")',
+            "ethereumMainnetCollectInboundEvidenceSnapshotsConsensusBoundary",
+        ),
+        (
+            "EvmSccpProverTests.java",
+            "Ethereum inbound collection must reject failed receipts",
+            "Ethereum inbound proving must reject missing finality branch",
+        ),
+        (
+            "SccpEthereumMainnetTests.cs",
+            "failedReceipt",
+            'Assert.Contains("beaconFinality.finalityBranch", missingFinalityBranch.Message)',
+        ),
+    )
+    for index, (filename, present_marker, removed_marker) in enumerate(cases):
+        sparse_source = tmp_path / f"{index}_{filename}"
+        sparse_source.write_text(present_marker + "\n", encoding="utf-8")
+        errors = report._ethereum_inbound_adversarial_gate_inventory_errors(
             (
-                sparse_test,
                 (
-                    "failedReceipt",
-                    "duplicateReceipt",
-                    "/receiptProof\\.sourceEventDigest must match receipt source event/u",
+                    sparse_source,
+                    (
+                        present_marker,
+                        removed_marker,
+                    ),
                 ),
-            ),
+            )
         )
-    )
 
-    assert any(
-        "Ethereum mainnet inbound adversarial SDK test inventory" in error
-        and str(sparse_test) in error
-        and "missing marker: duplicateReceipt" in error
-        for error in errors
-    )
-    assert any(
-        "Ethereum mainnet inbound adversarial SDK test inventory" in error
-        and (
-            "missing marker: /receiptProof\\.sourceEventDigest must match "
-            "receipt source event/u"
+        assert any(
+            "Ethereum mainnet inbound adversarial SDK test inventory" in error
+            and str(sparse_source) in error
+            and f"missing marker: {removed_marker}" in error
+            for error in errors
         )
-        in error
-        for error in errors
-    )
 
 
 def test_release_readiness_report_guards_bsc_inbound_adversarial_gate_inventory(
@@ -2157,35 +2294,59 @@ def test_release_readiness_report_guards_bsc_inbound_adversarial_gate_inventory(
     report = load_report_module()
     assert report._bsc_inbound_adversarial_gate_inventory_errors() == []
 
-    sparse_test = tmp_path / "sccpBscMainnet.test.js"
-    sparse_test.write_text(
-        "BscMainnetSccp requires full receipt proof evidence before inbound proving\n",
-        encoding="utf-8",
-    )
-    errors = report._bsc_inbound_adversarial_gate_inventory_errors(
+    cases = (
         (
+            "sccpBscMainnet.test.js",
+            "BscMainnetSccp requires full receipt proof evidence before inbound proving",
+            "callbackEvidence.receiptProof.blockHash",
+        ),
+        (
+            "sccp_test.py",
+            "called_with_hash_only",
+            'evidence["source_event_digest"]',
+        ),
+        (
+            "EvmSccpProverTest.kt",
+            "BscMainnetReceiptProof(",
+            "calledWithoutSourceEvent",
+        ),
+        (
+            "SccpSolanaProverTests.swift",
+            "BscMainnetReceiptProof(",
+            "extraTopicBscSourceReceipt",
+        ),
+        (
+            "EvmSccpProverTests.java",
+            "BscMainnetSccp.ReceiptProof",
+            "BSC inbound proving must reject hash-only receipt proof evidence",
+        ),
+        (
+            "SccpBscMainnetTests.cs",
+            "BscMainnetReceiptProof",
+            "Assert.Equal(0, noSourceEventProver.Calls)",
+        ),
+    )
+    for index, (filename, present_marker, removed_marker) in enumerate(cases):
+        sparse_source = tmp_path / f"{index}_{filename}"
+        sparse_source.write_text(present_marker + "\n", encoding="utf-8")
+        errors = report._bsc_inbound_adversarial_gate_inventory_errors(
             (
-                sparse_test,
                 (
-                    "BscMainnetSccp requires full receipt proof evidence before inbound proving",
-                    "callbackEvidence.receiptProof.blockHash",
-                    "callbackEvidence.sourceEventDigest",
+                    sparse_source,
+                    (
+                        present_marker,
+                        removed_marker,
+                    ),
                 ),
-            ),
+            )
         )
-    )
 
-    assert any(
-        "BSC mainnet inbound adversarial SDK test inventory" in error
-        and str(sparse_test) in error
-        and "missing marker: callbackEvidence.receiptProof.blockHash" in error
-        for error in errors
-    )
-    assert any(
-        "BSC mainnet inbound adversarial SDK test inventory" in error
-        and "missing marker: callbackEvidence.sourceEventDigest" in error
-        for error in errors
-    )
+        assert any(
+            "BSC mainnet inbound adversarial SDK test inventory" in error
+            and str(sparse_source) in error
+            and f"missing marker: {removed_marker}" in error
+            for error in errors
+        )
 
 
 def test_release_readiness_report_guards_tron_inbound_adversarial_gate_inventory(
@@ -2918,6 +3079,62 @@ def test_release_readiness_report_guards_ethereum_outbound_precallback_gate_inve
         for error in errors
     )
 
+    implementation_cases = (
+        (
+            "sccp.js",
+            "const proverArtifactRequestBytes =",
+            "...proverArtifactRequestBytes,\n        ...publicSignalWordBytes,",
+        ),
+        (
+            "sccp.py",
+            "def _normalize_optional_groth16_prover_artifacts(",
+            'prover_artifacts["proof_artifact_hash"]',
+        ),
+        (
+            "SccpEvmProver.swift",
+            "let proverArtifacts = try normalizeOptionalEvmGroth16ProverArtifacts(",
+            "if let proverArtifacts {\n        try preimage.append(evmBytesFromHex32(proverArtifacts.proofArtifactHash",
+        ),
+        (
+            "EvmSccpProver.kt",
+            "val proverArtifacts = normalizeOptionalGroth16ProverArtifacts(",
+            'preimage.write(hex32Bytes(proverArtifacts.proofArtifactHash, "proofArtifactHash"))',
+        ),
+        (
+            "EvmSccpProver.java",
+            "final Groth16ProverArtifacts proverArtifacts =",
+            'write(preimage, hex32Bytes(proverArtifacts.proofArtifactHash(), "proofArtifactHash"))',
+        ),
+        (
+            "EthereumMainnetSccp.cs",
+            "var proverArtifacts = NormalizeOptionalGroth16ProverArtifacts(proofArtifactHash, provingKeyHash);",
+            "payload.Write(HexToBytes(proverArtifacts.ProofArtifactHash, 32));",
+        ),
+    )
+    for index, (filename, present_marker, removed_marker) in enumerate(
+        implementation_cases
+    ):
+        sparse_impl = tmp_path / f"{index}_{filename}"
+        sparse_impl.write_text(present_marker + "\n", encoding="utf-8")
+        impl_errors = report._ethereum_outbound_precallback_gate_inventory_errors(
+            (
+                (
+                    sparse_impl,
+                    (
+                        present_marker,
+                        removed_marker,
+                    ),
+                ),
+            )
+        )
+
+        assert any(
+            "Ethereum mainnet outbound pre-callback SDK test inventory" in error
+            and str(sparse_impl) in error
+            and f"missing marker: {removed_marker}" in error
+            for error in impl_errors
+        )
+
 
 def test_release_readiness_report_guards_ethereum_outbound_provider_validation_gate_inventory(
     tmp_path: Path,
@@ -2927,43 +3144,69 @@ def test_release_readiness_report_guards_ethereum_outbound_provider_validation_g
     report = load_report_module()
     assert report._ethereum_outbound_provider_validation_gate_inventory_errors() == []
 
-    sparse_sdk = tmp_path / "sccp.py"
-    sparse_sdk.write_text(
-        'provider = options.get("execution_provider", self.execution_provider)\n',
-        encoding="utf-8",
-    )
-    errors = report._ethereum_outbound_provider_validation_gate_inventory_errors(
+    cases = (
         (
+            "sccp.js",
+            "let providerValidated = false;",
+            "await this.validateExecutionProviderMainnet({ executionProvider: provider });",
+        ),
+        (
+            "sccp.dist.js",
+            "let providerValidated = false;",
+            'if (typeof submit === "function")',
+        ),
+        (
+            "sccp.py",
+            'provider = options.get("execution_provider", self.execution_provider)',
+            "await self.validate_execution_provider_mainnet(provider)",
+        ),
+        (
+            "sccp_test.py",
+            "guarded_submit_called = False",
+            "assert guarded_submit_called is False",
+        ),
+        (
+            "SccpEvmProver.swift",
+            "if let executionProvider {",
+            "_ = try await validateExecutionProviderMainnet(executionProvider)",
+        ),
+        (
+            "EvmSccpProver.kt",
+            "executionProvider?.let { validateExecutionProviderMainnet(it) }",
+            "return submitter.submit(buildEthereumCalldata(input))",
+        ),
+        (
+            "EthereumMainnetSccp.java",
+            "if (executionProvider != null) {",
+            "validateExecutionProviderMainnet(executionProvider);",
+        ),
+        (
+            "EthereumMainnetSccp.cs",
+            "IEthereumMainnetExecutionProvider? executionProvider",
+            "ValidateExecutionProviderMainnetAsync(",
+        ),
+    )
+    for index, (filename, present_marker, removed_marker) in enumerate(cases):
+        sparse_sdk = tmp_path / f"{index}_{filename}"
+        sparse_sdk.write_text(present_marker + "\n", encoding="utf-8")
+        errors = report._ethereum_outbound_provider_validation_gate_inventory_errors(
             (
-                sparse_sdk,
                 (
-                    'provider = options.get("execution_provider", self.execution_provider)',
-                    "await self.validate_execution_provider_mainnet(provider)",
-                    "return await _maybe_await(submitter(dict(submission), options))",
+                    sparse_sdk,
+                    (
+                        present_marker,
+                        removed_marker,
+                    ),
                 ),
-            ),
+            )
         )
-    )
 
-    assert any(
-        "Ethereum mainnet outbound provider validation source inventory" in error
-        and str(sparse_sdk) in error
-        and (
-            "missing marker: await self.validate_execution_provider_mainnet"
-            "(provider)"
+        assert any(
+            "Ethereum mainnet outbound provider validation source inventory" in error
+            and str(sparse_sdk) in error
+            and f"missing marker: {removed_marker}" in error
+            for error in errors
         )
-        in error
-        for error in errors
-    )
-    assert any(
-        "Ethereum mainnet outbound provider validation source inventory" in error
-        and (
-            "missing marker: return await _maybe_await"
-            "(submitter(dict(submission), options))"
-        )
-        in error
-        for error in errors
-    )
 
 
 def test_release_readiness_report_guards_ethereum_local_admission_gate_inventory(
@@ -3106,33 +3349,37 @@ def test_release_readiness_report_guards_ethereum_receipt_source_event_context_g
     report = load_report_module()
     assert report._ethereum_receipt_source_event_context_gate_inventory_errors() == []
 
-    sparse_test = tmp_path / "sccp_evm_receipt_proof_evidence_test.py"
-    sparse_test.write_text(
-        "test_collect_receipt_proof_rejects_source_event_missing_context_fields\n",
-        encoding="utf-8",
-    )
-    errors = report._ethereum_receipt_source_event_context_gate_inventory_errors(
+    cases = (
         (
+            "sccp_evm_receipt_proof_evidence_test.py",
             (
-                sparse_test,
-                (
-                    "test_collect_receipt_proof_rejects_source_event_missing_context_fields",
-                    'for field in ("transactionHash", "blockHash", "blockNumber")',
-                ),
+                "test_collect_receipt_proof_rejects_source_event_missing_context_fields",
+                'for field in ("transactionHash", "blockHash", "blockNumber")',
             ),
-        )
+            'for field in ("transactionHash", "blockHash", "blockNumber")',
+        ),
+        (
+            "lib.rs",
+            ("EVM source receipts must not contain duplicate matching SCCP logs",),
+            "EVM source receipts must not contain duplicate matching SCCP logs",
+        ),
     )
+    for index, (filename, required_markers, removed_marker) in enumerate(cases):
+        sparse_source = tmp_path / f"{index}_{filename}"
+        sparse_source.write_text(
+            "\n".join(marker for marker in required_markers if marker != removed_marker),
+            encoding="utf-8",
+        )
+        errors = report._ethereum_receipt_source_event_context_gate_inventory_errors(
+            ((sparse_source, required_markers),)
+        )
 
-    assert any(
-        "Ethereum mainnet source-event context SDK test inventory" in error
-        and str(sparse_test) in error
-        and (
-            'missing marker: for field in ("transactionHash", "blockHash", '
-            '"blockNumber")'
+        assert any(
+            "Ethereum mainnet source-event context SDK test inventory" in error
+            and str(sparse_source) in error
+            and f"missing marker: {removed_marker}" in error
+            for error in errors
         )
-        in error
-        for error in errors
-    )
 
 
 def test_release_readiness_report_guards_ethereum_receipt_source_event_mode_gate_inventory(
@@ -3143,33 +3390,40 @@ def test_release_readiness_report_guards_ethereum_receipt_source_event_mode_gate
     report = load_report_module()
     assert report._ethereum_receipt_source_event_mode_gate_inventory_errors() == []
 
-    sparse_test = tmp_path / "sccp_evm_receipt_proof_evidence_test.py"
-    sparse_test.write_text(
-        "test_collect_receipt_proof_requires_explicit_receipt_only_mode_without_source_bridge\n",
-        encoding="utf-8",
-    )
-    errors = report._ethereum_receipt_source_event_mode_gate_inventory_errors(
+    cases = (
         (
+            "sccp_evm_receipt_proof_evidence_test.py",
             (
-                sparse_test,
-                (
-                    "test_collect_receipt_proof_requires_explicit_receipt_only_mode_without_source_bridge",
-                    "test_collect_receipt_proof_allows_explicit_receipt_only_mode",
-                ),
+                "test_collect_receipt_proof_requires_explicit_receipt_only_mode_without_source_bridge",
+                "test_collect_receipt_proof_allows_explicit_receipt_only_mode",
             ),
-        )
+            "test_collect_receipt_proof_allows_explicit_receipt_only_mode",
+        ),
+        (
+            "sccp_evm_receipt_proof_evidence.py",
+            (
+                "allow_receipt_only_evidence: bool = False",
+                "source_bridge_address is required for SCCP source-event evidence",
+            ),
+            "source_bridge_address is required for SCCP source-event evidence",
+        ),
     )
+    for index, (filename, required_markers, removed_marker) in enumerate(cases):
+        sparse_source = tmp_path / f"{index}_{filename}"
+        sparse_source.write_text(
+            "\n".join(marker for marker in required_markers if marker != removed_marker),
+            encoding="utf-8",
+        )
+        errors = report._ethereum_receipt_source_event_mode_gate_inventory_errors(
+            ((sparse_source, required_markers),)
+        )
 
-    assert any(
-        "Ethereum mainnet source-event evidence mode SDK test inventory" in error
-        and str(sparse_test) in error
-        and (
-            "missing marker: "
-            "test_collect_receipt_proof_allows_explicit_receipt_only_mode"
+        assert any(
+            "Ethereum mainnet source-event evidence mode SDK test inventory" in error
+            and str(sparse_source) in error
+            and f"missing marker: {removed_marker}" in error
+            for error in errors
         )
-        in error
-        for error in errors
-    )
 
 
 def test_release_readiness_report_guards_ethereum_receipt_source_event_zero_digest_gate_inventory(
@@ -3180,29 +3434,40 @@ def test_release_readiness_report_guards_ethereum_receipt_source_event_zero_dige
     report = load_report_module()
     assert report._ethereum_receipt_source_event_zero_digest_gate_inventory_errors() == []
 
-    sparse_test = tmp_path / "sccp_evm_receipt_proof_evidence_test.py"
-    sparse_test.write_text(
-        "test_collect_receipt_proof_rejects_zero_source_event_digest\n",
-        encoding="utf-8",
-    )
-    errors = report._ethereum_receipt_source_event_zero_digest_gate_inventory_errors(
+    cases = (
         (
+            "sccp_evm_receipt_proof_evidence_test.py",
             (
-                sparse_test,
-                (
-                    "test_collect_receipt_proof_rejects_zero_source_event_digest",
-                    "zero source event digest was accepted",
-                ),
+                "test_collect_receipt_proof_rejects_zero_source_event_digest",
+                "zero source event digest was accepted",
             ),
+            "zero source event digest was accepted",
+        ),
+        (
+            "sccp_evm_receipt_proof_evidence.py",
+            (
+                'method=f"receipt.logs[{index}].topics[1]"',
+                'raise RuntimeError(f"{method} returned zero data")',
+            ),
+            'raise RuntimeError(f"{method} returned zero data")',
+        ),
+    )
+    for index, (filename, required_markers, removed_marker) in enumerate(cases):
+        sparse_source = tmp_path / f"{index}_{filename}"
+        sparse_source.write_text(
+            "\n".join(marker for marker in required_markers if marker != removed_marker),
+            encoding="utf-8",
         )
-    )
+        errors = report._ethereum_receipt_source_event_zero_digest_gate_inventory_errors(
+            ((sparse_source, required_markers),)
+        )
 
-    assert any(
-        "Ethereum mainnet source-event zero digest SDK test inventory" in error
-        and str(sparse_test) in error
-        and "missing marker: zero source event digest was accepted" in error
-        for error in errors
-    )
+        assert any(
+            "Ethereum mainnet source-event zero digest SDK test inventory" in error
+            and str(sparse_source) in error
+            and f"missing marker: {removed_marker}" in error
+            for error in errors
+        )
 
 
 def test_release_readiness_report_guards_ethereum_receipt_rpc_duplicate_json_gate_inventory(
@@ -3213,33 +3478,41 @@ def test_release_readiness_report_guards_ethereum_receipt_rpc_duplicate_json_gat
     report = load_report_module()
     assert report._ethereum_receipt_rpc_duplicate_json_gate_inventory_errors() == []
 
-    sparse_test = tmp_path / "sccp_evm_receipt_proof_evidence_test.py"
-    sparse_test.write_text(
-        "test_collect_receipt_proof_rejects_duplicate_json_rpc_result_keys\n",
-        encoding="utf-8",
-    )
-    errors = report._ethereum_receipt_rpc_duplicate_json_gate_inventory_errors(
+    cases = (
         (
+            "sccp_evm_receipt_proof_evidence_test.py",
             (
-                sparse_test,
-                (
-                    "test_collect_receipt_proof_rejects_duplicate_json_rpc_result_keys",
-                    "test_collect_receipt_proof_rejects_duplicate_json_receipt_fields",
-                ),
+                "test_collect_receipt_proof_rejects_duplicate_json_rpc_result_keys",
+                "test_collect_receipt_proof_rejects_duplicate_json_receipt_fields",
             ),
-        )
+            "test_collect_receipt_proof_rejects_duplicate_json_receipt_fields",
+        ),
+        (
+            "sccp_evm_receipt_proof_evidence.py",
+            (
+                "_json_object_without_duplicate_keys",
+                "JSON-RPC returned duplicate JSON key",
+                "object_pairs_hook=_json_object_without_duplicate_keys",
+            ),
+            "object_pairs_hook=_json_object_without_duplicate_keys",
+        ),
     )
+    for index, (filename, required_markers, removed_marker) in enumerate(cases):
+        sparse_source = tmp_path / f"{index}_{filename}"
+        sparse_source.write_text(
+            "\n".join(marker for marker in required_markers if marker != removed_marker),
+            encoding="utf-8",
+        )
+        errors = report._ethereum_receipt_rpc_duplicate_json_gate_inventory_errors(
+            ((sparse_source, required_markers),)
+        )
 
-    assert any(
-        "Ethereum mainnet receipt RPC duplicate JSON SDK test inventory" in error
-        and str(sparse_test) in error
-        and (
-            "missing marker: "
-            "test_collect_receipt_proof_rejects_duplicate_json_receipt_fields"
+        assert any(
+            "Ethereum mainnet receipt RPC duplicate JSON SDK test inventory" in error
+            and str(sparse_source) in error
+            and f"missing marker: {removed_marker}" in error
+            for error in errors
         )
-        in error
-        for error in errors
-    )
 
 
 def test_release_readiness_report_guards_ethereum_receipt_block_transaction_hash_gate_inventory(
@@ -3250,33 +3523,49 @@ def test_release_readiness_report_guards_ethereum_receipt_block_transaction_hash
     report = load_report_module()
     assert report._ethereum_receipt_block_transaction_hash_gate_inventory_errors() == []
 
-    sparse_test = tmp_path / "sccp_evm_receipt_proof_evidence_test.py"
-    sparse_test.write_text(
-        "test_receipt_trie_builder_rejects_duplicate_transaction_hashes\n",
-        encoding="utf-8",
-    )
-    errors = report._ethereum_receipt_block_transaction_hash_gate_inventory_errors(
+    cases = (
         (
+            "sccp_evm_receipt_proof_evidence_test.py",
             (
-                sparse_test,
-                (
-                    "test_receipt_trie_builder_rejects_duplicate_transaction_hashes",
-                    'receipts[1]["transactionHash"] = receipts[0]["transactionHash"]',
-                ),
+                "test_receipt_trie_builder_rejects_duplicate_transaction_hashes",
+                'receipts[1]["transactionHash"] = receipts[0]["transactionHash"]',
             ),
-        )
+            'receipts[1]["transactionHash"] = receipts[0]["transactionHash"]',
+        ),
+        (
+            "sccp_evm_receipt_proof_evidence.py",
+            (
+                "seen_transaction_hashes: set[bytes] = set()",
+                "block receipt transactionHash values must be unique",
+            ),
+            "block receipt transactionHash values must be unique",
+        ),
+        (
+            "sccp.js",
+            (
+                "const seenTransactionHashes = new Set();",
+                "block receipt transactionHash values must be unique",
+            ),
+            "const seenTransactionHashes = new Set();",
+        ),
     )
+    for index, (filename, required_markers, removed_marker) in enumerate(cases):
+        sparse_source = tmp_path / f"{index}_{filename}"
+        sparse_source.write_text(
+            "\n".join(marker for marker in required_markers if marker != removed_marker),
+            encoding="utf-8",
+        )
+        errors = report._ethereum_receipt_block_transaction_hash_gate_inventory_errors(
+            ((sparse_source, required_markers),)
+        )
 
-    assert any(
-        "Ethereum mainnet block receipt transactionHash SDK test inventory" in error
-        and str(sparse_test) in error
-        and (
-            'missing marker: receipts[1]["transactionHash"] = '
-            'receipts[0]["transactionHash"]'
+        assert any(
+            "Ethereum mainnet block receipt transactionHash SDK test inventory"
+            in error
+            and str(sparse_source) in error
+            and f"missing marker: {removed_marker}" in error
+            for error in errors
         )
-        in error
-        for error in errors
-    )
 
 
 def test_release_readiness_report_guards_ethereum_js_receipt_admission_guard_gate_inventory(
@@ -3287,33 +3576,48 @@ def test_release_readiness_report_guards_ethereum_js_receipt_admission_guard_gat
     report = load_report_module()
     assert report._ethereum_js_receipt_admission_guard_gate_inventory_errors() == []
 
-    sparse_dist = tmp_path / "sccp.js"
-    sparse_dist.write_text(
-        "eth_getBlockReceipts target receipt must match transactionHash\n",
-        encoding="utf-8",
-    )
-    errors = report._ethereum_js_receipt_admission_guard_gate_inventory_errors(
+    cases = (
         (
+            "sccp.js",
             (
-                sparse_dist,
-                (
-                    "eth_getBlockReceipts target receipt must match transactionHash",
-                    "Ethereum mainnet receipt proof construction requires beaconFinality.",
-                ),
+                "eth_getBlockReceipts target receipt must match transactionHash",
+                "Ethereum mainnet receipt proof construction requires beaconFinality.",
             ),
-        )
+            "Ethereum mainnet receipt proof construction requires beaconFinality.",
+        ),
+        (
+            "sccp.js",
+            (
+                "typed receipt type is not supported for Ethereum mainnet receipt proofs",
+                "await prove(immutableProverCallbackValue(evidence), options)",
+            ),
+            "await prove(immutableProverCallbackValue(evidence), options)",
+        ),
+        (
+            "sccpEthereumMainnet.test.js",
+            (
+                'for (const field of ["finalizedHeaderRoot", "syncCommitteeRoot", "beaconSlot"])',
+                "receipt proof construction requires beaconFinality\\\\.${field}",
+            ),
+            "receipt proof construction requires beaconFinality\\\\.${field}",
+        ),
     )
+    for index, (filename, required_markers, removed_marker) in enumerate(cases):
+        sparse_source = tmp_path / f"{index}_{filename}"
+        sparse_source.write_text(
+            "\n".join(marker for marker in required_markers if marker != removed_marker),
+            encoding="utf-8",
+        )
+        errors = report._ethereum_js_receipt_admission_guard_gate_inventory_errors(
+            ((sparse_source, required_markers),)
+        )
 
-    assert any(
-        "Ethereum mainnet JS receipt admission source inventory" in error
-        and str(sparse_dist) in error
-        and (
-            "missing marker: Ethereum mainnet receipt proof construction "
-            "requires beaconFinality."
+        assert any(
+            "Ethereum mainnet JS receipt admission source inventory" in error
+            and str(sparse_source) in error
+            and f"missing marker: {removed_marker}" in error
+            for error in errors
         )
-        in error
-        for error in errors
-    )
 
 
 def test_release_readiness_report_guards_ethereum_sdk_receipt_metadata_guard_gate_inventory(
@@ -3324,33 +3628,48 @@ def test_release_readiness_report_guards_ethereum_sdk_receipt_metadata_guard_gat
     report = load_report_module()
     assert report._ethereum_sdk_receipt_metadata_guard_gate_inventory_errors() == []
 
-    sparse_source = tmp_path / "SourceSccpProofHashes.kt"
-    sparse_source.write_text(
-        "typed receipt type must fit one byte below 0x80\n",
-        encoding="utf-8",
-    )
-    errors = report._ethereum_sdk_receipt_metadata_guard_gate_inventory_errors(
+    cases = (
         (
+            "SourceSccpProofHashes.kt",
             (
-                sparse_source,
-                (
-                    "typed receipt type must fit one byte below 0x80",
-                    "typed receipt type is not supported for Ethereum mainnet receipt proofs",
-                ),
+                "typed receipt type must fit one byte below 0x80",
+                "typed receipt type is not supported for Ethereum mainnet receipt proofs",
             ),
-        )
+            "typed receipt type is not supported for Ethereum mainnet receipt proofs",
+        ),
+        (
+            "sccp.js",
+            (
+                "eth_getBlockReceipts target receipt RLP must match receipt",
+                "typed receipt type is not supported for Ethereum mainnet receipt proofs",
+            ),
+            "eth_getBlockReceipts target receipt RLP must match receipt",
+        ),
+        (
+            "SccpEvmProver.swift",
+            (
+                '"blockReceipts.receiptRlp"',
+                "canonicalEvmReceiptRlp(currentReceipt)",
+            ),
+            "canonicalEvmReceiptRlp(currentReceipt)",
+        ),
     )
+    for index, (filename, required_markers, removed_marker) in enumerate(cases):
+        sparse_source = tmp_path / f"{index}_{filename}"
+        sparse_source.write_text(
+            "\n".join(marker for marker in required_markers if marker != removed_marker),
+            encoding="utf-8",
+        )
+        errors = report._ethereum_sdk_receipt_metadata_guard_gate_inventory_errors(
+            ((sparse_source, required_markers),)
+        )
 
-    assert any(
-        "Ethereum mainnet SDK receipt metadata source inventory" in error
-        and str(sparse_source) in error
-        and (
-            "missing marker: typed receipt type is not supported "
-            "for Ethereum mainnet receipt proofs"
+        assert any(
+            "Ethereum mainnet SDK receipt metadata source inventory" in error
+            and str(sparse_source) in error
+            and f"missing marker: {removed_marker}" in error
+            for error in errors
         )
-        in error
-        for error in errors
-    )
 
 
 def test_release_readiness_report_guards_ethereum_noncanonical_chain_id_gate_inventory(
@@ -3563,29 +3882,36 @@ def test_release_readiness_report_guards_ethereum_evm_source_adapter_deployment_
     required_markers = verifier.ETHEREUM_EVM_SOURCE_ADAPTER_DEPLOYMENT_GATE_MARKERS[
         0
     ][1]
-    removed_marker = "wrong_config_deployment.source_bridge_config_hash[0] ^= 0x01;"
-    sparse_source = tmp_path / "lib.rs"
-    sparse_source.write_text(
-        "\n".join(marker for marker in required_markers if marker != removed_marker),
-        encoding="utf-8",
-    )
-
-    errors = report._ethereum_evm_source_adapter_deployment_gate_inventory_errors(
+    for index, removed_marker in enumerate(
         (
-            (
-                sparse_source,
-                required_markers,
-            ),
+            "wrong_config_deployment.source_bridge_config_hash[0] ^= 0x01;",
+            "source adapter deployment metadata must keep adapter VK and receipt hashes separated",
+            "BSC facade must reject replayed deployment receipts",
+            "ETH facade must reject replayed deployment receipts",
         )
-    )
+    ):
+        sparse_source = tmp_path / f"lib_{index}.rs"
+        sparse_source.write_text(
+            "\n".join(marker for marker in required_markers if marker != removed_marker),
+            encoding="utf-8",
+        )
 
-    assert any(
-        "Ethereum mainnet EVM source-adapter deployment gate source inventory"
-        in error
-        and str(sparse_source) in error
-        and removed_marker in error
-        for error in errors
-    )
+        errors = report._ethereum_evm_source_adapter_deployment_gate_inventory_errors(
+            (
+                (
+                    sparse_source,
+                    required_markers,
+                ),
+            )
+        )
+
+        assert any(
+            "Ethereum mainnet EVM source-adapter deployment gate source inventory"
+            in error
+            and str(sparse_source) in error
+            and removed_marker in error
+            for error in errors
+        )
 
 
 def test_release_readiness_report_guards_contract_smoke_eth_mainnet_network_id_gate_inventory(
@@ -3949,6 +4275,40 @@ def test_release_readiness_report_guards_native_sccp_no_wasm_readiness_gate_inve
         for error in errors
     )
 
+    markers_by_path = dict(verifier.NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS)
+    package_dist_markers = markers_by_path[
+        "javascript/iroha_js/test/package_dist.test.js"
+    ]
+    sparse_package_dist = tmp_path / "package_dist.test.js"
+    sparse_package_dist.write_text(
+        "function assertBrowserMainnetSccpArtifactsStayJsOnlyAndLocalProverOwned() {}\n",
+        encoding="utf-8",
+    )
+
+    errors = report._native_sccp_no_wasm_readiness_gate_inventory_errors(
+        (
+            (
+                sparse_package_dist,
+                package_dist_markers,
+            ),
+        )
+    )
+
+    for role_floor_marker in (
+        "proofArtifactBytes must be at least 65536 bytes",
+        "provingKeyBytes must be at least 65536 bytes",
+        "verifierKeyBytes must be at least 128 bytes",
+        "crossSdkFixtureParityBytes must be at least 128 bytes",
+        "nativeProverSelfTestBytes must be at least 128 bytes",
+        "implementationBytes must be at least 1024 bytes",
+    ):
+        assert any(
+            "native SCCP no-WASM readiness SDK test inventory" in error
+            and str(sparse_package_dist) in error
+            and f"missing marker: {role_floor_marker}" in error
+            for error in errors
+        )
+
 
 def test_release_readiness_report_guards_native_evm_canonical_sdk_inventory(
     tmp_path: Path,
@@ -4166,6 +4526,202 @@ def test_release_readiness_report_guards_sccp_proof_request_bundle_gate_inventor
         "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/"
         "SccpMessageProofBundles.java"
     ) in inventory_paths
+    inventory_by_path = dict(verifier.SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS)
+    javascript_impl_markers = inventory_by_path["javascript/iroha_js/src/sccp.js"]
+    assert (
+        "export function wrapTonSccpSourceStateVerificationProof(proofBytes, request) {\n"
+        "  const proofRequest = normalizeTonSourceStateProofRequestForWrapping(request);\n"
+        "  const proof = copyBytes(toBytes(proofBytes, \"proofBytes\"));\n"
+        "  requireSourceStateProofBytes(proof, \"proofBytes\");"
+        in javascript_impl_markers
+    )
+    javascript_dist_markers = inventory_by_path["javascript/iroha_js/dist/sccp.js"]
+    assert (
+        "export function wrapTonSccpSourceStateVerificationProof(proofBytes, request) {\n"
+        "  const proofRequest = normalizeTonSourceStateProofRequestForWrapping(request);\n"
+        "  const proof = copyBytes(toBytes(proofBytes, \"proofBytes\"));\n"
+        "  requireSourceStateProofBytes(proof, \"proofBytes\");"
+        in javascript_dist_markers
+    )
+    javascript_test_markers = inventory_by_path[
+        "javascript/iroha_js/test/sccpSolanaProver.test.js"
+    ]
+    assert "oversizedTonSourceStateProofBytes" in javascript_test_markers
+    assert "oversizedTonCallbackProver" in javascript_test_markers
+    javascript_package_dist_markers = inventory_by_path[
+        "javascript/iroha_js/test/package_dist.test.js"
+    ]
+    assert (
+        "package dist entrypoint enforces TON source-state proof cap"
+        in javascript_package_dist_markers
+    )
+    assert (
+        "oversizedTonDistSourceStateProofBytes"
+        in javascript_package_dist_markers
+    )
+    assert "oversizedTonDistCallbackProver" in javascript_package_dist_markers
+    javascript_package_root_markers = inventory_by_path[
+        "javascript/iroha_js/test/sccpPackageExports.test.js"
+    ]
+    assert (
+        "published package root enforces TON source-state proof cap"
+        in javascript_package_root_markers
+    )
+    assert (
+        "samplePackageRootTonShardStateSourceStateInput"
+        in javascript_package_root_markers
+    )
+    assert (
+        "oversizedTonPackageRootSourceStateProofBytes"
+        in javascript_package_root_markers
+    )
+    assert (
+        "oversizedTonPackageRootCallbackProver"
+        in javascript_package_root_markers
+    )
+    javascript_bsc_test_markers = inventory_by_path[
+        "javascript/iroha_js/test/sccpBscMainnet.test.js"
+    ]
+    assert "tamperedBscBase64ProofResult" in javascript_bsc_test_markers
+    assert (
+        "sdk.buildBscCalldata({ proofResult: tamperedBscBase64ProofResult })"
+        in javascript_bsc_test_markers
+    )
+    javascript_eth_test_markers = inventory_by_path[
+        "javascript/iroha_js/test/sccpEthereumMainnet.test.js"
+    ]
+    assert "tamperedEthereumBase64ProofResult" in javascript_eth_test_markers
+    assert (
+        "sdk.buildEthereumCalldata({ proofResult: tamperedEthereumBase64ProofResult })"
+        in javascript_eth_test_markers
+    )
+    python_impl_markers = inventory_by_path["python/iroha_torii_client/sccp.py"]
+    assert "def wrap_ton_sccp_source_state_verification_proof" in python_impl_markers
+    assert "_require_source_state_proof_bytes(proof)" in python_impl_markers
+    python_test_markers = inventory_by_path[
+        "python/iroha_torii_client/tests/sccp_test.py"
+    ]
+    assert (
+        "def test_ton_source_state_prover_wraps_shard_and_full_light_audit_role_proofs"
+        in python_test_markers
+    )
+    assert (
+        'oversized_proof_bytes = b"\\x01" * (SCCP_SOURCE_STATE_MAX_PROOF_BYTES + 1)'
+        in python_test_markers
+    )
+    assert (
+        "prove=lambda _request, _options: oversized_proof_bytes"
+        in python_test_markers
+    )
+    assert (
+        "def test_package_root_ton_source_state_cap_uses_public_exports"
+        in python_test_markers
+    )
+    assert (
+        "oversized_package_root_ton_source_state_proof"
+        in python_test_markers
+    )
+    assert "def sample_token_add_bundle_fixture" in python_test_markers
+    assert "lowercase_required_eip55_recipient" in python_test_markers
+    assert "lowercase_required_eip55_sender" in python_test_markers
+    assert "nul_prefixed_symbol_bundle" in python_test_markers
+    assert "tampered_bsc_base64_proof_result" in python_test_markers
+    assert "build_bsc_mainnet_sccp_destination_submission" in python_test_markers
+    assert "tampered_ethereum_base64_proof_result" in python_test_markers
+    assert "build_ethereum_calldata" in python_test_markers
+    assert (
+        "proofResult\\.proofBase64 must match proofResult\\.proofBytes"
+        in python_test_markers
+    )
+    kotlin_ton_impl_markers = inventory_by_path[
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/TonSccpProver.kt"
+    ]
+    assert (
+        "SOURCE_STATE_MAX_PROOF_BYTES: Int = NATIVE_RECURSIVE_MAX_PROOF_BYTES"
+        in kotlin_ton_impl_markers
+    )
+    assert "proofBytes.size <= SOURCE_STATE_MAX_PROOF_BYTES" in kotlin_ton_impl_markers
+    kotlin_ton_test_markers = inventory_by_path[
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/TonSccpProverTest.kt"
+    ]
+    assert (
+        "oversizedSourceStateProofBytes = ByteArray(SccpTon.SOURCE_STATE_MAX_PROOF_BYTES + 1)"
+        in kotlin_ton_test_markers
+    )
+    assert "oversizedCallbackProver" in kotlin_ton_test_markers
+    java_ton_impl_markers = inventory_by_path[
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/TonSccpProver.java"
+    ]
+    assert (
+        "SOURCE_STATE_MAX_PROOF_BYTES = NATIVE_RECURSIVE_MAX_PROOF_BYTES"
+        in java_ton_impl_markers
+    )
+    assert (
+        "normalizedProofBytes.length > SOURCE_STATE_MAX_PROOF_BYTES"
+        in java_ton_impl_markers
+    )
+    java_ton_test_markers = inventory_by_path[
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/TonSccpProverTests.java"
+    ]
+    assert "TonSccpProver.SOURCE_STATE_MAX_PROOF_BYTES + 1" in java_ton_test_markers
+    assert "oversizedCallbackProver" in java_ton_test_markers
+    kotlin_evm_test_markers = inventory_by_path[
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/EvmSccpProverTest.kt"
+    ]
+    assert "tamperedBscBase64ProofResultError" in kotlin_evm_test_markers
+    assert "tamperedEthereumBase64ProofResultError" in kotlin_evm_test_markers
+    assert "SccpBsc.buildSubmission" in kotlin_evm_test_markers
+    assert "buildEthereumCalldata" in kotlin_evm_test_markers
+    java_evm_test_markers = inventory_by_path[
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/EvmSccpProverTests.java"
+    ]
+    assert "tamperedBscBase64ProofResult" in java_evm_test_markers
+    assert (
+        "Ethereum mainnet calldata helper must reject tampered proofBase64"
+        in java_evm_test_markers
+    )
+    assert "BscSccpProver.buildSubmission" in java_evm_test_markers
+    assert 'evmResultWithProofBase64(artifactBoundResult, "AAAA")' in java_evm_test_markers
+    dotnet_eth_test_markers = inventory_by_path[
+        "csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpEthereumMainnetTests.cs"
+    ]
+    assert "OutboundCallbackAndSubmissionSnapshotsRejectMutation" in dotnet_eth_test_markers
+    assert "EthereumMainnetSccp.BuildEthereumCalldata" in dotnet_eth_test_markers
+    assert (
+        "ProofBase64 = Convert.ToBase64String(mutatedProofBytes)"
+        in dotnet_eth_test_markers
+    )
+    dotnet_bsc_test_markers = inventory_by_path[
+        "csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpBscMainnetTests.cs"
+    ]
+    assert "OutboundCallbackAndSubmissionSnapshotsRejectMutation" in dotnet_bsc_test_markers
+    assert "BscMainnetSccp.BuildBscCalldata" in dotnet_bsc_test_markers
+    assert (
+        "ProofBase64 = Convert.ToBase64String(mutatedProofBytes)"
+        in dotnet_bsc_test_markers
+    )
+    swift_ton_impl_markers = inventory_by_path[
+        "IrohaSwift/Sources/IrohaSwift/SccpTonProver.swift"
+    ]
+    assert (
+        "proof.proofBytes.count <= sccpSourceStateMaxProofBytes"
+        in swift_ton_impl_markers
+    )
+    assert "proofBytes.count <= sccpSourceStateMaxProofBytes" in swift_ton_impl_markers
+    swift_ton_test_markers = inventory_by_path[
+        "IrohaSwift/Tests/IrohaSwiftTests/SccpSolanaProverTests.swift"
+    ]
+    assert "oversizedTonSourceStateProofBytes" in swift_ton_test_markers
+    assert "sccpSourceStateMaxProofBytes + 1" in swift_ton_test_markers
+    assert "oversizedTonCallbackProver" in swift_ton_test_markers
+    assert "tamperedBscBase64ProofResult" in swift_ton_test_markers
+    assert "tamperedEthereumBase64ProofResult" in swift_ton_test_markers
+    assert (
+        "buildBscMainnetSccpDestinationSubmission(EvmSccpSubmissionInput("
+        in swift_ton_test_markers
+    )
+    assert "buildEthereumCalldata(EvmSccpSubmissionInput(" in swift_ton_test_markers
+    assert 'invalidPublicInputs("proofResult.proofBase64")' in swift_ton_test_markers
 
     sparse_gate = tmp_path / "sccp_test.py"
     sparse_gate.write_text(
@@ -4275,6 +4831,24 @@ def test_release_readiness_report_guards_sccp_phase_evidence_source_gate_invento
                     "duplicate SCCP corridor phase evidence for",
                     "already set by",
                     "cannot set from",
+                    "source_labels",
+                    "def _phase_evidence_source_label(",
+                    "--phase-evidence {name}=<path>",
+                    "def _phase_log_from_dir(",
+                    "checked standard phase log layouts",
+                    "def _parse_phase_assignment_name(",
+                    "unknown SCCP corridor phase",
+                    "phase result must use NAME=STATUS syntax",
+                    "phase result name contains surrounding whitespace",
+                    "phase result name contains Markdown-unsafe character",
+                    "phase result name contains malformed phase",
+                    "phase result status contains surrounding whitespace",
+                    "phase result status must be passed, failed, skipped, or missing",
+                    "phase evidence must use NAME=PATH syntax",
+                    "phase evidence path must not be empty",
+                    "phase evidence name contains surrounding whitespace",
+                    "phase evidence name contains Markdown-unsafe character",
+                    "phase evidence name contains malformed phase",
                 ),
             ),
         )
@@ -4289,6 +4863,82 @@ def test_release_readiness_report_guards_sccp_phase_evidence_source_gate_invento
     assert any(
         "SCCP phase evidence duplicate-input source inventory" in error
         and "missing marker: cannot set from" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP phase evidence duplicate-input source inventory" in error
+        and "missing marker: def _phase_evidence_source_label(" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP phase evidence duplicate-input source inventory" in error
+        and "missing marker: --phase-evidence {name}=<path>" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP phase evidence duplicate-input source inventory" in error
+        and "missing marker: def _phase_log_from_dir(" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP phase evidence duplicate-input source inventory" in error
+        and "missing marker: checked standard phase log layouts" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP phase evidence duplicate-input source inventory" in error
+        and "missing marker: unknown SCCP corridor phase" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP phase evidence duplicate-input source inventory" in error
+        and "missing marker: phase evidence name contains surrounding whitespace" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP phase evidence duplicate-input source inventory" in error
+        and "missing marker: phase result name contains Markdown-unsafe character"
+        in error
+        for error in errors
+    )
+    assert any(
+        "SCCP phase evidence duplicate-input source inventory" in error
+        and "missing marker: phase result must use NAME=STATUS syntax" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP phase evidence duplicate-input source inventory" in error
+        and "missing marker: phase evidence must use NAME=PATH syntax" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP phase evidence duplicate-input source inventory" in error
+        and "missing marker: phase evidence path must not be empty" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP phase evidence duplicate-input source inventory" in error
+        and "missing marker: phase evidence name contains Markdown-unsafe character"
+        in error
+        for error in errors
+    )
+    assert any(
+        "SCCP phase evidence duplicate-input source inventory" in error
+        and "missing marker: phase result name contains malformed phase" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP phase evidence duplicate-input source inventory" in error
+        and "missing marker: phase result status contains surrounding whitespace" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP phase evidence duplicate-input source inventory" in error
+        and (
+            "missing marker: phase result status must be passed, failed, "
+            "skipped, or missing"
+        )
+        in error
         for error in errors
     )
 
@@ -11168,7 +11818,7 @@ def test_release_readiness_report_blocks_malformed_active_required_record_metada
         (
             "records.operator_override",
             True,
-            "required record summary has unknown field operator_override",
+            "required record summary contains unknown field: operator_override",
         ),
     )
 
@@ -11204,6 +11854,64 @@ def test_release_readiness_report_blocks_malformed_active_required_record_metada
         assert any(
             expected_blocker in blocker for blocker in records_item["blockers"]
         ), path
+
+
+def test_release_readiness_report_classifies_malformed_active_required_record_fields(
+    tmp_path: Path,
+) -> None:
+    """Malformed active required-record keys must not leak through checklist text."""
+
+    report = load_report_module()
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    confusable_field = "operat\u043er_override"
+    markdown_field = "operator|secret-token"
+    cases = (
+        (
+            " operator_override ",
+            "required record summary contains unknown field name with surrounding whitespace",
+        ),
+        (
+            "operator\noverride",
+            "required record summary contains unknown field name with control character",
+        ),
+        (
+            "operator override",
+            "required record summary contains unknown field name with whitespace",
+        ),
+        (
+            markdown_field,
+            "required record summary contains unknown field name with Markdown-unsafe character",
+        ),
+        (
+            confusable_field,
+            "required record summary contains unknown field name with non-ASCII character",
+        ),
+    )
+
+    for field, expected_blocker in cases:
+        evidence_summary = report._load_evidence_summary([evidence])
+        native_status = report._native_evm_prover_bundle_status(
+            native_bundle,
+            evidence_summary,
+        )
+        active_lane = report._active_launch_lane(evidence_summary)
+        assert active_lane is not None
+        active_lane["records"][field] = True
+
+        checklist = report._active_launch_release_checklist(
+            evidence_summary,
+            native_status,
+        )
+        item_by_id = {item["id"]: item for item in checklist["items"]}
+        records_item = item_by_id["all_required_lane_records"]
+        blockers = "\n".join(records_item["blockers"])
+
+        assert checklist["ready"] is False, field
+        assert records_item["ready"] is False, field
+        assert expected_blocker in blockers, field
+        assert markdown_field not in blockers
+        assert confusable_field not in blockers
 
 
 def test_release_readiness_report_blocks_active_lane_unresolved_blockers(
@@ -11961,9 +12669,134 @@ def test_release_readiness_report_blocks_tiny_native_evm_prover_payload(
     blockers = payload["native_evm_prover_bundle"]["validation_blockers"]
     assert (
         "native EVM Groth16 prover bundle proof_artifact must be at least "
-        "256 bytes"
+        "65536 bytes"
     ) in blockers
     assert payload["release_checklist"]["ready"] is False
+
+
+def test_release_readiness_report_blocks_below_floor_native_evm_implementation(
+    tmp_path: Path,
+) -> None:
+    """Native SDK implementation artifacts must meet the launch SDK byte floor."""
+
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    implementation_path = (
+        tmp_path / "native-prover-artifacts" / "javascript-implementation.bin"
+    )
+    tiny_payload = b"tiny native javascript implementation\n"
+    implementation_path.write_bytes(tiny_payload)
+    implementation_hash = "0x" + hashlib.sha256(tiny_payload).hexdigest()
+    payload = json.loads(native_bundle.read_text(encoding="utf-8"))
+    for artifact in payload["native_sdk_artifacts"]:
+        if artifact["sdk"] == "javascript":
+            artifact["implementation_hash"] = implementation_hash
+            break
+    native_bundle.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--format",
+            "json",
+            "--phase-result",
+            "all=passed",
+            "--native-evm-prover-bundle",
+            str(native_bundle),
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    payload = json.loads(completed.stdout)
+    blockers = payload["native_evm_prover_bundle"]["validation_blockers"]
+    assert (
+        "native EVM Groth16 prover bundle javascript implementation_artifact "
+        "must be at least 1024 bytes"
+    ) in blockers
+    assert payload["release_checklist"]["ready"] is False
+
+
+def test_release_readiness_report_blocks_below_floor_native_evm_support_roles(
+    tmp_path: Path,
+) -> None:
+    """Native verifier and support artifacts must meet role-specific floors."""
+
+    cases = (
+        (
+            "verifier-key",
+            "verifier_key",
+            ("verifier_key_hash",),
+            b"tiny native verifier key\n",
+            "native EVM Groth16 prover bundle verifier_key must be at least 128 bytes",
+        ),
+        (
+            "parity-fixture",
+            "cross_sdk_fixture_parity_artifact",
+            ("audit_hashes", "cross_sdk_fixture_parity"),
+            b"{}\n",
+            "native EVM Groth16 prover bundle cross_sdk_fixture_parity_artifact "
+            "must be at least 128 bytes",
+        ),
+        (
+            "self-test-fixture",
+            "native_prover_self_test_artifact",
+            ("audit_hashes", "native_prover_self_test"),
+            b"{}\n",
+            "native EVM Groth16 prover bundle native_prover_self_test_artifact "
+            "must be at least 128 bytes",
+        ),
+    )
+
+    for label, path_field, hash_path, tiny_payload, expected_blocker in cases:
+        case_dir = tmp_path / label
+        case_dir.mkdir()
+        evidence, _ = write_active_launch_evidence(case_dir)
+        native_bundle = write_native_evm_prover_bundle(case_dir, evidence)
+        payload = json.loads(native_bundle.read_text(encoding="utf-8"))
+        artifact_path = case_dir / payload[path_field]
+        artifact_path.write_bytes(tiny_payload)
+        artifact_hash = "0x" + hashlib.sha256(tiny_payload).hexdigest()
+        if hash_path[0] == "audit_hashes":
+            payload["audit_hashes"][hash_path[1]] = artifact_hash
+        else:
+            payload[hash_path[0]] = artifact_hash
+        native_bundle.write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+        completed = subprocess.run(
+            [
+                "python3",
+                str(SCRIPT),
+                "--format",
+                "json",
+                "--phase-result",
+                "all=passed",
+                "--native-evm-prover-bundle",
+                str(native_bundle),
+                str(evidence),
+            ],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        assert completed.returncode == 1, label
+        report_payload = json.loads(completed.stdout)
+        blockers = report_payload["native_evm_prover_bundle"]["validation_blockers"]
+        assert expected_blocker in blockers
+        assert report_payload["release_checklist"]["ready"] is False
 
 
 def test_release_readiness_report_blocks_reused_native_evm_prover_role_hash(
@@ -14176,6 +15009,39 @@ def test_release_readiness_report_accepts_phase_evidence_dir(
     assert "## Blocking Items\n\n- None" in completed.stdout
 
 
+def test_release_readiness_report_suppresses_missing_phase_evidence_dir_path(
+    tmp_path: Path,
+) -> None:
+    """Missing phase evidence dir diagnostics must not echo local paths."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    phase_artifacts = tmp_path / "secret-token-phase-artifacts"
+    phase_artifacts.mkdir()
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--require-phase-evidence",
+            "--phase-result",
+            "all=passed",
+            "--phase-evidence-dir",
+            str(phase_artifacts),
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode != 0
+    assert "missing SCCP corridor evidence log for phase" in completed.stderr
+    assert "checked standard phase log layouts" in completed.stderr
+    assert "secret-token" not in completed.stderr
+    assert "Status:" not in completed.stdout
+
+
 def test_release_readiness_report_requires_contract_smoke_node_success_evidence(
     tmp_path: Path,
 ) -> None:
@@ -14273,6 +15139,424 @@ def test_release_readiness_report_rejects_duplicate_phase_evidence_assignment(
     ) in completed.stderr
     assert "already set by --phase-evidence rust-sccp=" in completed.stderr
     assert "cannot set from --phase-evidence rust-sccp=" in completed.stderr
+
+
+def test_release_readiness_report_suppresses_duplicate_phase_evidence_paths(
+    tmp_path: Path,
+) -> None:
+    """Duplicate phase-evidence diagnostics must not echo local paths."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    first_log = tmp_path / "phase-evidence-secret-token-first.log"
+    second_log = tmp_path / "phase-evidence-secret-token-second.log"
+    first_log.write_text(complete_corridor_log(("rust-sccp",)), encoding="utf-8")
+    second_log.write_text(complete_corridor_log(("rust-sccp",)), encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--require-phase-evidence",
+            "--phase-result",
+            "all=missing",
+            "--phase-result",
+            "rust-sccp=passed",
+            "--phase-evidence",
+            f"rust-sccp={first_log}",
+            "--phase-evidence",
+            f"rust-sccp={second_log}",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert (
+        "duplicate SCCP corridor phase evidence for rust-sccp"
+    ) in completed.stderr
+    assert "already set by --phase-evidence rust-sccp=<path>" in completed.stderr
+    assert "cannot set from --phase-evidence rust-sccp=<path>" in completed.stderr
+    assert "secret-token" not in completed.stderr
+
+
+def test_release_readiness_report_rejects_padded_phase_result_name(
+    tmp_path: Path,
+) -> None:
+    """Phase-result names must not be trim-normalized before readiness state."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--phase-result",
+            " rust-sccp =passed",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert "phase result name contains surrounding whitespace" in completed.stderr
+    assert "Status:" not in completed.stdout
+
+
+def test_release_readiness_report_suppresses_phase_result_syntax_input(
+    tmp_path: Path,
+) -> None:
+    """Phase-result syntax errors must not echo table-breaking operator input."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--phase-result",
+            "rust|sccp",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert "phase result must use NAME=STATUS syntax" in completed.stderr
+    assert "rust|sccp" not in completed.stderr
+    assert "Status:" not in completed.stdout
+
+
+def test_release_readiness_report_rejects_markdown_phase_result_name(
+    tmp_path: Path,
+) -> None:
+    """Phase-result names must not echo table-breaking operator input."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--phase-result",
+            "rust|sccp=passed",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert "phase result name contains Markdown-unsafe character" in completed.stderr
+    assert "rust|sccp" not in completed.stderr
+    assert "Status:" not in completed.stdout
+
+
+def test_release_readiness_report_rejects_malformed_phase_result_name(
+    tmp_path: Path,
+) -> None:
+    """Phase-result names must fail closed before unknown-phase lookup."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--phase-result",
+            "Rust-sccp=passed",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert "phase result name contains malformed phase" in completed.stderr
+    assert "Rust-sccp" not in completed.stderr
+    assert "Status:" not in completed.stdout
+
+
+def test_release_readiness_report_suppresses_unknown_phase_result_name(
+    tmp_path: Path,
+) -> None:
+    """Unknown phase-result names must not echo operator-supplied strings."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--phase-result",
+            "secret-token=passed",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert "unknown SCCP corridor phase" in completed.stderr
+    assert "secret-token" not in completed.stderr
+    assert "Status:" not in completed.stdout
+
+
+def test_release_readiness_report_rejects_padded_phase_result_status(
+    tmp_path: Path,
+) -> None:
+    """Phase-result statuses must not be trim-normalized before readiness state."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--phase-result",
+            "rust-sccp= passed",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert "phase result status contains surrounding whitespace" in completed.stderr
+    assert "Status:" not in completed.stdout
+
+
+def test_release_readiness_report_suppresses_unknown_phase_result_status(
+    tmp_path: Path,
+) -> None:
+    """Unknown phase-result statuses must not echo unsafe operator input."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--phase-result",
+            "rust-sccp=passed|failed",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert (
+        "phase result status must be passed, failed, skipped, or missing"
+        in completed.stderr
+    )
+    assert "passed|failed" not in completed.stderr
+    assert "Status:" not in completed.stdout
+
+
+def test_release_readiness_report_rejects_padded_phase_evidence_name(
+    tmp_path: Path,
+) -> None:
+    """Phase-evidence names must not be trim-normalized before artifact hashing."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    corridor_log = tmp_path / "rust-sccp.log"
+    corridor_log.write_text(complete_corridor_log(("rust-sccp",)), encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--require-phase-evidence",
+            "--phase-result",
+            "rust-sccp=passed",
+            "--phase-evidence",
+            f" rust-sccp ={corridor_log}",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert "phase evidence name contains surrounding whitespace" in completed.stderr
+    assert "Status:" not in completed.stdout
+
+
+def test_release_readiness_report_suppresses_phase_evidence_syntax_input(
+    tmp_path: Path,
+) -> None:
+    """Phase-evidence syntax errors must not echo table-breaking operator input."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--require-phase-evidence",
+            "--phase-result",
+            "rust-sccp=passed",
+            "--phase-evidence",
+            "rust|sccp",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert "phase evidence must use NAME=PATH syntax" in completed.stderr
+    assert "rust|sccp" not in completed.stderr
+    assert "Status:" not in completed.stdout
+
+
+def test_release_readiness_report_rejects_empty_phase_evidence_path(
+    tmp_path: Path,
+) -> None:
+    """Phase-evidence paths must be explicit before artifact hashing."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--require-phase-evidence",
+            "--phase-result",
+            "rust-sccp=passed",
+            "--phase-evidence",
+            "rust-sccp=",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert "phase evidence path must not be empty" in completed.stderr
+    assert "rust-sccp=" not in completed.stderr
+    assert "Status:" not in completed.stdout
+
+
+def test_release_readiness_report_rejects_markdown_phase_evidence_name(
+    tmp_path: Path,
+) -> None:
+    """Phase-evidence names must not echo table-breaking operator input."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    corridor_log = tmp_path / "rust-sccp.log"
+    corridor_log.write_text(complete_corridor_log(("rust-sccp",)), encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--require-phase-evidence",
+            "--phase-result",
+            "rust-sccp=passed",
+            "--phase-evidence",
+            f"rust|sccp={corridor_log}",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert "phase evidence name contains Markdown-unsafe character" in completed.stderr
+    assert "rust|sccp" not in completed.stderr
+    assert "Status:" not in completed.stdout
+
+
+def test_release_readiness_report_rejects_malformed_phase_evidence_name(
+    tmp_path: Path,
+) -> None:
+    """Phase-evidence names must fail closed before artifact hashing."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    corridor_log = tmp_path / "rust-sccp.log"
+    corridor_log.write_text(complete_corridor_log(("rust-sccp",)), encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--require-phase-evidence",
+            "--phase-result",
+            "rust-sccp=passed",
+            "--phase-evidence",
+            f"rust_sccp={corridor_log}",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert "phase evidence name contains malformed phase" in completed.stderr
+    assert "rust_sccp" not in completed.stderr
+    assert "Status:" not in completed.stdout
+
+
+def test_release_readiness_report_suppresses_unknown_phase_evidence_name(
+    tmp_path: Path,
+) -> None:
+    """Unknown phase-evidence names must not echo operator-supplied strings."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    corridor_log = tmp_path / "rust-sccp.log"
+    corridor_log.write_text(complete_corridor_log(("rust-sccp",)), encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--require-phase-evidence",
+            "--phase-result",
+            "rust-sccp=passed",
+            "--phase-evidence",
+            f"secret-token={corridor_log}",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert "unknown SCCP corridor phase" in completed.stderr
+    assert "secret-token" not in completed.stderr
+    assert "Status:" not in completed.stdout
 
 
 def test_release_readiness_report_rejects_phase_evidence_dir_override(
@@ -17742,6 +19026,9 @@ def test_release_readiness_guards_ethereum_outbound_precallback_sdk_tests() -> N
             "destinationBindingHash must match destinationBinding",
             "outbound_prover_called = False",
             "assert not outbound_prover_called",
+            "proof_artifact_hash",
+            "proofResult proofArtifactHash and provingKeyHash must be supplied together",
+            "proofResult proofArtifactHash and provingKeyHash must match request",
         ),
         ROOT
         / "IrohaSwift"

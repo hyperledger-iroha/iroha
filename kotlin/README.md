@@ -57,13 +57,13 @@ val snapshot = OfflineCashConfigurationSnapshot(
     assetDefinitionId = "pkr#sbp",
     offlinePaymentsEnabled = true,
     issuerPublicKeyBase64 = cachedIssuerKeyBase64,
-    bridgeAbiVersion = 7,
+    nativeBridgeAbiVersion = 7,
     createdAtMs = cachedAtMs,
     expiresAtMs = expiresAtMs,
 )
 snapshot.requireUsableForOfflineExchange(
     nowMs = currentTimeMs,
-    requiredBridgeAbiVersion = 7,
+    requiredNativeBridgeAbiVersion = 7,
 )
 
 val controller = OfflineCashLifecycleController(
@@ -129,7 +129,7 @@ reservation, multi-hop verifier-batch reservation, and reserved ABI-7 state.
 Missing native symbols still surface as `IllegalStateException`.
 `KagemushaRecursiveSpendProver` exposes the ABI 6 spend-again-offline cash
 surface. Preferred mode selection chooses `recursive_spend_v1` after the JNI
-bridge ABI-version probe succeeds and init, append, both transition-profile helpers,
+native bridge ABI-version probe succeeds and init, append, both transition-profile helpers,
 the append-boundary helper, both lineage-witness helpers, verify, and redeem
 reject the empty-archive availability probes instead of accepting permissive
 native calls.

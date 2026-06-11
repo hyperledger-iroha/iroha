@@ -191,8 +191,8 @@ public static class KagemushaRecursiveSpendNative
     public const string RecursiveSpendLineageAppendProofCircuitIdV1 = "kagemusha-recursive-spend-lineage-append-v1";
     public const string RecursiveCompactCircuitIdV1 = "kagemusha-recursive-compact-v1";
 
-    public const uint RequiredBridgeAbiVersion = 6;
-    public const uint RecursiveCompactRequiredBridgeAbiVersion = 7;
+    public const uint RequiredNativeBridgeAbiVersion = 6;
+    public const uint RecursiveCompactRequiredNativeBridgeAbiVersion = 7;
     public const uint CompactTokenMaxHops = 64;
     public const uint RecursiveSpendLineageWitnesslessMaxHopsV1 = 64;
     public const bool RecursiveSpendLineageTransitionCircuitWiredV1 = true;
@@ -252,7 +252,7 @@ public static class KagemushaRecursiveSpendNative
         {
             var version = abiVersionProbe();
             return version is not null
-                && version.Value >= RequiredBridgeAbiVersion
+                && version.Value >= RequiredNativeBridgeAbiVersion
                 && requiredSymbolsProbe();
         }
         catch (DllNotFoundException)
@@ -296,7 +296,7 @@ public static class KagemushaRecursiveSpendNative
         {
             var version = abiVersionProbe();
             return version is not null
-                && version.Value >= RecursiveCompactRequiredBridgeAbiVersion
+                && version.Value >= RecursiveCompactRequiredNativeBridgeAbiVersion
                 && compactSurfaceProbe();
         }
         catch (DllNotFoundException)
@@ -340,7 +340,7 @@ public static class KagemushaRecursiveSpendNative
         {
             var version = abiVersionProbe();
             return version is not null
-                && version.Value >= RequiredBridgeAbiVersion
+                && version.Value >= RequiredNativeBridgeAbiVersion
                 && compactTokenSymbolProbe();
         }
         catch (DllNotFoundException)
@@ -384,7 +384,7 @@ public static class KagemushaRecursiveSpendNative
         {
             var version = abiVersionProbe();
             return version is not null
-                && version.Value >= RequiredBridgeAbiVersion
+                && version.Value >= RequiredNativeBridgeAbiVersion
                 && recursiveAggregationSymbolProbe();
         }
         catch (DllNotFoundException)
@@ -428,7 +428,7 @@ public static class KagemushaRecursiveSpendNative
         {
             var version = abiVersionProbe();
             return version is not null
-                && version.Value >= RecursiveCompactRequiredBridgeAbiVersion
+                && version.Value >= RecursiveCompactRequiredNativeBridgeAbiVersion
                 && verifierSymbolProbe();
         }
         catch (DllNotFoundException)
@@ -472,7 +472,7 @@ public static class KagemushaRecursiveSpendNative
         {
             var version = abiVersionProbe();
             return version is not null
-                && version.Value >= RecursiveCompactRequiredBridgeAbiVersion
+                && version.Value >= RecursiveCompactRequiredNativeBridgeAbiVersion
                 && verifierSymbolProbe();
         }
         catch (DllNotFoundException)
@@ -841,13 +841,14 @@ public static class KagemushaRecursiveSpendNative
             {
                 throw new ArgumentException("lineage_proving_key_archive");
             }
-            var value = BinaryPrimitives.ReadUInt64LittleEndian(buffer.AsSpan(offset, 8));
-            if (value > int.MaxValue)
+            var fixedLength = BinaryPrimitives.ReadUInt64LittleEndian(
+                buffer.AsSpan(offset, 8));
+            if (fixedLength > int.MaxValue)
             {
                 throw new ArgumentException("lineage_proving_key_archive");
             }
             offset += 8;
-            return (int)value;
+            return (int)fixedLength;
         }
 
         ulong value = 0;
@@ -1511,16 +1512,16 @@ public static class KagemushaRecursiveSpendNative
                 $"{LibraryName} is unavailable; install the native bridge before using recursive Kagemusha.");
         }
 
-        if (version < RequiredBridgeAbiVersion)
+        if (version < RequiredNativeBridgeAbiVersion)
         {
             throw new InvalidOperationException(
-                $"{LibraryName} ABI v{RequiredBridgeAbiVersion} is required for recursive Kagemusha, found v{version}.");
+                $"{LibraryName} ABI v{RequiredNativeBridgeAbiVersion} is required for recursive Kagemusha, found v{version}.");
         }
 
         if (!TryProbeRequiredSymbols())
         {
             throw new InvalidOperationException(
-                $"{LibraryName} ABI v{RequiredBridgeAbiVersion} recursive Kagemusha surface is incomplete.");
+                $"{LibraryName} ABI v{RequiredNativeBridgeAbiVersion} recursive Kagemusha surface is incomplete.");
         }
     }
 

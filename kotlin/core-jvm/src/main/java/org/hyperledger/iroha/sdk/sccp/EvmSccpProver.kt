@@ -64,7 +64,11 @@ object SccpEvm {
         "no_wasm_no_remote_scan",
     )
     const val NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1: String = "sha256"
-    private const val NATIVE_EVM_PROVER_MIN_ARTIFACT_BYTES_V1: Int = 256
+    private const val NATIVE_EVM_PROVER_MIN_SUPPORT_ARTIFACT_BYTES_V1: Int = 128
+    private const val NATIVE_EVM_PROVER_MIN_IMPLEMENTATION_BYTES_V1: Int = 1024
+    private const val NATIVE_EVM_PROVER_MIN_PROOF_ARTIFACT_BYTES_V1: Int = 64 * 1024
+    private const val NATIVE_EVM_PROVER_MIN_PROVING_KEY_BYTES_V1: Int = 64 * 1024
+    private const val NATIVE_EVM_PROVER_MIN_VERIFIER_KEY_BYTES_V1: Int = 128
     /** Resolves manifest-declared native prover artifact paths from app-local storage. */
     fun interface NativeEvmProverArtifactResolver {
         fun resolveArtifact(path: String): ByteArray
@@ -456,9 +460,29 @@ object SccpEvm {
             require(nativeProverSelfTestHash == auditHashes["native_prover_self_test"]) {
                 "nativeProverSelfTestBytes sha256 must match nativeProverBundle.auditHashes.native_prover_self_test"
             }
-            requireNativeEvmProverProductionArtifactSize(proofArtifactBytes, "proofArtifactBytes")
-            requireNativeEvmProverProductionArtifactSize(provingKeyBytes, "provingKeyBytes")
-            requireNativeEvmProverProductionArtifactSize(verifierKeyBytes, "verifierKeyBytes")
+            requireNativeEvmProverProductionArtifactSize(
+                proofArtifactBytes,
+                "proofArtifactBytes",
+                NATIVE_EVM_PROVER_MIN_PROOF_ARTIFACT_BYTES_V1,
+            )
+            requireNativeEvmProverProductionArtifactSize(
+                provingKeyBytes,
+                "provingKeyBytes",
+                NATIVE_EVM_PROVER_MIN_PROVING_KEY_BYTES_V1,
+            )
+            requireNativeEvmProverProductionArtifactSize(
+                verifierKeyBytes,
+                "verifierKeyBytes",
+                NATIVE_EVM_PROVER_MIN_VERIFIER_KEY_BYTES_V1,
+            )
+            requireNativeEvmProverProductionArtifactSize(
+                crossSdkFixtureParityBytes,
+                "crossSdkFixtureParityBytes",
+            )
+            requireNativeEvmProverProductionArtifactSize(
+                nativeProverSelfTestBytes,
+                "nativeProverSelfTestBytes",
+            )
             rejectNativeEvmProverForbiddenArtifactMarkers(proofArtifactBytes, "proofArtifactBytes")
             rejectNativeEvmProverForbiddenArtifactMarkers(provingKeyBytes, "provingKeyBytes")
             rejectNativeEvmProverForbiddenArtifactMarkers(verifierKeyBytes, "verifierKeyBytes")
@@ -490,7 +514,11 @@ object SccpEvm {
             require(implementationHash == artifact.implementationHash) {
                 "implementationBytes sha256 must match nativeProverBundle implementationHash"
             }
-            requireNativeEvmProverProductionArtifactSize(implementationBytes, "implementationBytes")
+            requireNativeEvmProverProductionArtifactSize(
+                implementationBytes,
+                "implementationBytes",
+                NATIVE_EVM_PROVER_MIN_IMPLEMENTATION_BYTES_V1,
+            )
             rejectNativeEvmProverForbiddenArtifactMarkers(implementationBytes, "implementationBytes")
             val implementation = artifact.implementation
             return EthereumMainnetNativeEvmProverArtifacts(
@@ -2242,9 +2270,13 @@ object SccpEvm {
         }
     }
 
-    private fun requireNativeEvmProverProductionArtifactSize(bytes: ByteArray, field: String) {
-        require(bytes.size >= NATIVE_EVM_PROVER_MIN_ARTIFACT_BYTES_V1) {
-            "$field must be at least $NATIVE_EVM_PROVER_MIN_ARTIFACT_BYTES_V1 bytes"
+    private fun requireNativeEvmProverProductionArtifactSize(
+        bytes: ByteArray,
+        field: String,
+        minBytes: Int = NATIVE_EVM_PROVER_MIN_SUPPORT_ARTIFACT_BYTES_V1,
+    ) {
+        require(bytes.size >= minBytes) {
+            "$field must be at least $minBytes bytes"
         }
     }
 

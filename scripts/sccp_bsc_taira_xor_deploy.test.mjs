@@ -1736,8 +1736,22 @@ test("BSC route-config rejects malformed or foreign route manifests", () => {
       /source bridge address.*canonical lowercase hex/u,
     ],
     [
+      {
+        sccpBscSourceBridgeAddress: undefined,
+        sccp_tron_source_bridge_address: BSC_SOURCE_BRIDGE_ADDRESS,
+      },
+      /source bridge address.*must not use TRON aliases.*sccp_tron_source_bridge_address/u,
+    ],
+    [
       { bscVerifierAddress: BSC_VERIFIER_ADDRESS.replace(/^0x/u, "0X") },
       /verifier address.*canonical lowercase hex/u,
+    ],
+    [
+      {
+        bscVerifierAddress: undefined,
+        tron_verifier_address: BSC_VERIFIER_ADDRESS,
+      },
+      /verifier address.*must not use TRON aliases.*tron_verifier_address/u,
     ],
     [
       {

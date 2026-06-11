@@ -833,6 +833,50 @@ def _require_optional_result_proof_base64_matches(
         raise TypeError("proofResult.proofBase64 must match proofResult.proofBytes")
 
 
+def _normalize_optional_groth16_prover_artifacts(
+    value: Mapping[str, Any],
+    label: str,
+) -> Optional[Dict[str, str]]:
+    proof_artifact_hash = _mapping_optional_value_without_aliases(
+        value,
+        f"{label}.proofArtifactHash",
+        "proofArtifactHash",
+        "proof_artifact_hash",
+        "proverArtifactHash",
+        "prover_artifact_hash",
+        "circuitArtifactHash",
+        "circuit_artifact_hash",
+    )
+    proving_key_hash = _mapping_optional_value_without_aliases(
+        value,
+        f"{label}.provingKeyHash",
+        "provingKeyHash",
+        "proving_key_hash",
+    )
+    has_proof_artifact_hash = (
+        proof_artifact_hash is not _MISSING and proof_artifact_hash is not None
+    )
+    has_proving_key_hash = (
+        proving_key_hash is not _MISSING and proving_key_hash is not None
+    )
+    if has_proof_artifact_hash != has_proving_key_hash:
+        raise TypeError(
+            f"{label} proofArtifactHash and provingKeyHash must be supplied together"
+        )
+    if not has_proof_artifact_hash:
+        return None
+    return {
+        "proof_artifact_hash": _normalize_nonzero_hex32(
+            proof_artifact_hash,
+            f"{label}.proofArtifactHash",
+        ),
+        "proving_key_hash": _normalize_nonzero_hex32(
+            proving_key_hash,
+            f"{label}.provingKeyHash",
+        ),
+    }
+
+
 def _normalize_nonzero_hex32(value: Any, label: str) -> str:
     raw = bytes.fromhex(_normalize_hex_input(value, label, 32))
     if not any(raw):
@@ -12022,7 +12066,7 @@ def wrap_ton_sccp_source_state_verification_proof(
 
     circuit_id = _normalize_ton_source_state_proof_request_for_wrapping(request)
     proof = _to_bytes(proof_bytes, "proofBytes")
-    _require_nonzero_proof_bytes(proof)
+    _require_source_state_proof_bytes(proof)
     return _immutable_prover_envelope({
         "version": 1,
         "proof_family": SCCP_STARK_FRI_PROOF_FAMILY_V1,
@@ -22348,6 +22392,10 @@ def build_evm_sccp_proof_request(input_value: Any) -> Mapping[str, Any]:
         value if proof_context_input is _MISSING else proof_context_input,
         target_domain=public_inputs["target_domain"],
     )
+    prover_artifacts = _normalize_optional_groth16_prover_artifacts(
+        value,
+        "proof request",
+    )
     public_signal_words = sccp_groth16_bn254_public_signal_words(
         {
             "public_inputs": public_inputs,
@@ -22374,6 +22422,22 @@ def build_evm_sccp_proof_request(input_value: Any) -> Mapping[str, Any]:
                         "destinationBindingHash",
                         32,
                     ),
+                    *(
+                        ()
+                        if prover_artifacts is None
+                        else (
+                            _hex_to_bytes(
+                                prover_artifacts["proof_artifact_hash"],
+                                "proofArtifactHash",
+                                32,
+                            ),
+                            _hex_to_bytes(
+                                prover_artifacts["proving_key_hash"],
+                                "provingKeyHash",
+                                32,
+                            ),
+                        )
+                    ),
                     *public_signal_word_bytes,
                 )
             ),
@@ -22394,6 +22458,8 @@ def build_evm_sccp_proof_request(input_value: Any) -> Mapping[str, Any]:
         "destination_binding_hash": proof_context["destination_binding_hash"],
         "request_hash": request_hash,
     }
+    if prover_artifacts is not None:
+        request.update(prover_artifacts)
     if destination_binding is not None:
         request["destination_binding"] = destination_binding
     return _immutable_prover_envelope(request)
@@ -23984,6 +24050,8 @@ def _groth16_proof_request_comparable(request: Mapping[str, Any]) -> Dict[str, A
             request.get("destination_binding")
         ),
         "destination_binding_hash": request.get("destination_binding_hash"),
+        "proof_artifact_hash": request.get("proof_artifact_hash"),
+        "proving_key_hash": request.get("proving_key_hash"),
         "request_hash": request.get("request_hash"),
     }
 
@@ -23998,6 +24066,8 @@ def _require_canonical_evm_proof_request(request: Mapping[str, Any]) -> None:
                 "statement_hash": request["statement_hash"],
                 "destination_binding": request.get("destination_binding"),
                 "destination_binding_hash": request["destination_binding_hash"],
+                "proof_artifact_hash": request.get("proof_artifact_hash"),
+                "proving_key_hash": request.get("proving_key_hash"),
                 "source_domain": request["source_domain"],
                 "backend": request["backend"],
             }
@@ -24441,6 +24511,22 @@ def _require_optional_groth16_result_metadata_matches(
 ) -> None:
     _require_optional_transparent_result_metadata_matches(value, request)
 
+    supplied_prover_artifacts = _normalize_optional_groth16_prover_artifacts(
+        value,
+        "proofResult",
+    )
+    if supplied_prover_artifacts is not None and (
+        request.get("proof_artifact_hash") is None
+        or request.get("proving_key_hash") is None
+        or supplied_prover_artifacts["proof_artifact_hash"]
+        != request["proof_artifact_hash"]
+        or supplied_prover_artifacts["proving_key_hash"]
+        != request["proving_key_hash"]
+    ):
+        raise TypeError(
+            "proofResult proofArtifactHash and provingKeyHash must match request"
+        )
+
     supplied_public_signal_words = _mapping_optional_value_without_aliases(
         value,
         "proofResult.publicSignalWords",
@@ -24533,6 +24619,14 @@ def _normalize_evm_proof_result(result: Any, request: Mapping[str, Any]) -> Mapp
         "destination_binding_hash": request["destination_binding_hash"],
         "request_hash": request["request_hash"],
         "envelope_hash": envelope_hash,
+        **(
+            {}
+            if request.get("proof_artifact_hash") is None
+            else {
+                "proof_artifact_hash": request["proof_artifact_hash"],
+                "proving_key_hash": request["proving_key_hash"],
+            }
+        ),
     })
 
 
@@ -25002,6 +25096,10 @@ def _normalize_groth16_contract_submission_input(
             b"" if source_proof_input is _MISSING else source_proof_input,
             "proofResult.sourceProofBytes",
         )
+        prover_artifacts = _normalize_optional_groth16_prover_artifacts(
+            proof_result,
+            "proofResult",
+        )
         expected_request = proof_request_builder(
             {
                 "public_inputs": public_inputs,
@@ -25010,6 +25108,16 @@ def _normalize_groth16_contract_submission_input(
                 "statement_hash": statement_hash,
                 "destination_binding_hash": destination_binding_hash,
                 "source_domain": source_domain,
+                **(
+                    {}
+                    if prover_artifacts is None
+                    else {
+                        "proof_artifact_hash": prover_artifacts[
+                            "proof_artifact_hash"
+                        ],
+                        "proving_key_hash": prover_artifacts["proving_key_hash"],
+                    }
+                ),
             }
         )
         if expected_request["request_hash"] != request_hash:

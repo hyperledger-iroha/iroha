@@ -9606,10 +9606,19 @@ impl Actor {
         let payload_hash = session
             .payload_hash()
             .expect("metadata match requires a payload hash");
+        let chunk_max_bytes = self.config.rbc.chunk_max_bytes;
         self.with_authoritative_payload_for_progress(
             key.0,
-            |height, view, _payload_bytes, local_payload_hash| {
-                height == key.1 && view == key.2 && local_payload_hash == payload_hash
+            |height, view, payload_bytes, local_payload_hash| {
+                height == key.1
+                    && view == key.2
+                    && local_payload_hash == payload_hash
+                    && Self::local_payload_satisfies_rbc_chunk_metadata(
+                        session,
+                        payload_bytes,
+                        local_payload_hash,
+                        chunk_max_bytes,
+                    )
             },
         )
         .unwrap_or(false)
@@ -9626,13 +9635,38 @@ impl Actor {
         let payload_hash = session
             .payload_hash()
             .expect("metadata match requires a payload hash");
+        let chunk_max_bytes = self.config.rbc.chunk_max_bytes;
         self.with_authoritative_payload_for_progress(
             key.0,
-            |height, view, _payload_bytes, local_payload_hash| {
-                height == key.1 && view == key.2 && local_payload_hash == payload_hash
+            |height, view, payload_bytes, local_payload_hash| {
+                height == key.1
+                    && view == key.2
+                    && local_payload_hash == payload_hash
+                    && Self::local_payload_satisfies_rbc_chunk_metadata(
+                        session,
+                        payload_bytes,
+                        local_payload_hash,
+                        chunk_max_bytes,
+                    )
             },
         )
         .unwrap_or(false)
+    }
+
+    fn local_payload_satisfies_rbc_chunk_metadata(
+        session: &RbcSession,
+        payload_bytes: &[u8],
+        payload_hash: Hash,
+        chunk_max_bytes: usize,
+    ) -> bool {
+        let mut probe = session.clone();
+        let outcome = self::rbc::apply_hydrated_payload(
+            &mut probe,
+            payload_bytes,
+            payload_hash,
+            chunk_max_bytes,
+        );
+        outcome.all_chunks_present && probe.complete_payload_matches(&payload_hash)
     }
 
     fn rbc_session_metadata_matches_progress_slot(
@@ -9689,11 +9723,20 @@ impl Actor {
             return None;
         }
         let expected_payload_hash = session.payload_hash()?;
+        let chunk_max_bytes = self.config.rbc.chunk_max_bytes;
         self.with_local_payload_for_progress(
             key.0,
             |height, view, payload_bytes, local_payload_hash| {
-                (height == key.1 && view == key.2 && local_payload_hash == expected_payload_hash)
-                    .then(|| u64::try_from(payload_bytes.len()).unwrap_or(u64::MAX))
+                (height == key.1
+                    && view == key.2
+                    && local_payload_hash == expected_payload_hash
+                    && Self::local_payload_satisfies_rbc_chunk_metadata(
+                        session,
+                        payload_bytes,
+                        local_payload_hash,
+                        chunk_max_bytes,
+                    ))
+                .then(|| u64::try_from(payload_bytes.len()).unwrap_or(u64::MAX))
             },
         )
         .flatten()
@@ -24829,6 +24872,9 @@ impl Actor {
         key: super::rbc_store::SessionKey,
         session: &RbcSession,
     ) -> Option<RbcReady> {
+        if session.is_invalid() || rbc_session_has_invalid_chunk_shape(session) {
+            return None;
+        }
         let commit_topology = self.rbc_session_roster(key);
         if commit_topology.is_empty() {
             return None;
@@ -24865,6 +24911,9 @@ impl Actor {
         key: super::rbc_store::SessionKey,
         session: &RbcSession,
     ) -> Option<RbcDeliver> {
+        if session.is_invalid() || rbc_session_has_invalid_chunk_shape(session) {
+            return None;
+        }
         let commit_topology = self.rbc_session_roster(key);
         if commit_topology.is_empty() {
             return None;
@@ -24927,6 +24976,32 @@ impl Actor {
             topology,
             self.config.debug.rbc.force_deliver_quorum_one,
         )
+    }
+
+    fn rbc_leader_signature_matches_roster(
+        &self,
+        roster: &[PeerId],
+        height: u64,
+        view: u64,
+        block_header: BlockHeader,
+        leader_signature: &BlockSignature,
+    ) -> bool {
+        let mut signature_topology =
+            crate::sumeragi::network_topology::Topology::new(roster.to_vec());
+        let Ok(expected_leader_index) =
+            self.leader_index_for(&mut signature_topology, height, view)
+        else {
+            return false;
+        };
+        let Some(leader_peer) = signature_topology.as_ref().get(expected_leader_index) else {
+            return false;
+        };
+        let expected_leader_index = u64::try_from(expected_leader_index).unwrap_or(u64::MAX);
+        leader_signature.index() == expected_leader_index
+            && leader_signature
+                .signature()
+                .verify_hash(leader_peer.public_key(), block_header.hash())
+                .is_ok()
     }
 
     fn should_drop_future_consensus_message(
@@ -25060,7 +25135,7 @@ impl Actor {
 
     fn rebuild_rbc_init(&self, key: super::rbc_store::SessionKey) -> Option<RbcInit> {
         let session = self.subsystems.da_rbc.rbc.sessions.get(&key)?;
-        if session.is_invalid() {
+        if session.is_invalid() || rbc_session_has_invalid_chunk_shape(session) {
             return None;
         }
         let roster = {
@@ -25085,6 +25160,15 @@ impl Actor {
             .or_else(|| session.chunk_root())?;
         let block_header = session.block_header?;
         let leader_signature = session.leader_signature.clone()?;
+        if !self.rbc_leader_signature_matches_roster(
+            &roster,
+            key.1,
+            key.2,
+            block_header,
+            &leader_signature,
+        ) {
+            return None;
+        }
         Some(RbcInit {
             block_hash: key.0,
             height: key.1,
@@ -25186,6 +25270,15 @@ impl Actor {
             .signatures()
             .find(|signature| signature.index() == leader_index)?
             .clone();
+        if !self.rbc_leader_signature_matches_roster(
+            &roster,
+            key.1,
+            key.2,
+            block_header,
+            &leader_signature,
+        ) {
+            return None;
+        }
         Some(RbcInit {
             block_hash: key.0,
             height: key.1,
@@ -25343,6 +25436,18 @@ impl Actor {
             received_chunks = session.received_chunks();
             ready_count = session.ready_signatures.len();
             if rbc_session_has_invalid_chunk_shape(&session) {
+                if rbc_session_expected_digest_root_mismatch(&session) {
+                    session.invalid = true;
+                    invalidated = true;
+                    warn!(
+                        height = key.1,
+                        view = key.2,
+                        block = %key.0,
+                        expected_root = ?session.expected_chunk_root,
+                        "RBC expected digest root mismatch detected; refusing to emit READY"
+                    );
+                    return Ok(None);
+                }
                 if self.should_emit_rbc_ready_deferral(
                     key,
                     now,
@@ -25637,6 +25742,9 @@ impl Actor {
         session: &RbcSession,
         fallback_roster_hash: Hash,
     ) -> Option<Vec<RbcReady>> {
+        if session.is_invalid() || rbc_session_has_invalid_chunk_shape(session) {
+            return None;
+        }
         let chunk_root = session
             .expected_chunk_root
             .or_else(|| session.chunk_root())?;
@@ -25750,6 +25858,7 @@ impl Actor {
     }
 
     fn rbc_payload_bundle(
+        &self,
         key: super::rbc_store::SessionKey,
         session: &RbcSession,
         roster: &[PeerId],
@@ -25757,7 +25866,35 @@ impl Actor {
         crate::sumeragi::consensus::RbcInit,
         Vec<crate::sumeragi::consensus::RbcChunk>,
     )> {
-        if session.total_chunks() == 0 {
+        if session.is_invalid() || rbc_session_has_invalid_chunk_shape(session) {
+            return None;
+        }
+        if roster.is_empty() {
+            return None;
+        }
+        let block_header = session.block_header?;
+        let leader_signature = session.leader_signature.clone()?;
+        if !self.rbc_leader_signature_matches_roster(
+            roster,
+            key.1,
+            key.2,
+            block_header,
+            &leader_signature,
+        ) {
+            return None;
+        }
+        Self::rbc_payload_bundle_from_cached_parts(key, session, roster)
+    }
+
+    fn rbc_payload_bundle_from_cached_parts(
+        key: super::rbc_store::SessionKey,
+        session: &RbcSession,
+        roster: &[PeerId],
+    ) -> Option<(
+        crate::sumeragi::consensus::RbcInit,
+        Vec<crate::sumeragi::consensus::RbcChunk>,
+    )> {
+        if session.is_invalid() || rbc_session_has_invalid_chunk_shape(session) {
             return None;
         }
         if roster.is_empty() {
@@ -26133,7 +26270,7 @@ impl Actor {
         if !self.should_rebroadcast_rbc_payload(&roster, key) {
             return;
         }
-        let Some((init, chunks)) = Self::rbc_payload_bundle(key, session, &roster) else {
+        let Some((init, chunks)) = self.rbc_payload_bundle(key, session, &roster) else {
             debug!(
                 height = key.1,
                 view = key.2,
@@ -26196,8 +26333,14 @@ impl Actor {
         };
         let quorum_or_delivery_repair = session.delivered
             || (ready_quorum_required != 0 && ready_count >= ready_quorum_required);
+        let local_authoritative_payload =
+            self.rbc_session_has_local_authoritative_payload_for_progress(key, session);
+        let local_payload_rescue_needed = local_authoritative_payload
+            && (rbc_session_has_invalid_chunk_shape(session)
+                || (session.total_chunks() != 0
+                    && session.received_chunks() < session.total_chunks()));
         let allow_targeted_payload_rescue =
-            !authoritative_ready_repair || quorum_or_delivery_repair;
+            !authoritative_ready_repair || quorum_or_delivery_repair || local_payload_rescue_needed;
 
         let mut sent = false;
 
@@ -26215,8 +26358,9 @@ impl Actor {
         // keep targeted body rescue enabled under the existing cooldown until READY catches up.
         if allow_targeted_payload_rescue && payload_due && !roster.is_empty() && !targets.is_empty()
         {
-            if payload_session.total_chunks() != 0
-                && payload_session.received_chunks() < payload_session.total_chunks()
+            if (rbc_session_has_invalid_chunk_shape(&payload_session)
+                || (payload_session.total_chunks() != 0
+                    && payload_session.received_chunks() < payload_session.total_chunks()))
                 && let Some((height, view, payload_bytes, payload_hash)) = self
                     .with_local_payload_for_progress(
                         key.0,
@@ -26274,7 +26418,7 @@ impl Actor {
                     }
                     sent = true;
                 } else if let Some((init, chunks)) =
-                    Self::rbc_payload_bundle(key, &payload_session, &roster)
+                    self.rbc_payload_bundle(key, &payload_session, &roster)
                 {
                     if chunks.is_empty() {
                         debug!(
@@ -26487,7 +26631,7 @@ impl Actor {
             }
             RbcRepairAttempt::Fallback | RbcRepairAttempt::NotNeeded => {}
         }
-        let Some((init, chunks)) = Self::rbc_payload_bundle(key, session, &roster) else {
+        let Some((init, chunks)) = self.rbc_payload_bundle(key, session, &roster) else {
             debug!(
                 height = key.1,
                 view = key.2,
@@ -27174,7 +27318,7 @@ impl Actor {
                 && self.should_rebroadcast_rbc_payload(&roster, key)
                 && self.rbc_payload_rebroadcast_due(&key, now, payload_cooldown)
             {
-                Self::rbc_payload_bundle(key, &session, &roster)
+                self.rbc_payload_bundle(key, &session, &roster)
             } else {
                 None
             };
@@ -27513,6 +27657,25 @@ impl Actor {
         let received_chunks = session.received_chunks();
         let total_chunks = session.total_chunks();
         if rbc_session_has_invalid_chunk_shape(&session) {
+            if rbc_session_expected_digest_root_mismatch(&session) {
+                session.invalid = true;
+                warn!(
+                    height = key.1,
+                    view = key.2,
+                    block = %key.0,
+                    expected_root = ?session.expected_chunk_root,
+                    "RBC expected digest root mismatch detected; refusing to emit DELIVER"
+                );
+                self.subsystems.da_rbc.rbc.sessions.insert(key, session);
+                self.clear_pending_rbc(&key);
+                self.clear_rbc_deferrals(&key);
+                if let Some(updated) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() {
+                    self.update_rbc_status_entry(key, &updated, false);
+                    self.persist_rbc_session(key, &updated);
+                }
+                self.publish_rbc_backlog_snapshot();
+                return Ok(());
+            }
             self.request_missing_block_for_pending_rbc(
                 key,
                 "rbc_deliver_invalid_chunk_shape",
@@ -41246,6 +41409,9 @@ fn drain_rbc_state_for_block(
         if let Some(mut session) = rbc_sessions.remove(&key) {
             let delivered_payload_bytes_fallback =
                 delivered_payload_fallbacks.and_then(|fallbacks| fallbacks.get(&key).copied());
+            let delivered_payload_authoritative = session.delivered
+                && (session.delivered_payload_bytes().is_some()
+                    || delivered_payload_bytes_fallback.is_some());
             if let Some(bytes) = session.take_delivered_payload_bytes_for_telemetry_with_fallback(
                 delivered_payload_bytes_fallback,
             ) {
@@ -41272,7 +41438,7 @@ fn drain_rbc_state_for_block(
                     parity_shards: session.layout().parity_shards,
                     received_chunks: session.received_chunks(),
                     ready_count,
-                    delivered: session.delivered,
+                    delivered: delivered_payload_authoritative,
                     payload_hash: session.payload_hash(),
                     recovered_from_disk: session.recovered_from_disk()
                         || rbc_status_summary_recovered_from_disk(rbc_status_handle, &key),
@@ -44408,7 +44574,7 @@ impl RbcSession {
             }
         }
         let capacity = usize::try_from(total_chunks).unwrap_or(RBC_MAX_TOTAL_CHUNKS as usize);
-        Ok(Self {
+        let mut session = Self {
             layout,
             total_chunks,
             payload_hash,
@@ -44432,7 +44598,11 @@ impl RbcSession {
             reconstructed_stripes: 0,
             lane_allocations: Vec::new(),
             dataspace_allocations: Vec::new(),
-        })
+        };
+        if rbc_session_expected_digest_root_mismatch(&session) {
+            session.invalid = true;
+        }
+        Ok(session)
     }
 
     #[cfg(test)]
@@ -44587,13 +44757,24 @@ impl RbcSession {
         {
             return false;
         }
+        if rbc_session_has_invalid_chunk_shape(self) {
+            return false;
+        }
         let Some(payload_hash) = self.payload_hash else {
             return false;
         };
         let Some(payload) = self.payload_bytes() else {
             return false;
         };
-        Hash::new(&payload) == payload_hash
+        Hash::new(&payload) == payload_hash && self.complete_chunk_root_matches()
+    }
+
+    fn complete_chunk_root_matches(&self) -> bool {
+        match (self.expected_chunk_root, self.chunk_root()) {
+            (Some(expected_root), Some(observed_root)) => expected_root == observed_root,
+            (None, Some(_)) => true,
+            _ => false,
+        }
     }
 
     fn set_allocations(
@@ -44649,6 +44830,9 @@ impl RbcSession {
         if !self.lane_allocations.is_empty() || !self.dataspace_allocations.is_empty() {
             return;
         }
+        if !rbc_status::summary_allocations_valid(summary) {
+            return;
+        }
 
         let mut lane_allocations: Vec<LaneAllocation> = summary
             .lane_backlog
@@ -44698,9 +44882,11 @@ impl RbcSession {
 
     pub(crate) fn complete_payload_matches(&self, payload_hash: &Hash) -> bool {
         !self.is_invalid()
+            && !rbc_session_has_invalid_chunk_shape(self)
             && self.total_chunks != 0
             && self.received_chunks == self.total_chunks
             && matches!(self.payload_hash(), Some(hash) if &hash == payload_hash)
+            && self.complete_chunk_root_matches()
             && self
                 .payload_bytes()
                 .is_some_and(|payload| Hash::new(&payload) == *payload_hash)
@@ -44883,7 +45069,10 @@ impl RbcSession {
         manifest: &super::rbc_store::SoftwareManifest,
         session_roster: &[PeerId],
     ) -> super::rbc_store::PersistedSession {
-        use super::rbc_store::{PersistedChunk, PersistedReady, PersistedSession};
+        use super::rbc_store::{
+            PersistedChunk, PersistedDataspaceAllocation, PersistedLaneAllocation, PersistedReady,
+            PersistedSession,
+        };
 
         let mut chunks = Vec::new();
         for (idx, entry) in self.chunks.iter().enumerate() {
@@ -44903,6 +45092,29 @@ impl RbcSession {
             .map(|sig| PersistedReady {
                 sender: sig.sender,
                 signature: sig.signature.clone(),
+            })
+            .collect();
+        let lane_allocations = self
+            .lane_allocations
+            .iter()
+            .map(|alloc| PersistedLaneAllocation {
+                lane_id: alloc.lane_id.as_u32(),
+                tx_count: alloc.tx_count,
+                rbc_bytes_total: alloc.rbc_bytes_total,
+                teu_total: alloc.teu_total,
+                total_chunks: alloc.total_chunks,
+            })
+            .collect();
+        let dataspace_allocations = self
+            .dataspace_allocations
+            .iter()
+            .map(|alloc| PersistedDataspaceAllocation {
+                lane_id: alloc.lane_id.as_u32(),
+                dataspace_id: alloc.dataspace_id.as_u64(),
+                tx_count: alloc.tx_count,
+                rbc_bytes_total: alloc.rbc_bytes_total,
+                teu_total: alloc.teu_total,
+                total_chunks: alloc.total_chunks,
             })
             .collect();
 
@@ -44948,6 +45160,8 @@ impl RbcSession {
             chunks,
             last_updated_ms: now_ms,
             session_roster: session_roster.to_vec(),
+            lane_allocations,
+            dataspace_allocations,
         }
     }
 
@@ -44964,6 +45178,9 @@ impl RbcSession {
             digest.copy_from_slice(&hasher.finalize());
             RbcChunkEntry { bytes, digest }
         }
+
+        super::rbc_store::validate_allocations(persisted)
+            .map_err(PersistedLoadError::InvalidAllocation)?;
 
         let PersistedSession {
             total_chunks,
@@ -44988,8 +45205,18 @@ impl RbcSession {
             block_header,
             leader_signature,
             session_roster,
+            lane_allocations,
+            dataspace_allocations,
             ..
         } = persisted.clone();
+        if let (Some(expected_root), Some(computed_root)) =
+            (expected_chunk_root, computed_chunk_root)
+            && expected_root != computed_root
+        {
+            return Err(PersistedLoadError::InvalidLayout(
+                "computed chunk root mismatch",
+            ));
+        }
         let expected_chunk_root = expected_chunk_root.or(computed_chunk_root);
 
         if total_chunks > RBC_MAX_TOTAL_CHUNKS {
@@ -45123,10 +45350,31 @@ impl RbcSession {
             session.deliver_sender = None;
             session.deliver_signature = None;
         }
-        session.invalid = invalid;
+        session.invalid |= invalid;
         session.block_header = block_header;
         session.leader_signature = leader_signature;
         session.reconstructed_stripes = reconstructed_stripes;
+        session.lane_allocations = lane_allocations
+            .into_iter()
+            .map(|alloc| LaneAllocation {
+                lane_id: LaneId::new(alloc.lane_id),
+                tx_count: alloc.tx_count,
+                rbc_bytes_total: alloc.rbc_bytes_total,
+                teu_total: alloc.teu_total,
+                total_chunks: alloc.total_chunks,
+            })
+            .collect();
+        session.dataspace_allocations = dataspace_allocations
+            .into_iter()
+            .map(|alloc| DataspaceAllocation {
+                lane_id: LaneId::new(alloc.lane_id),
+                dataspace_id: DataSpaceId::new(alloc.dataspace_id),
+                tx_count: alloc.tx_count,
+                rbc_bytes_total: alloc.rbc_bytes_total,
+                teu_total: alloc.teu_total,
+                total_chunks: alloc.total_chunks,
+            })
+            .collect();
         session.drop_mismatched_chunks();
         let _ = session.try_reconstruct_full_chunks();
         if let Some(hash) = payload_hash
@@ -45373,7 +45621,7 @@ impl RbcSession {
     }
 
     fn complete_payload_unverified_or_mismatched(&self) -> bool {
-        if self.total_chunks == 0 || self.received_chunks > self.total_chunks {
+        if rbc_session_has_invalid_chunk_shape(self) {
             return true;
         }
         if self.received_chunks != self.total_chunks {
@@ -45393,8 +45641,55 @@ fn rbc_session_has_complete_delivery(session: &RbcSession) -> bool {
     session.delivered && session.has_complete_payload_bytes()
 }
 
+fn rbc_session_expected_digest_root_mismatch(session: &RbcSession) -> bool {
+    let (Some(expected_digests), Some(expected_root)) = (
+        session.expected_chunk_digests.as_ref(),
+        session.expected_chunk_root,
+    ) else {
+        return false;
+    };
+    let computed_root = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(expected_digests.clone())
+        .root()
+        .map(Hash::from);
+    computed_root != Some(expected_root)
+}
+
 fn rbc_session_has_invalid_chunk_shape(session: &RbcSession) -> bool {
-    session.total_chunks() == 0 || session.received_chunks() > session.total_chunks()
+    let total_chunks = session.total_chunks();
+    let Ok(expected_len) = usize::try_from(total_chunks) else {
+        return true;
+    };
+    if total_chunks == 0 || session.chunks.len() != expected_len {
+        return true;
+    }
+    if session
+        .expected_chunk_digests
+        .as_ref()
+        .is_some_and(|digests| digests.len() != expected_len)
+    {
+        return true;
+    }
+    if let Some(expected_digests) = session.expected_chunk_digests.as_ref() {
+        if rbc_session_expected_digest_root_mismatch(session) {
+            return true;
+        }
+        for (entry, expected_digest) in session.chunks.iter().zip(expected_digests) {
+            if let Some(entry) = entry
+                && entry.digest != *expected_digest
+            {
+                return true;
+            }
+        }
+    }
+    let present_chunks = session
+        .chunks
+        .iter()
+        .filter(|entry| entry.is_some())
+        .count();
+    let Ok(present_chunks) = u32::try_from(present_chunks) else {
+        return true;
+    };
+    session.received_chunks() != present_chunks || present_chunks > total_chunks
 }
 
 fn rbc_session_backlog_missing_chunks(session: &RbcSession) -> u64 {
@@ -45417,9 +45712,6 @@ fn rbc_session_availability_incomplete(
         return false;
     }
     let ready_quorum = session.ready_signatures.len() >= required_ready;
-    if rbc_session_has_complete_delivery(session) {
-        return !ready_quorum;
-    }
     let progress_started = session.total_chunks() != 0
         || session.received_chunks() != 0
         || !session.ready_signatures.is_empty()
@@ -45427,10 +45719,11 @@ fn rbc_session_availability_incomplete(
     if !progress_started {
         return false;
     }
-    let invalid_chunk_shape =
-        session.total_chunks() == 0 || session.received_chunks() > session.total_chunks();
-    if invalid_chunk_shape {
+    if rbc_session_has_invalid_chunk_shape(session) {
         return true;
+    }
+    if rbc_session_has_complete_delivery(session) {
+        return !ready_quorum;
     }
     let missing_chunks =
         session.total_chunks() != 0 && session.received_chunks() < session.total_chunks();
@@ -45472,6 +45765,9 @@ pub enum PersistedLoadError {
     /// Persisted layout metadata was invalid.
     #[error("invalid persisted RBC layout: {0}")]
     InvalidLayout(&'static str),
+    /// Persisted lane/dataspace allocation metadata was internally inconsistent.
+    #[error("invalid persisted RBC allocation metadata: {0}")]
+    InvalidAllocation(&'static str),
     /// Persisted snapshot advertises more chunks than supported.
     #[error("persisted RBC session exceeds chunk cap: {total_chunks} (cap {max_chunks})")]
     TooManyChunks {

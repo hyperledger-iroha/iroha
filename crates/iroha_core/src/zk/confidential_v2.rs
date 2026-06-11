@@ -28,9 +28,12 @@ pub const CONFIDENTIAL_UNSHIELD_V2_CIRCUIT_ID: &str =
     "halo2/pasta/ipa/anon-unshield-merkle16-poseidon-diversified";
 pub const CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID: &str =
     "halo2/pasta/ipa/anon-unshield-2in-1change-merkle16-poseidon-diversified";
+pub const ASSET_HIDDEN_TRANSFER_V1_CIRCUIT_ID: &str =
+    "halo2/pasta/ipa/asset-hidden-transfer-public-v1";
 pub const CONFIDENTIAL_TRANSFER_V2_IPA_K: u32 = 7;
 pub const CONFIDENTIAL_UNSHIELD_V2_IPA_K: u32 = 7;
 pub const CONFIDENTIAL_UNSHIELD_V3_IPA_K: u32 = 7;
+pub const ASSET_HIDDEN_TRANSFER_V1_IPA_K: u32 = 6;
 pub const CONFIDENTIAL_TREE_DEPTH_V2: usize = 16;
 pub const CONFIDENTIAL_TREE_CAPACITY_V2: usize = 1 << CONFIDENTIAL_TREE_DEPTH_V2;
 pub const CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1: &[u8] = br#"{"schema":"confidential_transfer_v2","public_inputs":["input_commitment_0","input_commitment_1","nullifier_0","nullifier_1","output_commitment_0","output_commitment_1","root","asset_tag","chain_tag"]}"#;
@@ -100,6 +103,16 @@ pub struct ConfidentialUnshieldOutputV3 {
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[derive(Debug, Clone)]
 pub struct ConfidentialUnshieldProofV3 {
+    pub nullifiers: Vec<[u8; 32]>,
+    pub output_commitments: Vec<[u8; 32]>,
+    pub root: [u8; 32],
+    pub proof: ProofBox,
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+#[derive(Debug, Clone)]
+pub struct AssetHiddenTransferProofV1 {
+    pub input_commitments: Vec<[u8; 32]>,
     pub nullifiers: Vec<[u8; 32]>,
     pub output_commitments: Vec<[u8; 32]>,
     pub root: [u8; 32],
@@ -198,6 +211,21 @@ pub fn confidential_transfer_v2_vk_box() -> Result<VerifyingKeyBox, String> {
         .clone()
 }
 
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+pub fn asset_hidden_transfer_v1_vk_box() -> Result<VerifyingKeyBox, String> {
+    static CACHE: std::sync::OnceLock<Result<VerifyingKeyBox, String>> = std::sync::OnceLock::new();
+
+    CACHE
+        .get_or_init(|| {
+            build_confidential_v2_vk_box(
+                ASSET_HIDDEN_TRANSFER_V1_IPA_K,
+                ASSET_HIDDEN_TRANSFER_V1_CIRCUIT_ID,
+                &super::pasta_tiny::AssetHiddenTransferPublic::default(),
+            )
+        })
+        .clone()
+}
+
 pub fn ensure_confidential_transfer_v2_canonical_vk_box(
     vk_box: &VerifyingKeyBox,
 ) -> Result<(), String> {
@@ -223,6 +251,38 @@ pub fn ensure_confidential_transfer_v2_canonical_vk_box(
         if super::hash_vk(vk_box) != super::hash_vk(&canonical) || vk_box.bytes != canonical.bytes {
             return Err(
                 "Confidential transfer v2 verifier key must match the canonical semantic circuit key"
+                    .to_owned(),
+            );
+        }
+    }
+    Ok(())
+}
+
+pub fn ensure_asset_hidden_transfer_v1_canonical_vk_box(
+    vk_box: &VerifyingKeyBox,
+) -> Result<(), String> {
+    if vk_box.backend.as_str() != super::ZK_BACKEND_HALO2_IPA {
+        return Err(format!(
+            "Asset-hidden transfer v1 verifier key backend `{}` is not `{}`",
+            vk_box.backend,
+            super::ZK_BACKEND_HALO2_IPA
+        ));
+    }
+    if vk_box.bytes.is_empty() {
+        return Err("Asset-hidden transfer v1 verifier key must be non-empty".to_owned());
+    }
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    {
+        ensure_confidential_v2_vk_box_shape(
+            vk_box,
+            ASSET_HIDDEN_TRANSFER_V1_CIRCUIT_ID,
+            ASSET_HIDDEN_TRANSFER_V1_IPA_K,
+            "Asset-hidden transfer v1",
+        )?;
+        let canonical = asset_hidden_transfer_v1_vk_box()?;
+        if super::hash_vk(vk_box) != super::hash_vk(&canonical) || vk_box.bytes != canonical.bytes {
+            return Err(
+                "Asset-hidden transfer v1 verifier key must match the canonical public-input circuit key"
                     .to_owned(),
             );
         }
@@ -394,6 +454,10 @@ pub fn confidential_unshield_v3_vk_record(
 
 pub fn is_confidential_unshield_v3_circuit_id(raw: &str) -> bool {
     normalize_confidential_circuit_id(raw) == CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID
+}
+
+pub fn is_asset_hidden_transfer_v1_circuit_id(raw: &str) -> bool {
+    normalize_confidential_circuit_id(raw) == ASSET_HIDDEN_TRANSFER_V1_CIRCUIT_ID
 }
 
 pub fn parse_transfer_public_inputs(
@@ -2423,6 +2487,33 @@ fn parse_vk_for_unshield_v3(
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+fn parse_vk_for_asset_hidden_transfer_v1(
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+) -> Result<(super::PastaParams, ConfidentialV2VerifyingKey), String> {
+    if vk_box.backend.as_str() != super::ZK_BACKEND_HALO2_IPA {
+        return Err(
+            "asset-hidden transfer v1 proving requires a halo2/ipa verifying key".to_owned(),
+        );
+    }
+    if !is_asset_hidden_transfer_v1_circuit_id(circuit_id) {
+        return Err(format!(
+            "unsupported asset-hidden transfer verifier circuit `{circuit_id}`"
+        ));
+    }
+    let params = super::zkparse::params_any(vk_box.bytes.as_slice())
+        .ok_or_else(|| "missing/invalid IPAK parameters in verifying key envelope".to_owned())?;
+    let parsed = super::zkparse::vk_from_bytes::<super::pasta_tiny::AssetHiddenTransferPublic>(
+        vk_box.bytes.as_slice(),
+        &params,
+    )
+    .ok_or_else(|| {
+        "missing/invalid H2VK payload for asset-hidden transfer verifying key".to_owned()
+    })?;
+    Ok((params, parsed))
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn derive_confidential_v2_proving_key<C>(
     params: &super::PastaParams,
     parsed_vk: ConfidentialV2VerifyingKey,
@@ -2503,6 +2594,28 @@ fn cached_confidential_unshield_v3_proving_key() -> Result<&'static Confidential
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+fn cached_asset_hidden_transfer_v1_proving_key() -> Result<&'static ConfidentialV2ProvingKey, String>
+{
+    static CACHE: std::sync::OnceLock<Result<ConfidentialV2ProvingKey, String>> =
+        std::sync::OnceLock::new();
+
+    match CACHE.get_or_init(|| {
+        let vk_box = asset_hidden_transfer_v1_vk_box()?;
+        let (params, parsed_vk) =
+            parse_vk_for_asset_hidden_transfer_v1(ASSET_HIDDEN_TRANSFER_V1_CIRCUIT_ID, &vk_box)?;
+        derive_confidential_v2_proving_key(
+            &params,
+            parsed_vk,
+            &super::pasta_tiny::AssetHiddenTransferPublic::default(),
+            "asset-hidden transfer",
+        )
+    }) {
+        Ok(proving_key) => Ok(proving_key),
+        Err(err) => Err(err.clone()),
+    }
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn create_confidential_v2_proof<C>(
     params: &super::PastaParams,
     proving_key: &ConfidentialV2ProvingKey,
@@ -2545,6 +2658,145 @@ fn encode_halo2_envelope(
         super::ZK_BACKEND_HALO2_IPA.to_owned(),
         encoded,
     ))
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+pub fn build_asset_hidden_transfer_proof_v1(
+    chain_id: &ChainId,
+    pool_id: &str,
+    asset_set_root: [u8; 32],
+    input_commitments: &[[u8; 32]],
+    nullifiers: &[[u8; 32]],
+    output_commitments: &[[u8; 32]],
+    root_hint: [u8; 32],
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+) -> Result<AssetHiddenTransferProofV1, String> {
+    if pool_id.trim().is_empty() {
+        return Err("asset-hidden transfer v1 pool_id must be non-empty".to_owned());
+    }
+    if asset_set_root == [0u8; 32] {
+        return Err("asset-hidden transfer v1 asset_set_root must be nonzero".to_owned());
+    }
+    if input_commitments.is_empty() || input_commitments.len() > 2 {
+        return Err("asset-hidden transfer v1 supports one or two input commitments".to_owned());
+    }
+    if nullifiers.is_empty() || nullifiers.len() > 2 {
+        return Err("asset-hidden transfer v1 supports one or two nullifiers".to_owned());
+    }
+    if output_commitments.is_empty() || output_commitments.len() > 2 {
+        return Err("asset-hidden transfer v1 supports one or two output commitments".to_owned());
+    }
+    if input_commitments.len() != nullifiers.len() {
+        return Err(
+            "asset-hidden transfer v1 input commitments must match nullifier count".to_owned(),
+        );
+    }
+    for (index, nullifier) in nullifiers.iter().enumerate() {
+        if *nullifier == [0u8; 32] {
+            return Err(format!(
+                "asset-hidden transfer v1 nullifier {index} must be nonzero"
+            ));
+        }
+        if nullifiers[..index].iter().any(|seen| seen == nullifier) {
+            return Err("asset-hidden transfer v1 duplicate nullifier".to_owned());
+        }
+    }
+    for (index, commitment) in output_commitments.iter().enumerate() {
+        if *commitment == [0u8; 32] {
+            return Err(format!(
+                "asset-hidden transfer v1 output commitment {index} must be nonzero"
+            ));
+        }
+        if output_commitments[..index]
+            .iter()
+            .any(|seen| seen == commitment)
+        {
+            return Err("asset-hidden transfer v1 duplicate output commitment".to_owned());
+        }
+    }
+
+    let (params, parsed_vk) = parse_vk_for_asset_hidden_transfer_v1(circuit_id, vk_box)?;
+    let zero = [0u8; 32];
+    let public_words = [
+        derive_asset_hidden_pool_id_tag_v1(pool_id),
+        asset_set_root,
+        input_commitments.first().copied().unwrap_or(zero),
+        input_commitments.get(1).copied().unwrap_or(zero),
+        nullifiers.first().copied().unwrap_or(zero),
+        nullifiers.get(1).copied().unwrap_or(zero),
+        output_commitments.first().copied().unwrap_or(zero),
+        output_commitments.get(1).copied().unwrap_or(zero),
+        root_hint,
+        derive_confidential_chain_tag_v2(chain_id.as_str()),
+    ];
+    let values = public_words
+        .into_iter()
+        .enumerate()
+        .map(|(index, word)| {
+            scalar_from_repr(word).ok_or_else(|| {
+                format!(
+                    "asset-hidden transfer v1 public input column {index} must be a canonical Pasta scalar"
+                )
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let values: [Scalar; 10] = values
+        .try_into()
+        .map_err(|_| "asset-hidden transfer v1 public input shape mismatch".to_owned())?;
+    let circuit = super::pasta_tiny::AssetHiddenTransferPublic { values };
+    let instance_columns: Vec<Vec<Scalar>> = values.iter().map(|value| vec![*value]).collect();
+    let instance_refs: Vec<&[Scalar]> = instance_columns.iter().map(Vec::as_slice).collect();
+    let instance_wrapper = vec![instance_refs.as_slice()];
+    let proof_raw = if ensure_asset_hidden_transfer_v1_canonical_vk_box(vk_box).is_ok() {
+        create_confidential_v2_proof(
+            &params,
+            cached_asset_hidden_transfer_v1_proving_key()?,
+            circuit,
+            &instance_wrapper,
+            "asset-hidden transfer",
+        )?
+    } else {
+        let proving_key = derive_confidential_v2_proving_key(
+            &params,
+            parsed_vk.clone(),
+            &super::pasta_tiny::AssetHiddenTransferPublic::default(),
+            "asset-hidden transfer",
+        )?;
+        create_confidential_v2_proof(
+            &params,
+            &proving_key,
+            circuit,
+            &instance_wrapper,
+            "asset-hidden transfer",
+        )?
+    };
+    {
+        let proofs_instances = [&instance_refs[..]];
+        super::halo2_backend::verify_ipa_proof(
+            &params,
+            &parsed_vk,
+            proof_raw.as_slice(),
+            &proofs_instances,
+        )
+        .map_err(|err| {
+            format!("generated asset-hidden transfer proof failed local self-verification: {err}")
+        })?;
+    }
+    let proof = encode_halo2_envelope(
+        ASSET_HIDDEN_TRANSFER_V1_CIRCUIT_ID,
+        vk_box,
+        ASSET_HIDDEN_TRANSFER_V1_PUBLIC_INPUTS_SCHEMA_V1.to_vec(),
+        &instance_columns,
+        proof_raw,
+    )?;
+    Ok(AssetHiddenTransferProofV1 {
+        input_commitments: input_commitments.to_vec(),
+        nullifiers: nullifiers.to_vec(),
+        output_commitments: output_commitments.to_vec(),
+        root: root_hint,
+        proof,
+    })
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
@@ -3624,6 +3876,80 @@ mod tests {
         assert!(
             crate::zk::verify_backend(crate::zk::ZK_BACKEND_HALO2_IPA, &proof.proof, Some(&vk_box)),
             "generated one-input confidential transfer v2 proof should verify against the generated VK"
+        );
+    }
+
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    #[test]
+    fn generated_asset_hidden_transfer_v1_proof_verifies_against_cached_canonical_vk() {
+        let chain_id = iroha_data_model::ChainId::from("asset-hidden-transfer-v1-test");
+        let pool_id = "boi-private-is-pool";
+        let asset_set_root = super::scalar_to_repr_bytes(super::scalar_from_u128(0xA0));
+        let input_commitment = super::scalar_to_repr_bytes(super::scalar_from_u128(0xA1));
+        let nullifier = super::scalar_to_repr_bytes(super::scalar_from_u128(0xB1));
+        let output_commitment = super::scalar_to_repr_bytes(super::scalar_from_u128(0xC1));
+        let root_hint = super::scalar_to_repr_bytes(super::scalar_from_u128(0xD1));
+        let vk_box = super::asset_hidden_transfer_v1_vk_box().expect("asset hidden vk");
+
+        let proof = super::build_asset_hidden_transfer_proof_v1(
+            &chain_id,
+            pool_id,
+            asset_set_root,
+            &[input_commitment],
+            &[nullifier],
+            &[output_commitment],
+            root_hint,
+            super::ASSET_HIDDEN_TRANSFER_V1_CIRCUIT_ID,
+            &vk_box,
+        )
+        .expect("build asset-hidden transfer proof");
+
+        assert_eq!(proof.input_commitments, vec![input_commitment]);
+        assert_eq!(proof.nullifiers, vec![nullifier]);
+        assert_eq!(proof.output_commitments, vec![output_commitment]);
+        assert_eq!(proof.root, root_hint);
+        assert!(
+            crate::zk::verify_backend(crate::zk::ZK_BACKEND_HALO2_IPA, &proof.proof, Some(&vk_box)),
+            "generated asset-hidden transfer v1 proof should verify against the cached canonical VK"
+        );
+
+        let public_inputs = super::parse_asset_hidden_transfer_public_inputs(&proof.proof.bytes)
+            .expect("asset-hidden public inputs");
+        assert_eq!(
+            public_inputs.pool_id_tag,
+            super::derive_asset_hidden_pool_id_tag_v1(pool_id)
+        );
+        assert_eq!(public_inputs.asset_set_root, asset_set_root);
+        assert_eq!(
+            public_inputs.input_commitments,
+            [input_commitment, [0u8; 32]]
+        );
+        assert_eq!(public_inputs.nullifiers, [nullifier, [0u8; 32]]);
+        assert_eq!(public_inputs.outputs, [output_commitment, [0u8; 32]]);
+        assert_eq!(public_inputs.root, root_hint);
+        assert_eq!(
+            public_inputs.chain_tag,
+            super::derive_confidential_chain_tag_v2(chain_id.as_str())
+        );
+
+        let duplicate_nullifier = super::build_asset_hidden_transfer_proof_v1(
+            &chain_id,
+            pool_id,
+            asset_set_root,
+            &[
+                input_commitment,
+                super::scalar_to_repr_bytes(super::scalar_from_u128(0xA2)),
+            ],
+            &[nullifier, nullifier],
+            &[output_commitment],
+            root_hint,
+            super::ASSET_HIDDEN_TRANSFER_V1_CIRCUIT_ID,
+            &vk_box,
+        )
+        .expect_err("duplicate nullifiers must reject before proving");
+        assert!(
+            duplicate_nullifier.contains("duplicate nullifier"),
+            "unexpected duplicate-nullifier error: {duplicate_nullifier}"
         );
     }
 

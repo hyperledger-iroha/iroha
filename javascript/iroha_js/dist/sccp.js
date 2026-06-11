@@ -741,6 +741,14 @@ const immutableProverCallbackValue = (value) => {
   return value;
 };
 
+const verifiedNativeEvmProverArtifacts = new WeakSet();
+
+const immutableVerifiedNativeEvmProverArtifacts = (value) => {
+  const frozen = immutableProverCallbackValue(value);
+  verifiedNativeEvmProverArtifacts.add(frozen);
+  return frozen;
+};
+
 const mutableProverCallbackSnapshotValue = (value) => {
   if (
     value instanceof Uint8Array ||
@@ -10162,7 +10170,7 @@ const verifyNativeEvmProverArtifacts = (
   );
   if (typeof sdk !== "string" || sdk.length === 0 || sdk.trim() !== sdk) {
     throw new TypeError(
-      "sdk must be a non-empty canonical string for nativeProverBundle implementation binding",
+      "nativeProverArtifacts.sdk must be a non-empty canonical string",
     );
   }
   if (implementationBytes === undefined) {
@@ -10197,7 +10205,7 @@ const verifyNativeEvmProverArtifacts = (
     "implementationBytes",
   );
   const implementation = artifact.implementation;
-  return immutableProverCallbackValue({
+  return immutableVerifiedNativeEvmProverArtifacts({
     hashAlgorithm: SCCP_NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1,
     nativeProverBundle,
     proofArtifactHash,
@@ -10299,7 +10307,7 @@ const verifyNativeEvmProverArtifactsFromBundle = async (
   const sdk = strictOptionalResultField(input, "sdk", "sdk");
   if (typeof sdk !== "string" || sdk.length === 0 || sdk.trim() !== sdk) {
     throw new TypeError(
-      "sdk must be a non-empty canonical string for nativeProverBundle implementation binding",
+      "nativeProverArtifacts.sdk must be a non-empty canonical string",
     );
   }
   const resolver = strictOptionalResultField(
@@ -10482,6 +10490,11 @@ const normalizeVerifiedNativeEvmProverArtifacts = (
     input,
     `${profile.displayName} verified native EVM prover artifacts`,
   );
+  if (!verifiedNativeEvmProverArtifacts.has(input)) {
+    throw new TypeError(
+      "nativeProverArtifacts must be returned by the local native EVM prover artifact byte verifier",
+    );
+  }
   const hashAlgorithm = strictResultField(
     input,
     "nativeProverArtifacts.hashAlgorithm",
@@ -10663,7 +10676,7 @@ const normalizeVerifiedNativeEvmProverArtifacts = (
       "nativeProverArtifacts implementationHash must match nativeProverBundle",
     );
   }
-  return immutableProverCallbackValue({
+  return immutableVerifiedNativeEvmProverArtifacts({
     hashAlgorithm,
     nativeProverBundle,
     proofArtifactHash,
@@ -11196,8 +11209,8 @@ export const buildEvmSccpProofRequest = (input) => {
           "destinationBindingHash",
           32,
         ),
-        ...publicSignalWordBytes,
         ...proverArtifactRequestBytes,
+        ...publicSignalWordBytes,
       ),
     ),
   );
@@ -30960,7 +30973,7 @@ const normalizeTonSourceStateProofRequestForWrapping = (request) => {
 export function wrapTonSccpSourceStateVerificationProof(proofBytes, request) {
   const proofRequest = normalizeTonSourceStateProofRequestForWrapping(request);
   const proof = copyBytes(toBytes(proofBytes, "proofBytes"));
-  requireNonZeroProofBytes(proof, "proofBytes");
+  requireSourceStateProofBytes(proof, "proofBytes");
   return immutableSourceStateVerificationProof({
     version: 1,
     proofFamily: SCCP_STARK_FRI_PROOF_FAMILY_V1,

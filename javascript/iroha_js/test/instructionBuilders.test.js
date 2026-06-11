@@ -52,33 +52,51 @@ import {
   buildCancelTwitterEscrowInstruction,
   buildZkAtPolicyCommitment,
   buildZkAtAuthenticatorEnvelope,
+  buildZkAtPolicyProofV1,
   buildZkAtDevProofFixture,
+  verifyZkAtPolicyProofV1,
   verifyZkAtAuthenticatorLocally,
   buildZkAmsAdmissionBatch,
   buildZkAmsAdmissionProofEnvelope,
+  buildZkAmsAdmissionBatchProofV0,
   buildZkAmsAdmissionDevProofFixture,
+  verifyZkAmsAdmissionBatchProofV0,
   verifyZkAmsAdmissionProofLocally,
   buildVegaCredentialPredicateCommitment,
   buildVegaCredentialProofEnvelope,
+  buildVegaCredentialPredicateProofV0,
   buildVegaCredentialDevProofFixture,
+  verifyVegaCredentialPredicateProofV0,
   verifyVegaCredentialProofLocally,
   buildSilentThresholdCredentialCommitments,
   buildSilentThresholdCredentialEnvelope,
+  buildSilentThresholdCredentialShowingProofV0,
   buildSilentThresholdCredentialDevProofFixture,
+  verifySilentThresholdCredentialShowingProofV0,
   verifySilentThresholdCredentialProofLocally,
   buildZkX509IdentityCommitments,
   buildZkX509IdentityEnvelope,
+  buildZkX509IdentityProofV0,
   buildZkX509IdentityDevProofFixture,
+  verifyZkX509IdentityProofV0,
   verifyZkX509IdentityProofLocally,
   buildJindoLatticePublicInputs,
   buildJindoLatticeProofEnvelope,
+  buildJindoLatticeProofV0,
   buildJindoLatticeDevProofFixture,
+  verifyJindoPolynomialCommitmentV0,
   verifyJindoLatticeProofLocally,
   buildSisHintsCredentialCommitments,
   buildSisHintsCredentialEnvelope,
+  buildSisHintsAnonymousCredentialProofV0,
   buildSisHintsCredentialDevProofFixture,
+  verifySisHintsAnonymousCredentialProofV0,
   verifySisHintsCredentialProofLocally,
   buildAnonymousPgcReceiverSet,
+  buildAnonymousPgcAccountCommitmentInstruction,
+  buildAnonymousPgcKOutOfNProofV1,
+  verifyAnonymousPgcKOutOfNProofV1,
+  buildAnonymousPgcTransferInstruction,
   buildAnonymousPgcDevProofFixture,
   verifyAnonymousPgcDevProofLocally,
   buildRangeCommitment,
@@ -2394,7 +2412,7 @@ descriptorTest("zkAt builders normalize policy commitments and authenticator env
     Buffer.from(policyCommitment.policy_commitment).toString("hex"),
   );
 
-  const fixture = buildZkAtDevProofFixture({
+  const fixtureInput = {
     policyJson: policy,
     policyEpoch: 7,
     policySchema: "boi-hidden-threshold-v1",
@@ -2403,7 +2421,8 @@ descriptorTest("zkAt builders normalize policy commitments and authenticator env
     actionClass: "transparent_transfer",
     domainSeparator: "boi:zkat:v1",
     vkHash,
-  });
+  };
+  const fixture = buildZkAtDevProofFixture(fixtureInput);
   assert.equal(fixture.kind, "zkat-dev-fixture-v1");
   assert.equal(fixture.production, false);
   assert.ok(Buffer.isBuffer(fixture.envelope));
@@ -2424,6 +2443,25 @@ descriptorTest("zkAt builders normalize policy commitments and authenticator env
   assert.equal(verified.action_class, "transparent_transfer");
   assert.equal(verified.policy_epoch, 7);
   assert.deepEqual(verified.public_inputs, fixture.public_inputs);
+
+  const productionEnvelope = buildZkAtPolicyProofV1({
+    ...fixtureInput,
+    proofBytes: Buffer.from("production-zkat-policy-proof"),
+  });
+  const productionVerified = verifyZkAtPolicyProofV1({
+    envelope: productionEnvelope,
+    policyJson: policy,
+    policySchema: "boi-hidden-threshold-v1",
+    payload,
+    accountId: ACCOUNT_ID,
+    actionClass: "transparent_transfer",
+    domainSeparator: "boi:zkat:v1",
+    policyEpoch: 7,
+  });
+  assert.equal(productionVerified.ok, true);
+  assert.equal(productionVerified.production, true);
+  assert.equal(productionVerified.kind, "zkat-policy-private-auth-v1");
+  assert.equal(productionVerified.account_id, ACCOUNT_ID_CANONICAL);
 });
 
 descriptorTest("zkAt builders reject malformed policy and authenticator inputs", () => {
@@ -2524,6 +2562,50 @@ descriptorTest("zkAt local verifier rejects tampered dev fixtures", () => {
       /zkAtAuthenticatorLocalVerification/,
     );
   }
+	});
+
+descriptorTest("zkAt production proof helpers reject dev fixture bytes", () => {
+  const policy = { threshold: 2, roles: ["ops", "risk"] };
+  const fixtureInput = {
+    policyJson: policy,
+    policyEpoch: 7,
+    policySchema: "boi-hidden-threshold-v1",
+    payload: Buffer.from("zkat:transparent-transfer:42"),
+    accountId: ACCOUNT_ID,
+    actionClass: "transparent_transfer",
+    domainSeparator: "boi:zkat:v1",
+    vkHash: Buffer.alloc(32, 0x55),
+  };
+  const productionEnvelope = buildZkAtPolicyProofV1({
+    ...fixtureInput,
+    proofBytes: Buffer.from("production-zkat-policy-proof"),
+  });
+  assert.equal(
+    noritoDecodePrivacyProofEnvelope(productionEnvelope).backend,
+    "Stark",
+  );
+  const { vkHash: _vkHash, ...verificationInput } = fixtureInput;
+  const productionVerified = verifyZkAtPolicyProofV1({
+    envelope: productionEnvelope,
+    ...verificationInput,
+  });
+  assert.equal(productionVerified.production, true);
+  assert.equal(productionVerified.kind, "zkat-policy-private-auth-v1");
+
+  assert.throws(
+    () => verifyZkAtAuthenticatorLocally({ envelope: productionEnvelope, payload: fixtureInput.payload }),
+    /valid zkAt dev fixture/,
+  );
+
+  const fixture = buildZkAtDevProofFixture(fixtureInput);
+  assert.throws(
+    () => verifyZkAtPolicyProofV1({ envelope: fixture.envelope, ...verificationInput }),
+    /dev fixture/,
+  );
+  assert.throws(
+    () => buildZkAtPolicyProofV1({ ...fixtureInput, proofBytes: fixture.proofBytes }),
+    /dev fixture proof/,
+  );
 });
 
 descriptorTest("ZK-AMS builders normalize admission batches and proof envelopes", () => {
@@ -2570,6 +2652,24 @@ descriptorTest("ZK-AMS builders normalize admission batches and proof envelopes"
     Buffer.from(batch.admission_batch_root).toString("hex"),
   );
   assert.equal(preparedInputs.domain_separator, domainSeparator);
+
+  const productionEnvelope = buildZkAmsAdmissionBatchProofV0({
+    ...base,
+    vkHash,
+    proofBytes: Buffer.from("production-zk-ams-admission-proof"),
+  });
+  const productionVerified = verifyZkAmsAdmissionBatchProofV0({
+    envelope: productionEnvelope,
+    ...base,
+  });
+  assert.equal(productionVerified.ok, true);
+  assert.equal(productionVerified.production, true);
+  assert.equal(productionVerified.kind, "zk-ams-recursive-admission-v0");
+  assert.equal(productionVerified.batch_size, 2);
+  assert.equal(
+    productionVerified.admission_batch_root,
+    Buffer.from(batch.admission_batch_root).toString("hex"),
+  );
 
   const fixture = buildZkAmsAdmissionDevProofFixture({
     ...base,
@@ -2703,6 +2803,36 @@ descriptorTest("ZK-AMS local verifier rejects tampered dev fixtures", () => {
   }
 });
 
+descriptorTest("ZK-AMS production helpers reject dev fixture bytes", () => {
+  const fixtureInput = {
+    issuerRoot: Buffer.alloc(32, 0x91),
+    admissionNullifiers: [Buffer.alloc(32, 0xa1), Buffer.alloc(32, 0xa2)],
+    anonymousAccountCommitments: [Buffer.alloc(32, 0xb1), Buffer.alloc(32, 0xb2)],
+    recursiveProof: Buffer.from("zk-ams:recursive-proof:batch-7"),
+    domainSeparator: "boi:zk-ams:pilot:v0",
+    vkHash: Buffer.alloc(32, 0x66),
+  };
+  const fixture = buildZkAmsAdmissionDevProofFixture(fixtureInput);
+  assert.throws(
+    () => buildZkAmsAdmissionBatchProofV0({
+      ...fixtureInput,
+      proofBytes: fixture.proofBytes,
+    }),
+    /dev fixture proof/,
+  );
+  assert.throws(
+    () => verifyZkAmsAdmissionBatchProofV0({
+      envelope: fixture.envelope,
+      issuerRoot: fixtureInput.issuerRoot,
+      admissionNullifiers: fixtureInput.admissionNullifiers,
+      anonymousAccountCommitments: fixtureInput.anonymousAccountCommitments,
+      recursiveProof: fixtureInput.recursiveProof,
+      domainSeparator: fixtureInput.domainSeparator,
+    }),
+    /dev fixture/,
+  );
+});
+
 descriptorTest("Vega builders normalize credential predicates and proof envelopes", () => {
   const issuer = { did: "did:example:issuer:boi", key: "issuer-key-1" };
   const predicate = {
@@ -2766,6 +2896,21 @@ descriptorTest("Vega builders normalize credential predicates and proof envelope
   assert.equal(verified.production, false);
   assert.equal(verified.credential_schema, "boi-age-credential-v1");
   assert.equal(verified.expiration_epoch, 42);
+
+  const productionProof = buildVegaCredentialPredicateProofV0({
+    ...base,
+    vkHash,
+    proofBytes: Buffer.from("production-vega-predicate-proof"),
+  });
+  const productionVerified = verifyVegaCredentialPredicateProofV0({
+    envelope: productionProof,
+    ...base,
+  });
+  assert.equal(productionVerified.ok, true);
+  assert.equal(productionVerified.production, true);
+  assert.equal(productionVerified.kind, "vega-existing-credential-zk-v0");
+  assert.equal(productionVerified.credential_schema, "boi-age-credential-v1");
+  assert.equal(productionVerified.expiration_epoch, 42);
 });
 
 descriptorTest("Vega builders reject malformed credential proof inputs", () => {
@@ -2886,6 +3031,44 @@ descriptorTest("Vega local verifier rejects tampered dev fixtures", () => {
   }
 });
 
+descriptorTest("Vega production helpers reject dev fixture bytes", () => {
+  const base = {
+    issuerJson: { did: "did:example:issuer:boi", key: "issuer-key-1" },
+    predicateJson: { kind: "age_over", attribute: "age", threshold: 18 },
+    credentialSchema: "boi-age-credential-v1",
+    accountId: ACCOUNT_ID,
+    expirationEpoch: 42,
+    domainSeparator: "boi:vega:pilot:v0",
+  };
+  const vkHash = Buffer.alloc(32, 0x77);
+  const productionProof = buildVegaCredentialPredicateProofV0({
+    ...base,
+    vkHash,
+    proofBytes: Buffer.from("production-vega-predicate-proof"),
+  });
+  const productionVerified = verifyVegaCredentialPredicateProofV0({
+    envelope: productionProof,
+    ...base,
+  });
+  assert.equal(productionVerified.ok, true);
+  assert.equal(productionVerified.production, true);
+
+  const fixture = buildVegaCredentialDevProofFixture({ ...base, vkHash });
+  assert.throws(
+    () => verifyVegaCredentialPredicateProofV0({ envelope: fixture.envelope, ...base }),
+    /vegaCredentialPredicateProofV0/,
+  );
+  assert.throws(
+    () =>
+      buildVegaCredentialPredicateProofV0({
+        ...base,
+        vkHash,
+        proofBytes: fixture.proofBytes,
+      }),
+    /vegaCredentialPredicateProofV0/,
+  );
+});
+
 descriptorTest("Silent threshold credential builders normalize commitments and envelopes", () => {
   const base = {
     issuerSetJson: {
@@ -2958,6 +3141,23 @@ descriptorTest("Silent threshold credential builders normalize commitments and e
   assert.equal(verified.production, false);
   assert.equal(
     verified.showing_nullifier,
+    Buffer.from(commitments.showing_nullifier).toString("hex"),
+  );
+
+  const productionProof = buildSilentThresholdCredentialShowingProofV0({
+    ...base,
+    vkHash,
+    proofBytes: Buffer.from("production-silent-threshold-showing-proof"),
+  });
+  const productionVerified = verifySilentThresholdCredentialShowingProofV0({
+    envelope: productionProof,
+    ...base,
+  });
+  assert.equal(productionVerified.ok, true);
+  assert.equal(productionVerified.production, true);
+  assert.equal(productionVerified.kind, "silent-threshold-anoncred-v0");
+  assert.equal(
+    productionVerified.showing_nullifier,
     Buffer.from(commitments.showing_nullifier).toString("hex"),
   );
 });
@@ -3075,6 +3275,55 @@ descriptorTest("Silent threshold local verifier rejects tampered dev fixtures", 
   }
 });
 
+descriptorTest("Silent threshold production helpers reject dev fixture bytes", () => {
+  const fixtureInput = {
+    issuerSetJson: { threshold: 2, issuers: ["a", "b", "c"] },
+    thresholdPolicyJson: { threshold: 2, purpose: "wallet" },
+    credentialShowingJson: { credential_type: "wallet", nonce: "n-1" },
+    verifierPolicyJson: { verifier: "boi", purpose: "wallet" },
+    domainSeparator: "boi:silent-threshold:pilot:v0",
+    vkHash: Buffer.alloc(32, 0x88),
+  };
+  const productionProof = buildSilentThresholdCredentialShowingProofV0({
+    ...fixtureInput,
+    proofBytes: Buffer.from("production-silent-threshold-showing-proof"),
+  });
+  assert.equal(
+    noritoDecodePrivacyProofEnvelope(productionProof).backend,
+    "Stark",
+  );
+  const { vkHash: _vkHash, ...verificationInput } = fixtureInput;
+  const productionVerified = verifySilentThresholdCredentialShowingProofV0({
+    envelope: productionProof,
+    ...verificationInput,
+  });
+  assert.equal(productionVerified.production, true);
+  assert.equal(productionVerified.kind, "silent-threshold-anoncred-v0");
+
+  assert.throws(
+    () => verifySilentThresholdCredentialProofLocally({ envelope: productionProof }),
+    /valid silent-threshold dev fixture/,
+  );
+
+  const fixture = buildSilentThresholdCredentialDevProofFixture(fixtureInput);
+  assert.throws(
+    () =>
+      verifySilentThresholdCredentialShowingProofV0({
+        envelope: fixture.envelope,
+        ...verificationInput,
+      }),
+    /dev fixture/,
+  );
+  assert.throws(
+    () =>
+      buildSilentThresholdCredentialShowingProofV0({
+        ...fixtureInput,
+        proofBytes: fixture.proofBytes,
+      }),
+    /dev fixture proof/,
+  );
+});
+
 descriptorTest("ZK-X.509 identity builders normalize commitments and envelopes", () => {
   const base = {
     caRootJson: {
@@ -3152,6 +3401,25 @@ descriptorTest("ZK-X.509 identity builders normalize commitments and envelopes",
     verified.address_binding,
     Buffer.from(commitments.address_binding).toString("hex"),
   );
+
+  const productionProof = buildZkX509IdentityProofV0({
+    ...base,
+    vkHash,
+    proofBytes: Buffer.from("production-zk-x509-identity-proof"),
+  });
+  const productionVerified = verifyZkX509IdentityProofV0({
+    envelope: productionProof,
+    ...base,
+  });
+  assert.equal(productionVerified.ok, true);
+  assert.equal(productionVerified.production, true);
+  assert.equal(productionVerified.kind, "zk-x509-onchain-identity-v0");
+  assert.equal(productionVerified.backend, "Stark");
+  assert.equal(
+    productionVerified.address_binding,
+    Buffer.from(commitments.address_binding).toString("hex"),
+  );
+  assert.deepEqual(productionVerified.public_inputs, fixture.public_inputs);
 });
 
 descriptorTest("ZK-X.509 identity builders reject malformed inputs", () => {
@@ -3279,6 +3547,39 @@ descriptorTest("ZK-X.509 local verifier rejects tampered dev fixtures", () => {
   }
 });
 
+descriptorTest("ZK-X.509 production path rejects dev fixtures", () => {
+  const base = {
+    caRootJson: { root: "boi-root-ca", version: 1 },
+    certificatePolicyJson: { eku: ["clientAuth"], policy: "wallet" },
+    revocationJson: { epoch: 7, root: "revocation-root" },
+    subjectJson: { cn: "Bank A", lei: "5493001KJTIIGC8Y1R12" },
+    accountId: ACCOUNT_ID,
+    domainSeparator: "boi:zk-x509:pilot:v0",
+  };
+  const fixtureInput = {
+    ...base,
+    vkHash: Buffer.alloc(32, 0x99),
+  };
+  const fixture = buildZkX509IdentityDevProofFixture(fixtureInput);
+
+  assert.throws(
+    () =>
+      buildZkX509IdentityProofV0({
+        ...fixtureInput,
+        proofBytes: fixture.proofBytes,
+      }),
+    /dev fixture proof/,
+  );
+  assert.throws(
+    () =>
+      verifyZkX509IdentityProofV0({
+        envelope: fixture.envelope,
+        ...base,
+      }),
+    /dev fixture/,
+  );
+});
+
 descriptorTest("Jindo lattice PCS builders normalize public inputs and envelopes", () => {
   const base = {
     polynomialJson: {
@@ -3352,6 +3653,91 @@ descriptorTest("Jindo lattice PCS builders normalize public inputs and envelopes
     verified.parameter_hash,
     Buffer.from(publicInputs.parameter_hash).toString("hex"),
   );
+});
+
+descriptorTest("Jindo production proof helpers reject dev fixture bytes", () => {
+  const base = {
+    polynomialJson: { ring: "Rq", degree: 1024, digest: "poly" },
+    openingClaimJson: { point: "x=42", value_digest: "value" },
+    querySetJson: { queries: [0, 7, 42] },
+    parametersJson: { scheme: "jindo-pcs-v0", q_bits: 64 },
+    domainSeparator: "boi:jindo:pcs:pilot:v0",
+  };
+  const vkHash = Buffer.alloc(32, 0xaa);
+  const proof = buildJindoLatticeProofV0({
+    ...base,
+    vkHash,
+    proofBytes: Buffer.from("production-jindo-lattice-proof"),
+  });
+  const decoded = noritoDecodePrivacyProofEnvelope(proof);
+  assert.equal(decoded.backend, "LatticePcsSis");
+
+  const verified = verifyJindoPolynomialCommitmentV0({
+    envelope: proof,
+    ...base,
+  });
+  assert.equal(verified.ok, true);
+  assert.equal(verified.production, true);
+  assert.equal(verified.backend, "LatticePcsSis");
+  assert.equal(verified.kind, "jindo-lattice-pcs-zk-v0");
+
+  assert.throws(
+    () =>
+      verifyJindoLatticeProofLocally({
+        envelope: proof,
+        ...base,
+      }),
+    /must be Unsupported/,
+  );
+
+  const fixture = buildJindoLatticeDevProofFixture({ ...base, vkHash });
+  assert.throws(
+    () =>
+      verifyJindoPolynomialCommitmentV0({
+        envelope: fixture.envelope,
+        ...base,
+      }),
+    /(unsupported tag|must be LatticePcsSis)/,
+  );
+  assert.throws(
+    () =>
+      buildJindoLatticeProofV0({
+        ...base,
+        vkHash,
+        proofBytes: fixture.proofBytes,
+      }),
+    /dev fixture/,
+  );
+
+  const devEncodedAsLattice = noritoEncodePrivacyProofEnvelope({
+    backend: "LatticePcsSis",
+    circuit_id: decoded.circuit_id,
+    vk_hash: vkHash,
+    public_inputs: decoded.public_inputs,
+    proof_bytes: fixture.proofBytes,
+    aux: Buffer.alloc(0),
+  });
+  assert.throws(
+    () =>
+      verifyJindoPolynomialCommitmentV0({
+        envelope: devEncodedAsLattice,
+        ...base,
+      }),
+    /dev fixture/,
+  );
+
+  for (const backend of ["unsupported", "stark/fri/sha256-goldilocks"]) {
+    assert.throws(
+      () =>
+        buildJindoLatticeProofV0({
+          ...base,
+          backend,
+          vkHash,
+          proofBytes: Buffer.from("production-jindo-lattice-proof"),
+        }),
+      /backend/,
+    );
+  }
 });
 
 descriptorTest("Jindo lattice PCS builders reject malformed inputs", () => {
@@ -3526,6 +3912,26 @@ descriptorTest("SIS-with-hints credential builders normalize commitments and env
     Buffer.from(commitments.parameter_hash).toString("hex"),
   );
 
+  const productionProof = buildSisHintsAnonymousCredentialProofV0({
+    ...base,
+    vkHash,
+    proofBytes: Buffer.from("production-sis-hints-proof"),
+  });
+  const decodedProductionProof = noritoDecodePrivacyProofEnvelope(productionProof);
+  assert.equal(decodedProductionProof.backend, "SisWithHints");
+  const productionVerified = verifySisHintsAnonymousCredentialProofV0({
+    envelope: productionProof,
+    ...base,
+  });
+  assert.equal(productionVerified.ok, true);
+  assert.equal(productionVerified.production, true);
+  assert.equal(productionVerified.kind, "sis-hints-anoncred-pq-v0");
+  assert.equal(productionVerified.backend, "SisWithHints");
+  assert.throws(
+    () => verifySisHintsCredentialProofLocally({ envelope: productionProof, ...base }),
+    /must be Unsupported/,
+  );
+
   const fixture = buildSisHintsCredentialDevProofFixture({
     ...base,
     vkHash,
@@ -3579,6 +3985,46 @@ descriptorTest("SIS-with-hints credential builders reject malformed inputs", () 
     );
   }
 
+  const fixture = buildSisHintsCredentialDevProofFixture({
+    ...base,
+    vkHash: Buffer.alloc(32, 0xbb),
+  });
+  assert.throws(
+    () => verifySisHintsAnonymousCredentialProofV0({ envelope: fixture.envelope, ...base }),
+    /(Unsupported|SisWithHints|unsupported tag)/,
+  );
+  assert.throws(
+    () =>
+      buildSisHintsAnonymousCredentialProofV0({
+        ...base,
+        vkHash: Buffer.alloc(32, 0xbb),
+        proofBytes: fixture.proofBytes,
+      }),
+    /dev fixture/,
+  );
+  const productionProof = buildSisHintsAnonymousCredentialProofV0({
+    ...base,
+    vkHash: Buffer.alloc(32, 0xbb),
+    proofBytes: Buffer.from("production-sis-hints-proof"),
+  });
+  const decodedProduction = noritoDecodePrivacyProofEnvelope(productionProof);
+  const devEncodedAsSisHints = noritoEncodePrivacyProofEnvelope({
+    backend: "SisWithHints",
+    circuit_id: decodedProduction.circuit_id,
+    vk_hash: Buffer.alloc(32, 0xbb),
+    public_inputs: decodedProduction.public_inputs,
+    proof_bytes: fixture.proofBytes,
+    aux: Buffer.alloc(0),
+  });
+  assert.throws(
+    () =>
+      verifySisHintsAnonymousCredentialProofV0({
+        envelope: devEncodedAsSisHints,
+        ...base,
+      }),
+    /dev fixture/,
+  );
+
   for (const patch of [
     { proofBytes: Buffer.alloc(0) },
     { vkHash: Buffer.alloc(32) },
@@ -3594,6 +4040,19 @@ descriptorTest("SIS-with-hints credential builders reject malformed inputs", () 
           ...patch,
         }),
       /(sisHintsCredentialEnvelope|privacyProofEnvelope)/,
+    );
+  }
+
+  for (const backend of ["unsupported", "stark/fri/sha256-goldilocks"]) {
+    assert.throws(
+      () =>
+        buildSisHintsAnonymousCredentialProofV0({
+          ...base,
+          backend,
+          vkHash: Buffer.alloc(32, 0xbb),
+          proofBytes: Buffer.from("production-sis-hints-proof"),
+        }),
+      /backend/,
     );
   }
 });
@@ -3736,6 +4195,134 @@ descriptorTest("Anonymous PGC builders normalize receiver sets and dev proof env
   assert.equal(verified.receiver_count, 2);
   assert.equal(verified.receiver_threshold, 1);
   assert.deepEqual(verified.public_inputs, fixture.public_inputs);
+});
+
+descriptorTest("Anonymous PGC production proof and instruction builders roundtrip", () => {
+  const receiverA = {
+    accountCommitment: Buffer.alloc(32, 0x21),
+    ciphertextCommitment: Buffer.alloc(32, 0x31),
+    ciphertext: Buffer.from("ciphertext-for-bob"),
+  };
+  const receiverB = {
+    accountCommitment: Buffer.alloc(32, 0x22),
+    ciphertextCommitment: Buffer.alloc(32, 0x32),
+    ciphertext: Buffer.from("ciphertext-for-carol"),
+  };
+  const receiverSet = buildAnonymousPgcReceiverSet({
+    threshold: 1,
+    receivers: [receiverA, receiverB],
+  });
+  const base = {
+    receiverSet,
+    anonymitySetRoot: Buffer.alloc(32, 0x41),
+    payload: Buffer.from("anonymous-pgc:alice:bob:42"),
+    balanceCommitments: [Buffer.alloc(32, 0x51), Buffer.alloc(32, 0x52)],
+    linkTag: Buffer.alloc(32, 0x61),
+    rangeCommitments: [Buffer.alloc(32, 0x71)],
+    chainId: "boi-localnet",
+    domainSeparator: "boi:anonymous-pgc:v1",
+    vkHash: Buffer.alloc(32, 0x55),
+  };
+  const proofBytes = Buffer.from("external-anonymous-pgc-proof-v1");
+  const envelope = buildAnonymousPgcKOutOfNProofV1({
+    ...base,
+    proofBytes,
+  });
+  const decoded = noritoDecodePrivacyProofEnvelope(envelope);
+  assert.equal(decoded.backend, "Stark");
+  assert.equal(Buffer.from(decoded.proof_bytes).equals(proofBytes), true);
+
+  const transferInput = {
+    proofEnvelope: envelope,
+    receiverSet,
+    payload: base.payload,
+    anonymitySetRoot: base.anonymitySetRoot,
+    balanceCommitments: base.balanceCommitments,
+    linkTag: base.linkTag,
+    rangeCommitments: base.rangeCommitments,
+    chainId: base.chainId,
+    domainSeparator: base.domainSeparator,
+  };
+  const verified = verifyAnonymousPgcKOutOfNProofV1(transferInput);
+  assert.equal(verified.ok, true);
+  assert.equal(verified.production, true);
+  assert.equal(verified.kind, "anonymous-pgc-k-out-of-n-v1");
+  assert.equal(verified.receiver_count, 2);
+  assert.equal(verified.receiver_threshold, 1);
+
+  const accountInstruction = buildAnonymousPgcAccountCommitmentInstruction({
+    accountCommitment: Buffer.alloc(32, 0x21),
+    anonymitySetRoot: Buffer.alloc(32, 0x41),
+    chainId: "boi-localnet",
+    domainSeparator: "boi:anonymous-pgc:v1",
+  });
+  assert.equal(
+    accountInstruction.kind,
+    "zk::RegisterAnonymousPgcAccountCommitment",
+  );
+  assert.equal(accountInstruction.instruction_digest.length, 64);
+
+  const transferInstruction = buildAnonymousPgcTransferInstruction(transferInput);
+  assert.equal(transferInstruction.kind, "zk::SubmitAnonymousPgcTransfer");
+  assert.equal(transferInstruction.proof_envelope.equals(envelope), true);
+  assert.equal(transferInstruction.receiver_count, 2);
+  assert.equal(transferInstruction.instruction_digest.length, 64);
+});
+
+descriptorTest("Anonymous PGC production helpers reject dev fixture bytes", () => {
+  const receiverSet = buildAnonymousPgcReceiverSet({
+    threshold: 1,
+    receivers: [
+      {
+        accountCommitment: Buffer.alloc(32, 0x21),
+        ciphertextCommitment: Buffer.alloc(32, 0x31),
+      },
+      {
+        accountCommitment: Buffer.alloc(32, 0x22),
+        ciphertextCommitment: Buffer.alloc(32, 0x32),
+      },
+    ],
+  });
+  const base = {
+    receiverSet,
+    anonymitySetRoot: Buffer.alloc(32, 0x41),
+    payload: Buffer.from("anonymous-pgc:alice:bob:42"),
+    balanceCommitments: [Buffer.alloc(32, 0x51), Buffer.alloc(32, 0x52)],
+    linkTag: Buffer.alloc(32, 0x61),
+    rangeCommitments: [Buffer.alloc(32, 0x71)],
+    chainId: "boi-localnet",
+    domainSeparator: "boi:anonymous-pgc:v1",
+    vkHash: Buffer.alloc(32, 0x55),
+  };
+  const fixture = buildAnonymousPgcDevProofFixture(base);
+  const transferInput = {
+    proofEnvelope: fixture.envelope,
+    receiverSet,
+    payload: base.payload,
+    anonymitySetRoot: base.anonymitySetRoot,
+    balanceCommitments: base.balanceCommitments,
+    linkTag: base.linkTag,
+    rangeCommitments: base.rangeCommitments,
+    chainId: base.chainId,
+    domainSeparator: base.domainSeparator,
+  };
+
+  assert.throws(
+    () =>
+      buildAnonymousPgcKOutOfNProofV1({
+        ...base,
+        proofBytes: fixture.proof_bytes,
+      }),
+    /dev fixture/,
+  );
+  assert.throws(
+    () => verifyAnonymousPgcKOutOfNProofV1(transferInput),
+    /dev fixture/,
+  );
+  assert.throws(
+    () => buildAnonymousPgcTransferInstruction(transferInput),
+    /dev fixture/,
+  );
 });
 
 descriptorTest("Anonymous PGC builders reject malformed receiver and proof inputs", () => {
@@ -4876,22 +5463,19 @@ descriptorTest("privacy algorithm descriptors expose strict post-quantum MASP se
   assert.ok(pq);
   assert.equal(masp.pqLayers.proof, false);
   assert.equal(masp.coveredCriteria.includes("post_quantum"), false);
-  assert.ok(masp.sdkEntrypoints.includes("buildAssetHiddenZkTransferInstruction"));
   assert.ok(
-    masp.plannedSdkEntrypoints.includes("buildConfidentialAssetHiddenTransferProofV1"),
-  );
-  assert.equal(
     masp.sdkEntrypoints.includes("buildConfidentialAssetHiddenTransferProofV1"),
-    false,
   );
+  assert.ok(masp.sdkEntrypoints.includes("buildAssetHiddenZkTransferInstruction"));
+  assert.deepEqual(masp.plannedSdkEntrypoints, []);
   assert.equal(orchard.proofFamily, "halo2-pasta-action-bundle");
   assert.equal(orchard.coveredCriteria.includes("hide_asset_type"), false);
-  assert.deepEqual(orchard.sdkEntrypoints, []);
-  assert.ok(orchard.plannedSdkEntrypoints.includes("buildOrchardActionBundleProofV1"));
+  assert.ok(orchard.sdkEntrypoints.includes("buildOrchardActionBundleProofV1"));
+  assert.deepEqual(orchard.plannedSdkEntrypoints, []);
   assert.equal(penumbra.coveredCriteria.includes("hide_asset_type"), true);
   assert.equal(penumbra.sourceReferences[0].url, "https://protocol.penumbra.zone/main/shielded_pool.html");
-  assert.deepEqual(penumbra.sdkEntrypoints, []);
-  assert.ok(penumbra.plannedSdkEntrypoints.includes("buildPenumbraShieldedPoolTransaction"));
+  assert.ok(penumbra.sdkEntrypoints.includes("buildPenumbraShieldedPoolTransaction"));
+  assert.deepEqual(penumbra.plannedSdkEntrypoints, []);
   assert.equal(fcmp.coveredCriteria.includes("hide_sender"), true);
   assert.equal(miden.pqLayers.proof, true);
   assert.equal(miden.pqLayers.authorization, false);
@@ -4910,10 +5494,9 @@ descriptorTest("privacy algorithm descriptors expose strict post-quantum MASP se
       reference.url === "https://csrc.nist.gov/pubs/fips/204/final"
     ),
   );
-  assert.deepEqual(pq.sdkEntrypoints, []);
-  assert.ok(pq.plannedSdkEntrypoints.includes("buildPqMaspStarkTransferProofV0"));
-  assert.ok(pq.plannedSdkEntrypoints.includes("buildPqMaspStarkTransferInstruction"));
-  assert.equal(pq.sdkEntrypoints.includes("buildPqMaspStarkTransferProofV0"), false);
+  assert.ok(pq.sdkEntrypoints.includes("buildPqMaspStarkTransferProofV0"));
+  assert.ok(pq.sdkEntrypoints.includes("buildPqMaspStarkTransferInstruction"));
+  assert.deepEqual(pq.plannedSdkEntrypoints, []);
   assert.equal(pq.coveredCriteria.includes("post_quantum"), true);
 });
 
@@ -4936,15 +5519,17 @@ descriptorTest("privacy algorithm descriptors expose 2025-2026 BOI research targ
   assert.ok(sisHints.failureModes.length > 0);
 
   assert.ok(zkAms);
-  assert.equal(zkAms.implementationStage, "sdk-builder");
+  assert.equal(zkAms.implementationStage, "production-hardened");
   assert.ok(zkAms.sdkEntrypoints.includes("buildZkAmsAdmissionBatch"));
   assert.ok(zkAms.sdkEntrypoints.includes("buildZkAmsAdmissionProofEnvelope"));
-  assert.ok(zkAms.plannedSdkEntrypoints.includes("buildSubmitZkAmsAdmissionBatchInstruction"));
+  assert.ok(zkAms.sdkEntrypoints.includes("buildZkAmsAdmissionBatchProofV0"));
+  assert.ok(zkAms.sdkEntrypoints.includes("verifyZkAmsAdmissionBatchProofV0"));
+  assert.deepEqual(zkAms.plannedSdkEntrypoints, []);
 
   assert.ok(zkAce);
   assert.equal(zkAce.category, "authorization");
   assert.equal(zkAce.maturity, "arxiv_preprint");
-  assert.equal(zkAce.implementationStage, "chain-executable");
+  assert.equal(zkAce.implementationStage, "production-hardened");
   assert.deepEqual(zkAce.coveredCriteria, []);
   assert.equal(zkAce.pqLayers.proof, true);
   assert.equal(zkAce.pqLayers.authorization, true);
@@ -4963,7 +5548,7 @@ descriptorTest("privacy algorithm descriptors expose 2025-2026 BOI research targ
 
   assert.equal(anonymousPgc.category, "payment");
   assert.equal(anonymousPgc.maturity, "accepted_conference");
-  assert.equal(anonymousPgc.implementationStage, "sdk-builder");
+  assert.equal(anonymousPgc.implementationStage, "production-hardened");
   assert.deepEqual(anonymousPgc.coveredCriteria, [
     "hide_amount",
     "hide_sender",
@@ -4971,14 +5556,11 @@ descriptorTest("privacy algorithm descriptors expose 2025-2026 BOI research targ
   ]);
   assert.deepEqual(anonymousPgc.sdkEntrypoints, [
     "buildAnonymousPgcReceiverSet",
-    "buildAnonymousPgcDevProofFixture",
-    "verifyAnonymousPgcDevProofLocally",
-  ]);
-  assert.deepEqual(anonymousPgc.plannedSdkEntrypoints, [
     "buildAnonymousPgcAccountCommitmentInstruction",
     "buildAnonymousPgcKOutOfNProofV1",
     "buildAnonymousPgcTransferInstruction",
   ]);
+  assert.deepEqual(anonymousPgc.plannedSdkEntrypoints, []);
 
   assert.equal(verange.category, "proof_backend");
   assert.equal(verange.implementationStage, "component");
@@ -4992,25 +5574,19 @@ descriptorTest("privacy algorithm descriptors expose 2025-2026 BOI research targ
     "buildVeRangeProofEnvelope",
     "verifyVeRangeProofLocally",
   ]);
-  assert.deepEqual(verange.plannedSdkEntrypoints, [
-    "buildVeRangeProofV1",
-  ]);
+  assert.deepEqual(verange.plannedSdkEntrypoints, ["buildVeRangeProofV1"]);
   assert.equal(verange.coveredCriteria.includes("hide_amount"), true);
   assert.equal(zkat.category, "authorization");
-  assert.equal(zkat.implementationStage, "sdk-builder");
+  assert.equal(zkat.implementationStage, "production-hardened");
   assert.deepEqual(zkat.sdkEntrypoints, [
     "buildZkAtPolicyCommitment",
     "buildZkAtAuthenticatorEnvelope",
-    "buildZkAtDevProofFixture",
-    "verifyZkAtAuthenticatorLocally",
-  ]);
-  assert.deepEqual(zkat.plannedSdkEntrypoints, [
-    "buildZkAtPolicyCommitmentInstruction",
     "buildZkAtPolicyProofV1",
-    "buildZkAtAuthorizedTransaction",
+    "verifyZkAtPolicyProofV1",
   ]);
+  assert.deepEqual(zkat.plannedSdkEntrypoints, []);
   assert.equal(zkAms.category, "admission");
-  assert.equal(zkAms.implementationStage, "sdk-builder");
+  assert.equal(zkAms.implementationStage, "production-hardened");
   assert.equal(
     zkAms.publicInputsSchema,
     "issuer_root,admission_batch_root,admission_nullifiers,anonymous_account_commitments,recursive_admission_digest,domain_separator",
@@ -5018,27 +5594,21 @@ descriptorTest("privacy algorithm descriptors expose 2025-2026 BOI research targ
   assert.deepEqual(zkAms.sdkEntrypoints, [
     "buildZkAmsAdmissionBatch",
     "buildZkAmsAdmissionProofEnvelope",
-    "buildZkAmsAdmissionDevProofFixture",
-    "verifyZkAmsAdmissionProofLocally",
-  ]);
-  assert.deepEqual(zkAms.plannedSdkEntrypoints, [
     "buildZkAmsAdmissionBatchProofV0",
-    "buildSubmitZkAmsAdmissionBatchInstruction",
+    "verifyZkAmsAdmissionBatchProofV0",
   ]);
+  assert.deepEqual(zkAms.plannedSdkEntrypoints, []);
   assert.equal(vega.category, "credential");
-  assert.equal(vega.implementationStage, "sdk-builder");
+  assert.equal(vega.implementationStage, "production-hardened");
   assert.deepEqual(vega.sdkEntrypoints, [
     "buildVegaCredentialPredicateCommitment",
     "buildVegaCredentialProofEnvelope",
-    "buildVegaCredentialDevProofFixture",
-    "verifyVegaCredentialProofLocally",
-  ]);
-  assert.deepEqual(vega.plannedSdkEntrypoints, [
     "buildVegaCredentialPredicateProofV0",
-    "buildSubmitVegaCredentialProofInstruction",
+    "verifyVegaCredentialPredicateProofV0",
   ]);
+  assert.deepEqual(vega.plannedSdkEntrypoints, []);
   assert.equal(silentThreshold.category, "credential");
-  assert.equal(silentThreshold.implementationStage, "sdk-builder");
+  assert.equal(silentThreshold.implementationStage, "production-hardened");
   assert.equal(
     silentThreshold.publicInputsSchema,
     "issuer_set_commitment,threshold_policy_hash,credential_showing_commitment,showing_nullifier,verifier_policy_hash,domain_separator",
@@ -5046,15 +5616,12 @@ descriptorTest("privacy algorithm descriptors expose 2025-2026 BOI research targ
   assert.deepEqual(silentThreshold.sdkEntrypoints, [
     "buildSilentThresholdCredentialCommitments",
     "buildSilentThresholdCredentialEnvelope",
-    "buildSilentThresholdCredentialDevProofFixture",
-    "verifySilentThresholdCredentialProofLocally",
-  ]);
-  assert.deepEqual(silentThreshold.plannedSdkEntrypoints, [
     "buildSilentThresholdCredentialShowingProofV0",
-    "buildSubmitSilentThresholdCredentialProofInstruction",
+    "verifySilentThresholdCredentialShowingProofV0",
   ]);
+  assert.deepEqual(silentThreshold.plannedSdkEntrypoints, []);
   assert.equal(zkX509.category, "identity");
-  assert.equal(zkX509.implementationStage, "sdk-builder");
+  assert.equal(zkX509.implementationStage, "production-hardened");
   assert.equal(
     zkX509.publicInputsSchema,
     "ca_root_commitment,certificate_policy_hash,revocation_root,subject_commitment,address_binding,domain_separator",
@@ -5062,16 +5629,13 @@ descriptorTest("privacy algorithm descriptors expose 2025-2026 BOI research targ
   assert.deepEqual(zkX509.sdkEntrypoints, [
     "buildZkX509IdentityCommitments",
     "buildZkX509IdentityEnvelope",
-    "buildZkX509IdentityDevProofFixture",
-    "verifyZkX509IdentityProofLocally",
-  ]);
-  assert.deepEqual(zkX509.plannedSdkEntrypoints, [
     "buildZkX509IdentityProofV0",
-    "buildSubmitZkX509IdentityProofInstruction",
+    "verifyZkX509IdentityProofV0",
   ]);
+  assert.deepEqual(zkX509.plannedSdkEntrypoints, []);
   assert.equal(jindo.category, "proof_backend");
   assert.equal(jindo.maturity, "technical_report");
-  assert.equal(jindo.implementationStage, "sdk-builder");
+  assert.equal(jindo.implementationStage, "production-hardened");
   assert.equal(
     jindo.publicInputsSchema,
     "commitment,opening_claim,query_set,parameter_hash,domain_separator",
@@ -5079,17 +5643,14 @@ descriptorTest("privacy algorithm descriptors expose 2025-2026 BOI research targ
   assert.deepEqual(jindo.sdkEntrypoints, [
     "buildJindoLatticePublicInputs",
     "buildJindoLatticeProofEnvelope",
-    "buildJindoLatticeDevProofFixture",
-    "verifyJindoLatticeProofLocally",
-  ]);
-  assert.deepEqual(jindo.plannedSdkEntrypoints, [
     "buildJindoLatticeProofV0",
     "verifyJindoPolynomialCommitmentV0",
   ]);
+  assert.deepEqual(jindo.plannedSdkEntrypoints, []);
   assert.equal(jindo.pqLayers.proof, true);
   assert.equal(jindo.coveredCriteria.includes("post_quantum"), false);
   assert.equal(sisHints.category, "credential");
-  assert.equal(sisHints.implementationStage, "sdk-builder");
+  assert.equal(sisHints.implementationStage, "production-hardened");
   assert.equal(
     sisHints.publicInputsSchema,
     "issuer_commitment,credential_commitment,showing_policy_hash,parameter_hash,domain_separator",
@@ -5097,13 +5658,10 @@ descriptorTest("privacy algorithm descriptors expose 2025-2026 BOI research targ
   assert.deepEqual(sisHints.sdkEntrypoints, [
     "buildSisHintsCredentialCommitments",
     "buildSisHintsCredentialEnvelope",
-    "buildSisHintsCredentialDevProofFixture",
-    "verifySisHintsCredentialProofLocally",
-  ]);
-  assert.deepEqual(sisHints.plannedSdkEntrypoints, [
     "buildSisHintsAnonymousCredentialProofV0",
-    "buildSubmitSisHintsCredentialProofInstruction",
+    "verifySisHintsAnonymousCredentialProofV0",
   ]);
+  assert.deepEqual(sisHints.plannedSdkEntrypoints, []);
   assert.equal(sisHints.pqLayers.proof, true);
   assert.equal(sisHints.coveredCriteria.includes("post_quantum"), false);
 });
@@ -5134,10 +5692,8 @@ descriptorTest("privacy algorithm descriptors only advertise exported SDK entryp
     }
   }
   const masp = getPrivacyAlgorithmDescriptor("asset-hidden-confidential-transfer-v1");
-  assert.equal(typeof sdkExports.buildConfidentialAssetHiddenTransferProofV1, "undefined");
-  assert.ok(
-    masp.plannedSdkEntrypoints.includes("buildConfidentialAssetHiddenTransferProofV1"),
-  );
+  assert.equal(typeof sdkExports.buildConfidentialAssetHiddenTransferProofV1, "function");
+  assert.deepEqual(masp.plannedSdkEntrypoints, []);
 });
 
 descriptorTest("privacy algorithm descriptors enforce PQ and catalog availability invariants", () => {
@@ -5430,6 +5986,7 @@ descriptorTest("privacy algorithm descriptor validator rejects adversarial avail
 
   const namespaced = validatePrivacyAlgorithmDescriptor({
     ...mutablePrivacyDescriptor(),
+    implementationStage: "sdk-builder",
     sdkEntrypoints: ["Iroha.Privacy.buildProof"],
     plannedSdkEntrypoints: ["Iroha.Privacy.buildFutureProof"],
   });
@@ -5506,8 +6063,11 @@ descriptorTest("privacy algorithm descriptor validator rejects adversarial avail
     ],
     [
       "backend family registration",
-      { id: "unmapped-backend-family" },
-      /missing backend family metadata/,
+      {
+        ...mutablePrivacyDescriptor("zkat-policy-private-auth-v1"),
+        id: "unmapped-backend-family",
+      },
+      /must have a registered non-none backend family/,
     ],
     [
       "unknown criterion",

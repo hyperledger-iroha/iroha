@@ -8,7 +8,7 @@ class KagemushaRecursiveCompactPaymentTokenProver private constructor() {
         private const val LIBRARY_NAME = "connect_norito_bridge"
         private val MAX_U64 = BigInteger("18446744073709551615")
         private val UNSIGNED_DECIMAL = Regex("0|[1-9][0-9]*")
-        const val REQUIRED_BRIDGE_ABI_VERSION: Int = 7
+        const val REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 7
         const val RECURSIVE_COMPACT_CIRCUIT_ID_V1: String =
             "kagemusha-recursive-compact-v1"
         private const val RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT =
@@ -206,7 +206,7 @@ class KagemushaRecursiveCompactPaymentTokenProver private constructor() {
         private fun loadLibrary(): Boolean =
             KagemushaRecursiveSpendProver.detectNativeAvailability(
                 loadLibrary = { System.loadLibrary(LIBRARY_NAME) },
-                bridgeAbiVersion = { nativeBridgeAbiVersion() },
+                nativeBridgeAbiVersionProbe = { nativeBridgeAbiVersion() },
                 probeSymbol = {
                     val proverRejects = KagemushaCompactPaymentTokenProver.expectIllegalArgumentProbe {
                         nativeProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
@@ -223,25 +223,25 @@ class KagemushaRecursiveCompactPaymentTokenProver private constructor() {
                     }
                     proverRejects && verifierRejects && projectionRejects
                 },
-                requiredBridgeAbiVersion = REQUIRED_BRIDGE_ABI_VERSION,
+                requiredNativeBridgeAbiVersion = REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
             )
 
         private fun loadVerifierLibrary(): Boolean =
             KagemushaRecursiveSpendProver.detectNativeAvailability(
                 loadLibrary = { System.loadLibrary(LIBRARY_NAME) },
-                bridgeAbiVersion = { nativeBridgeAbiVersion() },
+                nativeBridgeAbiVersionProbe = { nativeBridgeAbiVersion() },
                 probeSymbol = {
                     KagemushaCompactPaymentTokenProver.expectIllegalArgumentProbe {
                         nativeVerifyRecursiveCompactPaymentToken(ByteArray(0), ByteArray(0))
                     }
                 },
-                requiredBridgeAbiVersion = REQUIRED_BRIDGE_ABI_VERSION,
+                requiredNativeBridgeAbiVersion = REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
             )
 
         private fun loadProjectionVerifierLibrary(): Boolean =
             KagemushaRecursiveSpendProver.detectNativeAvailability(
                 loadLibrary = { System.loadLibrary(LIBRARY_NAME) },
-                bridgeAbiVersion = { nativeBridgeAbiVersion() },
+                nativeBridgeAbiVersionProbe = { nativeBridgeAbiVersion() },
                 probeSymbol = {
                     val noHeightRejects = KagemushaCompactPaymentTokenProver.expectIllegalArgumentProbe {
                         nativeVerifyRecursiveSpendCompactPaymentTokenProjection(ByteArray(0), ByteArray(0))
@@ -255,7 +255,7 @@ class KagemushaRecursiveCompactPaymentTokenProver private constructor() {
                     }
                     noHeightRejects && heightRejects
                 },
-                requiredBridgeAbiVersion = REQUIRED_BRIDGE_ABI_VERSION,
+                requiredNativeBridgeAbiVersion = REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
             )
 
         @JvmStatic

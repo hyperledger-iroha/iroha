@@ -697,6 +697,22 @@ def _display_path(path_text: str) -> str:
     return SECRET_PATH_REDACTION if SECRET_RE.search(path_text) else path_text
 
 
+def _contains_control_character(value: str) -> bool:
+    """Return whether a filesystem label carries non-printing control bytes."""
+
+    return any(ord(character) < 0x20 or ord(character) == 0x7F for character in value)
+
+
+def _display_slot_name(slot_name: str) -> str:
+    """Render a slot name in diagnostics without leaking unsafe terminal controls."""
+
+    if SECRET_RE.search(slot_name):
+        return SECRET_PATH_REDACTION
+    if _contains_control_character(slot_name):
+        return "<unsafe-slot-name>"
+    return slot_name
+
+
 def _normalise_manifest_path(path_text: str, errors: list[str], line_no: int) -> str | None:
     return _normalise_safe_relative_path(
         path_text,
@@ -713,9 +729,15 @@ def validate_slot_ids(slot_ids: Iterable[str] | None) -> tuple[list[str] | None,
     errors: list[str] = []
     normalised: list[str] = []
     for index, raw_slot_id in enumerate(slot_ids):
-        slot_id = raw_slot_id.strip()
+        slot_id = raw_slot_id
         if not slot_id:
             errors.append(f"slot id {index} must be a non-empty string")
+            continue
+        if any(character.isspace() for character in slot_id):
+            errors.append(f"slot id {index} must not contain whitespace")
+            continue
+        if _contains_control_character(slot_id):
+            errors.append(f"slot id {index} must not contain control characters")
             continue
         if SECRET_RE.search(slot_id):
             errors.append(f"slot id {index} must not contain secret-looking material")
@@ -785,12 +807,25 @@ def _append_error_once(errors: list[str], message: str) -> None:
 def _slot_tree_entries(
     dir_path: Path, label: str, errors: list[str]
 ) -> list[Path] | None:
-    try:
-        return list(dir_path.rglob("*"))
-    except OSError:
-        _append_error_once(errors, f"{label} could not be listed")
-        return None
-
+    entries: list[Path] = []
+    pending = [dir_path]
+    while pending:
+        current = pending.pop()
+        try:
+            scanned = sorted(os.scandir(current), key=lambda entry: entry.name)
+        except OSError:
+            _append_error_once(errors, f"{label} could not be listed")
+            return None
+        for entry in scanned:
+            entry_path = Path(entry.path)
+            entries.append(entry_path)
+            try:
+                entry_mode = entry.stat(follow_symlinks=False).st_mode
+            except OSError:
+                continue
+            if stat.S_ISDIR(entry_mode):
+                pending.append(entry_path)
+    return entries
 
 def validate_no_symlink_ancestors(path: Path, label: str) -> list[str]:
     """Reject symlinked parent directories without leaking local paths."""
@@ -1596,13 +1631,19 @@ def _require_non_empty_string(
     data: dict[str, Any], key: str, errors: list[str]
 ) -> str | None:
     value = data.get(key)
-    if not isinstance(value, str) or not value.strip():
+    if not isinstance(value, str) or not value:
         errors.append(f"slot.json {key} must be a non-empty string")
+        return None
+    if value != value.strip():
+        errors.append(f"slot.json {key} must not contain surrounding whitespace")
+        return None
+    if _contains_control_character(value):
+        errors.append(f"slot.json {key} must not contain control characters")
         return None
     if SECRET_RE.search(value):
         errors.append(f"slot.json {key} must not contain secret-looking material")
         return None
-    return value.strip()
+    return value
 
 
 def _require_true(data: dict[str, Any], key: str, errors: list[str]) -> None:
@@ -1650,15 +1691,23 @@ def _require_evidence_string(
     data: dict[str, Any], key: str, errors: list[str]
 ) -> str | None:
     value = data.get(key)
-    if not isinstance(value, str) or not value.strip():
+    if not isinstance(value, str) or not value:
         errors.append(f"signed evidence artifact {key} must be a non-empty string")
+        return None
+    if value != value.strip():
+        errors.append(
+            f"signed evidence artifact {key} must not contain surrounding whitespace"
+        )
+        return None
+    if _contains_control_character(value):
+        errors.append(f"signed evidence artifact {key} must not contain control characters")
         return None
     if SECRET_RE.search(value):
         errors.append(
             f"signed evidence artifact {key} must not contain secret-looking material"
         )
         return None
-    return value.strip()
+    return value
 
 
 def _require_evidence_raw_string(
@@ -1667,6 +1716,14 @@ def _require_evidence_raw_string(
     value = data.get(key)
     if not isinstance(value, str) or not value:
         errors.append(f"signed evidence artifact {key} must be a non-empty string")
+        return None
+    if value != value.strip():
+        errors.append(
+            f"signed evidence artifact {key} must not contain surrounding whitespace"
+        )
+        return None
+    if _contains_control_character(value):
+        errors.append(f"signed evidence artifact {key} must not contain control characters")
         return None
     if SECRET_RE.search(value):
         errors.append(
@@ -1700,15 +1757,21 @@ def _attestation_result_string(
     errors: list[str],
 ) -> str | None:
     value = result.get(key)
-    if not isinstance(value, str) or not value.strip():
+    if not isinstance(value, str) or not value:
         errors.append(f"attestation/result.json {key} must be a non-empty string")
+        return None
+    if value != value.strip():
+        errors.append(f"attestation/result.json {key} must not contain surrounding whitespace")
+        return None
+    if _contains_control_character(value):
+        errors.append(f"attestation/result.json {key} must not contain control characters")
         return None
     if SECRET_RE.search(value):
         errors.append(
             f"attestation/result.json {key} must not contain secret-looking material"
         )
         return None
-    return value.strip()
+    return value
 
 
 def _attestation_result_matches_slot_metadata(
@@ -1721,7 +1784,7 @@ def _attestation_result_matches_slot_metadata(
     actual = _attestation_result_string(result, key, errors)
     if key.endswith("_sha256") and actual is not None and not SHA256_HEX_RE.fullmatch(actual):
         errors.append(f"attestation/result.json {key} must be lowercase sha256 hex")
-    if isinstance(expected, str) and actual is not None and actual != expected.strip():
+    if isinstance(expected, str) and actual is not None and actual != expected:
         errors.append(f"attestation/result.json {key} must match slot.json {key}")
 
 
@@ -1744,7 +1807,7 @@ def validate_attestation_result(
         )
 
     status = _attestation_result_string(result, "status", errors)
-    if status is not None and status.lower() not in {"ok", "passed"}:
+    if status is not None and status not in {"ok", "passed"}:
         errors.append("attestation/result.json status must be ok or passed")
 
     slot_bindings: list[str] = []
@@ -1752,15 +1815,25 @@ def validate_attestation_result(
         slot_value = result.get(slot_key)
         if slot_value is None:
             continue
-        if not isinstance(slot_value, str) or not slot_value.strip():
+        if not isinstance(slot_value, str) or not slot_value:
             errors.append(f"attestation/result.json {slot_key} must be a non-empty string")
+            continue
+        if slot_value != slot_value.strip():
+            errors.append(
+                f"attestation/result.json {slot_key} must not contain surrounding whitespace"
+            )
+            continue
+        if _contains_control_character(slot_value):
+            errors.append(
+                f"attestation/result.json {slot_key} must not contain control characters"
+            )
             continue
         if SECRET_RE.search(slot_value):
             errors.append(
                 f"attestation/result.json {slot_key} must not contain secret-looking material"
             )
             continue
-        slot_binding = slot_value.strip()
+        slot_binding = slot_value
         slot_bindings.append(slot_binding)
         if slot_binding != slot_path.name:
             errors.append(
@@ -1776,15 +1849,20 @@ def validate_attestation_result(
     if result.get("physical_device_attestation") is not True:
         errors.append("attestation/result.json physical_device_attestation must be true")
 
-    security_levels = [
-        result.get("keymint_security_level"),
-        result.get("attestation_security_level"),
-        result.get("keymaster_security_level"),
-    ]
-    if not any(
-        isinstance(level, str) and level.strip().upper() in STRONGBOX_LEVELS
-        for level in security_levels
+    strongbox_seen = False
+    for level_key in (
+        "keymint_security_level",
+        "attestation_security_level",
+        "keymaster_security_level",
     ):
+        level = _attestation_result_string(result, level_key, errors)
+        if level is None:
+            continue
+        if level in STRONGBOX_LEVELS:
+            strongbox_seen = True
+        else:
+            errors.append(f"attestation/result.json {level_key} must be STRONGBOX")
+    if not strongbox_seen:
         errors.append("attestation/result.json must report STRONGBOX security level")
 
     for key in ATTESTATION_RESULT_SLOT_BINDING_FIELDS:
@@ -1797,15 +1875,21 @@ def _attestation_report_string(
     errors: list[str],
 ) -> str | None:
     value = report.get(key)
-    if not isinstance(value, str) or not value.strip():
+    if not isinstance(value, str) or not value:
         errors.append(f"attestation/report.json {key} must be a non-empty string")
+        return None
+    if value != value.strip():
+        errors.append(f"attestation/report.json {key} must not contain surrounding whitespace")
+        return None
+    if _contains_control_character(value):
+        errors.append(f"attestation/report.json {key} must not contain control characters")
         return None
     if SECRET_RE.search(value):
         errors.append(
             f"attestation/report.json {key} must not contain secret-looking material"
         )
         return None
-    return value.strip()
+    return value
 
 
 def _attestation_report_matches_slot_metadata(
@@ -1818,8 +1902,35 @@ def _attestation_report_matches_slot_metadata(
     actual = _attestation_report_string(report, key, errors)
     if key.endswith("_sha256") and actual is not None and not SHA256_HEX_RE.fullmatch(actual):
         errors.append(f"attestation/report.json {key} must be lowercase sha256 hex")
-    if isinstance(expected, str) and actual is not None and actual != expected.strip():
+    if isinstance(expected, str) and actual is not None and actual != expected:
         errors.append(f"attestation/report.json {key} must match slot.json {key}")
+
+
+def _attestation_report_verification_string(
+    verification: dict[str, Any],
+    key: str,
+    errors: list[str],
+) -> str | None:
+    value = verification.get(key)
+    if not isinstance(value, str) or not value:
+        errors.append(f"attestation/report.json verification.{key} must be a non-empty string")
+        return None
+    if value != value.strip():
+        errors.append(
+            f"attestation/report.json verification.{key} must not contain surrounding whitespace"
+        )
+        return None
+    if _contains_control_character(value):
+        errors.append(
+            f"attestation/report.json verification.{key} must not contain control characters"
+        )
+        return None
+    if SECRET_RE.search(value):
+        errors.append(
+            f"attestation/report.json verification.{key} must not contain secret-looking material"
+        )
+        return None
+    return value
 
 
 def validate_attestation_report(
@@ -1860,10 +1971,8 @@ def validate_attestation_report(
             "attestation/report.json verification contains unexpected field "
             f"{_display_path(field)}"
         )
-    status = verification.get("status")
-    if not isinstance(status, str) or not status.strip():
-        errors.append("attestation/report.json verification.status must be a non-empty string")
-    elif status.strip().lower() not in {"ok", "passed"}:
+    status = _attestation_report_verification_string(verification, "status", errors)
+    if status is not None and status not in {"ok", "passed"}:
         errors.append("attestation/report.json verification.status must be ok or passed")
     if verification.get("strongbox_attestation") is not True:
         errors.append("attestation/report.json verification.strongbox_attestation must be true")
@@ -1872,24 +1981,20 @@ def validate_attestation_report(
             "attestation/report.json verification.physical_device_attestation must be true"
         )
 
-    keymint_security_level = verification.get("keymint_security_level")
-    if not isinstance(keymint_security_level, str) or not keymint_security_level.strip():
-        errors.append(
-            "attestation/report.json verification.keymint_security_level must be a non-empty string"
-        )
-    elif keymint_security_level.strip().upper() not in STRONGBOX_LEVELS:
+    keymint_security_level = _attestation_report_verification_string(
+        verification,
+        "keymint_security_level",
+        errors,
+    )
+    if keymint_security_level is not None and keymint_security_level not in STRONGBOX_LEVELS:
         errors.append(
             "attestation/report.json verification.keymint_security_level must be STRONGBOX"
         )
     for optional_level in ("attestation_security_level", "keymaster_security_level"):
-        value = verification.get(optional_level)
-        if value is None:
+        if optional_level not in verification:
             continue
-        if not isinstance(value, str) or not value.strip():
-            errors.append(
-                f"attestation/report.json verification.{optional_level} must be a non-empty string"
-            )
-        elif value.strip().upper() not in STRONGBOX_LEVELS:
+        value = _attestation_report_verification_string(verification, optional_level, errors)
+        if value is not None and value not in STRONGBOX_LEVELS:
             errors.append(
                 f"attestation/report.json verification.{optional_level} must be STRONGBOX"
             )
@@ -1904,12 +2009,20 @@ def _attestation_harness_result_string(
     if not isinstance(value, str) or not value.strip():
         errors.append(f"attestation/harness-result.json {key} must be a non-empty string")
         return None
+    if value != value.strip():
+        errors.append(
+            f"attestation/harness-result.json {key} must not have surrounding whitespace"
+        )
+        return None
+    if _contains_control_character(value):
+        errors.append(f"attestation/harness-result.json {key} must not contain control characters")
+        return None
     if SECRET_RE.search(value):
         errors.append(
             f"attestation/harness-result.json {key} must not contain secret-looking material"
         )
         return None
-    return value.strip()
+    return value
 
 
 def _certificate_chain_pem_count(payload: bytes) -> int:
@@ -1944,7 +2057,7 @@ def validate_attestation_harness_result(
     _attestation_harness_result_string(result, "alias", errors)
     for key in ("attestation_security_level", "keymaster_security_level"):
         level = _attestation_harness_result_string(result, key, errors)
-        if level is not None and level.upper() not in STRONGBOX_LEVELS:
+        if level is not None and level not in STRONGBOX_LEVELS:
             errors.append(f"attestation/harness-result.json {key} must be STRONGBOX")
 
     if result.get("strongbox_attestation") is not True:
@@ -1953,7 +2066,15 @@ def validate_attestation_harness_result(
     challenge_hex = _attestation_harness_result_string(result, "challenge_hex", errors)
     challenge: bytes | None = None
     if challenge_hex is not None:
-        if len(challenge_hex) % 2 != 0:
+        if (
+            challenge_hex != challenge_hex.lower()
+            or any(ch.isspace() for ch in challenge_hex)
+            or not all(ch in "0123456789abcdef" for ch in challenge_hex)
+        ):
+            errors.append(
+                "attestation/harness-result.json challenge_hex must be lowercase hexadecimal without whitespace"
+            )
+        elif len(challenge_hex) % 2 != 0:
             errors.append("attestation/harness-result.json challenge_hex must be even-length hex")
         else:
             try:
@@ -2805,7 +2926,7 @@ def _validate_required_telemetry_artifact(slot_path: Path, errors: list[str]) ->
     if telemetry.get("schema_version") != 1:
         errors.append("telemetry/telemetry.json schema_version must be 1")
     slot_id = telemetry.get("slot_id")
-    if not isinstance(slot_id, str) or slot_id.strip() != slot_path.name:
+    if not isinstance(slot_id, str) or slot_id != slot_path.name:
         errors.append("telemetry/telemetry.json slot_id must match the slot directory name")
     suite = telemetry.get("suite")
     if not isinstance(suite, str) or not suite.strip():
@@ -2929,7 +3050,7 @@ def validate_signed_evidence_artifact(
     for key in SIGNED_EVIDENCE_SLOT_STRING_FIELDS:
         value = _require_evidence_string(evidence, key, errors)
         expected = metadata.get(key)
-        if isinstance(expected, str) and value is not None and value != expected.strip():
+        if isinstance(expected, str) and value is not None and value != expected:
             errors.append(f"signed evidence artifact {key} must match slot.json {key}")
     for key in SIGNED_EVIDENCE_SLOT_SHA256_FIELDS:
         value = _require_lowercase_sha256_hex(
@@ -3391,13 +3512,31 @@ def scan_slot(
     errors: list[str] = []
     present: dict[str, bool] = {}
     file_counts: dict[str, int] = {}
-    slot_label = _display_path(slot_path.name)
+    slot_label = _display_slot_name(slot_path.name)
 
     if SECRET_RE.search(slot_path.name):
         return {
             "slot": slot_label,
             "status": "error",
             "errors": ["slot directory name must not contain secret-looking material"],
+            "present": present,
+            "file_counts": file_counts,
+            "kagemusha": {"required": require_kagemusha_production_evidence},
+        }
+    if any(character.isspace() for character in slot_path.name):
+        return {
+            "slot": slot_label,
+            "status": "error",
+            "errors": ["slot directory name must not contain whitespace"],
+            "present": present,
+            "file_counts": file_counts,
+            "kagemusha": {"required": require_kagemusha_production_evidence},
+        }
+    if _contains_control_character(slot_path.name):
+        return {
+            "slot": slot_label,
+            "status": "error",
+            "errors": ["slot directory name must not contain control characters"],
             "present": present,
             "file_counts": file_counts,
             "kagemusha": {"required": require_kagemusha_production_evidence},
@@ -3757,6 +3896,43 @@ def _validate_summary_output_parent(
     return True, []
 
 
+def _file_identity(file_stat: os.stat_result) -> tuple[int, int]:
+    return file_stat.st_dev, file_stat.st_ino
+
+
+def _directory_open_flags() -> int:
+    flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        flags |= os.O_DIRECTORY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    return flags
+
+
+def _sync_summary_output_parent(
+    parent: Path,
+    label: str,
+    *,
+    expected_identity: tuple[int, int] | None,
+) -> list[str]:
+    try:
+        parent_fd = os.open(parent, _directory_open_flags())
+    except OSError:
+        return [f"{label} parent directory could not be synced"]
+    try:
+        parent_stat = os.fstat(parent_fd)
+        if not stat.S_ISDIR(parent_stat.st_mode):
+            return [f"{label} parent directory could not be synced"]
+        if expected_identity is not None and _file_identity(parent_stat) != expected_identity:
+            return [f"{label} parent directory changed before sync"]
+        os.fsync(parent_fd)
+    except OSError:
+        return [f"{label} parent directory could not be synced"]
+    finally:
+        os.close(parent_fd)
+    return []
+
+
 def _read_summary_output_text(
     path: Path,
     expected_stat: os.stat_result,
@@ -3816,6 +3992,13 @@ def write_summary(path: Path, summary: dict) -> list[str]:
     if errors:
         return errors
     try:
+        parent_stat = path.parent.lstat()
+    except OSError:
+        return ["--json-out parent directory metadata could not be read"]
+    if stat.S_ISLNK(parent_stat.st_mode) or not stat.S_ISDIR(parent_stat.st_mode):
+        return ["--json-out parent directory could not be synced"]
+    parent_identity = _file_identity(parent_stat)
+    try:
         summary_text = json.dumps(summary, indent=2, allow_nan=False) + "\n"
     except ValueError:
         return ["--json-out summary is not strict JSON"]
@@ -3825,6 +4008,7 @@ def write_summary(path: Path, summary: dict) -> list[str]:
             f"{MAX_ANDROID_DEVICE_LAB_JSON_BYTES} bytes"
         ]
     tmp_path: Path | None = None
+    tmp_identity: tuple[int, int] | None = None
     write_errors: list[str] = []
     try:
         with tempfile.NamedTemporaryFile(
@@ -3836,6 +4020,7 @@ def write_summary(path: Path, summary: dict) -> list[str]:
             delete=False,
         ) as handle:
             tmp_path = Path(handle.name)
+            tmp_identity = _file_identity(os.fstat(handle.fileno()))
             handle.write(summary_text)
             handle.flush()
             os.fsync(handle.fileno())
@@ -3849,22 +4034,19 @@ def write_summary(path: Path, summary: dict) -> list[str]:
         write_errors.append("--json-out could not be written")
     finally:
         if tmp_path is not None:
-            write_errors.extend(_cleanup_summary_output(tmp_path))
+            write_errors.extend(_cleanup_summary_output(tmp_path, tmp_identity))
     if write_errors:
         return write_errors
     errors = validate_summary_output_path(path, "--json-out")
     if errors:
         return errors
-    try:
-        parent_fd = os.open(path.parent, os.O_RDONLY)
-    except OSError:
-        return ["--json-out parent directory could not be synced"]
-    try:
-        os.fsync(parent_fd)
-    except OSError:
-        return ["--json-out parent directory could not be synced"]
-    finally:
-        os.close(parent_fd)
+    sync_errors = _sync_summary_output_parent(
+        path.parent,
+        "--json-out",
+        expected_identity=parent_identity,
+    )
+    if sync_errors:
+        return sync_errors
     errors = validate_summary_output_path(path, "--json-out")
     if errors:
         return errors
@@ -3890,13 +4072,40 @@ def write_summary(path: Path, summary: dict) -> list[str]:
     return []
 
 
-def _cleanup_summary_output(path: Path) -> list[str]:
+def _cleanup_summary_output(
+    path: Path,
+    expected_identity: tuple[int, int] | None,
+) -> list[str]:
+    if expected_identity is None:
+        return ["--json-out temporary file metadata could not be read"]
     try:
-        path.unlink()
-    except FileNotFoundError:
-        return []
+        parent_fd = os.open(path.parent, _directory_open_flags())
     except OSError:
         return ["--json-out temporary file could not be removed"]
+    try:
+        try:
+            temp_stat = os.stat(
+                path.name,
+                dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            return []
+        except OSError:
+            return ["--json-out temporary file could not be removed"]
+        if (
+            not stat.S_ISREG(temp_stat.st_mode)
+            or _file_identity(temp_stat) != expected_identity
+        ):
+            return ["--json-out temporary file changed before cleanup"]
+        try:
+            os.unlink(path.name, dir_fd=parent_fd)
+        except FileNotFoundError:
+            return []
+        except OSError:
+            return ["--json-out temporary file could not be removed"]
+    finally:
+        os.close(parent_fd)
     return []
 
 

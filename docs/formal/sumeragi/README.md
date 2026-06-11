@@ -9994,6 +9994,98 @@ Temporal properties:
   progress action surface: certified delivery disables proposal, prepare,
   commit, Byzantine commit, NewView, and post-GST progress gates, while pending
   delivery exposes exactly the phase/counter-derived progress gates.
+- `RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesVoteBudgetSurface` proves
+  that the same first-delivery branch selector fixes the vote/stake budget
+  surface: delivery preserves live vote counters and stake accounting, certified
+  delivery latches the exact quorum certificate witnesses, and pending delivery
+  keeps certificate witnesses empty until vote or stake quorum is available.
+- `RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesThresholdClassifier` proves
+  that the same first-delivery branch selector is exactly the live vote/stake
+  threshold classifier: certified delivery is equivalent to both live vote and
+  stake quorum being present after delivery, while pending delivery is
+  equivalent to a missing live vote or stake threshold and keeps certificate
+  witnesses empty.
+- `RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesPendingCommitVoteProgressSplit`
+  proves that the same first-delivery branch selector fixes the pending
+  commit-vote progress split: a delivered pending `CommitVote` state exposes
+  only the remaining honest commit-vote gate as post-GST progress, keeps
+  Byzantine commit-vote availability budgeted separately, and makes timeout
+  track GST plus missing honest commit-vote progress.
+- `RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesPendingNonCommitVoteProgressSplit`
+  proves that the same first-delivery branch selector fixes the complementary
+  pending non-`CommitVote` progress split: delivered pending `Propose`,
+  `Prepare`, and `NewView` states expose exactly their own honest progress
+  gate, keep commit-vote gates closed, and make timeout track GST plus the
+  phase-specific stalled-progress predicate.
+- `RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesPendingProgressPartition`
+  proves that the same first-delivery branch selector fixes the aggregate
+  delivered-pending progress partition: pending delivery is always in one of
+  `Propose`, `Prepare`, `CommitVote`, or `NewView`, post-GST progress is
+  exactly the phase/counter-derived honest progress predicate, and timeout is
+  exactly pre-GST or stalled post-GST progress.
+- `RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesPostStateClassifier`
+  proves that the same first-delivery branch selector fixes the total
+  post-state classifier: certified delivery is exactly the committed terminal
+  certificate state with progress and timeout closed, while pending delivery is
+  exactly the delivered-without-finality progress corridor with certificate
+  witnesses absent.
+- `RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesCertificateProgressDisjointness`
+  proves that the same first-delivery branch selector keeps committed
+  certificate witnesses and delivered-pending progress disjoint: a finality
+  certificate cannot coexist with post-GST progress or timeout gates, and any
+  nonzero commit-certificate witness belongs only to the certified post-state.
+- `RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesActionFamilyClassifier`
+  proves that the same first-delivery branch selector fixes the remaining
+  enabled-action family: RBC and Byzantine-fault gates are closed after
+  delivery, committed pre-GST delivery leaves only GST observation, committed
+  post-GST delivery is terminal, and pending delivery owns any consensus/timer
+  progress gates.
+- `RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesByzantineCommitVoteBoundary`
+  proves that the same first-delivery branch selector fixes the residual
+  Byzantine commit-vote boundary: Byzantine equivocation availability exists
+  only in delivered-pending `CommitVote`, never in certified delivery, and
+  post-GST timeout follows honest commit-vote progress rather than
+  Byzantine-only availability.
+- `RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesResidualGatePartition`
+  proves that the same first-delivery branch selector fixes the complete
+  residual enabled-gate partition: certified pre-GST delivery leaves exactly
+  the GST-observation gate, certified post-GST delivery leaves no enabled gate,
+  and pending delivery always exposes either GST observation, honest progress,
+  or timeout according to the delivered wait state.
+- `RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesCompleteHandoff` proves
+  that the same first-delivery branch selector is the complete handoff from
+  RBC delivery into either certified finality or delivered-pending
+  continuation: the source action is exactly `RbcDeliverGood`, certified
+  delivery installs the finality certificate surface, and pending delivery
+  installs the no-certificate wait surface with only the proved residual gates.
+- `RbcDeliveryEntryCommitEvidenceBranchAlwaysSeedsContinuationState` proves
+  that the same first-delivery branch selector seeds the next proof corridor:
+  certified delivery satisfies the committed finality invariants, while
+  non-final delivery installs the exact delivered-pending precondition,
+  evidence surface, counter handoff, and gate/timer predicates consumed by the
+  delivered-pending step-closure theorems.
+- `RbcDeliveryEntryCommitEvidenceBranchAlwaysSeedsPendingActionSurface` proves
+  that the same first-delivery branch selector seeds the delivered-pending
+  action surface exactly: non-final delivery exposes only the
+  phase-appropriate proposal, prepare, commit, Byzantine-commit, or NewView
+  gate, keeps RBC/fault gates closed, and preserves the GST/timeout
+  predicates used by the delivered-pending action-source proofs.
+- `RbcDeliveryEntryCommitEvidenceBranchAlwaysSeedsPendingTimerSurface` proves
+  that the same first-delivery branch selector seeds the delivered-pending
+  timer surface exactly: pre-GST pending delivery exposes both GST observation
+  and timeout, while post-GST pending delivery makes timeout track missing
+  honest progress and certified delivery keeps timeout closed.
+- `RbcDeliveryEntryCommitEvidenceBranchAlwaysSeedsPendingCounterFrame` proves
+  that the same first-delivery branch selector seeds the delivered-pending
+  counter frame exactly: non-final delivery preserves view, vote, stake,
+  NewView, view-evidence, and empty commit-witness counters, while certified
+  delivery installs the exact quorum witness counters and commit view.
+- `RbcDeliveryEntryCommitEvidenceBranchAlwaysSeedsPendingCompleteWaitState`
+  proves that the same first-delivery branch selector packages the
+  delivered-pending continuation as a complete wait-state seed: non-final
+  delivery preserves the delivered RBC evidence, view/GST/vote counters, empty
+  commit witnesses, closed RBC/fault gates, and the exact progress/timer
+  surface used by later delivered-pending closure proofs.
 - `RbcProgressEvidenceNeverDiverges` proves that every reachable RBC progress
   state keeps the evidence expected for that state: initialized states keep
   validated header/digest evidence, chunk-covered states keep full chunk
