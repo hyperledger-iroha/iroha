@@ -74,6 +74,9 @@ use sorafs_car::{
 };
 use zeroize::Zeroizing;
 
+#[cfg(feature = "privacy-production-enabled")]
+mod privacy_production;
+
 const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 7;
 const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: usize = 64 * 1024 * 1024;
 
@@ -801,6 +804,13 @@ const PRIVACY_FFI_ERROR_MALFORMED_NORITO: u32 = 2;
 const PRIVACY_FFI_ERROR_UNSUPPORTED_ALGORITHM: u32 = 3;
 const PRIVACY_FFI_ERROR_PRODUCTION_DISABLED: u32 = 4;
 const PRIVACY_FFI_ERROR_INVALID_REQUEST: u32 = 5;
+// These constants are only needed by the real prover dispatch path.
+// 0 = success; Kotlin decoder's STATUS_ERROR is 1, so 0 unambiguously signals success.
+// 6 = prover returned Err(String): structurally valid request but the circuit failed internally.
+#[cfg(feature = "privacy-production-enabled")]
+const PRIVACY_FFI_STATUS_OK: u32 = 0;
+#[cfg(feature = "privacy-production-enabled")]
+const PRIVACY_FFI_ERROR_PROVING_FAILED: u32 = 6;
 const PRIVACY_NATIVE_ARCHIVE_MAX_BYTES: usize = 64 * 1024 * 1024;
 const PRIVACY_REQUEST_TEXT_FIELD_MAX_BYTES: usize = 1024;
 const PRIVACY_REQUEST_PUBLIC_INPUTS_MAX_BYTES: usize = 1024 * 1024;
@@ -3174,11 +3184,23 @@ fn privacy_result_for_request(
             );
         }
 
-        privacy_production_disabled_result(&request)
+        // All structural validations passed. Dispatch to the real prover when the
+        // privacy-production-enabled feature is compiled in; otherwise stay fail-closed.
+        #[cfg(feature = "privacy-production-enabled")]
+        {
+            privacy_production_dispatch(&request, operation)
+        }
+        #[cfg(not(feature = "privacy-production-enabled"))]
+        {
+            privacy_production_disabled_result(&request)
+        }
     })();
     privacy_clear_request_byte_fields(&mut request);
     result
 }
+
+#[cfg(feature = "privacy-production-enabled")]
+use privacy_production::privacy_production_dispatch;
 
 #[cfg(any(
     target_os = "android",
@@ -24451,6 +24473,22 @@ mod tests {
 
     use super::*;
 
+    // A well-formed in-scope request (confidential-transfer-v2 / unshield) that carries
+    // placeholder witness/proof bytes reaches the production dispatch only when the
+    // feature is enabled. With the feature off it stays fail-closed (error 4). With the
+    // feature on the real path rejects the placeholder bytes: an undecodable witness fails
+    // request decoding (error 5), while an unverifiable proof fails verification (error 6).
+    // These schema-plumbing tests assert the error code via these constants so they hold in
+    // both build modes.
+    #[cfg(not(feature = "privacy-production-enabled"))]
+    const PRIVACY_IN_SCOPE_PLACEHOLDER_BUILD_ERROR_CODE: u32 = PRIVACY_FFI_ERROR_PRODUCTION_DISABLED;
+    #[cfg(feature = "privacy-production-enabled")]
+    const PRIVACY_IN_SCOPE_PLACEHOLDER_BUILD_ERROR_CODE: u32 = PRIVACY_FFI_ERROR_INVALID_REQUEST;
+    #[cfg(not(feature = "privacy-production-enabled"))]
+    const PRIVACY_IN_SCOPE_PLACEHOLDER_VERIFY_ERROR_CODE: u32 = PRIVACY_FFI_ERROR_PRODUCTION_DISABLED;
+    #[cfg(feature = "privacy-production-enabled")]
+    const PRIVACY_IN_SCOPE_PLACEHOLDER_VERIFY_ERROR_CODE: u32 = PRIVACY_FFI_ERROR_PROVING_FAILED;
+
     struct ResetConfig(AccelerationConfig);
 
     impl Drop for ResetConfig {
@@ -26923,7 +26961,7 @@ mod tests {
             norito::decode_from_bytes(&build_result_archive).expect("decode build result");
         assert_eq!(
             build_result.error_code,
-            PRIVACY_FFI_ERROR_PRODUCTION_DISABLED
+            PRIVACY_IN_SCOPE_PLACEHOLDER_BUILD_ERROR_CODE
         );
 
         let mut verify_request = privacy_request(
@@ -26961,8 +26999,99 @@ mod tests {
             norito::decode_from_bytes(&verify_result_archive).expect("decode verify result");
         assert_eq!(
             verify_result.error_code,
-            PRIVACY_FFI_ERROR_PRODUCTION_DISABLED
+            PRIVACY_IN_SCOPE_PLACEHOLDER_VERIFY_ERROR_CODE
         );
+    }
+
+    // Drives the exported FFI build+verify entrypoints end-to-end with a real,
+    // decodable witness so a status=OK result archive flows out of `write_privacy_payload`.
+    // Feature-on only: the disabled build has no success path to exercise.
+    #[cfg(feature = "privacy-production-enabled")]
+    #[test]
+    fn privacy_ffi_build_then_verify_emits_ok_proof_archive() {
+        use crate::privacy_production::test_fixtures::{
+            valid_transfer_witness_bytes, valid_unshield_witness_bytes,
+        };
+
+        let cases = [
+            (
+                "confidential-transfer-v2",
+                "buildConfidentialTransferProofV2",
+                valid_transfer_witness_bytes(),
+            ),
+            (
+                "unshield",
+                "buildConfidentialUnshieldProofV3",
+                valid_unshield_witness_bytes(),
+            ),
+        ];
+
+        for (algorithm_id, entrypoint, witness) in cases {
+            let mut out_ptr: *mut c_uchar = ptr::null_mut();
+            let mut out_len: c_ulong = 0;
+
+            let mut build_request = privacy_request(algorithm_id, entrypoint, Vec::new());
+            build_request.witness = witness;
+            let build_archive = public_privacy_request_archive(&build_request);
+            let build_rc = unsafe {
+                iroha_privacy_build_proof_v1(
+                    build_archive.as_ptr(),
+                    build_archive.len() as c_ulong,
+                    &mut out_ptr,
+                    &mut out_len,
+                )
+            };
+            assert_eq!(build_rc, 0, "{algorithm_id} build FFI return code");
+            let mut build_result_archive = take_privacy_output_bytes(out_ptr, out_len);
+            assert!(
+                privacy_archive_has_repeated_schema_byte(
+                    &build_result_archive,
+                    PRIVACY_BUILD_PROOF_RESULT_SCHEMA_BYTE,
+                ),
+                "{algorithm_id} build output must use the public build-result schema"
+            );
+            normalize_privacy_public_archive_for_decode::<PrivacyProofResultV1>(
+                &mut build_result_archive,
+            );
+            let build_result: PrivacyProofResultV1 =
+                norito::decode_from_bytes(&build_result_archive).expect("decode build result");
+            assert_eq!(
+                build_result.status, PRIVACY_FFI_STATUS_OK,
+                "{algorithm_id} build status must be OK"
+            );
+            assert_eq!(build_result.error_code, 0, "{algorithm_id} build error_code");
+            assert!(
+                !build_result.proof.is_empty(),
+                "{algorithm_id} build must emit a real proof envelope"
+            );
+            assert!(!build_result.verified, "{algorithm_id} build does not claim verified");
+            assert!(build_result.message.is_empty(), "{algorithm_id} build message");
+
+            let mut verify_request = privacy_request(algorithm_id, entrypoint, build_result.proof);
+            verify_request.witness.clear();
+            let verify_archive = public_privacy_request_archive(&verify_request);
+            let verify_rc = unsafe {
+                iroha_privacy_verify_proof_v1(
+                    verify_archive.as_ptr(),
+                    verify_archive.len() as c_ulong,
+                    &mut out_ptr,
+                    &mut out_len,
+                )
+            };
+            assert_eq!(verify_rc, 0, "{algorithm_id} verify FFI return code");
+            let mut verify_result_archive = take_privacy_output_bytes(out_ptr, out_len);
+            normalize_privacy_public_archive_for_decode::<PrivacyProofResultV1>(
+                &mut verify_result_archive,
+            );
+            let verify_result: PrivacyProofResultV1 =
+                norito::decode_from_bytes(&verify_result_archive).expect("decode verify result");
+            assert_eq!(
+                verify_result.status, PRIVACY_FFI_STATUS_OK,
+                "{algorithm_id} verify status must be OK"
+            );
+            assert_eq!(verify_result.error_code, 0, "{algorithm_id} verify error_code");
+            assert!(verify_result.verified, "{algorithm_id} verify must confirm the proof");
+        }
     }
 
     #[cfg(any(
@@ -27012,7 +27141,7 @@ mod tests {
             norito::decode_from_bytes(&build_result_archive).expect("decode JNI build result");
         assert_eq!(
             build_result.error_code,
-            PRIVACY_FFI_ERROR_PRODUCTION_DISABLED
+            PRIVACY_IN_SCOPE_PLACEHOLDER_BUILD_ERROR_CODE
         );
         assert!(build_result.proof.is_empty());
         assert!(!build_result.verified);
@@ -27041,7 +27170,7 @@ mod tests {
             norito::decode_from_bytes(&verify_result_archive).expect("decode JNI verify result");
         assert_eq!(
             verify_result.error_code,
-            PRIVACY_FFI_ERROR_PRODUCTION_DISABLED
+            PRIVACY_IN_SCOPE_PLACEHOLDER_VERIFY_ERROR_CODE
         );
         assert!(verify_result.proof.is_empty());
         assert!(!verify_result.verified);
@@ -27804,7 +27933,7 @@ mod tests {
             privacy_result_for_request(disabled_build, PrivacyProofOperationV1::Build);
         assert_eq!(
             disabled_build_result.error_code,
-            PRIVACY_FFI_ERROR_PRODUCTION_DISABLED,
+            PRIVACY_IN_SCOPE_PLACEHOLDER_BUILD_ERROR_CODE,
         );
         assert_privacy_result_does_not_serialize_witness(&disabled_build_result, witness);
 
@@ -27818,7 +27947,7 @@ mod tests {
             privacy_result_for_request(disabled_verify, PrivacyProofOperationV1::Verify);
         assert_eq!(
             disabled_verify_result.error_code,
-            PRIVACY_FFI_ERROR_PRODUCTION_DISABLED,
+            PRIVACY_IN_SCOPE_PLACEHOLDER_VERIFY_ERROR_CODE,
         );
         assert_privacy_result_does_not_serialize_witness(&disabled_verify_result, witness);
 
@@ -28338,6 +28467,10 @@ mod tests {
         assert!(!result.verified);
     }
 
+    // Asserts the fail-closed contract (production-disabled message) for the in-scope
+    // algorithms; only meaningful when the production feature is off. Out-of-scope
+    // algorithms keep dedicated disabled-path coverage in other tests.
+    #[cfg(not(feature = "privacy-production-enabled"))]
     #[test]
     fn privacy_build_proof_rejects_supported_algorithm_until_production_gate_passes() {
         let request = privacy_request(
@@ -28468,6 +28601,9 @@ mod tests {
         assert!(!jindo_result.message.contains("secret-witness"));
     }
 
+    // Asserts the fail-closed contract (production-disabled message) for the in-scope
+    // algorithms; only meaningful when the production feature is off.
+    #[cfg(not(feature = "privacy-production-enabled"))]
     #[test]
     fn privacy_verify_proof_rejects_supported_algorithm_until_production_gate_passes() {
         let mut request = privacy_request(

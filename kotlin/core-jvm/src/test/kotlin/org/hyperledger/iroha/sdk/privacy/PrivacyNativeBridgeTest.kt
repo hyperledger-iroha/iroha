@@ -12,12 +12,14 @@ class PrivacyNativeBridgeTest {
         assertEquals(7, PrivacyNativeBridge.REQUIRED_BRIDGE_ABI_VERSION)
         assertEquals(1, PrivacyNativeBridge.PRIVACY_FFI_VERSION_V1)
         assertEquals("privacy-production-gate-v1", PrivacyNativeBridge.PRODUCTION_GATE_VERSION)
+        assertEquals(0, PrivacyNativeBridge.STATUS_OK)
         assertEquals(1, PrivacyNativeBridge.STATUS_ERROR)
         assertEquals(1, PrivacyNativeBridge.ERROR_NULL_POINTER)
         assertEquals(2, PrivacyNativeBridge.ERROR_MALFORMED_NORITO)
         assertEquals(3, PrivacyNativeBridge.ERROR_UNSUPPORTED_ALGORITHM)
         assertEquals(4, PrivacyNativeBridge.ERROR_PRODUCTION_DISABLED)
         assertEquals(5, PrivacyNativeBridge.ERROR_INVALID_REQUEST)
+        assertEquals(6, PrivacyNativeBridge.ERROR_PROVING_FAILED)
         assertEquals(64 * 1024 * 1024, PrivacyNativeBridge.PRIVACY_NATIVE_ARCHIVE_MAX_BYTES)
     }
 

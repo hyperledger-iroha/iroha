@@ -10,6 +10,9 @@ crate-type = ["cdylib", "staticlib"]
 compact-len = []
 packed-struct = []
 schema-structural = []
+# Enable real halo2/ipa proving and verification for confidential-transfer-v2 and unshield.
+# OFF by default; flip on only when all production gates have passed.
+privacy-production-enabled = []
 
 [dependencies]
 norito = { path = "../norito", version = "2.0.0-rc.2.0", default-features = false, features = ["std", "derive", "json", "json-std-io", "columnar", "strict-safe"] }

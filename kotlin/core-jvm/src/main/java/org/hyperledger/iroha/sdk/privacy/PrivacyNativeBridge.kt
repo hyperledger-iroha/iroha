@@ -8,12 +8,18 @@ class PrivacyNativeBridge private constructor() {
         const val REQUIRED_BRIDGE_ABI_VERSION: Int = 7
         const val PRIVACY_FFI_VERSION_V1: Int = 1
         const val PRODUCTION_GATE_VERSION: String = "privacy-production-gate-v1"
+        // 0 unambiguously signals a successful build/verify result; the native bridge
+        // only emits it on the real proving path. STATUS_ERROR (1) covers every failure.
+        const val STATUS_OK: Int = 0
         const val STATUS_ERROR: Int = 1
         const val ERROR_NULL_POINTER: Int = 1
         const val ERROR_MALFORMED_NORITO: Int = 2
         const val ERROR_UNSUPPORTED_ALGORITHM: Int = 3
         const val ERROR_PRODUCTION_DISABLED: Int = 4
         const val ERROR_INVALID_REQUEST: Int = 5
+        // The real prover returns this when a structurally valid request fails inside the
+        // circuit (e.g. root mismatch, non-canonical scalar) rather than at request decode.
+        const val ERROR_PROVING_FAILED: Int = 6
         const val PRIVACY_NATIVE_ARCHIVE_MAX_BYTES: Int = 64 * 1024 * 1024
 
         private const val PRIVACY_NORITO_HEADER_BYTES: Int = 40
