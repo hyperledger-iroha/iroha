@@ -878,6 +878,44 @@ def _validate_output_root(root: Path) -> list[str]:
     return []
 
 
+def _cleanup_temp_output(
+    path: Path,
+    label: str,
+    expected_identity: tuple[int, int] | None,
+) -> list[str]:
+    if expected_identity is None:
+        return [f"{label} temporary output metadata could not be read"]
+    try:
+        parent_fd = os.open(path.parent, _directory_open_flags())
+    except OSError:
+        return [f"{label} temporary output could not be removed"]
+    try:
+        try:
+            temp_stat = os.stat(
+                path.name,
+                dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            return []
+        except OSError:
+            return [f"{label} temporary output could not be removed"]
+        if (
+            not stat.S_ISREG(temp_stat.st_mode)
+            or _file_identity(temp_stat) != expected_identity
+        ):
+            return [f"{label} temporary output changed before cleanup"]
+        try:
+            os.unlink(path.name, dir_fd=parent_fd)
+        except FileNotFoundError:
+            return []
+        except OSError:
+            return [f"{label} temporary output could not be removed"]
+    finally:
+        os.close(parent_fd)
+    return []
+
+
 def _write_latest_slot(root: Path, slot_id: str) -> list[str]:
     latest_path = root / "latest-slot.txt"
     errors = device_lab.validate_summary_output_path(latest_path, "raw latest-slot output")
@@ -892,9 +930,11 @@ def _write_latest_slot(root: Path, slot_id: str) -> list[str]:
     root_identity = _file_identity(root_stat)
     fd, temp_name = tempfile.mkstemp(prefix=".latest-slot.", suffix=".tmp", dir=root)
     temp_path = Path(temp_name)
+    temp_identity: tuple[int, int] | None = None
     encoded = (slot_id + "\n").encode("utf-8")
     try:
         with os.fdopen(fd, "wb") as output:
+            temp_identity = _file_identity(os.fstat(output.fileno()))
             output.write(encoded)
             output.flush()
             os.fsync(output.fileno())
@@ -942,9 +982,12 @@ def _write_latest_slot(root: Path, slot_id: str) -> list[str]:
         if sync_errors:
             return sync_errors
     except OSError:
-        return ["raw latest-slot output could not be written"]
-    finally:
-        temp_path.unlink(missing_ok=True)
+        cleanup_errors = _cleanup_temp_output(
+            temp_path,
+            "raw latest-slot output",
+            temp_identity,
+        )
+        return ["raw latest-slot output could not be written", *cleanup_errors]
     return []
 
 
@@ -970,8 +1013,10 @@ def _write_summary(path: Path, payload: dict[str, Any]) -> list[str]:
         ]
     fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
     temp_path = Path(temp_name)
+    temp_identity: tuple[int, int] | None = None
     try:
         with os.fdopen(fd, "wb") as output:
+            temp_identity = _file_identity(os.fstat(output.fileno()))
             output.write(encoded)
             output.flush()
             os.fsync(output.fileno())
@@ -1030,9 +1075,12 @@ def _write_summary(path: Path, payload: dict[str, Any]) -> list[str]:
         if sync_errors:
             return sync_errors
     except OSError:
-        return ["raw pull summary output could not be written"]
-    finally:
-        temp_path.unlink(missing_ok=True)
+        cleanup_errors = _cleanup_temp_output(
+            temp_path,
+            "raw pull summary output",
+            temp_identity,
+        )
+        return ["raw pull summary output could not be written", *cleanup_errors]
     return []
 
 

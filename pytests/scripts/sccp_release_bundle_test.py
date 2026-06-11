@@ -24737,34 +24737,38 @@ def test_release_bundle_verifier_guards_evm_source_adapter_deployment_gate(
     verifier = load_verify_helpers()
     assert verifier._ethereum_evm_source_adapter_deployment_gate_inventory_errors() == []
 
-    sparse_source = tmp_path / "lib.rs"
-    sparse_source.write_text(
-        "fn sccp_evm_source_adapter_deployment_unblocks_production_for_domain()\n",
-        encoding="utf-8",
-    )
-    verifier.ETHEREUM_EVM_SOURCE_ADAPTER_DEPLOYMENT_GATE_MARKERS = (
-        (
-            sparse_source,
-            (
-                "fn sccp_evm_source_adapter_deployment_unblocks_production_for_domain(",
-                "wrong_config_deployment.source_bridge_config_hash[0] ^= 0x01;",
-            ),
-        ),
-    )
-
     bundle_dir = tmp_path / "bundle"
     bundle_dir.mkdir()
     output_dir = build_ready_bundle(bundle_dir)
-    verified = verifier.verify_bundle(output_dir)
+    required_markers = verifier.ETHEREUM_EVM_SOURCE_ADAPTER_DEPLOYMENT_GATE_MARKERS[
+        0
+    ][1]
 
-    assert verified["verified"] is False
-    assert any(
-        "Ethereum mainnet EVM source-adapter deployment gate source inventory"
-        in error
-        and "missing marker: wrong_config_deployment.source_bridge_config_hash[0] ^= 0x01;"
-        in error
-        for error in verified["errors"]
-    )
+    for index, removed_marker in enumerate(
+        (
+            "wrong_config_deployment.source_bridge_config_hash[0] ^= 0x01;",
+            "source adapter deployment metadata must keep adapter VK and receipt hashes separated",
+            "BSC facade must reject replayed deployment receipts",
+            "ETH facade must reject replayed deployment receipts",
+        )
+    ):
+        sparse_source = tmp_path / f"lib_{index}.rs"
+        sparse_source.write_text(
+            "\n".join(marker for marker in required_markers if marker != removed_marker),
+            encoding="utf-8",
+        )
+        verifier.ETHEREUM_EVM_SOURCE_ADAPTER_DEPLOYMENT_GATE_MARKERS = (
+            (sparse_source, required_markers),
+        )
+        verified = verifier.verify_bundle(output_dir)
+
+        assert verified["verified"] is False
+        assert any(
+            "Ethereum mainnet EVM source-adapter deployment gate source inventory"
+            in error
+            and f"missing marker: {removed_marker}" in error
+            for error in verified["errors"]
+        )
 
 
 def test_release_bundle_verifier_guards_ethereum_launch_policy_selector(
@@ -25077,6 +25081,202 @@ def test_release_bundle_verifier_guards_sccp_proof_request_bundle_gate_inventory
         "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/"
         "SccpMessageProofBundles.java"
     ) in inventory_paths
+    inventory_by_path = dict(verifier.SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS)
+    javascript_impl_markers = inventory_by_path["javascript/iroha_js/src/sccp.js"]
+    assert (
+        "export function wrapTonSccpSourceStateVerificationProof(proofBytes, request) {\n"
+        "  const proofRequest = normalizeTonSourceStateProofRequestForWrapping(request);\n"
+        "  const proof = copyBytes(toBytes(proofBytes, \"proofBytes\"));\n"
+        "  requireSourceStateProofBytes(proof, \"proofBytes\");"
+        in javascript_impl_markers
+    )
+    javascript_dist_markers = inventory_by_path["javascript/iroha_js/dist/sccp.js"]
+    assert (
+        "export function wrapTonSccpSourceStateVerificationProof(proofBytes, request) {\n"
+        "  const proofRequest = normalizeTonSourceStateProofRequestForWrapping(request);\n"
+        "  const proof = copyBytes(toBytes(proofBytes, \"proofBytes\"));\n"
+        "  requireSourceStateProofBytes(proof, \"proofBytes\");"
+        in javascript_dist_markers
+    )
+    javascript_test_markers = inventory_by_path[
+        "javascript/iroha_js/test/sccpSolanaProver.test.js"
+    ]
+    assert "oversizedTonSourceStateProofBytes" in javascript_test_markers
+    assert "oversizedTonCallbackProver" in javascript_test_markers
+    javascript_package_dist_markers = inventory_by_path[
+        "javascript/iroha_js/test/package_dist.test.js"
+    ]
+    assert (
+        "package dist entrypoint enforces TON source-state proof cap"
+        in javascript_package_dist_markers
+    )
+    assert (
+        "oversizedTonDistSourceStateProofBytes"
+        in javascript_package_dist_markers
+    )
+    assert "oversizedTonDistCallbackProver" in javascript_package_dist_markers
+    javascript_package_root_markers = inventory_by_path[
+        "javascript/iroha_js/test/sccpPackageExports.test.js"
+    ]
+    assert (
+        "published package root enforces TON source-state proof cap"
+        in javascript_package_root_markers
+    )
+    assert (
+        "samplePackageRootTonShardStateSourceStateInput"
+        in javascript_package_root_markers
+    )
+    assert (
+        "oversizedTonPackageRootSourceStateProofBytes"
+        in javascript_package_root_markers
+    )
+    assert (
+        "oversizedTonPackageRootCallbackProver"
+        in javascript_package_root_markers
+    )
+    javascript_bsc_test_markers = inventory_by_path[
+        "javascript/iroha_js/test/sccpBscMainnet.test.js"
+    ]
+    assert "tamperedBscBase64ProofResult" in javascript_bsc_test_markers
+    assert (
+        "sdk.buildBscCalldata({ proofResult: tamperedBscBase64ProofResult })"
+        in javascript_bsc_test_markers
+    )
+    javascript_eth_test_markers = inventory_by_path[
+        "javascript/iroha_js/test/sccpEthereumMainnet.test.js"
+    ]
+    assert "tamperedEthereumBase64ProofResult" in javascript_eth_test_markers
+    assert (
+        "sdk.buildEthereumCalldata({ proofResult: tamperedEthereumBase64ProofResult })"
+        in javascript_eth_test_markers
+    )
+    python_impl_markers = inventory_by_path["python/iroha_torii_client/sccp.py"]
+    assert "def wrap_ton_sccp_source_state_verification_proof" in python_impl_markers
+    assert "_require_source_state_proof_bytes(proof)" in python_impl_markers
+    python_test_markers = inventory_by_path[
+        "python/iroha_torii_client/tests/sccp_test.py"
+    ]
+    assert (
+        "def test_ton_source_state_prover_wraps_shard_and_full_light_audit_role_proofs"
+        in python_test_markers
+    )
+    assert (
+        'oversized_proof_bytes = b"\\x01" * (SCCP_SOURCE_STATE_MAX_PROOF_BYTES + 1)'
+        in python_test_markers
+    )
+    assert (
+        "prove=lambda _request, _options: oversized_proof_bytes"
+        in python_test_markers
+    )
+    assert (
+        "def test_package_root_ton_source_state_cap_uses_public_exports"
+        in python_test_markers
+    )
+    assert (
+        "oversized_package_root_ton_source_state_proof"
+        in python_test_markers
+    )
+    assert "def sample_token_add_bundle_fixture" in python_test_markers
+    assert "lowercase_required_eip55_recipient" in python_test_markers
+    assert "lowercase_required_eip55_sender" in python_test_markers
+    assert "nul_prefixed_symbol_bundle" in python_test_markers
+    assert "tampered_bsc_base64_proof_result" in python_test_markers
+    assert "build_bsc_mainnet_sccp_destination_submission" in python_test_markers
+    assert "tampered_ethereum_base64_proof_result" in python_test_markers
+    assert "build_ethereum_calldata" in python_test_markers
+    assert (
+        "proofResult\\.proofBase64 must match proofResult\\.proofBytes"
+        in python_test_markers
+    )
+    kotlin_ton_impl_markers = inventory_by_path[
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/TonSccpProver.kt"
+    ]
+    assert (
+        "SOURCE_STATE_MAX_PROOF_BYTES: Int = NATIVE_RECURSIVE_MAX_PROOF_BYTES"
+        in kotlin_ton_impl_markers
+    )
+    assert "proofBytes.size <= SOURCE_STATE_MAX_PROOF_BYTES" in kotlin_ton_impl_markers
+    kotlin_ton_test_markers = inventory_by_path[
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/TonSccpProverTest.kt"
+    ]
+    assert (
+        "oversizedSourceStateProofBytes = ByteArray(SccpTon.SOURCE_STATE_MAX_PROOF_BYTES + 1)"
+        in kotlin_ton_test_markers
+    )
+    assert "oversizedCallbackProver" in kotlin_ton_test_markers
+    java_ton_impl_markers = inventory_by_path[
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/TonSccpProver.java"
+    ]
+    assert (
+        "SOURCE_STATE_MAX_PROOF_BYTES = NATIVE_RECURSIVE_MAX_PROOF_BYTES"
+        in java_ton_impl_markers
+    )
+    assert (
+        "normalizedProofBytes.length > SOURCE_STATE_MAX_PROOF_BYTES"
+        in java_ton_impl_markers
+    )
+    java_ton_test_markers = inventory_by_path[
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/TonSccpProverTests.java"
+    ]
+    assert "TonSccpProver.SOURCE_STATE_MAX_PROOF_BYTES + 1" in java_ton_test_markers
+    assert "oversizedCallbackProver" in java_ton_test_markers
+    kotlin_evm_test_markers = inventory_by_path[
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/EvmSccpProverTest.kt"
+    ]
+    assert "tamperedBscBase64ProofResultError" in kotlin_evm_test_markers
+    assert "tamperedEthereumBase64ProofResultError" in kotlin_evm_test_markers
+    assert "SccpBsc.buildSubmission" in kotlin_evm_test_markers
+    assert "buildEthereumCalldata" in kotlin_evm_test_markers
+    java_evm_test_markers = inventory_by_path[
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/EvmSccpProverTests.java"
+    ]
+    assert "tamperedBscBase64ProofResult" in java_evm_test_markers
+    assert (
+        "Ethereum mainnet calldata helper must reject tampered proofBase64"
+        in java_evm_test_markers
+    )
+    assert "BscSccpProver.buildSubmission" in java_evm_test_markers
+    assert 'evmResultWithProofBase64(artifactBoundResult, "AAAA")' in java_evm_test_markers
+    dotnet_eth_test_markers = inventory_by_path[
+        "csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpEthereumMainnetTests.cs"
+    ]
+    assert "OutboundCallbackAndSubmissionSnapshotsRejectMutation" in dotnet_eth_test_markers
+    assert "EthereumMainnetSccp.BuildEthereumCalldata" in dotnet_eth_test_markers
+    assert (
+        "ProofBase64 = Convert.ToBase64String(mutatedProofBytes)"
+        in dotnet_eth_test_markers
+    )
+    dotnet_bsc_test_markers = inventory_by_path[
+        "csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpBscMainnetTests.cs"
+    ]
+    assert "OutboundCallbackAndSubmissionSnapshotsRejectMutation" in dotnet_bsc_test_markers
+    assert "BscMainnetSccp.BuildBscCalldata" in dotnet_bsc_test_markers
+    assert (
+        "ProofBase64 = Convert.ToBase64String(mutatedProofBytes)"
+        in dotnet_bsc_test_markers
+    )
+    swift_ton_impl_markers = inventory_by_path[
+        "IrohaSwift/Sources/IrohaSwift/SccpTonProver.swift"
+    ]
+    assert (
+        "proof.proofBytes.count <= sccpSourceStateMaxProofBytes"
+        in swift_ton_impl_markers
+    )
+    assert "proofBytes.count <= sccpSourceStateMaxProofBytes" in swift_ton_impl_markers
+    swift_ton_test_markers = inventory_by_path[
+        "IrohaSwift/Tests/IrohaSwiftTests/SccpSolanaProverTests.swift"
+    ]
+    assert "oversizedTonSourceStateProofBytes" in swift_ton_test_markers
+    assert "sccpSourceStateMaxProofBytes + 1" in swift_ton_test_markers
+    assert "oversizedTonCallbackProver" in swift_ton_test_markers
+    assert "tamperedBscBase64ProofResult" in swift_ton_test_markers
+    assert "tamperedEthereumBase64ProofResult" in swift_ton_test_markers
+    assert (
+        "buildBscMainnetSccpDestinationSubmission(EvmSccpSubmissionInput("
+        in swift_ton_test_markers
+    )
+    assert "buildEthereumCalldata(EvmSccpSubmissionInput(" in swift_ton_test_markers
+    assert 'invalidPublicInputs("proofResult.proofBase64")' in swift_ton_test_markers
 
     sparse_gate = tmp_path / "sccp_test.py"
     sparse_gate.write_text(
@@ -26689,6 +26889,11 @@ def test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory(
     )
     assert any(
         "native SCCP no-WASM readiness SDK test inventory" in error
+        and "missing marker: local native EVM prover artifact byte verifier" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
         and (
             "missing marker: nativeProverArtifacts verifierKeyHash must match nativeProverBundle"
             in error
@@ -27409,29 +27614,31 @@ def test_release_bundle_verifier_guards_ethereum_data_collection_no_proxy(
     verifier = load_verify_helpers()
     assert verifier._ethereum_data_collection_no_proxy_inventory_errors() == []
 
-    sparse_sdk = tmp_path / "sccp.js"
-    sparse_sdk.write_text(
-        "  async validateExecutionProviderMainnet() {\n"
-        "    await provider.request({ method: \"eth_chainId\" });\n"
-        "    await provider.request({ method: \"eth_getTransactionReceipt\" });\n"
-        "    return Torii.proxy.fallback();\n"
-        "  }\n"
-        "  async submitInboundToIroha() {}\n",
-        encoding="utf-8",
-    )
-    verifier.ETHEREUM_DATA_COLLECTION_REGIONS = {
-        "js-sdk": (
-            sparse_sdk,
-            "  async validateExecutionProviderMainnet",
-            "  async submitInboundToIroha",
-            (
-                "eth_chainId",
-                "eth_getTransactionReceipt",
-                "eth_getBlockByHash",
-                "collectFinalityEvidence",
+    regions = {}
+    for sdk, (_path, start_marker, end_marker, required_markers) in (
+        verifier.ETHEREUM_DATA_COLLECTION_REGIONS.items()
+    ):
+        sparse_sdk = tmp_path / f"{sdk}.txt"
+        sparse_sdk.write_text(
+            "\n".join(
+                (
+                    start_marker,
+                    required_markers[0],
+                    required_markers[1],
+                    "return Torii.proxy.fetch();",
+                    end_marker,
+                    "",
+                )
             ),
+            encoding="utf-8",
         )
-    }
+        regions[sdk] = (
+            sparse_sdk,
+            start_marker,
+            end_marker,
+            required_markers,
+        )
+    verifier.ETHEREUM_DATA_COLLECTION_REGIONS = regions
 
     bundle_dir = tmp_path / "bundle"
     bundle_dir.mkdir()
@@ -27439,26 +27646,32 @@ def test_release_bundle_verifier_guards_ethereum_data_collection_no_proxy(
     verified = verifier.verify_bundle(output_dir)
 
     assert verified["verified"] is False
-    assert any(
-        "Ethereum mainnet js-sdk data collection source" in error
-        and "missing provider marker: eth_getBlockByHash" in error
-        for error in verified["errors"]
-    )
-    assert any(
-        "Ethereum mainnet js-sdk data collection source" in error
-        and "missing provider marker: collectFinalityEvidence" in error
-        for error in verified["errors"]
-    )
-    assert any(
-        "Ethereum mainnet js-sdk data collection source" in error
-        and "contains forbidden Torii" in error
-        for error in verified["errors"]
-    )
-    assert any(
-        "Ethereum mainnet js-sdk data collection source" in error
-        and "contains forbidden proxy" in error
-        for error in verified["errors"]
-    )
+    for sdk, (_sparse_sdk, _start, _end, required_markers) in regions.items():
+        assert any(
+            f"Ethereum mainnet {sdk} data collection source" in error
+            and f"missing provider marker: {required_markers[2]}" in error
+            for error in verified["errors"]
+        )
+        assert any(
+            f"Ethereum mainnet {sdk} data collection source" in error
+            and f"missing provider marker: {required_markers[3]}" in error
+            for error in verified["errors"]
+        )
+        assert any(
+            f"Ethereum mainnet {sdk} data collection source" in error
+            and "contains forbidden Torii" in error
+            for error in verified["errors"]
+        )
+        assert any(
+            f"Ethereum mainnet {sdk} data collection source" in error
+            and "contains forbidden proxy" in error
+            for error in verified["errors"]
+        )
+        assert any(
+            f"Ethereum mainnet {sdk} data collection source" in error
+            and "contains forbidden embedded HTTP client" in error
+            for error in verified["errors"]
+        )
 
 
 def test_release_bundle_verifier_guards_bsc_inbound_adversarial_sdk_tests(
@@ -28011,6 +28224,53 @@ def test_release_bundle_verifier_guards_ethereum_outbound_precallback_sdk_tests(
         "Ethereum outbound prover callback must not see BSC requests\n",
         encoding="utf-8",
     )
+    implementation_cases = (
+        (
+            "sccp.js",
+            "const proverArtifactRequestBytes =",
+            "...proverArtifactRequestBytes,\n        ...publicSignalWordBytes,",
+        ),
+        (
+            "sccp.py",
+            "def _normalize_optional_groth16_prover_artifacts(",
+            'prover_artifacts["proof_artifact_hash"]',
+        ),
+        (
+            "SccpEvmProver.swift",
+            "let proverArtifacts = try normalizeOptionalEvmGroth16ProverArtifacts(",
+            "if let proverArtifacts {\n        try preimage.append(evmBytesFromHex32(proverArtifacts.proofArtifactHash",
+        ),
+        (
+            "EvmSccpProver.kt",
+            "val proverArtifacts = normalizeOptionalGroth16ProverArtifacts(",
+            'preimage.write(hex32Bytes(proverArtifacts.proofArtifactHash, "proofArtifactHash"))',
+        ),
+        (
+            "EvmSccpProver.java",
+            "final Groth16ProverArtifacts proverArtifacts =",
+            'write(preimage, hex32Bytes(proverArtifacts.proofArtifactHash(), "proofArtifactHash"))',
+        ),
+        (
+            "EthereumMainnetSccp.cs",
+            "var proverArtifacts = NormalizeOptionalGroth16ProverArtifacts(proofArtifactHash, provingKeyHash);",
+            "payload.Write(HexToBytes(proverArtifacts.ProofArtifactHash, 32));",
+        ),
+    )
+    implementation_entries = []
+    for index, (filename, present_marker, removed_marker) in enumerate(
+        implementation_cases
+    ):
+        sparse_impl = tmp_path / f"{index}_{filename}"
+        sparse_impl.write_text(present_marker + "\n", encoding="utf-8")
+        implementation_entries.append(
+            (
+                sparse_impl,
+                (
+                    present_marker,
+                    removed_marker,
+                ),
+            )
+        )
     verifier.ETHEREUM_OUTBOUND_PRECALLBACK_SDK_TEST_MARKERS = (
         (
             sparse_js_test,
@@ -28019,6 +28279,7 @@ def test_release_bundle_verifier_guards_ethereum_outbound_precallback_sdk_tests(
                 "assert.equal(outboundProverCalled, false)",
             ),
         ),
+        *implementation_entries,
         (
             sparse_test,
             (
@@ -28042,6 +28303,12 @@ def test_release_bundle_verifier_guards_ethereum_outbound_precallback_sdk_tests(
         )
         for error in verified["errors"]
     )
+    for _, _, removed_marker in implementation_cases:
+        assert any(
+            "Ethereum mainnet outbound pre-callback SDK test inventory" in error
+            and f"missing marker: {removed_marker}" in error
+            for error in verified["errors"]
+        )
 
 
 def test_release_bundle_verifier_guards_ethereum_local_admission_sdk_tests(
@@ -28095,17 +28362,60 @@ def test_release_bundle_verifier_guards_ethereum_outbound_provider_validation(
     verifier = load_verify_helpers()
     assert verifier._ethereum_outbound_provider_validation_inventory_errors() == []
 
-    sparse_sdk = tmp_path / "sccp.js"
-    sparse_sdk.write_text("let providerValidated = false;\n", encoding="utf-8")
-    verifier.ETHEREUM_OUTBOUND_PROVIDER_VALIDATION_MARKERS = (
+    cases = (
         (
-            sparse_sdk,
-            (
-                "let providerValidated = false;",
-                "await this.validateExecutionProviderMainnet({ executionProvider: provider });",
-            ),
+            "sccp.js",
+            "let providerValidated = false;",
+            "await this.validateExecutionProviderMainnet({ executionProvider: provider });",
+        ),
+        (
+            "sccp.dist.js",
+            "let providerValidated = false;",
+            'if (typeof submit === "function")',
+        ),
+        (
+            "sccp.py",
+            'provider = options.get("execution_provider", self.execution_provider)',
+            "await self.validate_execution_provider_mainnet(provider)",
+        ),
+        (
+            "sccp_test.py",
+            "guarded_submit_called = False",
+            "assert guarded_submit_called is False",
+        ),
+        (
+            "SccpEvmProver.swift",
+            "if let executionProvider {",
+            "_ = try await validateExecutionProviderMainnet(executionProvider)",
+        ),
+        (
+            "EvmSccpProver.kt",
+            "executionProvider?.let { validateExecutionProviderMainnet(it) }",
+            "return submitter.submit(buildEthereumCalldata(input))",
+        ),
+        (
+            "EthereumMainnetSccp.java",
+            "if (executionProvider != null) {",
+            "validateExecutionProviderMainnet(executionProvider);",
+        ),
+        (
+            "EthereumMainnetSccp.cs",
+            "IEthereumMainnetExecutionProvider? executionProvider",
+            "ValidateExecutionProviderMainnetAsync(",
         ),
     )
+    verifier.ETHEREUM_OUTBOUND_PROVIDER_VALIDATION_MARKERS = tuple(
+        (
+            (tmp_path / f"{index}_{filename}"),
+            (
+                present_marker,
+                removed_marker,
+            ),
+        )
+        for index, (filename, present_marker, removed_marker) in enumerate(cases)
+    )
+    for sparse_sdk, markers in verifier.ETHEREUM_OUTBOUND_PROVIDER_VALIDATION_MARKERS:
+        sparse_sdk.write_text(markers[0] + "\n", encoding="utf-8")
 
     bundle_dir = tmp_path / "bundle"
     bundle_dir.mkdir()
@@ -28113,15 +28423,12 @@ def test_release_bundle_verifier_guards_ethereum_outbound_provider_validation(
     verified = verifier.verify_bundle(output_dir)
 
     assert verified["verified"] is False
-    assert any(
-        "Ethereum mainnet outbound provider validation source inventory" in error
-        and (
-            "missing marker: await this.validateExecutionProviderMainnet"
-            "({ executionProvider: provider });"
+    for _filename, _present_marker, removed_marker in cases:
+        assert any(
+            "Ethereum mainnet outbound provider validation source inventory" in error
+            and f"missing marker: {removed_marker}" in error
+            for error in verified["errors"]
         )
-        in error
-        for error in verified["errors"]
-    )
 
 
 def test_release_bundle_verifier_guards_ethereum_receipt_root_zero_sdk_tests(
@@ -28234,33 +28541,42 @@ def test_release_bundle_verifier_guards_ethereum_source_event_context_tests(
     verifier = load_verify_helpers()
     assert verifier._ethereum_receipt_source_event_context_inventory_errors() == []
 
-    sparse_test = tmp_path / "sccp_evm_receipt_proof_evidence_test.py"
-    sparse_test.write_text(
-        "test_collect_receipt_proof_rejects_source_event_missing_context_fields\n",
-        encoding="utf-8",
-    )
-    verifier.ETHEREUM_RECEIPT_SOURCE_EVENT_CONTEXT_MARKERS = (
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    output_dir = build_ready_bundle(bundle_dir)
+
+    cases = (
         (
-            sparse_test,
+            "sccp_evm_receipt_proof_evidence_test.py",
             (
                 "test_collect_receipt_proof_rejects_source_event_missing_context_fields",
                 'for field in ("transactionHash", "blockHash", "blockNumber")',
             ),
+            'for field in ("transactionHash", "blockHash", "blockNumber")',
+        ),
+        (
+            "lib.rs",
+            ("EVM source receipts must not contain duplicate matching SCCP logs",),
+            "EVM source receipts must not contain duplicate matching SCCP logs",
         ),
     )
+    for index, (filename, required_markers, removed_marker) in enumerate(cases):
+        sparse_source = tmp_path / f"{index}_{filename}"
+        sparse_source.write_text(
+            "\n".join(marker for marker in required_markers if marker != removed_marker),
+            encoding="utf-8",
+        )
+        verifier.ETHEREUM_RECEIPT_SOURCE_EVENT_CONTEXT_MARKERS = (
+            (sparse_source, required_markers),
+        )
+        verified = verifier.verify_bundle(output_dir)
 
-    bundle_dir = tmp_path / "bundle"
-    bundle_dir.mkdir()
-    output_dir = build_ready_bundle(bundle_dir)
-    verified = verifier.verify_bundle(output_dir)
-
-    assert verified["verified"] is False
-    assert any(
-        "Ethereum mainnet source-event context SDK test inventory" in error
-        and 'missing marker: for field in ("transactionHash", "blockHash", "blockNumber")'
-        in error
-        for error in verified["errors"]
-    )
+        assert verified["verified"] is False
+        assert any(
+            "Ethereum mainnet source-event context SDK test inventory" in error
+            and f"missing marker: {removed_marker}" in error
+            for error in verified["errors"]
+        )
 
 
 def test_release_bundle_verifier_guards_ethereum_source_event_mode_tests(
@@ -28271,33 +28587,46 @@ def test_release_bundle_verifier_guards_ethereum_source_event_mode_tests(
     verifier = load_verify_helpers()
     assert verifier._ethereum_receipt_source_event_mode_inventory_errors() == []
 
-    sparse_test = tmp_path / "sccp_evm_receipt_proof_evidence_test.py"
-    sparse_test.write_text(
-        "test_collect_receipt_proof_requires_explicit_receipt_only_mode_without_source_bridge\n",
-        encoding="utf-8",
-    )
-    verifier.ETHEREUM_RECEIPT_SOURCE_EVENT_MODE_MARKERS = (
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    output_dir = build_ready_bundle(bundle_dir)
+
+    cases = (
         (
-            sparse_test,
+            "sccp_evm_receipt_proof_evidence_test.py",
             (
                 "test_collect_receipt_proof_requires_explicit_receipt_only_mode_without_source_bridge",
                 "test_collect_receipt_proof_allows_explicit_receipt_only_mode",
             ),
+            "test_collect_receipt_proof_allows_explicit_receipt_only_mode",
+        ),
+        (
+            "sccp_evm_receipt_proof_evidence.py",
+            (
+                "allow_receipt_only_evidence: bool = False",
+                "source_bridge_address is required for SCCP source-event evidence",
+            ),
+            "source_bridge_address is required for SCCP source-event evidence",
         ),
     )
+    for index, (filename, required_markers, removed_marker) in enumerate(cases):
+        sparse_source = tmp_path / f"{index}_{filename}"
+        sparse_source.write_text(
+            "\n".join(marker for marker in required_markers if marker != removed_marker),
+            encoding="utf-8",
+        )
+        verifier.ETHEREUM_RECEIPT_SOURCE_EVENT_MODE_MARKERS = (
+            (sparse_source, required_markers),
+        )
+        verified = verifier.verify_bundle(output_dir)
 
-    bundle_dir = tmp_path / "bundle"
-    bundle_dir.mkdir()
-    output_dir = build_ready_bundle(bundle_dir)
-    verified = verifier.verify_bundle(output_dir)
-
-    assert verified["verified"] is False
-    assert any(
-        "Ethereum mainnet source-event evidence mode SDK test inventory" in error
-        and "missing marker: test_collect_receipt_proof_allows_explicit_receipt_only_mode"
-        in error
-        for error in verified["errors"]
-    )
+        assert verified["verified"] is False
+        assert any(
+            "Ethereum mainnet source-event evidence mode SDK test inventory"
+            in error
+            and f"missing marker: {removed_marker}" in error
+            for error in verified["errors"]
+        )
 
 
 def test_release_bundle_verifier_guards_ethereum_source_event_zero_digest_tests(
@@ -28308,32 +28637,45 @@ def test_release_bundle_verifier_guards_ethereum_source_event_zero_digest_tests(
     verifier = load_verify_helpers()
     assert verifier._ethereum_receipt_source_event_zero_digest_inventory_errors() == []
 
-    sparse_test = tmp_path / "sccp_evm_receipt_proof_evidence_test.py"
-    sparse_test.write_text(
-        "test_collect_receipt_proof_rejects_zero_source_event_digest\n",
-        encoding="utf-8",
-    )
-    verifier.ETHEREUM_RECEIPT_SOURCE_EVENT_ZERO_DIGEST_MARKERS = (
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    output_dir = build_ready_bundle(bundle_dir)
+
+    cases = (
         (
-            sparse_test,
+            "sccp_evm_receipt_proof_evidence_test.py",
             (
                 "test_collect_receipt_proof_rejects_zero_source_event_digest",
                 "zero source event digest was accepted",
             ),
+            "zero source event digest was accepted",
+        ),
+        (
+            "sccp_evm_receipt_proof_evidence.py",
+            (
+                'method=f"receipt.logs[{index}].topics[1]"',
+                'raise RuntimeError(f"{method} returned zero data")',
+            ),
+            'raise RuntimeError(f"{method} returned zero data")',
         ),
     )
+    for index, (filename, required_markers, removed_marker) in enumerate(cases):
+        sparse_source = tmp_path / f"{index}_{filename}"
+        sparse_source.write_text(
+            "\n".join(marker for marker in required_markers if marker != removed_marker),
+            encoding="utf-8",
+        )
+        verifier.ETHEREUM_RECEIPT_SOURCE_EVENT_ZERO_DIGEST_MARKERS = (
+            (sparse_source, required_markers),
+        )
+        verified = verifier.verify_bundle(output_dir)
 
-    bundle_dir = tmp_path / "bundle"
-    bundle_dir.mkdir()
-    output_dir = build_ready_bundle(bundle_dir)
-    verified = verifier.verify_bundle(output_dir)
-
-    assert verified["verified"] is False
-    assert any(
-        "Ethereum mainnet source-event zero digest SDK test inventory" in error
-        and "missing marker: zero source event digest was accepted" in error
-        for error in verified["errors"]
-    )
+        assert verified["verified"] is False
+        assert any(
+            "Ethereum mainnet source-event zero digest SDK test inventory" in error
+            and f"missing marker: {removed_marker}" in error
+            for error in verified["errors"]
+        )
 
 
 def test_release_bundle_verifier_guards_ethereum_receipt_rpc_duplicate_json_tests(
@@ -28344,33 +28686,47 @@ def test_release_bundle_verifier_guards_ethereum_receipt_rpc_duplicate_json_test
     verifier = load_verify_helpers()
     assert verifier._ethereum_receipt_rpc_duplicate_json_inventory_errors() == []
 
-    sparse_test = tmp_path / "sccp_evm_receipt_proof_evidence_test.py"
-    sparse_test.write_text(
-        "test_collect_receipt_proof_rejects_duplicate_json_rpc_result_keys\n",
-        encoding="utf-8",
-    )
-    verifier.ETHEREUM_RECEIPT_RPC_DUPLICATE_JSON_MARKERS = (
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    output_dir = build_ready_bundle(bundle_dir)
+
+    cases = (
         (
-            sparse_test,
+            "sccp_evm_receipt_proof_evidence_test.py",
             (
                 "test_collect_receipt_proof_rejects_duplicate_json_rpc_result_keys",
                 "test_collect_receipt_proof_rejects_duplicate_json_receipt_fields",
             ),
+            "test_collect_receipt_proof_rejects_duplicate_json_receipt_fields",
+        ),
+        (
+            "sccp_evm_receipt_proof_evidence.py",
+            (
+                "_json_object_without_duplicate_keys",
+                "JSON-RPC returned duplicate JSON key",
+                "object_pairs_hook=_json_object_without_duplicate_keys",
+            ),
+            "object_pairs_hook=_json_object_without_duplicate_keys",
         ),
     )
+    for index, (filename, required_markers, removed_marker) in enumerate(cases):
+        sparse_source = tmp_path / f"{index}_{filename}"
+        sparse_source.write_text(
+            "\n".join(marker for marker in required_markers if marker != removed_marker),
+            encoding="utf-8",
+        )
+        verifier.ETHEREUM_RECEIPT_RPC_DUPLICATE_JSON_MARKERS = (
+            (sparse_source, required_markers),
+        )
+        verified = verifier.verify_bundle(output_dir)
 
-    bundle_dir = tmp_path / "bundle"
-    bundle_dir.mkdir()
-    output_dir = build_ready_bundle(bundle_dir)
-    verified = verifier.verify_bundle(output_dir)
-
-    assert verified["verified"] is False
-    assert any(
-        "Ethereum mainnet receipt RPC duplicate JSON SDK test inventory" in error
-        and "missing marker: test_collect_receipt_proof_rejects_duplicate_json_receipt_fields"
-        in error
-        for error in verified["errors"]
-    )
+        assert verified["verified"] is False
+        assert any(
+            "Ethereum mainnet receipt RPC duplicate JSON SDK test inventory"
+            in error
+            and f"missing marker: {removed_marker}" in error
+            for error in verified["errors"]
+        )
 
 
 def test_release_bundle_verifier_guards_ethereum_block_receipt_transaction_hash_tests(
@@ -28381,33 +28737,54 @@ def test_release_bundle_verifier_guards_ethereum_block_receipt_transaction_hash_
     verifier = load_verify_helpers()
     assert verifier._ethereum_receipt_block_transaction_hash_inventory_errors() == []
 
-    sparse_test = tmp_path / "sccp_evm_receipt_proof_evidence_test.py"
-    sparse_test.write_text(
-        "test_receipt_trie_builder_rejects_duplicate_transaction_hashes\n",
-        encoding="utf-8",
-    )
-    verifier.ETHEREUM_RECEIPT_BLOCK_TRANSACTION_HASH_MARKERS = (
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    output_dir = build_ready_bundle(bundle_dir)
+
+    cases = (
         (
-            sparse_test,
+            "sccp_evm_receipt_proof_evidence_test.py",
             (
                 "test_receipt_trie_builder_rejects_duplicate_transaction_hashes",
                 'receipts[1]["transactionHash"] = receipts[0]["transactionHash"]',
             ),
+            'receipts[1]["transactionHash"] = receipts[0]["transactionHash"]',
+        ),
+        (
+            "sccp_evm_receipt_proof_evidence.py",
+            (
+                "seen_transaction_hashes: set[bytes] = set()",
+                "block receipt transactionHash values must be unique",
+            ),
+            "block receipt transactionHash values must be unique",
+        ),
+        (
+            "sccp.js",
+            (
+                "const seenTransactionHashes = new Set();",
+                "block receipt transactionHash values must be unique",
+            ),
+            "const seenTransactionHashes = new Set();",
         ),
     )
+    for index, (filename, required_markers, removed_marker) in enumerate(cases):
+        sparse_source = tmp_path / f"{index}_{filename}"
+        sparse_source.write_text(
+            "\n".join(marker for marker in required_markers if marker != removed_marker),
+            encoding="utf-8",
+        )
+        verifier.ETHEREUM_RECEIPT_BLOCK_TRANSACTION_HASH_MARKERS = (
+            (sparse_source, required_markers),
+        )
+        verified = verifier.verify_bundle(output_dir)
 
-    bundle_dir = tmp_path / "bundle"
-    bundle_dir.mkdir()
-    output_dir = build_ready_bundle(bundle_dir)
-    verified = verifier.verify_bundle(output_dir)
-
-    assert verified["verified"] is False
-    assert any(
-        "Ethereum mainnet block receipt transactionHash SDK test inventory" in error
-        and 'missing marker: receipts[1]["transactionHash"] = receipts[0]["transactionHash"]'
-        in error
-        for error in verified["errors"]
-    )
+        assert verified["verified"] is False
+        assert any(
+            "Ethereum mainnet block receipt transactionHash SDK test inventory"
+            in error
+            and f"missing marker: {removed_marker}" in error
+            for error in verified["errors"]
+        )
 
 
 def test_release_bundle_verifier_guards_ethereum_js_receipt_admission_artifacts(
@@ -28499,36 +28876,53 @@ def test_release_bundle_verifier_guards_ethereum_sdk_receipt_metadata_sources(
     verifier = load_verify_helpers()
     assert verifier._ethereum_sdk_receipt_metadata_guard_inventory_errors() == []
 
-    sparse_source = tmp_path / "SourceSccpProofHashes.kt"
-    sparse_source.write_text(
-        "typed receipt type must fit one byte below 0x80\n",
-        encoding="utf-8",
-    )
-    verifier.ETHEREUM_SDK_RECEIPT_METADATA_GUARD_MARKERS = (
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    output_dir = build_ready_bundle(bundle_dir)
+
+    cases = (
         (
-            sparse_source,
+            "SourceSccpProofHashes.kt",
             (
                 "typed receipt type must fit one byte below 0x80",
                 "typed receipt type is not supported for Ethereum mainnet receipt proofs",
             ),
+            "typed receipt type is not supported for Ethereum mainnet receipt proofs",
+        ),
+        (
+            "sccp.js",
+            (
+                "eth_getBlockReceipts target receipt RLP must match receipt",
+                "typed receipt type is not supported for Ethereum mainnet receipt proofs",
+            ),
+            "eth_getBlockReceipts target receipt RLP must match receipt",
+        ),
+        (
+            "SccpEvmProver.swift",
+            (
+                '"blockReceipts.receiptRlp"',
+                "canonicalEvmReceiptRlp(currentReceipt)",
+            ),
+            "canonicalEvmReceiptRlp(currentReceipt)",
         ),
     )
-
-    bundle_dir = tmp_path / "bundle"
-    bundle_dir.mkdir()
-    output_dir = build_ready_bundle(bundle_dir)
-    verified = verifier.verify_bundle(output_dir)
-
-    assert verified["verified"] is False
-    assert any(
-        "Ethereum mainnet SDK receipt metadata source inventory" in error
-        and (
-            "missing marker: typed receipt type is not supported "
-            "for Ethereum mainnet receipt proofs"
+    for index, (filename, required_markers, removed_marker) in enumerate(cases):
+        sparse_source = tmp_path / f"{index}_{filename}"
+        sparse_source.write_text(
+            "\n".join(marker for marker in required_markers if marker != removed_marker),
+            encoding="utf-8",
         )
-        in error
-        for error in verified["errors"]
-    )
+        verifier.ETHEREUM_SDK_RECEIPT_METADATA_GUARD_MARKERS = (
+            (sparse_source, required_markers),
+        )
+        verified = verifier.verify_bundle(output_dir)
+
+        assert verified["verified"] is False
+        assert any(
+            "Ethereum mainnet SDK receipt metadata source inventory" in error
+            and f"missing marker: {removed_marker}" in error
+            for error in verified["errors"]
+        )
 
 
 def test_release_bundle_verifier_guards_ethereum_native_receipt_finality_sources(
@@ -28539,53 +28933,61 @@ def test_release_bundle_verifier_guards_ethereum_native_receipt_finality_sources
     verifier = load_verify_helpers()
     assert verifier._ethereum_native_receipt_finality_guard_inventory_errors() == []
 
-    sparse_source = tmp_path / "EvmSccpProver.kt"
-    sparse_source.write_text(
-        "beaconFinality.beaconSlot is required for receiptProof\n",
-        encoding="utf-8",
-    )
-    sparse_test = tmp_path / "EvmSccpProverTest.kt"
-    sparse_test.write_text(
-        "for ((field, label) in listOf(\n",
-        encoding="utf-8",
-    )
-    verifier.ETHEREUM_NATIVE_RECEIPT_FINALITY_GUARD_MARKERS = (
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    output_dir = build_ready_bundle(bundle_dir)
+
+    cases = (
         (
-            sparse_source,
+            "EvmSccpProver.kt",
             (
                 "beaconFinality.beaconSlot is required for receiptProof",
                 "beaconFinality.syncCommitteeRoot is required for receiptProof",
             ),
+            "beaconFinality.syncCommitteeRoot is required for receiptProof",
         ),
         (
-            sparse_test,
+            "EvmSccpProverTest.kt",
             (
                 "for ((field, label) in listOf(",
                 "beaconFinality = beaconFinality - field",
             ),
+            "beaconFinality = beaconFinality - field",
+        ),
+        (
+            "SccpEvmProver.swift",
+            (
+                "guard let beaconSlotInput = try Self.strictFirstPresent(",
+                "guard let finalizedRootInput = try Self.strictFirstPresent(",
+            ),
+            "guard let finalizedRootInput = try Self.strictFirstPresent(",
+        ),
+        (
+            "EthereumMainnetSccp.cs",
+            (
+                "BeaconSlot = NormalizeUnsignedInteger(",
+                "BeaconFinalizedRoot = NormalizeRpcHex(",
+            ),
+            "BeaconFinalizedRoot = NormalizeRpcHex(",
         ),
     )
-
-    bundle_dir = tmp_path / "bundle"
-    bundle_dir.mkdir()
-    output_dir = build_ready_bundle(bundle_dir)
-    verified = verifier.verify_bundle(output_dir)
-
-    assert verified["verified"] is False
-    assert any(
-        "Ethereum mainnet native receipt finality source inventory" in error
-        and (
-            "missing marker: beaconFinality.syncCommitteeRoot "
-            "is required for receiptProof"
+    for index, (filename, required_markers, removed_marker) in enumerate(cases):
+        sparse_source = tmp_path / f"{index}_{filename}"
+        sparse_source.write_text(
+            "\n".join(marker for marker in required_markers if marker != removed_marker),
+            encoding="utf-8",
         )
-        in error
-        for error in verified["errors"]
-    )
-    assert any(
-        "Ethereum mainnet native receipt finality source inventory" in error
-        and "missing marker: beaconFinality = beaconFinality - field" in error
-        for error in verified["errors"]
-    )
+        verifier.ETHEREUM_NATIVE_RECEIPT_FINALITY_GUARD_MARKERS = (
+            (sparse_source, required_markers),
+        )
+        verified = verifier.verify_bundle(output_dir)
+
+        assert verified["verified"] is False
+        assert any(
+            "Ethereum mainnet native receipt finality source inventory" in error
+            and f"missing marker: {removed_marker}" in error
+            for error in verified["errors"]
+        )
 
 
 def test_release_bundle_verifier_guards_ethereum_noncanonical_chain_id_tests(

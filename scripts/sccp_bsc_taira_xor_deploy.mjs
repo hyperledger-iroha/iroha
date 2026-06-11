@@ -153,6 +153,20 @@ const NATIVE_EVM_PROVER_BUNDLE_KEYS = Object.freeze([
   "proverBundle",
   "prover_bundle",
 ]);
+const FORBIDDEN_BSC_ROUTE_MANIFEST_ADDRESS_ALIASES = Object.freeze({
+  sourceBridgeAddress: Object.freeze([
+    "sccpTronSourceBridgeAddress",
+    "sccp_tron_source_bridge_address",
+    "tronSourceBridgeAddress",
+    "tron_source_bridge_address",
+  ]),
+  verifierAddress: Object.freeze([
+    "sccpTronDestinationVerifierAddress",
+    "sccp_tron_destination_verifier_address",
+    "tronVerifierAddress",
+    "tron_verifier_address",
+  ]),
+});
 const POST_DEPLOY_LIVE_EVIDENCE_BLOCKER_KEYS = Object.freeze([
   "productionBlockers",
   "production_blockers",
@@ -2569,6 +2583,17 @@ function assertSingleStringAliasPerSource(sources, label) {
   }
 }
 
+function assertNoForbiddenStringAliases(record, keys, pathName, label) {
+  const entries = collectStringEntries(record, keys, pathName);
+  if (entries.length > 0) {
+    throw new Error(
+      `${label} must not use TRON aliases on a BSC route manifest: ${entries
+        .map((entry) => entry.key)
+        .join(", ")}.`,
+    );
+  }
+}
+
 function assertSingleValueAlias(record, keys, pathName, label) {
   if (!isRecord(record)) {
     return;
@@ -2945,14 +2970,18 @@ function normalizeRouteManifestForConfig(manifest) {
         "sccp_bsc_source_bridge_address",
         "bscSourceBridgeAddress",
         "bsc_source_bridge_address",
-        "sccpTronSourceBridgeAddress",
-        "sccp_tron_source_bridge_address",
         "sourceBridgeAddress",
         "source_bridge_address",
       ],
       pathName: "route manifest",
     },
   ];
+  assertNoForbiddenStringAliases(
+    record,
+    FORBIDDEN_BSC_ROUTE_MANIFEST_ADDRESS_ALIASES.sourceBridgeAddress,
+    "route manifest",
+    "route manifest BSC source bridge address",
+  );
   assertSingleStringAliasPerSource(
     sourceBridgeAddressSources,
     "route manifest BSC source bridge address",
@@ -2976,8 +3005,6 @@ function normalizeRouteManifestForConfig(manifest) {
         "bsc_verifier_address",
         "evmVerifierAddress",
         "evm_verifier_address",
-        "tronVerifierAddress",
-        "tron_verifier_address",
       ],
       pathName: "route manifest",
     },
@@ -2987,6 +3014,12 @@ function normalizeRouteManifestForConfig(manifest) {
       pathName: "route manifest destinationRollout",
     },
   ];
+  assertNoForbiddenStringAliases(
+    record,
+    FORBIDDEN_BSC_ROUTE_MANIFEST_ADDRESS_ALIASES.verifierAddress,
+    "route manifest",
+    "route manifest BSC verifier address",
+  );
   assertSingleStringAliasPerSource(
     verifierAddressSources,
     "route manifest BSC verifier address",

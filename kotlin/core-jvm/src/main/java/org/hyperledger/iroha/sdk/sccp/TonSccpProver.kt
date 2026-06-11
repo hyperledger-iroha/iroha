@@ -14,6 +14,7 @@ object SccpTon {
     const val MESSAGE_BODY_BOC_V1: String = "ton_message_body_boc_v1"
     const val STARK_FRI_PROOF_FAMILY_V1: String = "stark-fri-v1"
     const val NATIVE_RECURSIVE_MAX_PROOF_BYTES: Int = 2 * 1024 * 1024
+    const val SOURCE_STATE_MAX_PROOF_BYTES: Int = NATIVE_RECURSIVE_MAX_PROOF_BYTES
     const val CODEC_TEXT_UTF8: Int = 1
     const val CODEC_EVM_HEX: Int = 2
     const val CODEC_SOLANA_BASE58: Int = 3
@@ -1320,8 +1321,8 @@ object SccpTon {
             "sourceStateVerificationProof must be a TON source-state stark-fri-v1 proof"
         }
         require(proof.proofBytes.isNotEmpty()) { "proofBytes must not be empty" }
-        require(proof.proofBytes.size <= NATIVE_RECURSIVE_MAX_PROOF_BYTES) {
-            "proofBytes must be at most $NATIVE_RECURSIVE_MAX_PROOF_BYTES bytes"
+        require(proof.proofBytes.size <= SOURCE_STATE_MAX_PROOF_BYTES) {
+            "proofBytes must be at most $SOURCE_STATE_MAX_PROOF_BYTES bytes"
         }
         require(proof.proofBytes.any { it.toInt() != 0 }) { "proofBytes must not be all zero" }
         val out = ByteArrayOutputStream()
@@ -1717,8 +1718,8 @@ object SccpTon {
             "sourceStateProof.circuitId must be a TON source-state verification circuit"
         }
         require(proofBytes.isNotEmpty()) { "proofBytes must not be empty" }
-        require(proofBytes.size <= NATIVE_RECURSIVE_MAX_PROOF_BYTES) {
-            "proofBytes must be at most $NATIVE_RECURSIVE_MAX_PROOF_BYTES bytes"
+        require(proofBytes.size <= SOURCE_STATE_MAX_PROOF_BYTES) {
+            "proofBytes must be at most $SOURCE_STATE_MAX_PROOF_BYTES bytes"
         }
         require(proofBytes.any { it.toInt() != 0 }) { "proofBytes must not be all zero" }
         return TonSccpSourceStateVerificationProof(

@@ -21,6 +21,7 @@
 
 use fastpq_prover::{hash_field_elements, pack_bytes};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 
 use crate::json_macros::{JsonDeserialize, JsonSerialize};
 
@@ -447,6 +448,10 @@ fn validate_params(
     {
         return None;
     }
+    let domain = 1usize.checked_shl(u32::from(params.n_log2))?;
+    if query_count > domain {
+        return None;
+    }
     if roots_len == 0 || roots_len > limits.max_merkle_depth + 1 {
         return None;
     }
@@ -678,6 +683,13 @@ mod tests {
         )
         .expect("query shape replays");
         assert_eq!(indices.len(), usize::from(params.queries));
+        assert!(
+            indices
+                .iter()
+                .enumerate()
+                .all(|(index, sampled)| !indices[..index].contains(sampled)),
+            "query sampling must not repeat base indices"
+        );
 
         let mut stale_merkle = envelope.clone();
         stale_merkle.proof.queries[0][0].path_y0.siblings[0][0] ^= 1;
@@ -1003,7 +1015,7 @@ mod tests {
     }
 
     #[test]
-    fn air_envelope_rejects_repeated_transcript_query_indices() {
+    fn air_prover_rejects_more_queries_than_domain() {
         let params = StarkFriParamsV1 {
             version: 1,
             n_log2: 1,
@@ -1014,108 +1026,158 @@ mod tests {
             hash_fn: STARK_HASH_SHA256_V1,
             domain_tag: "iroha:test:repeated-air-query".to_owned(),
         };
-        let domain = 1_usize << usize::from(params.n_log2);
-        let rows = (0..domain)
-            .map(|index| {
-                vec![
-                    u64::try_from(index).expect("index fits u64"),
-                    u64::try_from(index + 7).expect("sample value fits u64"),
-                ]
-            })
-            .collect::<Vec<_>>();
-        let composition_values = vec![Fq::zero(); domain];
-        let composition_values_u64 = composition_values
-            .iter()
-            .map(|value| value.0)
-            .collect::<Vec<_>>();
-        let public_digest = [0x71; 32];
-        let circuit_id = "stark/fri/custom-repeated-query-air:test";
-        let trace_leaves = rows
-            .iter()
-            .map(|row| stark_air_trace_leaf_hash(&params, row).expect("trace row hash"))
-            .collect::<Vec<_>>();
-        let trace_levels =
-            merkle_levels_from_hashes(&params, trace_leaves).expect("trace Merkle levels");
-        let trace_root = merkle_root_from_levels(&trace_levels).expect("trace root");
-        let composition_levels =
-            merkle_levels_from_values(&params, &composition_values).expect("composition levels");
-        let composition_root =
-            merkle_root_from_levels(&composition_levels).expect("composition root");
-        let extra_query_roots = [trace_root, composition_root, public_digest];
-        let mut envelope = synthesize_stark_fri_envelope_from_values(
-            params.clone(),
+        let err = prove_stark_fri_air_envelope_bytes(
+            params,
             "IROHA-TEST-REPEATED-AIR-QUERY".to_owned(),
-            composition_values.clone(),
-            &extra_query_roots,
+            "stark/fri/custom-repeated-query-air:test".to_owned(),
+            [0x71; 32],
         )
-        .expect("duplicate-query envelope fixture");
-
-        assert_eq!(
-            validate_stark_fri_query_shape_and_indices_v1(
-                &envelope.params,
-                &envelope.transcript_label,
-                &envelope.proof.commits.roots,
-                &extra_query_roots,
-                &envelope.proof.queries,
-            )
-            .expect_err("repeated query indices must be rejected"),
-            "FRI query index repeated"
-        );
-
-        let mut query_roots = envelope.proof.commits.roots.clone();
-        query_roots.extend_from_slice(&extra_query_roots);
-        let mut seen_indices = Vec::new();
-        let mut openings = Vec::with_capacity(usize::from(params.queries));
-        for qi in 0..usize::from(params.queries) {
-            let index = derive_query_index(
-                &envelope.transcript_label,
-                &envelope.params,
-                &query_roots,
-                qi,
-            )
-            .expect("query index")
-                % domain;
-            seen_indices.push(index);
-            let next_index = (index + 1) % domain;
-            openings.push(StarkAirOpeningV1 {
-                index: u32::try_from(index).expect("index fits u32"),
-                row: rows[index].clone(),
-                next_row: rows[next_index].clone(),
-                row_path: merkle_path_from_levels(index, &trace_levels).expect("row path"),
-                next_row_path: merkle_path_from_levels(next_index, &trace_levels)
-                    .expect("next row path"),
-                composition_value: composition_values[index].0,
-                composition_path: merkle_path_from_levels(index, &composition_levels)
-                    .expect("composition path"),
-            });
-        }
+        .expect_err("pigeonhole-small AIR query schedule must not emit proof bytes");
         assert!(
-            seen_indices
+            err.contains("STARK query count exceeds domain size"),
+            "unexpected impossible-query rejection: {err}"
+        );
+    }
+
+    #[test]
+    fn air_envelope_skips_repeated_transcript_query_indices() {
+        let mut params = StarkFriParamsV1 {
+            version: 1,
+            n_log2: 3,
+            blowup_log2: 1,
+            fold_arity: 2,
+            queries: 4,
+            merkle_arity: 2,
+            hash_fn: STARK_HASH_SHA256_V1,
+            domain_tag: String::new(),
+        };
+        let domain = 1_usize << usize::from(params.n_log2);
+        let values = vec![Fq::zero(); domain];
+
+        for nonce in 0_u32..1024 {
+            params.domain_tag = format!("iroha:test:skip-repeated-query:{nonce}");
+            let envelope = synthesize_stark_fri_envelope_from_values(
+                params.clone(),
+                "IROHA-TEST-SKIP-REPEATED-AIR-QUERY".to_owned(),
+                values.clone(),
+                &[],
+            )
+            .expect("duplicate-free query schedule must synthesize");
+            let raw_indices = (0..usize::from(params.queries))
+                .map(|query_number| {
+                    derive_query_index(
+                        &envelope.transcript_label,
+                        &params,
+                        &envelope.proof.commits.roots,
+                        query_number,
+                    )
+                    .expect("query index")
+                        % domain
+                })
+                .collect::<Vec<_>>();
+            if !raw_indices
                 .iter()
                 .enumerate()
-                .any(|(index, sampled)| seen_indices[..index].contains(sampled)),
-            "small-domain fixture must force a repeated sampled index"
-        );
+                .any(|(index, sampled)| raw_indices[..index].contains(sampled))
+            {
+                continue;
+            }
 
-        envelope.proof.air = Some(StarkAirProofV1 {
-            version: 1,
-            circuit_id: circuit_id.to_owned(),
-            public_digest,
-            trace_root,
-            composition_root,
-            trace_width: u16::try_from(rows[0].len()).expect("trace width fits u16"),
-            openings,
-        });
-        let bytes = norito::to_bytes(&envelope).expect("encode repeated-query envelope");
-        assert!(
-            !verify_stark_fri_air_envelope_from_rows_and_composition_values(
-                &bytes,
-                circuit_id,
-                &public_digest,
-                &rows,
-                &composition_values_u64,
+            let replayed_indices = validate_stark_fri_query_shape_and_indices_v1(
+                &params,
+                &envelope.transcript_label,
+                &envelope.proof.commits.roots,
+                &[],
+                &envelope.proof.queries,
             )
-        );
+            .expect("colliding raw transcript samples are mapped without replacement");
+            assert_eq!(replayed_indices.len(), usize::from(params.queries));
+            assert!(
+                !replayed_indices
+                    .iter()
+                    .enumerate()
+                    .any(|(index, sampled)| replayed_indices[..index].contains(sampled)),
+                "replayed transcript query indices must be duplicate-free"
+            );
+            assert_ne!(
+                raw_indices, replayed_indices,
+                "fixture must exercise collision skipping"
+            );
+
+            let public_digest = [0x73; 32];
+            let circuit_id = "stark/fri/custom-skip-repeated-query-air:test";
+            let rows = (0..domain)
+                .map(|index| {
+                    stark_air_row(index, &public_digest).expect("build duplicate-skip AIR row")
+                })
+                .collect::<Vec<_>>();
+            let composition_values = (0..domain)
+                .map(|index| {
+                    stark_air_composition_value(
+                        index,
+                        domain,
+                        &public_digest,
+                        &rows[index],
+                        &rows[(index + 1) % domain],
+                    )
+                    .expect("build duplicate-skip AIR composition value")
+                })
+                .collect::<Vec<_>>();
+            let composition_values_u64 = composition_values
+                .iter()
+                .map(|value| value.0)
+                .collect::<Vec<_>>();
+            let bytes = prove_stark_fri_air_envelope_from_rows_and_composition_values_fq_bytes(
+                params.clone(),
+                "IROHA-TEST-SKIP-REPEATED-AIR-QUERY".to_owned(),
+                circuit_id.to_owned(),
+                public_digest,
+                rows.clone(),
+                composition_values.clone(),
+            )
+            .expect("colliding raw samples must still produce a duplicate-free AIR envelope");
+            assert!(
+                verify_stark_fri_air_envelope_from_rows_and_composition_values(
+                    &bytes,
+                    circuit_id,
+                    &public_digest,
+                    &rows,
+                    &composition_values_u64,
+                )
+            );
+
+            let mut duplicate_opening: StarkVerifyEnvelopeV1 =
+                norito::decode_from_bytes(&bytes).expect("decode duplicate-free AIR envelope");
+            duplicate_opening.proof.queries[1] = duplicate_opening.proof.queries[0].clone();
+            let first_opening = duplicate_opening
+                .proof
+                .air
+                .as_ref()
+                .expect("duplicate-free AIR section")
+                .openings[0]
+                .clone();
+            duplicate_opening
+                .proof
+                .air
+                .as_mut()
+                .expect("duplicate-free AIR section")
+                .openings[1] = first_opening;
+            let duplicate_opening_bytes =
+                norito::to_bytes(&duplicate_opening).expect("encode duplicate AIR opening");
+            assert!(
+                !verify_stark_fri_air_envelope_from_rows_and_composition_values(
+                    &duplicate_opening_bytes,
+                    circuit_id,
+                    &public_digest,
+                    &rows,
+                    &composition_values_u64,
+                ),
+                "duplicate raw query/opening replay must not satisfy skipped transcript samples"
+            );
+            return;
+        }
+
+        panic!("failed to find small-domain transcript query collision fixture");
     }
 
     fn zk_ace_test_account(seed: u8) -> iroha_data_model::account::AccountId {
@@ -1261,8 +1323,8 @@ mod tests {
         )
         .expect_err("pigeonhole-small ZK-ACE query schedule must not emit proof bytes");
         assert!(
-            err.contains("duplicate-free public query openings"),
-            "unexpected repeated-query rejection: {err}"
+            err.contains("STARK query count exceeds domain size"),
+            "unexpected impossible-query rejection: {err}"
         );
     }
 
@@ -1398,6 +1460,43 @@ fn derive_query_index(
         }
         _ => None,
     }
+}
+
+fn derive_query_indices_without_replacement(
+    label: &str,
+    params: &StarkFriParamsV1,
+    roots: &[[u8; 32]],
+    query_count: usize,
+    domain: usize,
+) -> Result<Vec<usize>, &'static str> {
+    if domain == 0 {
+        return Err("FRI domain size overflow");
+    }
+    if query_count > domain {
+        return Err("FRI query count exceeds domain size");
+    }
+
+    let mut swaps = BTreeMap::new();
+    let mut indices = Vec::with_capacity(query_count);
+    for query_number in 0..query_count {
+        let remaining = domain
+            .checked_sub(query_number)
+            .ok_or("FRI query index derivation failed")?;
+        let offset = derive_query_index(label, params, roots, query_number)
+            .ok_or("FRI query index derivation failed")?
+            % remaining;
+        let draw = query_number
+            .checked_add(offset)
+            .ok_or("FRI query index derivation failed")?;
+        let selected = swaps.get(&draw).copied().unwrap_or(draw);
+        if indices.contains(&selected) {
+            return Err(STARK_FRI_QUERY_INDEX_REPEATED_ERROR);
+        }
+        let replacement = swaps.get(&query_number).copied().unwrap_or(query_number);
+        swaps.insert(draw, replacement);
+        indices.push(selected);
+    }
+    Ok(indices)
 }
 
 /// Norito-serializable Merkle path (dirs as bitset, siblings as hashes).
@@ -1958,19 +2057,17 @@ pub(crate) fn validate_stark_fri_query_shape_and_indices_v1(
     let fold_arity = usize::from(params.fold_arity);
     let mut query_roots = roots.to_vec();
     query_roots.extend_from_slice(extra_query_roots);
-    let mut base_indices = Vec::with_capacity(queries.len());
-    for (query_number, chain) in queries.iter().enumerate() {
+    let base_indices = derive_query_indices_without_replacement(
+        transcript_label,
+        params,
+        &query_roots,
+        queries.len(),
+        total_domain,
+    )?;
+    for (chain, mut idx_layer) in queries.iter().zip(base_indices.iter().copied()) {
         if chain.len() != expected_chain_len {
             return Err("FRI query chain length mismatch");
         }
-        let mut idx_layer =
-            derive_query_index(transcript_label, params, &query_roots, query_number)
-                .ok_or("FRI query index derivation failed")?
-                % total_domain;
-        if base_indices.contains(&idx_layer) {
-            return Err(STARK_FRI_QUERY_INDEX_REPEATED_ERROR);
-        }
-        base_indices.push(idx_layer);
         let mut layer_domain = total_domain;
         for (round, decommit) in chain.iter().enumerate() {
             if layer_domain < fold_arity {
@@ -2054,57 +2151,6 @@ pub(crate) fn validate_stark_air_opening_first_fri_value_v1(
     };
     if opened_fri_value != opening.composition_value {
         return Err("AIR/FRI composition value mismatch");
-    }
-    Ok(())
-}
-
-/// Verify that one optional composition value is bound to its commitment root.
-pub(crate) fn validate_stark_composition_value_commitment_v1(
-    params: &StarkFriParamsV1,
-    comp_root: &[u8; 32],
-    comp_entry: &StarkCompositionValueV1,
-    expected_depth: usize,
-    expected_index: usize,
-) -> Result<(), &'static str> {
-    if !merkle_path_depth_ok(
-        &comp_entry.path,
-        expected_depth,
-        &StarkVerifierLimits::default(),
-    ) {
-        return Err("composition value Merkle path depth mismatch");
-    }
-    if merkle_path_index(&comp_entry.path) != Some(expected_index) {
-        return Err("composition value Merkle path index mismatch");
-    }
-    let cv_f =
-        Fq::from_canonical_u64(comp_entry.leaf).ok_or("composition value leaf field element")?;
-    let constant = Fq::from_canonical_u64(comp_entry.constant)
-        .ok_or("composition value constant field element")?;
-    Fq::from_canonical_u64(comp_entry.z_coeff).ok_or("composition value z coefficient")?;
-    if comp_entry.z_coeff != 0 {
-        return Err("composition value z coefficient requires final fold");
-    }
-    if comp_entry.aux_terms.len() > StarkVerifierLimits::default().max_aux_terms {
-        return Err("composition value auxiliary term count");
-    }
-    let mut expected = constant;
-    let mut last_wire: Option<u32> = None;
-    for term in &comp_entry.aux_terms {
-        if last_wire.is_some_and(|prev| term.wire_index <= prev) {
-            return Err("composition value auxiliary wire ordering");
-        }
-        last_wire = Some(term.wire_index);
-        let coeff = Fq::from_canonical_u64(term.coeff)
-            .ok_or("composition value auxiliary coefficient field element")?;
-        let value = Fq::from_canonical_u64(term.value)
-            .ok_or("composition value auxiliary field element")?;
-        expected = expected.add(coeff.mul(value));
-    }
-    if cv_f != expected {
-        return Err("composition value leaf mismatch");
-    }
-    if !merkle_verify(params, comp_root, cv_f, &comp_entry.path) {
-        return Err("composition value Merkle root mismatch");
     }
     Ok(())
 }
@@ -2586,6 +2632,12 @@ fn validate_stark_prover_params(
     if n_log2 > MAX_MERKLE_DEPTH {
         return Err("STARK domain depth exceeds verifier limits".to_owned());
     }
+    let domain = 1usize
+        .checked_shl(u32::from(params.n_log2))
+        .ok_or_else(|| "STARK domain size overflow".to_owned())?;
+    if query_count > domain {
+        return Err("STARK query count exceeds domain size".to_owned());
+    }
     layers_required(params).ok_or_else(|| "invalid STARK folding parameters".to_owned())
 }
 
@@ -2667,11 +2719,16 @@ fn synthesize_stark_fri_envelope_from_values(
     query_roots.extend_from_slice(extra_query_roots);
 
     let query_count = params.queries as usize;
+    let query_indices = derive_query_indices_without_replacement(
+        &transcript_label,
+        &params,
+        &query_roots,
+        query_count,
+        total_domain,
+    )
+    .map_err(|err| format!("failed to derive STARK query schedule: {err}"))?;
     let mut queries = Vec::with_capacity(query_count);
-    for qi in 0..query_count {
-        let mut idx_layer = derive_query_index(&transcript_label, &params, &query_roots, qi)
-            .ok_or_else(|| "failed to derive STARK query index".to_owned())?
-            % total_domain;
+    for mut idx_layer in query_indices {
         let mut chain = Vec::with_capacity(required_layers);
         for k in 0..required_layers {
             let j = idx_layer / 2;
@@ -3116,12 +3173,16 @@ pub fn prove_stark_fri_zk_ace_air_envelope_bytes(
             .ok_or_else(|| "failed to derive ZK-ACE AIR composition root".to_owned())?;
         let extra_query_roots = [trace_root, composition_root, public_digest];
 
-        let mut envelope = synthesize_stark_fri_envelope_from_values(
+        let mut envelope = match synthesize_stark_fri_envelope_from_values(
             params.clone(),
             transcript_label.clone(),
             composition_values,
             &extra_query_roots,
-        )?;
+        ) {
+            Ok(envelope) => envelope,
+            Err(err) if err == STARK_FRI_QUERY_INDEX_REPEATED_ERROR => continue,
+            Err(err) => return Err(err),
+        };
         if envelope.proof.commits.roots.first().copied() != Some(composition_root) {
             return Err("ZK-ACE AIR composition root does not match FRI base root".to_owned());
         }
@@ -3463,21 +3524,27 @@ fn verify_stark_fri_envelope_with_context(
     }
     let query_roots = stark_air_query_roots(roots, Some(air));
     let fold_arity = env.params.fold_arity as usize;
-    let mut sampled_base_indices = Vec::with_capacity(query_count);
+    let sampled_base_indices = match derive_query_indices_without_replacement(
+        &env.transcript_label,
+        &env.params,
+        &query_roots,
+        query_count,
+        total_domain,
+    ) {
+        Ok(indices) => indices,
+        Err(_) => return false,
+    };
 
-    for (qi, chain) in env.proof.queries.iter().enumerate() {
+    for (qi, (chain, base_index)) in env
+        .proof
+        .queries
+        .iter()
+        .zip(sampled_base_indices.iter().copied())
+        .enumerate()
+    {
         if chain.len() != expected_chain_len {
             return false;
         }
-        let base_index =
-            match derive_query_index(&env.transcript_label, &env.params, &query_roots, qi) {
-                Some(idx) => idx % total_domain,
-                None => return false,
-            };
-        if sampled_base_indices.contains(&base_index) {
-            return false;
-        }
-        sampled_base_indices.push(base_index);
         let Some(opening) = air.openings.get(qi) else {
             return false;
         };

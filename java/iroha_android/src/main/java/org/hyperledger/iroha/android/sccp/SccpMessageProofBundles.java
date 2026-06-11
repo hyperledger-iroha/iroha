@@ -448,9 +448,28 @@ final class SccpMessageProofBundles {
     if (text.length() != 42 || !text.startsWith("0x")) {
       throw new IllegalArgumentException(label + " must be a 0x-prefixed 20-byte EVM address");
     }
-    for (int i = 2; i < text.length(); i++) {
-      if (hexDigit(text.charAt(i)) < 0) {
+    final String payload = text.substring(2);
+    for (int index = 0; index < payload.length(); index++) {
+      final char symbol = payload.charAt(index);
+      if (hexDigit(symbol) < 0) {
         throw new IllegalArgumentException(label + " must be a 0x-prefixed 20-byte EVM address");
+      }
+    }
+    final byte[] checksum =
+        keccak256(payload.toLowerCase(java.util.Locale.ROOT).getBytes(StandardCharsets.UTF_8));
+    for (int index = 0; index < payload.length(); index++) {
+      final char symbol = payload.charAt(index);
+      if (symbol >= '0' && symbol <= '9') {
+        continue;
+      }
+      final int checksumByte = checksum[index / 2] & 0xff;
+      final int checksumNibble = index % 2 == 0 ? checksumByte >>> 4 : checksumByte & 0x0f;
+      final boolean shouldBeUppercase = checksumNibble >= 8;
+      if (shouldBeUppercase && symbol != Character.toUpperCase(symbol)) {
+        throw new IllegalArgumentException(label + " must be a canonical EIP-55 EVM address");
+      }
+      if (!shouldBeUppercase && symbol != Character.toLowerCase(symbol)) {
+        throw new IllegalArgumentException(label + " must be a canonical EIP-55 EVM address");
       }
     }
   }
@@ -539,8 +558,15 @@ final class SccpMessageProofBundles {
   }
 
   private static boolean fixedAsciiFieldIsNonEmpty(final byte[] raw) {
-    for (final byte value : raw) {
-      if (value >= 0x20 && value <= 0x7e) {
+    int limit = raw.length;
+    for (int index = 0; index < raw.length; index++) {
+      if (raw[index] == 0) {
+        limit = index;
+        break;
+      }
+    }
+    for (int index = 0; index < limit; index++) {
+      if (raw[index] != 0) {
         return true;
       }
     }
@@ -602,6 +628,10 @@ final class SccpMessageProofBundles {
     final byte[] preimage = new byte[prefixBytes.length + payload.length];
     System.arraycopy(prefixBytes, 0, preimage, 0, prefixBytes.length);
     System.arraycopy(payload, 0, preimage, prefixBytes.length, payload.length);
+    return keccak256(preimage);
+  }
+
+  private static byte[] keccak256(final byte[] preimage) {
     final KeccakDigest digest = new KeccakDigest(256);
     digest.update(preimage, 0, preimage.length);
     final byte[] out = new byte[32];

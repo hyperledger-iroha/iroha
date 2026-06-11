@@ -41527,7 +41527,21 @@ mod tests {
         )));
 
         let mut payload = add;
+        payload.name = [0; 32];
+        payload.name[1..6].copy_from_slice(b"Token");
+        assert!(!verify_sccp_payload_structure(&SccpPayloadV1::TokenAdd(
+            payload
+        )));
+
+        let mut payload = add;
         payload.symbol = [0; 32];
+        assert!(!verify_sccp_payload_structure(&SccpPayloadV1::TokenAdd(
+            payload
+        )));
+
+        let mut payload = add;
+        payload.symbol = [0; 32];
+        payload.symbol[1..4].copy_from_slice(b"TOK");
         assert!(!verify_sccp_payload_structure(&SccpPayloadV1::TokenAdd(
             payload
         )));
@@ -65884,7 +65898,13 @@ mod tests {
             b"0x52908400098527886e0f7030069857d2e4169ee7"
         ));
         assert!(!validate_evm_hex_codec(
+            b"0xDE709F2102306220921060314715629080E2FB77"
+        ));
+        assert!(!validate_evm_hex_codec(
             b"0X52908400098527886E0F7030069857D2E4169EE7"
+        ));
+        assert!(!validate_evm_hex_codec(
+            b"0x52908400098527886E0F7030069857D2E4169EEZ"
         ));
 
         let bad_evm = SccpPayloadV1::Transfer(TransferPayloadV1 {

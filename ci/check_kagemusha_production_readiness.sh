@@ -1196,6 +1196,12 @@ TEXT_REQUIREMENTS = {
         "raw latest-slot output must not be hardlinked after writing",
         "raw latest-slot output changed while being read back",
         "expected_identity=root_identity",
+        "def _cleanup_temp_output(",
+        "temp_identity = _file_identity(os.fstat(output.fileno()))",
+        "_file_identity(temp_stat) != expected_identity",
+        "os.unlink(path.name, dir_fd=parent_fd)",
+        "temporary output changed before cleanup",
+        "cleanup_errors = _cleanup_temp_output(",
         "raw slot tar directory {relative} could not be created",
         "_validate_sha256_hex",
         "must be a lowercase SHA-256 hex digest",
@@ -2442,11 +2448,15 @@ TEXT_REQUIREMENTS = {
         "test_kagemusha_android_raw_puller_latest_writer_rejects_symlink_after_replace",
         "test_kagemusha_android_raw_puller_latest_writer_rejects_hardlink_after_replace",
         "test_kagemusha_android_raw_puller_latest_writer_rejects_readback_path_swap",
+        "test_kagemusha_android_raw_puller_latest_writer_reports_temp_cleanup_failure",
+        "test_kagemusha_android_raw_puller_latest_writer_temp_cleanup_rejects_swap",
         "test_kagemusha_android_raw_puller_summary_rejects_nonfinite_json_before_tempfile",
         "test_kagemusha_android_raw_puller_summary_rejects_oversized_json_before_tempfile",
         "test_kagemusha_android_raw_puller_summary_rejects_symlink_after_replace",
         "test_kagemusha_android_raw_puller_summary_rejects_hardlink_after_replace",
         "test_kagemusha_android_raw_puller_summary_rejects_readback_path_swap",
+        "test_kagemusha_android_raw_puller_summary_reports_temp_cleanup_failure",
+        "test_kagemusha_android_raw_puller_summary_temp_cleanup_rejects_swap",
         "test_kagemusha_android_raw_puller_summary_sync_rejects_parent_identity_swap",
         "test_kagemusha_android_raw_puller_summary_digest_rejects_symlinked_artifact",
         "test_kagemusha_android_raw_puller_summary_digest_rejects_hardlinked_artifact",
@@ -3711,6 +3721,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-readback-symlink",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-readback-hardlink",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-readback-identity",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-temp-cleanup-identity",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-digest-open-path",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-digest-inventory",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-harness-result",
@@ -3965,6 +3976,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-latest-write-readback-symlink",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-latest-write-readback-hardlink",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-latest-write-readback-identity",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-latest-write-temp-cleanup-identity",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-directory-collision",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-result-slot-required",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-result-chain-digest-required",
@@ -4730,6 +4742,17 @@ if mode == "--negative-control-android-device-lab-raw-puller-summary-readback-id
             "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
             "raw pull summary output changed while being read back",
             "raw pull summary output path swaps are accepted during readback",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-raw-puller-summary-temp-cleanup-identity":
+    run_negative_control(
+        "Android raw puller summary temp cleanup identity gate",
+        lambda: override_text(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            "_file_identity(temp_stat) != expected_identity",
+            "False",
         ),
     )
     raise SystemExit(0)
@@ -7596,6 +7619,17 @@ if mode == "--negative-control-android-device-lab-raw-puller-latest-write-readba
             "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
             "raw latest-slot output changed while being read back",
             "raw latest-slot output path swaps are accepted during readback",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-raw-puller-latest-write-temp-cleanup-identity":
+    run_negative_control(
+        "Android raw puller latest-slot writer temp cleanup identity gate",
+        lambda: override_text(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            "_file_identity(temp_stat) != expected_identity",
+            "False",
         ),
     )
     raise SystemExit(0)

@@ -1044,6 +1044,14 @@ test("BSC testnet destination helpers bind outbound proofs to chain id 97", () =
   const submission = buildBscTestnetSccpDestinationSubmission({ proofResult });
   assert.equal(submission.targetDomain, SCCP_DOMAIN_BSC);
   assert.equal(submission.destinationBindingHash, request.destinationBindingHash);
+  const tamperedBscBase64ProofResult = {
+    ...proofResult,
+    proofBase64: "AAAA",
+  };
+  assert.throws(
+    () => sdk.buildBscCalldata({ proofResult: tamperedBscBase64ProofResult }),
+    /proofResult\.proofBase64 must match proofResult\.proofBytes/u,
+  );
 
   assert.throws(
     () =>

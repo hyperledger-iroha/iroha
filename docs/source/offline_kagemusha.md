@@ -900,6 +900,10 @@ before creating `--out` temporary files and again while reading back the opened
 output file after atomic replacement, so oversized same-inode output growth
 cannot be accepted as a verified write, and they report identity-checked temporary-file cleanup
 failures after output write or post-stage output-validation errors.
+The Android raw puller's host `latest-slot.txt` and raw-pull summary writers
+also report identity-checked temporary-file cleanup failures after failed
+writes and refuse to unlink a temp output whose file identity changed before
+cleanup.
 The release-bundle writer applies the same pattern to its manifest output with
 a 16 MiB cap before temporary-file creation and during final opened-file
 readback, and reports temporary-file cleanup failures after write or post-stage

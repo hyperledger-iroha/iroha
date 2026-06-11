@@ -2640,6 +2640,68 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             ["raw latest-slot output changed while being read back"],
         )
 
+    def test_kagemusha_android_raw_puller_latest_writer_reports_temp_cleanup_failure(
+        self,
+    ) -> None:
+        original_replace = raw_puller.os.replace
+        original_unlink = raw_puller.os.unlink
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+
+            def failing_replace(_src, _dst):  # type: ignore[no-untyped-def]
+                raise OSError("simulated latest-slot replace failure")
+
+            def failing_unlink(path: str, *args, **kwargs):
+                if Path(path).name.startswith(".latest-slot.") and Path(path).suffix == ".tmp":
+                    raise OSError("simulated latest-slot temp cleanup failure")
+                return original_unlink(path, *args, **kwargs)
+
+            raw_puller.os.replace = failing_replace
+            raw_puller.os.unlink = failing_unlink
+            try:
+                errors = raw_puller._write_latest_slot(root, "pixel6")
+            finally:
+                raw_puller.os.replace = original_replace
+                raw_puller.os.unlink = original_unlink
+            temp_outputs = list(root.glob(".latest-slot.*.tmp"))
+
+        self.assertEqual(
+            errors,
+            [
+                "raw latest-slot output could not be written",
+                "raw latest-slot output temporary output could not be removed",
+            ],
+        )
+        self.assertEqual(len(temp_outputs), 1)
+
+    def test_kagemusha_android_raw_puller_latest_writer_temp_cleanup_rejects_swap(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            temp_output = root / ".latest-slot.swap.tmp"
+            temp_output.write_text("original\n", encoding="utf-8")
+            temp_identity = raw_puller._file_identity(temp_output.lstat())
+            original_temp = root / "original-latest-slot-temp"
+            temp_output.rename(original_temp)
+            temp_output.write_text("do not remove\n", encoding="utf-8")
+
+            errors = raw_puller._cleanup_temp_output(
+                temp_output,
+                "raw latest-slot output",
+                temp_identity,
+            )
+            replacement = temp_output.read_text(encoding="utf-8")
+            original = original_temp.read_text(encoding="utf-8")
+
+        self.assertEqual(
+            errors,
+            ["raw latest-slot output temporary output changed before cleanup"],
+        )
+        self.assertEqual(replacement, "do not remove\n")
+        self.assertEqual(original, "original\n")
+
     def test_kagemusha_android_raw_puller_summary_rejects_nonfinite_json_before_tempfile(
         self,
     ) -> None:
@@ -2792,6 +2854,74 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             errors,
             ["raw pull summary output changed while being read back"],
         )
+
+    def test_kagemusha_android_raw_puller_summary_reports_temp_cleanup_failure(
+        self,
+    ) -> None:
+        original_replace = raw_puller.os.replace
+        original_unlink = raw_puller.os.unlink
+
+        with tempfile.TemporaryDirectory() as temp:
+            summary_out = Path(temp) / "pull-summary.json"
+
+            def failing_replace(_src, _dst):  # type: ignore[no-untyped-def]
+                raise OSError("simulated raw summary replace failure")
+
+            def failing_unlink(path: str, *args, **kwargs):
+                if (
+                    Path(path).name.startswith(f".{summary_out.name}.")
+                    and Path(path).suffix == ".tmp"
+                ):
+                    raise OSError("simulated raw summary temp cleanup failure")
+                return original_unlink(path, *args, **kwargs)
+
+            raw_puller.os.replace = failing_replace
+            raw_puller.os.unlink = failing_unlink
+            try:
+                errors = raw_puller._write_summary(
+                    summary_out,
+                    {"schema": raw_puller.RAW_PULL_SUMMARY_SCHEMA},
+                )
+            finally:
+                raw_puller.os.replace = original_replace
+                raw_puller.os.unlink = original_unlink
+            temp_outputs = list(summary_out.parent.glob(f".{summary_out.name}.*.tmp"))
+
+        self.assertEqual(
+            errors,
+            [
+                "raw pull summary output could not be written",
+                "raw pull summary output temporary output could not be removed",
+            ],
+        )
+        self.assertEqual(len(temp_outputs), 1)
+
+    def test_kagemusha_android_raw_puller_summary_temp_cleanup_rejects_swap(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            temp_output = root / ".pull-summary.json.swap.tmp"
+            temp_output.write_text("original\n", encoding="utf-8")
+            temp_identity = raw_puller._file_identity(temp_output.lstat())
+            original_temp = root / "original-raw-summary-temp"
+            temp_output.rename(original_temp)
+            temp_output.write_text("do not remove\n", encoding="utf-8")
+
+            errors = raw_puller._cleanup_temp_output(
+                temp_output,
+                "raw pull summary output",
+                temp_identity,
+            )
+            replacement = temp_output.read_text(encoding="utf-8")
+            original = original_temp.read_text(encoding="utf-8")
+
+        self.assertEqual(
+            errors,
+            ["raw pull summary output temporary output changed before cleanup"],
+        )
+        self.assertEqual(replacement, "do not remove\n")
+        self.assertEqual(original, "original\n")
 
     def test_kagemusha_android_raw_puller_summary_sync_rejects_parent_identity_swap(
         self,

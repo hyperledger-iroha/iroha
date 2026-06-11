@@ -1444,6 +1444,18 @@ public final class TonSccpProverTests {
       allZeroWrappedProofThrew = ex.getMessage().contains("all zero");
     }
     assert allZeroWrappedProofThrew : "TON source-state wrappers must reject all-zero proofs";
+    final byte[] oversizedSourceStateProofBytes =
+        new byte[TonSccpProver.SOURCE_STATE_MAX_PROOF_BYTES + 1];
+    Arrays.fill(oversizedSourceStateProofBytes, (byte) 1);
+    boolean oversizedWrappedProofThrew = false;
+    try {
+      TonSccpProver.wrapSourceStateVerificationProof(
+          oversizedSourceStateProofBytes, shardRequest);
+    } catch (final IllegalArgumentException ex) {
+      oversizedWrappedProofThrew = ex.getMessage().contains("proofBytes must be at most");
+    }
+    assert oversizedWrappedProofThrew
+        : "TON source-state wrappers must reject oversized source-state proofs";
     final ArrayList<TonSccpProver.ShardStateFastpqTransition> tamperedShardTransitions =
         new ArrayList<TonSccpProver.ShardStateFastpqTransition>(
             shardRequest.fastpqTransitions());
@@ -1644,6 +1656,19 @@ public final class TonSccpProverTests {
         : "TON audit prover must reject malformed requests before callback";
     assert !preflightCallbackInvoked[0]
         : "TON audit prover must not invoke callback for malformed requests";
+
+    final TonSccpProver.SourceStateProver oversizedCallbackProver =
+        new TonSccpProver.SourceStateProver(
+            request -> oversizedSourceStateProofBytes,
+            null);
+    boolean oversizedCallbackProofThrew = false;
+    try {
+      oversizedCallbackProver.proveShardState(shardRequest);
+    } catch (final IllegalArgumentException ex) {
+      oversizedCallbackProofThrew = ex.getMessage().contains("proofBytes must be at most");
+    }
+    assert oversizedCallbackProofThrew
+        : "TON source-state prover must reject oversized callback proof bytes";
 
     final StringBuilder seenRoles = new StringBuilder();
     final TonSccpProver.SourceStateProver sourceStateProver =
@@ -3687,6 +3712,39 @@ public final class TonSccpProverTests {
     }
     assert threw : "TON proof requests must reject unsupported SCCP payload kinds";
 
+    final byte[] nulPrefixedName = new byte[32];
+    final byte[] tokenName = "Token".getBytes(StandardCharsets.UTF_8);
+    System.arraycopy(tokenName, 0, nulPrefixedName, 1, tokenName.length);
+    final SampleTonBundleFixture nulPrefixedNameBundle =
+        sampleTonTokenAddBundleFixture(nulPrefixedName, fixedTestAscii32("TOK"));
+    threw = false;
+    try {
+      TonSccpProver.buildProofRequest(
+          proofRequestInputWithBundle(
+              nulPrefixedNameBundle.publicInputs,
+              nulPrefixedNameBundle.bundleBytes,
+              new byte[0]));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("bundleBytes.payload.name");
+    }
+    assert threw : "TON proof requests must reject NUL-prefixed TokenAdd names";
+    final byte[] nulPrefixedSymbol = new byte[32];
+    final byte[] tokenSymbol = "TOK".getBytes(StandardCharsets.UTF_8);
+    System.arraycopy(tokenSymbol, 0, nulPrefixedSymbol, 1, tokenSymbol.length);
+    final SampleTonBundleFixture nulPrefixedSymbolBundle =
+        sampleTonTokenAddBundleFixture(fixedTestAscii32("Token"), nulPrefixedSymbol);
+    threw = false;
+    try {
+      TonSccpProver.buildProofRequest(
+          proofRequestInputWithBundle(
+              nulPrefixedSymbolBundle.publicInputs,
+              nulPrefixedSymbolBundle.bundleBytes,
+              new byte[0]));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("bundleBytes.payload.symbol");
+    }
+    assert threw : "TON proof requests must reject NUL-prefixed TokenAdd symbols";
+
     threw = false;
     try {
       TonSccpProver.buildProofRequest(
@@ -3747,6 +3805,60 @@ public final class TonSccpProverTests {
       threw = ex.getMessage().contains("sourceProofBytes required for non-SORA source bundle");
     }
     assert threw : "TON proof-result submissions must reject stripped non-SORA source proofs";
+
+    final String canonicalEip55Sender = "0x52908400098527886E0F7030069857D2E4169EE7";
+    final String lowercaseRequiredEip55Sender = "0xde709f2102306220921060314715629080e2fb77";
+    final SampleTonBundleFixture lowercaseRequiredEip55Source =
+        sampleTonBundleFixture(
+            SourceSccpProofs.DOMAIN_ETH,
+            TonSccpProver.CODEC_EVM_HEX,
+            lowercaseRequiredEip55Sender);
+    TonSccpProver.buildProofRequest(
+        proofRequestInputWithBundle(
+            lowercaseRequiredEip55Source.publicInputs,
+            lowercaseRequiredEip55Source.bundleBytes,
+            new byte[] {9, 10}));
+    final SampleTonBundleFixture noncanonicalEip55Source =
+        sampleTonBundleFixture(
+            SourceSccpProofs.DOMAIN_ETH,
+            TonSccpProver.CODEC_EVM_HEX,
+            canonicalEip55Sender.toLowerCase(java.util.Locale.ROOT));
+    threw = false;
+    try {
+      TonSccpProver.buildProofRequest(
+          proofRequestInputWithBundle(
+              noncanonicalEip55Source.publicInputs,
+              noncanonicalEip55Source.bundleBytes,
+              new byte[] {9, 10}));
+    } catch (final IllegalArgumentException ex) {
+      threw =
+          ex.getMessage().contains("bundleBytes.payload.sender")
+              && ex.getMessage().contains("EIP-55");
+    }
+    assert threw : "TON proof requests must reject noncanonical EIP-55 source senders";
+    for (final String invalidSender :
+        new String[] {
+          lowercaseRequiredEip55Sender.toUpperCase(java.util.Locale.ROOT),
+          "0X" + canonicalEip55Sender.substring(2),
+          "0x52908400098527886E0F7030069857D2E4169EEZ"
+        }) {
+      final SampleTonBundleFixture invalidSource =
+          sampleTonBundleFixture(
+              SourceSccpProofs.DOMAIN_ETH,
+              TonSccpProver.CODEC_EVM_HEX,
+              invalidSender);
+      threw = false;
+      try {
+        TonSccpProver.buildProofRequest(
+            proofRequestInputWithBundle(
+                invalidSource.publicInputs,
+                invalidSource.bundleBytes,
+                new byte[] {9, 10}));
+      } catch (final IllegalArgumentException ex) {
+        threw = ex.getMessage().contains("bundleBytes.payload.sender");
+      }
+      assert threw : "invalid TON EVM source sender must be rejected";
+    }
   }
 
   private static void proofRequestHashMatchesCrossSdkVector() {
@@ -4124,6 +4236,75 @@ public final class TonSccpProverTests {
             "19",
             repeat("aa", 32)),
         bundle.toByteArray());
+  }
+
+  private static SampleTonBundleFixture sampleTonTokenAddBundleFixture(
+      final byte[] name, final byte[] symbol) {
+    if (name.length != 32 || symbol.length != 32) {
+      throw new IllegalArgumentException("fixed token fields must be 32 bytes");
+    }
+
+    final int targetDomain = TonSccpProver.DOMAIN_TON;
+    final ByteArrayOutputStream payloadBody = new ByteArrayOutputStream();
+    payloadBody.write(1);
+    writeTestU32Le(payloadBody, targetDomain);
+    writeTestU64Le(payloadBody, BigInteger.valueOf(327L));
+    writeTestRawBytes(payloadBody, hexBytes(repeat("11", 32)));
+    payloadBody.write(18);
+    writeTestRawBytes(payloadBody, name);
+    writeTestRawBytes(payloadBody, symbol);
+
+    final byte[] payloadBodyBytes = payloadBody.toByteArray();
+    final byte[] payloadBytes = concatTestBytes(new byte[] {0x03}, payloadBodyBytes);
+    final String messageId =
+        "0x" + hexLower(prefixedKeccakBytes("sccp:token:add:v1", payloadBodyBytes));
+    final String payloadHash =
+        "0x"
+            + hexLower(
+                Blake2b.digest256(
+                    concatTestBytes("sccp:payload:v1".getBytes(StandardCharsets.UTF_8), payloadBytes)));
+
+    final ByteArrayOutputStream commitment = new ByteArrayOutputStream();
+    commitment.write(1);
+    commitment.write(1);
+    writeTestU32Le(commitment, targetDomain);
+    writeTestRawBytes(commitment, hexBytes(messageId.substring(2)));
+    writeTestRawBytes(commitment, hexBytes(payloadHash.substring(2)));
+    final byte[] commitmentBytes = commitment.toByteArray();
+    final byte[] currentRoot =
+        Blake2b.digest256(
+            concatTestBytes("sccp:hub:leaf:v1".getBytes(StandardCharsets.UTF_8), commitmentBytes));
+    final String commitmentRoot = "0x" + hexLower(currentRoot);
+
+    final ByteArrayOutputStream merkleProof = new ByteArrayOutputStream();
+    writeTestU32Le(merkleProof, 0);
+
+    final ByteArrayOutputStream bundle = new ByteArrayOutputStream();
+    bundle.write(1);
+    writeTestRawBytes(bundle, currentRoot);
+    writeTestBytes(bundle, commitmentBytes);
+    writeTestBytes(bundle, merkleProof.toByteArray());
+    writeTestBytes(bundle, payloadBytes);
+    writeTestBytes(bundle, new byte[] {0x71, 0x72});
+
+    return new SampleTonBundleFixture(
+        new TonSccpProver.PublicInputsInput(
+            1,
+            messageId,
+            payloadHash,
+            targetDomain,
+            commitmentRoot,
+            "19",
+            repeat("aa", 32)),
+        bundle.toByteArray());
+  }
+
+  private static byte[] fixedTestAscii32(final String value) {
+    final byte[] raw = value.getBytes(StandardCharsets.UTF_8);
+    if (raw.length > 32) {
+      throw new IllegalArgumentException("fixed token field is too long");
+    }
+    return Arrays.copyOf(raw, 32);
   }
 
   private static TonSccpProver.ProofRequestInput proofRequestInputWithBundle(
