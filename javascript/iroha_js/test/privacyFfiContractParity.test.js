@@ -128,11 +128,6 @@ const EXPECTED_NATIVE_PRIVACY_REQUIRED_PRODUCTION_PLAN_ROWS = Object.freeze([
     "sis-with-hints",
   ]),
   Object.freeze([
-    "zk-ace-pq-authorization-v0",
-    "stark/fri/sha256-goldilocks",
-    "stark-fri",
-  ]),
-  Object.freeze([
     "orchard-halo2-actions-v1",
     "halo2-pasta-action-bundle",
     "halo2-ipa-orchard",
@@ -255,21 +250,9 @@ const EXPECTED_PENDING_PRIVACY_BACKEND_LABELS = Object.freeze([
   "zk-x509",
   "sis-with-hints",
 ]);
-const EXPECTED_REQUIRED_PRIVACY_PRODUCTION_ALLOWLIST_BACKEND_LABELS = Object.freeze([
-  "stark-fri",
-]);
-const EXPECTED_REQUIRED_PRIVACY_PRODUCTION_ALLOWLIST_ROWS = Object.freeze([
-  Object.freeze(["zk-ace-pq-authorization-v0", "stark-fri"]),
-]);
-const EXPECTED_REQUIRED_PRIVACY_PRODUCTION_ALLOWLIST_RUST_BACKEND_LABELS = Object.freeze([
-  Object.freeze([
-    "stark-fri",
-    "stark/fri",
-    "stark/fri/sha256-goldilocks",
-    "stark/fri/poseidon2-goldilocks",
-    "stark/fri/sha256_goldilocks.v1",
-  ]),
-]);
+const EXPECTED_REQUIRED_PRIVACY_PRODUCTION_ALLOWLIST_BACKEND_LABELS = Object.freeze([]);
+const EXPECTED_REQUIRED_PRIVACY_PRODUCTION_ALLOWLIST_ROWS = Object.freeze([]);
+const EXPECTED_REQUIRED_PRIVACY_PRODUCTION_ALLOWLIST_RUST_BACKEND_LABELS = Object.freeze([]);
 const EXPECTED_ADVERSARIAL_PENDING_PRIVACY_BACKEND_LABELS = Object.freeze([
   "halo2/ipa/orchard/dev-fixture",
   "stark/fri/miden/claimed-production",
@@ -2419,6 +2402,31 @@ test("native privacy FFI capabilities accept internal evidence while defaulting 
       text,
       /privacy_production_evidence_rejects_adversarial_zk_ace_bindings[\s\S]*wrong chain[\s\S]*mock chain marker[\s\S]*wrong verifier key[\s\S]*mutated public input schema[\s\S]*dev fixture entrypoint[\s\S]*local verifier entrypoint[\s\S]*missing SDK export surface[\s\S]*mismatched SDK export entrypoint[\s\S]*dev fixture SDK export[\s\S]*missing SDK parity artifact[\s\S]*wrong SDK parity artifact kind[\s\S]*bad SDK parity artifact hash[\s\S]*three-peer localnet downgrade[\s\S]*replay acceptance[\s\S]*restart replay acceptance[\s\S]*bad review artifact hash[\s\S]*unsigned review artifact[\s\S]*missing required state/,
       `${label} must test adversarial ZK-ACE production evidence rejection`,
+    );
+    assert.match(
+      text,
+      /const\s+PRIVACY_PRODUCTION_REVIEW_SCOPE_VERSION:\s*&str\s*=\s*"privacy-production-review-scope-v1"/,
+      `${label} must version internal cryptographic review scope evidence`,
+    );
+    assert.match(
+      text,
+      /struct\s+PrivacyProductionReviewScopeV1[\s\S]*version:\s*&'static str[\s\S]*algorithm_id:\s*&'static str[\s\S]*chain_id:\s*&'static str[\s\S]*verifier_key_id:\s*&'static str[\s\S]*proof_family:\s*&'static str[\s\S]*public_inputs_schema:\s*Option<&'static str>[\s\S]*sdk_entrypoints:\s*Vec<&'static str>[\s\S]*required_state:\s*Vec<&'static str>[\s\S]*fuzz_artifact_hash:\s*&'static str[\s\S]*performance_artifact_hash:\s*&'static str[\s\S]*localnet_run_id:\s*&'static str/,
+      `${label} must bind review artifacts to algorithm, chain, verifier, schema, SDK, state, fuzz/perf, and localnet scope`,
+    );
+    assert.match(
+      text,
+      /fn\s+privacy_production_review_scope_is_valid[\s\S]*PRIVACY_PRODUCTION_REVIEW_SCOPE_VERSION[\s\S]*row\.review_scope\.algorithm_id\s*==\s*row\.algorithm_id[\s\S]*row\.review_scope\.chain_id\s*==\s*row\.chain_id[\s\S]*row\.review_scope\.verifier_key_id\s*==\s*row\.verifier_key_id[\s\S]*row\.review_scope\.public_inputs_schema\s*==\s*row\.public_inputs_schema[\s\S]*row\.review_scope\.localnet_run_id\s*==\s*row\.localnet_acceptance\.run_id/,
+      `${label} must validate review scope against the admitted evidence row`,
+    );
+    assert.match(
+      text,
+      /privacy_production_evidence_row_is_valid[\s\S]*privacy_production_review_scope_is_valid\(row,\s*entry\)/,
+      `${label} must require review scope validation before capability admission`,
+    );
+    assert.match(
+      text,
+      /privacy_production_evidence_rejects_adversarial_zk_ace_bindings[\s\S]*wrong review scope algorithm[\s\S]*wrong review scope chain[\s\S]*wrong review scope verifier key[\s\S]*mutated review scope public input schema[\s\S]*missing review scope SDK entrypoint[\s\S]*dev fixture review scope SDK entrypoint[\s\S]*missing review scope required state[\s\S]*bad review scope fuzz hash[\s\S]*bad review scope performance hash[\s\S]*mock review scope localnet run/,
+      `${label} must test adversarial review-scope binding rejection`,
     );
     assert.match(
       text,

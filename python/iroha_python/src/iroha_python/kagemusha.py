@@ -231,6 +231,8 @@ _MALFORMED_NATIVE_PROBE_ARCHIVE = b"\x00"
 _KAGEMUSHA_NORITO_HEADER_BYTES = 40
 _KAGEMUSHA_NORITO_MAX_HEADER_PADDING_BYTES = 64
 _KAGEMUSHA_NORITO_SUPPORTED_FLAGS_MASK = 0x27
+_KAGEMUSHA_NORITO_COMPACT_LEN_FLAG = 0x02
+_KAGEMUSHA_NORITO_PACKED_STRUCT_FLAG = 0x04
 _KAGEMUSHA_NORITO_FIELD_BITSET_FLAG = 0x20
 _KAGEMUSHA_NORITO_FIELD_BITSET_REQUIRED_FLAGS = 0x06
 _KAGEMUSHA_NORITO_MAGIC = b"NRT0"
@@ -240,6 +242,10 @@ _KAGEMUSHA_ZK1_MAGIC = b"ZK1\x00"
 _KAGEMUSHA_ZK1_TLV_CID1 = b"CID1"
 _KAGEMUSHA_ZK1_TLV_IPAK = b"IPAK"
 _KAGEMUSHA_ZK1_TLV_H2VK = b"H2VK"
+_KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_VERSION_V1 = 1
+_KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH = bytes.fromhex(
+    "c88489618a012c283ff3bb2ebabc7775"
+)
 
 
 def _build_kagemusha_crc64_table() -> tuple[int, ...]:
@@ -380,6 +386,19 @@ def _validate_kagemusha_recursive_spend_lineage_key_artifact_package_binding(
         or archive_payload.find(verifier_key_commitment) < 0
     ):
         raise ValueError("lineage_proving_key_archive")
+    version, circuit_family, archive_commitment, proving_key = (
+        _kagemusha_decode_lineage_proving_key_archive_payload(
+            archive_payload,
+            lineage_proving_key_archive[39],
+        )
+    )
+    if (
+        version != _KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_VERSION_V1
+        or circuit_family != proof_circuit_id
+        or archive_commitment != verifier_key_commitment
+        or not proving_key
+    ):
+        raise ValueError("lineage_proving_key_archive")
 
 
 def _kagemusha_lineage_verifier_key_envelope_circuit_id(
@@ -434,12 +453,132 @@ def _kagemusha_lineage_proving_key_archive_payload(
     lineage_proving_key_archive: bytes,
 ) -> bytes:
     try:
-        return _assert_kagemusha_norito_archive(
+        archive_payload = _assert_kagemusha_norito_archive(
             lineage_proving_key_archive,
             "lineage_proving_key_archive",
         )
+        if (
+            lineage_proving_key_archive[6:22]
+            != _KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH
+            or lineage_proving_key_archive[39] & _KAGEMUSHA_NORITO_PACKED_STRUCT_FLAG
+            or lineage_proving_key_archive[39] & _KAGEMUSHA_NORITO_FIELD_BITSET_FLAG
+        ):
+            raise ValueError("lineage_proving_key_archive")
+        return archive_payload
     except ValueError as exc:
         raise ValueError("lineage_proving_key_archive") from exc
+
+
+def _kagemusha_decode_lineage_proving_key_archive_payload(
+    payload: bytes,
+    flags: int,
+) -> tuple[int, str, bytes, bytes]:
+    try:
+        offset = 0
+        version_payload, offset = _kagemusha_read_norito_field(
+            payload,
+            offset,
+            flags,
+        )
+        if len(version_payload) != 2:
+            raise ValueError("lineage_proving_key_archive")
+        version = int.from_bytes(version_payload, "little")
+
+        circuit_family_payload, offset = _kagemusha_read_norito_field(
+            payload,
+            offset,
+            flags,
+        )
+        circuit_family = _kagemusha_decode_norito_string(
+            circuit_family_payload,
+            flags,
+        )
+
+        verifier_key_commitment, offset = _kagemusha_read_norito_field(
+            payload,
+            offset,
+            flags,
+        )
+        if len(verifier_key_commitment) != 32:
+            raise ValueError("lineage_proving_key_archive")
+
+        proving_key_payload, offset = _kagemusha_read_norito_field(
+            payload,
+            offset,
+            flags,
+        )
+        proving_key = _kagemusha_decode_norito_byte_vec(proving_key_payload)
+        if offset != len(payload):
+            raise ValueError("lineage_proving_key_archive")
+        return version, circuit_family, verifier_key_commitment, proving_key
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise ValueError("lineage_proving_key_archive") from exc
+
+
+def _kagemusha_read_norito_field(
+    buffer: bytes,
+    offset: int,
+    flags: int,
+) -> tuple[bytes, int]:
+    length, payload_start = _kagemusha_read_norito_length(buffer, offset, flags)
+    payload_end = payload_start + length
+    if payload_end > len(buffer):
+        raise ValueError("lineage_proving_key_archive")
+    return buffer[payload_start:payload_end], payload_end
+
+
+def _kagemusha_read_norito_length(
+    buffer: bytes,
+    offset: int,
+    flags: int,
+) -> tuple[int, int]:
+    if not flags & _KAGEMUSHA_NORITO_COMPACT_LEN_FLAG:
+        if offset + 8 > len(buffer):
+            raise ValueError("lineage_proving_key_archive")
+        value = int.from_bytes(buffer[offset : offset + 8], "little")
+        if value > _KAGEMUSHA_U64_MAX or value > len(buffer):
+            raise ValueError("lineage_proving_key_archive")
+        return value, offset + 8
+
+    value = 0
+    shift = 0
+    cursor = offset
+    for _ in range(10):
+        if cursor >= len(buffer):
+            raise ValueError("lineage_proving_key_archive")
+        byte = buffer[cursor]
+        cursor += 1
+        chunk = byte & 0x7F
+        if shift >= 63 and chunk > 1:
+            raise ValueError("lineage_proving_key_archive")
+        value |= chunk << shift
+        if not byte & 0x80:
+            encoded_len = cursor - offset
+            if encoded_len > 1 and value < (1 << (7 * (encoded_len - 1))):
+                raise ValueError("lineage_proving_key_archive")
+            if value > len(buffer):
+                raise ValueError("lineage_proving_key_archive")
+            return value, cursor
+        shift += 7
+    raise ValueError("lineage_proving_key_archive")
+
+
+def _kagemusha_decode_norito_string(payload: bytes, flags: int) -> str:
+    length, start = _kagemusha_read_norito_length(payload, 0, flags)
+    end = start + length
+    if end != len(payload):
+        raise ValueError("lineage_proving_key_archive")
+    return payload[start:end].decode("utf-8")
+
+
+def _kagemusha_decode_norito_byte_vec(payload: bytes) -> bytes:
+    if len(payload) < 8:
+        raise ValueError("lineage_proving_key_archive")
+    length = int.from_bytes(payload[:8], "little")
+    end = 8 + length
+    if end != len(payload):
+        raise ValueError("lineage_proving_key_archive")
+    return payload[8:end]
 
 
 def _kagemusha_verifying_key_commitment(

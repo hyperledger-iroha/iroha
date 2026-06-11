@@ -5,7 +5,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     path::PathBuf,
     sync::{
-        Arc, Condvar, Mutex,
+        Arc, Condvar, Mutex, MutexGuard,
         atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc,
     },
@@ -2443,7 +2443,7 @@ mod tests {
             ValidatorIndex::try_from(0).expect("validator index fits") + 1,
         );
         {
-            let mut guard = vote_dedup.lock().expect("dedup cache poisoned");
+            let mut guard = lock_vote_dedup_cache(&vote_dedup);
             let now = Instant::now();
             guard.clear();
             for i in 0..max_dedup_cache {
@@ -2463,10 +2463,64 @@ mod tests {
         }
 
         assert!(handle.dedup_vote(base_key));
-        let guard = vote_dedup.lock().expect("dedup cache poisoned");
+        let guard = lock_vote_dedup_cache(&vote_dedup);
         assert!(guard.contains(&base_key));
         assert_eq!(guard.len(), max_dedup_cache);
         assert!(!guard.contains(&first_key));
+    }
+
+    #[test]
+    fn vote_dedup_recovers_poisoned_cache() {
+        let (block_payload_tx, _block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_tx, _block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (rbc_chunk_tx, _rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (vote_tx, _vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (consensus_tx, _consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (background_tx, _background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (lane_tx, _lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let vote_dedup: Arc<Mutex<DedupCache<VoteDedupKey>>> = Arc::new(Mutex::new(
+            DedupCache::new(VOTE_DEDUP_CACHE_CAP, VOTE_DEDUP_CACHE_TTL),
+        ));
+        let block_payload_dedup: Arc<Mutex<BlockPayloadDedupCache>> =
+            Arc::new(Mutex::new(BlockPayloadDedupCache::new(
+                BLOCK_PAYLOAD_DEDUP_CACHE_PER_KIND,
+                BLOCK_PAYLOAD_DEDUP_CACHE_TTL,
+            )));
+        let handle = SumeragiHandle::new(
+            block_payload_tx,
+            block_tx,
+            rbc_chunk_tx,
+            vote_tx,
+            consensus_tx,
+            background_tx,
+            lane_tx,
+            Arc::clone(&vote_dedup),
+            block_payload_dedup,
+        );
+
+        let poison = std::panic::catch_unwind({
+            let vote_dedup = Arc::clone(&vote_dedup);
+            move || {
+                let _guard = vote_dedup.lock().expect("fresh vote dedup cache");
+                panic!("poison vote dedup cache for recovery test");
+            }
+        });
+        assert!(poison.is_err());
+
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x5A; 32]));
+        let key: VoteDedupKey = (
+            SumeragiHandle::phase_id(crate::sumeragi::consensus::Phase::Commit),
+            block_hash,
+            7,
+            2,
+            0,
+            ValidatorIndex::try_from(2).expect("validator index fits") + 1,
+        );
+        assert!(handle.dedup_vote(key));
+        assert!(
+            !handle.dedup_vote(key),
+            "recovered vote dedup cache should still reject duplicates"
+        );
     }
 
     #[test]
@@ -2516,9 +2570,7 @@ mod tests {
             payload_hash: first_payload_hash,
         };
         {
-            let mut guard = block_payload_dedup
-                .lock()
-                .expect("block payload dedup cache poisoned");
+            let mut guard = lock_block_payload_dedup_cache(&block_payload_dedup);
             let now = Instant::now();
             guard.clear();
             for i in 0..(max_dedup_cache + 4) {
@@ -2537,12 +2589,64 @@ mod tests {
         }
 
         assert!(handle.dedup_block_payload(base_key));
-        let guard = block_payload_dedup
-            .lock()
-            .expect("block payload dedup cache poisoned");
+        let guard = lock_block_payload_dedup_cache(&block_payload_dedup);
         assert!(guard.contains(&base_key));
         assert_eq!(guard.len(), max_dedup_cache + 1);
         assert!(!guard.contains(&first_key));
+    }
+
+    #[test]
+    fn block_payload_dedup_recovers_poisoned_cache() {
+        let (block_payload_tx, _block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_tx, _block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (rbc_chunk_tx, _rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (vote_tx, _vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (consensus_tx, _consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (background_tx, _background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (lane_tx, _lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let vote_dedup: Arc<Mutex<DedupCache<VoteDedupKey>>> = Arc::new(Mutex::new(
+            DedupCache::new(VOTE_DEDUP_CACHE_CAP, VOTE_DEDUP_CACHE_TTL),
+        ));
+        let block_payload_dedup: Arc<Mutex<BlockPayloadDedupCache>> =
+            Arc::new(Mutex::new(BlockPayloadDedupCache::new(
+                BLOCK_PAYLOAD_DEDUP_CACHE_PER_KIND,
+                BLOCK_PAYLOAD_DEDUP_CACHE_TTL,
+            )));
+        let handle = SumeragiHandle::new(
+            block_payload_tx,
+            block_tx,
+            rbc_chunk_tx,
+            vote_tx,
+            consensus_tx,
+            background_tx,
+            lane_tx,
+            Arc::clone(&vote_dedup),
+            Arc::clone(&block_payload_dedup),
+        );
+
+        let poison = std::panic::catch_unwind({
+            let block_payload_dedup = Arc::clone(&block_payload_dedup);
+            move || {
+                let _guard = block_payload_dedup
+                    .lock()
+                    .expect("fresh block payload dedup cache");
+                panic!("poison block payload dedup cache for recovery test");
+            }
+        });
+        assert!(poison.is_err());
+
+        let key = BlockPayloadDedupKey::RbcChunk {
+            height: 3,
+            view: 1,
+            epoch: 0,
+            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([9u8; 32])),
+            idx: 4,
+            bytes_hash: Hash::new(b"poisoned-dedup-rbc-chunk"),
+        };
+        assert!(handle.dedup_block_payload(key));
+        assert!(!handle.dedup_block_payload(key));
+        handle.release_block_payload_dedup(&key);
+        assert!(handle.dedup_block_payload(key));
     }
 
     #[test]
@@ -9791,6 +9895,21 @@ mod tests {
     }
 
     #[test]
+    fn actor_gate_recovers_poisoned_state() {
+        let gate = ActorGate::new(Vec::<&'static str>::new());
+
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut guard = gate.enter(GatePriority::AvailabilityCritical);
+            guard.actor_mut().push("poisoned");
+            panic!("poison sumeragi actor gate for recovery test");
+        }));
+
+        let mut guard = gate.enter(GatePriority::Regular);
+        guard.actor_mut().push("recovered");
+        assert_eq!(guard.actor_mut().as_slice(), &["poisoned", "recovered"]);
+    }
+
+    #[test]
     fn actor_gate_prioritizes_urgent_waiters() {
         let gate = Arc::new(ActorGate::new(Vec::<&'static str>::new()));
         let order = Arc::new(Mutex::new(Vec::<&'static str>::new()));
@@ -11400,6 +11519,20 @@ where
     }
 }
 
+fn lock_vote_dedup_cache(
+    cache: &Mutex<DedupCache<VoteDedupKey>>,
+) -> MutexGuard<'_, DedupCache<VoteDedupKey>> {
+    match cache.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            iroha_logger::warn!(
+                "vote dedup cache mutex was poisoned; recovering duplicate-suppression state"
+            );
+            poisoned.into_inner()
+        }
+    }
+}
+
 #[derive(Debug)]
 struct BlockPayloadDedupCache {
     block_created: DedupCache<BlockPayloadDedupKey>,
@@ -11630,11 +11763,22 @@ impl FrontierBlockSyncHint {
             || self.frontier_lane_active.load(Ordering::Relaxed)
     }
 
+    fn direct_response_permits_lock(
+        &self,
+    ) -> MutexGuard<'_, BTreeMap<PeerId, DirectBlockSyncResponsePermit>> {
+        match self.direct_response_permits.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                iroha_logger::warn!(
+                    "direct block-sync response permit mutex was poisoned; recovering recovery-gossip permit state"
+                );
+                poisoned.into_inner()
+            }
+        }
+    }
+
     fn record_direct_block_sync_response_permit(&self, peer_id: PeerId, now: Instant) {
-        let mut permits = self
-            .direct_response_permits
-            .lock()
-            .expect("direct block sync response permits poisoned");
+        let mut permits = self.direct_response_permits_lock();
         Self::prune_direct_block_sync_response_permits(&mut permits, now);
         let entry = permits
             .entry(peer_id)
@@ -11650,10 +11794,7 @@ impl FrontierBlockSyncHint {
     }
 
     fn allow_direct_block_sync_response(&self, peer_id: &PeerId, now: Instant) -> bool {
-        let mut permits = self
-            .direct_response_permits
-            .lock()
-            .expect("direct block sync response permits poisoned");
+        let mut permits = self.direct_response_permits_lock();
         Self::prune_direct_block_sync_response_permits(&mut permits, now);
         let Some(entry) = permits.get_mut(peer_id) else {
             return false;
@@ -11678,6 +11819,20 @@ impl FrontierBlockSyncHint {
     ) {
         let ttl = direct_block_sync_response_permit_ttl();
         permits.retain(|_, permit| now.saturating_duration_since(permit.last_request) <= ttl);
+    }
+}
+
+fn lock_block_payload_dedup_cache(
+    cache: &Mutex<BlockPayloadDedupCache>,
+) -> MutexGuard<'_, BlockPayloadDedupCache> {
+    match cache.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            iroha_logger::warn!(
+                "block payload dedup cache mutex was poisoned; recovering duplicate-suppression state"
+            );
+            poisoned.into_inner()
+        }
     }
 }
 
@@ -11781,7 +11936,7 @@ impl SumeragiHandle {
     }
 
     fn dedup_vote(&self, key: VoteDedupKey) -> bool {
-        let mut guard = self.vote_dedup.lock().expect("vote dedup cache poisoned");
+        let mut guard = lock_vote_dedup_cache(&self.vote_dedup);
         let outcome = guard.insert(key, Instant::now());
         if outcome.evicted_capacity > 0 || outcome.evicted_expired > 0 {
             status::record_dedup_evictions(
@@ -11814,10 +11969,7 @@ impl SumeragiHandle {
             }
             BlockPayloadDedupKey::RbcChunk { .. } => status::DedupEvictionKind::RbcChunk,
         };
-        let mut guard = self
-            .block_payload_dedup
-            .lock()
-            .expect("block payload dedup cache poisoned");
+        let mut guard = lock_block_payload_dedup_cache(&self.block_payload_dedup);
         let outcome = guard.insert(key, Instant::now());
         if outcome.evicted_capacity > 0 || outcome.evicted_expired > 0 {
             status::record_dedup_evictions(kind, outcome.evicted_capacity, outcome.evicted_expired);
@@ -11826,10 +11978,7 @@ impl SumeragiHandle {
     }
 
     fn release_block_payload_dedup(&self, key: &BlockPayloadDedupKey) {
-        let mut guard = self
-            .block_payload_dedup
-            .lock()
-            .expect("block payload dedup cache poisoned");
+        let mut guard = lock_block_payload_dedup_cache(&self.block_payload_dedup);
         guard.remove(key);
     }
 
@@ -12994,11 +13143,7 @@ mod frontier_block_sync_hint_tests {
         hint: &FrontierBlockSyncHint,
         peer_id: &PeerId,
     ) -> Option<DirectBlockSyncResponsePermit> {
-        hint.direct_response_permits
-            .lock()
-            .expect("direct block sync response permits poisoned")
-            .get(peer_id)
-            .copied()
+        hint.direct_response_permits_lock().get(peer_id).copied()
     }
 
     #[test]
@@ -13191,10 +13336,7 @@ mod frontier_block_sync_hint_tests {
         );
 
         {
-            let mut permits = hint
-                .direct_response_permits
-                .lock()
-                .expect("direct block sync response permits poisoned");
+            let mut permits = hint.direct_response_permits_lock();
             permits.insert(
                 owner.clone(),
                 DirectBlockSyncResponsePermit {
@@ -13215,10 +13357,7 @@ mod frontier_block_sync_hint_tests {
         hint.record_direct_block_sync_response_permit(owner.clone(), now);
         hint.record_direct_block_sync_response_permit(other.clone(), ttl_boundary);
         FrontierBlockSyncHint::prune_direct_block_sync_response_permits(
-            &mut hint
-                .direct_response_permits
-                .lock()
-                .expect("direct block sync response permits poisoned"),
+            &mut hint.direct_response_permits_lock(),
             expired,
         );
         assert!(
@@ -13229,6 +13368,33 @@ mod frontier_block_sync_hint_tests {
             direct_permit_state(&hint, &other).is_some(),
             "pruning should keep fresh permits",
         );
+    }
+
+    #[test]
+    fn direct_block_sync_response_permits_recover_poisoned_lock() {
+        let hint = FrontierBlockSyncHint::default();
+        let owner = peer_id();
+        let now = Instant::now();
+
+        let poison = std::panic::catch_unwind(|| {
+            let _guard = hint
+                .direct_response_permits
+                .lock()
+                .expect("fresh direct block sync response permits lock");
+            panic!("poison direct block sync response permits for recovery test");
+        });
+        assert!(poison.is_err());
+
+        hint.record_direct_block_sync_response_permit(owner.clone(), now);
+        assert!(
+            hint.allow_direct_block_sync_response(&owner, now),
+            "permit record/consume should recover after a poisoned lock"
+        );
+        assert!(
+            !hint.allow_direct_block_sync_response(&owner, now),
+            "recovered permits should still remain single-use"
+        );
+        assert!(direct_permit_state(&hint, &owner).is_none());
     }
 }
 
@@ -13934,8 +14100,35 @@ impl<A> ActorGate<A> {
         }
     }
 
+    fn lock_state(&self) -> MutexGuard<'_, ActorGateState<A>> {
+        match self.state.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                iroha_logger::warn!(
+                    "Sumeragi actor gate mutex was poisoned; recovering worker scheduling state"
+                );
+                poisoned.into_inner()
+            }
+        }
+    }
+
+    fn wait_state<'a>(
+        &'a self,
+        guard: MutexGuard<'a, ActorGateState<A>>,
+    ) -> MutexGuard<'a, ActorGateState<A>> {
+        match self.cvar.wait(guard) {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                iroha_logger::warn!(
+                    "Sumeragi actor gate mutex was poisoned while waiting; recovering worker scheduling state"
+                );
+                poisoned.into_inner()
+            }
+        }
+    }
+
     fn enter(&self, priority: GatePriority) -> ActorGuard<'_, A> {
-        let mut guard = self.state.lock().expect("sumeragi actor gate poisoned");
+        let mut guard = self.lock_state();
         match priority {
             GatePriority::AvailabilityBody => {
                 guard.waiting_availability_body = guard.waiting_availability_body.saturating_add(1);
@@ -13954,7 +14147,7 @@ impl<A> ActorGate<A> {
             }
         }
         while !Self::can_enter(priority, &guard, self.max_urgent_before_da_critical) {
-            guard = self.cvar.wait(guard).expect("sumeragi actor gate poisoned");
+            guard = self.wait_state(guard);
         }
         guard.in_flight = true;
         match priority {

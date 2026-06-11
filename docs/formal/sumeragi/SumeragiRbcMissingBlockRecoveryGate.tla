@@ -78,6 +78,32 @@ ImplementationNeedsRecovery(c) ==
        /\ c = NeedsCompleteSession -> TRUE
     [] OTHER -> SpecNeedsRecovery(c)
 
+MaterializeAuthoritativeComplete == "materialize_authoritative_complete"
+MaterializeMissingPayloadHash == "materialize_missing_payload_hash"
+MaterializeMissingHeader == "materialize_missing_header"
+MaterializeMissingLeaderSignature == "materialize_missing_leader_signature"
+MaterializeInvalidSession == "materialize_invalid_session"
+MaterializeIncompleteChunks == "materialize_incomplete_chunks"
+MaterializePayloadHashMismatch == "materialize_payload_hash_mismatch"
+
+MaterializeCases == {
+  MaterializeAuthoritativeComplete,
+  MaterializeMissingPayloadHash,
+  MaterializeMissingHeader,
+  MaterializeMissingLeaderSignature,
+  MaterializeInvalidSession,
+  MaterializeIncompleteChunks,
+  MaterializePayloadHashMismatch
+}
+
+SpecMaterializesBlock(c) ==
+  c = MaterializeAuthoritativeComplete
+
+ImplementationMaterializesBlock(c) ==
+  CASE Bug = "materialize_missing_payload_hash"
+       /\ c = MaterializeMissingPayloadHash -> TRUE
+    [] OTHER -> SpecMaterializesBlock(c)
+
 ForceInvalidSession == "force_invalid_session"
 ForcePayloadAvailable == "force_payload_available"
 ForceExactFrontierGap == "force_exact_frontier_gap"
@@ -257,6 +283,7 @@ Bugs == {
   "needs_signature_skips",
   "needs_invalid_skips",
   "needs_complete_fetches",
+  "materialize_missing_payload_hash",
   "force_invalid_fetches",
   "force_payload_available_fetches",
   "force_frontier_gap_skips",
@@ -286,17 +313,20 @@ Init ==
   checked = 0
 
 Next ==
-  \/ /\ checked < 30
+  \/ /\ checked < 31
      /\ checked' = checked + 1
-  \/ /\ checked = 30
+  \/ /\ checked = 31
      /\ checked' = checked
 
 TypeInvariant ==
   /\ Bug \in Bugs
-  /\ checked \in 0..30
+  /\ checked \in 0..31
   /\ \A c \in NeedsCases:
        /\ SpecNeedsRecovery(c) \in BOOLEAN
        /\ ImplementationNeedsRecovery(c) \in BOOLEAN
+  /\ \A c \in MaterializeCases:
+       /\ SpecMaterializesBlock(c) \in BOOLEAN
+       /\ ImplementationMaterializesBlock(c) \in BOOLEAN
   /\ \A c \in ForceCases:
        /\ SpecForceFrontierFetch(c) \in BOOLEAN
        /\ ImplementationForceFrontierFetch(c) \in BOOLEAN
@@ -316,6 +346,8 @@ TypeInvariant ==
 RbcMissingBlockRecoveryMatchesSpec ==
   /\ \A c \in NeedsCases:
        ImplementationNeedsRecovery(c) = SpecNeedsRecovery(c)
+  /\ \A c \in MaterializeCases:
+       ImplementationMaterializesBlock(c) = SpecMaterializesBlock(c)
   /\ \A c \in ForceCases:
        ImplementationForceFrontierFetch(c) = SpecForceFrontierFetch(c)
   /\ \A c \in FetchCases:
@@ -333,6 +365,10 @@ SafetyFast ==
 AllNeedsRecoveryMatches ==
   \A c \in NeedsCases:
     ImplementationNeedsRecovery(c) = SpecNeedsRecovery(c)
+
+AllMaterializationMatches ==
+  \A c \in MaterializeCases:
+    ImplementationMaterializesBlock(c) = SpecMaterializesBlock(c)
 
 AllForceFrontierFetchMatches ==
   \A c \in ForceCases:
@@ -358,6 +394,15 @@ NeedsRecoveryAnchors ==
   /\ ImplementationNeedsRecovery(NeedsMissingHeader)
   /\ ImplementationNeedsRecovery(NeedsMissingLeaderSignature)
   /\ ImplementationNeedsRecovery(NeedsInvalidSession)
+
+MaterializationAnchors ==
+  /\ ImplementationMaterializesBlock(MaterializeAuthoritativeComplete)
+  /\ ~ImplementationMaterializesBlock(MaterializeMissingPayloadHash)
+  /\ ~ImplementationMaterializesBlock(MaterializeMissingHeader)
+  /\ ~ImplementationMaterializesBlock(MaterializeMissingLeaderSignature)
+  /\ ~ImplementationMaterializesBlock(MaterializeInvalidSession)
+  /\ ~ImplementationMaterializesBlock(MaterializeIncompleteChunks)
+  /\ ~ImplementationMaterializesBlock(MaterializePayloadHashMismatch)
 
 ForceFrontierFetchAnchors ==
   /\ ~ImplementationForceFrontierFetch(ForceInvalidSession)
@@ -409,10 +454,12 @@ SuppressionRangePullAnchors ==
 
 MissingBlockRecoverySafetyAnchors ==
   /\ AllNeedsRecoveryMatches
+  /\ AllMaterializationMatches
   /\ AllForceFrontierFetchMatches
   /\ AllFetchModesMatch
   /\ AllSuppressionMatches
   /\ NeedsRecoveryAnchors
+  /\ MaterializationAnchors
   /\ ForceFrontierFetchAnchors
   /\ FetchModeAnchors
   /\ SuppressionDecisionAnchors

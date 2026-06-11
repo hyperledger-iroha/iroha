@@ -25,7 +25,7 @@ import check_android_device_lab_slot as device_lab  # noqa: E402
 import sign_android_device_lab_evidence as evidence_signer  # noqa: E402
 
 
-DEFAULT_APP_PACKAGE_NAME = "org.hyperledger.iroha.android.offlinewallet"
+DEFAULT_APP_PACKAGE_NAME = "org.hyperledger.iroha.sdk.offline.wallet.lab"
 DEFAULT_POLICY_BYTES = b"kagemusha-offline-wallet-policy-v1"
 DEFAULT_ATTESTATION_HARNESS_RESULT_PATH = "attestation/harness-result.json"
 DEFAULT_ATTESTATION_CHAIN_PATH = "attestation/keymint-certificate-chain.pem"

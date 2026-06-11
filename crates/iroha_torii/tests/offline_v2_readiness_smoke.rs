@@ -10,9 +10,7 @@ use http_body_util::BodyExt as _;
 use iroha_core::{
     kiso::KisoHandle, kura::Kura, prelude::World, query::store::LiveQueryStore, state::State,
 };
-use iroha_data_model::{
-    ChainId, offline::offline_note_v2_recursive_public_inputs_schema_hash, peer::PeerId,
-};
+use iroha_data_model::{ChainId, peer::PeerId};
 use tower::ServiceExt as _;
 
 #[path = "fixtures.rs"]
@@ -124,28 +122,35 @@ async fn offline_v2_readiness_is_mounted_and_legacy_routes_are_absent() {
     assert_eq!(readiness.status(), StatusCode::OK);
     let body = readiness.into_body().collect().await.unwrap().to_bytes();
     let body = String::from_utf8(body.to_vec()).unwrap();
-    assert!(body.contains("\"offline_note_v2\":true"));
-    assert!(body.contains("\"offline_one_use_keys\":true"));
-    assert!(body.contains("\"offline_recursive_note_proof\":true"));
-    assert!(body.contains("\"offline_recursive_note_proof_backend\":\"halo2/ipa\""));
-    assert!(
-        body.contains(
-            "\"offline_recursive_note_proof_circuit_id\":\"offline-note-v2-recursive-v1\""
-        )
-    );
-    let schema_hash = hex::encode(offline_note_v2_recursive_public_inputs_schema_hash());
-    assert!(body.contains(&format!(
-        "\"offline_recursive_note_proof_public_inputs_schema_hash\":\"{schema_hash}\""
-    )));
-    assert!(body.contains("\"offline_recursive_note_proof_public_instance_columns\":16"));
-    assert!(body.contains(
-        "\"offline_recursive_note_proof_verifier_key_id\":{\"backend\":\"halo2/ipa\",\"name\":\"offline-note-v2-recursive-v1\"}"
-    ));
-    assert!(body.contains("\"offline_fountain_qr_v1\":true"));
-    assert!(body.contains("\"offline_sync_optional\":true"));
     assert!(body.contains("\"offline_telemetry\":true"));
+    assert!(body.contains("\"offline_kagemusha_abi7\":true"));
+    assert!(body.contains("\"offline_kagemusha_abi7_mode\":\"recursive_compact_v1\""));
+    assert!(body.contains("\"offline_kagemusha_abi7_bridge_abi_version\":7"));
+    assert!(
+        body.contains("\"offline_kagemusha_abi7_circuit_id\":\"kagemusha-recursive-compact-v1\"")
+    );
+    assert!(body.contains("\"offline_kagemusha_abi7_artifacts\":true"));
+    for field in [
+        "offline_note_v2",
+        "offline_one_use_keys",
+        "offline_recursive_note_proof",
+        "offline_recursive_note_proof_backend",
+        "offline_recursive_note_proof_circuit_id",
+        "offline_recursive_note_proof_public_inputs_schema_hash",
+        "offline_recursive_note_proof_public_instance_columns",
+        "offline_recursive_note_proof_verifier_key_id",
+        "offline_fountain_qr_v1",
+        "offline_sync_optional",
+    ] {
+        assert!(
+            !body.contains(&format!("\"{field}\"")),
+            "legacy v2 readiness field must be absent: {field}"
+        );
+    }
 
     for path in [
+        "/v1/offline/keys/refill",
+        "/v1/offline/notes/issue",
         "/v1/offline/cash/setup",
         "/v1/offline/cash/load",
         "/v1/offline/cash/refresh",

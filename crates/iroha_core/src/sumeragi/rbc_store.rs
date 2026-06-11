@@ -1255,6 +1255,8 @@ fn validate_chunks(session: &PersistedSession) -> Result<(), &'static str> {
             (Some(_), Some(sig)) if !sig.is_empty() => {}
             _ => return Err("delivered flag set without deliver sender/signature"),
         }
+    } else if session.deliver_sender.is_some() || session.deliver_signature.is_some() {
+        return Err("deliver metadata without delivered flag");
     }
 
     if let Some(expected_hash) = &session.payload_hash {
@@ -2244,6 +2246,19 @@ mod tests {
             manifest.clone(),
         );
 
+        let mut stale_deliver_metadata =
+            sample_persisted_session(base_key, chain_hash, manifest.clone());
+        stale_deliver_metadata.delivered = false;
+        stale_deliver_metadata.deliver_sender = Some(0);
+        stale_deliver_metadata.deliver_signature = Some(vec![0x01]);
+        assert_persisted_session_rejected_and_deleted(
+            "deliver metadata without delivered flag",
+            base_key,
+            stale_deliver_metadata,
+            chain_hash,
+            manifest.clone(),
+        );
+
         let mut payload_hash_mismatch =
             persisted_single_chunk_session(base_key, chain_hash, &manifest, 0xA5, 8);
         payload_hash_mismatch.payload_hash = Some(Hash::prehashed([0xFF; 32]));
@@ -2575,6 +2590,25 @@ mod tests {
             None,
             "payload-less recovered delivery must not consume delivered-byte telemetry"
         );
+    }
+
+    #[test]
+    fn from_persisted_clears_deliver_metadata_when_not_delivered() {
+        let mut session = RbcSession::test_new(1, None, None, 0);
+        session.test_note_chunk(0, vec![1, 2, 3], 0);
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let key = session_key(17);
+        let mut persisted = session.to_persisted(key, chain_hash, &manifest, &[]);
+        persisted.delivered = false;
+        persisted.deliver_sender = Some(0);
+        persisted.deliver_signature = Some(vec![0xAA]);
+
+        let rebuilt = RbcSession::from_persisted_unchecked(&persisted).expect("rebuild session");
+        let roundtrip = rebuilt.to_persisted(key, chain_hash, &manifest, &[]);
+        assert!(!roundtrip.delivered);
+        assert_eq!(roundtrip.deliver_sender, None);
+        assert_eq!(roundtrip.deliver_signature, None);
     }
 
     #[test]

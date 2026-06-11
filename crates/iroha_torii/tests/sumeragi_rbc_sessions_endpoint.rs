@@ -137,6 +137,7 @@ async fn rbc_sessions_endpoint_exposes_complete_delivery_separately_from_raw_del
     handle.update(summary(8, 6, 2, 2, true, false), SystemTime::now());
     handle.update(summary(9, 7, 2, 1, true, false), SystemTime::now());
     handle.update(summary(10, 8, 2, 2, true, true), SystemTime::now());
+    handle.update(summary(11, 9, 2, 3, true, false), SystemTime::now());
 
     let app = Router::new().route(
         "/v1/sumeragi/rbc/sessions",
@@ -188,5 +189,17 @@ async fn rbc_sessions_endpoint_exposes_complete_delivery_separately_from_raw_del
     assert!(
         !invalid["complete_delivery"].as_bool().unwrap(),
         "invalid sessions must remain diagnostic-only even with complete chunks"
+    );
+
+    let overcounted = items
+        .iter()
+        .find(|item| item["height"].as_u64() == Some(9))
+        .expect("raw delivered over-counted summary present");
+    assert!(overcounted["delivered"].as_bool().unwrap());
+    assert_eq!(overcounted["received_chunks"].as_u64(), Some(3));
+    assert_eq!(overcounted["total_chunks"].as_u64(), Some(2));
+    assert!(
+        !overcounted["complete_delivery"].as_bool().unwrap(),
+        "over-counted sessions must remain diagnostic-only"
     );
 }

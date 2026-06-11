@@ -296,35 +296,46 @@ def test_direct_record_hashes_reject_template_component_hashes():
 
 def test_direct_record_hashes_reject_zero_component_hashes():
     module = load_evidence_module()
+    material_fields = tuple(
+        field for field, _id, _kind in module._template_hash_fields()
+    )
+    deployment_fields = module._component_hash_args()
+    audit_fields = tuple(
+        field for field, _engine_id in module._light_client_evidence_fields()
+    )
 
-    material_args = solana_args(module)
-    material_args.source_trust_anchor_hash = bytes(32)
-    try:
-        module.solana_source_verifier_material_record_hash(material_args)
-    except ValueError as exc:
-        assert "source_trust_anchor_hash must not be zero" in str(exc)
-    else:
-        raise AssertionError("Solana material hash accepted zero trust anchor")
+    for field in material_fields:
+        args = solana_args(module)
+        setattr(args, field, bytes(32))
+        try:
+            module.solana_source_verifier_material_record_hash(args)
+        except ValueError as exc:
+            assert f"{field} must not be zero" in str(exc)
+        else:
+            raise AssertionError(f"Solana material hash accepted zero {field}")
 
-    deployment_args = solana_args(module)
-    deployment_args.deployment_receipt_hash = bytes(32)
-    try:
-        module.solana_source_adapter_engine_deployment_record_hash(deployment_args)
-    except ValueError as exc:
-        assert "deployment_receipt_hash must not be zero" in str(exc)
-    else:
-        raise AssertionError("Solana deployment hash accepted zero receipt")
+    for field in deployment_fields:
+        args = solana_args(module)
+        setattr(args, field, bytes(32))
+        try:
+            module.solana_source_adapter_engine_deployment_record_hash(args)
+        except ValueError as exc:
+            assert f"{field} must not be zero" in str(exc)
+        else:
+            raise AssertionError(f"Solana deployment hash accepted zero {field}")
 
-    audit_args = solana_args(module)
-    audit_args.tower_replay_verifier_hash = bytes(32)
-    audit_args.full_accountsdb_lattice_verifier_hash = bytes.fromhex("cc" * 32)
-    audit_args.bank_fork_choice_verifier_hash = bytes.fromhex("dd" * 32)
-    try:
-        module.solana_full_light_client_gate_hash(audit_args)
-    except ValueError as exc:
-        assert "tower_replay_verifier_hash must not be zero" in str(exc)
-    else:
-        raise AssertionError("Solana audit gate accepted zero Tower verifier hash")
+    for field in audit_fields:
+        args = solana_args(module)
+        args.tower_replay_verifier_hash = bytes.fromhex("bb" * 32)
+        args.full_accountsdb_lattice_verifier_hash = bytes.fromhex("cc" * 32)
+        args.bank_fork_choice_verifier_hash = bytes.fromhex("dd" * 32)
+        setattr(args, field, bytes(32))
+        try:
+            module.solana_full_light_client_gate_hash(args)
+        except ValueError as exc:
+            assert f"{field} must not be zero" in str(exc)
+        else:
+            raise AssertionError(f"Solana audit gate accepted zero {field}")
 
 
 def test_solana_source_deployment_hash_rejects_noncanonical_adapter_vk_hash():

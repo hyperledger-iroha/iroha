@@ -781,8 +781,19 @@ function kagemushaReadNoritoLength(buffer, offset, flags, name) {
     }
     const byte = BigInt(buffer[cursor]);
     cursor += 1;
-    value |= (byte & 0x7fn) << shift;
+    const chunk = byte & 0x7fn;
+    if (shift >= 63n && chunk > 1n) {
+      throw new Error(`${name} varint exceeds u64 length space`);
+    }
+    value |= chunk << shift;
     if ((byte & 0x80n) === 0n) {
+      const encodedLength = cursor - offset;
+      if (
+        encodedLength > 1 &&
+        value < (1n << (7n * BigInt(encodedLength - 1)))
+      ) {
+        throw new Error(`${name} varint is non-canonical`);
+      }
       if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
         throw new Error(`${name} exceeds safe length`);
       }

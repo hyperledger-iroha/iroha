@@ -136,13 +136,14 @@ splices before receiver admission can trust that evidence. Semantic previous
 proofs must
 leave the lineage scalar-projection digest zero; Reserved-lineage previous
 proofs must bind a non-zero scalar-projection digest and require the active
-lineage verifier record before native hosts can serialize a redeem instruction.
+matching lineage verifier record before native hosts can serialize a redeem
+instruction.
 Core chain-side replay
 preflights those previous proofs before
 reconstructing hop evidence, so backend/profile substitutions, empty previous
 proofs, stale public-input hashes, verifier-context splices,
-scalar-projection splices, and out-of-order hop counts fail before expensive
-Pallas replay. Chain execution also requires
+scalar-projection splices, prefix-spliced folded public-input hashes, and
+out-of-order hop counts fail before expensive Pallas replay. Chain execution also requires
 every supplied record snapshot to equal the currently registered WSV verifier
 record. Without that witness, semantic v1 accumulator proofs remain
 admission-neutral. The reserved `kagemusha-recursive-spend-lineage-v1` profile
@@ -217,10 +218,15 @@ the proving-key archive against that verifier key before proving. Runtime
 verifier-slice key generation is disabled by default and is available only
 behind the explicit developer environment override used to generate artifacts,
 so SDKs should treat missing artifacts as a deterministic request-construction
-error rather than a fallback to runtime keygen. Swift, Kotlin/JVM, Java Android,
-JavaScript/Node, Python, and C# expose typed lineage key artifact helpers for the
-same package shape; those helpers defensively copy key bytes and reject unknown
-profile ids, unsupported opening lengths, non-`halo2/ipa` verifier backends,
+error rather than a fallback to runtime keygen. Release key-artifact generation
+derives the one-hop and append verifier/proving keys through key-generation-only
+verifier-slice shapes whose verifier-key commitments are regression-checked
+against the full recursive verifier circuits, reducing keygen witness memory
+without changing the published circuit identities. Swift, Kotlin/JVM, Java
+Android, JavaScript/Node, Python, and C# expose typed lineage key artifact
+helpers for the same package shape; those helpers defensively copy key bytes and
+reject unknown profile ids, unsupported opening lengths, non-`halo2/ipa`
+verifier backends,
 empty verifier keys, and empty proving-key archives before wallet code can
 construct a native request archive. The helpers also require the proving-key
 archive payload to contain both the selected circuit id bytes and the stable
@@ -228,7 +234,17 @@ verifier-key commitment for the supplied verifier key, so a self-consistent
 archive cannot be paired with a different verifier package. Kotlin/JVM also
 converts Java-callable null
 lineage artifact inputs into the same stable field errors instead of relying on
-Kotlin intrinsic null checks.
+Kotlin intrinsic null checks. Swift, Kotlin/JVM, Java Android, JavaScript/Node,
+Python, and C# now also parse the
+canonical `KagemushaRecursiveSpendLineageKeyArtifactsV1` proving-key archive
+fields and reject byte-smuggled circuit ids or verifier-key commitments, stale
+schema hashes, unsupported archive flags, wrong archive versions, empty proving
+keys, trailing payloads, non-canonical compact Norito length encodings,
+canonical compact lengths above each SDK's addressable archive bounds, compact
+length encodings whose terminal byte would overflow the u64 length space, and
+invalid UTF-8 circuit family fields before native bridge loading, so overlong,
+over-cap, or overflowing varints cannot smuggle otherwise valid lineage metadata
+through the SDK guard.
 
 Release tooling can produce the portable Norito packages with:
 
@@ -411,6 +427,9 @@ regular-file preflight before parsing `slot.json`, and classifies the slot
 directory plus its parent with `lstat()` so unreadable slot or parent metadata
 fails closed before metadata-derived output paths, signatures, or manifest
 refreshes can start from an aliased slot bundle. The shared Android device-lab
+signing path also validates the preserved `attestation/harness-result.json`
+against the slot challenge and copied certificate-chain count before producing
+or binding signed evidence. The shared Android device-lab
 JSON loader rejects duplicate keys and non-standard `NaN`/`Infinity` constants
 before slot metadata, attestation, signed evidence, D2D handoff, or
 wallet-integrity schema validation, and caps those JSON inputs at 16 MiB from
@@ -737,9 +756,14 @@ Verification recomputes the manifest from local release evidence and performs a
 stable manifest comparison that ignores only `generated_at_utc`. The existing
 manifest path is checked under `--bundle-root` before readiness, proof-evidence,
 compact-key, or device-lab scanners run. The existing manifest's nested
-evidence inventory paths are also checked before comparison; every `path` entry
-must be a canonical safe relative string with a non-zero lowercase SHA-256
-digest and a positive integer `size_bytes`, so traversal, absolute, non-string,
+evidence inventory is closed before comparison: required evidence groups and
+`path`/`sha256`/`size_bytes` entry fields must be present, unexpected groups or
+entry fields are rejected, lineage/compact artifact and proof-log groups must
+match their required key sets, Android evidence slot groups must match
+`android_device_lab.signed_evidence`, and Android slot artifact maps must name
+exactly the release-critical artifact kinds. Every `path` entry must be a
+canonical safe relative string with a non-zero lowercase SHA-256 digest and a
+positive integer `size_bytes`, so traversal, absolute, non-string,
 whitespace-normalized, all-zero digest, missing-size, boolean-size, zero-size,
 or non-integer-size evidence entries fail as manifest-shape blockers.
 The readiness summary JSON and any `--verify-existing` release manifest are
@@ -772,10 +796,13 @@ name, signed-evidence summary field set, signed-evidence timestamp, summary
 digest, and slot-relative artifact path before
 constructing manifest paths. The verifier rejects summary drift,
 release-manifest drift, duplicate JSON keys,
-unexpected top-level, section-level, or per-slot Android signed-evidence summary
-fields, missing Android signed-evidence summary fields, malformed summary
-digests, malformed or noncanonical summary/manifest timestamps, non-standard `NaN`/`Infinity` JSON constants in
-summaries or manifests,
+unexpected top-level, section-level, evidence-inventory, evidence-entry,
+Android manifest, or per-slot Android signed-evidence summary fields, missing
+release section/evidence fields, malformed release section states, timestamps,
+digest maps, size maps, checked-file lists, Android family coverage, Android
+trusted-signer pins, duplicate-binding slot lists, and malformed summary
+digests, malformed or noncanonical summary/manifest timestamps, non-standard
+`NaN`/`Infinity` JSON constants in summaries or manifests,
 per-section blockers in a ready summary,
 non-string, unsafe, or noncanonical nested evidence inventory paths, malformed
 nested evidence digests, or missing/boolean/non-integer/non-positive nested evidence sizes in
@@ -1003,6 +1030,10 @@ stable verifier context across hops. The fixed-window table-base digest is
 proof-witness-specific, so the accumulator folds it through a separate
 recursive-spend stream alongside the verifier-witness batch digest instead of
 requiring it to remain identical across legitimate re-spends.
+Lineage witnesses therefore allow carried previous recursive proofs to expose a
+different fixed-window table-base public input from the current bundle proof,
+while still rejecting splices in stable verifier context such as opening length,
+parameters, schedule, shared manifest, and scalar projection.
 
 Kagemusha proof attachments are transparent-only. Chain-side Kagemusha transfers
 currently require the literal confidential-transfer-v2 circuit id
@@ -1496,13 +1527,34 @@ bound to the exact previous bundle and previous opening archive, and the current
 checked-hop opening, bound to the checked-hop proof hash. The two openings must
 also share the same verifier context before the contract can digest: opening
 length, Pallas parameter fingerprint, fixed-window schedule digest, and
-shared-table manifest digest. Core checks that this contract is attached to a Reserved-lineage
-previous proof, that its previous accumulator/proof artifact digests match the
+shared-table manifest digest. The public previous-proof opening domain-tag and
+metadata helpers validate the exact previous accumulator/proof public-input
+binding before hashing or returning metadata, so callers cannot derive opening
+metadata from a mismatched previous bundle. Core checks that this contract is
+attached to a Reserved-lineage previous proof, that its previous
+accumulator/proof artifact digests match the
 actual previous bundle, and that the resulting accumulator public inputs carry
 the same append opening preflight digest, compact append-boundary digest, and
 verifier corridor. The Reserved-lineage append proof branch binds those digests
 into the transition profile before emitting output. This material is circuit
-input and remains bounded by the 64-hop witnessless cap. The native C
+input and remains bounded by the 64-hop witnessless cap. Recursive proof
+public inputs also fail closed if a one-hop proof carries a non-zero append
+opening preflight digest; append-opening and append-boundary fields only become
+admissible after the first append hop, and append-boundary values additionally
+require the compact boundary contract. Semantic recursive spend proofs also
+reject append-opening preflight state, even when it is consistently carried by
+the accumulator and proof public inputs; digest-only append-opening state is
+transition evidence, not a semantic final proof channel. Generic recursive
+aggregation proofs must keep recursive spend state zero: proof-chain,
+transition-profile binding, append-opening, append-boundary, and recursive
+verifier scalar-projection digests are accepted only by recursive spend or
+Reserved-lineage proof binding. The standalone recursive spend proof artifact
+digest helper runs the same circuit gates before hashing: plain recursive
+aggregation proofs cannot be promoted into spend artifacts, semantic spend
+proofs cannot carry Reserved-lineage-only append-opening, append-boundary, or
+scalar-projection state, and Reserved-lineage proofs that carry an append
+opening preflight digest must also carry the compact append-boundary digest.
+The native C
 bridge, Swift, Android Java/Kotlin, JavaScript,
 Python, and C# SDK surfaces expose raw-archive transition-profile init/append
 helpers and the stable
@@ -1622,9 +1674,13 @@ Reserved-lineage previous proofs are accepted at this helper boundary only when
 the append request carries an active matching lineage verifier record; semantic
 previous proofs reject that record. Direct redeem-request validation mirrors the
 same selection rule: a final Reserved-lineage bundle must carry the active
-lineage verifier record, and semantic final bundles must leave it empty unless a
-record-backed witness path explicitly needs the record to verify prior
-Reserved-lineage proofs.
+lineage verifier record matching the final proof circuit id, and semantic final
+bundles must leave it empty unless a record-backed witness path explicitly needs
+the record to verify prior Reserved-lineage proofs with the same circuit id.
+The C bridge, Node NAPI host, and Python PyO3 host pin that boundary with
+wrong-`circuit_id` regressions so raw-archive redeem builders reject a
+valid-looking lineage verifier record from another Reserved-lineage circuit
+family before serializing an instruction.
 Ledger execution repeats that witness verification and additionally rejects
 lineage witnesses whose hop verifier-record snapshots are stale, missing,
 duplicated, unreferenced, or absent from the current WSV registry.
@@ -2188,7 +2244,10 @@ the append preflight digest remains zero for init and semantic append, and is
 nonzero only for Reserved-lineage append outputs. The append-boundary digest is
 nonzero only for those Reserved-lineage append proofs and must be paired with a
 nonzero append-opening preflight digest. The scalar-projection digest stays zero
-until a composed verifier-slice proof is used.
+until a composed verifier-slice proof is used. Direct proof-artifact hashing
+uses these same public-input gates, so a stale semantic proof, a plain
+recursive aggregation proof, or a digest-only Reserved-lineage append-opening
+proof cannot be hashed into the previous-proof chain.
 This evidence binding is consumed by the ABI-7 recursive compact prover rather
 than rederived by SDKs from each compact-hop Halo2 proof envelope.
 Core preverification for that proof-carrying bundle now checks the transparent

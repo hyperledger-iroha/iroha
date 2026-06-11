@@ -14,7 +14,7 @@ use std::{
     ops::Bound::{Excluded, Unbounded},
     path::{Path, PathBuf},
     sync::{
-        Arc, LazyLock, Mutex,
+        Arc, LazyLock, Mutex, MutexGuard,
         atomic::{AtomicBool, Ordering},
         mpsc,
     },
@@ -2221,43 +2221,40 @@ impl RosterValidationCache {
     }
 
     fn memo_commit_qc_get(&self, key: &CommitQcMemoKey) -> Option<Vec<PeerId>> {
-        let mut guard = self
-            .memo
-            .lock()
-            .expect("roster validation memo mutex poisoned");
+        let mut guard = self.memo_lock();
         guard.commit_qc.get(key)
     }
 
     fn memo_commit_qc_insert(&self, key: CommitQcMemoKey, roster: Vec<PeerId>) {
-        let mut guard = self
-            .memo
-            .lock()
-            .expect("roster validation memo mutex poisoned");
+        let mut guard = self.memo_lock();
         guard.commit_qc.insert(key, roster);
     }
 
     fn memo_checkpoint_get(&self, key: &CheckpointMemoKey) -> Option<Vec<PeerId>> {
-        let mut guard = self
-            .memo
-            .lock()
-            .expect("roster validation memo mutex poisoned");
+        let mut guard = self.memo_lock();
         guard.checkpoint.get(key)
     }
 
     fn memo_checkpoint_insert(&self, key: CheckpointMemoKey, roster: Vec<PeerId>) {
-        let mut guard = self
-            .memo
-            .lock()
-            .expect("roster validation memo mutex poisoned");
+        let mut guard = self.memo_lock();
         guard.checkpoint.insert(key, roster);
+    }
+
+    fn memo_lock(&self) -> MutexGuard<'_, RosterValidationMemo> {
+        match self.memo.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                warn!(
+                    "roster validation memo mutex was poisoned; recovering cached validation state"
+                );
+                poisoned.into_inner()
+            }
+        }
     }
 
     #[cfg(test)]
     fn memo_sizes(&self) -> (usize, usize) {
-        let guard = self
-            .memo
-            .lock()
-            .expect("roster validation memo mutex poisoned");
+        let guard = self.memo_lock();
         (guard.commit_qc.len(), guard.checkpoint.len())
     }
 }
@@ -9688,6 +9685,9 @@ impl Actor {
         if let Some(bytes) = session.delivered_payload_bytes() {
             return Some(bytes);
         }
+        if session.complete_payload_unverified_or_mismatched() {
+            return None;
+        }
         let expected_payload_hash = session.payload_hash()?;
         self.with_local_payload_for_progress(
             key.0,
@@ -9998,17 +9998,15 @@ impl Actor {
             if session.is_invalid() {
                 continue;
             }
+            let invalid_chunk_shape = rbc_session_has_invalid_chunk_shape(session);
             let authoritative_payload =
                 self.rbc_session_has_authoritative_payload_for_progress(*key, session);
-            if authoritative_payload {
+            if authoritative_payload && !invalid_chunk_shape {
                 continue;
             }
-            let total_chunks = session.total_chunks();
-            let received_chunks = session.received_chunks();
-            let missing_chunks = total_chunks != 0 && received_chunks < total_chunks;
             summary.sessions_pending = summary.sessions_pending.saturating_add(1);
-            if missing_chunks {
-                let missing = total_chunks.saturating_sub(received_chunks);
+            let missing = rbc_session_backlog_missing_chunks(session);
+            if missing != 0 {
                 summary.missing_chunks_total = summary
                     .missing_chunks_total
                     .saturating_add(usize::try_from(missing).unwrap_or(usize::MAX));
@@ -10046,17 +10044,15 @@ impl Actor {
             if session.is_invalid() {
                 continue;
             }
+            let invalid_chunk_shape = rbc_session_has_invalid_chunk_shape(session);
             let authoritative_payload =
                 self.rbc_session_has_authoritative_payload_for_progress(*key, session);
-            if authoritative_payload {
+            if authoritative_payload && !invalid_chunk_shape {
                 continue;
             }
-            let total_chunks = session.total_chunks();
-            let received_chunks = session.received_chunks();
-            let missing_chunks = total_chunks != 0 && received_chunks < total_chunks;
             summary.sessions_pending = summary.sessions_pending.saturating_add(1);
-            if missing_chunks {
-                let missing = total_chunks.saturating_sub(received_chunks);
+            let missing = rbc_session_backlog_missing_chunks(session);
+            if missing != 0 {
                 summary.missing_chunks_total = summary
                     .missing_chunks_total
                     .saturating_add(usize::try_from(missing).unwrap_or(usize::MAX));
@@ -15848,7 +15844,7 @@ impl Actor {
                         .rbc
                         .deliver_rebroadcast_last_sent
                         .remove(&key);
-                    self.subsystems.da_rbc.rbc.deliver_deferral.remove(&key);
+                    self.clear_rbc_deferrals(&key);
                     if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() {
                         self.update_rbc_status_entry(key, &session, false);
                         self.persist_rbc_session(key, &session);
@@ -15908,7 +15904,7 @@ impl Actor {
                             .rbc
                             .deliver_rebroadcast_last_sent
                             .remove(&key);
-                        self.subsystems.da_rbc.rbc.deliver_deferral.remove(&key);
+                        self.clear_rbc_deferrals(&key);
                         if let Some(session) =
                             self.subsystems.da_rbc.rbc.sessions.get(&key).cloned()
                         {
@@ -15976,7 +15972,7 @@ impl Actor {
                                 .rbc
                                 .deliver_rebroadcast_last_sent
                                 .remove(&key);
-                            self.subsystems.da_rbc.rbc.deliver_deferral.remove(&key);
+                            self.clear_rbc_deferrals(&key);
                             if let Some(session) =
                                 self.subsystems.da_rbc.rbc.sessions.get(&key).cloned()
                             {
@@ -16041,7 +16037,7 @@ impl Actor {
                         .rbc
                         .deliver_rebroadcast_last_sent
                         .remove(&key);
-                    self.subsystems.da_rbc.rbc.deliver_deferral.remove(&key);
+                    self.clear_rbc_deferrals(&key);
                     if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() {
                         self.update_rbc_status_entry(key, &session, false);
                         self.persist_rbc_session(key, &session);
@@ -20420,11 +20416,13 @@ impl Actor {
             let ready_quorum = session.ready_signatures.len() >= required;
             let total_chunks = session.total_chunks();
             let missing_chunks = total_chunks != 0 && session.received_chunks() < total_chunks;
-            if ready_quorum && !missing_chunks {
+            let malformed_chunks = rbc_session_has_invalid_chunk_shape(session);
+            let unresolved_chunks = missing_chunks || malformed_chunks;
+            if ready_quorum && !unresolved_chunks {
                 continue;
             }
 
-            if missing_chunks || !ready_quorum {
+            if unresolved_chunks || !ready_quorum {
                 let deadline = rbc
                     .payload_rebroadcast_last_sent
                     .get(key)
@@ -25231,7 +25229,7 @@ impl Actor {
             return Ok(());
         };
         if session.is_invalid() {
-            self.subsystems.da_rbc.rbc.ready_deferral.remove(&key);
+            self.clear_rbc_deferrals(&key);
             self.subsystems.da_rbc.rbc.sessions.insert(key, session);
             return Ok(());
         }
@@ -25243,13 +25241,15 @@ impl Actor {
         let mut authoritative_known_payload =
             self.rbc_session_has_authoritative_payload_for_progress(key, &session);
         let can_skip_local_hydration = authoritative_known_payload
+            && !rbc_session_has_invalid_chunk_shape(&session)
             && session
                 .expected_chunk_root
                 .or_else(|| session.chunk_root())
                 .is_some();
         if !can_skip_local_hydration
-            && session.total_chunks() != 0
-            && session.received_chunks() < session.total_chunks()
+            && (rbc_session_has_invalid_chunk_shape(&session)
+                || (session.total_chunks() != 0
+                    && session.received_chunks() < session.total_chunks()))
         {
             self.subsystems.da_rbc.rbc.sessions.insert(key, session);
             let hydrated = self.maybe_hydrate_rbc_session_from_local_payload(key, None)?;
@@ -25258,7 +25258,7 @@ impl Actor {
             };
             session = reloaded_session;
             if session.is_invalid() {
-                self.subsystems.da_rbc.rbc.ready_deferral.remove(&key);
+                self.clear_rbc_deferrals(&key);
                 self.subsystems.da_rbc.rbc.sessions.insert(key, session);
                 return Ok(());
             }
@@ -25342,6 +25342,39 @@ impl Actor {
             total_chunks = session.total_chunks();
             received_chunks = session.received_chunks();
             ready_count = session.ready_signatures.len();
+            if rbc_session_has_invalid_chunk_shape(&session) {
+                if self.should_emit_rbc_ready_deferral(
+                    key,
+                    now,
+                    RbcReadyDeferralReason::MissingPayload,
+                    ready_count,
+                    0,
+                    received_chunks,
+                    total_chunks,
+                    self.payload_rebroadcast_cooldown(),
+                ) {
+                    info!(
+                        height = key.1,
+                        view = key.2,
+                        block = %key.0,
+                        local_peer = %self.common_config.peer.id(),
+                        roster_source = ?roster_source,
+                        allow_unverified,
+                        local_in_roster,
+                        roster_len,
+                        ready = ready_count,
+                        received = received_chunks,
+                        total_chunks,
+                        "deferring local RBC READY: invalid chunk shape"
+                    );
+                }
+                self.request_missing_block_for_pending_rbc(
+                    key,
+                    "rbc_ready_invalid_chunk_shape",
+                    None,
+                );
+                return Ok(None);
+            }
             if !roster_source.is_authoritative() && !allow_unverified {
                 if self.should_emit_rbc_ready_deferral(
                     key,
@@ -25549,6 +25582,7 @@ impl Actor {
         }
         if invalidated {
             self.clear_pending_rbc(&key);
+            self.clear_rbc_deferrals(&key);
         }
         if sent_ready || mismatch_detected {
             self.subsystems.da_rbc.rbc.ready_deferral.remove(&key);
@@ -27009,9 +27043,46 @@ impl Actor {
                 let _ = session
                     .sync_progress_observations(authoritative_known_payload, ready_quorum_required);
             }
-            let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() else {
+            let Some(mut session) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() else {
                 continue;
             };
+            if rbc_session_has_invalid_chunk_shape(&session) {
+                match self.maybe_hydrate_rbc_session_from_local_payload(key, None) {
+                    Ok(true) => {
+                        progress = true;
+                    }
+                    Ok(false) => {}
+                    Err(err) => {
+                        debug!(
+                            height = key.1,
+                            view = key.2,
+                            ?err,
+                            "failed to hydrate malformed RBC session from local payload"
+                        );
+                    }
+                }
+                let Some(refreshed) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() else {
+                    continue;
+                };
+                session = refreshed;
+                if session.is_invalid() {
+                    continue;
+                }
+                if rbc_session_has_invalid_chunk_shape(&session) {
+                    self.request_missing_block_for_pending_rbc(
+                        key,
+                        "rbc_rebroadcast_invalid_chunk_shape",
+                        None,
+                    );
+                    self.subsystems
+                        .da_rbc
+                        .rbc
+                        .payload_rebroadcast_last_sent
+                        .insert(key, now);
+                    progress = true;
+                    continue;
+                }
+            }
             if session.is_invalid() {
                 continue;
             }
@@ -27383,8 +27454,7 @@ impl Actor {
             return Ok(());
         };
         if rbc_session_has_complete_delivery(&session) || session.is_invalid() {
-            self.subsystems.da_rbc.rbc.ready_deferral.remove(&key);
-            self.subsystems.da_rbc.rbc.deliver_deferral.remove(&key);
+            self.clear_rbc_deferrals(&key);
             self.subsystems.da_rbc.rbc.sessions.insert(key, session);
             return Ok(());
         }
@@ -27396,13 +27466,15 @@ impl Actor {
         let mut authoritative_known_payload =
             self.rbc_session_has_authoritative_payload_for_progress(key, &session);
         let can_skip_local_hydration = authoritative_known_payload
+            && !rbc_session_has_invalid_chunk_shape(&session)
             && session
                 .expected_chunk_root
                 .or_else(|| session.chunk_root())
                 .is_some();
         if !can_skip_local_hydration
-            && session.total_chunks() != 0
-            && session.received_chunks() < session.total_chunks()
+            && (rbc_session_has_invalid_chunk_shape(&session)
+                || (session.total_chunks() != 0
+                    && session.received_chunks() < session.total_chunks()))
         {
             self.subsystems.da_rbc.rbc.sessions.insert(key, session);
             let hydrated = self.maybe_hydrate_rbc_session_from_local_payload(key, None)?;
@@ -27411,8 +27483,7 @@ impl Actor {
             };
             session = reloaded_session;
             if rbc_session_has_complete_delivery(&session) || session.is_invalid() {
-                self.subsystems.da_rbc.rbc.ready_deferral.remove(&key);
-                self.subsystems.da_rbc.rbc.deliver_deferral.remove(&key);
+                self.clear_rbc_deferrals(&key);
                 self.subsystems.da_rbc.rbc.sessions.insert(key, session);
                 return Ok(());
             }
@@ -27441,6 +27512,59 @@ impl Actor {
         let ready_count = session.ready_signatures.len();
         let received_chunks = session.received_chunks();
         let total_chunks = session.total_chunks();
+        if rbc_session_has_invalid_chunk_shape(&session) {
+            self.request_missing_block_for_pending_rbc(
+                key,
+                "rbc_deliver_invalid_chunk_shape",
+                None,
+            );
+            if self.should_emit_rbc_deliver_deferral(
+                key,
+                now,
+                ready_count,
+                received_chunks,
+                total_chunks,
+                self.payload_rebroadcast_cooldown()
+                    .max(RBC_DELIVER_DEFERRAL_LOG_COOLDOWN_FLOOR),
+            ) {
+                info!(
+                    height = key.1,
+                    view = key.2,
+                    block = %key.0,
+                    local_peer = %self.common_config.peer.id(),
+                    ready = ready_count,
+                    received = received_chunks,
+                    total = total_chunks,
+                    "deferring RBC DELIVER: invalid chunk shape"
+                );
+            }
+            self.subsystems.da_rbc.rbc.sessions.insert(key, session);
+            return Ok(());
+        }
+        if let (Some(expected_root), Some(computed_root)) =
+            (session.expected_chunk_root, session.computed_chunk_root())
+            && expected_root != computed_root
+        {
+            session.invalid = true;
+            warn!(
+                height = key.1,
+                view = key.2,
+                block = %key.0,
+                ?expected_root,
+                ?computed_root,
+                "RBC chunk-root mismatch detected; refusing to emit DELIVER"
+            );
+            self.subsystems.da_rbc.rbc.sessions.insert(key, session);
+            self.clear_pending_rbc(&key);
+            self.clear_rbc_deferrals(&key);
+            if let Some(updated) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() {
+                self.update_rbc_status_entry(key, &updated, false);
+                self.persist_rbc_session(key, &updated);
+            }
+            self.publish_rbc_backlog_snapshot();
+            self.clear_rbc_deferrals(&key);
+            return Ok(());
+        }
         if commit_topology.is_empty() {
             if self.should_emit_rbc_deliver_deferral(
                 key,
@@ -27570,13 +27694,14 @@ impl Actor {
                         "RBC chunk-root mismatch detected; refusing to emit DELIVER"
                     );
                     self.subsystems.da_rbc.rbc.sessions.insert(key, session);
-                    self.subsystems.da_rbc.rbc.deliver_deferral.remove(&key);
+                    self.clear_rbc_deferrals(&key);
                     self.clear_pending_rbc(&key);
                     if let Some(updated) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() {
                         self.update_rbc_status_entry(key, &updated, false);
                         self.persist_rbc_session(key, &updated);
                     }
                     self.publish_rbc_backlog_snapshot();
+                    self.clear_rbc_deferrals(&key);
                     return Ok(());
                 }
             } else {
@@ -27685,9 +27810,10 @@ impl Actor {
             self.update_rbc_status_entry(key, &updated, false);
             self.persist_rbc_session(key, &updated);
         }
-        self.subsystems.da_rbc.rbc.deliver_deferral.remove(&key);
-        let telemetry_ref = self.telemetry_handle();
+        self.clear_rbc_deferrals(&key);
         self.publish_rbc_backlog_snapshot();
+        self.clear_rbc_deferrals(&key);
+        let telemetry_ref = self.telemetry_handle();
 
         if first_deliver {
             if let Some(telemetry) = telemetry_ref {
@@ -40424,24 +40550,31 @@ impl Actor {
             .sessions
             .iter()
             .filter(|(key, _)| key.1 == height && key.2 < min_view)
-            .filter(|(key, session)| {
+            .filter_map(|(key, session)| {
                 if !da_enabled {
-                    return true;
+                    return Some((*key, false));
                 }
                 if session.is_invalid() {
-                    return true;
+                    return Some((*key, false));
                 }
-                if session.delivered {
-                    return self.kura.block_payload_available_by_hash(key.0);
+                if rbc_session_has_complete_delivery(session)
+                    && self.kura.block_payload_available_by_hash(key.0)
+                {
+                    return Some((*key, true));
                 }
-                false
+                None
             })
-            .map(|(key, _)| *key)
             .collect();
         let mut rbc_removed = 0usize;
-        for key in stale_rbc {
-            self.purge_rbc_state(key, key.0, key.1, key.2);
-            rbc_removed = rbc_removed.saturating_add(1);
+        for (key, committed_settled) in stale_rbc {
+            if committed_settled {
+                if self.clean_rbc_sessions_for_committed_block_if_settled(key.0, key.1) {
+                    rbc_removed = rbc_removed.saturating_add(1);
+                }
+            } else {
+                self.purge_rbc_state(key, key.0, key.1, key.2);
+                rbc_removed = rbc_removed.saturating_add(1);
+            }
         }
 
         if pending_removed > 0
@@ -40504,6 +40637,11 @@ impl Actor {
         self.clear_rbc_runtime_state_inner(key, clear_status_summary, true);
     }
 
+    fn clear_rbc_deferrals(&mut self, key: &super::rbc_store::SessionKey) {
+        self.subsystems.da_rbc.rbc.ready_deferral.remove(key);
+        self.subsystems.da_rbc.rbc.deliver_deferral.remove(key);
+    }
+
     fn clear_rbc_runtime_state_inner(
         &mut self,
         key: super::rbc_store::SessionKey,
@@ -40550,8 +40688,7 @@ impl Actor {
             .rbc
             .deliver_rebroadcast_last_sent
             .remove(&key);
-        self.subsystems.da_rbc.rbc.ready_deferral.remove(&key);
-        self.subsystems.da_rbc.rbc.deliver_deferral.remove(&key);
+        self.clear_rbc_deferrals(&key);
         self.subsystems.da_rbc.rbc.outbound_chunks.remove(&key);
         if self.subsystems.da_rbc.rbc.outbound_cursor == Some(key) {
             self.subsystems.da_rbc.rbc.outbound_cursor = None;
@@ -44340,6 +44477,11 @@ impl RbcSession {
         self.received_chunks
     }
 
+    #[cfg(test)]
+    pub(crate) fn test_set_received_chunks(&mut self, received_chunks: u32) {
+        self.received_chunks = received_chunks;
+    }
+
     pub(crate) fn payload_hash(&self) -> Option<Hash> {
         self.payload_hash
     }
@@ -44467,7 +44609,7 @@ impl RbcSession {
         if self.delivered && self.has_complete_payload_bytes() {
             return 0;
         }
-        if self.total_chunks == 0 {
+        if self.total_chunks == 0 || self.received_chunks > self.total_chunks {
             return allocated;
         }
         let received = u128::from(self.received_chunks).saturating_mul(u128::from(allocated))
@@ -44977,6 +45119,10 @@ impl RbcSession {
         session.delivered = delivered;
         session.deliver_sender = deliver_sender;
         session.deliver_signature = deliver_signature;
+        if !session.delivered {
+            session.deliver_sender = None;
+            session.deliver_signature = None;
+        }
         session.invalid = invalid;
         session.block_header = block_header;
         session.leader_signature = leader_signature;
@@ -45116,16 +45262,25 @@ impl RbcSession {
         }
 
         if dropped > 0 {
-            self.received_chunks = self
-                .chunks
-                .iter()
-                .filter(|entry| entry.is_some())
-                .count()
-                .try_into()
-                .unwrap_or(u32::MAX);
+            self.recount_received_chunks();
         }
 
         dropped
+    }
+
+    fn recount_received_chunks(&mut self) -> bool {
+        let received = self
+            .chunks
+            .iter()
+            .filter(|entry| entry.is_some())
+            .count()
+            .try_into()
+            .unwrap_or(u32::MAX);
+        if self.received_chunks == received {
+            return false;
+        }
+        self.received_chunks = received;
+        true
     }
 
     fn note_chunk(&mut self, idx: u32, bytes: Vec<u8>, sender: Option<u32>) -> ChunkIngestOutcome {
@@ -45218,7 +45373,10 @@ impl RbcSession {
     }
 
     fn complete_payload_unverified_or_mismatched(&self) -> bool {
-        if self.total_chunks == 0 || self.received_chunks != self.total_chunks {
+        if self.total_chunks == 0 || self.received_chunks > self.total_chunks {
+            return true;
+        }
+        if self.received_chunks != self.total_chunks {
             return false;
         }
         let Some(payload_hash) = self.payload_hash else {
@@ -45233,6 +45391,21 @@ impl RbcSession {
 
 fn rbc_session_has_complete_delivery(session: &RbcSession) -> bool {
     session.delivered && session.has_complete_payload_bytes()
+}
+
+fn rbc_session_has_invalid_chunk_shape(session: &RbcSession) -> bool {
+    session.total_chunks() == 0 || session.received_chunks() > session.total_chunks()
+}
+
+fn rbc_session_backlog_missing_chunks(session: &RbcSession) -> u64 {
+    if rbc_session_has_invalid_chunk_shape(session) {
+        return u64::from(session.total_chunks().max(1));
+    }
+    u64::from(
+        session
+            .total_chunks()
+            .saturating_sub(session.received_chunks()),
+    )
 }
 
 fn rbc_session_availability_incomplete(
@@ -45253,6 +45426,11 @@ fn rbc_session_availability_incomplete(
         || pending_entry;
     if !progress_started {
         return false;
+    }
+    let invalid_chunk_shape =
+        session.total_chunks() == 0 || session.received_chunks() > session.total_chunks();
+    if invalid_chunk_shape {
+        return true;
     }
     let missing_chunks =
         session.total_chunks() != 0 && session.received_chunks() < session.total_chunks();

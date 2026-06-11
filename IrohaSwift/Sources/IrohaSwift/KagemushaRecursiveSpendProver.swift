@@ -80,10 +80,25 @@ public enum KagemushaRecursiveSpendProver {
     public static let recursiveSpendLineageAppendBoundaryFinalNoteBindingDomainV1 =
         "iroha:kagemusha:recursive-spend-lineage-append-boundary-final-note:v1"
     private static let maxNoritoHeaderPaddingBytes = 64
+    private static let kagemushaNoritoCompactLenFlag = NoritoHeader.compactLen
+    private static let kagemushaNoritoPackedStructFlag = NoritoHeader.packedStruct
+    private static let privacyNoritoFieldBitsetFlag = NoritoHeader.fieldBitset
+    private static let kagemushaLineageProvingKeyArchiveVersionV1: UInt16 = 1
+    private static let kagemushaLineageProvingKeyArchiveSchemaHash: [UInt8] = [
+        0xc8, 0x84, 0x89, 0x61, 0x8a, 0x01, 0x2c, 0x28,
+        0x3f, 0xf3, 0xbb, 0x2e, 0xba, 0xbc, 0x77, 0x75,
+    ]
     private static let kagemushaZk1Magic = Data([0x5A, 0x4B, 0x31, 0x00])
     private static let kagemushaZk1TlvCid1 = Data("CID1".utf8)
     private static let kagemushaZk1TlvIpaK = Data("IPAK".utf8)
     private static let kagemushaZk1TlvH2Vk = Data("H2VK".utf8)
+
+    private struct LineageProvingKeyArchive {
+        let version: UInt16
+        let circuitFamily: String
+        let verifierKeyCommitment: Data
+        let provingKey: Data
+    }
 
     public static var isNativeAvailable: Bool {
         NoritoNativeBridge.shared.isKagemushaRecursiveSpendAvailable
@@ -284,6 +299,17 @@ public enum KagemushaRecursiveSpendProver {
         else {
             throw KagemushaRecursiveSpendProverError.invalidLineageKeyArtifact("lineage_proving_key_archive")
         }
+        let archive = try decodeLineageProvingKeyArchivePayload(
+            archivePayload,
+            flags: lineageProvingKeyArchive[NoritoHeader.encodedLength - 1]
+        )
+        guard archive.version == kagemushaLineageProvingKeyArchiveVersionV1,
+              archive.circuitFamily == proofCircuitId,
+              archive.verifierKeyCommitment == verifierKeyCommitment,
+              !archive.provingKey.isEmpty
+        else {
+            throw KagemushaRecursiveSpendProverError.invalidLineageKeyArtifact("lineage_proving_key_archive")
+        }
     }
 
     private static func lineageVerifierKeyEnvelopeCircuitId(_ lineageVerifierKey: Data) throws -> String {
@@ -344,11 +370,136 @@ public enum KagemushaRecursiveSpendProver {
     private static func lineageProvingKeyArchivePayload(_ lineageProvingKeyArchive: Data) throws -> Data {
         guard let frame = noritoDecodeFrame(lineageProvingKeyArchive),
               frame.paddingLength <= maxNoritoHeaderPaddingBytes,
+              frame.header.schema == kagemushaLineageProvingKeyArchiveSchemaHash,
+              (frame.header.flags & kagemushaNoritoPackedStructFlag) == 0,
+              (frame.header.flags & privacyNoritoFieldBitsetFlag) == 0,
               frame.header.length > 0
         else {
             throw KagemushaRecursiveSpendProverError.invalidLineageKeyArtifact("lineage_proving_key_archive")
         }
         return frame.payload
+    }
+
+    private static func decodeLineageProvingKeyArchivePayload(
+        _ payload: Data,
+        flags: UInt8
+    ) throws -> LineageProvingKeyArchive {
+        var offset = 0
+        let versionPayload = try readNoritoField(payload, offset: &offset, flags: flags)
+        guard versionPayload.count == 2,
+              let version = readUInt16LE(versionPayload, at: 0)
+        else {
+            throw KagemushaRecursiveSpendProverError.invalidLineageKeyArtifact("lineage_proving_key_archive")
+        }
+        let circuitFamilyPayload = try readNoritoField(payload, offset: &offset, flags: flags)
+        let circuitFamily = try decodeNoritoString(circuitFamilyPayload, flags: flags)
+        let verifierKeyCommitment = try readNoritoField(payload, offset: &offset, flags: flags)
+        guard verifierKeyCommitment.count == 32 else {
+            throw KagemushaRecursiveSpendProverError.invalidLineageKeyArtifact("lineage_proving_key_archive")
+        }
+        let provingKeyPayload = try readNoritoField(payload, offset: &offset, flags: flags)
+        let provingKey = try decodeNoritoByteVec(provingKeyPayload)
+        guard offset == payload.count else {
+            throw KagemushaRecursiveSpendProverError.invalidLineageKeyArtifact("lineage_proving_key_archive")
+        }
+        return LineageProvingKeyArchive(
+            version: version,
+            circuitFamily: circuitFamily,
+            verifierKeyCommitment: verifierKeyCommitment,
+            provingKey: provingKey
+        )
+    }
+
+    private static func readNoritoField(
+        _ buffer: Data,
+        offset: inout Int,
+        flags: UInt8
+    ) throws -> Data {
+        let (length, payloadStart) = try readNoritoLength(buffer, offset: offset, flags: flags)
+        let payloadEnd = payloadStart + length
+        guard payloadEnd <= buffer.count else {
+            throw KagemushaRecursiveSpendProverError.invalidLineageKeyArtifact("lineage_proving_key_archive")
+        }
+        let startIndex = buffer.index(buffer.startIndex, offsetBy: payloadStart)
+        let endIndex = buffer.index(buffer.startIndex, offsetBy: payloadEnd)
+        offset = payloadEnd
+        return Data(buffer[startIndex..<endIndex])
+    }
+
+    private static func readNoritoLength(
+        _ buffer: Data,
+        offset: Int,
+        flags: UInt8
+    ) throws -> (Int, Int) {
+        guard offset >= 0 else {
+            throw KagemushaRecursiveSpendProverError.invalidLineageKeyArtifact("lineage_proving_key_archive")
+        }
+        if (flags & kagemushaNoritoCompactLenFlag) == 0 {
+            guard let value = readUInt64LE(buffer, at: offset),
+                  value <= UInt64(Int.max),
+                  value <= UInt64(buffer.count)
+            else {
+                throw KagemushaRecursiveSpendProverError.invalidLineageKeyArtifact("lineage_proving_key_archive")
+            }
+            return (Int(value), offset + 8)
+        }
+
+        var value: UInt64 = 0
+        var shift: UInt64 = 0
+        var cursor = offset
+        for _ in 0..<10 {
+            guard cursor < buffer.count else {
+                throw KagemushaRecursiveSpendProverError.invalidLineageKeyArtifact("lineage_proving_key_archive")
+            }
+            let byte = buffer[buffer.index(buffer.startIndex, offsetBy: cursor)]
+            cursor += 1
+            let chunk = UInt64(byte & 0x7f)
+            if shift >= 63 && chunk > 1 {
+                throw KagemushaRecursiveSpendProverError.invalidLineageKeyArtifact("lineage_proving_key_archive")
+            }
+            value |= chunk << shift
+            if (byte & 0x80) == 0 {
+                let encodedLength = cursor - offset
+                if encodedLength > 1 && value < (UInt64(1) << UInt64(7 * (encodedLength - 1))) {
+                    throw KagemushaRecursiveSpendProverError.invalidLineageKeyArtifact("lineage_proving_key_archive")
+                }
+                guard value <= UInt64(Int.max),
+                      value <= UInt64(buffer.count)
+                else {
+                    throw KagemushaRecursiveSpendProverError.invalidLineageKeyArtifact("lineage_proving_key_archive")
+                }
+                return (Int(value), cursor)
+            }
+            shift += 7
+        }
+        throw KagemushaRecursiveSpendProverError.invalidLineageKeyArtifact("lineage_proving_key_archive")
+    }
+
+    private static func decodeNoritoString(_ payload: Data, flags: UInt8) throws -> String {
+        let (length, start) = try readNoritoLength(payload, offset: 0, flags: flags)
+        let end = start + length
+        guard end == payload.count else {
+            throw KagemushaRecursiveSpendProverError.invalidLineageKeyArtifact("lineage_proving_key_archive")
+        }
+        let startIndex = payload.index(payload.startIndex, offsetBy: start)
+        let endIndex = payload.index(payload.startIndex, offsetBy: end)
+        guard let decoded = String(data: Data(payload[startIndex..<endIndex]), encoding: .utf8) else {
+            throw KagemushaRecursiveSpendProverError.invalidLineageKeyArtifact("lineage_proving_key_archive")
+        }
+        return decoded
+    }
+
+    private static func decodeNoritoByteVec(_ payload: Data) throws -> Data {
+        guard let length = readUInt64LE(payload, at: 0) else {
+            throw KagemushaRecursiveSpendProverError.invalidLineageKeyArtifact("lineage_proving_key_archive")
+        }
+        let available = payload.count - 8
+        guard length == UInt64(available) else {
+            throw KagemushaRecursiveSpendProverError.invalidLineageKeyArtifact("lineage_proving_key_archive")
+        }
+        let startIndex = payload.index(payload.startIndex, offsetBy: 8)
+        let endIndex = payload.index(payload.startIndex, offsetBy: payload.count)
+        return Data(payload[startIndex..<endIndex])
     }
 
     private static func verifyingKeyCommitment(
@@ -374,6 +525,30 @@ public enum KagemushaRecursiveSpendProver {
             memcpy(&value, baseAddress, 4)
         }
         return UInt32(littleEndian: value)
+    }
+
+    private static func readUInt16LE(_ data: Data, at offset: Int) -> UInt16? {
+        guard offset >= 0, offset + 2 <= data.count else {
+            return nil
+        }
+        var value: UInt16 = 0
+        data[offset..<(offset + 2)].withUnsafeBytes { buffer in
+            guard let baseAddress = buffer.baseAddress else { return }
+            memcpy(&value, baseAddress, 2)
+        }
+        return UInt16(littleEndian: value)
+    }
+
+    private static func readUInt64LE(_ data: Data, at offset: Int) -> UInt64? {
+        guard offset >= 0, offset + 8 <= data.count else {
+            return nil
+        }
+        var value: UInt64 = 0
+        data[offset..<(offset + 8)].withUnsafeBytes { buffer in
+            guard let baseAddress = buffer.baseAddress else { return }
+            memcpy(&value, baseAddress, 8)
+        }
+        return UInt64(littleEndian: value)
     }
 
     private static func appendUInt64BE(_ value: UInt64, to data: inout Data) {

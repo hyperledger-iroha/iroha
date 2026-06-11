@@ -27,7 +27,8 @@ with:
 
 ```bash
 python3 scripts/iso_xsd_fixture_verify.py \
-  --manifest fixtures/iso20022/xsd/fixture_manifest.json
+  --manifest fixtures/iso20022/xsd/fixture_manifest.json \
+  --profile-catalog crates/iroha_core/src/iso_bridge/profiles.rs
 ```
 
 The verifier is a structural manifest preflight, not a full XSD validator. It
@@ -47,9 +48,10 @@ not carry identifier-style secret-looking material. Schema entries and blocked
 candidate entries must record `source` explicitly; omitted `source` and
 explicit `source: null` are rejected separately. Blocked source
 entries use the same canonical GitHub/path/SHA checks, record audited
-restriction markers without checking in the restricted XSD bytes, and, when a
-profile catalog is supplied, must correspond to a current missing
-fixture/schema-only/profile-version gap. The verifier can also read the embedded default rail profile catalog
+restriction markers without checking in the restricted XSD bytes, and must
+correspond to a current missing fixture/schema-only gap or, with
+`--profile-catalog`, a current missing profile-version gap. The verifier can
+also read the embedded default rail profile catalog
 from `crates/iroha_core/src/iso_bridge/profiles.rs` with `--profile-catalog` and
 record which concrete advertised message versions are backed by checked-in XSD
 fixtures. Summaries bind the manifest SHA-256, each schema and fixture SHA-256,

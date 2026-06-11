@@ -3076,6 +3076,7 @@ def check_android_device_lab(
             "slots": [],
             "covered_device_families": [],
             "missing_device_families": list(device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES),
+            "duplicate_bindings": {},
             "signed_evidence": {},
             "min_signed_at_utc": (
                 min_signed_at.isoformat().replace("+00:00", "Z")
@@ -3097,6 +3098,7 @@ def check_android_device_lab(
             "slots": [],
             "covered_device_families": [],
             "missing_device_families": list(device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES),
+            "duplicate_bindings": {},
             "signed_evidence": {},
             "min_signed_at_utc": (
                 min_signed_at.isoformat().replace("+00:00", "Z")
@@ -3184,6 +3186,7 @@ def check_android_device_lab(
         "slots": reports,
         "covered_device_families": covered,
         "missing_device_families": missing,
+        "duplicate_bindings": device_lab.kagemusha_duplicate_matrix_bindings(reports),
         "signed_evidence": _android_signed_evidence_summary(reports),
         "min_signed_at_utc": (
             min_signed_at.isoformat().replace("+00:00", "Z")

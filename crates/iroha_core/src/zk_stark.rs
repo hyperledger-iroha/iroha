@@ -11,6 +11,7 @@
 //! roots, and query decommitments. Verification replays the transcript and checks:
 //! - Merkle openings for each queried value
 //! - The domain-aware fold relation for `(x, -x)` openings in each round and query
+//! - Distinct transcript-derived query positions
 //! - Optional composition leaf constraints when `comp_root` is present
 //!
 //! Size and structural limits are enforced to reject oversized or malformed payloads
@@ -20,6 +21,7 @@
 
 use fastpq_prover::{hash_field_elements, pack_bytes};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 
 use crate::json_macros::{JsonDeserialize, JsonSerialize};
 
@@ -58,6 +60,8 @@ const MAX_AIR_WIDTH: usize = 64;
 const MAX_DOMAIN_TAG_LEN: usize = 64;
 const MAX_TRANSCRIPT_LABEL_LEN: usize = 128;
 const MAX_ENVELOPE_BYTES: usize = 1 << 20; // 1 MiB guard for decoded envelopes
+
+pub(crate) const STARK_FRI_QUERY_INDEX_REPEATED_ERROR: &str = "FRI query index repeated";
 
 /// Tunable limits applied during STARK envelope verification to prevent denial-of-service inputs.
 #[derive(Clone, Copy, Debug)]
@@ -444,6 +448,10 @@ fn validate_params(
     {
         return None;
     }
+    let domain = 1usize.checked_shl(u32::from(params.n_log2))?;
+    if query_count > domain {
+        return None;
+    }
     if roots_len == 0 || roots_len > limits.max_merkle_depth + 1 {
         return None;
     }
@@ -675,6 +683,13 @@ mod tests {
         )
         .expect("query shape replays");
         assert_eq!(indices.len(), usize::from(params.queries));
+        assert!(
+            indices
+                .iter()
+                .enumerate()
+                .all(|(index, sampled)| !indices[..index].contains(sampled)),
+            "query sampling must not repeat base indices"
+        );
 
         let mut stale_merkle = envelope.clone();
         stale_merkle.proof.queries[0][0].path_y0.siblings[0][0] ^= 1;
@@ -1000,6 +1015,179 @@ mod tests {
     }
 
     #[test]
+    fn air_prover_rejects_more_queries_than_domain() {
+        let params = StarkFriParamsV1 {
+            version: 1,
+            n_log2: 1,
+            blowup_log2: 1,
+            fold_arity: 2,
+            queries: 3,
+            merkle_arity: 2,
+            hash_fn: STARK_HASH_SHA256_V1,
+            domain_tag: "iroha:test:repeated-air-query".to_owned(),
+        };
+        let err = prove_stark_fri_air_envelope_bytes(
+            params,
+            "IROHA-TEST-REPEATED-AIR-QUERY".to_owned(),
+            "stark/fri/custom-repeated-query-air:test".to_owned(),
+            [0x71; 32],
+        )
+        .expect_err("pigeonhole-small AIR query schedule must not emit proof bytes");
+        assert!(
+            err.contains("STARK query count exceeds domain size"),
+            "unexpected impossible-query rejection: {err}"
+        );
+    }
+
+    fn zk_ace_test_account(seed: u8) -> iroha_data_model::account::AccountId {
+        let key_pair =
+            iroha_crypto::KeyPair::from_seed(vec![seed; 32], iroha_crypto::Algorithm::Ed25519);
+        iroha_data_model::account::AccountId::new(key_pair.public_key().clone())
+    }
+
+    fn zk_ace_test_asset_definition_id() -> iroha_data_model::asset::AssetDefinitionId {
+        iroha_data_model::asset::AssetDefinitionId::new(
+            iroha_data_model::domain::DomainId::try_new("wonderland", "universal").expect("domain"),
+            "xor".parse().expect("asset name"),
+        )
+    }
+
+    fn zk_ace_test_public_inputs_and_witness() -> (
+        iroha_data_model::zk::ZkAcePublicInputsV1,
+        iroha_data_model::zk::ZkAceWitnessV1,
+    ) {
+        let witness = iroha_data_model::zk::ZkAceWitnessV1 {
+            identity_root: [0x11; 32],
+            identity_blinding: [0x22; 32],
+            replay_secret: [0x33; 32],
+        };
+        let policy_hash = [0x44; 32];
+        let chain_id: iroha_data_model::ChainId = "zk-ace-test-chain".parse().expect("chain id");
+        let from = zk_ace_test_account(1);
+        let to = zk_ace_test_account(2);
+        let asset = zk_ace_test_asset_definition_id();
+        let amount = 17;
+        let verifier_key_id = iroha_data_model::proof::VerifyingKeyId::new(
+            iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND,
+            iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID,
+        );
+        let identity_commitment = iroha_data_model::zk::derive_zk_ace_identity_commitment(
+            &witness.identity_root,
+            &witness.identity_blinding,
+            iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG,
+        );
+        let tx_digest = iroha_data_model::zk::derive_zk_ace_transfer_digest(
+            &from,
+            &to,
+            &asset,
+            amount,
+            &chain_id,
+            iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER,
+            &policy_hash,
+        );
+        let replay_nullifier = iroha_data_model::zk::derive_zk_ace_replay_nullifier(
+            &witness.replay_secret,
+            &tx_digest,
+            &chain_id,
+            iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER,
+            iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG,
+        );
+        let public_inputs = iroha_data_model::zk::ZkAcePublicInputsV1::transparent_transfer(
+            identity_commitment,
+            tx_digest,
+            chain_id,
+            replay_nullifier,
+            policy_hash,
+            from,
+            to,
+            asset,
+            amount,
+            verifier_key_id,
+        );
+        (public_inputs, witness)
+    }
+
+    #[test]
+    fn zk_ace_air_prover_self_verifies_generated_envelope() {
+        let params = StarkFriParamsV1 {
+            version: 1,
+            n_log2: 4,
+            blowup_log2: 2,
+            fold_arity: 2,
+            queries: 2,
+            merkle_arity: 2,
+            hash_fn: STARK_HASH_SHA256_V1,
+            domain_tag: "iroha:test:zk-ace-air-self-verify".to_owned(),
+        };
+        let (public_inputs, witness) = zk_ace_test_public_inputs_and_witness();
+        let public_digest = iroha_data_model::zk::derive_zk_ace_air_public_digest(&public_inputs)
+            .expect("ZK-ACE public AIR digest");
+        let bytes = prove_stark_fri_zk_ace_air_envelope_bytes(
+            params.clone(),
+            "IROHA-TEST-ZK-ACE-AIR".to_owned(),
+            iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID.to_owned(),
+            public_digest,
+            &public_inputs,
+            &witness,
+        )
+        .expect("ZK-ACE AIR envelope");
+        assert!(verify_stark_fri_zk_ace_envelope_with_limits(
+            &bytes,
+            &StarkVerifierLimits::default(),
+            &public_inputs,
+        ));
+        let envelope: StarkVerifyEnvelopeV1 =
+            norito::decode_from_bytes(&bytes).expect("decode ZK-ACE AIR envelope");
+        let air = envelope.proof.air.as_ref().expect("AIR section");
+        let extra_query_roots = [air.trace_root, air.composition_root, air.public_digest];
+        let indices = validate_stark_fri_query_shape_and_indices_v1(
+            &envelope.params,
+            &envelope.transcript_label,
+            &envelope.proof.commits.roots,
+            &extra_query_roots,
+            &envelope.proof.queries,
+        )
+        .expect("ZK-ACE prover emits replayable duplicate-free queries");
+        let domain = 1_usize << usize::from(params.n_log2);
+        assert!(
+            indices
+                .iter()
+                .all(|&index| zk_ace_air_opening_is_safe(index, domain)),
+            "ZK-ACE prover must not open private witness rows"
+        );
+    }
+
+    #[test]
+    fn zk_ace_air_prover_rejects_repeated_query_schedule() {
+        let params = StarkFriParamsV1 {
+            version: 1,
+            n_log2: 2,
+            blowup_log2: 1,
+            fold_arity: 2,
+            queries: 5,
+            merkle_arity: 2,
+            hash_fn: STARK_HASH_SHA256_V1,
+            domain_tag: "iroha:test:zk-ace-repeated-query".to_owned(),
+        };
+        let (public_inputs, witness) = zk_ace_test_public_inputs_and_witness();
+        let public_digest = iroha_data_model::zk::derive_zk_ace_air_public_digest(&public_inputs)
+            .expect("ZK-ACE public AIR digest");
+        let err = prove_stark_fri_zk_ace_air_envelope_bytes(
+            params,
+            "IROHA-TEST-ZK-ACE-REPEATED-QUERY".to_owned(),
+            iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID.to_owned(),
+            public_digest,
+            &public_inputs,
+            &witness,
+        )
+        .expect_err("pigeonhole-small ZK-ACE query schedule must not emit proof bytes");
+        assert!(
+            err.contains("STARK query count exceeds domain size"),
+            "unexpected impossible-query rejection: {err}"
+        );
+    }
+
+    #[test]
     fn synthesized_envelope_rejects_unsupported_fold_arity() {
         let params = StarkFriParamsV1 {
             version: 1,
@@ -1131,6 +1319,43 @@ fn derive_query_index(
         }
         _ => None,
     }
+}
+
+fn derive_query_indices_without_replacement(
+    label: &str,
+    params: &StarkFriParamsV1,
+    roots: &[[u8; 32]],
+    query_count: usize,
+    domain: usize,
+) -> Result<Vec<usize>, &'static str> {
+    if domain == 0 {
+        return Err("FRI domain size overflow");
+    }
+    if query_count > domain {
+        return Err("FRI query count exceeds domain size");
+    }
+
+    let mut swaps = BTreeMap::new();
+    let mut indices = Vec::with_capacity(query_count);
+    for query_number in 0..query_count {
+        let remaining = domain
+            .checked_sub(query_number)
+            .ok_or("FRI query index derivation failed")?;
+        let offset = derive_query_index(label, params, roots, query_number)
+            .ok_or("FRI query index derivation failed")?
+            % remaining;
+        let draw = query_number
+            .checked_add(offset)
+            .ok_or("FRI query index derivation failed")?;
+        let selected = swaps.get(&draw).copied().unwrap_or(draw);
+        if indices.contains(&selected) {
+            return Err(STARK_FRI_QUERY_INDEX_REPEATED_ERROR);
+        }
+        let replacement = swaps.get(&query_number).copied().unwrap_or(query_number);
+        swaps.insert(draw, replacement);
+        indices.push(selected);
+    }
+    Ok(indices)
 }
 
 /// Norito-serializable Merkle path (dirs as bitset, siblings as hashes).
@@ -1691,16 +1916,17 @@ pub(crate) fn validate_stark_fri_query_shape_and_indices_v1(
     let fold_arity = usize::from(params.fold_arity);
     let mut query_roots = roots.to_vec();
     query_roots.extend_from_slice(extra_query_roots);
-    let mut base_indices = Vec::with_capacity(queries.len());
-    for (query_number, chain) in queries.iter().enumerate() {
+    let base_indices = derive_query_indices_without_replacement(
+        transcript_label,
+        params,
+        &query_roots,
+        queries.len(),
+        total_domain,
+    )?;
+    for (chain, mut idx_layer) in queries.iter().zip(base_indices.iter().copied()) {
         if chain.len() != expected_chain_len {
             return Err("FRI query chain length mismatch");
         }
-        let mut idx_layer =
-            derive_query_index(transcript_label, params, &query_roots, query_number)
-                .ok_or("FRI query index derivation failed")?
-                % total_domain;
-        base_indices.push(idx_layer);
         let mut layer_domain = total_domain;
         for (round, decommit) in chain.iter().enumerate() {
             if layer_domain < fold_arity {
@@ -2316,6 +2542,12 @@ fn validate_stark_prover_params(
     if n_log2 > MAX_MERKLE_DEPTH {
         return Err("STARK domain depth exceeds verifier limits".to_owned());
     }
+    let domain = 1usize
+        .checked_shl(u32::from(params.n_log2))
+        .ok_or_else(|| "STARK domain size overflow".to_owned())?;
+    if query_count > domain {
+        return Err("STARK query count exceeds domain size".to_owned());
+    }
     layers_required(params).ok_or_else(|| "invalid STARK folding parameters".to_owned())
 }
 
@@ -2397,11 +2629,16 @@ fn synthesize_stark_fri_envelope_from_values(
     query_roots.extend_from_slice(extra_query_roots);
 
     let query_count = params.queries as usize;
+    let query_indices = derive_query_indices_without_replacement(
+        &transcript_label,
+        &params,
+        &query_roots,
+        query_count,
+        total_domain,
+    )
+    .map_err(|err| format!("failed to derive STARK query schedule: {err}"))?;
     let mut queries = Vec::with_capacity(query_count);
-    for qi in 0..query_count {
-        let mut idx_layer = derive_query_index(&transcript_label, &params, &query_roots, qi)
-            .ok_or_else(|| "failed to derive STARK query index".to_owned())?
-            % total_domain;
+    for mut idx_layer in query_indices {
         let mut chain = Vec::with_capacity(required_layers);
         for k in 0..required_layers {
             let j = idx_layer / 2;
@@ -2674,16 +2911,34 @@ fn prove_stark_fri_air_envelope_from_rows_and_composition_values_fq_bytes(
             composition_path,
         });
     }
+    let composition_values_u64 = composition_values
+        .iter()
+        .map(|value| value.0)
+        .collect::<Vec<_>>();
     envelope.proof.air = Some(StarkAirProofV1 {
         version: 1,
-        circuit_id,
+        circuit_id: circuit_id.clone(),
         public_digest,
         trace_root,
         composition_root,
         trace_width,
         openings,
     });
-    norito::to_bytes(&envelope).map_err(|err| format!("failed to encode STARK envelope: {err}"))
+    let bytes = norito::to_bytes(&envelope)
+        .map_err(|err| format!("failed to encode STARK envelope: {err}"))?;
+    let mut limits = StarkVerifierLimits::default();
+    limits.max_envelope_bytes = usize::MAX;
+    if !verify_stark_fri_air_envelope_from_rows_and_composition_values_with_limits(
+        &bytes,
+        &limits,
+        &circuit_id,
+        &public_digest,
+        &rows,
+        &composition_values_u64,
+    ) {
+        return Err("STARK AIR envelope self-verification failed".to_owned());
+    }
+    Ok(bytes)
 }
 
 /// Build a deterministic V1 STARK/FRI envelope with an explicit verifier-owned AIR section.
@@ -2838,27 +3093,25 @@ pub fn prove_stark_fri_zk_ace_air_envelope_bytes(
             return Err("ZK-ACE AIR composition root does not match FRI base root".to_owned());
         }
 
-        let query_roots = stark_air_query_roots(&envelope.proof.commits.roots, None)
-            .into_iter()
-            .chain(extra_query_roots)
-            .collect::<Vec<_>>();
-        let mut query_indices = Vec::with_capacity(envelope.proof.queries.len());
-        let mut openings_are_private = false;
-        for qi in 0..envelope.proof.queries.len() {
-            let index = derive_query_index(
-                &envelope.transcript_label,
-                &envelope.params,
-                &query_roots,
-                qi,
-            )
-            .ok_or_else(|| "failed to derive ZK-ACE AIR query index".to_owned())?;
-            if !zk_ace_air_opening_is_safe(index, domain) {
-                openings_are_private = true;
-                break;
+        let query_indices = match validate_stark_fri_query_shape_and_indices_v1(
+            &envelope.params,
+            &envelope.transcript_label,
+            &envelope.proof.commits.roots,
+            &extra_query_roots,
+            &envelope.proof.queries,
+        ) {
+            Ok(indices) => indices,
+            Err(STARK_FRI_QUERY_INDEX_REPEATED_ERROR) => continue,
+            Err(err) => {
+                return Err(format!(
+                    "ZK-ACE AIR FRI query shape failed validation: {err}"
+                ));
             }
-            query_indices.push(index);
-        }
-        if openings_are_private {
+        };
+        if query_indices
+            .iter()
+            .any(|&index| !zk_ace_air_opening_is_safe(index, domain))
+        {
             continue;
         }
 
@@ -2901,11 +3154,17 @@ pub fn prove_stark_fri_zk_ace_air_envelope_bytes(
                 .map_err(|_| "ZK-ACE AIR trace width does not fit u16".to_owned())?,
             openings,
         });
-        return norito::to_bytes(&envelope)
-            .map_err(|err| format!("failed to encode STARK envelope: {err}"));
+        let bytes = norito::to_bytes(&envelope)
+            .map_err(|err| format!("failed to encode STARK envelope: {err}"))?;
+        let mut limits = StarkVerifierLimits::default();
+        limits.max_envelope_bytes = usize::MAX;
+        if !verify_stark_fri_zk_ace_envelope_with_limits(&bytes, &limits, public_inputs) {
+            return Err("ZK-ACE AIR envelope self-verification failed".to_owned());
+        }
+        return Ok(bytes);
     }
 
-    Err("failed to derive ZK-ACE AIR blinding that keeps private rows unopened".to_owned())
+    Err("failed to derive ZK-ACE AIR blinding with duplicate-free public query openings".to_owned())
 }
 
 /// Build a deterministic V1 STARK/FRI envelope with verifier-owned composition terms.
@@ -3171,16 +3430,27 @@ fn verify_stark_fri_envelope_with_context(
     }
     let query_roots = stark_air_query_roots(roots, Some(air));
     let fold_arity = env.params.fold_arity as usize;
+    let sampled_base_indices = match derive_query_indices_without_replacement(
+        &env.transcript_label,
+        &env.params,
+        &query_roots,
+        query_count,
+        total_domain,
+    ) {
+        Ok(indices) => indices,
+        Err(_) => return false,
+    };
 
-    for (qi, chain) in env.proof.queries.iter().enumerate() {
+    for (qi, (chain, base_index)) in env
+        .proof
+        .queries
+        .iter()
+        .zip(sampled_base_indices.iter().copied())
+        .enumerate()
+    {
         if chain.len() != expected_chain_len {
             return false;
         }
-        let base_index =
-            match derive_query_index(&env.transcript_label, &env.params, &query_roots, qi) {
-                Some(idx) => idx % total_domain,
-                None => return false,
-            };
         let Some(opening) = air.openings.get(qi) else {
             return false;
         };
