@@ -4,7 +4,7 @@
 
 use core::sync::atomic::{AtomicU64, Ordering};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
     io::{self, Write},
     path::{Path, PathBuf},
@@ -156,6 +156,18 @@ impl Handle {
     pub fn update(&self, summary: Summary, updated_at: SystemTime) {
         let mut inner = self.store.lock_inner();
         let key = (summary.block_hash, summary.height, summary.view);
+        if !session_summary_chunk_shape_valid(&summary)
+            || summary_allocation_error(&summary).is_some()
+        {
+            let removed = inner.map.remove(&key).is_some();
+            if removed {
+                persist_if_needed(&mut inner, "drop_invalid_update");
+            }
+            self.store
+                .active_count
+                .store(inner.map.len() as u64, Ordering::Relaxed);
+            return;
+        }
         let mut persist_needed = true;
         if let Some(entry) = inner.map.get_mut(&key) {
             if entry.summary == summary {
@@ -781,11 +793,101 @@ fn valid_persisted_summary(stored: &StoredEntry, path: &Path) -> bool {
         );
         return false;
     }
+    if let Some(reason) = summary_allocation_error(summary) {
+        warn!(
+            ?path,
+            block_hash = ?summary.block_hash,
+            height = summary.height,
+            view = summary.view,
+            reason,
+            "dropping RBC session status with inconsistent lane/dataspace allocation metadata"
+        );
+        return false;
+    }
     true
 }
 
 fn session_summary_chunk_shape_valid(summary: &Summary) -> bool {
     summary.total_chunks > 0 && summary.received_chunks <= summary.total_chunks
+}
+
+pub(super) fn summary_allocations_valid(summary: &Summary) -> bool {
+    summary_allocation_error(summary).is_none()
+}
+
+fn summary_allocation_error(summary: &Summary) -> Option<&'static str> {
+    if summary.lane_backlog.is_empty() && summary.dataspace_backlog.is_empty() {
+        return None;
+    }
+    if summary.total_chunks == 0 {
+        return Some("allocation metadata with zero chunks");
+    }
+    if summary.lane_backlog.is_empty() || summary.dataspace_backlog.is_empty() {
+        return Some("incomplete allocation metadata");
+    }
+
+    let mut lane_totals: BTreeMap<u32, (u64, u64, u64)> = BTreeMap::new();
+    let mut lane_chunk_sum = 0u64;
+    for lane in &summary.lane_backlog {
+        if lane.tx_count == 0 {
+            return Some("zero lane allocation transaction count");
+        }
+        if lane.pending_chunks > lane.total_chunks {
+            return Some("lane allocation pending chunks exceed total chunks");
+        }
+        if lane_totals
+            .insert(
+                lane.lane_id,
+                (lane.tx_count, lane.total_chunks, lane.rbc_bytes_total),
+            )
+            .is_some()
+        {
+            return Some("duplicate lane allocation");
+        }
+        let Some(updated_chunk_sum) = lane_chunk_sum.checked_add(lane.total_chunks) else {
+            return Some("lane allocation chunk sum overflow");
+        };
+        lane_chunk_sum = updated_chunk_sum;
+    }
+    if lane_chunk_sum != u64::from(summary.total_chunks) {
+        return Some("lane allocation chunk sum mismatch");
+    }
+
+    let mut dataspace_seen = BTreeSet::new();
+    let mut dataspace_sums: BTreeMap<u32, (u64, u64, u64)> = BTreeMap::new();
+    for dataspace in &summary.dataspace_backlog {
+        if dataspace.tx_count == 0 {
+            return Some("zero dataspace allocation transaction count");
+        }
+        if dataspace.pending_chunks > dataspace.total_chunks {
+            return Some("dataspace allocation pending chunks exceed total chunks");
+        }
+        if !lane_totals.contains_key(&dataspace.lane_id) {
+            return Some("dataspace allocation references unknown lane");
+        }
+        if !dataspace_seen.insert((dataspace.lane_id, dataspace.dataspace_id)) {
+            return Some("duplicate dataspace allocation");
+        }
+        let entry = dataspace_sums.entry(dataspace.lane_id).or_insert((0, 0, 0));
+        let Some(tx_count) = entry.0.checked_add(dataspace.tx_count) else {
+            return Some("dataspace allocation transaction sum overflow");
+        };
+        let Some(total_chunks) = entry.1.checked_add(dataspace.total_chunks) else {
+            return Some("dataspace allocation chunk sum overflow");
+        };
+        let Some(rbc_bytes_total) = entry.2.checked_add(dataspace.rbc_bytes_total) else {
+            return Some("dataspace allocation byte sum overflow");
+        };
+        *entry = (tx_count, total_chunks, rbc_bytes_total);
+    }
+
+    for (lane_id, expected) in lane_totals {
+        if dataspace_sums.get(&lane_id).copied().unwrap_or_default() != expected {
+            return Some("dataspace allocation sum mismatch");
+        }
+    }
+
+    None
 }
 
 fn complete_summary_chunk_shape_valid(summary: &Summary) -> bool {
@@ -1276,7 +1378,7 @@ mod tests {
             block_hash: hash(1),
             height: 1,
             view: 0,
-            total_chunks: 0,
+            total_chunks: 1,
             encoding: RbcEncoding::Plain,
             data_shards: 0,
             parity_shards: 0,
@@ -1295,7 +1397,7 @@ mod tests {
             block_hash: hash(2),
             height: 2,
             view: 0,
-            total_chunks: 0,
+            total_chunks: 1,
             encoding: RbcEncoding::Plain,
             data_shards: 0,
             parity_shards: 0,
@@ -1501,6 +1603,109 @@ mod tests {
     }
 
     #[test]
+    fn update_drops_impossible_summary_and_clears_stale_entry() {
+        let handle = register_handle();
+        set_active(&handle);
+
+        let block_hash = hash(13);
+        let payload_hash = Hash::new(b"payload");
+        let valid = Summary {
+            block_hash,
+            height: 13,
+            view: 0,
+            total_chunks: 2,
+            encoding: RbcEncoding::Plain,
+            data_shards: 0,
+            parity_shards: 0,
+            received_chunks: 2,
+            ready_count: 1,
+            delivered: true,
+            payload_hash: Some(payload_hash),
+            recovered_from_disk: false,
+            invalid: false,
+            reconstructed_stripes: 0,
+            reconstructable_stripes: 0,
+            lane_backlog: Vec::new(),
+            dataspace_backlog: Vec::new(),
+        };
+        handle.update(valid.clone(), SystemTime::now());
+        assert!(handle.delivered_payload_matches(&block_hash, 13, &payload_hash));
+
+        handle.update(
+            Summary {
+                received_chunks: 3,
+                ..valid
+            },
+            SystemTime::now(),
+        );
+
+        assert!(
+            handle.get(&(block_hash, 13, 0)).is_none(),
+            "impossible updates must clear stale summaries for the same key"
+        );
+        assert!(
+            !handle.delivered_payload_matches(&block_hash, 13, &payload_hash),
+            "stale delivered proof must not survive an impossible replacement"
+        );
+
+        let allocated_payload_hash = Hash::new(b"allocated-payload");
+        let allocated = Summary {
+            block_hash,
+            height: 13,
+            view: 0,
+            total_chunks: 2,
+            encoding: RbcEncoding::Plain,
+            data_shards: 0,
+            parity_shards: 0,
+            received_chunks: 2,
+            ready_count: 1,
+            delivered: true,
+            payload_hash: Some(allocated_payload_hash),
+            recovered_from_disk: false,
+            invalid: false,
+            reconstructed_stripes: 0,
+            reconstructable_stripes: 0,
+            lane_backlog: vec![LaneRbcSnapshot {
+                lane_id: 7,
+                tx_count: 1,
+                total_chunks: 2,
+                pending_chunks: 0,
+                rbc_bytes_total: 16,
+            }],
+            dataspace_backlog: vec![DataspaceRbcSnapshot {
+                lane_id: 7,
+                dataspace_id: 42,
+                tx_count: 1,
+                total_chunks: 2,
+                pending_chunks: 0,
+                rbc_bytes_total: 16,
+            }],
+        };
+        handle.update(allocated.clone(), SystemTime::now());
+        assert!(handle.delivered_payload_matches(&block_hash, 13, &allocated_payload_hash));
+
+        handle.update(
+            Summary {
+                dataspace_backlog: vec![DataspaceRbcSnapshot {
+                    lane_id: 7,
+                    dataspace_id: 42,
+                    tx_count: 1,
+                    total_chunks: 1,
+                    pending_chunks: 0,
+                    rbc_bytes_total: 16,
+                }],
+                ..allocated
+            },
+            SystemTime::now(),
+        );
+
+        assert!(
+            handle.get(&(block_hash, 13, 0)).is_none(),
+            "inconsistent allocation updates must clear stale summaries for the same key"
+        );
+    }
+
+    #[test]
     fn persisted_snapshot_drops_impossible_chunk_shapes() {
         let dir = tempdir().expect("tempdir");
         let file = dir.path().join(FILE_NAME);
@@ -1563,6 +1768,111 @@ mod tests {
             snapshot,
             vec![valid_in_progress, valid_delivered, invalid_diagnostic],
             "persisted recovery should keep valid and invalid diagnostic rows but drop impossible chunk shapes"
+        );
+    }
+
+    #[test]
+    fn persisted_snapshot_drops_inconsistent_allocation_metadata() {
+        let dir = tempdir().expect("tempdir");
+        let file = dir.path().join(FILE_NAME);
+        let now_ms = system_time_to_ms(SystemTime::now());
+        let valid = Summary {
+            lane_backlog: vec![LaneRbcSnapshot {
+                lane_id: 7,
+                tx_count: 2,
+                total_chunks: 4,
+                pending_chunks: 3,
+                rbc_bytes_total: 1024,
+            }],
+            dataspace_backlog: vec![DataspaceRbcSnapshot {
+                lane_id: 7,
+                dataspace_id: 42,
+                tx_count: 2,
+                total_chunks: 4,
+                pending_chunks: 3,
+                rbc_bytes_total: 1024,
+            }],
+            ..summary(19, 13, 1, 0, false, Some(b"valid-alloc"))
+        };
+        let inconsistent = Summary {
+            lane_backlog: vec![LaneRbcSnapshot {
+                lane_id: 7,
+                tx_count: 2,
+                total_chunks: 4,
+                pending_chunks: 3,
+                rbc_bytes_total: 1024,
+            }],
+            dataspace_backlog: vec![DataspaceRbcSnapshot {
+                lane_id: 7,
+                dataspace_id: 42,
+                tx_count: 2,
+                total_chunks: 3,
+                pending_chunks: 3,
+                rbc_bytes_total: 1024,
+            }],
+            ..summary(20, 13, 1, 0, false, Some(b"bad-alloc"))
+        };
+        let over_pending = Summary {
+            lane_backlog: vec![LaneRbcSnapshot {
+                lane_id: 7,
+                tx_count: 2,
+                total_chunks: 4,
+                pending_chunks: 5,
+                rbc_bytes_total: 1024,
+            }],
+            dataspace_backlog: vec![DataspaceRbcSnapshot {
+                lane_id: 7,
+                dataspace_id: 42,
+                tx_count: 2,
+                total_chunks: 4,
+                pending_chunks: 4,
+                rbc_bytes_total: 1024,
+            }],
+            ..summary(21, 13, 1, 0, false, Some(b"over-pending"))
+        };
+        let dataspace_over_pending = Summary {
+            lane_backlog: vec![LaneRbcSnapshot {
+                lane_id: 7,
+                tx_count: 2,
+                total_chunks: 4,
+                pending_chunks: 4,
+                rbc_bytes_total: 1024,
+            }],
+            dataspace_backlog: vec![DataspaceRbcSnapshot {
+                lane_id: 7,
+                dataspace_id: 42,
+                tx_count: 2,
+                total_chunks: 4,
+                pending_chunks: 5,
+                rbc_bytes_total: 1024,
+            }],
+            ..summary(22, 13, 1, 0, false, Some(b"dataspace-over-pending"))
+        };
+        let encoded = to_bytes(&vec![
+            StoredEntry {
+                summary: valid.clone(),
+                updated_at_ms: now_ms,
+            },
+            StoredEntry {
+                summary: inconsistent,
+                updated_at_ms: now_ms,
+            },
+            StoredEntry {
+                summary: over_pending,
+                updated_at_ms: now_ms,
+            },
+            StoredEntry {
+                summary: dataspace_over_pending,
+                updated_at_ms: now_ms,
+            },
+        ])
+        .expect("encode RBC status store");
+        fs::write(&file, encoded).expect("write RBC status store");
+
+        assert_eq!(
+            read_persisted_snapshot(dir.path()),
+            vec![valid],
+            "persisted recovery should drop allocation summaries whose dataspace totals do not match the lane"
         );
     }
 
