@@ -19825,6 +19825,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "zk-stark")]
     #[track_caller]
     fn assert_bfv_error_contains(err: &iroha_crypto::fhe_bfv::BfvError, expected: &str) {
         let debug = format!("{err:?}");

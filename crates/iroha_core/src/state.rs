@@ -7246,7 +7246,7 @@ pub struct State {
     pub commit_topology: Cell<Vec<PeerId>>,
     /// Topology used to commit previous block
     pub prev_commit_topology: Cell<Vec<PeerId>>,
-    /// In-memory DA commitment index (temporary until WSV wiring lands).
+    /// Ledger-derived DA commitment index hydrated from committed Kura blocks.
     pub da_commitments: parking_lot::RwLock<DaCommitmentStore>,
     /// In-memory confidential-compute receipt index derived from DA commitments.
     pub da_confidential_compute: parking_lot::RwLock<ConfidentialComputeStore>,
@@ -7444,14 +7444,14 @@ pub struct StateBlock<'state> {
     /// Lock serializing multi-component writer commit phases.
     state_write_lock: &'state parking_lot::Mutex<()>,
     tiered_backend: Arc<parking_lot::Mutex<TieredStateBackend>>,
-    /// DA commitments indexed while WSV wiring lands.
+    /// Ledger-derived DA commitments indexed while applying the block.
     pub(crate) da_commitments:
         &'state parking_lot::RwLock<crate::da::commitment_store::DaCommitmentStore>,
-    /// DA receipt cursors indexed while WSV wiring lands.
+    /// DA receipt cursors indexed while applying the block.
     pub(crate) da_receipt_cursors: &'state parking_lot::RwLock<DaReceiptCursorIndex>,
-    /// DA shard cursors indexed while WSV wiring lands.
+    /// DA shard cursors indexed while applying the block.
     pub(crate) da_shard_cursors: &'state parking_lot::RwLock<DaShardCursorIndex>,
-    /// DA pin intents indexed while WSV wiring lands.
+    /// DA pin intents indexed while applying the block.
     pub(crate) da_pin_intents: &'state parking_lot::RwLock<crate::da::pin_store::DaPinStore>,
     /// Lanes whose state was touched while executing this block.
     touched_lanes: BTreeSet<LaneId>,
@@ -27116,6 +27116,8 @@ impl<'state> StateBlock<'state> {
         height: u64,
         bundle: &iroha_data_model::da::commitment::DaCommitmentBundle,
     ) -> Result<(), BlockValidationError> {
+        crate::da::validate_commitment_bundle(bundle, &self.nexus.lane_config)
+            .map_err(BlockValidationError::DaCommitmentBundle)?;
         if let Err(err) =
             cursors.record_records(&self.nexus.lane_config, &bundle.commitments, height)
         {
@@ -37533,7 +37535,7 @@ mod tests {
         da::{
             commitment::{
                 DaCommitmentBundle, DaCommitmentLocation, DaCommitmentRecord, DaProofScheme,
-                KzgCommitment, RetentionClass,
+                RetentionClass,
             },
             confidential_compute::{ConfidentialComputeMechanism, ConfidentialComputePolicy},
             pin_intent::{DaPinIntent, DaPinIntentBundle},
@@ -41938,7 +41940,7 @@ mod tests {
                 ManifestDigest::new([0xBB; 32]),
                 DaProofScheme::MerkleSha256,
                 Hash::prehashed([0xCC; 32]),
-                Some(KzgCommitment::new([0xDD; 48])),
+                None,
                 None,
                 RetentionClass::default(),
                 StorageTicketId::new([0xEE; 32]),
@@ -42103,7 +42105,7 @@ mod tests {
                 ManifestDigest::new([0xBB; 32]),
                 DaProofScheme::MerkleSha256,
                 Hash::prehashed([0xCC; 32]),
-                Some(KzgCommitment::new([0xDD; 48])),
+                None,
                 None,
                 RetentionClass::default(),
                 StorageTicketId::new([0xEE; 32]),
@@ -42293,7 +42295,7 @@ mod tests {
                 ManifestDigest::new([0xBB; 32]),
                 DaProofScheme::MerkleSha256,
                 Hash::prehashed([0xCC; 32]),
-                Some(KzgCommitment::new([0xDD; 48])),
+                None,
                 None,
                 RetentionClass::default(),
                 StorageTicketId::new([0xEE; 32]),
@@ -45051,7 +45053,7 @@ mod tests {
             iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]),
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0xCC; 32]),
-            Some(KzgCommitment::new([0xDD; 48])),
+            None,
             None,
             RetentionClass::default(),
             StorageTicketId::new([0xEE; 32]),
@@ -45065,7 +45067,7 @@ mod tests {
             iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xCC; 32]),
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0xDD; 32]),
-            Some(KzgCommitment::new([0xEE; 48])),
+            None,
             None,
             RetentionClass::default(),
             StorageTicketId::new([0xFF; 32]),
@@ -45112,7 +45114,7 @@ mod tests {
             iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]),
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0xCC; 32]),
-            Some(KzgCommitment::new([0xDD; 48])),
+            None,
             None,
             RetentionClass::default(),
             StorageTicketId::new([0xEE; 32]),
@@ -45126,7 +45128,7 @@ mod tests {
             iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xCC; 32]),
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0xDD; 32]),
-            Some(KzgCommitment::new([0xEE; 48])),
+            None,
             None,
             RetentionClass::default(),
             StorageTicketId::new([0xFF; 32]),
@@ -45283,7 +45285,7 @@ mod tests {
             iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]),
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0xCC; 32]),
-            Some(KzgCommitment::new([0xDD; 48])),
+            None,
             None,
             RetentionClass::default(),
             StorageTicketId::new([0xEE; 32]),
@@ -45330,7 +45332,7 @@ mod tests {
                 iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]),
                 DaProofScheme::MerkleSha256,
                 Hash::prehashed([0xCC; 32]),
-                Some(KzgCommitment::new([0xDD; 48])),
+                None,
                 None,
                 RetentionClass::default(),
                 StorageTicketId::new([0xEE; 32]),
@@ -45408,7 +45410,7 @@ mod tests {
             iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x02; 32]),
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0x03; 32]),
-            Some(KzgCommitment::new([0x04; 48])),
+            None,
             None,
             RetentionClass::default(),
             StorageTicketId::new([0x05; 32]),
@@ -45507,7 +45509,7 @@ mod tests {
                 iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]),
                 DaProofScheme::MerkleSha256,
                 Hash::prehashed([0xCC; 32]),
-                Some(KzgCommitment::new([0xDD; 48])),
+                None,
                 None,
                 RetentionClass::default(),
                 StorageTicketId::new([0xEE; 32]),
@@ -45521,7 +45523,7 @@ mod tests {
                 iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBC; 32]),
                 DaProofScheme::MerkleSha256,
                 Hash::prehashed([0xCD; 32]),
-                Some(KzgCommitment::new([0xDE; 48])),
+                None,
                 None,
                 RetentionClass::default(),
                 StorageTicketId::new([0xEF; 32]),
@@ -45550,7 +45552,7 @@ mod tests {
             iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBD; 32]),
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0xCE; 32]),
-            Some(KzgCommitment::new([0xDF; 48])),
+            None,
             None,
             RetentionClass::default(),
             StorageTicketId::new([0xF0; 32]),
@@ -45610,7 +45612,7 @@ mod tests {
             iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]),
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0xCC; 32]),
-            Some(KzgCommitment::new([0xDD; 48])),
+            None,
             None,
             RetentionClass::default(),
             StorageTicketId::new([0xEE; 32]),
@@ -45654,7 +45656,7 @@ mod tests {
             iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBC; 32]),
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0xCD; 32]),
-            Some(KzgCommitment::new([0xDE; 48])),
+            None,
             None,
             RetentionClass::default(),
             StorageTicketId::new([0xEF; 32]),
@@ -45701,7 +45703,7 @@ mod tests {
                 iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]),
                 DaProofScheme::MerkleSha256,
                 Hash::prehashed([0xCC; 32]),
-                Some(KzgCommitment::new([0xDD; 48])),
+                None,
                 None,
                 RetentionClass::default(),
                 StorageTicketId::new([0xEE; 32]),
@@ -45825,7 +45827,7 @@ mod tests {
             iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]),
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0xCC; 32]),
-            Some(KzgCommitment::new([0xDD; 48])),
+            None,
             None,
             RetentionClass::default(),
             StorageTicketId::new([0xEE; 32]),
@@ -45839,7 +45841,7 @@ mod tests {
             iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x21; 32]),
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0x32; 32]),
-            Some(KzgCommitment::new([0x43; 48])),
+            None,
             None,
             RetentionClass::default(),
             StorageTicketId::new([0x54; 32]),
@@ -45922,7 +45924,7 @@ mod tests {
             iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x02; 32]),
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0x03; 32]),
-            Some(KzgCommitment::new([0x04; 48])),
+            None,
             None,
             RetentionClass::default(),
             StorageTicketId::new([0x05; 32]),
@@ -45952,7 +45954,7 @@ mod tests {
             iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x20; 32]),
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0x30; 32]),
-            Some(KzgCommitment::new([0x40; 48])),
+            None,
             None,
             RetentionClass::default(),
             StorageTicketId::new([0x50; 32]),
@@ -45981,6 +45983,123 @@ mod tests {
             state.da_commitments().bundle_at(42).is_none(),
             "stale commitment bundle should be dropped after replay"
         );
+    }
+
+    #[test]
+    fn da_commitment_lookup_hydrates_from_kura_after_state_restart() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let store_root = temp_dir.path().join("kura");
+        let catalog =
+            LaneCatalog::new(nonzero!(1_u32), vec![LaneConfig::default()]).expect("catalog");
+        let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(store_root),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity:
+                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: iroha_config::kura::FsyncMode::Batched,
+            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+            block_sync_roster_retention:
+                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention:
+                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+        };
+        let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
+        let mut state = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        state
+            .set_nexus(iroha_config::parameters::actual::Nexus {
+                lane_catalog: catalog.clone(),
+                lane_config: lane_config.clone(),
+                ..Default::default()
+            })
+            .expect("apply Nexus catalog before commitment replay");
+
+        let record = DaCommitmentRecord::new(
+            LaneId::new(0),
+            4,
+            9,
+            BlobDigest::new([0xA1; 32]),
+            iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xB2; 32]),
+            DaProofScheme::MerkleSha256,
+            Hash::prehashed([0xC3; 32]),
+            None,
+            None,
+            RetentionClass::default(),
+            StorageTicketId::new([0xE5; 32]),
+            Signature::from_bytes(&[0xF6; 64]),
+        );
+        let bundle = DaCommitmentBundle::new(vec![record.clone()]);
+        let keypair = KeyPair::random();
+        let block = BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, None)
+            .with_da_commitments(Some(bundle))
+            .sign(keypair.private_key())
+            .unpack(|_| {});
+        let signed: SignedBlock = block.into();
+        kura.store_block(Arc::new(signed.clone()))
+            .expect("store block");
+        {
+            let mut hashes = state.block_hashes.block();
+            hashes.push(signed.hash());
+            hashes.commit_for_tests();
+        }
+        assert_eq!(
+            state.find_da_commitment_by_manifest(&record.manifest_hash),
+            Some(record.clone()),
+            "pre-restart lookup should hydrate from the committed block"
+        );
+        drop(state);
+
+        let mut restarted = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        restarted
+            .set_nexus(iroha_config::parameters::actual::Nexus {
+                lane_catalog: catalog,
+                lane_config,
+                ..Default::default()
+            })
+            .expect("apply Nexus catalog after restart");
+        {
+            let mut hashes = restarted.block_hashes.block();
+            hashes.push(signed.hash());
+            hashes.commit_for_tests();
+        }
+        assert!(
+            restarted
+                .da_commitments
+                .read()
+                .get_by_manifest(&record.manifest_hash)
+                .is_none(),
+            "fresh state should start with an empty in-memory commitment index"
+        );
+
+        assert_eq!(
+            restarted.find_da_commitment_by_manifest(&record.manifest_hash),
+            Some(record.clone()),
+            "manifest lookup should hydrate from Kura after restart"
+        );
+        assert_eq!(
+            restarted.find_da_commitment_by_lane_epoch_sequence(0, record.epoch, record.sequence),
+            Some(record.clone()),
+            "lane/epoch/sequence lookup should hydrate from Kura after restart"
+        );
+        let commitments = restarted.da_commitments();
+        let stored_bundle = commitments
+            .bundle_at(signed.header().height().get())
+            .expect("replayed commitment bundle should be retained by block height");
+        assert_eq!(stored_bundle.commitments, vec![record]);
     }
 
     #[test]
@@ -46020,7 +46139,7 @@ mod tests {
                 iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]),
                 DaProofScheme::MerkleSha256,
                 Hash::prehashed([0xCC; 32]),
-                Some(KzgCommitment::new([0xDD; 48])),
+                None,
                 None,
                 RetentionClass::default(),
                 StorageTicketId::new([0xEE; 32]),
@@ -46138,7 +46257,7 @@ mod tests {
             iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]),
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0xCC; 32]),
-            Some(KzgCommitment::new([0xDD; 48])),
+            None,
             None,
             RetentionClass::default(),
             StorageTicketId::new([0xEE; 32]),
@@ -46211,7 +46330,7 @@ mod tests {
             iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]),
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0xCC; 32]),
-            Some(KzgCommitment::new([0xDD; 48])),
+            None,
             None,
             RetentionClass::default(),
             StorageTicketId::new([0xEE; 32]),
@@ -46839,7 +46958,7 @@ mod tests {
             iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]),
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0xCC; 32]),
-            Some(KzgCommitment::new([0xDD; 48])),
+            None,
             None,
             RetentionClass::default(),
             StorageTicketId::new([0xEE; 32]),
@@ -46930,7 +47049,7 @@ mod tests {
                 iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]),
                 DaProofScheme::MerkleSha256,
                 Hash::prehashed([0xCC; 32]),
-                Some(KzgCommitment::new([0xDD; 48])),
+                None,
                 None,
                 RetentionClass::default(),
                 StorageTicketId::new([0xEE; 32]),
@@ -47896,7 +48015,7 @@ mod tests {
             iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x20; 32]),
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0x30; 32]),
-            Some(KzgCommitment::new([0x40; 48])),
+            None,
             None,
             RetentionClass::default(),
             StorageTicketId::new([0x50; 32]),
@@ -47973,7 +48092,7 @@ mod tests {
                 iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]),
                 DaProofScheme::MerkleSha256,
                 Hash::prehashed([0xCC; 32]),
-                Some(KzgCommitment::new([0xDD; 48])),
+                None,
                 None,
                 RetentionClass::default(),
                 StorageTicketId::new([0xEE; 32]),
@@ -48087,7 +48206,7 @@ mod tests {
             iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xB2; 32]),
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0xC3; 32]),
-            Some(KzgCommitment::new([0xD4; 48])),
+            None,
             None,
             RetentionClass::default(),
             StorageTicketId::new([0xE5; 32]),
@@ -48215,7 +48334,7 @@ mod tests {
             iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x02; 32]),
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0x03; 32]),
-            Some(KzgCommitment::new([0x04; 48])),
+            None,
             None,
             RetentionClass::default(),
             StorageTicketId::new([0x05; 32]),
@@ -48296,7 +48415,7 @@ mod tests {
             iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]),
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0xCC; 32]),
-            Some(KzgCommitment::new([0xDD; 48])),
+            None,
             None,
             RetentionClass::default(),
             StorageTicketId::new([0xEE; 32]),
@@ -48384,7 +48503,7 @@ mod tests {
             iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]),
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0xCC; 32]),
-            Some(KzgCommitment::new([0xDD; 48])),
+            None,
             None,
             RetentionClass::default(),
             StorageTicketId::new([0xEE; 32]),
@@ -48446,7 +48565,7 @@ mod tests {
             iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]),
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0xCC; 32]),
-            Some(KzgCommitment::new([0xDD; 48])),
+            None,
             None,
             RetentionClass::default(),
             StorageTicketId::new([0xEE; 32]),

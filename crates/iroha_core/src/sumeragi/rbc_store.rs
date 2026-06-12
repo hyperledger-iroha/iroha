@@ -2837,6 +2837,37 @@ mod tests {
     }
 
     #[test]
+    fn from_persisted_demotes_delivered_with_complete_payload_for_revalidation() {
+        let payload = b"complete-recovered-payload".to_vec();
+        let payload_hash = Hash::new(&payload);
+        let mut session = RbcSession::test_new(1, Some(payload_hash), None, 0);
+        session.test_note_chunk(0, payload.clone(), 0);
+        session.test_set_delivered(true);
+        session.test_set_sent_ready(true);
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let key = session_key(18);
+        let persisted = session.to_persisted(key, chain_hash, &manifest, &[]);
+
+        let mut rebuilt =
+            RbcSession::from_persisted_unchecked(&persisted).expect("rebuild session");
+
+        assert_eq!(rebuilt.total_chunks(), 1);
+        assert_eq!(rebuilt.received_chunks(), 1);
+        assert_eq!(
+            rebuilt.progress_stage(),
+            RbcProgressStage::LocalReadySent,
+            "recovered delivery markers must be re-derived from fresh network evidence"
+        );
+        assert!(
+            rebuilt.complete_payload_matches(&payload_hash),
+            "complete recovered payload bytes should remain available after demoting delivery"
+        );
+        assert_eq!(rebuilt.delivered_payload_bytes(), None);
+        assert_eq!(rebuilt.take_delivered_payload_bytes_for_telemetry(), None);
+    }
+
+    #[test]
     fn load_session_metadata_from_dir_reports_chunk_counts() {
         let dir = tempdir().unwrap();
         let key = session_key(13);
