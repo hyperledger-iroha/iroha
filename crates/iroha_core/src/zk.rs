@@ -15783,6 +15783,35 @@ pub(crate) fn normalize_stark_fri_circuit_id_for_backend(
     Some(format!("{backend}:{trimmed}"))
 }
 
+fn stark_open_verify_circuit_id_matches_backend(backend: &str, circuit_id: &str) -> bool {
+    if !is_stark_fri_v1_backend(backend)
+        || normalize_stark_fri_circuit_id_for_backend(backend, circuit_id).is_none()
+    {
+        return false;
+    }
+    let trimmed = circuit_id.trim();
+    if ["halo2", "groth16", "kzg"].iter().any(|family| {
+        trimmed == *family
+            || trimmed
+                .strip_prefix(family)
+                .is_some_and(|suffix| suffix.starts_with('/') || suffix.starts_with(':'))
+    }) {
+        return false;
+    }
+    if backend == ZK_BACKEND_STARK_FRI_V1 {
+        return true;
+    }
+    if trimmed.starts_with("stark/fri:") {
+        return false;
+    }
+    if trimmed.starts_with("stark/fri/") {
+        return trimmed
+            .strip_prefix(backend)
+            .is_some_and(|suffix| suffix.starts_with(':') || suffix.starts_with('/'));
+    }
+    true
+}
+
 fn normalized_zk_ace_stark_circuit_id_for_backend(backend: &str) -> Option<String> {
     normalize_stark_fri_circuit_id_for_backend(
         backend,
@@ -15973,6 +16002,9 @@ pub fn prove_stark_fri_open_verify_envelope(
     .map_err(|err| format!("invalid STARK verifying key payload: {err}"))?;
     let env_circuit_id = normalize_stark_fri_circuit_id_for_backend(backend, circuit_id)
         .ok_or_else(|| "invalid STARK circuit_id".to_owned())?;
+    if !stark_open_verify_circuit_id_matches_backend(backend, circuit_id) {
+        return Err("STARK circuit_id does not match backend family".to_owned());
+    }
     if normalized_zk_ace_stark_circuit_id_for_backend(backend).as_deref()
         == Some(env_circuit_id.as_str())
     {
@@ -20988,6 +21020,9 @@ fn preverify_open_verify_envelope_metadata(
         return Err(PreverifyResult::MalformedProof);
     }
     if expected_tag == iroha_data_model::zk::BackendTag::Stark {
+        if !stark_open_verify_circuit_id_matches_backend(&proof.backend, &envelope.circuit_id) {
+            return Err(PreverifyResult::MalformedProof);
+        }
         let Some(env_circuit_id) =
             normalize_stark_fri_circuit_id_for_backend(&proof.backend, &envelope.circuit_id)
         else {
@@ -21254,6 +21289,9 @@ fn verify_stark_fri_open_verify_envelope_with_limits(
     }
     if env.validate_for_admission().is_err() {
         return reject("invalid OpenVerifyEnvelope shape");
+    }
+    if !stark_open_verify_circuit_id_matches_backend(backend, &env.circuit_id) {
+        return reject("STARK OpenVerifyEnvelope circuit_id does not match backend family");
     }
 
     let Some(vk_box) = vk else {
@@ -22408,6 +22446,124 @@ mod stark_prover_tests {
     }
 
     #[test]
+    fn prove_stark_open_verify_envelope_rejects_circuit_family_mismatch() {
+        for (case, backend, circuit_id) in [
+            (
+                "profile backend with sibling STARK profile",
+                "stark/fri/sha256-goldilocks",
+                "stark/fri/poseidon2-goldilocks:family-spoof",
+            ),
+            (
+                "profile backend with generic STARK prefix",
+                "stark/fri/sha256-goldilocks",
+                "stark/fri:family-spoof",
+            ),
+            (
+                "generic STARK backend with halo2 circuit",
+                super::ZK_BACKEND_STARK_FRI_V1,
+                "halo2/ipa:family-spoof",
+            ),
+            (
+                "generic STARK backend with colon-form halo2 circuit",
+                super::ZK_BACKEND_STARK_FRI_V1,
+                "halo2:family-spoof",
+            ),
+            (
+                "generic STARK backend with colon-form kzg circuit",
+                super::ZK_BACKEND_STARK_FRI_V1,
+                "kzg:trusted-setup-spoof",
+            ),
+        ] {
+            let vk_payload = StarkFriVerifyingKeyV1 {
+                version: 1,
+                circuit_id: circuit_id.to_owned(),
+                n_log2: ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2,
+                blowup_log2: ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2,
+                fold_arity: 2,
+                queries: ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES,
+                merkle_arity: 2,
+                hash_fn: STARK_HASH_SHA256_V1,
+            };
+            let vk_box = VerifyingKeyBox::new(
+                backend.to_owned(),
+                norito::to_bytes(&vk_payload)
+                    .expect("encode circuit-family-mismatched STARK VK payload"),
+            );
+            let err = prove_stark_fri_open_verify_envelope(
+                backend,
+                circuit_id,
+                &vk_box,
+                b"family-mismatch:schema:v1",
+                vec![vec![[0x11; 32]]],
+            )
+            .expect_err("generic STARK prover must reject circuit ids from another family/profile");
+            assert!(
+                err.contains("backend family"),
+                "unexpected circuit family rejection for {case}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn verify_stark_open_verify_envelope_rejects_circuit_family_mismatch() {
+        for (case, backend, circuit_id) in [
+            (
+                "profile backend with sibling STARK profile",
+                "stark/fri/sha256-goldilocks",
+                "stark/fri/poseidon2-goldilocks:family-spoof",
+            ),
+            (
+                "profile backend with generic STARK prefix",
+                "stark/fri/sha256-goldilocks",
+                "stark/fri:family-spoof",
+            ),
+            (
+                "generic STARK backend with halo2 circuit",
+                super::ZK_BACKEND_STARK_FRI_V1,
+                "halo2/ipa:family-spoof",
+            ),
+            (
+                "generic STARK backend with colon-form halo2 circuit",
+                super::ZK_BACKEND_STARK_FRI_V1,
+                "halo2:family-spoof",
+            ),
+            (
+                "generic STARK backend with colon-form kzg circuit",
+                super::ZK_BACKEND_STARK_FRI_V1,
+                "kzg:trusted-setup-spoof",
+            ),
+        ] {
+            let vk_payload = StarkFriVerifyingKeyV1 {
+                version: 1,
+                circuit_id: circuit_id.to_owned(),
+                n_log2: ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2,
+                blowup_log2: ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2,
+                fold_arity: 2,
+                queries: ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES,
+                merkle_arity: 2,
+                hash_fn: STARK_HASH_SHA256_V1,
+            };
+            let vk_box = VerifyingKeyBox::new(
+                backend.to_owned(),
+                norito::to_bytes(&vk_payload)
+                    .expect("encode circuit-family-mismatched STARK VK payload"),
+            );
+            let proof = weak_stark_open_verify_proof(
+                backend,
+                circuit_id,
+                &vk_box,
+                b"family-mismatch:schema:v1".to_vec(),
+                vec![vec![[0x11; 32]]],
+            );
+            let report = verify_backend_with_timing(backend, &proof, Some(&vk_box));
+            assert!(
+                !report.ok,
+                "generic STARK verifier must reject circuit id family/profile mismatch for {case}"
+            );
+        }
+    }
+
+    #[test]
     fn prove_stark_open_verify_envelope_rejects_zk_ace_circuit_aliases() {
         let backend = "stark/fri/sha256-goldilocks";
         let canonical = iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID;
@@ -23126,6 +23282,17 @@ pub fn verify_backend_with_timing_guardrails(
                 backend,
                 error = %err,
                 "stark OpenVerifyEnvelope failed guardrail validation"
+            );
+            return VerifyReport {
+                ok: false,
+                elapsed: Duration::ZERO,
+            };
+        }
+        if !stark_open_verify_circuit_id_matches_backend(backend, &env.circuit_id) {
+            iroha_logger::debug!(
+                backend,
+                circuit_id = env.circuit_id.as_str(),
+                "stark OpenVerifyEnvelope circuit id does not match verifier backend"
             );
             return VerifyReport {
                 ok: false,
@@ -23882,6 +24049,70 @@ mod guardrails_tests {
             );
             let report = verify_backend_with_timing_guardrails(
                 ZK_BACKEND_STARK_FRI_V1,
+                &proof,
+                None,
+                ZkVerifyGuardrails {
+                    halo2_enabled: true,
+                    halo2_max_envelope_bytes: 1024,
+                    halo2_max_proof_bytes: 1024,
+                    stark_enabled: true,
+                    stark_max_envelope_bytes: 1024,
+                    stark_max_proof_bytes: 1024,
+                },
+            );
+            assert!(!report.ok, "case {case}");
+            assert_eq!(report.elapsed, Duration::ZERO, "case {case}");
+        }
+    }
+
+    #[test]
+    fn guardrails_reject_stark_open_verify_circuit_mismatch_before_dispatch() {
+        let open = StarkFriOpenProofV1 {
+            version: 1,
+            public_inputs: Vec::new(),
+            envelope_bytes: vec![0xCC; 10],
+        };
+        for (case, backend, circuit_id) in [
+            (
+                "profile backend with sibling STARK profile",
+                "stark/fri/sha256-goldilocks",
+                "stark/fri/poseidon2-goldilocks:dummy",
+            ),
+            (
+                "profile backend with generic STARK prefix",
+                "stark/fri/sha256-goldilocks",
+                "stark/fri:dummy",
+            ),
+            (
+                "generic STARK backend with halo2 circuit",
+                ZK_BACKEND_STARK_FRI_V1,
+                "halo2/ipa:ivm-execution-v1",
+            ),
+            (
+                "generic STARK backend with colon-form halo2 circuit",
+                ZK_BACKEND_STARK_FRI_V1,
+                "halo2:ivm-execution-v1",
+            ),
+            (
+                "generic STARK backend with colon-form kzg circuit",
+                ZK_BACKEND_STARK_FRI_V1,
+                "kzg:trusted-setup-spoof",
+            ),
+        ] {
+            let env = OpenVerifyEnvelope {
+                backend: BackendTag::Stark,
+                circuit_id: circuit_id.to_owned(),
+                vk_hash: [0x11; 32],
+                public_inputs: vec![0xAA; 32],
+                proof_bytes: norito::to_bytes(&open).expect("encode stark wrapper"),
+                aux: Vec::new(),
+            };
+            let proof = ProofBox::new(
+                backend.to_owned(),
+                norito::to_bytes(&env).expect("encode envelope"),
+            );
+            let report = verify_backend_with_timing_guardrails(
+                backend,
                 &proof,
                 None,
                 ZkVerifyGuardrails {
@@ -72184,6 +72415,85 @@ mod preverified_key_tests {
             let mismatched = preverify_enveloped_proof_for_backend(
                 backend,
                 BackendTag::Halo2IpaPasta,
+                mismatched_circuit_id,
+                expected,
+            );
+
+            let mut dedup = DedupCache::new();
+            assert_eq!(
+                preverify_with_budget(
+                    &mismatched,
+                    Some(&vk),
+                    &mut dedup,
+                    0,
+                    Some(expected),
+                    Some(expected),
+                    true,
+                ),
+                PreverifyResult::MalformedProof,
+                "case {case}"
+            );
+            assert_eq!(
+                preverify_with_budget(
+                    &accepted,
+                    Some(&vk),
+                    &mut dedup,
+                    0,
+                    Some(expected),
+                    Some(expected),
+                    true,
+                ),
+                PreverifyResult::Accepted,
+                "case {case} must not poison dedup"
+            );
+        }
+    }
+
+    #[test]
+    fn preverify_rejects_stark_open_verify_circuit_mismatch_before_dedup() {
+        for (case, backend, accepted_circuit_id, mismatched_circuit_id) in [
+            (
+                "profile backend with sibling STARK profile",
+                "stark/fri/sha256-goldilocks",
+                "stark/fri/sha256-goldilocks:preverify-test",
+                "stark/fri/poseidon2-goldilocks:preverify-test",
+            ),
+            (
+                "profile backend with generic STARK prefix",
+                "stark/fri/sha256-goldilocks",
+                "stark/fri/sha256-goldilocks:preverify-test",
+                "stark/fri:preverify-test",
+            ),
+            (
+                "generic STARK backend with halo2 circuit",
+                ZK_BACKEND_STARK_FRI_V1,
+                "stark/fri:preverify-test",
+                "halo2/ipa:preverify-test",
+            ),
+            (
+                "generic STARK backend with colon-form halo2 circuit",
+                ZK_BACKEND_STARK_FRI_V1,
+                "stark/fri:preverify-test",
+                "halo2:preverify-test",
+            ),
+            (
+                "generic STARK backend with colon-form kzg circuit",
+                ZK_BACKEND_STARK_FRI_V1,
+                "stark/fri:preverify-test",
+                "kzg:trusted-setup-spoof",
+            ),
+        ] {
+            let vk = VerifyingKeyBox::new(backend.to_owned(), vec![0xA5, 0x5A, 0xC3]);
+            let expected = hash_vk(&vk);
+            let accepted = preverify_enveloped_proof_for_backend(
+                backend,
+                BackendTag::Stark,
+                accepted_circuit_id,
+                expected,
+            );
+            let mismatched = preverify_enveloped_proof_for_backend(
+                backend,
+                BackendTag::Stark,
                 mismatched_circuit_id,
                 expected,
             );

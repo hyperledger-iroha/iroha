@@ -106,7 +106,7 @@ impl KeyExchangeScheme for X25519Sha256 {
         let mut array = [0u8; Self::PUBLIC_KEY_SIZE];
         array.copy_from_slice(bytes);
         let public_key = PublicKey::from(array);
-        if is_low_order_public_key(&public_key) {
+        if is_x25519_low_order_public_key(&public_key) {
             return Err(ParseError("x25519 public key is low-order".into()));
         }
         Ok(public_key)
@@ -138,7 +138,7 @@ fn validate_private_key_material_not_all_zero(label: &str, bytes: &[u8; 32]) -> 
     Ok(())
 }
 
-fn is_low_order_public_key(public_key: &PublicKey) -> bool {
+pub(super) fn is_x25519_low_order_public_key(public_key: &PublicKey) -> bool {
     let probe_secret = StaticSecret::from(LOW_ORDER_CHECK_PRIVATE_KEY);
     probe_secret
         .diffie_hellman(public_key)
@@ -149,7 +149,19 @@ fn is_low_order_public_key(public_key: &PublicKey) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use curve25519_dalek::constants::EIGHT_TORSION;
+
     use super::*;
+
+    fn low_order_montgomery_encodings() -> Vec<[u8; 32]> {
+        let mut encodings = EIGHT_TORSION
+            .iter()
+            .map(|point| point.to_montgomery().0)
+            .collect::<Vec<_>>();
+        encodings.sort_unstable();
+        encodings.dedup();
+        encodings
+    }
 
     #[test]
     fn key_exchange() {
@@ -211,12 +223,20 @@ mod tests {
     }
 
     #[test]
-    fn shared_secret_rejects_low_order_public_key() {
+    fn shared_secret_rejects_all_low_order_public_keys() {
         let scheme = X25519Sha256::new();
         let (_pk, sk) = scheme.keypair(KeyGenOption::UseSeed(vec![0x11; 32]));
-        let low_order = PublicKey::from([0u8; 32]);
-        let err = scheme.compute_shared_secret(&sk, &low_order);
-        assert!(err.is_err());
+
+        let low_order_points = low_order_montgomery_encodings();
+        assert!(low_order_points.len() > 1);
+        for low_order in low_order_points {
+            let low_order = PublicKey::from(low_order);
+            match scheme.compute_shared_secret(&sk, &low_order) {
+                Err(Error::Other(message)) => assert!(message.contains("all-zero")),
+                Err(other) => panic!("unexpected low-order public-key error: {other:?}"),
+                Ok(_) => panic!("low-order public key must derive an all-zero secret"),
+            }
+        }
     }
 
     #[test]
@@ -255,9 +275,13 @@ mod tests {
     }
 
     #[test]
-    fn decode_public_key_rejects_low_order_public_key() {
-        let err = X25519Sha256::decode_public_key(&[0u8; 32])
-            .expect_err("low-order public key must be rejected while decoding");
-        assert!(err.to_string().contains("low-order"));
+    fn decode_public_key_rejects_all_low_order_public_keys() {
+        let low_order_points = low_order_montgomery_encodings();
+        assert!(low_order_points.len() > 1);
+        for low_order in low_order_points {
+            let err = X25519Sha256::decode_public_key(&low_order)
+                .expect_err("low-order public key must be rejected while decoding");
+            assert!(err.to_string().contains("low-order"));
+        }
     }
 }

@@ -20,12 +20,13 @@ use thiserror::Error;
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
 use zeroize::Zeroizing;
 
+use crate::kex::is_x25519_low_order_public_key;
+
 const SUITE_KDF_SALT_V1: &[u8] = b"sorafs.hybrid.kem.hkdf:transcript-v1";
 const SUITE_KDF_INFO_V1: &[u8] = b"sorafs.hybrid.kem.material:transcript-v1";
 const SUITE_REKEY_INFO_V1: &[u8] = b"sorafs.hybrid.kem.rekey:transcript-v1";
 const SUITE_TRANSCRIPT_DOMAIN_V1: &[u8] = b"sorafs.hybrid.kem.transcript:transcript-v1";
 const HYBRID_KEM_SUITE: MlKemSuite = MlKemSuite::MlKem768;
-const X25519_LOW_ORDER_CHECK_SECRET: [u8; 32] = [1_u8; 32];
 
 /// Supported hybrid suites for payload envelopes.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -720,19 +721,10 @@ fn append_transcript_component(
 
 fn decode_x25519_public_key(bytes: [u8; 32]) -> Result<X25519PublicKey, HybridError> {
     let public_key = X25519PublicKey::from(bytes);
-    if x25519_public_key_is_low_order(&public_key) {
+    if is_x25519_low_order_public_key(&public_key) {
         return Err(HybridError::InvalidX25519PublicKey);
     }
     Ok(public_key)
-}
-
-fn x25519_public_key_is_low_order(public_key: &X25519PublicKey) -> bool {
-    let probe_secret = StaticSecret::from(X25519_LOW_ORDER_CHECK_SECRET);
-    probe_secret
-        .diffie_hellman(public_key)
-        .as_bytes()
-        .iter()
-        .all(|&byte| byte == 0)
 }
 
 fn validate_kyber_public_not_all_zero(kyber_public: &[u8]) -> Result<(), HybridError> {

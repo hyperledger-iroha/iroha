@@ -511,6 +511,8 @@ impl Sm2PrivateKey {
     /// Returns [`ParseError`] when a valid key cannot be derived within the retry budget.
     pub fn from_seed(distid: impl Into<String>, seed: &[u8]) -> Result<Self, ParseError> {
         let distid = distid.into();
+        validate_distid(&distid)?;
+        validate_seed_material_not_all_zero(seed)?;
         let mut counter: u32 = 0;
         loop {
             let mut hasher = Sha512::new();
@@ -623,6 +625,15 @@ impl Sm2PrivateKey {
         bytes.zeroize();
         Self::from_bytes(distid, buf.as_ref())
     }
+}
+
+fn validate_seed_material_not_all_zero(seed: &[u8]) -> Result<(), ParseError> {
+    if !seed.is_empty() && seed.iter().all(|&byte| byte == 0) {
+        return Err(ParseError(
+            "SM2 seed material must not be all zero".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 /// Encode an SM2 public key payload with an explicit distinguishing identifier.
@@ -3549,6 +3560,29 @@ mod tests {
             original.public_key().to_sec1_bytes(false),
             restored.public_key().to_sec1_bytes(false)
         );
+    }
+
+    #[test]
+    fn sm2_from_seed_rejects_all_zero_seed_material() {
+        match Sm2PrivateKey::from_seed(Sm2PublicKey::DEFAULT_DISTID, &[0u8; 32]) {
+            Err(err) => assert!(
+                err.to_string().contains("all zero"),
+                "unexpected all-zero seed error: {err:?}"
+            ),
+            Ok(_) => panic!("all-zero SM2 seed material must fail"),
+        }
+    }
+
+    #[test]
+    fn sm2_from_seed_rejects_invalid_distid_before_derivation() {
+        let oversized_distid = "x".repeat((u16::MAX as usize / 8) + 1);
+        match Sm2PrivateKey::from_seed(&oversized_distid, b"valid-seed") {
+            Err(err) => assert!(
+                err.to_string().contains("exceeds 65535 bits"),
+                "unexpected distid error: {err:?}"
+            ),
+            Ok(_) => panic!("oversized SM2 distinguishing identifier must fail"),
+        }
     }
 
     #[test]

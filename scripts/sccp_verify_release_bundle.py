@@ -4226,6 +4226,17 @@ SCCP_PUBLIC_DISCOVERY_DOCUMENTATION_MARKERS = (
             "`evm-groth16-bn254-v1`, and `tron-groth16-bn254-v1`)",
         ),
     ),
+    (
+        "crates/iroha_torii/src/openapi.rs",
+        (
+            "fn sccp_capabilities_operation() -> Map",
+            "fn sccp_manifests_operation() -> Map",
+            "Discover SCCP proof capabilities.",
+            "Discover SCCP proof manifests.",
+            "SCCP \\\n             will not support Sub&#115;trate/Pol&#107;adot networks for now.",
+            "SCCP will not \\\n             support Sub&#115;trate/Pol&#107;adot networks for now.",
+        ),
+    ),
 )
 SCCP_PUBLIC_DISCOVERY_DOCUMENTATION_FORBIDDEN_MARKERS = ()
 SCCP_RETIRED_NETWORK_SURFACE_GUARD_MARKERS = (
@@ -5096,8 +5107,10 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "def _required_record_summary_unknown_field_blocker(",
             "f\"{lane_label}: required record summary\"",
             "def _active_launch_evm_live_metadata_blockers(",
+            "def _active_launch_source_record_hash_role_blockers(",
             "source live eth_chainId must be",
             "destination live eth_chainId must be",
+            "source verifier material hash must not reuse source adapter engine deployment hash",
             "active EVM source adapter gate summary must not be ",
             "active EVM source adapter gate hash must be empty",
             "active EVM source adapter gate audit hashes must be ",
@@ -5135,7 +5148,10 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "def test_release_readiness_report_blocks_missing_active_launch_checklist_schema_gate",
             "def test_release_readiness_report_compares_checklist_ready_exactly",
             "def test_active_launch_evm_live_metadata_requires_canonical_decimal_chain_id",
-            'for noncanonical_chain_id in ("0x1", "01", " 1", "1 ", 1):',
+            "noncanonical_chain_ids = (",
+            '"\\uff11",',
+            '"\\u0661",',
+            "assert absent_blocker not in blockers",
             "def test_release_readiness_report_blocks_malformed_active_route_allowlist_binding",
             "def test_release_readiness_report_blocks_malformed_active_governed_deployment_metadata",
             "source_record_hashes.hash_reuse",
@@ -5143,13 +5159,20 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "source_adapter_gate.gate_hash",
             "source_adapter_gate.audit_hashes",
             "route_allowlist.hash_mismatch",
+            "expected_match_flag_exactness_cases = (",
+            "expected_destination_match_flag_exactness_cases = (",
             "route_allowlist.expected_route_allowlist_hash_matches",
             "def test_release_readiness_report_blocks_malformed_active_route_canary_metadata",
+            "receipt_block_number_exactness_cases = (",
+            "route_canary_evidence_bound_exactness_cases = (",
+            "route_canary_status_exactness_cases = (",
+            "route_canary_hex32_exactness_cases = (",
             "route canary block receipts root must be a canonical non-zero bytes32 hex string",
             "route canary receipt block must be finalized",
             "route allowlist source verifier material hash must not reuse source adapter engine deployment hash",
             "governed deployment source verifier material hash must not reuse source adapter engine deployment hash",
             "def test_release_readiness_report_blocks_malformed_active_required_record_metadata",
+            "required_record_flag_exactness_cases = (",
             "domain.string",
             "chain.padded",
             "production_ready.string",
@@ -5165,11 +5188,26 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
         (
             "def test_release_bundle_verifier_guards_active_launch_checklist_schema_inventory",
             "def test_release_bundle_active_evm_metadata_rejects_noncanonical_chain_id",
-            'for noncanonical_chain_id in ("0x1", "01", " 1", "1 ", 1):',
+            "noncanonical_chain_ids = (",
+            '"\\uff11",',
+            '"\\u0661",',
+            "assert absent_blocker not in blockers",
             "def test_release_bundle_verifier_rejects_missing_active_launch_checklist_schema_inventory_gate",
             "def test_release_bundle_verifier_rejects_readiness_boolean_type_drift",
             "def test_release_bundle_verifier_recomputes_active_checklist_rejects_malformed_canary_source",
+            "def test_release_bundle_verifier_recomputes_active_route_canary_status_exactly",
+            "def test_release_bundle_verifier_recomputes_active_route_canary_evidence_bound_exactly",
+            "def test_release_bundle_active_route_canary_metadata_rejects_exact_type_drift",
+            "receipt_block_number_exactness_cases = (",
+            "route_canary_evidence_bound_exactness_cases = (",
+            "route_canary_status_exactness_cases = (",
+            "route_canary_hex32_exactness_cases = (",
+            "def test_release_bundle_active_route_allowlist_metadata_rejects_exact_flag_and_role_reuse",
+            "expected_match_flag_exactness_cases = (",
+            "def test_release_bundle_active_governed_deployment_metadata_rejects_exact_flag_and_role_reuse",
+            "expected_destination_match_flag_exactness_cases = (",
             "def test_release_bundle_verifier_recomputes_active_required_record_identity_scalars",
+            "required_record_flag_exactness_cases = (",
             "domain.string",
             "chain.padded",
             "production_ready.string",
@@ -6956,6 +6994,8 @@ SCCP_RELEASE_NATIVE_PROVER_BUNDLE_SCHEMA_MARKERS = (
         (
             "test_release_bundle_verifier_guards_release_native_prover_bundle_schema_inventory",
             "test_release_bundle_verifier_rejects_missing_release_native_prover_bundle_schema_inventory_gate",
+            "test_release_bundle_native_evm_prover_bundle_rejects_boolean_type_drift",
+            "native_bundle_boolean_exactness_cases = (",
             "test_release_bundle_rejects_malformed_copied_native_evm_summary_before_render",
             "test_release_bundle_rejects_blocked_copied_native_evm_summary_before_render",
             "test_release_bundle_rejects_malformed_copied_native_evm_artifacts_before_render",
@@ -6998,6 +7038,8 @@ SCCP_RELEASE_NATIVE_PROVER_BUNDLE_SCHEMA_MARKERS = (
         (
             "test_release_readiness_report_guards_release_native_prover_bundle_schema_gate_inventory",
             "test_release_readiness_report_blocks_missing_release_native_prover_bundle_schema_gate",
+            "test_release_readiness_report_blocks_wasm_or_remote_native_evm_prover_bundle",
+            "native_bundle_boolean_exactness_cases = (",
             "test_release_readiness_report_blocks_native_evm_prover_unknown_root_and_audit_fields",
             "test_release_readiness_report_blocks_native_evm_prover_malformed_unknown_field_names",
             "test_release_readiness_report_blocks_native_evm_prover_malformed_duplicate_json_keys",
@@ -12082,6 +12124,29 @@ def _active_launch_evm_live_metadata_blockers(
     return blockers
 
 
+def _active_launch_source_record_hash_role_blockers(
+    lane_label: str,
+    source_hashes: dict[str, Any],
+    evidence_label: str,
+) -> list[str]:
+    """Return blockers for reused active-launch source record hash roles."""
+
+    source_verifier_material_hash = source_hashes.get("source_verifier_material_hash")
+    source_adapter_engine_deployment_hash = source_hashes.get(
+        "source_adapter_engine_deployment_hash"
+    )
+    if (
+        _is_nonzero_hex32(source_verifier_material_hash)
+        and _is_nonzero_hex32(source_adapter_engine_deployment_hash)
+        and source_verifier_material_hash == source_adapter_engine_deployment_hash
+    ):
+        return [
+            f"{lane_label}: {evidence_label} source verifier material hash must "
+            "not reuse source adapter engine deployment hash"
+        ]
+    return []
+
+
 def _active_launch_route_canary_metadata_blockers(
     lane_label: str,
     canary: dict[str, Any],
@@ -12155,6 +12220,13 @@ def _active_launch_governed_deployment_metadata_blockers(
                 f"{lane_label}: governed deployment {field_label} must be a "
                 "canonical non-zero bytes32 hex string"
             )
+    blockers.extend(
+        _active_launch_source_record_hash_role_blockers(
+            lane_label,
+            source_hashes,
+            "governed deployment",
+        )
+    )
 
     destination_binding = lane.get("destination_binding")
     if not isinstance(destination_binding, dict):
@@ -12275,6 +12347,13 @@ def _active_launch_route_allowlist_binding_blockers(
                 f"{lane_label}: route allowlist {field_label} must be a canonical "
                 "non-zero bytes32 hex string"
             )
+    blockers.extend(
+        _active_launch_source_record_hash_role_blockers(
+            lane_label,
+            source_hashes,
+            "route allowlist",
+        )
+    )
     if not _is_nonzero_hex32(destination_binding.get("destination_binding_hash")):
         blockers.append(
             f"{lane_label}: route allowlist destination binding hash must be a "

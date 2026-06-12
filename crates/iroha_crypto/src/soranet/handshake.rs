@@ -39,7 +39,7 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
 use zeroize::Zeroizing;
 
-use crate::{KeyPair, SessionKey};
+use crate::{KeyPair, SessionKey, kex::is_x25519_low_order_public_key};
 
 /// Domain separation tag for transcript hashing.
 const TRANSCRIPT_DOMAIN: &[u8] = b"soranet.transcript.v1";
@@ -60,7 +60,6 @@ const ED25519_SIGNATURE_LEN: usize = 64;
 const NOISE_SECRET_LEN: usize = 32;
 const NOISE_PADDING_BLOCK: usize = 1024;
 const TRANSCRIPT_BINDING_LEN: usize = 32;
-const X25519_LOW_ORDER_CHECK_SECRET: [u8; NOISE_SECRET_LEN] = [1_u8; NOISE_SECRET_LEN];
 
 const STEP_NOTE_HYBRID_INIT: &str = "Client sends NK2 hybrid init";
 const STEP_NOTE_HYBRID_RESPONSE: &str = "Relay completes NK2 hybrid handshake";
@@ -4922,12 +4921,7 @@ fn decode_noise_public_key(
 
 fn noise_public_key_is_low_order(public: &[u8; NOISE_SECRET_LEN]) -> bool {
     let public_key = X25519PublicKey::from(*public);
-    let probe_secret = StaticSecret::from(X25519_LOW_ORDER_CHECK_SECRET);
-    probe_secret
-        .diffie_hellman(&public_key)
-        .as_bytes()
-        .iter()
-        .all(|&byte| byte == 0)
+    is_x25519_low_order_public_key(&public_key)
 }
 
 struct MessageCursor<'a> {

@@ -987,6 +987,8 @@ and completed history lives in [`status.md`](./status.md).
   compatibility lane.
   Torii OpenAPI SCCP discovery descriptions must carry the same no-support
   sentence so relayers see the exclusion before reading proof manifests.
+  Release-readiness and strict bundle source inventories now pin both Torii
+  OpenAPI SCCP capability/manifest descriptions to that sentence.
   The retired-network surface guard must require explicit no-support
   launch-scope wording in each launch-scope file, including the exact escaped
   Sub&#115;trate/Pol&#107;adot no-support sentence.
@@ -1061,7 +1063,10 @@ and completed history lives in [`status.md`](./status.md).
   and destination chain ids in readiness summaries are decimal-only (`1` for
   Ethereum mainnet, `56` for BSC mainnet), so JSON-RPC quantity spellings such
   as `0x1`, leading-zero values such as `01`, whitespace-padded values, and
-  numeric JSON values remain evidence blockers.
+  plus-signed, decimal-looking, Unicode-confusable, or numeric JSON values
+  remain evidence blockers. The readiness-report and strict bundle tests also
+  mutate source and destination metadata independently so one canonical side
+  cannot hide the other side's drift.
 - SCCP Ethereum source-event context inventory must keep the Rust EVM receipt
   duplicate matching-log rejection pinned alongside receipt-log RPC context
   checks, so one source receipt cannot satisfy admission with multiple matching
@@ -1249,6 +1254,9 @@ and completed history lives in [`status.md`](./status.md).
   record flag is boolean `true` with no unknown record fields. Stringified
   domain ids, padded chain labels, and stringified production-ready flags are
   pinned as adversarial blockers in both readiness and strict bundle tests.
+  Required record flags must also reject copied truthy strings, numeric values,
+  `false`, and missing/null values in both readiness and strict bundle
+  recomputation.
   Unknown required-record summary keys must be schema-classified before checklist text
   is rendered, preserving safe operator diagnostics while padded,
   control-character, whitespace, Markdown-unsafe, malformed, or
@@ -1563,18 +1571,24 @@ and completed history lives in [`status.md`](./status.md).
   canonical: release notes cannot report the governed deployment ready unless
   the normalized source-material, source-deployment, destination-binding, and
   recomputed expected destination-binding hashes are canonical non-zero bytes32
-  values, the supplied binding hash matches the expected value, and the active
-  EVM source-adapter gate summary remains explicitly not required with empty
-  gate metadata. Readiness and strict bundle source-inventory tests must keep
-  the required, gate-hash, and audit-hash source-adapter gate blockers pinned.
+  values, the supplied binding hash matches the expected value, the expected
+  match flag is exact boolean `true`, and source-material/source-deployment
+  record hashes remain role-separated. The active EVM source-adapter gate
+  summary must remain explicitly not required with empty gate metadata.
+  Readiness and strict bundle source-inventory tests must keep the exact flag,
+  role-reuse, required, gate-hash, and audit-hash source-adapter gate blockers
+  pinned.
 - SCCP active-launch route-allowlist readiness metadata must stay canonical:
   release notes cannot report the launch route binding ready unless the
   normalized source-material, source-deployment, destination-binding,
   route-allowlist, and recomputed expected route-allowlist hashes are canonical
   non-zero bytes32 values and the route hash matches the expected binding tuple.
+  The expected-match flag must be exactly boolean `true`, and the strict bundle
+  verifier must reject source verifier material/source-adapter deployment hash
+  role reuse for the route-allowlist item just as the readiness generator does.
   Source-inventory tests must keep the recomputed route-hash mismatch,
-  expected-match-flag, and adversarial `route_allowlist.hash_mismatch` markers
-  pinned.
+  exact expected-match-flag, source-record role-reuse, and adversarial
+  `route_allowlist.hash_mismatch` markers pinned.
 - SCCP active-launch route-canary readiness metadata must stay canonical:
   release notes cannot report the launch lane ready unless the EVM
   `MessageProofAccepted` evidence source, non-zero transaction hash, finalized
@@ -1583,6 +1597,20 @@ and completed history lives in [`status.md`](./status.md).
   The route-canary evidence source must first be a non-empty canonical string:
   missing, non-string, empty, or whitespace-padded values are release blockers
   before the exact `evm_message_proof_accepted_transaction` source match runs.
+  Route-canary `status` must also be exactly `passed`; missing, empty, padded,
+  or non-string status values remain live-route-canary blockers in readiness and
+  strict bundle recomputation.
+  Route-canary evidence hash, transaction hash, receipt block hash, block
+  receipts root, and message id must all be canonical lowercase non-zero `0x`
+  bytes32 strings; missing, zero, uppercase, or non-string values remain
+  live-route-canary blockers in readiness and strict bundle recomputation.
+  Route-canary receipt block numbers must also stay exact positive integers:
+  numeric-looking strings, hex text, plus-signed text, Unicode-confusable text,
+  and booleans are release blockers, and `receipt_block_finalized` must be
+  exactly boolean `true`. `evidence_bound` must also be exact boolean `true`;
+  copied truthy strings, numeric values, false, and missing/null flags must
+  remain live-route-canary blockers in readiness and strict bundle
+  recomputation.
   Source-inventory tests must also keep the transaction hash, receipt-block
   hash/root, message-id, positive block-number, finalized-block, and adversarial
   block-receipts-root markers pinned.
@@ -1993,6 +2021,10 @@ and completed history lives in [`status.md`](./status.md).
   Published readiness-report `native_evm_prover_bundle` summaries must enforce
   the same malformed root and `audit_hashes` field-name policy after bundle
   generation, so rehashed report JSON cannot bypass the native manifest gate.
+  Native prover bundle booleans must remain exact: `no_wasm` is accepted only
+  as boolean `true`, and `remote_prover_required` is accepted only as boolean
+  `false`, with string, numeric, null, and missing variants pinned as blockers
+  in readiness and strict verifier tests.
   The bundle builder must reject copied non-empty native summary extra fields,
   noncanonical validation blocker lists, passed summaries with blockers,
   malformed artifact rows, noncanonical proof/key/destination hash text,
@@ -2052,7 +2084,9 @@ and completed history lives in [`status.md`](./status.md).
 - SCCP release readiness reports now also promote the native EVM Groth16 prover
   bundle schema to a production gate: manifest schema checks, readiness summary
   schema checks, artifact hash/path binding, and bundled-manifest drift
-  rejection must remain pinned before public bundle readiness can pass. The
+  rejection must remain pinned before public bundle readiness can pass. Native
+  no-WASM/no-remote manifest flags must be exact booleans, not truthy or falsy
+  scalar substitutes. The
   release bundle builder must also compare copied public artifact rows against
   the copied file byte lengths and SHA-256 hashes before Markdown rendering or
   public JSON writes, so forged input, corridor, or native artifact hashes cannot
@@ -3333,9 +3367,10 @@ and completed history lives in [`status.md`](./status.md).
   internally inconsistent ML-DSA secrets return `KeyGen` instead of panicking;
   `KeyPair::try_from_seed`, `KeyPair::try_random`, and
   `KeyPair::try_random_with_algorithm` give ML-DSA/GOST/SM2/BLS key generation
-  non-panicking routes, with ML-DSA seeded-keygen HKDF expansion now propagated
-  as `Error::KeyGen` instead of relying on a panic-only assertion and the S2
-  nonce offset conversion using the same `Error::KeyGen` route, and GOST
+  non-panicking routes, with ML-DSA seeded-keygen rejecting non-empty all-zero
+  seed material before HKDF, HKDF expansion now propagated as `Error::KeyGen`
+  instead of relying on a panic-only assertion, and the S2 nonce offset
+  conversion using the same `Error::KeyGen` route, and GOST
   deterministic nonce generation now feeds the domain tag, private scalar,
   message scalar, and optional extra entropy into HMAC-Streebog as separate
   components while preserving the previous contiguous seed transcript, and
@@ -3401,12 +3436,17 @@ and completed history lives in [`status.md`](./status.md).
   signing now use `Signature::try_new` and propagate contextual `eyre` errors
   through the emission `Result` path;
   GOST random scalar sampling and per-signature extra entropy now also use
-  checked OS fills, while both BLS backends derive random keys from checked OS
-  seed material and the default w3f backend seeds its key-splitting/signing RNGs
-  only after checked OS fills, leaving the compatibility `os_rng()` adapter
+  checked OS fills, and GOST deterministic key generation rejects non-empty
+  all-zero seed material before scalar sampling, while both BLS backends derive
+  random keys from checked OS
+  seed material after rejecting all-zero OS seed output and the default w3f
+  backend seeds its key-splitting/signing RNGs only after checked OS fills,
+  leaving the compatibility `os_rng()` adapter
   test-only. SM2 top-level random key generation now routes through
   `Sm2PrivateKey::try_random`, fallible `TryCryptoRng` byte draws, and bounded
-  scalar validation before returning key material; P2P SoraNet runtime
+  scalar validation before returning key material, while SM2 deterministic seed
+  derivation rejects non-empty all-zero seed material and validates
+  distinguishing identifiers before hashing candidates; P2P SoraNet runtime
   handshakes now seed their local `StdRng`
   through `SeedableRng::try_from_os_rng` and surface entropy-source failures as
   `HandshakeSoranet` instead of panicking; Taikai ingest-edge drift jitter now
@@ -3462,7 +3502,9 @@ and completed history lives in [`status.md`](./status.md).
   wrapper no longer falls back to an empty private-key payload if checked export
   fails; secp256k1 message signing now exposes
   `try_sign` and routes `Signature::try_new` through the fallible helper,
-  direct secp256k1 verification maps malformed and all-zero compact signatures
+  deterministic secp256k1 key generation now rejects explicit all-zero
+  32-byte seed material before DRBG expansion, direct secp256k1 verification
+  maps malformed and all-zero compact signatures
   to `Error::BadSignature`, the compatibility `sign` helper no longer falls
   back to an empty signature if checked signing fails, and
   secp256k1 recoverable prehash signing now checks the low-S recovery-id parity
@@ -3491,6 +3533,8 @@ and completed history lives in [`status.md`](./status.md).
   SoraNet PQ ML-DSA helpers now apply the same secret-key consistency check to
   direct validation and direct/OS-backed signing, reject all-zero standalone
   public-key, secret-key, and detached-signature material before backend use,
+  reject all-zero deterministic `HedgedRngSeed` material before seeded keygen,
+  reject all-zero caller/OS seed draws before `*_from_rng` keygen or signing,
   and expose fallible public-key reconstruction from secret material. SoraNet PQ
   labeled-HKDF derivation now streams the namespace, separator, label,
   separator, and context components through `expand_multi_info`, preserving the
@@ -3517,8 +3561,9 @@ and completed history lives in [`status.md`](./status.md).
   after removing an unused panic-only secret-key wrapper. The default w3f BLS
   backend also exposes fallible secret reload, signing, and public-key
   derivation helpers, both BLS backends expose checked keypair generation, the
-  public backend helper names `keypair` and `sign` now return `Result`, and the
-  w3f stored-secret `public_key` helper is fallible too.
+  public backend helper names `keypair` and `sign` now return `Result`, both
+  backends reject non-empty all-zero deterministic seed material before deriving
+  a secret, and the w3f stored-secret `public_key` helper is fallible too.
   `KeyPair::try_random_with_algorithm`, `KeyPair::try_from_seed`,
   `Signature::try_new`, BLS PoP proving, and `PublicKey::from_private_key` now
   route through checked BLS paths so corrupted stored secret bytes become
@@ -3697,13 +3742,16 @@ and completed history lives in [`status.md`](./status.md).
 	  material, returning labelled `HarnessError::RandomBytes` failures.
   SoraNet PoW and Argon2 puzzle ticket minting now also use fallible
   `TryCryptoRng` draws and preserve labelled nonce-generation failures
-  through `MintError::RandomBytes` and the p2p challenge wrapper.
+  through `MintError::RandomBytes` and the p2p challenge wrapper, with
+  all-zero nonce draws rejected as inert random material.
   SoraNet admission-token minting and SoraFS proof-token minting now also use
   fallible `TryCryptoRng` draws and return labelled `MintError::RandomBytes`
-  failures for admission-token nonce and proof-token id generation.
+  failures for admission-token nonce and proof-token id generation, including
+  all-zero random draws.
   SoraNet request blinding nonce generation now also accepts fallible
   `TryCryptoRng` inputs and reports entropy failures through
-  `BlindingError::RandomBytes`.
+  `BlindingError::RandomBytes`, while all-zero generated nonces fail through
+  the existing weak-input gate.
   P2P handshake hello construction now also extracts local peer key metadata
   through checked accessors and reports malformed local keys through a
   dedicated handshake error, while multisig members expose a fallible
@@ -3743,8 +3791,10 @@ and completed history lives in [`status.md`](./status.md).
 	  clearing the targeted BLS formatter compatibility-accessor scan for both
 	  backends.
 	  X25519 public-key decoders for the hybrid KEM and standalone key exchange now
-	  reject low-order encodings before ECDH, while retaining shared-secret checks
-	  as defense in depth, and X25519 session-key derivation now maps HKDF expansion
+	  reject low-order encodings before ECDH through the shared standalone X25519
+	  predicate, with standalone regressions covering every distinct
+	  dalek-torsion-derived Montgomery encoding while retaining shared-secret
+	  checks as defense in depth, and X25519 session-key derivation now maps HKDF expansion
   failures through the shared-secret `Result` path instead of using a panic-only
   assertion. SoraNet PQ ML-KEM key generation now exposes checked direct and
   seeded constructors, routes OS-backed keygen through key-pair validation, and
@@ -3756,7 +3806,11 @@ and completed history lives in [`status.md`](./status.md).
   before key, ciphertext, or AEAD nonce material is emitted. The public
   direct and seeded
   `generate_mlkem_keypair*` wrappers now return `Result` instead of panicking
-  after validation. Nonzero PQClean ML-KEM backend statuses now
+  after validation, and deterministic ML-KEM keygen/encapsulation reject
+  all-zero `HedgedRngSeed` material before seeded RNG construction while
+  ML-KEM caller/OS seed draws reject all-zero material before `*_from_rng`
+  keygen or encapsulation and seeded encapsulation preserves invalid-public-key
+  preflight order. Nonzero PQClean ML-KEM backend statuses now
   surface as `MlKemError::BackendFailure` through keygen, encapsulation, and
   decapsulation `Result` paths instead of panic-only assertions, and ML-KEM
   12-bit coefficient validators now reject partial byte groups as
@@ -5325,6 +5379,7 @@ and completed history lives in [`status.md`](./status.md).
 	  RBC delivered-pending named NewView-vote split,
 	  RBC delivered-pending named proposal handoff,
 	  RBC delivered-pending named GST preservation,
+	  RBC delivered-pending named exact action-branch classifier,
 	  RBC delivered-pending commit-vote preservation handoff,
 	  RBC delivered-pending commit-vote finality handoff,
 	  RBC delivered-pending prepare-vote handoff,
@@ -7798,6 +7853,13 @@ operator-provided rollout bundles.
   source/deployment role-hash separation before returning canonical record
   hashes, keeping live collectors and programmatic governance tooling aligned
   with TOML rendering and all-lanes preflight.
+  BSC deployment-bound facade regressions now build coherent alternate
+  production-ready source material/deployment pairs for source trust anchor,
+  consensus, message-inclusion, finality-policy, governed source bridge emitter
+  address/runtime code hash, and deployment-receipt replay, then require the
+  original proof, local-admission artifact, bundle extraction, and any
+  post-construction evidence splice to fail against those alternate EVM-family
+  deployments.
   JavaScript, Python, Swift,
   Kotlin, and Java Android SDKs now derive the same canonical source-material
   and source-adapter deployment record bytes/hashes for portal and mobile proof
@@ -11667,6 +11729,20 @@ or ABI behavior.
   supplied public input bounds before rejecting zero-round requests, so
   oversized input-bound metadata cannot be hidden by invalid direct refresh
   counts.
+  Bounded full-bootstrap linear-transform, raw-sample, and sample-switch bound
+  propagation now preflights public artifact metadata before rounded-capacity
+  errors while keeping full switch-key entry validation after the capacity
+  gate.
+  Direct no-artifact bounded full-bootstrap execution and bound helpers now
+  preflight FullBootstrapV1 key/material metadata before rounded-capacity
+  errors, and artifact-aware bounded full-bootstrap prefix execution/bound
+  helpers share that key/material preflight before concrete artifact or
+  ciphertext validation.
+  Bounded raw-sample coefficient-zero repack and owner diagnostic helpers now
+  reject malformed raw-sample metadata before rounded-capacity errors.
+  Bounded raw-sample extraction and sample-switch execution helpers now do the
+  same for sample/key metadata and key/sample consistency before inspecting
+  ciphertexts or full switch-key entries.
   Bootstrap refresh execution now also validates public key metadata plus
   requested round index/count before full refresh-key ciphertext shape across
   scalar, bounded-noise, direct RNS, and registered RNS paths, so malformed

@@ -1010,7 +1010,14 @@ fn fill_random<R: TryCryptoRng>(
         .map_err(|err| MintError::RandomBytes {
             operation,
             message: err.to_string(),
-        })
+        })?;
+    if dest.iter().all(|&byte| byte == 0) {
+        return Err(MintError::RandomBytes {
+            operation,
+            message: "rng returned all-zero material".to_owned(),
+        });
+    }
+    Ok(())
 }
 
 /// Errors surfaced while decoding a token frame.
@@ -1218,6 +1225,29 @@ mod tests {
     }
 
     impl TryCryptoRng for FailingTryRng {}
+
+    struct FixedTryRng {
+        byte: u8,
+    }
+
+    impl TryRngCore for FixedTryRng {
+        type Error = core::convert::Infallible;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok(u32::from_le_bytes([self.byte; 4]))
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok(u64::from_le_bytes([self.byte; 8]))
+        }
+
+        fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Self::Error> {
+            dest.fill(self.byte);
+            Ok(())
+        }
+    }
+
+    impl TryCryptoRng for FixedTryRng {}
 
     #[test]
     fn signing_body_matches_legacy_contiguous_layout() {
@@ -1712,6 +1742,23 @@ mod tests {
                 assert!(message.contains("failing admission token RNG"));
             }
             other => panic!("expected RNG failure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fill_random_rejects_all_zero_nonce_material() {
+        let mut rng = FixedTryRng { byte: 0 };
+        let mut nonce = [0u8; 16];
+
+        let err = fill_random(&mut rng, "minting admission token nonce", &mut nonce)
+            .expect_err("all-zero token nonce material must fail");
+
+        match err {
+            MintError::RandomBytes { operation, message } => {
+                assert_eq!(operation, "minting admission token nonce");
+                assert!(message.contains("all-zero material"));
+            }
+            other => panic!("expected all-zero nonce RandomBytes error, got {other:?}"),
         }
     }
 

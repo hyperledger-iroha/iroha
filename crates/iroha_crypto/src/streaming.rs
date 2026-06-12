@@ -32,7 +32,7 @@ use zeroize::Zeroizing;
 
 use crate::{
     Algorithm, KeyPair, PrivateKey, PublicKey, SessionKey, Signature,
-    signature::ed25519::Ed25519Sha512,
+    kex::is_x25519_low_order_public_key, signature::ed25519::Ed25519Sha512,
 };
 
 const SNAPSHOT_KEY_DOMAIN: &[u8] = b"iroha.streaming.snapshot-key";
@@ -44,7 +44,6 @@ const FEC_WINDOW_CHUNKS: u32 = 12;
 const MAX_PARITY_CHUNKS: u8 = 6;
 const MAX_LOSS_PERCENT_X100: u16 = 10_000;
 const FEEDBACK_MAX_LOSS_Q16: u32 = 1u32 << FEEDBACK_FP_SHIFT;
-const X25519_LOW_ORDER_CHECK_SECRET: [u8; 32] = [1u8; 32];
 const GROUP_CONTENT_KEY_LEN: usize = 32;
 /// Default ML-KEM suite used for streaming key material when no explicit override is configured.
 pub const STREAMING_DEFAULT_KEM_SUITE: MlKemSuite = MlKemSuite::MlKem768;
@@ -574,9 +573,7 @@ impl X25519Ephemeral {
 
 fn decode_x25519_ephemeral_public_key(bytes: [u8; 32]) -> Result<X25519PublicKey, HandshakeError> {
     let public_key = X25519PublicKey::from(bytes);
-    let check_secret = StaticSecret::from(X25519_LOW_ORDER_CHECK_SECRET);
-    let check_shared = check_secret.diffie_hellman(&public_key);
-    if check_shared.as_bytes().iter().all(|byte| *byte == 0) {
+    if is_x25519_low_order_public_key(&public_key) {
         return Err(HandshakeError::InvalidX25519EphemeralPublicKey);
     }
     Ok(public_key)

@@ -65,6 +65,7 @@ pub mod mldsa65 {
     }
 
     pub fn keypair_from_seed(seed: &[u8]) -> Result<(PublicKey, PrivateKey), Error> {
+        validate_seed_material_not_all_zero(seed)?;
         let seed_material = derive_seed_material(seed)?;
         keypair_from_seed_material(&seed_material)
     }
@@ -169,6 +170,15 @@ pub mod mldsa65 {
         kdf.expand(HKDF_INFO, out.as_mut())
             .map_err(|_| Error::KeyGen(String::from("ML-DSA HKDF seed expansion failed")))?;
         Ok(out)
+    }
+
+    fn validate_seed_material_not_all_zero(seed: &[u8]) -> Result<(), Error> {
+        if !seed.is_empty() && seed.iter().all(|&byte| byte == 0) {
+            return Err(Error::KeyGen(String::from(
+                "ML-DSA seed material must not be all zero",
+            )));
+        }
+        Ok(())
     }
 
     #[allow(unsafe_code)]
@@ -348,6 +358,15 @@ pub mod mldsa65 {
             let recovered = public_key_from_secret(&secret).expect("recover public key");
 
             assert_eq!(public, recovered);
+        }
+
+        #[test]
+        fn seeded_keypair_rejects_all_zero_seed_material() {
+            match keypair_from_seed(&[0u8; 32]) {
+                Err(Error::KeyGen(message)) => assert!(message.contains("all zero")),
+                Err(err) => panic!("expected all-zero seed KeyGen error, got {err:?}"),
+                Ok(_) => panic!("all-zero ML-DSA seed material must fail"),
+            }
         }
 
         #[test]

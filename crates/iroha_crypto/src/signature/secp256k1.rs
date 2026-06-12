@@ -220,7 +220,7 @@ mod ecdsa_secp256k1 {
     use rand_core::TryRngCore;
     use sha2::Digest as _;
     use sha3::Keccak256;
-    use zeroize::Zeroizing;
+    use zeroize::{Zeroize as _, Zeroizing};
 
     use super::{PrivateKey, PublicKey};
     use crate::{Error, KeyGenOption, ParseError, rng::rng_from_seed};
@@ -238,7 +238,13 @@ mod ecdsa_secp256k1 {
             let signing_key = match option {
                 #[cfg(feature = "rand")]
                 KeyGenOption::Random => Self::random_private_key()?,
-                KeyGenOption::UseSeed(seed) => {
+                KeyGenOption::UseSeed(mut seed) => {
+                    if seed.len() == 32 && seed.iter().all(|&byte| byte == 0) {
+                        seed.zeroize();
+                        return Err(Error::KeyGen(
+                            "secp256k1 seed material must not be all zero".into(),
+                        ));
+                    }
                     let mut rng = rng_from_seed(seed);
                     PrivateKey::random(&mut rng)
                 }
@@ -422,6 +428,16 @@ mod test {
         let signature = EcdsaSecp256k1Sha256::sign(message, &private);
 
         EcdsaSecp256k1Sha256::verify(message, &signature, &public).expect("signature verifies");
+    }
+
+    #[test]
+    fn secp256k1_try_keypair_rejects_all_zero_seed_material() {
+        let err = EcdsaSecp256k1Sha256::try_keypair(KeyGenOption::UseSeed(vec![0u8; 32]))
+            .expect_err("all-zero seed material must fail");
+        assert!(matches!(
+            err,
+            Error::KeyGen(message) if message.contains("all zero")
+        ));
     }
 
     #[cfg(feature = "crypto-parity-tests")]

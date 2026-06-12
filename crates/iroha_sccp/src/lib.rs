@@ -68180,9 +68180,9 @@ mod tests {
         for (label, replay) in replayed_bsc_deployments {
             let (replayed_material, replayed_deployment) = build_replayed_bsc_deployment(replay);
             assert_ne!(
-                sccp_source_verifier_material_hash(&replayed_material),
-                sccp_source_verifier_material_hash(&material),
-                "BSC replay fixture for {label} must use distinct source material"
+                sccp_source_adapter_engine_deployment_hash(&replayed_deployment),
+                sccp_source_adapter_engine_deployment_hash(&deployment),
+                "BSC replay fixture for {label} must use a distinct deployment"
             );
             assert!(
                 !sccp_source_chain_proof_matches_adapter_deployment(&proof, &replayed_deployment),
