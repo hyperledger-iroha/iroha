@@ -946,6 +946,98 @@ def _source_adapter_gate_semantic_errors(
     return errors
 
 
+def _cryptographic_evidence_source_adapter_gate_bundle_errors(
+    label: str,
+    payload: dict[str, Any],
+    audit_hashes: Any,
+) -> list[str]:
+    domain = payload.get("domain")
+    required = payload.get("source_adapter_gate_required")
+    gate_hash = payload.get("source_adapter_gate_hash")
+    if type(required) is not bool:
+        return []
+
+    errors: list[str] = []
+    expected_audit_keys = (
+        _source_adapter_gate_audit_keys_by_domain().get(domain)
+        if type(domain) is int
+        else None
+    )
+    if required:
+        if expected_audit_keys is None:
+            errors.append(
+                f"{label} source_adapter_gate_required must be false for this domain"
+            )
+        if not _is_nonzero_bytes32_hex_text(gate_hash):
+            errors.append(
+                f"{label} source_adapter_gate_hash must be a non-zero canonical "
+                "bytes32 hex string when required"
+            )
+        semantic_audit_hashes: dict[str, Any] = {}
+        if isinstance(audit_hashes, dict):
+            audit_label = f"{label} source_adapter_gate_audit_hashes"
+            for audit_key, audit_hash in audit_hashes.items():
+                if _source_adapter_gate_audit_key_error(audit_key, audit_label) is not None:
+                    continue
+                semantic_audit_hashes[audit_key] = audit_hash
+                if not _is_nonzero_bytes32_hex_text(audit_hash):
+                    errors.append(
+                        f"{audit_label} {audit_key} must be a non-zero canonical "
+                        "bytes32 hex string"
+                    )
+            if expected_audit_keys is not None:
+                for key in sorted(set(semantic_audit_hashes) - expected_audit_keys):
+                    errors.append(
+                        f"{audit_label} contains unexpected field: {key}"
+                    )
+                for key in sorted(expected_audit_keys - set(semantic_audit_hashes)):
+                    errors.append(f"{audit_label} missing field: {key}")
+        if not semantic_audit_hashes:
+            errors.append(
+                f"{label} source_adapter_gate_audit_hashes must not be empty "
+                "when required"
+            )
+        if (
+            _is_nonzero_bytes32_hex_text(gate_hash)
+            and semantic_audit_hashes
+            and gate_hash not in set(semantic_audit_hashes.values())
+        ):
+            errors.append(
+                f"{label} source_adapter_gate_hash must match one "
+                "source_adapter_gate_audit_hashes value"
+            )
+        expected_gate_key = (
+            _source_adapter_gate_hash_key_by_domain().get(domain)
+            if type(domain) is int
+            else None
+        )
+        expected_gate_hash = semantic_audit_hashes.get(expected_gate_key)
+        if (
+            expected_gate_key is not None
+            and _is_nonzero_bytes32_hex_text(gate_hash)
+            and _is_nonzero_bytes32_hex_text(expected_gate_hash)
+            and gate_hash != expected_gate_hash
+        ):
+            errors.append(
+                f"{label} source_adapter_gate_hash must match "
+                f"source_adapter_gate_audit_hashes.{expected_gate_key}"
+            )
+    else:
+        if expected_audit_keys is not None:
+            errors.append(
+                f"{label} source_adapter_gate_required must be true for this domain"
+            )
+        if gate_hash not in (None, ""):
+            errors.append(
+                f"{label} source_adapter_gate_hash must be empty when gate is not required"
+            )
+        if audit_hashes:
+            errors.append(
+                f"{label} source_adapter_gate_audit_hashes must be empty when gate is not required"
+            )
+    return errors
+
+
 def _route_canary_common_semantic_errors(
     label: str,
     lane: dict[str, Any],
@@ -2014,6 +2106,52 @@ def _optional_integer_field_errors(
     return []
 
 
+def _optional_u32_integer_field_errors(
+    label: str,
+    payload: dict[str, Any],
+    field: str,
+    *,
+    positive: bool,
+) -> list[str]:
+    if field not in payload or payload.get(field) is None:
+        return []
+    value = payload.get(field)
+    if type(value) is int and value > 0xFFFF_FFFF:
+        if field == "route_canary_receipt_block_number" and positive:
+            return [
+                f"{label} route_canary_receipt_block_number must be null or a positive u32 integer"
+            ]
+        if positive:
+            return [f"{label} {field} must be null or a positive u32 integer"]
+        return [f"{label} {field} must be null or a non-negative u32 integer"]
+    return []
+
+
+def _optional_u64_integer_field_errors(
+    label: str,
+    payload: dict[str, Any],
+    field: str,
+    *,
+    positive: bool,
+) -> list[str]:
+    if field not in payload or payload.get(field) is None:
+        return []
+    value = payload.get(field)
+    if type(value) is int and value > 0xFFFF_FFFF_FFFF_FFFF:
+        if field == "route_canary_block_number" and positive:
+            return [
+                f"{label} route_canary_block_number must be null or a positive u64 integer"
+            ]
+        if field == "route_canary_block_timestamp" and not positive:
+            return [
+                f"{label} route_canary_block_timestamp must be null or a non-negative u64 integer"
+            ]
+        if positive:
+            return [f"{label} {field} must be null or a positive u64 integer"]
+        return [f"{label} {field} must be null or a non-negative u64 integer"]
+    return []
+
+
 def _string_field_errors(
     label: str,
     payload: dict[str, Any],
@@ -2108,8 +2246,8 @@ def _artifact_row_errors(row: Any, label: str) -> list[str]:
             ):
                 errors.append(f"{label} path is not canonical")
     bytes_value = artifact.get("bytes")
-    if type(bytes_value) is not int or bytes_value < 0:
-        errors.append(f"{label} bytes must be a non-negative integer")
+    if type(bytes_value) is not int or bytes_value <= 0:
+        errors.append(f"{label} bytes must be a positive integer")
     if not _is_canonical_sha256_text(artifact.get("sha256")):
         errors.append(f"{label} sha256 must be a canonical SHA-256 hex string")
     return errors
@@ -2154,8 +2292,8 @@ def _native_evm_artifact_summary_errors(row: Any, label: str) -> list[str]:
             ):
                 errors.append(f"{label} path is not canonical")
     bytes_value = artifact.get("bytes")
-    if type(bytes_value) is not int or bytes_value < 0:
-        errors.append(f"{label} bytes must be a non-negative integer")
+    if type(bytes_value) is not int or bytes_value <= 0:
+        errors.append(f"{label} bytes must be a positive integer")
     if not _is_canonical_sha256_text(artifact.get("sha256")):
         errors.append(f"{label} sha256 must be a canonical SHA-256 hex string")
     return errors
@@ -2744,6 +2882,26 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
         errors.append(
             f"{label} route_canary_receipt_block_finalized must be true, false, or null"
         )
+    has_evm_route_canary_evidence = payload.get("domain") in {1, 2} and bool(
+        payload.get("route_canary_evidence_hash")
+    )
+    if has_evm_route_canary_evidence:
+        expected_source = _route_canary_source_by_domain().get(payload.get("domain"))
+        if payload.get("route_canary_evidence_source") != expected_source:
+            errors.append(
+                f"{label} route_canary_evidence_source must be {expected_source} "
+                "for finalized EVM route canary evidence"
+            )
+        if payload.get("route_canary_evidence_bound") is not True:
+            errors.append(
+                f"{label} route_canary_evidence_bound must be true for finalized "
+                "EVM route canary evidence"
+            )
+        if payload.get("route_canary_receipt_block_finalized") is not True:
+            errors.append(
+                f"{label} route_canary_receipt_block_finalized must be true for "
+                "finalized EVM route canary evidence"
+            )
     for field in (
         "source_verifier_material_hash",
         "source_adapter_engine_deployment_hash",
@@ -2766,6 +2924,14 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
         )
     )
     errors.extend(
+        _optional_u32_integer_field_errors(
+            label,
+            payload,
+            "route_canary_receipt_block_number",
+            positive=True,
+        )
+    )
+    errors.extend(
         _optional_integer_field_errors(
             label,
             payload,
@@ -2774,7 +2940,23 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
         )
     )
     errors.extend(
+        _optional_u64_integer_field_errors(
+            label,
+            payload,
+            "route_canary_block_number",
+            positive=True,
+        )
+    )
+    errors.extend(
         _optional_integer_field_errors(
+            label,
+            payload,
+            "route_canary_block_timestamp",
+            positive=False,
+        )
+    )
+    errors.extend(
+        _optional_u64_integer_field_errors(
             label,
             payload,
             "route_canary_block_timestamp",
@@ -2802,6 +2984,13 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
                     errors.append(
                         f"{audit_label} {audit_key} must be a canonical bytes32 hex string"
                     )
+    errors.extend(
+        _cryptographic_evidence_source_adapter_gate_bundle_errors(
+            label,
+            payload,
+            audit_hashes,
+        )
+    )
     return errors
 
 
@@ -3161,6 +3350,18 @@ def _submission_surface_binding_bundle_errors(
             errors.append(
                 f"{label}.user_prover_submission_surfaces on_chain_submission "
                 f"must match expected submission text for lanes {lanes}"
+            )
+        required_phases = surface.get("required_phases")
+        expected_required_phases = expected.get("required_phases")
+        if (
+            isinstance(required_phases, list)
+            and isinstance(expected_required_phases, list)
+            and all(isinstance(phase, str) for phase in required_phases)
+            and required_phases != expected_required_phases
+        ):
+            errors.append(
+                f"{label}.user_prover_submission_surfaces "
+                f"required_phases must match expected phases for lanes {lanes}"
             )
         helper_sets = surface.get("sdk_helper_symbols_by_sdk")
         expected_helper_sets = expected.get("sdk_helper_symbols_by_sdk")

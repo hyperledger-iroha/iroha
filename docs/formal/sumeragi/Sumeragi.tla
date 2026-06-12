@@ -11000,6 +11000,46 @@ DeliveredPendingCompleteWaitStateGstElapsedStepKeepsWaitStateStep ==
     /\ ~RbcDeliverGoodEnabled'
     /\ ~ByzantineFaultEnabled'
 
+DeliveredPendingCompleteWaitStateNextStepMatchesNamedActionBranchStep ==
+  (/\ DeliveredPendingCompleteWaitState
+   /\ [Next]_vars
+   /\ Next) =>
+    /\ DeliveredPendingCompleteWaitStateSpecStepClosesStep
+    /\ RbcDeliveredPendingNextStepCoveredByHandoffs
+    /\ RbcDeliveredPendingSpecStepStuttersOrTakesCoveredHandoffStep
+    /\ RbcDeliveredPendingSpecStepActionSourcesExclusiveStep
+    /\ \/ HonestCommitVote
+       \/ ByzantineEquivocateCommit
+       \/ HonestPrepareVote
+       \/ TimeoutTick
+       \/ HonestNewViewVote
+       \/ HonestPropose
+       \/ GstElapsed
+    /\ ~RbcInit
+    /\ ~RbcChunkGood
+    /\ ~RbcReadyGood
+    /\ ~RbcDeliverGood
+    /\ ~ByzantineFault
+    /\ ((HonestCommitVote \/ ByzantineEquivocateCommit) =>
+          DeliveredPendingCompleteWaitStateCommitVoteStepSplitsStep)
+    /\ (HonestPrepareVote =>
+          DeliveredPendingCompleteWaitStatePrepareVoteStepSplitsStep)
+    /\ (TimeoutTick =>
+          DeliveredPendingCompleteWaitStateTimeoutStepStartsNewViewStep)
+    /\ (HonestNewViewVote =>
+          DeliveredPendingCompleteWaitStateNewViewVoteStepSplitsStep)
+    /\ (HonestPropose =>
+          DeliveredPendingCompleteWaitStateHonestProposeStepStartsPrepareStep)
+    /\ (GstElapsed =>
+          DeliveredPendingCompleteWaitStateGstElapsedStepKeepsWaitStateStep)
+    /\ (committed' =>
+          /\ phase' = "Committed"
+          /\ ~DeliveredPendingCompleteWaitState'
+          /\ FinalityCertificateStackPresent')
+    /\ (~committed' =>
+          /\ DeliveredPendingCompleteWaitState'
+          /\ RbcDeliveredWithoutFinalityWaitsForCommitEvidence')
+
 RbcStateChangeMatchesLocalExitClassificationStep ==
   (rbcState' # rbcState) =>
     /\ RbcStateOnlyChangesByProtocolOrFaultStep
@@ -11874,6 +11914,9 @@ DeliveredPendingCompleteWaitStateHonestProposeStepAlwaysStartsPrepare ==
 
 DeliveredPendingCompleteWaitStateGstElapsedStepAlwaysKeepsWaitState ==
   [] [DeliveredPendingCompleteWaitStateGstElapsedStepKeepsWaitStateStep]_vars
+
+DeliveredPendingCompleteWaitStateNextStepAlwaysMatchesNamedActionBranch ==
+  [] [DeliveredPendingCompleteWaitStateNextStepMatchesNamedActionBranchStep]_vars
 
 RbcDeliveryEntryOnlyByDeliver ==
   [] [RbcDeliveryEntryOnlyByDeliverStep]_vars

@@ -10712,6 +10712,12 @@ Temporal properties:
   witnesses, keeps the current phase/gate surface stable, and re-enters the
   named wait state with `GstElapsed` closed and timeout tracking only the
   remaining post-GST progress surface.
+- `DeliveredPendingCompleteWaitStateNextStepAlwaysMatchesNamedActionBranch`
+  proves that every non-stuttering `Next` step from the named
+  delivered-pending complete wait state is one of the named commit-vote,
+  prepare-vote, timeout/NewView, NewView-vote, proposal, or GST branch
+  theorems, with RBC and Byzantine-fault actions closed at the delivered
+  wait-state boundary.
 - `PendingProtocolStepsNeverChangeGst` proves that non-final NewView,
   prepare-vote, honest commit-vote, Byzantine commit-vote, and RBC DELIVER
   pending branches preserve the GST observation flag; synchrony observation

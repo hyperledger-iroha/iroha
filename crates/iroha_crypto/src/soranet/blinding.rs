@@ -154,7 +154,8 @@ impl RequestNonce {
     ///
     /// # Errors
     /// Returns [`BlindingError::RandomBytes`] if the RNG cannot provide request
-    /// nonce material.
+    /// nonce material, or [`BlindingError::WeakInput`] if the RNG returns
+    /// all-zero nonce material.
     #[cfg(feature = "rand")]
     pub fn random<R>(rng: &mut R) -> Result<Self, BlindingError>
     where
@@ -166,6 +167,9 @@ impl RequestNonce {
                 operation: "building request blinding nonce",
                 message: err.to_string(),
             })?;
+        if buf.iter().all(|&byte| byte == 0) {
+            return Err(BlindingError::WeakInput("request_nonce"));
+        }
         Ok(Self(buf))
     }
 }
@@ -235,6 +239,31 @@ mod tests {
 
     impl TryCryptoRng for FailingTryRng {}
 
+    struct FixedTryRng {
+        bytes: [u8; REQUEST_NONCE_LEN],
+    }
+
+    impl TryRngCore for FixedTryRng {
+        type Error = core::convert::Infallible;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok(u32::from_le_bytes(self.bytes[..4].try_into().unwrap()))
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok(u64::from_le_bytes(self.bytes[..8].try_into().unwrap()))
+        }
+
+        fn try_fill_bytes(&mut self, dst: &mut [u8]) -> Result<(), Self::Error> {
+            for (index, byte) in dst.iter_mut().enumerate() {
+                *byte = self.bytes[index % self.bytes.len()];
+            }
+            Ok(())
+        }
+    }
+
+    impl TryCryptoRng for FixedTryRng {}
+
     #[test]
     fn canonical_cache_key_matches_reference() {
         let salt = [0x11_u8; 32];
@@ -288,6 +317,16 @@ mod tests {
             }
             other => panic!("expected RNG failure, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn request_nonce_random_rejects_all_zero_material() {
+        let mut rng = FixedTryRng {
+            bytes: [0_u8; REQUEST_NONCE_LEN],
+        };
+        let err = RequestNonce::random(&mut rng).expect_err("all-zero nonce must fail");
+
+        assert!(matches!(err, BlindingError::WeakInput("request_nonce")));
     }
 
     #[test]
