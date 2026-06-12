@@ -2,6 +2,8 @@ package org.hyperledger.iroha.android.offline;
 
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -11,6 +13,7 @@ import java.util.Optional;
 import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.address.AccountAddress.AccountAddressException;
 import org.hyperledger.iroha.android.address.AssetDefinitionIdEncoder;
+import org.hyperledger.iroha.android.crypto.Blake2b;
 import org.hyperledger.iroha.norito.NoritoCodec;
 import org.hyperledger.iroha.norito.NoritoDecoder;
 import org.hyperledger.iroha.norito.NoritoEncoder;
@@ -40,12 +43,45 @@ public final class KagemushaRecursiveSpendRequestCodecs {
       "iroha_data_model::proof::ProofAttachment";
   public static final String SCHEMA_VERIFYING_KEY_RECORD =
       "iroha_data_model::proof::VerifyingKeyRecord";
+  public static final String SCHEMA_OPEN_VERIFY_ENVELOPE =
+      "iroha_data_model::zk::OpenVerifyEnvelope";
+  public static final String CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID =
+      "halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified";
+  public static final String CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID =
+      "halo2/pasta/ipa/anon-unshield-2in-1change-merkle16-poseidon-diversified";
 
   private static final int REQUEST_FLAGS = NoritoHeader.COMPACT_LEN;
   private static final BigInteger MAX_U128 = BigInteger.ONE.shiftLeft(128).subtract(BigInteger.ONE);
   private static final BigInteger BYTE_MASK = BigInteger.valueOf(0xffL);
   private static final int MULTISIG_POLICY_VERSION = 1;
   private static final char[] HEX = "0123456789abcdef".toCharArray();
+  private static final int PRIVACY_FFI_VERSION_V1 = 1;
+  private static final int PRIVACY_FFI_STATUS_OK = 0;
+  private static final int PRIVACY_SCHEMA_BUILD_PROOF_RESULT = 0x42;
+  private static final long BACKEND_TAG_HALO2_IPA_PASTA = 0L;
+  private static final int CONFIDENTIAL_STATUS_ACTIVE = 1;
+  private static final int CONFIDENTIAL_V2_MAX_PROOF_BYTES = 192 * 1024;
+  private static final String KAGEMUSHA_VERIFIER_NAMESPACE = "offline_kagemusha";
+  private static final String ZK_BACKEND_HALO2_IPA = "halo2/ipa";
+  private static final String CONFIDENTIAL_TRANSFER_ALGORITHM_ID = "confidential-transfer-v2";
+  private static final String CONFIDENTIAL_TRANSFER_ENTRYPOINT = "buildConfidentialTransferProofV2";
+  private static final String CONFIDENTIAL_UNSHIELD_ALGORITHM_ID = "unshield";
+  private static final String CONFIDENTIAL_UNSHIELD_ENTRYPOINT = "buildConfidentialUnshieldProofV3";
+  private static final String CONFIDENTIAL_RECORD_CURVE = "pallas";
+  private static final int ZK1_MAX_TLV_BYTES = 8 * 1024 * 1024;
+  private static final int ZK1_MAX_INSTANCE_COLUMNS = 64;
+  private static final int ZK1_MAX_INSTANCE_ROWS = 8192;
+  private static final byte[] CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA =
+      ("{\"schema\":\"confidential_transfer_v2\",\"public_inputs\":[\"input_commitment_0\","
+              + "\"input_commitment_1\",\"nullifier_0\",\"nullifier_1\",\"output_commitment_0\","
+              + "\"output_commitment_1\",\"root\",\"asset_tag\",\"chain_tag\"]}")
+          .getBytes(StandardCharsets.UTF_8);
+  private static final byte[] CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA =
+      ("{\"schema\":\"confidential_unshield_v3\",\"public_inputs\":[\"input_commitment_0\","
+              + "\"input_commitment_1\",\"nullifier_0\",\"nullifier_1\",\"change_commitment_0\","
+              + "\"root\",\"public_amount\",\"asset_tag\",\"chain_tag\"]}")
+          .getBytes(StandardCharsets.UTF_8);
+  private static final byte[] ZK1_MAGIC = new byte[] {0x5a, 0x4b, 0x31, 0x00};
 
   private KagemushaRecursiveSpendRequestCodecs() {}
 
@@ -67,6 +103,77 @@ public final class KagemushaRecursiveSpendRequestCodecs {
   public static byte[] encodeRedeemRequest(final RedeemSpendRequest request) {
     return NoritoCodec.encode(
         Objects.requireNonNull(request, "request"), SCHEMA_REDEEM_REQUEST, REDEEM_REQUEST_ADAPTER, REQUEST_FLAGS);
+  }
+
+  public static byte[] buildPallasOpenEnvelopesArchive(final List<byte[]> proofOutputArchives) {
+    require(proofOutputArchives != null && !proofOutputArchives.isEmpty(),
+        "proofOutputArchives must not be empty");
+    throw new IllegalArgumentException(
+        "Pallas IPA opening envelopes cannot be derived from privacy proof outputs; "
+            + "pass the prover-emitted Norito archive of Vec<iroha_zkp_halo2::OpenVerifyEnvelope>");
+  }
+
+  public static byte[] buildVerifiedFoldRecordBundle(
+      final List<byte[]> hopProofOutputArchives, final List<VerifierRecordRef> hopVerifierRecords) {
+    require(hopProofOutputArchives != null && !hopProofOutputArchives.isEmpty(),
+        "hopProofOutputArchives must not be empty");
+    require(hopVerifierRecords != null && hopVerifierRecords.size() == hopProofOutputArchives.size(),
+        "hopVerifierRecords must match hopProofOutputArchives");
+    throw new IllegalArgumentException(
+        "chainId, asset, and rootAfter are required to build KagemushaVerifiedFoldRecordBundle; "
+            + "use VerifiedFoldHopEvidence inputs instead");
+  }
+
+  public static byte[] buildVerifiedFoldRecordBundle(final List<VerifiedFoldHopEvidence> hops) {
+    require(hops != null && !hops.isEmpty(), "hops must not be empty");
+    require(hops.size() <= KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS,
+        "hops must not exceed " + KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS);
+    final List<PreparedVerifiedFoldHop> prepared = new ArrayList<>();
+    for (int i = 0; i < hops.size(); i++) {
+      prepared.add(prepareTransferHop(i, hops.get(i)));
+    }
+    final String chainId = prepared.get(0).chainId;
+    final String asset = prepared.get(0).asset;
+    byte[] expectedRootBefore = null;
+    for (int i = 0; i < prepared.size(); i++) {
+      final PreparedVerifiedFoldHop hop = prepared.get(i);
+      require(chainId.equals(hop.chainId), "hop " + i + " chainId does not match first hop");
+      require(asset.equals(hop.asset), "hop " + i + " asset does not match first hop");
+      if (expectedRootBefore != null) {
+        require(Arrays.equals(hop.publicInputs.rootBefore, expectedRootBefore),
+            "hop " + i + " rootBefore must equal previous hop rootAfter");
+      }
+      require(!Arrays.equals(hop.publicInputs.rootBefore, hop.rootAfter),
+          "hop " + i + " rootAfter must differ from rootBefore");
+      expectedRootBefore = hop.rootAfter;
+    }
+    return NoritoCodec.encode(prepared, SCHEMA_RECORD_BUNDLE, VERIFIED_FOLD_RECORD_BUNDLE_ADAPTER, REQUEST_FLAGS);
+  }
+
+  public static byte[] buildRedeemProofAttachment(
+      final byte[] unshieldProofOutputArchive, final VerifierRecordRef unshieldVerifierRecord) {
+    require(unshieldProofOutputArchive != null, "unshieldProofOutputArchive is required");
+    require(unshieldVerifierRecord != null, "unshieldVerifierRecord is required");
+    final PrivacyBuildResult proof =
+        parsePrivacyBuildResult(
+            unshieldProofOutputArchive,
+            CONFIDENTIAL_UNSHIELD_ALGORITHM_ID,
+            CONFIDENTIAL_UNSHIELD_ENTRYPOINT,
+            "unshieldProofOutputArchive");
+    final OpenVerifyEnvelopeValue envelope = decodeOpenVerifyEnvelope(proof.proof, "unshield proof");
+    final VerifierRecordValue verifierRecord =
+        decodeAndValidateVerifierRecord(
+            unshieldVerifierRecord,
+            envelope,
+            CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
+            CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA,
+            proof.proof.length,
+            "unshieldVerifierRecord");
+    return NoritoCodec.encode(
+        proofAttachmentPayload(envelope, verifierRecord),
+        SCHEMA_PROOF_ATTACHMENT,
+        RAW_PAYLOAD_ADAPTER,
+        REQUEST_FLAGS);
   }
 
   public static VerifySpendResult decodeVerifyResult(final byte[] archive) {
@@ -218,6 +325,44 @@ public final class KagemushaRecursiveSpendRequestCodecs {
 
     public byte[] recordBytes() {
       return Arrays.copyOf(recordBytes, recordBytes.length);
+    }
+  }
+
+  /** One checked private hop plus the chain context that proof-output archives do not carry. */
+  public static final class VerifiedFoldHopEvidence {
+    private final byte[] proofOutputArchive;
+    public final VerifierRecordRef verifierRecord;
+    public final String chainId;
+    public final String asset;
+    private final byte[] rootAfter;
+
+    public VerifiedFoldHopEvidence(
+        final byte[] proofOutputArchive,
+        final VerifierRecordRef verifierRecord,
+        final String chainId,
+        final String asset,
+        final byte[] rootAfter) {
+      this.proofOutputArchive = copyOf(proofOutputArchive, "proofOutputArchive");
+      this.verifierRecord = Objects.requireNonNull(verifierRecord, "verifierRecord");
+      this.chainId = Objects.requireNonNull(chainId, "chainId");
+      this.asset = Objects.requireNonNull(asset, "asset");
+      this.rootAfter = fixedBytes(rootAfter, 32, "rootAfter");
+      require(this.proofOutputArchive.length > 0, "proofOutputArchive must not be empty");
+      requireNonBlankUnpadded(this.chainId, "chainId");
+      try {
+        AssetDefinitionIdEncoder.parseAddressBytes(this.asset);
+      } catch (final IllegalArgumentException ex) {
+        throw new IllegalArgumentException("asset must be a canonical asset definition id", ex);
+      }
+      require(!isZero(this.rootAfter), "rootAfter must be non-zero");
+    }
+
+    public byte[] proofOutputArchive() {
+      return Arrays.copyOf(proofOutputArchive, proofOutputArchive.length);
+    }
+
+    public byte[] rootAfter() {
+      return Arrays.copyOf(rootAfter, rootAfter.length);
     }
   }
 
@@ -681,10 +826,360 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     return readVerifyingKeyIdName(verifierKeyIdPayload, flags);
   }
 
+  private static final TypeAdapter<byte[]> RAW_PAYLOAD_ADAPTER =
+      new TypeAdapter<byte[]>() {
+        @Override
+        public void encode(final NoritoEncoder encoder, final byte[] value) {
+          encoder.writeBytes(value);
+        }
+
+        @Override
+        public byte[] decode(final NoritoDecoder decoder) {
+          throw new UnsupportedOperationException("raw payload archives are encode-only");
+        }
+      };
+
+  private static final TypeAdapter<List<PreparedVerifiedFoldHop>> VERIFIED_FOLD_RECORD_BUNDLE_ADAPTER =
+      new TypeAdapter<List<PreparedVerifiedFoldHop>>() {
+        @Override
+        public void encode(final NoritoEncoder encoder, final List<PreparedVerifiedFoldHop> value) {
+          writeField(
+              encoder,
+              bundle -> {
+                writeField(bundle, child -> writeChainId(child, value.get(0).chainId));
+                writeField(bundle, child -> writeAssetDefinitionId(child, value.get(0).asset));
+                writeField(bundle, child -> writeVerifiedFoldSteps(child, value));
+              });
+          writeField(encoder, child -> writeVerifiedFoldVerifierRecords(child, value));
+        }
+
+        @Override
+        public List<PreparedVerifiedFoldHop> decode(final NoritoDecoder decoder) {
+          throw new UnsupportedOperationException("verified fold bundles are encode-only");
+        }
+      };
+
+  private static PreparedVerifiedFoldHop prepareTransferHop(final int index, final VerifiedFoldHopEvidence hop) {
+    final PrivacyBuildResult proof =
+        parsePrivacyBuildResult(
+            hop.proofOutputArchive(),
+            CONFIDENTIAL_TRANSFER_ALGORITHM_ID,
+            CONFIDENTIAL_TRANSFER_ENTRYPOINT,
+            "hop " + index + " proofOutputArchive");
+    final OpenVerifyEnvelopeValue envelope = decodeOpenVerifyEnvelope(proof.proof, "hop " + index + " proof");
+    final TransferPublicInputs publicInputs = parseTransferPublicInputs(envelope.proofBytes, "hop " + index);
+    require(!isZero(publicInputs.rootBefore), "hop " + index + " rootBefore must be non-zero");
+    final VerifierRecordValue verifierRecord =
+        decodeAndValidateVerifierRecord(
+            hop.verifierRecord,
+            envelope,
+            CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
+            CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA,
+            proof.proof.length,
+            "hop " + index + " verifierRecord");
+    return new PreparedVerifiedFoldHop(
+        hop.chainId,
+        hop.asset,
+        hop.rootAfter(),
+        publicInputs,
+        envelope,
+        verifierRecord);
+  }
+
+  private static PrivacyBuildResult parsePrivacyBuildResult(
+      final byte[] archive,
+      final String expectedAlgorithmId,
+      final String expectedEntrypoint,
+      final String label) {
+    final ArchivePayload payload = requirePrivacyBuildResultPayload(archive, label);
+    require(payload.flags == REQUEST_FLAGS, label + " must use compact Norito layout");
+    final NoritoDecoder decoder = new NoritoDecoder(payload.payload, payload.flags);
+    final int version = readField(decoder, child -> checkedInt(child.readUInt(32), label + ".version"));
+    final int status = readField(decoder, child -> checkedInt(child.readUInt(32), label + ".status"));
+    final int errorCode = readField(decoder, child -> checkedInt(child.readUInt(32), label + ".error_code"));
+    final String message = readField(decoder, KagemushaRecursiveSpendRequestCodecs::readString);
+    final String algorithmId = readField(decoder, KagemushaRecursiveSpendRequestCodecs::readString);
+    final String entrypoint = readField(decoder, KagemushaRecursiveSpendRequestCodecs::readString);
+    final String vkRef = readField(decoder, KagemushaRecursiveSpendRequestCodecs::readString);
+    final byte[] publicInputs = readField(decoder, KagemushaRecursiveSpendRequestCodecs::readBytesVec);
+    final byte[] proof = readField(decoder, KagemushaRecursiveSpendRequestCodecs::readBytesVec);
+    final boolean verified = readField(decoder, KagemushaRecursiveSpendRequestCodecs::readBool);
+    require(decoder.remaining() == 0, "Trailing bytes after " + label);
+    require(version == PRIVACY_FFI_VERSION_V1, label + " version must be " + PRIVACY_FFI_VERSION_V1);
+    require(status == PRIVACY_FFI_STATUS_OK && errorCode == 0,
+        label + " must be a successful privacy proof result: status=" + status + " error_code=" + errorCode);
+    require(message.isEmpty(), label + " success message must be empty");
+    require(expectedAlgorithmId.equals(algorithmId), label + " algorithm_id must be " + expectedAlgorithmId);
+    require(expectedEntrypoint.equals(entrypoint), label + " entrypoint must be " + expectedEntrypoint);
+    requirePortableId(vkRef, label + ".vk_ref");
+    require(publicInputs.length == 0, label + " public_inputs must be empty; envelope carries authoritative inputs");
+    require(proof.length > 0, label + " proof must not be empty");
+    require(!verified, label + " build results must not claim online verification");
+    return new PrivacyBuildResult(proof);
+  }
+
+  private static ArchivePayload requirePrivacyBuildResultPayload(final byte[] archive, final String label) {
+    require(archive != null && archive.length > 0, label + " must not be empty");
+    require(archive.length <= KagemushaRecursiveSpendProver.NATIVE_ARCHIVE_MAX_BYTES,
+        label + " must not exceed " + KagemushaRecursiveSpendProver.NATIVE_ARCHIVE_MAX_BYTES + " bytes");
+    final NoritoHeader.DecodeResult decoded;
+    try {
+      decoded = NoritoHeader.decode(archive, null);
+    } catch (final IllegalArgumentException ex) {
+      throw new IllegalArgumentException(label + " must be a valid privacy build-result Norito archive", ex);
+    }
+    final byte[] schemaHash = decoded.header().schemaHash();
+    for (final byte b : schemaHash) {
+      require((b & 0xff) == PRIVACY_SCHEMA_BUILD_PROOF_RESULT,
+          label + " must use privacy build-result schema marker");
+    }
+    require(decoded.header().compression() == NoritoHeader.COMPRESSION_NONE, label + " must not be compressed");
+    require(decoded.header().payloadLength() > 0, label + " must contain a non-empty Norito payload");
+    decoded.header().validateChecksum(decoded.payload());
+    return new ArchivePayload(decoded.payload(), decoded.header().flags());
+  }
+
+  private static OpenVerifyEnvelopeValue decodeOpenVerifyEnvelope(final byte[] archive, final String label) {
+    final ArchivePayload payload = requirePayloadArchive(archive, SCHEMA_OPEN_VERIFY_ENVELOPE, label);
+    require(payload.flags == REQUEST_FLAGS, label + " must use compact Norito layout");
+    final NoritoDecoder decoder = new NoritoDecoder(payload.payload, payload.flags);
+    final long backendTag = readField(decoder, child -> child.readUInt(32));
+    final String circuitId = readField(decoder, KagemushaRecursiveSpendRequestCodecs::readString);
+    final byte[] vkHash = readField(decoder, child -> readFixedBytes(child, 32, "vk_hash"));
+    final byte[] publicInputs = readField(decoder, KagemushaRecursiveSpendRequestCodecs::readBytesVec);
+    final byte[] proofBytes = readField(decoder, KagemushaRecursiveSpendRequestCodecs::readBytesVec);
+    final byte[] aux = readField(decoder, KagemushaRecursiveSpendRequestCodecs::readBytesVec);
+    require(decoder.remaining() == 0, "Trailing bytes after " + label + " OpenVerifyEnvelope");
+    require(backendTag == BACKEND_TAG_HALO2_IPA_PASTA, label + " backend must be Halo2IpaPasta");
+    requirePortableId(circuitId, label + ".circuit_id");
+    require(!isZero(vkHash), label + " vk_hash must be non-zero");
+    require(proofBytes.length > 0, label + " proof_bytes must not be empty");
+    require(aux.length == 0, label + " aux must be empty");
+    return new OpenVerifyEnvelopeValue(archive, circuitId, vkHash, publicInputs, proofBytes);
+  }
+
+  private static VerifierRecordValue decodeAndValidateVerifierRecord(
+      final VerifierRecordRef ref,
+      final OpenVerifyEnvelopeValue envelope,
+      final String expectedCircuitId,
+      final byte[] expectedSchema,
+      final int proofArchiveSize,
+      final String label) {
+    final byte[] recordPayload = compactPayloadForRequest(ref.recordBytes(), SCHEMA_VERIFYING_KEY_RECORD, label);
+    final DecodedVerifierRecord record = decodeVerifierRecordPayload(recordPayload, label);
+    final VerifierKeyIdValue id = parseVerifierKeyId(ref.verifierKeyId, label + ".verifierKeyId");
+    require(ZK_BACKEND_HALO2_IPA.equals(id.backend),
+        label + " verifierKeyId backend must be " + ZK_BACKEND_HALO2_IPA);
+    require(record.status == CONFIDENTIAL_STATUS_ACTIVE, label + " status must be Active");
+    require(KAGEMUSHA_VERIFIER_NAMESPACE.equals(record.namespace),
+        label + " namespace must be " + KAGEMUSHA_VERIFIER_NAMESPACE);
+    require(record.backendTag == BACKEND_TAG_HALO2_IPA_PASTA, label + " backend must be Halo2IpaPasta");
+    require(CONFIDENTIAL_RECORD_CURVE.equals(record.curve), label + " curve must be " + CONFIDENTIAL_RECORD_CURVE);
+    require(expectedCircuitId.equals(record.circuitId), label + " circuit_id must be " + expectedCircuitId);
+    require(expectedCircuitId.equals(envelope.circuitId), label + " envelope circuit_id must be " + expectedCircuitId);
+    require(Arrays.equals(envelope.publicInputs, expectedSchema), label + " public-input schema mismatch");
+    require(Arrays.equals(record.publicInputsSchemaHash, Blake2b.digest256(expectedSchema)),
+        label + " public_inputs_schema_hash mismatch");
+    require(Arrays.equals(record.commitment, envelope.vkHash), label + " commitment must match envelope vk_hash");
+    require(record.maxProofBytes > 0, label + " max_proof_bytes must be non-zero");
+    require(record.maxProofBytes <= CONFIDENTIAL_V2_MAX_PROOF_BYTES,
+        label + " max_proof_bytes exceeds confidential-v2 cap");
+    require(proofArchiveSize <= record.maxProofBytes, label + " proof exceeds max_proof_bytes");
+    require(record.key != null, label + " must include inline verifier key");
+    require(ZK_BACKEND_HALO2_IPA.equals(record.key.backend),
+        label + " verifier key backend must be " + ZK_BACKEND_HALO2_IPA);
+    require(record.key.bytes.length > 0, label + " verifier key bytes must not be empty");
+    require(record.vkLen == record.key.bytes.length, label + " vk_len must equal inline verifier key bytes length");
+    require(Arrays.equals(record.commitment, verifyingKeyCommitment(record.key.backend, record.key.bytes)),
+        label + " inline verifier-key commitment mismatch");
+    return new VerifierRecordValue(id, recordPayload, record.commitment, record.key);
+  }
+
+  private static DecodedVerifierRecord decodeVerifierRecordPayload(final byte[] payload, final String label) {
+    final NoritoDecoder decoder = new NoritoDecoder(payload, REQUEST_FLAGS);
+    readField(decoder, child -> checkedInt(child.readUInt(32), label + ".version"));
+    final String circuitId = readField(decoder, KagemushaRecursiveSpendRequestCodecs::readString);
+    readField(decoder, KagemushaRecursiveSpendRequestCodecs::readOptionString);
+    final String namespace = readField(decoder, KagemushaRecursiveSpendRequestCodecs::readString);
+    final long backendTag = readField(decoder, child -> child.readUInt(32));
+    final String curve = readField(decoder, KagemushaRecursiveSpendRequestCodecs::readString);
+    final byte[] schemaHash = readField(decoder, child -> readFixedBytes(child, 32, "public_inputs_schema_hash"));
+    final byte[] commitment = readField(decoder, child -> readFixedBytes(child, 32, "commitment"));
+    final int vkLen = readField(decoder, child -> checkedInt(child.readUInt(32), label + ".vk_len"));
+    final int maxProofBytes =
+        readField(decoder, child -> checkedInt(child.readUInt(32), label + ".max_proof_bytes"));
+    readField(decoder, KagemushaRecursiveSpendRequestCodecs::readOptionString);
+    readField(decoder, KagemushaRecursiveSpendRequestCodecs::readOptionString);
+    readField(decoder, KagemushaRecursiveSpendRequestCodecs::readOptionString);
+    readField(decoder, KagemushaRecursiveSpendRequestCodecs::readOptionU64Value);
+    readField(decoder, KagemushaRecursiveSpendRequestCodecs::readOptionU64Value);
+    final VerifyingKeyBoxValue key =
+        readField(
+            decoder,
+            child -> {
+              final byte[] keyPayload = readOptionRawPayload(child);
+              return keyPayload == null ? null : readVerifyingKeyBoxPayload(keyPayload, label + ".key");
+            });
+    final int status = readField(decoder, child -> checkedInt(child.readUInt(8), label + ".status"));
+    require(decoder.remaining() == 0, "Trailing bytes after " + label);
+    return new DecodedVerifierRecord(
+        circuitId,
+        namespace,
+        backendTag,
+        curve,
+        schemaHash,
+        commitment,
+        vkLen,
+        maxProofBytes,
+        key,
+        status);
+  }
+
+  private static VerifyingKeyBoxValue readVerifyingKeyBoxPayload(final byte[] payload, final String label) {
+    final NoritoDecoder decoder = new NoritoDecoder(payload, REQUEST_FLAGS);
+    final String backend = readField(decoder, KagemushaRecursiveSpendRequestCodecs::readString);
+    final byte[] bytes = readField(decoder, KagemushaRecursiveSpendRequestCodecs::readBytesVec);
+    require(decoder.remaining() == 0, "Trailing bytes after " + label);
+    return new VerifyingKeyBoxValue(backend, bytes);
+  }
+
+  private static TransferPublicInputs parseTransferPublicInputs(final byte[] proofBytes, final String label) {
+    final List<List<byte[]>> columns = parseZk1InstanceColumns(proofBytes, label);
+    boolean singleRow = columns.size() >= 9;
+    for (int i = 0; singleRow && i < 9; i++) {
+      singleRow = columns.get(i).size() == 1;
+    }
+    require(singleRow, label + " transfer proof must expose 9 single-row instance columns");
+    final List<byte[]> inputNullifiers = nonZeroSorted(
+        Arrays.asList(columns.get(2).get(0), columns.get(3).get(0)), label + " input nullifiers");
+    final List<byte[]> outputCommitments = nonZeroSorted(
+        Arrays.asList(columns.get(4).get(0), columns.get(5).get(0)), label + " output commitments");
+    return new TransferPublicInputs(columns.get(6).get(0), inputNullifiers, outputCommitments);
+  }
+
+  private static List<List<byte[]>> parseZk1InstanceColumns(final byte[] proofBytes, final String label) {
+    require(proofBytes.length >= ZK1_MAGIC.length
+        && Arrays.equals(Arrays.copyOfRange(proofBytes, 0, ZK1_MAGIC.length), ZK1_MAGIC),
+        label + " proof must use strict ZK1 envelope");
+    int offset = ZK1_MAGIC.length;
+    boolean sawProof = false;
+    List<List<byte[]>> columns = null;
+    while (offset < proofBytes.length) {
+      require(offset + 8 <= proofBytes.length, label + " malformed ZK1 TLV");
+      final String tag = new String(Arrays.copyOfRange(proofBytes, offset, offset + 4), StandardCharsets.US_ASCII);
+      final int length = readUInt32LittleEndian(proofBytes, offset + 4);
+      require(length >= 0 && length <= ZK1_MAX_TLV_BYTES, label + " oversized ZK1 TLV");
+      final int payloadStart = offset + 8;
+      final long payloadEndLong = (long) payloadStart + length;
+      require(payloadEndLong <= proofBytes.length, label + " truncated ZK1 TLV");
+      final int payloadEnd = (int) payloadEndLong;
+      final byte[] payload = Arrays.copyOfRange(proofBytes, payloadStart, payloadEnd);
+      if ("PROF".equals(tag)) {
+        require(!sawProof, label + " duplicate PROF TLV");
+        require(payload.length > 0, label + " empty PROF TLV");
+        sawProof = true;
+      } else if ("I10P".equals(tag)) {
+        require(columns == null, label + " duplicate I10P TLV");
+        columns = readZk1InstanceColumnsPayload(payload, label);
+      } else {
+        throw new IllegalArgumentException(label + " unexpected ZK1 TLV");
+      }
+      offset = payloadEnd;
+    }
+    require(sawProof, label + " missing PROF TLV");
+    if (columns == null) {
+      throw new IllegalArgumentException(label + " missing I10P TLV");
+    }
+    return columns;
+  }
+
+  private static List<List<byte[]>> readZk1InstanceColumnsPayload(final byte[] payload, final String label) {
+    require(payload.length >= 8, label + " malformed I10P TLV");
+    final int columnCount = readUInt32LittleEndian(payload, 0);
+    final int rowCount = readUInt32LittleEndian(payload, 4);
+    require(columnCount > 0 && rowCount > 0, label + " empty I10P TLV");
+    require(columnCount <= ZK1_MAX_INSTANCE_COLUMNS && rowCount <= ZK1_MAX_INSTANCE_ROWS,
+        label + " oversized I10P TLV");
+    final long expected = 8L + (long) columnCount * rowCount * 32L;
+    require(expected <= Integer.MAX_VALUE && payload.length == (int) expected, label + " malformed I10P length");
+    final List<List<byte[]>> columns = new ArrayList<>();
+    for (int i = 0; i < columnCount; i++) {
+      columns.add(new ArrayList<byte[]>(rowCount));
+    }
+    int offset = 8;
+    for (int row = 0; row < rowCount; row++) {
+      for (int column = 0; column < columnCount; column++) {
+        columns.get(column).add(Arrays.copyOfRange(payload, offset, offset + 32));
+        offset += 32;
+      }
+    }
+    return columns;
+  }
+
+  private static byte[] proofAttachmentPayload(
+      final OpenVerifyEnvelopeValue envelope, final VerifierRecordValue verifierRecord) {
+    final NoritoEncoder encoder = new NoritoEncoder(REQUEST_FLAGS);
+    writeField(encoder, child -> writeString(child, ZK_BACKEND_HALO2_IPA));
+    writeField(encoder, child -> writeProofBox(child, envelope.archive));
+    writeField(encoder, child -> writeVerifierKeyId(child, verifierRecord.id));
+    writeField(encoder, child -> writeOptionFixed32(child, verifierRecord.commitment));
+    writeField(encoder, child -> writeOptionFixed32(child, Blake2b.digest256(envelope.archive)));
+    writeField(encoder, child -> writeOptionRaw(child, null));
+    return encoder.toByteArray();
+  }
+
+  private static void writeVerifiedFoldSteps(
+      final NoritoEncoder encoder, final List<PreparedVerifiedFoldHop> hops) {
+    encoder.writeUInt(hops.size(), 64);
+    for (final PreparedVerifiedFoldHop hop : hops) {
+      writeField(
+          encoder,
+          step -> {
+            writeField(step, child -> writeConstVec(child, hop.publicInputs.rootBefore));
+            writeField(step, child -> writeFixed32Vec(child, hop.publicInputs.inputNullifiers));
+            writeField(step, child -> writeFixed32Vec(child, hop.publicInputs.outputCommitments));
+            writeField(step, child -> writeConstVec(child, hop.rootAfter));
+            writeRawField(step, proofAttachmentPayload(hop.envelope, hop.verifierRecord));
+            writeRawField(step, verifyingKeyBoxPayload(hop.verifierRecord.key.backend, hop.verifierRecord.key.bytes));
+          });
+    }
+  }
+
+  private static void writeVerifiedFoldVerifierRecords(
+      final NoritoEncoder encoder, final List<PreparedVerifiedFoldHop> hops) {
+    final List<VerifierRecordValue> unique = new ArrayList<>();
+    for (final PreparedVerifiedFoldHop hop : hops) {
+      boolean exists = false;
+      for (final VerifierRecordValue record : unique) {
+        if (record.id.equals(hop.verifierRecord.id)) {
+          exists = true;
+          break;
+        }
+      }
+      if (!exists) {
+        unique.add(hop.verifierRecord);
+      }
+    }
+    encoder.writeUInt(unique.size(), 64);
+    for (final VerifierRecordValue record : unique) {
+      writeField(
+          encoder,
+          entry -> {
+            writeField(entry, child -> writeVerifierKeyId(child, record.id));
+            writeRawField(entry, record.recordPayload);
+          });
+    }
+  }
+
   private static byte[] verifyingKeyBoxPayload(final byte[] bytes) {
-    require(bytes != null && bytes.length > 0, "lineageVerifierKey must not be empty");
+    return verifyingKeyBoxPayload(KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND, bytes);
+  }
+
+  private static byte[] verifyingKeyBoxPayload(final String backend, final byte[] bytes) {
+    requireNonBlankUnpadded(backend, "verifierKeyBackend");
+    require(bytes != null && bytes.length > 0, "verifierKey must not be empty");
     final NoritoEncoder encoder = new NoritoEncoder(NoritoHeader.COMPACT_LEN);
-    writeField(encoder, child -> writeString(child, KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND));
+    writeField(encoder, child -> writeString(child, backend));
     writeField(encoder, child -> writeBytesVec(child, bytes));
     return encoder.toByteArray();
   }
@@ -780,6 +1275,12 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     }
   }
 
+  private static byte[] fixed32Payload(final byte[] value) {
+    final NoritoEncoder encoder = new NoritoEncoder(NoritoHeader.COMPACT_LEN);
+    writeConstVec(encoder, fixedBytes(value, 32, "fixed32"));
+    return encoder.toByteArray();
+  }
+
   private static void writeOptionRaw(final NoritoEncoder encoder, final byte[] payload) {
     if (payload == null) {
       encoder.writeByte(0);
@@ -808,10 +1309,50 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     writeField(encoder, child -> child.writeUInt(value, 64));
   }
 
+  private static void writeOptionFixed32(final NoritoEncoder encoder, final byte[] value) {
+    writeOptionRaw(encoder, value == null ? null : fixed32Payload(value));
+  }
+
   private static void writeSpendableNote(final NoritoEncoder encoder, final SpendableNoteDescriptor value) {
     writeField(encoder, child -> writeConstVec(child, value.noteCommitment()));
     writeField(encoder, child -> writeConstVec(child, value.spendNullifier()));
     writeField(encoder, child -> writeNumeric(child, value.amount));
+  }
+
+  private static void writeChainId(final NoritoEncoder encoder, final String value) {
+    requireNonBlankUnpadded(value, "chainId");
+    writeField(encoder, child -> writeString(child, value));
+  }
+
+  private static void writeAssetDefinitionId(final NoritoEncoder encoder, final String value) {
+    final byte[] bytes;
+    try {
+      bytes = AssetDefinitionIdEncoder.parseAddressBytes(value);
+    } catch (final IllegalArgumentException ex) {
+      throw new IllegalArgumentException("asset must be a canonical asset definition id", ex);
+    }
+    encoder.writeBytes(bytes);
+  }
+
+  private static void writeFixed32Vec(final NoritoEncoder encoder, final List<byte[]> values) {
+    require(!values.isEmpty(), "fixed32 vector must not be empty");
+    encoder.writeUInt(values.size(), 64);
+    for (final byte[] value : values) {
+      writeField(encoder, child -> writeConstVec(child, fixedBytes(value, 32, "fixed32 vector element")));
+    }
+  }
+
+  private static void writeProofBox(final NoritoEncoder encoder, final byte[] proofBytes) {
+    require(proofBytes.length > 0, "proof bytes must not be empty");
+    writeField(encoder, child -> writeString(child, ZK_BACKEND_HALO2_IPA));
+    writeField(encoder, child -> writeBytesVec(child, proofBytes));
+  }
+
+  private static void writeVerifierKeyId(final NoritoEncoder encoder, final VerifierKeyIdValue id) {
+    requirePortableId(id.backend, "verifierKeyId.backend");
+    requirePortableId(id.name, "verifierKeyId.name");
+    writeField(encoder, child -> writeString(child, id.backend));
+    writeField(encoder, child -> writeString(child, id.name));
   }
 
   private static void writeNumeric(final NoritoEncoder encoder, final String value) {
@@ -1043,6 +1584,43 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     return new String(decoder.readBytes(length), StandardCharsets.UTF_8);
   }
 
+  private static byte[] readBytesVec(final NoritoDecoder decoder) {
+    final int length = checkedInt(decoder.readUInt(64), "byte vector length");
+    return decoder.readBytes(length);
+  }
+
+  private static byte[] readOptionRawPayload(final NoritoDecoder decoder) {
+    final int tag = decoder.readByte();
+    require(tag == 0 || tag == 1, "option tag must be 0 or 1");
+    if (tag == 0) {
+      return null;
+    }
+    final int length = checkedInt(decoder.readLength(compact(decoder)), "option payload length");
+    return decoder.readBytes(length);
+  }
+
+  private static String readOptionString(final NoritoDecoder decoder) {
+    final byte[] payload = readOptionRawPayload(decoder);
+    if (payload == null) {
+      return null;
+    }
+    final NoritoDecoder child = new NoritoDecoder(payload, decoder.flags(), decoder.flagsHint());
+    final String value = readString(child);
+    require(child.remaining() == 0, "Trailing bytes after option string");
+    return value;
+  }
+
+  private static Long readOptionU64Value(final NoritoDecoder decoder) {
+    final byte[] payload = readOptionRawPayload(decoder);
+    if (payload == null) {
+      return null;
+    }
+    final NoritoDecoder child = new NoritoDecoder(payload, decoder.flags(), decoder.flagsHint());
+    final long value = child.readUInt(64);
+    require(child.remaining() == 0, "Trailing bytes after option u64");
+    return value;
+  }
+
   private static void skipFields(final NoritoDecoder decoder, final int count) {
     for (int i = 0; i < count; i++) {
       final int length = checkedInt(decoder.readLength(compact(decoder)), "field length");
@@ -1114,6 +1692,228 @@ public final class KagemushaRecursiveSpendRequestCodecs {
       out[i * 2 + 1] = HEX[value & 0x0f];
     }
     return new String(out);
+  }
+
+  private static VerifierKeyIdValue parseVerifierKeyId(final String value, final String field) {
+    requirePortableId(value, field);
+    final int separator = value.indexOf(':');
+    require(separator > 0 && separator < value.length() - 1, field + " must use backend:name syntax");
+    final String backend = value.substring(0, separator);
+    final String name = value.substring(separator + 1);
+    requirePortableId(backend, field + ".backend");
+    requirePortableId(name, field + ".name");
+    return new VerifierKeyIdValue(backend, name);
+  }
+
+  private static byte[] verifyingKeyCommitment(final String backend, final byte[] verifierKey) {
+    requireNonBlankUnpadded(backend, "verifierKeyBackend");
+    require(verifierKey != null && verifierKey.length > 0, "verifierKey must not be empty");
+    try {
+      final MessageDigest digest = MessageDigest.getInstance("SHA-256");
+      final byte[] backendBytes = backend.getBytes(StandardCharsets.UTF_8);
+      digest.update("iroha:zk:v1:vk".getBytes(StandardCharsets.US_ASCII));
+      digest.update(longBigEndian(backendBytes.length));
+      digest.update(backendBytes);
+      digest.update(longBigEndian(verifierKey.length));
+      digest.update(verifierKey);
+      return digest.digest();
+    } catch (final NoSuchAlgorithmException ex) {
+      throw new IllegalStateException("SHA-256 digest is unavailable", ex);
+    }
+  }
+
+  private static byte[] longBigEndian(final long value) {
+    final byte[] out = new byte[8];
+    for (int i = 0; i < out.length; i++) {
+      out[i] = (byte) ((value >>> ((7 - i) * 8)) & 0xff);
+    }
+    return out;
+  }
+
+  private static int readUInt32LittleEndian(final byte[] bytes, final int offset) {
+    require(offset >= 0 && offset + 4 <= bytes.length, "u32 field is truncated");
+    return (bytes[offset] & 0xff)
+        | ((bytes[offset + 1] & 0xff) << 8)
+        | ((bytes[offset + 2] & 0xff) << 16)
+        | ((bytes[offset + 3] & 0xff) << 24);
+  }
+
+  private static List<byte[]> nonZeroSorted(final List<byte[]> values, final String field) {
+    final List<byte[]> filtered = new ArrayList<>();
+    for (final byte[] value : values) {
+      final byte[] fixed = fixedBytes(value, 32, field);
+      if (!isZero(fixed)) {
+        filtered.add(fixed);
+      }
+    }
+    require(!filtered.isEmpty(), field + " must contain at least one non-zero value");
+    Collections.sort(filtered, KagemushaRecursiveSpendRequestCodecs::compareUnsigned);
+    for (int i = 1; i < filtered.size(); i++) {
+      require(!Arrays.equals(filtered.get(i - 1), filtered.get(i)), field + " must not contain duplicates");
+    }
+    return filtered;
+  }
+
+  private static final class PrivacyBuildResult {
+    final byte[] proof;
+
+    PrivacyBuildResult(final byte[] proof) {
+      this.proof = Arrays.copyOf(proof, proof.length);
+    }
+  }
+
+  private static final class OpenVerifyEnvelopeValue {
+    final byte[] archive;
+    final String circuitId;
+    final byte[] vkHash;
+    final byte[] publicInputs;
+    final byte[] proofBytes;
+
+    OpenVerifyEnvelopeValue(
+        final byte[] archive,
+        final String circuitId,
+        final byte[] vkHash,
+        final byte[] publicInputs,
+        final byte[] proofBytes) {
+      this.archive = Arrays.copyOf(archive, archive.length);
+      this.circuitId = circuitId;
+      this.vkHash = Arrays.copyOf(vkHash, vkHash.length);
+      this.publicInputs = Arrays.copyOf(publicInputs, publicInputs.length);
+      this.proofBytes = Arrays.copyOf(proofBytes, proofBytes.length);
+    }
+  }
+
+  private static final class TransferPublicInputs {
+    final byte[] rootBefore;
+    final List<byte[]> inputNullifiers;
+    final List<byte[]> outputCommitments;
+
+    TransferPublicInputs(
+        final byte[] rootBefore, final List<byte[]> inputNullifiers, final List<byte[]> outputCommitments) {
+      this.rootBefore = Arrays.copyOf(rootBefore, rootBefore.length);
+      this.inputNullifiers = copyByteList(inputNullifiers);
+      this.outputCommitments = copyByteList(outputCommitments);
+    }
+  }
+
+  private static final class VerifierKeyIdValue {
+    final String backend;
+    final String name;
+
+    VerifierKeyIdValue(final String backend, final String name) {
+      this.backend = backend;
+      this.name = name;
+    }
+
+    @Override
+    public boolean equals(final Object other) {
+      if (!(other instanceof VerifierKeyIdValue)) {
+        return false;
+      }
+      final VerifierKeyIdValue rhs = (VerifierKeyIdValue) other;
+      return backend.equals(rhs.backend) && name.equals(rhs.name);
+    }
+
+    @Override
+    public int hashCode() {
+      return 31 * backend.hashCode() + name.hashCode();
+    }
+  }
+
+  private static final class VerifyingKeyBoxValue {
+    final String backend;
+    final byte[] bytes;
+
+    VerifyingKeyBoxValue(final String backend, final byte[] bytes) {
+      this.backend = backend;
+      this.bytes = Arrays.copyOf(bytes, bytes.length);
+    }
+  }
+
+  private static final class DecodedVerifierRecord {
+    final String circuitId;
+    final String namespace;
+    final long backendTag;
+    final String curve;
+    final byte[] publicInputsSchemaHash;
+    final byte[] commitment;
+    final int vkLen;
+    final int maxProofBytes;
+    final VerifyingKeyBoxValue key;
+    final int status;
+
+    DecodedVerifierRecord(
+        final String circuitId,
+        final String namespace,
+        final long backendTag,
+        final String curve,
+        final byte[] publicInputsSchemaHash,
+        final byte[] commitment,
+        final int vkLen,
+        final int maxProofBytes,
+        final VerifyingKeyBoxValue key,
+        final int status) {
+      this.circuitId = circuitId;
+      this.namespace = namespace;
+      this.backendTag = backendTag;
+      this.curve = curve;
+      this.publicInputsSchemaHash = Arrays.copyOf(publicInputsSchemaHash, publicInputsSchemaHash.length);
+      this.commitment = Arrays.copyOf(commitment, commitment.length);
+      this.vkLen = vkLen;
+      this.maxProofBytes = maxProofBytes;
+      this.key = key;
+      this.status = status;
+    }
+  }
+
+  private static final class VerifierRecordValue {
+    final VerifierKeyIdValue id;
+    final byte[] recordPayload;
+    final byte[] commitment;
+    final VerifyingKeyBoxValue key;
+
+    VerifierRecordValue(
+        final VerifierKeyIdValue id,
+        final byte[] recordPayload,
+        final byte[] commitment,
+        final VerifyingKeyBoxValue key) {
+      this.id = id;
+      this.recordPayload = Arrays.copyOf(recordPayload, recordPayload.length);
+      this.commitment = Arrays.copyOf(commitment, commitment.length);
+      this.key = key;
+    }
+  }
+
+  private static final class PreparedVerifiedFoldHop {
+    final String chainId;
+    final String asset;
+    final byte[] rootAfter;
+    final TransferPublicInputs publicInputs;
+    final OpenVerifyEnvelopeValue envelope;
+    final VerifierRecordValue verifierRecord;
+
+    PreparedVerifiedFoldHop(
+        final String chainId,
+        final String asset,
+        final byte[] rootAfter,
+        final TransferPublicInputs publicInputs,
+        final OpenVerifyEnvelopeValue envelope,
+        final VerifierRecordValue verifierRecord) {
+      this.chainId = chainId;
+      this.asset = asset;
+      this.rootAfter = Arrays.copyOf(rootAfter, rootAfter.length);
+      this.publicInputs = publicInputs;
+      this.envelope = envelope;
+      this.verifierRecord = verifierRecord;
+    }
+  }
+
+  private static List<byte[]> copyByteList(final List<byte[]> values) {
+    final List<byte[]> out = new ArrayList<>();
+    for (final byte[] value : values) {
+      out.add(Arrays.copyOf(value, value.length));
+    }
+    return out;
   }
 
   private interface FieldWriter {

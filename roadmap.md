@@ -7086,6 +7086,14 @@ and completed history lives in [`status.md`](./status.md).
   Python, Swift, Kotlin/JVM, and Java Android now expose record-backed compact-token
   prover wrappers over that ABI, so mobile wallets can pass
   `KagemushaVerifiedFoldRecordBundle` Norito bytes through the native bridge
+  while Kotlin/JVM and Java Android recursive-spend evidence helpers keep
+  `VerifiedFoldHopEvidence` explicit for `chain_id`, asset, and `root_after`,
+  validate privacy build results, nested `OpenVerifyEnvelope`s, active
+  Kagemusha verifier records, schema hashes, verifier-key commitments, strict
+  ZK1 public-instance columns, and root continuity before emitting checked
+  fold-record bundles or redeem proof attachments. Proof-output-only helpers
+  must remain fail-closed because privacy proof outputs do not carry Pallas IPA
+  opening envelopes or enough chain context to derive a production-safe record bundle
   instead of constructing preverified folded public inputs themselves. The same
   SDK surfaces now expose the ABI-6 recursive aggregation proof-bundle prover,
   which accepts record-backed bundle bytes plus proof-derived Pallas

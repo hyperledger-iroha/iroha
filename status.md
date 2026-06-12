@@ -173273,6 +173273,14 @@ Last updated: 2026-06-12
 - Tightened request layout coverage so encoded SDK requests pin compact Norito
   root fields, raw embedded archive payloads, `Option` child-length framing, and
   Rust-compatible `[u8; N]` fixed-array encoding without an extra sequence length.
+- Added Kotlin/JVM and Java Android record-backed hop-evidence helpers for
+  explicit `VerifiedFoldHopEvidence` inputs. The helpers decode privacy
+  build-result archives, validate nested `OpenVerifyEnvelope` metadata, active
+  Kagemusha verifier records, verifier-key commitments, public-input schemas,
+  strict ZK1 `PROF`/`I10P` instance columns, root continuity, and canonical
+  proof attachments before emitting `KagemushaVerifiedFoldRecordBundle` or
+  redeem `ProofAttachment` archives. The proof-output-only Pallas/open-envelope
+  and record-bundle builders now fail closed.
 - Focused validation passed:
   - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest --console=plain`
   - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest ./gradlew :jvm:test --rerun-tasks --console=plain`

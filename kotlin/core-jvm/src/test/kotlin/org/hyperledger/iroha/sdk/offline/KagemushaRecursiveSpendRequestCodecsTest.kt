@@ -3,9 +3,12 @@ package org.hyperledger.iroha.sdk.offline
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
+import java.security.MessageDigest
 import java.util.Base64
 import org.hyperledger.iroha.sdk.address.AccountAddress
+import org.hyperledger.iroha.sdk.address.AssetDefinitionIdEncoder
 import org.hyperledger.iroha.sdk.client.JsonParser
+import org.hyperledger.iroha.sdk.crypto.Blake2b
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
 import org.hyperledger.iroha.sdk.norito.NoritoDecoder
 import org.hyperledger.iroha.sdk.norito.NoritoEncoder
@@ -192,6 +195,177 @@ class KagemushaRecursiveSpendRequestCodecsTest {
     }
 
     @Test
+    fun `redeem proof attachment builder emits canonical proof attachment archive`() {
+        val fixture = proofFixture(
+            circuitId = KagemushaRecursiveSpendRequestCodecs.CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
+            schema = CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA,
+            algorithmId = "unshield",
+            entrypoint = "buildConfidentialUnshieldProofV3",
+        )
+
+        val attachment = KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachment(
+            fixture.proofOutputArchive,
+            fixture.verifierRecordRef,
+        )
+
+        assertArchiveSchema(attachment, KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT)
+        val fields = requestFields(attachment, KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT)
+        assertEquals(6, fields.size)
+        assertEquals("halo2/ipa", readStringPayload(fields[0]))
+
+        val proofBoxFields = fieldPayloads(fields[1])
+        assertEquals("halo2/ipa", readStringPayload(proofBoxFields[0]))
+        assertContentEquals(fixture.envelopeArchive, readBytesVecPayload(proofBoxFields[1]))
+
+        val vkRefFields = fieldPayloads(fields[2])
+        assertEquals("halo2/ipa", readStringPayload(vkRefFields[0]))
+        assertEquals(fixture.verifierKeyName, readStringPayload(vkRefFields[1]))
+        assertContentEquals(fixture.commitment, readFixedArrayPayload(optionSomePayload(fields[3]), 32))
+        assertContentEquals(
+            Blake2b.digest256(fixture.envelopeArchive),
+            readFixedArrayPayload(optionSomePayload(fields[4]), 32),
+        )
+        assertOptionNone(fields[5])
+    }
+
+    @Test
+    fun `verified fold record bundle builder assembles explicit hop evidence`() {
+        val rootBefore = fixedBytes(0x31)
+        val rootAfter = fixedBytes(0x32)
+        val fixture = proofFixture(
+            circuitId = KagemushaRecursiveSpendRequestCodecs.CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
+            schema = CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA,
+            algorithmId = "confidential-transfer-v2",
+            entrypoint = "buildConfidentialTransferProofV2",
+            proofBytes = zk1Proof(
+                listOf(
+                    fixedBytes(0x41),
+                    fixedBytes(0x42),
+                    fixedBytes(0x43),
+                    ByteArray(32),
+                    fixedBytes(0x44),
+                    ByteArray(32),
+                    rootBefore,
+                    fixedBytes(0x45),
+                    fixedBytes(0x46),
+                ),
+            ),
+        )
+        val asset = sampleAssetDefinition()
+
+        val recordBundle = KagemushaRecursiveSpendRequestCodecs.buildVerifiedFoldRecordBundle(
+            listOf(
+                VerifiedFoldHopEvidence(
+                    proofOutputArchive = fixture.proofOutputArchive,
+                    verifierRecord = fixture.verifierRecordRef,
+                    chainId = "kagemusha-test-chain",
+                    asset = asset,
+                    rootAfter = rootAfter,
+                ),
+            ),
+        )
+
+        assertArchiveSchema(recordBundle, KagemushaRecursiveSpendRequestCodecs.SCHEMA_RECORD_BUNDLE)
+        val fields = requestFields(recordBundle, KagemushaRecursiveSpendRequestCodecs.SCHEMA_RECORD_BUNDLE)
+        assertEquals(2, fields.size)
+        val bundleFields = fieldPayloads(fields[0])
+        assertEquals("kagemusha-test-chain", readStringPayload(fieldPayloads(bundleFields[0]).single()))
+        assertContentEquals(AssetDefinitionIdEncoder.parseAddressBytes(asset), bundleFields[1])
+
+        val steps = sequencePayloads(bundleFields[2])
+        assertEquals(1, steps.size)
+        val stepFields = fieldPayloads(steps[0])
+        assertContentEquals(rootBefore, readFixedArrayPayload(stepFields[0], 32))
+        assertContentEquals(fixedBytes(0x43), readFixed32VecPayload(stepFields[1]).single())
+        assertContentEquals(fixedBytes(0x44), readFixed32VecPayload(stepFields[2]).single())
+        assertContentEquals(rootAfter, readFixedArrayPayload(stepFields[3], 32))
+        assertEquals("halo2/ipa", readStringPayload(fieldPayloads(stepFields[4])[0]))
+        assertEquals("halo2/ipa", readStringPayload(fieldPayloads(stepFields[5])[0]))
+
+        val records = sequencePayloads(fields[1])
+        assertEquals(1, records.size)
+        val recordFields = fieldPayloads(records[0])
+        val idFields = fieldPayloads(recordFields[0])
+        assertEquals("halo2/ipa", readStringPayload(idFields[0]))
+        assertEquals(fixture.verifierKeyName, readStringPayload(idFields[1]))
+        assertContentEquals(
+            compactPayload(fixture.verifierRecordRef.recordBytes, KagemushaRecursiveSpendRequestCodecs.SCHEMA_VERIFYING_KEY_RECORD),
+            recordFields[1],
+        )
+    }
+
+    @Test
+    fun `proof output only evidence builders fail closed`() {
+        val verifierRecord = sampleVerifierRecord()
+
+        val pallasError = assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendRequestCodecs.buildPallasOpenEnvelopesArchive(listOf(byteArrayOf(1)))
+        }
+        assertTrue(pallasError.message.orEmpty().contains("cannot be derived"))
+
+        val bundleError = assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendRequestCodecs.buildVerifiedFoldRecordBundle(
+                listOf(byteArrayOf(1)),
+                listOf(verifierRecord),
+            )
+        }
+        assertTrue(bundleError.message.orEmpty().contains("chainId, asset, and rootAfter"))
+    }
+
+    @Test
+    fun `evidence builders reject malformed privacy and verifier records`() {
+        val fixture = proofFixture(
+            circuitId = KagemushaRecursiveSpendRequestCodecs.CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
+            schema = CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA,
+            algorithmId = "unshield",
+            entrypoint = "buildConfidentialUnshieldProofV3",
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachment(
+                privacyBuildResultArchive(
+                    algorithmId = "unshield",
+                    entrypoint = "buildConfidentialUnshieldProofV3",
+                    proof = fixture.envelopeArchive,
+                    status = 1,
+                    errorCode = 5,
+                    message = "rejected",
+                ),
+                fixture.verifierRecordRef,
+            )
+        }
+
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachment(
+                fixture.proofOutputArchive,
+                VerifierRecordRef(
+                    "halo2/ipa:${fixture.verifierKeyName}",
+                    verifierRecordArchive(
+                        circuitId = KagemushaRecursiveSpendRequestCodecs.CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
+                        schema = CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA,
+                        verifierKey = fixture.verifierKey,
+                        status = 2,
+                    ),
+                ),
+            )
+        }
+
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendRequestCodecs.buildVerifiedFoldRecordBundle(
+                listOf(
+                    VerifiedFoldHopEvidence(
+                        proofOutputArchive = fixture.proofOutputArchive,
+                        verifierRecord = fixture.verifierRecordRef,
+                        chainId = "chain",
+                        asset = sampleAssetDefinition(),
+                        rootAfter = fixedBytes(0x77),
+                    ),
+                ),
+            )
+        }
+    }
+
+    @Test
     fun `spendable note constructors defensively copy arrays`() {
         val commitment = ByteArray(32) { 0x11 }
         val nullifier = ByteArray(32) { 0x22 }
@@ -285,6 +459,269 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         assertTrue(error.message.orEmpty().contains("previousProofOpenEnvelopes is required"))
     }
 
+    private data class ProofFixture(
+        val proofOutputArchive: ByteArray,
+        val envelopeArchive: ByteArray,
+        val verifierRecordRef: VerifierRecordRef,
+        val verifierKeyName: String,
+        val verifierKey: ByteArray,
+        val commitment: ByteArray,
+    )
+
+    private fun proofFixture(
+        circuitId: String,
+        schema: ByteArray,
+        algorithmId: String,
+        entrypoint: String,
+        proofBytes: ByteArray = zk1Proof(
+            listOf(
+                fixedBytes(0x11),
+                fixedBytes(0x12),
+                fixedBytes(0x13),
+                fixedBytes(0x14),
+                fixedBytes(0x15),
+                fixedBytes(0x16),
+                fixedBytes(0x17),
+                fixedBytes(0x18),
+                fixedBytes(0x19),
+            ),
+        ),
+    ): ProofFixture {
+        val verifierKeyName = "kagemusha-test-${circuitId.substringAfterLast('/').replace('_', '-')}"
+        val verifierKey = zk1VerifierKey(circuitId)
+        val commitment = verifyingKeyCommitment("halo2/ipa", verifierKey)
+        val envelope = openVerifyEnvelopeArchive(
+            circuitId = circuitId,
+            schema = schema,
+            vkHash = commitment,
+            proofBytes = proofBytes,
+        )
+        val proofOutput = privacyBuildResultArchive(
+            algorithmId = algorithmId,
+            entrypoint = entrypoint,
+            proof = envelope,
+        )
+        val record = verifierRecordArchive(
+            circuitId = circuitId,
+            schema = schema,
+            verifierKey = verifierKey,
+        )
+        return ProofFixture(
+            proofOutputArchive = proofOutput,
+            envelopeArchive = envelope,
+            verifierRecordRef = VerifierRecordRef("halo2/ipa:$verifierKeyName", record),
+            verifierKeyName = verifierKeyName,
+            verifierKey = verifierKey,
+            commitment = commitment,
+        )
+    }
+
+    private fun privacyBuildResultArchive(
+        algorithmId: String,
+        entrypoint: String,
+        proof: ByteArray,
+        status: Int = 0,
+        errorCode: Int = 0,
+        message: String = "",
+    ): ByteArray {
+        val archive = NoritoCodec.encode(
+            Unit,
+            "privacy.BuildProofResultV1",
+            object : TypeAdapter<Unit> {
+                override fun encode(encoder: NoritoEncoder, value: Unit) {
+                    writeTestField(encoder) { it.writeUInt(1, 32) }
+                    writeTestField(encoder) { it.writeUInt(status.toLong(), 32) }
+                    writeTestField(encoder) { it.writeUInt(errorCode.toLong(), 32) }
+                    writeTestField(encoder) { writeTestString(it, message) }
+                    writeTestField(encoder) { writeTestString(it, algorithmId) }
+                    writeTestField(encoder) { writeTestString(it, entrypoint) }
+                    writeTestField(encoder) { writeTestString(it, "halo2/ipa:kagemusha-test") }
+                    writeTestField(encoder) { writeTestBytesVec(it, ByteArray(0)) }
+                    writeTestField(encoder) { writeTestBytesVec(it, proof) }
+                    writeTestField(encoder) { it.writeByte(0) }
+                }
+
+                override fun decode(decoder: NoritoDecoder): Unit =
+                    throw UnsupportedOperationException("test privacy results are encode-only")
+            },
+            NoritoHeader.COMPACT_LEN,
+        )
+        for (index in 6 until 22) {
+            archive[index] = 0x42
+        }
+        return archive
+    }
+
+    private fun openVerifyEnvelopeArchive(
+        circuitId: String,
+        schema: ByteArray,
+        vkHash: ByteArray,
+        proofBytes: ByteArray,
+        aux: ByteArray = ByteArray(0),
+    ): ByteArray =
+        NoritoCodec.encode(
+            Unit,
+            KagemushaRecursiveSpendRequestCodecs.SCHEMA_OPEN_VERIFY_ENVELOPE,
+            object : TypeAdapter<Unit> {
+                override fun encode(encoder: NoritoEncoder, value: Unit) {
+                    writeTestField(encoder) { it.writeUInt(0, 32) }
+                    writeTestField(encoder) { writeTestString(it, circuitId) }
+                    writeTestField(encoder) { it.writeBytes(vkHash) }
+                    writeTestField(encoder) { writeTestBytesVec(it, schema) }
+                    writeTestField(encoder) { writeTestBytesVec(it, proofBytes) }
+                    writeTestField(encoder) { writeTestBytesVec(it, aux) }
+                }
+
+                override fun decode(decoder: NoritoDecoder): Unit =
+                    throw UnsupportedOperationException("test OpenVerifyEnvelope archives are encode-only")
+            },
+            NoritoHeader.COMPACT_LEN,
+        )
+
+    private fun verifierRecordArchive(
+        circuitId: String,
+        schema: ByteArray,
+        verifierKey: ByteArray,
+        status: Int = 1,
+    ): ByteArray {
+        val commitment = verifyingKeyCommitment("halo2/ipa", verifierKey)
+        return NoritoCodec.encode(
+            Unit,
+            KagemushaRecursiveSpendRequestCodecs.SCHEMA_VERIFYING_KEY_RECORD,
+            object : TypeAdapter<Unit> {
+                override fun encode(encoder: NoritoEncoder, value: Unit) {
+                    writeTestField(encoder) { it.writeUInt(1, 32) }
+                    writeTestField(encoder) { writeTestString(it, circuitId) }
+                    writeTestField(encoder) { writeTestOptionRaw(it, null) }
+                    writeTestField(encoder) { writeTestString(it, "offline_kagemusha") }
+                    writeTestField(encoder) { it.writeUInt(0, 32) }
+                    writeTestField(encoder) { writeTestString(it, "pallas") }
+                    writeTestField(encoder) { it.writeBytes(Blake2b.digest256(schema)) }
+                    writeTestField(encoder) { it.writeBytes(commitment) }
+                    writeTestField(encoder) { it.writeUInt(verifierKey.size.toLong(), 32) }
+                    writeTestField(encoder) { it.writeUInt((192 * 1024).toLong(), 32) }
+                    writeTestField(encoder) { writeTestOptionRaw(it, null) }
+                    writeTestField(encoder) { writeTestOptionRaw(it, null) }
+                    writeTestField(encoder) { writeTestOptionRaw(it, null) }
+                    writeTestField(encoder) { writeTestOptionRaw(it, null) }
+                    writeTestField(encoder) { writeTestOptionRaw(it, null) }
+                    writeTestField(encoder) {
+                        writeTestOptionRaw(
+                            it,
+                            testPayload {
+                                writeTestField(this) { field -> writeTestString(field, "halo2/ipa") }
+                                writeTestField(this) { field -> writeTestBytesVec(field, verifierKey) }
+                            },
+                        )
+                    }
+                    writeTestField(encoder) { it.writeUInt(status.toLong(), 8) }
+                }
+
+                override fun decode(decoder: NoritoDecoder): Unit =
+                    throw UnsupportedOperationException("test verifier records are encode-only")
+            },
+            NoritoHeader.COMPACT_LEN,
+        )
+    }
+
+    private fun zk1VerifierKey(circuitId: String): ByteArray {
+        val out = "ZK1\u0000".toByteArray(Charsets.US_ASCII).toMutableList()
+        appendTlv(out, "CID1", circuitId.toByteArray(Charsets.UTF_8))
+        appendTlv(out, "IPAK", byteArrayOf(7, 0, 0, 0))
+        appendTlv(out, "H2VK", ByteArray(32) { (it + 1).toByte() })
+        return out.toByteArray()
+    }
+
+    private fun zk1Proof(columns: List<ByteArray>): ByteArray {
+        val out = "ZK1\u0000".toByteArray(Charsets.US_ASCII).toMutableList()
+        appendTlv(out, "PROF", byteArrayOf(0x55))
+        val payload = ArrayList<Byte>()
+        appendU32Le(payload, columns.size)
+        appendU32Le(payload, 1)
+        for (column in columns) {
+            require(column.size == 32)
+            for (byte in column) payload.add(byte)
+        }
+        appendTlv(out, "I10P", payload.toByteArray())
+        return out.toByteArray()
+    }
+
+    private fun appendTlv(out: MutableList<Byte>, tag: String, payload: ByteArray) {
+        for (byte in tag.toByteArray(Charsets.US_ASCII)) out.add(byte)
+        appendU32Le(out, payload.size)
+        for (byte in payload) out.add(byte)
+    }
+
+    private fun appendU32Le(out: MutableList<Byte>, value: Int) {
+        out.add((value and 0xff).toByte())
+        out.add(((value ushr 8) and 0xff).toByte())
+        out.add(((value ushr 16) and 0xff).toByte())
+        out.add(((value ushr 24) and 0xff).toByte())
+    }
+
+    private fun writeTestField(parent: NoritoEncoder, writePayload: (NoritoEncoder) -> Unit) {
+        val child = parent.childEncoder()
+        writePayload(child)
+        val payload = child.toByteArray()
+        parent.writeLength(payload.size.toLong(), true)
+        parent.writeBytes(payload)
+    }
+
+    private fun testPayload(writePayload: NoritoEncoder.() -> Unit): ByteArray {
+        val encoder = NoritoEncoder(NoritoHeader.COMPACT_LEN)
+        encoder.writePayload()
+        return encoder.toByteArray()
+    }
+
+    private fun writeTestString(encoder: NoritoEncoder, value: String) {
+        val bytes = value.toByteArray(Charsets.UTF_8)
+        encoder.writeLength(bytes.size.toLong(), true)
+        encoder.writeBytes(bytes)
+    }
+
+    private fun writeTestBytesVec(encoder: NoritoEncoder, value: ByteArray) {
+        encoder.writeUInt(value.size.toLong(), 64)
+        encoder.writeBytes(value)
+    }
+
+    private fun writeTestOptionRaw(encoder: NoritoEncoder, payload: ByteArray?) {
+        if (payload == null) {
+            encoder.writeByte(0)
+            return
+        }
+        encoder.writeByte(1)
+        encoder.writeLength(payload.size.toLong(), true)
+        encoder.writeBytes(payload)
+    }
+
+    private fun verifyingKeyCommitment(backend: String, verifierKey: ByteArray): ByteArray {
+        val digest = MessageDigest.getInstance("SHA-256")
+        val backendBytes = backend.toByteArray(Charsets.UTF_8)
+        digest.update("iroha:zk:v1:vk".toByteArray(Charsets.US_ASCII))
+        digest.update(longBigEndian(backendBytes.size.toLong()))
+        digest.update(backendBytes)
+        digest.update(longBigEndian(verifierKey.size.toLong()))
+        digest.update(verifierKey)
+        return digest.digest()
+    }
+
+    private fun longBigEndian(value: Long): ByteArray {
+        val out = ByteArray(8)
+        for (index in out.indices) {
+            out[index] = ((value ushr ((7 - index) * 8)) and 0xff).toByte()
+        }
+        return out
+    }
+
+    private fun fixedBytes(seed: Int): ByteArray = ByteArray(32) { seed.toByte() }
+
+    private fun sampleAssetDefinition(): String {
+        val bytes = ByteArray(16) { (it + 1).toByte() }
+        bytes[6] = ((bytes[6].toInt() and 0x0f) or 0x40).toByte()
+        bytes[8] = ((bytes[8].toInt() and 0x3f) or 0x80).toByte()
+        return AssetDefinitionIdEncoder.encodeFromBytes(bytes)
+    }
+
     private fun sampleNote(seed: Int = 0x21): SpendableNoteDescriptor =
         SpendableNoteDescriptor(
             noteCommitment = ByteArray(32) { seed.toByte() },
@@ -329,6 +766,23 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         }
         return fields
     }
+
+    private fun sequencePayloads(payload: ByteArray): List<ByteArray> {
+        val decoder = NoritoDecoder(payload, NoritoHeader.COMPACT_LEN)
+        val count = decoder.readUInt(64)
+        require(count <= Int.MAX_VALUE) { "test sequence too large" }
+        val fields = ArrayList<ByteArray>(count.toInt())
+        repeat(count.toInt()) {
+            val length = decoder.readLength(true)
+            require(length <= Int.MAX_VALUE) { "test sequence item too large" }
+            fields.add(decoder.readBytes(length.toInt()))
+        }
+        assertEquals(0, decoder.remaining())
+        return fields
+    }
+
+    private fun readFixed32VecPayload(payload: ByteArray): List<ByteArray> =
+        sequencePayloads(payload).map { readFixedArrayPayload(it, 32) }
 
     private fun readBytesVecPayload(payload: ByteArray): ByteArray {
         val decoder = NoritoDecoder(payload, NoritoHeader.COMPACT_LEN)
@@ -422,5 +876,17 @@ class KagemushaRecursiveSpendRequestCodecsTest {
 
     private companion object {
         private const val U128_MAX_PLUS_ONE = "340282366920938463463374607431768211456"
+        private val CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA: ByteArray =
+            (
+                "{\"schema\":\"confidential_transfer_v2\",\"public_inputs\":[\"input_commitment_0\"," +
+                    "\"input_commitment_1\",\"nullifier_0\",\"nullifier_1\",\"output_commitment_0\"," +
+                    "\"output_commitment_1\",\"root\",\"asset_tag\",\"chain_tag\"]}"
+                ).toByteArray(Charsets.UTF_8)
+        private val CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA: ByteArray =
+            (
+                "{\"schema\":\"confidential_unshield_v3\",\"public_inputs\":[\"input_commitment_0\"," +
+                    "\"input_commitment_1\",\"nullifier_0\",\"nullifier_1\",\"change_commitment_0\"," +
+                    "\"root\",\"public_amount\",\"asset_tag\",\"chain_tag\"]}"
+                ).toByteArray(Charsets.UTF_8)
     }
 }
