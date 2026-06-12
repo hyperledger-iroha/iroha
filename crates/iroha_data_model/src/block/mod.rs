@@ -579,6 +579,13 @@ impl SignedBlock {
             }])
         });
         let proof_policy_hash = HashOf::new(&proof_policies);
+        let da_commitments_hash = da_commitments.as_ref().and_then(|bundle| {
+            if bundle.is_empty() {
+                None
+            } else {
+                Some(bundle.canonical_hash())
+            }
+        });
 
         let header = BlockHeader {
             height: nonzero!(1_u64),
@@ -586,7 +593,7 @@ impl SignedBlock {
             merkle_root: Some(merkle_root),
             result_merkle_root: result_merkle.root(),
             da_proof_policies_hash: Some(proof_policy_hash),
-            da_commitments_hash: None,
+            da_commitments_hash,
             da_pin_intents_hash: None,
             prev_roster_evidence_hash: None,
             npos_effects_hash: None,
@@ -608,7 +615,7 @@ impl SignedBlock {
             transactions,
             external_entrypoints: external_entrypoints.clone(),
             execution_context: None,
-            da_commitments: None,
+            da_commitments,
             da_proof_policies: Some(proof_policies),
             da_pin_intents: None,
             previous_roster_evidence: None,
@@ -626,12 +633,11 @@ impl SignedBlock {
             trigger_completions: Vec::new(),
             axt_policy_snapshot: None,
         };
-        let mut block = SignedBlock {
+        let block = SignedBlock {
             signatures: [signature].into_iter().collect(),
             payload,
             result: Some(result),
         };
-        block.set_da_commitments(da_commitments);
         block
     }
 

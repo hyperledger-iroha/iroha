@@ -5367,6 +5367,16 @@ and completed history lives in [`status.md`](./status.md).
   reports non-UTF-8 manifest JSON, readiness JSON, all-lanes summary JSON,
   readiness Markdown, and release-note attachments as structured bundle
   failures instead of raising out of the verifier.
+- Keep DA/RBC runtime hardening focused on protocol-quorum and
+  roster-verified evidence boundaries. Recent cleanup removed stale commit
+  quorum-bypass plumbing, an unused READY-quorum progress-sync argument, and a
+  dead near-tip backpressure branch that referenced the debug-aware quorum
+  helper; future DA/RBC work should keep receiver-side availability/finality
+  gates on protocol quorum and avoid reintroducing debug-shortcut dependencies
+  outside local emission/scheduling helpers. The 2026-06-12 broad
+  `cargo test -p iroha_core --lib -- --nocapture` run is green (`4647` passed,
+  `262` ignored) after the retained-summary evidence hardening and
+  default-feature STARK-only fixture gating.
 - Keep extending the Sumeragi formal corridor with independent TLC
   cross-checks; the current local TLC slice covers the top-level commit-path
   fast model under the fairness-backed `Spec`, including finality and
@@ -5374,7 +5384,8 @@ and completed history lives in [`status.md`](./status.md).
   live commit-gate finality equivalence, NPoS stake-quorum fork-safety via
   `fork-npos`,
   live commit-gate RBC evidence binding,
-	  RBC CHUNK gate header/digest matching,
+	  inbound RBC READY/DELIVER key-header-signature evidence binding,
+	  inbound RBC CHUNK key-header-signature evidence binding and digest matching,
 	  RBC READY gate full-chunk matching,
 	  RBC DELIVER gate complete-evidence matching,
 	  RBC DELIVER finality buffered-commit matching,
@@ -12368,7 +12379,13 @@ fixture corridor into broader release validation.
   terminal delivery and resumed progress. The payload-loss DA-gate scenario
   now requires expected-height RBC session evidence on commit quorum, at least
   one nonterminal/incomplete session, and committed-quorum Sumeragi snapshots
-  before accepting commit progress. Required-observation large-payload DA/RBC
+  before accepting commit progress. The confidential downtime plus timeout
+  restart-pressure localnet now also requires the restarted peer to catch up to
+  the expected non-empty height instead of logging a best-effort waiver, and
+  its shield fixtures carry deterministic non-empty encrypted payload envelopes
+  so production payload validation cannot silently turn the shield debit into a
+  rejected-in-block no-op.
+  Required-observation large-payload DA/RBC
   tests, including the tight block queue case, fail closed if neither the session
   endpoint nor quorum-visible persisted RBC snapshots expose same-block-hash
   delivery evidence; conflicting persisted delivered hashes cannot be merged
@@ -12477,11 +12494,14 @@ fixture corridor into broader release validation.
   same-key summaries instead of preserving old delivered-payload proof. RBC INIT
   rejection coverage now also pins digest-count, digest-root, header-hash, and
   invalid leader-signature/layout failures as no-cache paths, so malformed INITs
-  cannot leave session-roster or vote-roster evidence behind. Local
-  authoritative payload shortcuts now also hydrate-probe a cloned session before
-  satisfying missing-chunk progress, so a matching local payload hash cannot
-  accept READY/DELIVER progress when the advertised RBC chunk root, digest
-  vector, or layout contradicts deterministic local chunking.
+  cannot leave session-roster or vote-roster evidence behind. Local READY and
+  DELIVER signing now shares the same key/header boundary: helpers require
+  matching block-header hash/height/view metadata plus a leader signature that
+  verifies against the session roster for that height/view before producing new
+  local signatures. Local authoritative payload shortcuts now also hydrate-probe
+  a cloned session before satisfying missing-chunk progress, so a matching local
+  payload hash cannot accept READY/DELIVER progress when the advertised RBC
+  chunk root, digest vector, or layout contradicts deterministic local chunking.
   Committed-block cleanup now keeps retained RBC summaries observable without
   synthesizing delivered status unless a matching local payload and positive
   chunk shape back the summary. Live RBC complete payload matches now also hash
@@ -12490,7 +12510,12 @@ fixture corridor into broader release validation.
   payload proof without byte-carrying live/recovered session evidence. Delivered
   payload-byte telemetry also refuses complete chunk sets whose reconstructed
   bytes do not match the advertised payload hash, so mismatched payload material
-  cannot consume or report delivered-byte metrics; complete chunk sets without an
+  cannot consume or report delivered-byte metrics. Production DA availability
+  and authoritative-payload repair suppression now additionally require that
+  the live/recovered RBC session's cached leader signature verifies against the
+  resolved session roster, so forged signature metadata remains diagnostic-only
+  even with complete chunk bytes; the older map-based complete-byte predicate is
+  retained only for unit-level byte-shape coverage. Complete chunk sets without an
   advertised payload hash now follow the same nonterminal/unreported path,
   including restart recovery of `delivered=true` persisted sessions.
   RS16 layout payload-size metadata alone is no longer accepted as
@@ -12530,8 +12555,11 @@ fixture corridor into broader release validation.
   invariant: non-invalid zero-chunk or over-counted sessions with READY quorum
   remain unresolved before the availability timeout unless local block payload
   bytes are already available; the timeout boundary still releases the
-  reschedule gate. The direct availability reschedule TLA gate includes the
-  over-counted case and expected-failure mutation.
+  reschedule gate. The live reschedule gate also uses protocol READY quorum
+  even when `force_deliver_quorum_one` lowers local emission helpers, so
+  debug-only one-READY delivery cannot resolve DA availability before
+  receiver-side quorum. The direct availability reschedule TLA gate includes
+  the over-counted case and expected-failure mutation.
   RBC recovery-helper coverage now also pins non-invalid over-counted metadata
   as payload-repairable, matching zero-chunk metadata rather than treating the
   impossible count as complete recovery evidence.
@@ -12550,14 +12578,22 @@ fixture corridor into broader release validation.
 	  hydration-probe chunk-metadata guard before status, cleanup, or DELIVER
 	  emission can record bytes; matching local payload hashes alone no longer
 	  satisfy delivered-byte telemetry when advertised roots, digest vectors, or
-	  layouts contradict deterministic local chunking.
+	  layouts contradict deterministic local chunking. Commit cleanup now keeps
+	  retained summaries on that boundary as well: live-session summaries retain
+	  delivered status and delivered-byte metrics only when complete chunks or the
+	  strict local fallback prove the payload, while status-only retained
+	  summaries now need exact local height/view/payload-hash evidence plus a
+	  successful deterministic exact-frontier RBC snapshot refresh.
 	  Live maintenance now carries that invalid-shape invariant through READY and
 	  DELIVER emission, rebroadcast scheduling, and operator backlog accounting:
 	  malformed zero-total or over-counted sessions first try local-payload
 	  hydration; exact authoritative local payloads can rebuild zero-total
 	  metadata into the deterministic positive chunk layout, while sessions that
 	  remain malformed stay deferred/repair-visible instead of signing from
-	  malformed counters or reporting zero missing pressure. The RBC
+	  malformed counters or reporting zero missing pressure. Pending local READY
+	  and ready-quorum local DELIVER wakeups now use the same roster-verified
+	  leader-signature boundary as the local signing helpers, so invalid leader
+	  metadata cannot hot-loop the actor before the builders refuse to sign. The RBC
 	  backlog-status TLA gate now also models malformed summary/proposal/snapshot
 	  pressure so saturating-to-zero accounting and authoritative-payload skips
 	  stay pinned as expected failures. A dedicated RBC payload-hydration TLA
@@ -12589,8 +12625,56 @@ fixture corridor into broader release validation.
   Pending-block validation priority now uses the same exact-payload
   complete-delivery invariant for both live RBC sessions and retained RBC
   status summaries, so malformed `delivered=true` evidence with missing chunks,
-  missing payload hashes, or mismatched payload hashes cannot schedule
-  validation as `rbc_deliver`.
+  missing payload hashes, mismatched payload hashes, live delivered chunks for
+  locally mismatched pending bodies, or status-only summaries for locally
+  mismatched pending bodies cannot schedule validation as `rbc_deliver` or make
+  missing-QC cleanup treat repair payloads as available.
+  Status-only READY-quorum counters now follow the same local
+  height/view/payload-hash binding before they can schedule
+  `rbc_ready_quorum` priority or preserve missing-QC repair availability, and
+  live READY-quorum priority now also requires the live session payload hash to
+  match the pending block's locally verified payload hash. That priority gate
+  now uses the protocol READY quorum even when the test-only
+  `force_deliver_quorum_one` shortcut lowers local RBC emission helpers, so
+  debug settings cannot promote live-session or retained-summary priority below
+  receiver-side protocol quorum.
+	  DA availability proofing now also requires complete live RBC payload sessions
+	  to carry matching block-header height/view/hash metadata and leader-signature
+	  metadata before they can clear missing-local-data gates; summary-only status
+	  and malformed live sessions remain diagnostic-only.
+	  Local RBC READY and DELIVER construction now shares that metadata binding:
+	  validators refuse to sign local READY/DELIVER messages for sessions whose
+	  INIT/header metadata is absent or keyed to a different block height, hash, or
+	  view, while READY relay uses the protocol relay threshold even when
+	  `force_deliver_quorum_one` lowers local DELIVER emission helpers. READY
+	  rebroadcast suppression, targeted missing-READY payload/body rescue, and
+	  cached-slot timeout pressure also use protocol READY quorum, so the debug
+	  one-READY DELIVER shortcut cannot suppress READY fanout, unlock targeted
+	  payload rescue, or release reduced timeout pressure early. READY rebroadcast
+	  bundles stay limited to already-recorded peer signatures. Cached RBC INIT
+	  rebuilds and payload-bundle emission apply the
+	  same key/header/signature binding before repackaging cached session metadata,
+	  including same-height/view headers that are leader-signed for a different
+	  block hash. Late missing-BlockCreated repair targeting now also trusts cached
+	  leader-signature indices only after that verification, falling back to the
+	  real slot leader when a cached index is forged. Inbound RBC chunk repair
+	  responses now apply the same boundary before serving cached chunks, so
+	  invalid, malformed, key/header-mismatched, or wrong-leader-signature sessions
+	  cannot answer `RbcChunkRequest`. Outbound missing-chunk repair now also
+	  requires cached header/signature metadata to match the session key before
+	  emitting `RbcChunkRequest`, falling back to missing-BlockCreated repair for
+	  misbound sessions. Production READY rebroadcast paths now use the same
+	  verified session boundary before broad or targeted repair packages recorded
+	  READY signatures for outbound traffic.
+	  The actor idle scheduler now wakes immediately for complete READY-quorum RBC
+	  sessions that still need local DELIVER emission, but keeps observers and
+	  non-signing roles from hot-looping on states they cannot advance, and keeps
+  complete-but-payload-mismatched chunk evidence passive instead of scheduling
+  immediate local DELIVER attempts.
+  Live partial DELIVER acceptance through authoritative local payload fallback
+  is pinned as diagnostic-only delivery status until complete chunk evidence is
+  present, so it can expose READY-quorum progress without masquerading as
+  delivered-RBC validation priority.
   The Torii `/v1/sumeragi/rbc/delivered/{height}/{view}` operator endpoint now
   applies that same non-invalid positive-complete chunk invariant to its
   `delivered` flag while keeping incomplete matches visible as diagnostics.
@@ -12672,7 +12756,10 @@ fixture corridor into broader release validation.
   deferrals together with pending RBC messages. The
   four-peer NPoS/DA late-VRF persistence gate now passes on the current tree,
   advancing past the previously documented height-4 RBC stall and finalizing the
-  epoch after recording the late reveal.
+  epoch after recording the late reveal. DA-enabled NPoS recovery roster
+  shrinkage now also has direct regression coverage proving the baseline
+  validator set is restored and the pending restore marker is consumed at the
+  committed recovery height.
   The RBC status lookup formal model now matches the current helper contract:
   `is_delivered` requires delivered, non-invalid, complete chunk metadata while
   intentionally not checking payload equality, and the expected-failure configs

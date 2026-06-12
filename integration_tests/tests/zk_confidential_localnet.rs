@@ -140,6 +140,14 @@ fn live_halo2_verifying_key_registration() -> verifying_keys::RegisterVerifyingK
     }
 }
 
+fn live_encrypted_payload(seed: [u8; 32]) -> ConfidentialEncryptedPayload {
+    let mut nonce = [0_u8; 24];
+    nonce.copy_from_slice(&seed[..24]);
+    let mut ciphertext = b"zk-confidential-localnet-payload-v1".to_vec();
+    ciphertext.extend_from_slice(&seed);
+    ConfidentialEncryptedPayload::new([1_u8; 32], nonce, ciphertext)
+}
+
 fn live_halo2_attachment(seed: [u8; 32]) -> ProofAttachment {
     let fixture = live_halo2_fixture(seed);
     let proof_box = fixture.proof_box(ZK_BACKEND_HALO2_IPA);
@@ -1096,7 +1104,7 @@ async fn confidential_public_and_shielded_three_hop_localnet() -> Result<()> {
                 source.clone(),
                 600_u128,
                 marker(1),
-                ConfidentialEncryptedPayload::default(),
+                live_encrypted_payload(marker(1)),
             )
             .into(),
         ],
@@ -1195,7 +1203,7 @@ async fn confidential_public_and_shielded_three_hop_localnet() -> Result<()> {
                 source.clone(),
                 500_u128,
                 marker(2),
-                ConfidentialEncryptedPayload::default(),
+                live_encrypted_payload(marker(2)),
             )
             .into(),
         ],
@@ -1306,7 +1314,7 @@ async fn confidential_public_two_three_hop_sequences_allow_multiple_unshields_lo
                 source.clone(),
                 600_u128,
                 marker(61),
-                ConfidentialEncryptedPayload::default(),
+                live_encrypted_payload(marker(61)),
             )
             .into(),
         ],
@@ -1481,7 +1489,7 @@ async fn confidential_shielded_asset_three_hop_localnet() -> Result<()> {
                 source.clone(),
                 500_u128,
                 marker(71),
-                ConfidentialEncryptedPayload::default(),
+                live_encrypted_payload(marker(71)),
             )
             .into(),
         ],
@@ -1578,7 +1586,7 @@ async fn confidential_shielded_asset_three_hop_then_unshield_and_transfer_localn
                 source.clone(),
                 500_u128,
                 marker(91),
-                ConfidentialEncryptedPayload::default(),
+                live_encrypted_payload(marker(91)),
             )
             .into(),
         ],
@@ -1723,7 +1731,7 @@ async fn confidential_dual_restart_stress_mid_flow_localnet() -> Result<()> {
                 source.clone(),
                 700_u128,
                 marker(131),
-                ConfidentialEncryptedPayload::default(),
+                live_encrypted_payload(marker(131)),
             )
             .into(),
         ],
@@ -1909,7 +1917,7 @@ async fn confidential_combined_peer_downtime_and_timeout_pressure_localnet() -> 
                 source.clone(),
                 500_u128,
                 marker(151),
-                ConfidentialEncryptedPayload::default(),
+                live_encrypted_payload(marker(151)),
             )
             .into(),
         ],
@@ -2025,21 +2033,13 @@ async fn confidential_combined_peer_downtime_and_timeout_pressure_localnet() -> 
     )
     .await?;
 
-    if let Err(err) = wait_for_peer_non_empty(
+    wait_for_peer_non_empty(
         &network,
         restart_idx,
         non_empty_target,
         "combined downtime+timeout restarted peer catch-up",
     )
-    .await
-    {
-        // TODO: tighten this back to a hard restarted-peer catch-up requirement once grouped
-        // confidential restart-pressure runs reliably converge on the restarted node under
-        // serialized localnet startup. The final balance checks below still verify the flow.
-        eprintln!(
-            "combined downtime+timeout restarted peer did not catch up to non-empty height {non_empty_target}; continuing because quorum progress and final balances are the authoritative end-state signal: {err:?}"
-        );
-    }
+    .await?;
 
     let quorum = peer_clients.len().saturating_sub(1).max(1);
     wait_for_numeric_balance_quorum(
@@ -2121,7 +2121,7 @@ async fn confidential_unshield_rejects_corrupted_proof_bytes_localnet() -> Resul
                 source.clone(),
                 250_u128,
                 marker(161),
-                ConfidentialEncryptedPayload::default(),
+                live_encrypted_payload(marker(161)),
             )
             .into(),
         ],
@@ -2251,7 +2251,7 @@ async fn confidential_unshield_rejects_corrupted_vk_bytes_localnet() -> Result<(
                 source.clone(),
                 250_u128,
                 marker(171),
-                ConfidentialEncryptedPayload::default(),
+                live_encrypted_payload(marker(171)),
             )
             .into(),
         ],
@@ -2381,7 +2381,7 @@ async fn confidential_unshield_rejects_wrong_statement_hint_localnet() -> Result
                 source.clone(),
                 250_u128,
                 marker(181),
-                ConfidentialEncryptedPayload::default(),
+                live_encrypted_payload(marker(181)),
             )
             .into(),
         ],
@@ -2792,7 +2792,7 @@ async fn confidential_unshield_rejected_when_disabled() -> Result<()> {
                 source.clone(),
                 200_u128,
                 marker(9),
-                ConfidentialEncryptedPayload::default(),
+                live_encrypted_payload(marker(9)),
             )
             .into(),
         ],
@@ -2924,7 +2924,7 @@ async fn confidential_shield_rejected_when_disabled() -> Result<()> {
                 source.clone(),
                 200_u128,
                 marker(7),
-                ConfidentialEncryptedPayload::default(),
+                live_encrypted_payload(marker(7)),
             ),
         )],
         iroha_data_model::metadata::Metadata::default(),
@@ -3015,7 +3015,7 @@ async fn confidential_shield_rejected_without_zk_registration() -> Result<()> {
                 source.clone(),
                 200_u128,
                 marker(11),
-                ConfidentialEncryptedPayload::default(),
+                live_encrypted_payload(marker(11)),
             ),
         )],
         iroha_data_model::metadata::Metadata::default(),
@@ -3119,7 +3119,7 @@ async fn confidential_unshield_rejected_with_stale_root_hint() -> Result<()> {
                 source.clone(),
                 250_u128,
                 marker(41),
-                ConfidentialEncryptedPayload::default(),
+                live_encrypted_payload(marker(41)),
             )
             .into(),
         ],
@@ -3345,7 +3345,7 @@ async fn confidential_unshield_duplicate_nullifier_rejected() -> Result<()> {
                 source.clone(),
                 300_u128,
                 marker(91),
-                ConfidentialEncryptedPayload::default(),
+                live_encrypted_payload(marker(91)),
             )
             .into(),
         ],
@@ -3501,7 +3501,7 @@ async fn confidential_shield_and_unshield_rejected_in_transparent_only_mode() ->
                 source.clone(),
                 200_u128,
                 marker(15),
-                ConfidentialEncryptedPayload::default(),
+                live_encrypted_payload(marker(15)),
             ),
         )],
         iroha_data_model::metadata::Metadata::default(),
@@ -3918,6 +3918,18 @@ fn pressure_submitter_clients_applies_short_timeouts() {
 
 #[test]
 fn restart_progress_hard_timeout_extends_combined_pressure_windows() {
+    assert_eq!(
+        restart_progress_timeout("combined downtime+timeout restarted peer catch-up"),
+        COMBINED_PRESSURE_CATCH_UP_TIMEOUT,
+    );
+    assert_eq!(
+        restart_progress_timeout("combined downtime+timeout transfer failed"),
+        COMBINED_PRESSURE_RESTART_PROGRESS_TIMEOUT,
+    );
+    assert_eq!(
+        restart_progress_timeout("plain restart"),
+        RESTART_PROGRESS_TIMEOUT
+    );
     assert_eq!(
         restart_progress_hard_timeout("combined downtime+timeout restarted peer catch-up"),
         COMBINED_PRESSURE_CATCH_UP_TIMEOUT

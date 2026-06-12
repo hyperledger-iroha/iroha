@@ -4656,10 +4656,12 @@ redistributable schemas, and official trust/revocation bundles.
     isolation and hardening the RBC sidecar cooldown fixture.
   - The later 2026-05-03 restarted-peer commit-QC recovery fix is covered by
     focused block-body response regressions and the confidential downtime plus
-    timeout localnet scenario, now passing without the restarted-peer catch-up
-    waiver warning. Rerun the full `cargo test -p iroha_core --lib` corridor
-    after the next main-loop edit or before opening the next full workspace
-    sweep.
+    timeout localnet scenario, which now enforces restarted-peer non-empty
+    height catch-up before final balance checks.
+  - The 2026-06-12 `cargo test -p iroha_core --lib -- --nocapture` rerun is
+    green (`4647` passed, `0` failed, `262` ignored; finished in `11832.87s`)
+    after the retained-summary DA/RBC evidence hardening and default-feature
+    STARK-only fixture gating.
   - For the next consensus change, rerun the same broad window so the collector
     fallback, exact-frontier repair, cached-target, vote replay, roster
     recovery, future-new-view, and model-backed reschedule fixtures continue to
@@ -4681,9 +4683,9 @@ redistributable schemas, and official trust/revocation bundles.
     into an arbitrary pipeline unless a new bug requires more than the active
     plus one-future-slot abstraction.
 - Reopen the wider validation corridor after the recent focused `iroha_core`, `iroha_torii`, and `iroha_data_model` test additions.
-  - `cargo test -p iroha_core --lib` is green as of 2026-05-03; rerun it only
-    after the next core/consensus change or before opening the full workspace
-    corridor.
+  - `cargo test -p iroha_core --lib -- --nocapture` is green as of 2026-06-12
+    (`4647` passed, `262` ignored); rerun it only after the next core/consensus
+    change or before opening the full workspace corridor.
   - `cargo test -p iroha_torii` is green as of 2026-05-03 after fixing the
     macOS attachment-sanitizer subprocess wrapper path; rerun it after the next
     Torii/API change or before opening the full workspace corridor.

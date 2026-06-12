@@ -5233,10 +5233,16 @@ impl PinIntentSpoolResult {
 pub enum PinIntentSpoolReason {
     /// Pin intent survived validation and dedupe.
     Kept,
+    /// Pin intent bundle version was unsupported.
+    UnsupportedVersion,
     /// Manifest hash was zero or missing.
     ZeroManifest,
     /// Intent duplicated lane/epoch/sequence/ticket.
     DuplicateIntent,
+    /// Storage ticket was reused by another pin intent.
+    DuplicateStorageTicket,
+    /// Manifest hash was reused by another pin intent.
+    DuplicateManifest,
     /// Alias collision superseded this intent.
     AliasSuperseded,
     /// Lane was not present in the lane catalog.
@@ -5254,8 +5260,11 @@ impl PinIntentSpoolReason {
     fn label(self) -> &'static str {
         match self {
             PinIntentSpoolReason::Kept => "kept",
+            PinIntentSpoolReason::UnsupportedVersion => "unsupported_version",
             PinIntentSpoolReason::ZeroManifest => "zero_manifest",
             PinIntentSpoolReason::DuplicateIntent => "duplicate",
+            PinIntentSpoolReason::DuplicateStorageTicket => "duplicate_storage_ticket",
+            PinIntentSpoolReason::DuplicateManifest => "duplicate_manifest",
             PinIntentSpoolReason::AliasSuperseded => "alias_superseded",
             PinIntentSpoolReason::UnknownLane => "unknown_lane",
             PinIntentSpoolReason::UnknownOwner => "unknown_owner",
@@ -5268,10 +5277,19 @@ impl PinIntentSpoolReason {
 impl From<&DaPinIntentValidationError> for PinIntentSpoolReason {
     fn from(error: &DaPinIntentValidationError) -> Self {
         match error {
+            DaPinIntentValidationError::UnsupportedVersion { .. } => {
+                PinIntentSpoolReason::UnsupportedVersion
+            }
             DaPinIntentValidationError::UnknownLane { .. } => PinIntentSpoolReason::UnknownLane,
             DaPinIntentValidationError::UnknownOwner { .. } => PinIntentSpoolReason::UnknownOwner,
             DaPinIntentValidationError::DuplicateIntent { .. } => {
                 PinIntentSpoolReason::DuplicateIntent
+            }
+            DaPinIntentValidationError::DuplicateStorageTicket { .. } => {
+                PinIntentSpoolReason::DuplicateStorageTicket
+            }
+            DaPinIntentValidationError::DuplicateManifest { .. } => {
+                PinIntentSpoolReason::DuplicateManifest
             }
             DaPinIntentValidationError::ZeroManifestHash { .. } => {
                 PinIntentSpoolReason::ZeroManifest

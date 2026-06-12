@@ -18707,6 +18707,7 @@ pub mod isi {
         struct ZkAceTransferFixture {
             state: State,
             asset_def_id: AssetDefinitionId,
+            #[cfg(feature = "zk-stark")]
             receiver: AccountId,
             vk_id: VerifyingKeyId,
             #[cfg(feature = "zk-stark")]
@@ -18767,6 +18768,7 @@ pub mod isi {
             ZkAceTransferFixture {
                 state,
                 asset_def_id,
+                #[cfg(feature = "zk-stark")]
                 receiver,
                 vk_id: VerifyingKeyId::new(
                     iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND,
@@ -19233,6 +19235,7 @@ pub mod isi {
             );
         }
 
+        #[cfg(feature = "zk-stark")]
         #[test]
         fn zk_ace_identity_management_permission_is_account_scoped() {
             let fixture = zk_ace_transfer_fixture();
