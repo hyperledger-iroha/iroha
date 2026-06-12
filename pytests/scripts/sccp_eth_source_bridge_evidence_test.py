@@ -59,6 +59,44 @@ def eth_args(module):
     )
 
 
+def test_eth_cli_redacts_top_level_exception_details(monkeypatch, capsys):
+    module = load_evidence_module()
+
+    def fail_apply(_args):
+        raise ValueError("secret-token /tmp/operator/private-path")
+
+    monkeypatch.setattr(module, "apply_runtime_bytecode_hash", fail_apply)
+
+    try:
+        module.main(
+            [
+                "--bridge-address",
+                "0x" + "11" * 20,
+                "--source-trust-anchor-hash",
+                "0x" + "44" * 32,
+                "--consensus-verifier-hash",
+                "0x" + "55" * 32,
+                "--message-inclusion-verifier-hash",
+                "0x" + "66" * 32,
+                "--finality-policy-hash",
+                "0x" + "88" * 32,
+                "--adapter-verifier-vk-hash",
+                "0x" + ETH_SOURCE_ADAPTER_VERIFIER_VK_HASH_VECTOR,
+                "--deployment-receipt-hash",
+                "0x" + "aa" * 32,
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("ETH source CLI accepted top-level render failure")
+
+    captured = capsys.readouterr()
+    assert "SCCP Ethereum source bridge evidence rendering failed" in captured.err
+    assert "secret-token" not in captured.err
+    assert "private-path" not in captured.err
+
+
 def test_eth_address_parser_rejects_zero_and_wrong_width(tmp_path):
     module = load_evidence_module()
 

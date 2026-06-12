@@ -1977,19 +1977,24 @@ fn derive_ed25519_signature(
     Ok(signature.to_bytes())
 }
 
-fn validate_handshake_signature_len(
+fn validate_handshake_signature_material(
     context: &str,
     name: &str,
-    actual: usize,
+    signature: &[u8],
     expected: usize,
 ) -> Result<(), HarnessError> {
+    let actual = signature.len();
     if actual == expected {
-        Ok(())
-    } else {
-        Err(HarnessError::Validation(format!(
-            "{context} {name} signature must be {expected} bytes, got {actual}"
-        )))
+        if signature.iter().all(|&byte| byte == 0) {
+            return Err(HarnessError::Validation(format!(
+                "{context} {name} signature must not be all zero"
+            )));
+        }
+        return Ok(());
     }
+    Err(HarnessError::Validation(format!(
+        "{context} {name} signature must be {expected} bytes, got {actual}"
+    )))
 }
 
 fn read_handshake_signature_pair(
@@ -1997,15 +2002,15 @@ fn read_handshake_signature_pair(
     context: &str,
 ) -> Result<(), HarnessError> {
     let dilithium = cursor.read_len_prefixed()?;
-    validate_handshake_signature_len(
+    validate_handshake_signature_material(
         context,
         "Dilithium3",
-        dilithium.len(),
+        dilithium,
         DILITHIUM3_SIGNATURE_LEN,
     )?;
 
     let ed25519 = cursor.read_len_prefixed()?;
-    validate_handshake_signature_len(context, "Ed25519", ed25519.len(), ED25519_SIGNATURE_LEN)
+    validate_handshake_signature_material(context, "Ed25519", ed25519, ED25519_SIGNATURE_LEN)
 }
 
 fn validate_noise_padding(
@@ -6008,6 +6013,29 @@ mod tests {
     }
 
     #[test]
+    fn parse_client_hello_rejects_all_zero_dilithium_signature() {
+        let params = RuntimeParams::soranet_defaults();
+        let mut rng = StdRng::seed_from_u64(7314);
+        let (mut client_hello, _state) =
+            build_client_hello(&params, &mut rng).expect("client hello");
+
+        let header = client_first_signature_len_range(&client_hello);
+        let mut offset = header.start;
+        let payload = len_prefixed_payload_range(&client_hello, &mut offset);
+        client_hello[payload].fill(0);
+
+        let err = match parse_client_hello(&client_hello, params.resume_hash) {
+            Ok(_) => panic!("all-zero Dilithium signature material must be rejected"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string().contains("Dilithium3 signature")
+                && err.to_string().contains("all zero"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn parse_client_hello_rejects_malformed_padding() {
         let params = RuntimeParams::soranet_defaults();
         let mut rng = StdRng::seed_from_u64(7314);
@@ -6083,6 +6111,47 @@ mod tests {
         .expect_err("malformed Ed25519 signature length must be rejected");
         assert!(
             err.to_string().contains("Ed25519 signature"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_relay_response_rejects_all_zero_ed25519_signature() {
+        let params = RuntimeParams::soranet_defaults();
+        let mut rng_client = StdRng::seed_from_u64(7315);
+        let mut rng_relay = StdRng::seed_from_u64(7316);
+        let relay_keys = KeyPair::random();
+
+        let (client_hello, _client_state) =
+            build_client_hello(&params, &mut rng_client).expect("client hello");
+        let (mut relay_response, _relay_state) =
+            process_client_hello(&client_hello, &params, &relay_keys, &mut rng_relay)
+                .expect("relay response");
+
+        let (_dilithium_header, ed25519_header) = relay_signature_len_ranges(&relay_response);
+        let mut offset = ed25519_header.start;
+        let payload = len_prefixed_payload_range(&relay_response, &mut offset);
+        relay_response[payload].fill(0);
+
+        let profile = kem_profile(params.kem_id).expect("kem profile");
+        let err = match relay_response.first().copied() {
+            Some(HYBRID_RELAY_RESPONSE_TYPE) => parse_hybrid_relay_response(
+                &relay_response,
+                params.descriptor_commit,
+                profile.suite(),
+            )
+            .map(|_| ()),
+            Some(PQFS_RELAY_RESPONSE_TYPE) => parse_pqfs_relay_response(
+                &relay_response,
+                params.descriptor_commit,
+                profile.suite(),
+            )
+            .map(|_| ()),
+            other => panic!("unexpected relay response type {other:?}"),
+        }
+        .expect_err("all-zero Ed25519 signature material must be rejected");
+        assert!(
+            err.to_string().contains("Ed25519 signature") && err.to_string().contains("all zero"),
             "unexpected error: {err}"
         );
     }

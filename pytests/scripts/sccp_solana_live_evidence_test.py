@@ -95,7 +95,7 @@ class OversizedErrorBody:
     def read(self, size=-1):
         if size is None or size < 0:
             size = 4097
-        return b"solana-error" * size
+        return b"secret-token-solana-error" * size
 
     def close(self):
         return None
@@ -221,9 +221,9 @@ def test_solana_json_rpc_http_error_detail_is_bounded():
         )
     except RuntimeError as exc:
         message = str(exc)
-        assert "HTTP 429" in message
-        assert "...<truncated>" in message
-        assert len(message) < 4300
+        assert message == "JSON-RPC getAccountInfo failed with HTTP 429"
+        assert "secret-token" not in message
+        assert len(message) < 100
     else:
         raise AssertionError("oversized Solana JSON-RPC error body was accepted")
 
@@ -232,7 +232,7 @@ def test_solana_json_rpc_rejects_duplicate_json_keys():
     module = load_live_module()
     duplicate_payload = (
         b'{"jsonrpc":"2.0","id":1,"result":{"context":{"slot":1},'
-        b'"value":null,"value":{}}}'
+        b'"secret-token-value":null,"secret-token-value":{},"value":null}}'
     )
 
     def duplicate_json_opener(_request, timeout):
@@ -248,9 +248,96 @@ def test_solana_json_rpc_rejects_duplicate_json_keys():
             timeout=3.0,
         )
     except RuntimeError as exc:
-        assert "duplicate JSON key" in str(exc)
+        message = str(exc)
+        assert message == "JSON-RPC getAccountInfo returned duplicate JSON keys"
+        assert "secret-token" not in message
+        assert "duplicate JSON key " not in message
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
     else:
         raise AssertionError("duplicate-key Solana JSON-RPC response was accepted")
+
+
+def test_solana_json_rpc_redacts_transport_and_error_response_details():
+    module = load_live_module()
+
+    def secret_url_error_opener(_request, timeout):
+        assert timeout == 3.0
+        raise module.urllib.error.URLError(
+            "secret-token provider URL leaked from transport"
+        )
+
+    def secret_error_object_opener(_request, timeout):
+        assert timeout == 3.0
+        return FakeResponse(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "error": {
+                    "code": -32000,
+                    "message": "secret-token Solana provider error object",
+                },
+            }
+        )
+
+    try:
+        module._json_rpc(
+            "https://solana.example.invalid",
+            "getAccountInfo",
+            [],
+            opener=secret_url_error_opener,
+            timeout=3.0,
+        )
+    except RuntimeError as exc:
+        message = str(exc)
+        assert message == "JSON-RPC getAccountInfo request failed"
+        assert "secret-token" not in message
+    else:
+        raise AssertionError("secret-bearing Solana transport error was accepted")
+
+    try:
+        module._json_rpc(
+            "https://solana.example.invalid",
+            "getAccountInfo",
+            [],
+            opener=secret_error_object_opener,
+            timeout=3.0,
+        )
+    except RuntimeError as exc:
+        message = str(exc)
+        assert message == "JSON-RPC getAccountInfo returned error response"
+        assert "secret-token" not in message
+        assert "provider error object" not in message
+    else:
+        raise AssertionError("secret-bearing Solana JSON-RPC error was accepted")
+
+
+def test_solana_live_cli_redacts_top_level_exception_details(monkeypatch, capsys):
+    module = load_live_module()
+
+    def fail_collect(*_args, **_kwargs):
+        raise RuntimeError("secret-token /tmp/operator/private-path")
+
+    monkeypatch.setattr(module, "collect_live_evidence", fail_collect)
+
+    try:
+        module.main(
+            [
+                "--rpc-url",
+                "https://solana.example.invalid",
+                "--verifier-program-id",
+                _default_program_id(module),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("Solana live CLI accepted top-level collection failure")
+
+    captured = capsys.readouterr()
+    assert "SCCP Solana live evidence collection failed" in captured.err
+    assert "secret-token" not in captured.err
+    assert "private-path" not in captured.err
 
 
 def _live_route_canary_hash(
@@ -563,7 +650,7 @@ def test_live_solana_direct_api_rejects_forged_live_metadata():
         (
             "programdata_executable_base64",
             base64.b64encode(b"not-elf").decode("ascii"),
-            "BPF ELF",
+            "Solana ProgramData executable base64 metadata is invalid",
         ),
         (
             "programdata_executable_base64",
@@ -573,7 +660,7 @@ def test_live_solana_direct_api_rejects_forged_live_metadata():
         (
             "programdata_executable_base64",
             noncanonical_base64_alias(program_bytes),
-            "canonical base64",
+            "Solana ProgramData executable base64 metadata is invalid",
         ),
     ):
         live = _live_record(
@@ -605,6 +692,64 @@ def test_live_solana_direct_api_rejects_forged_live_metadata():
         assert "program owner" in str(exc)
     else:
         raise AssertionError("Solana live TOML accepted forged owner metadata")
+
+
+def test_live_solana_evidence_redacts_imported_parser_failures(monkeypatch):
+    """Imported Solana live parser failures must not echo parser payloads."""
+
+    module = load_live_module()
+    program_id = module._encode_solana_base58(bytes.fromhex("33" * 32))
+    programdata_address = module._encode_solana_base58(bytes.fromhex("11" * 32))
+    program_bytes = b"\x7fELFsol"
+    code_hash = module.evidence.solana_verifier_program_code_hash(program_bytes)
+    args = _live_args(module, code_hash=code_hash, programdata_address=programdata_address)
+    live = _live_record(
+        module,
+        program_id=program_id,
+        programdata_address=programdata_address,
+        program_bytes=program_bytes,
+    )
+
+    original_normalize = module.evidence.normalize_solana_program_id
+    with monkeypatch.context() as patch:
+        def fail_program_id(value, *, label):
+            if label == "verifier program id":
+                raise module.argparse.ArgumentTypeError(
+                    "secret-token verifier program id parser detail"
+                )
+            return original_normalize(value, label=label)
+
+        patch.setattr(module.evidence, "normalize_solana_program_id", fail_program_id)
+        try:
+            module._summary(args, live)
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == "Solana live verifier program id metadata is invalid"
+            assert "secret-token" not in rendered
+            assert "parser detail" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError("Solana live summary leaked verifier id parser detail")
+
+    with monkeypatch.context() as patch:
+        def fail_program_bytes(_value, *, label):
+            raise module.argparse.ArgumentTypeError(
+                f"secret-token {label} parser detail"
+            )
+
+        patch.setattr(module.evidence, "parse_program_bytes_base64", fail_program_bytes)
+        try:
+            module._summary(args, live)
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == "Solana ProgramData executable base64 metadata is invalid"
+            assert "secret-token" not in rendered
+            assert "parser detail" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError("Solana live summary leaked executable parser detail")
 
 
 def test_live_solana_summary_requires_boolean_destination_readiness(monkeypatch):

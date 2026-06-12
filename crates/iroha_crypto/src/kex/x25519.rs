@@ -5,7 +5,7 @@ use rand::rngs::OsRng;
 use rand_core::TryRngCore;
 use sha2::Sha256;
 use x25519_dalek::{PublicKey, StaticSecret};
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use super::KeyExchangeScheme;
 use crate::{Error, KeyGenOption, SessionKey, error::ParseError, rng::rng_from_seed};
@@ -46,15 +46,23 @@ impl KeyExchangeScheme for X25519Sha256 {
                 let pk = PublicKey::from(&sk);
                 Ok((pk, sk))
             }
-            KeyGenOption::UseSeed(s) => {
+            KeyGenOption::UseSeed(mut s) => {
+                if s.len() == Self::PRIVATE_KEY_SIZE && s.iter().all(|&byte| byte == 0) {
+                    s.zeroize();
+                    return Err(Error::KeyGen(
+                        "X25519 seed material must not be all zero".into(),
+                    ));
+                }
                 let mut rng = rng_from_seed(s);
                 let mut bytes = Zeroizing::new([0u8; 32]);
                 rand_core::RngCore::fill_bytes(&mut rng, bytes.as_mut());
+                validate_private_key_material_not_all_zero("X25519 derived private key", &bytes)?;
                 let sk = StaticSecret::from(*bytes);
                 let pk = PublicKey::from(&sk);
                 Ok((pk, sk))
             }
             KeyGenOption::FromPrivateKey(ref sk) => {
+                validate_private_key_material_not_all_zero("X25519 private key", sk.as_bytes())?;
                 let pk = PublicKey::from(sk);
                 Ok((pk, sk.clone()))
             }
@@ -116,8 +124,18 @@ impl X25519Sha256 {
         OsRng
             .try_fill_bytes(bytes.as_mut())
             .map_err(|err| Error::KeyGen(format!("X25519 OS RNG failed: {err}")))?;
+        validate_private_key_material_not_all_zero("X25519 OS RNG private key", &bytes)?;
         Ok(StaticSecret::from(*bytes))
     }
+}
+
+fn validate_private_key_material_not_all_zero(label: &str, bytes: &[u8; 32]) -> Result<(), Error> {
+    if bytes.iter().all(|&byte| byte == 0) {
+        return Err(Error::KeyGen(format!(
+            "{label} material must not be all zero"
+        )));
+    }
+    Ok(())
 }
 
 fn is_low_order_public_key(public_key: &PublicKey) -> bool {
@@ -213,6 +231,27 @@ mod tests {
 
         assert_eq!(public_one, public_two);
         assert_eq!(private_one.to_bytes(), private_two.to_bytes());
+    }
+
+    #[test]
+    fn seeded_keypair_rejects_all_zero_seed_material() {
+        let scheme = X25519Sha256::new();
+
+        assert!(matches!(
+            scheme.try_keypair(KeyGenOption::UseSeed(vec![0u8; 32])),
+            Err(Error::KeyGen(message)) if message.contains("all zero")
+        ));
+    }
+
+    #[test]
+    fn imported_private_key_rejects_all_zero_material() {
+        let scheme = X25519Sha256::new();
+        let zero_secret = StaticSecret::from([0u8; 32]);
+
+        assert!(matches!(
+            scheme.try_keypair(KeyGenOption::FromPrivateKey(zero_secret)),
+            Err(Error::KeyGen(message)) if message.contains("all zero")
+        ));
     }
 
     #[test]

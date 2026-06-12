@@ -126,18 +126,9 @@ def _json_object_without_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[st
     decoded: dict[str, Any] = {}
     for key, value in pairs:
         if key in decoded:
-            raise ValueError(f"JSON-RPC returned duplicate JSON key {key!r}")
+            raise ValueError("JSON-RPC returned duplicate JSON keys")
         decoded[key] = value
     return decoded
-
-
-def _http_error_detail(exc: urllib.error.HTTPError) -> str:
-    raw = exc.read(EVM_RECEIPT_PROOF_JSON_RPC_MAX_ERROR_BYTES + 1)
-    truncated = len(raw) > EVM_RECEIPT_PROOF_JSON_RPC_MAX_ERROR_BYTES
-    detail = raw[:EVM_RECEIPT_PROOF_JSON_RPC_MAX_ERROR_BYTES].decode("utf-8", "replace")
-    if truncated:
-        detail += "...<truncated>"
-    return detail
 
 
 def _json_rpc(
@@ -161,12 +152,9 @@ def _json_rpc(
         with opener(request, timeout=timeout) as response:
             raw = response.read(EVM_RECEIPT_PROOF_JSON_RPC_MAX_RESPONSE_BYTES + 1)
     except urllib.error.HTTPError as exc:
-        detail = _http_error_detail(exc)
-        raise RuntimeError(
-            f"JSON-RPC {method} failed with HTTP {exc.code}: {detail}"
-        ) from exc
+        raise RuntimeError(f"JSON-RPC {method} failed with HTTP {exc.code}") from exc
     except urllib.error.URLError as exc:
-        raise RuntimeError(f"JSON-RPC {method} request failed: {exc.reason}") from exc
+        raise RuntimeError(f"JSON-RPC {method} request failed") from exc
     if len(raw) > EVM_RECEIPT_PROOF_JSON_RPC_MAX_RESPONSE_BYTES:
         raise RuntimeError(
             f"JSON-RPC {method} response exceeds "
@@ -180,7 +168,9 @@ def _json_rpc(
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise RuntimeError(f"JSON-RPC {method} returned invalid JSON") from exc
     except ValueError as exc:
-        raise RuntimeError(str(exc)) from exc
+        if str(exc) == "JSON-RPC returned duplicate JSON keys":
+            raise RuntimeError(f"JSON-RPC {method} returned duplicate JSON keys") from None
+        raise RuntimeError(f"JSON-RPC {method} returned invalid JSON") from exc
     if not isinstance(decoded, dict):
         raise RuntimeError(f"JSON-RPC {method} returned a non-object response")
     if decoded.get("jsonrpc") != "2.0":
@@ -189,7 +179,7 @@ def _json_rpc(
         raise RuntimeError(f"JSON-RPC {method} returned a mismatched response id")
     error = decoded.get("error")
     if error is not None:
-        raise RuntimeError(f"JSON-RPC {method} error: {error}")
+        raise RuntimeError(f"JSON-RPC {method} returned error response")
     if "result" not in decoded:
         raise RuntimeError(f"JSON-RPC {method} returned no result")
     return decoded["result"]
@@ -861,6 +851,39 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+SENSITIVE_CLI_ERROR_MARKERS = (
+    "secret-token",
+    "private-key",
+    "private_key",
+    "password",
+    "passphrase",
+    "bearer ",
+    "authorization",
+    "access-key",
+    "access_key",
+    "api-key",
+    "api_key",
+    "client-secret",
+    "client_secret",
+    "session=",
+    "token=",
+)
+
+
+def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
+    if isinstance(exc, OSError):
+        return fallback
+    text = str(exc)
+    if not text:
+        return fallback
+    lowered = text.lower()
+    if any(marker in lowered for marker in SENSITIVE_CLI_ERROR_MARKERS):
+        return fallback
+    if any((ord(ch) < 0x20 and ch not in "\n\t") or ord(ch) == 0x7F for ch in text):
+        return fallback
+    return text
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -880,8 +903,12 @@ def main(argv: list[str] | None = None) -> int:
             allow_receipt_only_evidence=args.allow_receipt_only_evidence,
             timeout=args.timeout,
         )
-    except (RuntimeError, ValueError, argparse.ArgumentTypeError) as exc:
-        parser.error(str(exc))
+    except (OSError, RuntimeError, ValueError, argparse.ArgumentTypeError) as exc:
+        detail = _cli_error_detail(
+            exc,
+            fallback="SCCP EVM receipt proof evidence collection failed",
+        )
+        parser.exit(2, f"{parser.prog}: error: {detail}\n")
     print(json.dumps(summary, indent=2, sort_keys=True))
     return 0
 

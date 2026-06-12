@@ -46,3 +46,45 @@ fn pqc_batch_verify_rejects_empty_input() {
     let empty: Vec<&[u8]> = Vec::new();
     assert!(pqc_verify_batch_deterministic(&empty, &empty, &empty, [0u8; 32]).is_err());
 }
+
+#[test]
+fn pqc_batch_verify_rejects_all_zero_material_before_backend() {
+    let kp = KeyPair::from_seed(
+        b"iroha:ml-dsa:pqc-batch-all-zero".to_vec(),
+        Algorithm::MlDsa,
+    );
+    let (_, public_bytes) = kp
+        .public_key()
+        .try_to_bytes()
+        .expect("fixture ML-DSA public key must be well-formed");
+    let secret = dilithium::SecretKey::from_bytes(&kp.private_key().to_bytes().1)
+        .expect("seeded ML-DSA secret key");
+    let message = b"iroha:ml-dsa:pqc-batch-all-zero";
+    let signature = dilithium::detached_sign(message, &secret)
+        .as_bytes()
+        .to_vec();
+    let all_zero_signature = vec![0u8; dilithium::signature_bytes()];
+    let all_zero_public_key = vec![0u8; dilithium::public_key_bytes()];
+    let message_ref: &[u8] = message;
+
+    assert!(
+        pqc_verify_batch_deterministic(
+            &[message_ref],
+            &[all_zero_signature.as_slice()],
+            &[public_bytes],
+            [0u8; 32],
+        )
+        .is_err(),
+        "all-zero ML-DSA signature must fail before backend verification"
+    );
+    assert!(
+        pqc_verify_batch_deterministic(
+            &[message_ref],
+            &[signature.as_slice()],
+            &[all_zero_public_key.as_slice()],
+            [0u8; 32],
+        )
+        .is_err(),
+        "all-zero ML-DSA public key must fail before backend verification"
+    );
+}

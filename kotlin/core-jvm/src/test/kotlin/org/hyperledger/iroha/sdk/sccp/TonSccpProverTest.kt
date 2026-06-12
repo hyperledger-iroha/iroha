@@ -955,6 +955,12 @@ class TonSccpProverTest {
             SccpTon.canonicalSourceStateVerificationProofBytes(input.shardStateVerificationProof.copy(version = 0))
         }
         assertTrue(wrongShardStateVerificationProofVersion.message!!.contains("sourceStateVerificationProof"))
+        val wrongShardStateVerificationProofFamily = assertFailsWith<IllegalArgumentException> {
+            SccpTon.canonicalSourceStateVerificationProofBytes(
+                input.shardStateVerificationProof.copy(proofFamily = "debug-proof-family"),
+            )
+        }
+        assertTrue(wrongShardStateVerificationProofFamily.message!!.contains("stark-fri-v1"))
         val proofBytes = byteArrayOf(4, 5, 6)
         val copiedProof = TonSccpSourceStateVerificationProof(proofBytes = proofBytes)
         proofBytes[0] = 0

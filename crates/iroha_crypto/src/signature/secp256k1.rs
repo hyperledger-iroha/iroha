@@ -267,7 +267,8 @@ mod ecdsa_secp256k1 {
         }
 
         pub fn sign(message: &[u8], sk: &PrivateKey) -> Vec<u8> {
-            Self::try_sign(message, sk).unwrap_or_default()
+            Self::try_sign(message, sk)
+                .expect("secp256k1 signing should succeed for a valid private key and message")
         }
 
         pub fn try_sign(message: &[u8], sk: &PrivateKey) -> Result<Vec<u8>, Error> {
@@ -332,8 +333,10 @@ mod ecdsa_secp256k1 {
         }
 
         pub fn verify(message: &[u8], signature: &[u8], pk: &PublicKey) -> Result<(), Error> {
-            let signature =
-                Signature::from_slice(signature).map_err(|e| Error::Signing(format!("{e:?}")))?;
+            if signature_payload_is_all_zero(signature) {
+                return Err(Error::BadSignature);
+            }
+            let signature = Signature::from_slice(signature).map_err(|_| Error::BadSignature)?;
             if signature.normalize_s().is_some() {
                 return Err(Error::BadSignature);
             }
@@ -362,6 +365,10 @@ mod ecdsa_secp256k1 {
             let bytes = Zeroizing::new(payload.to_vec());
             PrivateKey::from_slice(bytes.as_ref()).map_err(|err| ParseError(err.to_string()))
         }
+    }
+
+    fn signature_payload_is_all_zero(signature: &[u8]) -> bool {
+        !signature.is_empty() && signature.iter().all(|&byte| byte == 0)
     }
 }
 
@@ -452,7 +459,25 @@ mod test {
             EcdsaSecp256k1Sha256::try_sign(message, &private).expect("checked secp256k1 signing");
 
         assert_eq!(checked, EcdsaSecp256k1Sha256::sign(message, &private));
+        assert_eq!(checked.len(), 64);
         EcdsaSecp256k1Sha256::verify(message, &checked, &public).expect("signature verifies");
+    }
+
+    #[test]
+    fn verify_rejects_malformed_signature_as_bad_signature() {
+        let public = public_key();
+        let err = EcdsaSecp256k1Sha256::verify(b"malformed secp256k1", &[0x01, 0x02], &public);
+
+        assert!(matches!(err, Err(Error::BadSignature)));
+    }
+
+    #[test]
+    fn verify_rejects_all_zero_signature_before_backend() {
+        let public = public_key();
+        let signature = [0u8; 64];
+        let err = EcdsaSecp256k1Sha256::verify(b"inert secp256k1", &signature, &public);
+
+        assert!(matches!(err, Err(Error::BadSignature)));
     }
 
     #[cfg(feature = "crypto-parity-tests")]

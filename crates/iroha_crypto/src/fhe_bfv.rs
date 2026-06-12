@@ -228,6 +228,18 @@ const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_BODY_DIGEST_PREIMAGES: &[&[u8
     b"pending BFV full-bootstrap audit archive",
     b"TODO pending external audit archive",
     b"replace-before-production",
+    b"replace before production",
+    b"replace_before_production",
+    b"not for production",
+    b"not-for-production",
+    b"not_for_production",
+    b"not production ready",
+    b"not-production-ready",
+    b"not_production_ready",
+    b"draft",
+    b"draft-only",
+    b"draft only",
+    b"draft_only",
     b"todo",
     b"dummy",
     b"fake",
@@ -238,9 +250,22 @@ const BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_INERT_DIGEST_ZERO_LENGTHS: &[usize] =
 const BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_PLACEHOLDER_DIGEST_PREIMAGES: &[&[u8]] = &[
     b"placeholder BFV full-bootstrap native prover payload",
     b"placeholder BFV full-bootstrap native verifier payload",
+    b"placeholder BFV full-bootstrap native proof key payload",
     b"pending BFV full-bootstrap native proof key payload",
     b"TODO pending BFV full-bootstrap native proof key payload",
     b"replace-before-production",
+    b"replace before production",
+    b"replace_before_production",
+    b"not for production",
+    b"not-for-production",
+    b"not_for_production",
+    b"not production ready",
+    b"not-production-ready",
+    b"not_production_ready",
+    b"draft",
+    b"draft-only",
+    b"draft only",
+    b"draft_only",
     b"todo",
     b"dummy",
     b"fake",
@@ -468,7 +493,7 @@ pub const BFV_FULL_BOOTSTRAP_NATIVE_PROOF_KEY_MATERIAL_VERSION_V1: u16 = 1;
 /// Number of top-level fields in the native BFV full-bootstrap proof-key material payload.
 pub const BFV_FULL_BOOTSTRAP_NATIVE_PROOF_KEY_MATERIAL_FIELD_COUNT_V1: u16 = 20;
 const BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_CONSTRAINT_SYSTEM_MATERIAL_VERSION_V1: u16 = 1;
-const BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_CONSTRAINT_SYSTEM_MATERIAL_FIELD_COUNT_V1: u16 = 27;
+const BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_CONSTRAINT_SYSTEM_MATERIAL_FIELD_COUNT_V1: u16 = 32;
 const BFV_FULL_BOOTSTRAP_NATIVE_PROOF_CIRCUIT_FINGERPRINT_MATERIAL_VERSION_V1: u16 = 1;
 const BFV_FULL_BOOTSTRAP_NATIVE_PROOF_CIRCUIT_FINGERPRINT_MATERIAL_FIELD_COUNT_V1: u16 = 29;
 /// Canonical native proof system family for BFV full-bootstrap proof keys.
@@ -2131,8 +2156,18 @@ pub struct BfvFullBootstrapProofPublicInputSchemaV1 {
     pub enforces_no_unmasked_private_row_openings: bool,
     /// Whether the AIR contract forbids duplicate sampled openings.
     pub enforces_duplicate_free_openings: bool,
+    /// Domain used before deriving AIR composition challenges.
+    pub composition_challenge_domain: Vec<u8>,
+    /// Whether AIR composition challenges bind the public statement hash.
+    pub binds_composition_challenges_to_statement_hash: bool,
     /// Whether AIR composition challenges bind the row-major trace material digest.
     pub binds_composition_challenges_to_trace_material_digest: bool,
+    /// Whether AIR composition challenges bind the row index.
+    pub binds_composition_challenges_to_row_index: bool,
+    /// Whether AIR composition challenges bind the column index.
+    pub binds_composition_challenges_to_column_index: bool,
+    /// Whether zero AIR composition challenges are remapped to a nonzero field element.
+    pub maps_zero_composition_challenge_to_one: bool,
     /// Version of the release proof input material package.
     pub proof_input_material_version: u16,
     /// Number of top-level fields in the release proof input material package.
@@ -3306,8 +3341,18 @@ pub struct BfvFullBootstrapArithmeticAirConstraintSystemMaterialV1 {
     pub enforces_no_unmasked_private_row_openings: bool,
     /// Whether native transparent proofs must avoid duplicate sampled openings.
     pub enforces_duplicate_free_openings: bool,
+    /// Domain used before deriving AIR composition challenges.
+    pub composition_challenge_domain: Vec<u8>,
+    /// Whether composition challenges bind the public statement hash.
+    pub binds_composition_challenges_to_statement_hash: bool,
     /// Whether composition challenges bind the row-major trace material digest.
     pub binds_composition_challenges_to_trace_material_digest: bool,
+    /// Whether composition challenges bind the row index.
+    pub binds_composition_challenges_to_row_index: bool,
+    /// Whether composition challenges bind the column index.
+    pub binds_composition_challenges_to_column_index: bool,
+    /// Whether zero composition challenges are remapped to one.
+    pub maps_zero_composition_challenge_to_one: bool,
     /// Whether exact residual-multiple proof statements are supported.
     pub supports_exact_residual_multiple: bool,
     /// Whether bounded-noise proof statements are supported.
@@ -3480,6 +3525,7 @@ impl BfvEvaluationKeyBundle {
     ) -> Result<(), BfvError> {
         validate_refresh_preflight(params, rotation_transcripts, bootstrap_transcript, mode)?;
         validate_public_key(params, public_key)?;
+        validate_public_key_not_all_zero(public_key)?;
         self.validate(params)?;
         if rotation_transcripts.len() != self.rotation_keys.len() {
             return Err(BfvError::ShapeMismatch(format!(
@@ -3854,6 +3900,7 @@ impl BfvEvaluationKeyBundle {
     ) -> Result<Option<Hash>, BfvError> {
         validate_evaluation_key_bundle_metadata(params, self)?;
         validate_public_key(params, public_key)?;
+        validate_public_key_not_all_zero(public_key)?;
         self.validate(params)?;
         let Some(bootstrap_key) = self.bootstrap_key.as_ref() else {
             return Ok(None);
@@ -4052,6 +4099,7 @@ impl BfvEvaluationKeyBundle {
     /// Returns [`BfvError`] when validation or canonical encoding fails.
     pub fn digest(&self, params: &BfvParameters) -> Result<Hash, BfvError> {
         self.validate(params)?;
+        validate_evaluation_key_bundle_digest_refresh_material_v1(self)?;
         let bytes = norito::to_bytes(self).map_err(|err| {
             BfvError::InvalidParameters(format!("evaluation key encoding failed: {err}"))
         })?;
@@ -4171,6 +4219,7 @@ impl BfvIdentifierPublicParameters {
     pub fn validate(&self) -> Result<(), BfvError> {
         validate_identifier_public_parameter_metadata(self)?;
         validate_public_key(&self.parameters, &self.public_key)?;
+        validate_public_key_not_all_zero(&self.public_key)?;
         Ok(())
     }
 }
@@ -4328,6 +4377,7 @@ pub fn bfv_public_key_digest(
 ) -> Result<Hash, BfvError> {
     params.validate()?;
     validate_public_key(params, public_key)?;
+    validate_public_key_not_all_zero(public_key)?;
     let material = BfvPublicKeyDigestMaterial {
         params: *params,
         public_key: public_key.clone(),
@@ -4339,6 +4389,20 @@ pub fn bfv_public_key_digest(
         BFV_PUBLIC_KEY_DIGEST_DOMAIN,
         bytes.as_slice(),
     ]))
+}
+
+fn validate_public_key_not_all_zero(public_key: &BfvPublicKey) -> Result<(), BfvError> {
+    if !public_key.b.is_empty() && public_key.b.iter().all(|&coefficient| coefficient == 0) {
+        return Err(BfvError::InvalidParameters(
+            "BFV public key b component must not be all zero".to_owned(),
+        ));
+    }
+    if !public_key.a.is_empty() && public_key.a.iter().all(|&coefficient| coefficient == 0) {
+        return Err(BfvError::InvalidParameters(
+            "BFV public key a component must not be all zero".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 /// Public affine circuit over scalar ciphertext inputs.
@@ -4495,15 +4559,16 @@ pub fn keygen_from_seed(
 /// that a published key was honestly generated.
 ///
 /// # Errors
-/// Returns [`BfvError`] when the key material is malformed, the public key does
-/// not match `secret_key`, or the public-key residual exceeds the current error
-/// profile.
+/// Returns [`BfvError`] when the key material is malformed or inert, the public
+/// key does not match `secret_key`, or the public-key residual exceeds the
+/// current error profile.
 pub fn validate_public_key_secret_consistency(
     params: &BfvParameters,
     secret_key: &BfvSecretKey,
     public_key: &BfvPublicKey,
 ) -> Result<(), BfvError> {
     validate_public_key(params, public_key)?;
+    validate_public_key_not_all_zero(public_key)?;
     validate_secret_key(params, secret_key)?;
     let residual = poly_add_mod(
         params,
@@ -4586,7 +4651,7 @@ pub fn keygen_bounded_noise_with_relinearization_from_seed(
 /// published key was honestly generated.
 ///
 /// # Errors
-/// Returns [`BfvError`] when key material is malformed, does not match
+/// Returns [`BfvError`] when key material is malformed or inert, does not match
 /// `secret_key`, or exceeds the bounded-noise keygen error profile.
 pub fn validate_bounded_noise_public_key_secret_consistency(
     params: &BfvParameters,
@@ -4594,6 +4659,7 @@ pub fn validate_bounded_noise_public_key_secret_consistency(
     public_key: &BfvPublicKey,
 ) -> Result<(), BfvError> {
     validate_public_key(params, public_key)?;
+    validate_public_key_not_all_zero(public_key)?;
     validate_secret_key(params, secret_key)?;
     let residual = poly_add_mod(
         params,
@@ -4652,8 +4718,8 @@ fn validate_bounded_noise_relinearization_key_secret_consistency_with_label(
 /// are treated as zero.
 ///
 /// # Errors
-/// Returns [`BfvError`] when parameters, plaintext, key shapes, or the
-/// deterministic seed are invalid.
+/// Returns [`BfvError`] when parameters, plaintext, key shapes, public-key
+/// material, or the deterministic seed are invalid.
 pub fn encrypt_from_seed(
     params: &BfvParameters,
     public_key: &BfvPublicKey,
@@ -4664,6 +4730,7 @@ pub fn encrypt_from_seed(
     validate_deterministic_seed("BFV encryption seed", seed)?;
     validate_bfv_seeded_encryption_residual_capacity(params)?;
     validate_public_key(params, public_key)?;
+    validate_public_key_not_all_zero(public_key)?;
 
     let encoded_plaintext = encode_plaintext(params, plaintext);
     let mut rng = derive_rng(ENCRYPT_DOMAIN, seed);
@@ -4686,8 +4753,9 @@ pub fn encrypt_from_seed(
 /// encryption entry for the pending bounded-noise BFV-RNS path.
 ///
 /// # Errors
-/// Returns [`BfvError`] when parameters, plaintext, key shapes, rounded-noise
-/// capacity, or deterministic seed material are invalid.
+/// Returns [`BfvError`] when parameters, plaintext, key shapes, public-key
+/// material, rounded-noise capacity, or deterministic seed material are
+/// invalid.
 pub fn encrypt_bounded_noise_from_seed(
     params: &BfvParameters,
     public_key: &BfvPublicKey,
@@ -4698,6 +4766,7 @@ pub fn encrypt_bounded_noise_from_seed(
     validate_deterministic_seed("bounded-noise BFV encryption seed", seed)?;
     validate_bfv_bounded_noise_encryption_capacity(params)?;
     validate_public_key(params, public_key)?;
+    validate_public_key_not_all_zero(public_key)?;
 
     let encoded_plaintext = encode_rounded_plaintext(params, plaintext)?;
     let mut rng = derive_rng(ENCRYPT_DOMAIN, seed);
@@ -6149,6 +6218,10 @@ fn bootstrap_key_refresh_digest_summary_v1(
                 "bootstrap key refresh round count exceeds u16 summary bounds".to_owned(),
             )
         })?;
+    validate_refresh_ciphertext_not_all_zero(
+        "bootstrap key zero_refresh",
+        &bootstrap_key.zero_refresh,
+    )?;
     let zero_refresh_bytes = norito::to_bytes(&bootstrap_key.zero_refresh).map_err(|err| {
         BfvError::InvalidParameters(format!(
             "bootstrap key zero_refresh summary encoding failed: {err}"
@@ -6163,6 +6236,10 @@ fn bootstrap_key_refresh_digest_summary_v1(
         .iter()
         .enumerate()
         .map(|(index, refresh)| {
+            validate_refresh_ciphertext_not_all_zero(
+                &format!("bootstrap key round_refreshes[{index}]"),
+                refresh,
+            )?;
             let index_bytes = u64::try_from(index)
                 .map_err(|_| {
                     BfvError::InvalidParameters(
@@ -6187,6 +6264,46 @@ fn bootstrap_key_refresh_digest_summary_v1(
         zero_refresh_digest,
         bootstrap_round_digests,
     ))
+}
+
+fn validate_evaluation_key_bundle_digest_refresh_material_v1(
+    bundle: &BfvEvaluationKeyBundle,
+) -> Result<(), BfvError> {
+    for (index, rotation_key) in bundle.rotation_keys.iter().enumerate() {
+        validate_refresh_ciphertext_not_all_zero(
+            &format!("evaluation-key bundle rotation_keys[{index}].zero_refresh"),
+            &rotation_key.zero_refresh,
+        )?;
+    }
+    if let Some(bootstrap_key) = bundle.bootstrap_key.as_ref() {
+        validate_refresh_ciphertext_not_all_zero(
+            "evaluation-key bundle bootstrap_key.zero_refresh",
+            &bootstrap_key.zero_refresh,
+        )?;
+        for (index, refresh) in bootstrap_key.round_refreshes.iter().enumerate() {
+            validate_refresh_ciphertext_not_all_zero(
+                &format!("evaluation-key bundle bootstrap_key.round_refreshes[{index}]"),
+                refresh,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_refresh_ciphertext_not_all_zero(
+    label: &str,
+    refresh: &BfvCiphertext,
+) -> Result<(), BfvError> {
+    if !refresh.c0.is_empty()
+        && !refresh.c1.is_empty()
+        && refresh.c0.iter().all(|&coefficient| coefficient == 0)
+        && refresh.c1.iter().all(|&coefficient| coefficient == 0)
+    {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} must not be an all-zero refresh ciphertext"
+        )));
+    }
+    Ok(())
 }
 
 /// Validate versioned full-bootstrap circuit material commitments.
@@ -6364,7 +6481,7 @@ fn bfv_full_bootstrap_evaluator_artifact_set_digest_from_governed_material_v1(
 ///
 /// # Errors
 /// Returns [`BfvError`] when a supplied artifact envelope is empty, oversized,
-/// or canonical encoding fails.
+/// malformed, targets a stale profile, or canonical encoding fails.
 #[allow(clippy::too_many_arguments)]
 pub fn bfv_full_bootstrap_evaluator_artifact_set_digest_v1(
     params: &BfvParameters,
@@ -6421,31 +6538,29 @@ pub fn bfv_full_bootstrap_evaluator_artifact_set_digest_v1(
     ] {
         validate_bfv_full_bootstrap_evaluator_artifact_set_bytes_v1(role, bytes)?;
     }
-    hash_bfv_full_bootstrap_evaluator_artifact_set_digest_material_v1(
-        &BfvFullBootstrapEvaluatorArtifactSetDigestMaterialV1 {
-            version: BFV_FULL_BOOTSTRAP_EVALUATOR_ARTIFACT_SET_DIGEST_MATERIAL_VERSION_V1,
-            field_count: BFV_FULL_BOOTSTRAP_EVALUATOR_ARTIFACT_SET_DIGEST_MATERIAL_FIELD_COUNT_V1,
-            evaluator_artifact_digest_count:
-                BFV_FULL_BOOTSTRAP_EVALUATOR_ARTIFACT_SET_DIGEST_MATERIAL_ARTIFACT_DIGEST_COUNT_V1,
-            circuit_id: BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1.to_owned(),
-            parameter_digest: registered_bfv_parameter_digest(params)?,
-            rns_modulus_chain_digest: registered_bfv_rns_modulus_chain_digest(params)?,
-            key_switch_decomposition_chain_digest:
-                registered_bfv_key_switch_decomposition_chain_digest(params)?,
-            max_bootstrap_depth,
-            coefficient_to_slot_key_digest: Hash::new(coefficient_to_slot_key),
-            slot_to_coefficient_key_digest: Hash::new(slot_to_coefficient_key),
-            blind_rotation_key_digest: Hash::new(blind_rotation_key),
-            sample_extraction_key_digest: Hash::new(sample_extraction_key),
-            accumulator_digest: Hash::new(accumulator),
-            proof_public_input_schema_digest: Hash::new(proof_public_input_schema),
-            arithmetic_air_constraint_system_artifact_digest: Hash::new(
-                arithmetic_air_constraint_system,
-            ),
-            arithmetic_air_constraint_system_digest:
-                canonical_bfv_full_bootstrap_arithmetic_air_constraint_system_digest_v1(),
-        },
-    )
+    let digest_material = bfv_full_bootstrap_evaluator_artifact_set_digest_material_v1(
+        params,
+        max_bootstrap_depth,
+        coefficient_to_slot_key,
+        slot_to_coefficient_key,
+        blind_rotation_key,
+        sample_extraction_key,
+        accumulator,
+        proof_public_input_schema,
+        arithmetic_air_constraint_system,
+    )?;
+    validate_bfv_full_bootstrap_evaluator_artifact_set_artifacts_v1(
+        params,
+        &digest_material,
+        coefficient_to_slot_key,
+        slot_to_coefficient_key,
+        blind_rotation_key,
+        sample_extraction_key,
+        accumulator,
+        proof_public_input_schema,
+        arithmetic_air_constraint_system,
+    )?;
+    hash_bfv_full_bootstrap_evaluator_artifact_set_digest_material_v1(&digest_material)
 }
 
 fn validate_bfv_full_bootstrap_evaluator_artifact_set_bytes_v1(
@@ -6455,6 +6570,12 @@ fn validate_bfv_full_bootstrap_evaluator_artifact_set_bytes_v1(
     if bytes.is_empty() {
         return Err(BfvError::InvalidParameters(format!(
             "{} must not be empty",
+            full_bootstrap_artifact_label_for_role(role)
+        )));
+    }
+    if bytes.iter().all(|&byte| byte == 0) {
+        return Err(BfvError::InvalidParameters(format!(
+            "{} must not be all-zero",
             full_bootstrap_artifact_label_for_role(role)
         )));
     }
@@ -6469,9 +6590,234 @@ fn validate_bfv_full_bootstrap_evaluator_artifact_set_bytes_v1(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
+fn bfv_full_bootstrap_evaluator_artifact_set_digest_material_v1(
+    params: &BfvParameters,
+    max_bootstrap_depth: u16,
+    coefficient_to_slot_key: &[u8],
+    slot_to_coefficient_key: &[u8],
+    blind_rotation_key: &[u8],
+    sample_extraction_key: &[u8],
+    accumulator: &[u8],
+    proof_public_input_schema: &[u8],
+    arithmetic_air_constraint_system: &[u8],
+) -> Result<BfvFullBootstrapEvaluatorArtifactSetDigestMaterialV1, BfvError> {
+    Ok(BfvFullBootstrapEvaluatorArtifactSetDigestMaterialV1 {
+        version: BFV_FULL_BOOTSTRAP_EVALUATOR_ARTIFACT_SET_DIGEST_MATERIAL_VERSION_V1,
+        field_count: BFV_FULL_BOOTSTRAP_EVALUATOR_ARTIFACT_SET_DIGEST_MATERIAL_FIELD_COUNT_V1,
+        evaluator_artifact_digest_count:
+            BFV_FULL_BOOTSTRAP_EVALUATOR_ARTIFACT_SET_DIGEST_MATERIAL_ARTIFACT_DIGEST_COUNT_V1,
+        circuit_id: BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1.to_owned(),
+        parameter_digest: registered_bfv_parameter_digest(params)?,
+        rns_modulus_chain_digest: registered_bfv_rns_modulus_chain_digest(params)?,
+        key_switch_decomposition_chain_digest:
+            registered_bfv_key_switch_decomposition_chain_digest(params)?,
+        max_bootstrap_depth,
+        coefficient_to_slot_key_digest: Hash::new(coefficient_to_slot_key),
+        slot_to_coefficient_key_digest: Hash::new(slot_to_coefficient_key),
+        blind_rotation_key_digest: Hash::new(blind_rotation_key),
+        sample_extraction_key_digest: Hash::new(sample_extraction_key),
+        accumulator_digest: Hash::new(accumulator),
+        proof_public_input_schema_digest: Hash::new(proof_public_input_schema),
+        arithmetic_air_constraint_system_artifact_digest: Hash::new(
+            arithmetic_air_constraint_system,
+        ),
+        arithmetic_air_constraint_system_digest:
+            canonical_bfv_full_bootstrap_arithmetic_air_constraint_system_digest_v1(),
+    })
+}
+
+fn bfv_full_bootstrap_evaluator_artifact_set_validation_material_v1(
+    digest_material: &BfvFullBootstrapEvaluatorArtifactSetDigestMaterialV1,
+) -> BfvFullBootstrapCircuitMaterialV1 {
+    BfvFullBootstrapCircuitMaterialV1 {
+        circuit_id: digest_material.circuit_id.clone(),
+        parameter_digest: digest_material.parameter_digest,
+        rns_modulus_chain_digest: digest_material.rns_modulus_chain_digest,
+        key_switch_decomposition_chain_digest: digest_material
+            .key_switch_decomposition_chain_digest,
+        coefficient_to_slot_key_digest: digest_material.coefficient_to_slot_key_digest,
+        slot_to_coefficient_key_digest: digest_material.slot_to_coefficient_key_digest,
+        blind_rotation_key_digest: digest_material.blind_rotation_key_digest,
+        sample_extraction_key_digest: digest_material.sample_extraction_key_digest,
+        accumulator_digest: digest_material.accumulator_digest,
+        proof_public_input_schema_digest: digest_material.proof_public_input_schema_digest,
+        arithmetic_air_constraint_system_artifact_digest: digest_material
+            .arithmetic_air_constraint_system_artifact_digest,
+        proof_key_pair_commitment: Hash::new_from_chunks(&[
+            BFV_FULL_BOOTSTRAP_EVALUATOR_ARTIFACT_SET_DIGEST_DOMAIN,
+            b"transient proof-key pair commitment outside evaluator artifact set digest v1",
+        ]),
+        prover_key_digest: Hash::new_from_chunks(&[
+            BFV_FULL_BOOTSTRAP_EVALUATOR_ARTIFACT_SET_DIGEST_DOMAIN,
+            b"transient prover-key artifact digest outside evaluator artifact set digest v1",
+        ]),
+        prover_key_material_commitment: Hash::new_from_chunks(&[
+            BFV_FULL_BOOTSTRAP_EVALUATOR_ARTIFACT_SET_DIGEST_DOMAIN,
+            b"transient prover-key material commitment outside evaluator artifact set digest v1",
+        ]),
+        verifier_key_digest: Hash::new_from_chunks(&[
+            BFV_FULL_BOOTSTRAP_EVALUATOR_ARTIFACT_SET_DIGEST_DOMAIN,
+            b"transient verifier-key artifact digest outside evaluator artifact set digest v1",
+        ]),
+        verifier_key_material_commitment: Hash::new_from_chunks(&[
+            BFV_FULL_BOOTSTRAP_EVALUATOR_ARTIFACT_SET_DIGEST_DOMAIN,
+            b"transient verifier-key material commitment outside evaluator artifact set digest v1",
+        ]),
+        max_bootstrap_depth: digest_material.max_bootstrap_depth,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_bfv_full_bootstrap_evaluator_artifact_set_artifacts_v1(
+    params: &BfvParameters,
+    digest_material: &BfvFullBootstrapEvaluatorArtifactSetDigestMaterialV1,
+    coefficient_to_slot_key: &[u8],
+    slot_to_coefficient_key: &[u8],
+    blind_rotation_key: &[u8],
+    sample_extraction_key: &[u8],
+    accumulator: &[u8],
+    proof_public_input_schema: &[u8],
+    arithmetic_air_constraint_system: &[u8],
+) -> Result<(), BfvError> {
+    let validation_material =
+        bfv_full_bootstrap_evaluator_artifact_set_validation_material_v1(digest_material);
+    decode_bfv_full_bootstrap_linear_transform_artifact_v1(
+        params,
+        &validation_material,
+        BfvFullBootstrapCircuitArtifactRoleV1::CoefficientToSlotKey,
+        coefficient_to_slot_key,
+    )?;
+    decode_bfv_full_bootstrap_linear_transform_artifact_v1(
+        params,
+        &validation_material,
+        BfvFullBootstrapCircuitArtifactRoleV1::SlotToCoefficientKey,
+        slot_to_coefficient_key,
+    )?;
+    decode_bfv_full_bootstrap_blind_rotation_artifact_v1(
+        params,
+        &validation_material,
+        blind_rotation_key,
+    )?;
+    decode_bfv_full_bootstrap_sample_extraction_switch_key_artifact_v1(
+        params,
+        &validation_material,
+        sample_extraction_key,
+    )?;
+    decode_bfv_full_bootstrap_accumulator_artifact_v1(params, &validation_material, accumulator)?;
+    decode_bfv_full_bootstrap_proof_public_input_schema_artifact_v1(
+        params,
+        &validation_material,
+        proof_public_input_schema,
+    )?;
+    decode_bfv_full_bootstrap_arithmetic_air_constraint_system_artifact_v1(
+        params,
+        &validation_material,
+        arithmetic_air_constraint_system,
+    )?;
+    Ok(())
+}
+
+fn validate_bfv_full_bootstrap_evaluator_artifact_set_digest_material_v1(
+    digest_material: &BfvFullBootstrapEvaluatorArtifactSetDigestMaterialV1,
+) -> Result<(), BfvError> {
+    if digest_material.version
+        != BFV_FULL_BOOTSTRAP_EVALUATOR_ARTIFACT_SET_DIGEST_MATERIAL_VERSION_V1
+    {
+        return Err(BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap evaluator artifact set digest material version {} does not match canonical version {}",
+            digest_material.version,
+            BFV_FULL_BOOTSTRAP_EVALUATOR_ARTIFACT_SET_DIGEST_MATERIAL_VERSION_V1
+        )));
+    }
+    if digest_material.field_count
+        != BFV_FULL_BOOTSTRAP_EVALUATOR_ARTIFACT_SET_DIGEST_MATERIAL_FIELD_COUNT_V1
+    {
+        return Err(BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap evaluator artifact set digest material field count {} does not match canonical count {}",
+            digest_material.field_count,
+            BFV_FULL_BOOTSTRAP_EVALUATOR_ARTIFACT_SET_DIGEST_MATERIAL_FIELD_COUNT_V1
+        )));
+    }
+    if digest_material.evaluator_artifact_digest_count
+        != BFV_FULL_BOOTSTRAP_EVALUATOR_ARTIFACT_SET_DIGEST_MATERIAL_ARTIFACT_DIGEST_COUNT_V1
+    {
+        return Err(BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap evaluator artifact set digest material artifact count {} does not match canonical count {}",
+            digest_material.evaluator_artifact_digest_count,
+            BFV_FULL_BOOTSTRAP_EVALUATOR_ARTIFACT_SET_DIGEST_MATERIAL_ARTIFACT_DIGEST_COUNT_V1
+        )));
+    }
+    if digest_material.circuit_id != BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1 {
+        return Err(BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap evaluator artifact set digest material circuit id `{}` does not match canonical `{BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1}`",
+            digest_material.circuit_id
+        )));
+    }
+    if digest_material.max_bootstrap_depth == 0 {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap evaluator artifact set digest material max_bootstrap_depth must be greater than zero"
+                .to_owned(),
+        ));
+    }
+    if digest_material.max_bootstrap_depth > BFV_FULL_BOOTSTRAP_MAX_CIRCUIT_DEPTH {
+        return Err(BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap evaluator artifact set digest material max_bootstrap_depth exceeds supported limit {BFV_FULL_BOOTSTRAP_MAX_CIRCUIT_DEPTH}"
+        )));
+    }
+    validate_bfv_full_bootstrap_digest_material_hashes(
+        "BFV full-bootstrap evaluator artifact set digest material",
+        &[
+            ("parameter digest", &digest_material.parameter_digest),
+            (
+                "RNS modulus-chain digest",
+                &digest_material.rns_modulus_chain_digest,
+            ),
+            (
+                "key-switch decomposition-chain digest",
+                &digest_material.key_switch_decomposition_chain_digest,
+            ),
+            (
+                "coefficient-to-slot key digest",
+                &digest_material.coefficient_to_slot_key_digest,
+            ),
+            (
+                "slot-to-coefficient key digest",
+                &digest_material.slot_to_coefficient_key_digest,
+            ),
+            (
+                "blind-rotation key digest",
+                &digest_material.blind_rotation_key_digest,
+            ),
+            (
+                "sample-extraction key digest",
+                &digest_material.sample_extraction_key_digest,
+            ),
+            ("accumulator digest", &digest_material.accumulator_digest),
+            (
+                "proof public-input schema digest",
+                &digest_material.proof_public_input_schema_digest,
+            ),
+            (
+                "arithmetic AIR constraint-system artifact digest",
+                &digest_material.arithmetic_air_constraint_system_artifact_digest,
+            ),
+            (
+                "arithmetic AIR constraint-system digest",
+                &digest_material.arithmetic_air_constraint_system_digest,
+            ),
+        ],
+    )?;
+    validate_bfv_full_bootstrap_arithmetic_air_constraint_system_digest_v1(
+        "BFV full-bootstrap evaluator artifact set digest material arithmetic AIR constraint-system digest",
+        &digest_material.arithmetic_air_constraint_system_digest,
+    )
+}
+
 fn hash_bfv_full_bootstrap_evaluator_artifact_set_digest_material_v1(
     digest_material: &BfvFullBootstrapEvaluatorArtifactSetDigestMaterialV1,
 ) -> Result<Hash, BfvError> {
+    validate_bfv_full_bootstrap_evaluator_artifact_set_digest_material_v1(digest_material)?;
     let bytes = norito::to_bytes(digest_material).map_err(|err| {
         BfvError::InvalidParameters(format!(
             "BFV full-bootstrap evaluator artifact set digest material encoding failed: {err}"
@@ -6503,6 +6849,11 @@ pub fn encode_bfv_full_bootstrap_circuit_artifact_payload_v1(
     if payload.is_empty() {
         return Err(BfvError::InvalidParameters(
             "BFV full-bootstrap artifact payload must not be empty".to_owned(),
+        ));
+    }
+    if payload.iter().all(|&byte| byte == 0) {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap artifact payload must not be all-zero".to_owned(),
         ));
     }
     if max_bootstrap_depth == 0 {
@@ -6609,6 +6960,12 @@ pub fn validate_bfv_full_bootstrap_linear_transform_v1(
             )));
         }
         validate_plaintext(params, &diagonal.plaintext)?;
+        let diagonal_slots = decode_packed_plaintext_slots(params, &diagonal.plaintext)?;
+        if diagonal_slots.iter().all(|&slot| slot == 0) {
+            return Err(BfvError::InvalidParameters(format!(
+                "BFV full-bootstrap linear transform diagonal[{index}] plaintext must not decode to all-zero slots"
+            )));
+        }
     }
     Ok(())
 }
@@ -6696,6 +7053,10 @@ pub fn bfv_full_bootstrap_blind_rotation_key_for_packed_left_rotation_v1(
         "BFV full-bootstrap blind-rotation accumulator digest",
         &accumulator_digest,
     )?;
+    validate_no_full_bootstrap_placeholder_material_digest(
+        "BFV full-bootstrap blind-rotation accumulator digest",
+        &accumulator_digest,
+    )?;
     let schedule = packed_left_rotation_galois_schedule(params, rotation_steps)?;
     let mut steps = Vec::with_capacity(schedule.len());
     for (automorphism_power, selector_slots) in schedule {
@@ -6744,6 +7105,10 @@ pub fn validate_bfv_full_bootstrap_blind_rotation_key_v1(
         )));
     }
     validate_nonzero_material_digest(
+        "BFV full-bootstrap blind-rotation accumulator digest",
+        &key.accumulator_digest,
+    )?;
+    validate_no_full_bootstrap_placeholder_material_digest(
         "BFV full-bootstrap blind-rotation accumulator digest",
         &key.accumulator_digest,
     )?;
@@ -7107,6 +7472,25 @@ pub fn validate_bfv_full_bootstrap_sample_extraction_switch_key_v1(
                 "BFV full-bootstrap sample-extraction switch key coefficient[{index}] entries"
             ),
         )?;
+        for (digit_index, entry) in coefficient_entry.entries.iter().enumerate() {
+            if entry.b.iter().all(|&coefficient| coefficient == 0)
+                && entry.a.iter().all(|&coefficient| coefficient == 0)
+            {
+                return Err(BfvError::InvalidParameters(format!(
+                    "BFV full-bootstrap sample-extraction switch key coefficient[{index}] entry[{digit_index}] must not be all zero"
+                )));
+            }
+            if entry.b.iter().all(|&coefficient| coefficient == 0) {
+                return Err(BfvError::InvalidParameters(format!(
+                    "BFV full-bootstrap sample-extraction switch key coefficient[{index}] entry[{digit_index}] b limb must not be all zero"
+                )));
+            }
+            if entry.a.iter().all(|&coefficient| coefficient == 0) {
+                return Err(BfvError::InvalidParameters(format!(
+                    "BFV full-bootstrap sample-extraction switch key coefficient[{index}] entry[{digit_index}] a limb must not be all zero"
+                )));
+            }
+        }
     }
     Ok(())
 }
@@ -7661,7 +8045,18 @@ pub fn validate_bfv_full_bootstrap_raw_extracted_sample_v1(
         params,
         &sample.secret_coefficients,
         "BFV full-bootstrap raw sample secret_coefficients",
-    )
+    )?;
+    if sample.constant_term == 0
+        && sample
+            .secret_coefficients
+            .iter()
+            .all(|&coefficient| coefficient == 0)
+    {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap raw extracted sample must not be all zero".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 /// Repack a raw extracted sample as a coefficient-zero BFV ciphertext.
@@ -8204,7 +8599,13 @@ pub fn bfv_full_bootstrap_arithmetic_air_constraint_system_material_v1()
             BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_FORBIDS_UNMASKED_PRIVATE_ROW_OPENINGS_V1,
         enforces_duplicate_free_openings:
             BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_FORBIDS_DUPLICATE_OPENINGS_V1,
+        composition_challenge_domain:
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_COMPOSITION_CHALLENGE_DOMAIN.to_vec(),
+        binds_composition_challenges_to_statement_hash: true,
         binds_composition_challenges_to_trace_material_digest: true,
+        binds_composition_challenges_to_row_index: true,
+        binds_composition_challenges_to_column_index: true,
+        maps_zero_composition_challenge_to_one: true,
         supports_exact_residual_multiple: true,
         supports_bounded_noise: true,
     }
@@ -8335,6 +8736,14 @@ pub fn validate_bfv_full_bootstrap_arithmetic_air_constraint_system_material_v1(
                 .to_owned(),
         ));
     }
+    if material.composition_challenge_domain.as_slice()
+        != BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_COMPOSITION_CHALLENGE_DOMAIN
+    {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap arithmetic AIR constraint-system material composition challenge domain mismatch"
+                .to_owned(),
+        ));
+    }
     macro_rules! require_contract_flag {
         ($field:ident, $label:literal) => {
             if !material.$field {
@@ -8371,8 +8780,24 @@ pub fn validate_bfv_full_bootstrap_arithmetic_air_constraint_system_material_v1(
     );
     require_contract_flag!(enforces_duplicate_free_openings, "duplicate-free openings");
     require_contract_flag!(
+        binds_composition_challenges_to_statement_hash,
+        "composition challenges to statement hash"
+    );
+    require_contract_flag!(
         binds_composition_challenges_to_trace_material_digest,
         "composition challenges to trace material digest"
+    );
+    require_contract_flag!(
+        binds_composition_challenges_to_row_index,
+        "composition challenges to row index"
+    );
+    require_contract_flag!(
+        binds_composition_challenges_to_column_index,
+        "composition challenges to column index"
+    );
+    require_contract_flag!(
+        maps_zero_composition_challenge_to_one,
+        "nonzero composition challenges"
     );
     require_contract_flag!(
         supports_exact_residual_multiple,
@@ -8428,6 +8853,7 @@ fn validate_bfv_full_bootstrap_arithmetic_trace_profile_digest_v1(
     digest: &Hash,
 ) -> Result<(), BfvError> {
     validate_nonzero_material_digest(label, digest)?;
+    validate_no_full_bootstrap_placeholder_material_digest(label, digest)?;
     let expected = bfv_full_bootstrap_arithmetic_trace_profile_digest_v1()?;
     if *digest != expected {
         return Err(BfvError::InvalidParameters(format!(
@@ -8442,6 +8868,7 @@ fn validate_bfv_full_bootstrap_arithmetic_air_constraint_system_digest_v1(
     digest: &Hash,
 ) -> Result<(), BfvError> {
     validate_nonzero_material_digest(label, digest)?;
+    validate_no_full_bootstrap_placeholder_material_digest(label, digest)?;
     let expected = bfv_full_bootstrap_arithmetic_air_constraint_system_digest_v1()?;
     if *digest != expected {
         return Err(BfvError::InvalidParameters(format!(
@@ -8507,7 +8934,13 @@ pub fn bfv_full_bootstrap_proof_public_input_schema_v1() -> BfvFullBootstrapProo
             BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_FORBIDS_UNMASKED_PRIVATE_ROW_OPENINGS_V1,
         enforces_duplicate_free_openings:
             BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_FORBIDS_DUPLICATE_OPENINGS_V1,
+        composition_challenge_domain:
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_COMPOSITION_CHALLENGE_DOMAIN.to_vec(),
+        binds_composition_challenges_to_statement_hash: true,
         binds_composition_challenges_to_trace_material_digest: true,
+        binds_composition_challenges_to_row_index: true,
+        binds_composition_challenges_to_column_index: true,
+        maps_zero_composition_challenge_to_one: true,
         proof_input_material_version: BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_INPUT_MATERIAL_VERSION_V1,
         proof_input_material_field_count:
             BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_INPUT_MATERIAL_FIELD_COUNT_V1,
@@ -8709,6 +9142,14 @@ fn validate_bfv_full_bootstrap_proof_public_input_schema_air_contract_bindings_v
             BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_CONSTRAINT_SYSTEM_MATERIAL_FIELD_COUNT_V1
         )));
     }
+    if schema.composition_challenge_domain.as_slice()
+        != BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_COMPOSITION_CHALLENGE_DOMAIN
+    {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap proof public-input schema composition challenge domain mismatch"
+                .to_owned(),
+        ));
+    }
     for (label, is_bound) in [
         (
             "arithmetic AIR constraint-system digest",
@@ -8749,8 +9190,24 @@ fn validate_bfv_full_bootstrap_proof_public_input_schema_air_contract_bindings_v
             schema.enforces_duplicate_free_openings,
         ),
         (
+            "composition challenges bound to statement hash",
+            schema.binds_composition_challenges_to_statement_hash,
+        ),
+        (
             "composition challenges bound to trace material digest",
             schema.binds_composition_challenges_to_trace_material_digest,
+        ),
+        (
+            "composition challenges bound to row index",
+            schema.binds_composition_challenges_to_row_index,
+        ),
+        (
+            "composition challenges bound to column index",
+            schema.binds_composition_challenges_to_column_index,
+        ),
+        (
+            "nonzero composition challenges",
+            schema.maps_zero_composition_challenge_to_one,
         ),
     ] {
         if !is_bound {
@@ -9255,7 +9712,15 @@ pub fn encode_bfv_full_bootstrap_proof_key_material_envelope_v1(
         "BFV full-bootstrap proof key material envelope public-input schema digest",
         &public_input_schema_digest,
     )?;
+    validate_no_full_bootstrap_placeholder_material_digest(
+        "BFV full-bootstrap proof key material envelope public-input schema digest",
+        &public_input_schema_digest,
+    )?;
     validate_nonzero_material_digest(
+        "BFV full-bootstrap proof key material envelope evaluator artifact set digest",
+        &evaluator_artifact_set_digest,
+    )?;
+    validate_no_full_bootstrap_placeholder_material_digest(
         "BFV full-bootstrap proof key material envelope evaluator artifact set digest",
         &evaluator_artifact_set_digest,
     )?;
@@ -9403,6 +9868,7 @@ pub fn bfv_full_bootstrap_proof_key_material_commitment_v1(
     key: &BfvFullBootstrapProofKeyV1,
 ) -> Result<Hash, BfvError> {
     let role_label = full_bootstrap_proof_key_role_label(key.key_role)?;
+    validate_bfv_full_bootstrap_proof_key_commitment_profile_digests_v1(key)?;
     let parameter_digest: [u8; Hash::LENGTH] = key.parameter_digest.into();
     let rns_modulus_chain_digest: [u8; Hash::LENGTH] = key.rns_modulus_chain_digest.into();
     let key_switch_decomposition_chain_digest: [u8; Hash::LENGTH] =
@@ -9539,10 +10005,11 @@ pub fn bfv_full_bootstrap_proof_key_pair_from_key_material_v1(
     prover_key_material: &[u8],
     verifier_key_material: &[u8],
 ) -> Result<(BfvFullBootstrapProofKeyV1, BfvFullBootstrapProofKeyV1), BfvError> {
-    let placeholder_pair_commitment =
-        Hash::new(b"pending BFV full-bootstrap proof-key pair commitment");
-    let placeholder_key_commitment =
-        Hash::new(b"pending BFV full-bootstrap proof-key material commitment");
+    let transient_pair_commitment =
+        Hash::new(b"transient BFV full-bootstrap proof-key pair commitment before finalization v1");
+    let transient_key_commitment = Hash::new(
+        b"transient BFV full-bootstrap proof-key material commitment before finalization v1",
+    );
     let parameter_digest = registered_bfv_parameter_digest(params)?;
     let rns_modulus_chain_digest = registered_bfv_rns_modulus_chain_digest(params)?;
     let key_switch_decomposition_chain_digest =
@@ -9574,7 +10041,7 @@ pub fn bfv_full_bootstrap_proof_key_pair_from_key_material_v1(
         max_bootstrap_depth,
         public_input_schema_digest,
         evaluator_artifact_set_digest,
-        proof_key_pair_commitment: placeholder_pair_commitment,
+        proof_key_pair_commitment: transient_pair_commitment,
         statement_material_version:
             BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_STATEMENT_MATERIAL_VERSION_V1,
         statement_material_field_count:
@@ -9593,7 +10060,7 @@ pub fn bfv_full_bootstrap_proof_key_pair_from_key_material_v1(
         public_input_hash_bytes: BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUT_HASH_BYTES_V1,
         supports_exact_residual_multiple: true,
         supports_bounded_noise: true,
-        key_material_commitment: placeholder_key_commitment,
+        key_material_commitment: transient_key_commitment,
         key_material: prover_key_material,
     };
     let verifier_key = BfvFullBootstrapProofKeyV1 {
@@ -9630,6 +10097,10 @@ fn validate_bfv_full_bootstrap_proof_key_material_commitment_binding_v1(
     key: &BfvFullBootstrapProofKeyV1,
 ) -> Result<(), BfvError> {
     validate_nonzero_material_digest(
+        "BFV full-bootstrap proof key material commitment",
+        &key.key_material_commitment,
+    )?;
+    validate_no_full_bootstrap_placeholder_material_digest(
         "BFV full-bootstrap proof key material commitment",
         &key.key_material_commitment,
     )?;
@@ -11431,6 +11902,18 @@ fn validate_bfv_full_bootstrap_release_audit_artifact_body_not_placeholder_v1(
     let has_placeholder_token = [
         b"placeholder".as_slice(),
         b"replace-before-production".as_slice(),
+        b"replace before production".as_slice(),
+        b"replace_before_production".as_slice(),
+        b"not for production".as_slice(),
+        b"not-for-production".as_slice(),
+        b"not_for_production".as_slice(),
+        b"not production ready".as_slice(),
+        b"not-production-ready".as_slice(),
+        b"not_production_ready".as_slice(),
+        b"draft".as_slice(),
+        b"draft-only".as_slice(),
+        b"draft only".as_slice(),
+        b"draft_only".as_slice(),
         b"todo".as_slice(),
         b"dummy".as_slice(),
         b"fake".as_slice(),
@@ -11656,11 +12139,10 @@ fn validate_bfv_full_bootstrap_release_audit_signoff_payload_v1(
     }
     validate_bfv_full_bootstrap_release_audit_signoff_payload_digests_v1(payload)?;
     validate_bfv_full_bootstrap_release_audit_reviewer_id(&payload.reviewer_id)?;
-    payload.reviewer_public_key.try_algorithm().map_err(|err| {
-        BfvError::InvalidParameters(format!(
-            "BFV full-bootstrap release audit signoff reviewer public key is invalid: {err}"
-        ))
-    })?;
+    validate_bfv_full_bootstrap_release_audit_reviewer_public_key(
+        "BFV full-bootstrap release audit signoff reviewer public key",
+        &payload.reviewer_public_key,
+    )?;
     Ok(())
 }
 
@@ -11884,12 +12366,32 @@ fn validate_bfv_full_bootstrap_release_audit_trusted_reviewer_inputs_v1(
     reviewer_public_key: &PublicKey,
 ) -> Result<(), BfvError> {
     validate_bfv_full_bootstrap_release_audit_reviewer_id(reviewer_id)?;
-    reviewer_public_key.try_algorithm().map_err(|err| {
-        BfvError::InvalidParameters(format!(
-            "BFV full-bootstrap release audit trusted reviewer public key is invalid: {err}"
-        ))
-    })?;
-    Ok(())
+    validate_bfv_full_bootstrap_release_audit_reviewer_public_key(
+        "BFV full-bootstrap release audit trusted reviewer public key",
+        reviewer_public_key,
+    )
+}
+
+fn validate_bfv_full_bootstrap_release_audit_reviewer_public_key(
+    label: &str,
+    reviewer_public_key: &PublicKey,
+) -> Result<(), BfvError> {
+    let (algorithm, payload) = reviewer_public_key
+        .try_to_bytes()
+        .map_err(|err| BfvError::InvalidParameters(format!("{label} is invalid: {err}")))?;
+    if payload.is_empty() {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} payload must not be empty"
+        )));
+    }
+    if payload.iter().all(|byte| *byte == 0) {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} payload must not be all zero"
+        )));
+    }
+    PublicKey::from_bytes(algorithm, payload)
+        .map(|_| ())
+        .map_err(|err| BfvError::InvalidParameters(format!("{label} is invalid: {err}")))
 }
 
 #[allow(clippy::too_many_lines)]
@@ -12382,13 +12884,12 @@ fn validate_bfv_full_bootstrap_release_audit_key_evidence_shape_v1(
             evidence.key_role, expected_role
         )));
     }
-    validate_nonzero_material_digest(
-        &format!("{label} release audit key digest"),
-        &evidence.key_digest,
-    )?;
-    validate_nonzero_material_digest(
-        &format!("{label} release audit key material commitment"),
-        &evidence.key_material_commitment,
+    validate_bfv_full_bootstrap_digest_material_hashes(
+        &format!("{label} release audit key evidence"),
+        &[
+            ("key digest", &evidence.key_digest),
+            ("key material commitment", &evidence.key_material_commitment),
+        ],
     )?;
     validate_bfv_full_bootstrap_native_payload_circuit_id(
         &format!("{label} release audit native payload circuit id"),
@@ -12439,6 +12940,7 @@ fn validate_bfv_full_bootstrap_release_audit_key_evidence_shape_v1(
 fn hash_bfv_full_bootstrap_circuit_artifact_bundle_digest_material_v1(
     digest_material: &BfvFullBootstrapCircuitArtifactBundleDigestMaterialV1,
 ) -> Result<Hash, BfvError> {
+    validate_bfv_full_bootstrap_circuit_artifact_bundle_digest_material_v1(digest_material)?;
     let bytes = norito::to_bytes(digest_material).map_err(|err| {
         BfvError::InvalidParameters(format!(
             "BFV full-bootstrap circuit artifact bundle digest material encoding failed: {err}"
@@ -12448,6 +12950,61 @@ fn hash_bfv_full_bootstrap_circuit_artifact_bundle_digest_material_v1(
         BFV_FULL_BOOTSTRAP_CIRCUIT_ARTIFACT_BUNDLE_DIGEST_DOMAIN,
         bytes.as_slice(),
     ]))
+}
+
+fn validate_bfv_full_bootstrap_circuit_artifact_bundle_digest_material_v1(
+    digest_material: &BfvFullBootstrapCircuitArtifactBundleDigestMaterialV1,
+) -> Result<(), BfvError> {
+    if digest_material.version
+        != BFV_FULL_BOOTSTRAP_CIRCUIT_ARTIFACT_BUNDLE_DIGEST_MATERIAL_VERSION_V1
+    {
+        return Err(BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap circuit artifact bundle digest material version {} does not match canonical version {}",
+            digest_material.version,
+            BFV_FULL_BOOTSTRAP_CIRCUIT_ARTIFACT_BUNDLE_DIGEST_MATERIAL_VERSION_V1
+        )));
+    }
+    if digest_material.artifact_digest_count
+        != BFV_FULL_BOOTSTRAP_CIRCUIT_ARTIFACT_BUNDLE_DIGEST_MATERIAL_ARTIFACT_DIGEST_COUNT_V1
+    {
+        return Err(BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap circuit artifact bundle digest material artifact count {} does not match canonical count {}",
+            digest_material.artifact_digest_count,
+            BFV_FULL_BOOTSTRAP_CIRCUIT_ARTIFACT_BUNDLE_DIGEST_MATERIAL_ARTIFACT_DIGEST_COUNT_V1
+        )));
+    }
+    validate_bfv_full_bootstrap_digest_material_hashes(
+        "BFV full-bootstrap circuit artifact bundle digest material",
+        &[
+            (
+                "coefficient-to-slot key digest",
+                &digest_material.coefficient_to_slot_key_digest,
+            ),
+            (
+                "slot-to-coefficient key digest",
+                &digest_material.slot_to_coefficient_key_digest,
+            ),
+            (
+                "blind-rotation key digest",
+                &digest_material.blind_rotation_key_digest,
+            ),
+            (
+                "sample-extraction key digest",
+                &digest_material.sample_extraction_key_digest,
+            ),
+            ("accumulator digest", &digest_material.accumulator_digest),
+            (
+                "proof public-input schema digest",
+                &digest_material.proof_public_input_schema_digest,
+            ),
+            (
+                "arithmetic AIR constraint-system artifact digest",
+                &digest_material.arithmetic_air_constraint_system_artifact_digest,
+            ),
+            ("prover-key digest", &digest_material.prover_key_digest),
+            ("verifier-key digest", &digest_material.verifier_key_digest),
+        ],
+    )
 }
 
 /// Build typed proof input material for a dedicated BFV full-bootstrap material prover.
@@ -12506,6 +13063,10 @@ pub fn validate_bfv_full_bootstrap_material_proof_input_material_v1(
         )));
     }
     validate_nonzero_material_digest(
+        "BFV full-bootstrap material proof input statement hash",
+        &material.statement_hash,
+    )?;
+    validate_no_full_bootstrap_placeholder_material_digest(
         "BFV full-bootstrap material proof input statement hash",
         &material.statement_hash,
     )?;
@@ -12650,7 +13211,16 @@ pub fn bfv_full_bootstrap_execution_witness_digest_material_v1(
                 .to_owned(),
         ));
     }
+    validate_ciphertext(params, &claim.input_ciphertext)?;
+    validate_ciphertext_not_all_zero(
+        "BFV full-bootstrap execution witness input ciphertext",
+        &claim.input_ciphertext,
+    )?;
     validate_ciphertext(params, &claim.output_ciphertext)?;
+    validate_ciphertext_not_all_zero(
+        "BFV full-bootstrap execution witness output ciphertext",
+        &claim.output_ciphertext,
+    )?;
     let (trace, trace_bounds) = match claim.bound_mode {
         BfvFullBootstrapExecutionProofBoundModeV1::ExactResidualMultiple => {
             let trace = apply_bfv_full_bootstrap_execution_prefix_trace_registered_rns_exact_v1(
@@ -12788,6 +13358,17 @@ pub fn validate_bfv_full_bootstrap_execution_witness_digest_material_v1(
         "BFV full-bootstrap execution witness Galois key set digest",
         &material.galois_key_set_digest,
     )?;
+    validate_bfv_full_bootstrap_digest_material_hashes(
+        "BFV full-bootstrap execution witness digest material",
+        &[
+            (
+                "full-bootstrap material digest",
+                &material.full_bootstrap_material_digest,
+            ),
+            ("artifact bundle digest", &material.artifact_bundle_digest),
+            ("Galois key set digest", &material.galois_key_set_digest),
+        ],
+    )?;
     if usize::try_from(material.slot_index).map_or(true, |slot_index| slot_index >= params.degree())
     {
         return Err(BfvError::InvalidParameters(
@@ -12796,7 +13377,15 @@ pub fn validate_bfv_full_bootstrap_execution_witness_digest_material_v1(
         ));
     }
     validate_ciphertext(params, &material.input_ciphertext)?;
+    validate_ciphertext_not_all_zero(
+        "BFV full-bootstrap execution witness material input ciphertext",
+        &material.input_ciphertext,
+    )?;
     validate_ciphertext(params, &material.output_ciphertext)?;
+    validate_ciphertext_not_all_zero(
+        "BFV full-bootstrap execution witness material output ciphertext",
+        &material.output_ciphertext,
+    )?;
     validate_bfv_full_bootstrap_execution_prefix_trace_v1(params, &material.trace)?;
     validate_bfv_full_bootstrap_execution_prefix_trace_bounds_v1(
         params,
@@ -12979,12 +13568,76 @@ pub fn validate_bfv_full_bootstrap_execution_witness_digest_material_for_artifac
         &claim,
     )?;
     if material != &expected_material {
-        return Err(BfvError::InvalidParameters(
-            "BFV full-bootstrap execution witness material does not match governed artifact trace"
-                .to_owned(),
-        ));
+        let mismatch = bfv_full_bootstrap_execution_witness_artifact_mismatch_label_v1(
+            material,
+            &expected_material,
+        );
+        return Err(BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap execution witness material {mismatch} does not match governed artifact trace"
+        )));
     }
     Ok(())
+}
+
+fn bfv_full_bootstrap_execution_witness_artifact_mismatch_label_v1(
+    material: &BfvFullBootstrapExecutionWitnessDigestMaterialV1,
+    expected: &BfvFullBootstrapExecutionWitnessDigestMaterialV1,
+) -> &'static str {
+    if material.full_bootstrap_material_digest != expected.full_bootstrap_material_digest {
+        return "full-bootstrap material digest";
+    }
+    if material.artifact_bundle_digest != expected.artifact_bundle_digest {
+        return "artifact bundle digest";
+    }
+    if material.galois_key_set_digest != expected.galois_key_set_digest {
+        return "Galois key set digest";
+    }
+    if material.trace.coefficient_to_slot_output != expected.trace.coefficient_to_slot_output {
+        return "coefficient-to-slot output";
+    }
+    if material.trace.blind_rotation_output != expected.trace.blind_rotation_output {
+        return "blind-rotation output";
+    }
+    if material.trace.raw_extracted_sample != expected.trace.raw_extracted_sample {
+        return "raw extracted sample";
+    }
+    if material.trace.coefficient_zero_repack_output
+        != expected.trace.coefficient_zero_repack_output
+    {
+        return "coefficient-zero repack output";
+    }
+    if material.trace.diagnostic_slot_to_coefficient_output
+        != expected.trace.diagnostic_slot_to_coefficient_output
+    {
+        return "diagnostic slot-to-coefficient output";
+    }
+    if material.trace.sample_switch_output != expected.trace.sample_switch_output {
+        return "sample-switch output";
+    }
+    if material.trace.slot_to_coefficient_output != expected.trace.slot_to_coefficient_output {
+        return "slot-to-coefficient output";
+    }
+    if material.trace_bounds.coefficient_to_slot != expected.trace_bounds.coefficient_to_slot {
+        return "coefficient-to-slot bound";
+    }
+    if material.trace_bounds.blind_rotation != expected.trace_bounds.blind_rotation {
+        return "blind-rotation bound";
+    }
+    if material.trace_bounds.raw_extracted_sample != expected.trace_bounds.raw_extracted_sample {
+        return "raw extracted sample bound";
+    }
+    if material.trace_bounds.coefficient_zero_repack
+        != expected.trace_bounds.coefficient_zero_repack
+    {
+        return "coefficient-zero repack bound";
+    }
+    if material.trace_bounds.sample_switch != expected.trace_bounds.sample_switch {
+        return "sample-switch bound";
+    }
+    if material.trace_bounds.slot_to_coefficient != expected.trace_bounds.slot_to_coefficient {
+        return "slot-to-coefficient bound";
+    }
+    "typed material"
 }
 
 fn bfv_full_bootstrap_sample_extraction_from_raw_sample_v1(
@@ -13011,13 +13664,37 @@ fn validate_bfv_full_bootstrap_execution_prefix_trace_v1(
     params: &BfvParameters,
     trace: &BfvFullBootstrapExecutionPrefixTraceV1,
 ) -> Result<(), BfvError> {
-    validate_ciphertext(params, &trace.coefficient_to_slot_output)?;
-    validate_ciphertext(params, &trace.blind_rotation_output)?;
+    for (label, ciphertext) in [
+        (
+            "BFV full-bootstrap execution trace coefficient-to-slot output",
+            &trace.coefficient_to_slot_output,
+        ),
+        (
+            "BFV full-bootstrap execution trace blind-rotation output",
+            &trace.blind_rotation_output,
+        ),
+        (
+            "BFV full-bootstrap execution trace coefficient-zero repack output",
+            &trace.coefficient_zero_repack_output,
+        ),
+        (
+            "BFV full-bootstrap execution trace diagnostic slot-to-coefficient output",
+            &trace.diagnostic_slot_to_coefficient_output,
+        ),
+        (
+            "BFV full-bootstrap execution trace sample-switch output",
+            &trace.sample_switch_output,
+        ),
+        (
+            "BFV full-bootstrap execution trace slot-to-coefficient output",
+            &trace.slot_to_coefficient_output,
+        ),
+    ] {
+        validate_ciphertext(params, ciphertext)?;
+        validate_ciphertext_not_all_zero(label, ciphertext)?;
+    }
     validate_bfv_full_bootstrap_raw_extracted_sample_v1(params, &trace.raw_extracted_sample)?;
-    validate_ciphertext(params, &trace.coefficient_zero_repack_output)?;
-    validate_ciphertext(params, &trace.diagnostic_slot_to_coefficient_output)?;
-    validate_ciphertext(params, &trace.sample_switch_output)?;
-    validate_ciphertext(params, &trace.slot_to_coefficient_output)
+    Ok(())
 }
 
 fn validate_bfv_full_bootstrap_execution_prefix_trace_bounds_v1(
@@ -13315,6 +13992,10 @@ pub fn validate_bfv_full_bootstrap_execution_proof_input_material_v1(
         )));
     }
     validate_nonzero_material_digest(
+        "BFV full-bootstrap execution proof input statement hash",
+        &material.statement_hash,
+    )?;
+    validate_no_full_bootstrap_placeholder_material_digest(
         "BFV full-bootstrap execution proof input statement hash",
         &material.statement_hash,
     )?;
@@ -13620,6 +14301,10 @@ pub fn bfv_full_bootstrap_arithmetic_trace_public_padding_row_v1(
     bound_mode: BfvFullBootstrapExecutionProofBoundModeV1,
 ) -> Result<Vec<u64>, BfvError> {
     validate_nonzero_material_digest(
+        "BFV full-bootstrap arithmetic trace public padding statement hash",
+        &statement_hash,
+    )?;
+    validate_no_full_bootstrap_placeholder_material_digest(
         "BFV full-bootstrap arithmetic trace public padding statement hash",
         &statement_hash,
     )?;
@@ -13935,6 +14620,10 @@ pub fn validate_bfv_full_bootstrap_arithmetic_air_evaluation_material_v1(
         "BFV full-bootstrap arithmetic AIR evaluation material trace material digest",
         &material.arithmetic_trace_material_digest,
     )?;
+    validate_no_full_bootstrap_placeholder_material_digest(
+        "BFV full-bootstrap arithmetic AIR evaluation material trace material digest",
+        &material.arithmetic_trace_material_digest,
+    )?;
     let expected_row_count = canonical_bfv_full_bootstrap_arithmetic_trace_padded_row_count_v1();
     if material.trace_row_count != expected_row_count {
         return Err(BfvError::InvalidParameters(format!(
@@ -14134,6 +14823,10 @@ pub fn validate_bfv_full_bootstrap_execution_prover_input_material_v1(
         "BFV full-bootstrap execution prover input arithmetic trace material digest",
         &material.arithmetic_trace_material_digest,
     )?;
+    validate_no_full_bootstrap_placeholder_material_digest(
+        "BFV full-bootstrap execution prover input arithmetic trace material digest",
+        &material.arithmetic_trace_material_digest,
+    )?;
     let expected_trace_digest = bfv_full_bootstrap_arithmetic_trace_material_digest_v1(
         &material.arithmetic_trace_material,
     )?;
@@ -14154,6 +14847,10 @@ pub fn validate_bfv_full_bootstrap_execution_prover_input_material_v1(
         "BFV full-bootstrap execution prover input material arithmetic AIR artifact digest",
         &material.arithmetic_air_constraint_system_artifact_digest,
     )?;
+    validate_no_full_bootstrap_placeholder_material_digest(
+        "BFV full-bootstrap execution prover input material arithmetic AIR artifact digest",
+        &material.arithmetic_air_constraint_system_artifact_digest,
+    )?;
     if material.arithmetic_air_constraint_system_artifact_digest
         != governed_material.arithmetic_air_constraint_system_artifact_digest
     {
@@ -14163,6 +14860,10 @@ pub fn validate_bfv_full_bootstrap_execution_prover_input_material_v1(
         ));
     }
     validate_nonzero_material_digest(
+        "BFV full-bootstrap execution prover input material arithmetic AIR evaluation material digest",
+        &material.arithmetic_air_evaluation_material_digest,
+    )?;
+    validate_no_full_bootstrap_placeholder_material_digest(
         "BFV full-bootstrap execution prover input material arithmetic AIR evaluation material digest",
         &material.arithmetic_air_evaluation_material_digest,
     )?;
@@ -14577,7 +15278,9 @@ pub fn bfv_full_bootstrap_execution_proof_claim_with_witness_digest_v1(
         bound_mode,
         input_bound,
         output_bound,
-        execution_witness_digest: Hash::new(b"pending BFV full-bootstrap execution witness digest"),
+        execution_witness_digest: Hash::new(
+            b"transient BFV full-bootstrap execution witness digest before finalization v1",
+        ),
     };
     let execution_witness_digest = bfv_full_bootstrap_execution_witness_digest_v1(
         params,
@@ -14669,7 +15372,15 @@ pub fn bfv_full_bootstrap_execution_proof_statement_digest_v1(
         &claim.input_ciphertext,
         artifacts,
     )?;
+    validate_ciphertext_not_all_zero(
+        "BFV full-bootstrap execution proof input ciphertext",
+        &claim.input_ciphertext,
+    )?;
     validate_ciphertext(params, &claim.output_ciphertext)?;
+    validate_ciphertext_not_all_zero(
+        "BFV full-bootstrap execution proof output ciphertext",
+        &claim.output_ciphertext,
+    )?;
     match claim.bound_mode {
         BfvFullBootstrapExecutionProofBoundModeV1::ExactResidualMultiple => {
             validate_exact_residual_bound_within_centered_capacity(
@@ -15217,6 +15928,10 @@ pub fn validate_bfv_full_bootstrap_material_proof_profile_v1(
         "expected BFV full-bootstrap proof public-input schema digest",
         expected_public_input_schema_digest,
     )?;
+    validate_no_full_bootstrap_placeholder_material_digest(
+        "expected BFV full-bootstrap proof public-input schema digest",
+        expected_public_input_schema_digest,
+    )?;
     if material.proof_public_input_schema_digest != *expected_public_input_schema_digest {
         return Err(BfvError::InvalidParameters(
             "BFV full-bootstrap proof public-input schema digest does not match expected verifier profile"
@@ -15227,6 +15942,10 @@ pub fn validate_bfv_full_bootstrap_material_proof_profile_v1(
         expected_verifier_key_material_commitment
     {
         validate_nonzero_material_digest(
+            "expected BFV full-bootstrap verifier-key material commitment",
+            expected_verifier_key_material_commitment,
+        )?;
+        validate_no_full_bootstrap_placeholder_material_digest(
             "expected BFV full-bootstrap verifier-key material commitment",
             expected_verifier_key_material_commitment,
         )?;
@@ -15972,6 +16691,68 @@ fn decode_full_bootstrap_execution_prefix_artifacts_v1(
     ))
 }
 
+fn validate_bfv_full_bootstrap_execution_galois_key_set_v1(
+    params: &BfvParameters,
+    galois_keys: &[BfvGaloisKey],
+    coefficient_to_slot: &BfvFullBootstrapLinearTransformV1,
+    blind_rotation: &BfvFullBootstrapBlindRotationKeyV1,
+    slot_to_coefficient: &BfvFullBootstrapLinearTransformV1,
+) -> Result<(), BfvError> {
+    validate_galois_key_set_metadata(
+        params,
+        galois_keys,
+        "BFV full-bootstrap execution Galois key set",
+    )?;
+    let mut required_powers = std::collections::BTreeSet::new();
+    collect_full_bootstrap_linear_transform_galois_powers_v1(
+        params,
+        coefficient_to_slot,
+        &mut required_powers,
+    )?;
+    for step in &blind_rotation.steps {
+        required_powers.insert(step.automorphism_power);
+    }
+    collect_full_bootstrap_linear_transform_galois_powers_v1(
+        params,
+        slot_to_coefficient,
+        &mut required_powers,
+    )?;
+
+    let supplied_powers = galois_keys
+        .iter()
+        .map(|key| key.automorphism_power)
+        .collect::<std::collections::BTreeSet<_>>();
+    if let Some(missing_power) = required_powers.difference(&supplied_powers).next() {
+        return Err(BfvError::InvalidParameters(format!(
+            "missing BFV Galois key for full-bootstrap execution automorphism power {missing_power}"
+        )));
+    }
+    if let Some(extra_power) = supplied_powers.difference(&required_powers).next() {
+        return Err(BfvError::InvalidParameters(format!(
+            "unexpected BFV Galois key for full-bootstrap execution automorphism power {extra_power}"
+        )));
+    }
+    validate_galois_key_set_entries(params, galois_keys)
+}
+
+fn collect_full_bootstrap_linear_transform_galois_powers_v1(
+    params: &BfvParameters,
+    transform: &BfvFullBootstrapLinearTransformV1,
+    required_powers: &mut std::collections::BTreeSet<u32>,
+) -> Result<(), BfvError> {
+    for diagonal in &transform.diagonals {
+        if diagonal.rotation_steps == 0 {
+            continue;
+        }
+        for (automorphism_power, _) in
+            packed_left_rotation_galois_schedule(params, diagonal.rotation_steps)?
+        {
+            required_powers.insert(automorphism_power);
+        }
+    }
+    Ok(())
+}
+
 /// Execute the governed exact-RNS full-bootstrap prefix through raw sample extraction.
 ///
 /// This validates the same concrete artifacts as
@@ -16000,6 +16781,13 @@ pub fn apply_bfv_full_bootstrap_execution_prefix_trace_registered_rns_exact_v1(
     let material = full_bootstrap_material_from_key(bootstrap_key)?;
     let (coefficient_to_slot, slot_to_coefficient, blind_rotation, sample_switch_key) =
         decode_full_bootstrap_execution_prefix_artifacts_v1(params, material, artifacts)?;
+    validate_bfv_full_bootstrap_execution_galois_key_set_v1(
+        params,
+        galois_keys,
+        &coefficient_to_slot,
+        &blind_rotation,
+        &slot_to_coefficient,
+    )?;
     let coefficient_to_slot_output =
         apply_bfv_full_bootstrap_linear_transform_registered_rns_exact_v1(
             params,
@@ -16084,6 +16872,13 @@ pub fn apply_bfv_full_bootstrap_execution_prefix_trace_bounded_noise_registered_
     let material = full_bootstrap_material_from_key(bootstrap_key)?;
     let (coefficient_to_slot, slot_to_coefficient, blind_rotation, sample_switch_key) =
         decode_full_bootstrap_execution_prefix_artifacts_v1(params, material, artifacts)?;
+    validate_bfv_full_bootstrap_execution_galois_key_set_v1(
+        params,
+        galois_keys,
+        &coefficient_to_slot,
+        &blind_rotation,
+        &slot_to_coefficient,
+    )?;
     let coefficient_to_slot_output =
         apply_bfv_full_bootstrap_linear_transform_bounded_noise_registered_rns_basis_extension_exact_v1(
             params,
@@ -16168,6 +16963,13 @@ pub fn bfv_full_bootstrap_execution_prefix_trace_output_residual_multiple_bounds
     )?;
     let (coefficient_to_slot, slot_to_coefficient, blind_rotation, sample_switch_key) =
         decode_full_bootstrap_execution_prefix_artifacts_v1(params, material, artifacts)?;
+    validate_bfv_full_bootstrap_execution_galois_key_set_v1(
+        params,
+        galois_keys,
+        &coefficient_to_slot,
+        &blind_rotation,
+        &slot_to_coefficient,
+    )?;
     let coefficient_to_slot =
         bfv_full_bootstrap_linear_transform_output_residual_multiple_bound_v1(
             params,
@@ -16244,6 +17046,13 @@ pub fn bfv_full_bootstrap_execution_prefix_trace_bounded_noise_output_bounds_v1(
     )?;
     let (coefficient_to_slot, slot_to_coefficient, blind_rotation, sample_switch_key) =
         decode_full_bootstrap_execution_prefix_artifacts_v1(params, material, artifacts)?;
+    validate_bfv_full_bootstrap_execution_galois_key_set_v1(
+        params,
+        galois_keys,
+        &coefficient_to_slot,
+        &blind_rotation,
+        &slot_to_coefficient,
+    )?;
     let coefficient_to_slot = bfv_full_bootstrap_linear_transform_bounded_noise_output_bound_v1(
         params,
         galois_keys,
@@ -19729,6 +20538,7 @@ pub fn encrypt_identifier_from_seed(
     let scalars = encode_identifier_slots(public_parameters, input)?;
     validate_deterministic_seed("BFV identifier encryption seed", seed)?;
     validate_public_key(&public_parameters.parameters, &public_parameters.public_key)?;
+    validate_public_key_not_all_zero(&public_parameters.public_key)?;
     let slots = scalars
         .into_iter()
         .enumerate()
@@ -19761,6 +20571,10 @@ pub fn decrypt_identifier(
             "identifier ciphertext expected {expected_slots} slots, found {}",
             ciphertext.slots.len()
         )));
+    }
+    for (index, slot) in ciphertext.slots.iter().enumerate() {
+        validate_ciphertext(&public_parameters.parameters, slot)?;
+        validate_ciphertext_not_all_zero(&format!("identifier ciphertext slot[{index}]"), slot)?;
     }
     let scalars = ciphertext
         .slots
@@ -19813,7 +20627,13 @@ fn validate_plain_scalar(params: &BfvParameters, scalar: u64) -> Result<(), BfvE
 
 fn validate_secret_key(params: &BfvParameters, secret_key: &BfvSecretKey) -> Result<(), BfvError> {
     params.validate()?;
-    validate_poly(params, &secret_key.s, "secret key")
+    validate_poly(params, &secret_key.s, "secret key")?;
+    if !secret_key.s.is_empty() && secret_key.s.iter().all(|&coefficient| coefficient == 0) {
+        return Err(BfvError::InvalidParameters(
+            "BFV secret key material must not be all zero".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 /// Validate BFV public-key shape against a parameter set.
@@ -20022,6 +20842,13 @@ fn validate_key_switch_entry_polynomials(
     for (index, entry) in entries.iter().enumerate() {
         validate_poly(params, &entry.b, &format!("{label} b[{index}]"))?;
         validate_poly(params, &entry.a, &format!("{label} a[{index}]"))?;
+        if entry.b.iter().all(|&coefficient| coefficient == 0)
+            && entry.a.iter().all(|&coefficient| coefficient == 0)
+        {
+            return Err(BfvError::InvalidParameters(format!(
+                "{label} entry[{index}] must not be all zero"
+            )));
+        }
     }
     Ok(())
 }
@@ -20102,6 +20929,11 @@ fn validate_refresh_transcript_seed(label: &str, seed: &[u8]) -> Result<(), BfvE
             "{label} must not be empty"
         )));
     }
+    if seed.iter().all(|&byte| byte == 0) {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} must not be all zero"
+        )));
+    }
     if seed.len() > BFV_REFRESH_TRANSCRIPT_SEED_MAX_BYTES {
         return Err(BfvError::InvalidParameters(format!(
             "{label} exceeds the maximum supported length {BFV_REFRESH_TRANSCRIPT_SEED_MAX_BYTES}"
@@ -20114,6 +20946,11 @@ fn validate_deterministic_seed(label: &str, seed: &[u8]) -> Result<(), BfvError>
     if seed.is_empty() {
         return Err(BfvError::InvalidParameters(format!(
             "{label} must not be empty"
+        )));
+    }
+    if seed.iter().all(|&byte| byte == 0) {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} must not be all zero"
         )));
     }
     if seed.len() > BFV_DETERMINISTIC_SEED_MAX_BYTES {
@@ -20163,6 +21000,22 @@ fn validate_ciphertext(params: &BfvParameters, ciphertext: &BfvCiphertext) -> Re
     validate_poly(params, &ciphertext.c1, "ciphertext c1")
 }
 
+fn validate_ciphertext_not_all_zero(
+    label: &str,
+    ciphertext: &BfvCiphertext,
+) -> Result<(), BfvError> {
+    if !ciphertext.c0.is_empty()
+        && !ciphertext.c1.is_empty()
+        && ciphertext.c0.iter().all(|&coefficient| coefficient == 0)
+        && ciphertext.c1.iter().all(|&coefficient| coefficient == 0)
+    {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} must not be an all-zero ciphertext"
+        )));
+    }
+    Ok(())
+}
+
 fn validate_poly(params: &BfvParameters, poly: &[u64], label: &str) -> Result<(), BfvError> {
     params.validate()?;
     if poly.len() != params.degree() {
@@ -20205,7 +21058,7 @@ fn validate_bootstrap_key_admission_shape_metadata(
 ) -> Result<(), BfvError> {
     validate_bootstrap_key_metadata(&bootstrap_key.key_id, bootstrap_key.max_refresh_rounds)?;
     if let Some(public_key_digest) = bootstrap_key.public_key_digest.as_ref() {
-        validate_nonzero_material_digest("BFV bootstrap key public-key digest", public_key_digest)?;
+        validate_bootstrap_key_public_key_digest_metadata(public_key_digest)?;
     }
     match bootstrap_key.mode {
         BfvBootstrapKeyMode::RefreshOnlyV1 => {
@@ -20243,6 +21096,7 @@ fn validate_bootstrap_key_public_key_digest(
     bootstrap_key: &BfvBootstrapKey,
 ) -> Result<(), BfvError> {
     validate_public_key(params, public_key)?;
+    validate_public_key_not_all_zero(public_key)?;
     let Some(expected_digest) = bootstrap_key.public_key_digest.as_ref() else {
         if bootstrap_key.mode == BfvBootstrapKeyMode::FullBootstrapV1 {
             return Err(BfvError::InvalidParameters(
@@ -20251,7 +21105,7 @@ fn validate_bootstrap_key_public_key_digest(
         }
         return Ok(());
     };
-    validate_nonzero_material_digest("BFV bootstrap key public-key digest", expected_digest)?;
+    validate_bootstrap_key_public_key_digest_metadata(expected_digest)?;
     let actual_digest = bfv_public_key_digest(params, public_key)?;
     if actual_digest != *expected_digest {
         return Err(BfvError::InvalidParameters(
@@ -20259,6 +21113,14 @@ fn validate_bootstrap_key_public_key_digest(
         ));
     }
     Ok(())
+}
+
+fn validate_bootstrap_key_public_key_digest_metadata(digest: &Hash) -> Result<(), BfvError> {
+    validate_nonzero_material_digest("BFV bootstrap key public-key digest", digest)?;
+    validate_no_full_bootstrap_placeholder_material_digest(
+        "BFV bootstrap key public-key digest",
+        digest,
+    )
 }
 
 fn validate_bootstrap_key_round_refresh_shape(
@@ -20304,7 +21166,28 @@ const BFV_FULL_BOOTSTRAP_PLACEHOLDER_MATERIAL_DIGEST_PREIMAGES: &[&[u8]] = &[
     b"placeholder full-bootstrap verifier-key commitment",
     b"placeholder full-bootstrap artifact-helper proof-key commitment",
     b"placeholder full-bootstrap adversarial proof-key commitment",
+    b"placeholder BFV full-bootstrap native prover payload",
+    b"placeholder BFV full-bootstrap native verifier payload",
+    b"placeholder BFV full-bootstrap native proof key payload",
+    b"pending BFV full-bootstrap native proof key payload",
+    b"TODO pending BFV full-bootstrap native proof key payload",
     b"pending BFV full-bootstrap execution witness digest",
+    b"replace-before-production",
+    b"replace before production",
+    b"replace_before_production",
+    b"not for production",
+    b"not-for-production",
+    b"not_for_production",
+    b"not production ready",
+    b"not-production-ready",
+    b"not_production_ready",
+    b"draft",
+    b"draft-only",
+    b"draft only",
+    b"draft_only",
+    b"todo",
+    b"dummy",
+    b"fake",
 ];
 
 fn validate_nonzero_material_digest(label: &str, digest: &Hash) -> Result<(), BfvError> {
@@ -20312,6 +21195,28 @@ fn validate_nonzero_material_digest(label: &str, digest: &Hash) -> Result<(), Bf
         return Err(BfvError::InvalidParameters(format!(
             "{label} must not be the zero hash"
         )));
+    }
+    Ok(())
+}
+
+fn validate_bfv_full_bootstrap_digest_material_hashes(
+    material_label: &str,
+    digests: &[(&str, &Hash)],
+) -> Result<(), BfvError> {
+    for (label, digest) in digests {
+        validate_nonzero_material_digest(&format!("{material_label} {label}"), digest)?;
+        validate_no_full_bootstrap_placeholder_material_digest(
+            &format!("{material_label} {label}"),
+            digest,
+        )?;
+    }
+    for (index, (label, digest)) in digests.iter().enumerate() {
+        if let Some((prior_label, _)) = digests[..index].iter().find(|(_, prior)| *prior == *digest)
+        {
+            return Err(BfvError::InvalidParameters(format!(
+                "{material_label} {label} must be distinct from {prior_label}"
+            )));
+        }
     }
     Ok(())
 }
@@ -20627,18 +21532,7 @@ fn validate_bfv_full_bootstrap_proof_key_backend_profile_v1(
 fn validate_bfv_full_bootstrap_proof_key_digests_and_depth_v1(
     key: &BfvFullBootstrapProofKeyV1,
 ) -> Result<(), BfvError> {
-    validate_nonzero_material_digest(
-        "BFV full-bootstrap proof key parameter digest",
-        &key.parameter_digest,
-    )?;
-    validate_nonzero_material_digest(
-        "BFV full-bootstrap proof key RNS modulus-chain digest",
-        &key.rns_modulus_chain_digest,
-    )?;
-    validate_nonzero_material_digest(
-        "BFV full-bootstrap proof key key-switch decomposition-chain digest",
-        &key.key_switch_decomposition_chain_digest,
-    )?;
+    validate_bfv_full_bootstrap_proof_key_commitment_profile_digests_v1(key)?;
     if key.max_bootstrap_depth == 0 {
         return Err(BfvError::InvalidParameters(
             "BFV full-bootstrap proof key max_bootstrap_depth must be greater than zero".to_owned(),
@@ -20649,18 +21543,42 @@ fn validate_bfv_full_bootstrap_proof_key_digests_and_depth_v1(
             "BFV full-bootstrap proof key max_bootstrap_depth exceeds supported limit {BFV_FULL_BOOTSTRAP_MAX_CIRCUIT_DEPTH}"
         )));
     }
-    validate_nonzero_material_digest(
-        "BFV full-bootstrap proof key public-input schema digest",
-        &key.public_input_schema_digest,
-    )?;
-    validate_nonzero_material_digest(
-        "BFV full-bootstrap proof key evaluator artifact set digest",
-        &key.evaluator_artifact_set_digest,
-    )?;
-    validate_nonzero_material_digest(
-        "BFV full-bootstrap proof-key pair commitment",
-        &key.proof_key_pair_commitment,
-    )?;
+    Ok(())
+}
+
+fn validate_bfv_full_bootstrap_proof_key_commitment_profile_digests_v1(
+    key: &BfvFullBootstrapProofKeyV1,
+) -> Result<(), BfvError> {
+    let digests = [
+        (
+            "BFV full-bootstrap proof key parameter digest",
+            &key.parameter_digest,
+        ),
+        (
+            "BFV full-bootstrap proof key RNS modulus-chain digest",
+            &key.rns_modulus_chain_digest,
+        ),
+        (
+            "BFV full-bootstrap proof key key-switch decomposition-chain digest",
+            &key.key_switch_decomposition_chain_digest,
+        ),
+        (
+            "BFV full-bootstrap proof key public-input schema digest",
+            &key.public_input_schema_digest,
+        ),
+        (
+            "BFV full-bootstrap proof key evaluator artifact set digest",
+            &key.evaluator_artifact_set_digest,
+        ),
+        (
+            "BFV full-bootstrap proof-key pair commitment",
+            &key.proof_key_pair_commitment,
+        ),
+    ];
+    for (label, digest) in digests {
+        validate_nonzero_material_digest(label, digest)?;
+        validate_no_full_bootstrap_placeholder_material_digest(label, digest)?;
+    }
     Ok(())
 }
 
@@ -21107,6 +22025,10 @@ fn validate_bfv_full_bootstrap_native_proof_key_material_object_v1(
         "BFV full-bootstrap native proof key payload digest",
         &material.native_payload_digest,
     )?;
+    validate_no_bfv_full_bootstrap_inert_sha256_digest(
+        "BFV full-bootstrap native proof key payload digest",
+        &material.native_payload_digest,
+    )?;
     if material.native_payload_digest != sha256(&material.native_payload) {
         return Err(BfvError::InvalidParameters(
             "BFV full-bootstrap native proof key payload digest mismatch".to_owned(),
@@ -21222,17 +22144,37 @@ fn validate_bfv_full_bootstrap_proof_key_material_envelope_matches_key_v1(
     expect_envelope_field_match!(key_format, "key format");
     expect_envelope_field_match!(circuit_id, "circuit id");
     expect_envelope_field_match!(parameter_digest, "parameter digest");
+    validate_no_full_bootstrap_placeholder_material_digest(
+        "BFV full-bootstrap proof key material envelope parameter digest",
+        &envelope.parameter_digest,
+    )?;
     expect_envelope_field_match!(rns_modulus_chain_digest, "RNS modulus-chain digest");
+    validate_no_full_bootstrap_placeholder_material_digest(
+        "BFV full-bootstrap proof key material envelope RNS modulus-chain digest",
+        &envelope.rns_modulus_chain_digest,
+    )?;
     expect_envelope_field_match!(
         key_switch_decomposition_chain_digest,
         "key-switch decomposition-chain digest"
     );
+    validate_no_full_bootstrap_placeholder_material_digest(
+        "BFV full-bootstrap proof key material envelope key-switch decomposition-chain digest",
+        &envelope.key_switch_decomposition_chain_digest,
+    )?;
     expect_envelope_field_match!(max_bootstrap_depth, "max bootstrap depth");
     expect_envelope_field_match!(public_input_schema_digest, "public-input schema digest");
+    validate_no_full_bootstrap_placeholder_material_digest(
+        "BFV full-bootstrap proof key material envelope public-input schema digest",
+        &envelope.public_input_schema_digest,
+    )?;
     expect_envelope_field_match!(
         evaluator_artifact_set_digest,
         "evaluator artifact set digest"
     );
+    validate_no_full_bootstrap_placeholder_material_digest(
+        "BFV full-bootstrap proof key material envelope evaluator artifact set digest",
+        &envelope.evaluator_artifact_set_digest,
+    )?;
     validate_bfv_full_bootstrap_arithmetic_trace_profile_digest_v1(
         "BFV full-bootstrap proof key material envelope arithmetic trace profile digest",
         &envelope.arithmetic_trace_profile_digest,
@@ -23823,6 +24765,16 @@ fn rotation_steps_mod_slot_count(
 mod tests {
     use super::*;
 
+    type SignoffDigestSetter = (
+        &'static str,
+        fn(&mut BfvFullBootstrapReleaseAuditSignoffV1, Hash),
+    );
+
+    type ManifestDigestSetter = (
+        &'static str,
+        fn(&mut BfvFullBootstrapReleaseAuditManifestV1, Hash),
+    );
+
     fn params() -> BfvParameters {
         BfvParameters {
             polynomial_degree: 8,
@@ -24369,6 +25321,31 @@ mod tests {
             decode_bfv_full_bootstrap_native_proof_key_material_v1(&zero_digest_material),
             "zero SHA-256 digest",
             "native material must reject missing verifier payload digests",
+        );
+
+        let mut inert_payload_material = decoded_verifier.clone();
+        inert_payload_material.native_payload = b"not-production-ready".to_vec();
+        inert_payload_material.native_payload_digest =
+            sha256(&inert_payload_material.native_payload);
+        let inert_payload_material = norito::to_bytes(&inert_payload_material)
+            .expect("encode inert native payload material");
+        assert_error_contains(
+            decode_bfv_full_bootstrap_native_proof_key_material_v1(&inert_payload_material),
+            "inert native payload digest",
+            "native material must reject digest-correct inert verifier payloads",
+        );
+
+        let mut generic_placeholder_material = decoded_prover.clone();
+        generic_placeholder_material.native_payload =
+            b"PLACEHOLDER BFV FULL-BOOTSTRAP NATIVE PROOF KEY PAYLOAD".to_vec();
+        generic_placeholder_material.native_payload_digest =
+            sha256(&generic_placeholder_material.native_payload);
+        let generic_placeholder_material = norito::to_bytes(&generic_placeholder_material)
+            .expect("encode generic placeholder native material");
+        assert_error_contains(
+            decode_bfv_full_bootstrap_native_proof_key_material_v1(&generic_placeholder_material),
+            "inert native payload digest",
+            "native material must reject generic proof-key placeholder payloads",
         );
 
         let mut drifted_material = decoded_verifier;
@@ -27235,6 +28212,13 @@ mod tests {
             err.to_string().contains("must not be empty"),
             "unexpected error: {err}"
         );
+        let all_zero_seed = vec![0_u8; 32];
+        let err = keygen_from_seed(&params, &all_zero_seed)
+            .expect_err("all-zero BFV keygen seeds must not derive key material");
+        assert!(
+            err.to_string().contains("all zero"),
+            "unexpected error: {err}"
+        );
 
         let (secret_key, public_key, _) =
             keygen_from_seed(&params, b"bfv-empty-seed-keygen").expect("keygen");
@@ -27244,11 +28228,23 @@ mod tests {
             err.to_string().contains("must not be empty"),
             "unexpected error: {err}"
         );
+        let err = encrypt_from_seed(&params, &public_key, &[1], &all_zero_seed)
+            .expect_err("all-zero BFV encryption seeds must not derive ciphertexts");
+        assert!(
+            err.to_string().contains("all zero"),
+            "unexpected error: {err}"
+        );
 
         let err = galois_key_from_seed(&params, &secret_key, 3, b"")
             .expect_err("empty BFV Galois key seeds must not derive key material");
         assert!(
             err.to_string().contains("must not be empty"),
+            "unexpected error: {err}"
+        );
+        let err = galois_key_from_seed(&params, &secret_key, 3, &all_zero_seed)
+            .expect_err("all-zero BFV Galois key seeds must not derive key material");
+        assert!(
+            err.to_string().contains("all zero"),
             "unexpected error: {err}"
         );
 
@@ -27264,6 +28260,17 @@ mod tests {
             err.to_string().contains("must not be empty"),
             "unexpected error: {err}"
         );
+        let err = derive_identifier_key_material_from_seed(
+            &identifier_params,
+            8,
+            &all_zero_seed,
+            b"test-associated",
+        )
+        .expect_err("all-zero BFV identifier key seeds must not derive key material");
+        assert!(
+            err.to_string().contains("all zero"),
+            "unexpected error: {err}"
+        );
 
         let (public_parameters, _, _) = derive_identifier_key_material_from_seed(
             &identifier_params,
@@ -27276,6 +28283,12 @@ mod tests {
             .expect_err("empty BFV identifier encryption seeds must not derive ciphertexts");
         assert!(
             err.to_string().contains("must not be empty"),
+            "unexpected error: {err}"
+        );
+        let err = encrypt_identifier_from_seed(&public_parameters, b"id", &all_zero_seed)
+            .expect_err("all-zero BFV identifier encryption seeds must not derive ciphertexts");
+        assert!(
+            err.to_string().contains("all zero"),
             "unexpected error: {err}"
         );
 
@@ -27308,6 +28321,12 @@ mod tests {
             err.to_string().contains("maximum supported length"),
             "unexpected error: {err}"
         );
+        let err = keygen_bounded_noise_from_seed(&params, &all_zero_seed)
+            .expect_err("all-zero bounded-noise BFV keygen seeds must not derive key material");
+        assert!(
+            err.to_string().contains("all zero"),
+            "unexpected error: {err}"
+        );
         let err =
             encrypt_bounded_noise_from_seed(&params, &bounded_public_key, &[1], &oversized_seed)
                 .expect_err(
@@ -27318,12 +28337,28 @@ mod tests {
             "unexpected error: {err}"
         );
         let err =
+            encrypt_bounded_noise_from_seed(&params, &bounded_public_key, &[1], &all_zero_seed)
+                .expect_err(
+                    "all-zero bounded-noise BFV encryption seeds must not derive ciphertexts",
+                );
+        assert!(
+            err.to_string().contains("all zero"),
+            "unexpected error: {err}"
+        );
+        let err =
             galois_key_bounded_noise_from_seed(&params, &bounded_secret_key, 3, &oversized_seed)
                 .expect_err(
                     "oversized bounded-noise BFV Galois seeds must not derive key material",
                 );
         assert!(
             err.to_string().contains("maximum supported length"),
+            "unexpected error: {err}"
+        );
+        let err =
+            galois_key_bounded_noise_from_seed(&params, &bounded_secret_key, 3, &all_zero_seed)
+                .expect_err("all-zero bounded-noise BFV Galois seeds must not derive key material");
+        assert!(
+            err.to_string().contains("all zero"),
             "unexpected error: {err}"
         );
 
@@ -27379,6 +28414,34 @@ mod tests {
             "must not be empty",
             "exact encryption must reject seed metadata before public-key shape",
         );
+        let all_zero_exact_public_key = BfvPublicKey {
+            b: zero_poly(&exact_params),
+            a: zero_poly(&exact_params),
+        };
+        assert_error_contains(
+            encrypt_from_seed(
+                &exact_params,
+                &all_zero_exact_public_key,
+                &[0],
+                b"bfv-exact-all-zero-public-key",
+            ),
+            "all zero",
+            "exact encryption must reject inert all-zero public-key material",
+        );
+        let zero_a_exact_public_key = BfvPublicKey {
+            b: vec![1; exact_params.degree()],
+            a: zero_poly(&exact_params),
+        };
+        assert_error_contains(
+            encrypt_from_seed(
+                &exact_params,
+                &zero_a_exact_public_key,
+                &[0],
+                b"bfv-exact-zero-a-public-key",
+            ),
+            "a component",
+            "exact encryption must reject inert zero-a public-key components",
+        );
 
         let bounded_params = params();
         let invalid_bounded_plaintext = [bounded_params.plaintext_modulus];
@@ -27396,6 +28459,34 @@ mod tests {
             encrypt_bounded_noise_from_seed(&bounded_params, &malformed_public_key, &[0], b""),
             "must not be empty",
             "bounded encryption must reject seed metadata before public-key shape",
+        );
+        let all_zero_bounded_public_key = BfvPublicKey {
+            b: zero_poly(&bounded_params),
+            a: zero_poly(&bounded_params),
+        };
+        assert_error_contains(
+            encrypt_bounded_noise_from_seed(
+                &bounded_params,
+                &all_zero_bounded_public_key,
+                &[0],
+                b"bfv-bounded-all-zero-public-key",
+            ),
+            "all zero",
+            "bounded encryption must reject inert all-zero public-key material",
+        );
+        let zero_b_bounded_public_key = BfvPublicKey {
+            b: zero_poly(&bounded_params),
+            a: vec![1; bounded_params.degree()],
+        };
+        assert_error_contains(
+            encrypt_bounded_noise_from_seed(
+                &bounded_params,
+                &zero_b_bounded_public_key,
+                &[0],
+                b"bfv-bounded-zero-b-public-key",
+            ),
+            "b component",
+            "bounded encryption must reject inert zero-b public-key components",
         );
 
         let identifier_params = ram_lfe_bfv_parameters_v1();
@@ -27663,6 +28754,49 @@ mod tests {
             err.to_string().contains("public key a contains"),
             "unexpected error: {err}"
         );
+
+        let all_zero = BfvPublicKey {
+            b: zero_poly(&params),
+            a: zero_poly(&params),
+        };
+        validate_public_key(&params, &all_zero)
+            .expect("shape validation remains available for all-zero public-key diagnostics");
+        let err = bfv_public_key_digest(&params, &all_zero)
+            .expect_err("public-key digesting must reject inert all-zero public keys");
+        assert!(
+            err.to_string().contains("all zero"),
+            "unexpected error: {err}"
+        );
+
+        {
+            let malformed_key = BfvPublicKey {
+                b: zero_poly(&params),
+                a: vec![1; params.degree()],
+            };
+            validate_public_key(&params, &malformed_key)
+                .expect("shape validation remains available for zero-b public-key diagnostics");
+            let err = bfv_public_key_digest(&params, &malformed_key)
+                .expect_err("public-key digesting must reject inert zero-b public-key components");
+            assert!(
+                err.to_string().contains("b component"),
+                "unexpected error: {err}"
+            );
+        }
+
+        {
+            let malformed_key = BfvPublicKey {
+                b: vec![1; params.degree()],
+                a: zero_poly(&params),
+            };
+            validate_public_key(&params, &malformed_key)
+                .expect("shape validation remains available for zero-a public-key diagnostics");
+            let err = bfv_public_key_digest(&params, &malformed_key)
+                .expect_err("public-key digesting must reject inert zero-a public-key components");
+            assert!(
+                err.to_string().contains("a component"),
+                "unexpected error: {err}"
+            );
+        }
     }
 
     #[test]
@@ -27673,6 +28807,70 @@ mod tests {
 
         validate_public_key_secret_consistency(&params, &secret_key, &public_key)
             .expect("generated public key is consistent with the secret key");
+
+        let all_zero_secret_key = BfvSecretKey {
+            s: zero_poly(&params),
+        };
+        let err =
+            validate_public_key_secret_consistency(&params, &all_zero_secret_key, &public_key)
+                .expect_err("exact public-key consistency must reject all-zero secret material");
+        assert!(
+            err.to_string().contains("all zero"),
+            "unexpected error: {err}"
+        );
+        let err = validate_bounded_noise_public_key_secret_consistency(
+            &params,
+            &all_zero_secret_key,
+            &public_key,
+        )
+        .expect_err("bounded public-key consistency must reject all-zero secret material");
+        assert!(
+            err.to_string().contains("all zero"),
+            "unexpected error: {err}"
+        );
+
+        let all_zero_public_key = BfvPublicKey {
+            b: zero_poly(&params),
+            a: zero_poly(&params),
+        };
+        let err =
+            validate_public_key_secret_consistency(&params, &secret_key, &all_zero_public_key)
+                .expect_err("exact public-key consistency must reject all-zero key material");
+        assert!(
+            err.to_string().contains("all zero"),
+            "unexpected error: {err}"
+        );
+        let err = validate_bounded_noise_public_key_secret_consistency(
+            &params,
+            &secret_key,
+            &all_zero_public_key,
+        )
+        .expect_err("bounded public-key consistency must reject all-zero key material");
+        assert!(
+            err.to_string().contains("all zero"),
+            "unexpected error: {err}"
+        );
+
+        let zero_a_public_key = BfvPublicKey {
+            b: vec![1; params.degree()],
+            a: zero_poly(&params),
+        };
+        let err = validate_public_key_secret_consistency(&params, &secret_key, &zero_a_public_key)
+            .expect_err("exact public-key consistency must reject zero-a key material");
+        assert!(
+            err.to_string().contains("a component"),
+            "unexpected error: {err}"
+        );
+        let err = validate_bounded_noise_public_key_secret_consistency(
+            &params,
+            &secret_key,
+            &zero_a_public_key,
+        )
+        .expect_err("bounded public-key consistency must reject zero-a key material");
+        assert!(
+            err.to_string().contains("a component"),
+            "unexpected error: {err}"
+        );
 
         let mut non_plaintext_residue = public_key.clone();
         non_plaintext_residue.b[0] =
@@ -27685,11 +28883,12 @@ mod tests {
             "unexpected error: {err}"
         );
 
-        let mut oversized_residual = BfvPublicKey {
-            b: zero_poly(&params),
-            a: zero_poly(&params),
-        };
-        oversized_residual.b[0] = params.plaintext_modulus * 2;
+        let mut oversized_residual = public_key.clone();
+        oversized_residual.b[0] = add_mod_u64(
+            oversized_residual.b[0],
+            params.plaintext_modulus * (u64::from(BFV_ERROR_MULTIPLE_BOUND) + 2),
+            params.ciphertext_modulus,
+        );
         let err = validate_public_key_secret_consistency(&params, &secret_key, &oversized_residual)
             .expect_err("oversized public-key residual must be rejected");
         assert!(
@@ -27742,6 +28941,19 @@ mod tests {
         .expect_err("empty rotation transcript seed must be rejected");
         assert!(
             err.to_string().contains("must not be empty"),
+            "unexpected error: {err}"
+        );
+
+        let all_zero_rotation_seed = vec![0_u8; 32];
+        let err = validate_rotation_key_zero_refresh_transcript(
+            &material.params,
+            &material.public_key,
+            &material.rotation_key,
+            &all_zero_rotation_seed,
+        )
+        .expect_err("all-zero rotation transcript seed must be rejected");
+        assert!(
+            err.to_string().contains("all zero"),
             "unexpected error: {err}"
         );
 
@@ -27831,6 +29043,19 @@ mod tests {
         .expect_err("empty bootstrap transcript seed must be rejected");
         assert!(
             err.to_string().contains("must not be empty"),
+            "unexpected error: {err}"
+        );
+
+        let all_zero_bootstrap_seed = vec![0_u8; 32];
+        let err = validate_bootstrap_key_zero_refresh_transcript(
+            &material.params,
+            &material.public_key,
+            &bootstrap_key,
+            &all_zero_bootstrap_seed,
+        )
+        .expect_err("all-zero bootstrap transcript seed must be rejected");
+        assert!(
+            err.to_string().contains("all zero"),
             "unexpected error: {err}"
         );
 
@@ -27965,6 +29190,89 @@ mod tests {
             ),
             "public-key digest",
             "bounded bootstrap proof statements must reject stale public-key digest metadata",
+        );
+        let mut placeholder_public_key_digest = bootstrap_key.clone();
+        placeholder_public_key_digest.public_key_digest = Some(Hash::new(b"not for production"));
+        assert_error_contains(
+            bootstrap_key_zero_refresh_proof_statement_digest(
+                &material.params,
+                &material.public_key,
+                &placeholder_public_key_digest,
+            ),
+            "placeholder",
+            "exact bootstrap proof statements must reject placeholder public-key digest metadata before comparison",
+        );
+        assert_error_contains(
+            bootstrap_key_bounded_noise_zero_refresh_proof_statement_digest(
+                &material.params,
+                &material.public_key,
+                &placeholder_public_key_digest,
+            ),
+            "placeholder",
+            "bounded bootstrap proof statements must reject placeholder public-key digest metadata before comparison",
+        );
+
+        let all_zero_public_key = BfvPublicKey {
+            b: zero_poly(&material.params),
+            a: zero_poly(&material.params),
+        };
+        let mut omitted_public_key_digest = bootstrap_key.clone();
+        omitted_public_key_digest.public_key_digest = None;
+        assert_error_contains(
+            bootstrap_key_zero_refresh_proof_statement_digest(
+                &material.params,
+                &all_zero_public_key,
+                &omitted_public_key_digest,
+            ),
+            "all zero",
+            "exact bootstrap proof statements must reject all-zero public keys even when refresh-only digest metadata is omitted",
+        );
+        assert_error_contains(
+            bootstrap_key_bounded_noise_zero_refresh_proof_statement_digest(
+                &material.params,
+                &all_zero_public_key,
+                &omitted_public_key_digest,
+            ),
+            "all zero",
+            "bounded bootstrap proof statements must reject all-zero public keys even when refresh-only digest metadata is omitted",
+        );
+
+        let mut all_zero_zero_refresh = bootstrap_key.clone();
+        let all_zero_refresh = BfvCiphertext {
+            c0: zero_poly(&material.params),
+            c1: zero_poly(&material.params),
+        };
+        all_zero_zero_refresh.zero_refresh = all_zero_refresh.clone();
+        all_zero_zero_refresh.round_refreshes[0] = all_zero_refresh.clone();
+        assert_error_contains(
+            bootstrap_key_zero_refresh_proof_statement_digest(
+                &material.params,
+                &material.public_key,
+                &all_zero_zero_refresh,
+            ),
+            "all-zero refresh ciphertext",
+            "exact bootstrap proof statements must reject inert all-zero zero_refresh material",
+        );
+        assert_error_contains(
+            bootstrap_key_bounded_noise_zero_refresh_proof_statement_digest(
+                &material.params,
+                &material.public_key,
+                &all_zero_zero_refresh,
+            ),
+            "all-zero refresh ciphertext",
+            "bounded bootstrap proof statements must reject inert all-zero zero_refresh material",
+        );
+
+        let mut all_zero_round_refresh = bootstrap_key.clone();
+        all_zero_round_refresh.round_refreshes[1] = all_zero_refresh;
+        assert_error_contains(
+            bootstrap_key_zero_refresh_proof_statement_digest(
+                &material.params,
+                &material.public_key,
+                &all_zero_round_refresh,
+            ),
+            "all-zero refresh ciphertext",
+            "exact bootstrap proof statements must reject inert all-zero round refresh material",
         );
 
         let mut tampered_refresh = bootstrap_key.clone();
@@ -28307,6 +29615,46 @@ mod tests {
             "full-bootstrap material must reject proof-key material placeholder digests",
         );
 
+        let mut draft_accumulator_digest = material.clone();
+        draft_accumulator_digest.accumulator_digest = Hash::new(b"draft");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_circuit_material_v1(&params, &draft_accumulator_digest),
+            "placeholder",
+            "full-bootstrap material must reject draft material digest sentinels",
+        );
+
+        let mut not_ready_prover_key_digest = material.clone();
+        not_ready_prover_key_digest.prover_key_digest = Hash::new(b"not-production-ready");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_circuit_material_v1(&params, &not_ready_prover_key_digest),
+            "placeholder",
+            "full-bootstrap material must reject not-production-ready material digest sentinels",
+        );
+
+        let mut generic_placeholder_prover_key_digest = material.clone();
+        generic_placeholder_prover_key_digest.prover_key_digest =
+            Hash::new(b"placeholder BFV full-bootstrap native proof key payload");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_circuit_material_v1(
+                &params,
+                &generic_placeholder_prover_key_digest,
+            ),
+            "placeholder",
+            "full-bootstrap material must reject generic native proof-key placeholder digest sentinels",
+        );
+
+        let mut replace_before_production_verifier_key_commitment = material.clone();
+        replace_before_production_verifier_key_commitment.verifier_key_material_commitment =
+            Hash::new(b"replace before production");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_circuit_material_v1(
+                &params,
+                &replace_before_production_verifier_key_commitment,
+            ),
+            "placeholder",
+            "full-bootstrap material must reject replace-before-production material digest sentinels",
+        );
+
         let mut aliased_prover_key_material = material.clone();
         aliased_prover_key_material.prover_key_material_commitment =
             aliased_prover_key_material.proof_key_pair_commitment;
@@ -28413,6 +29761,18 @@ mod tests {
             "full-bootstrap material must bind the expected proof schema",
         );
 
+        let placeholder_schema_digest = Hash::new(b"draft");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_material_proof_profile_v1(
+                &params,
+                &material,
+                &placeholder_schema_digest,
+                Some(&expected_verifier_key_material_commitment),
+            ),
+            "placeholder",
+            "full-bootstrap material proof profile must reject placeholder expected schema digests",
+        );
+
         let wrong_verifier_key_material_commitment =
             Hash::new(b"wrong-bfv-full-bootstrap-verifier-key-material-commitment");
         assert_error_contains(
@@ -28424,6 +29784,18 @@ mod tests {
             ),
             "verifier-key material commitment",
             "full-bootstrap material must bind the expected verifier key",
+        );
+
+        let placeholder_verifier_key_material_commitment = Hash::new(b"replace before production");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_material_proof_profile_v1(
+                &params,
+                &material,
+                &expected_schema_digest,
+                Some(&placeholder_verifier_key_material_commitment),
+            ),
+            "placeholder",
+            "full-bootstrap material proof profile must reject placeholder expected verifier commitments",
         );
 
         let zero_digest = Hash::prehashed([0_u8; Hash::LENGTH]);
@@ -28540,6 +29912,34 @@ mod tests {
             ),
             "placeholder audit artifact",
             "archive helper must reject pending placeholder audit archive bodies",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_report_bytes_v1(
+                b"external review draft not for production release report body v1",
+            ),
+            "placeholder audit artifact",
+            "report helper must reject draft/not-for-production audit report bodies",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_archive_bytes_v1(
+                b"external review evidence archive replace before production body v1",
+            ),
+            "placeholder audit artifact",
+            "archive helper must reject spaced replace-before-production bodies",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_report_bytes_v1(
+                b"external review not-production-ready release report body v1",
+            ),
+            "placeholder audit artifact",
+            "report helper must reject not-production-ready audit report bodies",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_archive_bytes_v1(
+                b"external review evidence archive replace_before_production body v1",
+            ),
+            "placeholder audit artifact",
+            "archive helper must reject underscore replace-before-production bodies",
         );
         let mut delayed_placeholder_report_body =
             vec![b'x'; BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_BODY_TEST_PADDING_BYTES + 32];
@@ -28848,6 +30248,17 @@ mod tests {
             "placeholder",
             "release audit evidence must reject proof-key material placeholder digests",
         );
+        let mut not_for_production_key_digest_evidence = evidence.clone();
+        not_for_production_key_digest_evidence
+            .verifier_key
+            .key_digest = Hash::new(b"not for production");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_evidence_v1(
+                &not_for_production_key_digest_evidence,
+            ),
+            "placeholder",
+            "release audit evidence must reject not-for-production proof-key digest sentinels",
+        );
         assert_eq!(
             evidence.version,
             BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_EVIDENCE_VERSION_V1
@@ -28973,6 +30384,35 @@ mod tests {
             &params, &material, &artifacts, &signoff,
         )
         .expect("signed release audit signoff matches governed artifacts");
+        let all_zero_reviewer_public_key = crate::PublicKey(crate::PublicKeyCompact::new(
+            crate::Algorithm::Ed25519,
+            &[0_u8; 32],
+        ));
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_trusted_reviewer_inputs_v1(
+                "sora-zk-audit-wg-2026",
+                &all_zero_reviewer_public_key,
+            ),
+            "all zero",
+            "release audit trusted reviewer inputs must reject inert all-zero public keys",
+        );
+        let mut all_zero_reviewer_signoff = signoff.clone();
+        all_zero_reviewer_signoff.payload.reviewer_public_key = all_zero_reviewer_public_key;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_signoff_v1(&all_zero_reviewer_signoff),
+            "all zero",
+            "release audit signoff payloads must reject inert all-zero reviewer public keys before signature verification",
+        );
+        let empty_reviewer_public_key =
+            crate::PublicKey(crate::PublicKeyCompact::new(crate::Algorithm::Ed25519, &[]));
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_trusted_reviewer_inputs_v1(
+                "sora-zk-audit-wg-2026",
+                &empty_reviewer_public_key,
+            ),
+            "payload must not be empty",
+            "release audit trusted reviewer inputs must reject empty public-key payloads",
+        );
         let mut stale_signoff_fingerprint = signoff.clone();
         stale_signoff_fingerprint.payload.native_circuit_fingerprint =
             Hash::new(b"stale-release-audit-signoff-native-circuit-fingerprint");
@@ -28991,10 +30431,7 @@ mod tests {
             "placeholder",
             "release audit signoff payloads must reject placeholder proof-key pair commitments before signature checks",
         );
-        let signoff_placeholder_digest_setters: [(
-            &str,
-            fn(&mut BfvFullBootstrapReleaseAuditSignoffV1, Hash),
-        ); 8] = [
+        let signoff_placeholder_digest_setters: [SignoffDigestSetter; 8] = [
             ("release evidence digest", |signoff, digest| {
                 signoff.payload.release_audit_evidence_digest = digest;
             }),
@@ -29163,10 +30600,7 @@ mod tests {
             "placeholder",
             "release audit manifests must reject placeholder proof-key digest commitments",
         );
-        let manifest_placeholder_digest_setters: [(
-            &str,
-            fn(&mut BfvFullBootstrapReleaseAuditManifestV1, Hash),
-        ); 9] = [
+        let manifest_placeholder_digest_setters: [ManifestDigestSetter; 9] = [
             ("record digest", |manifest, digest| {
                 manifest.record_digest = digest;
             }),
@@ -30388,6 +31822,29 @@ mod tests {
             "placeholder audit artifact",
             "release audit signoffs must reject known placeholder audit report digests",
         );
+        let draft_audit_report_digest =
+            Hash::new([BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1, b"draft"].concat());
+        let mut draft_report_signoff = signoff.clone();
+        draft_report_signoff.payload.audit_report_digest = draft_audit_report_digest;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_signoff_v1(&draft_report_signoff),
+            "placeholder audit artifact",
+            "release audit signoffs must reject known draft audit report digests",
+        );
+        let not_ready_audit_report_digest = Hash::new(
+            [
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1,
+                b"not-production-ready".as_slice(),
+            ]
+            .concat(),
+        );
+        let mut not_ready_report_signoff = signoff.clone();
+        not_ready_report_signoff.payload.audit_report_digest = not_ready_audit_report_digest;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_signoff_v1(&not_ready_report_signoff),
+            "placeholder audit artifact",
+            "release audit signoffs must reject known not-production-ready audit report digests",
+        );
         let mut long_placeholder_audit_report_body = b"placeholder external audit report ".to_vec();
         long_placeholder_audit_report_body.resize(
             BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_BODY_TEST_PADDING_BYTES + 1,
@@ -31073,6 +32530,78 @@ mod tests {
             bfv_full_bootstrap_release_audit_package_digest_v1(&signed_placeholder_archive_package),
             "placeholder audit artifact",
             "release audit package digesting must reject signed placeholder evidence archive bodies",
+        );
+        let mut signed_draft_report_package = package.clone();
+        signed_draft_report_package.audit_report_bytes = [
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1,
+            b"external review draft not for production release report body v1",
+        ]
+        .concat();
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_v1(&signed_draft_report_package),
+            "placeholder audit artifact",
+            "release audit packages must reject signed draft/not-for-production audit report bodies",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_package_digest_v1(&signed_draft_report_package),
+            "placeholder audit artifact",
+            "release audit package digesting must reject signed draft/not-for-production audit report bodies",
+        );
+        let mut signed_replace_before_production_archive_package = package.clone();
+        signed_replace_before_production_archive_package.audit_evidence_archive_bytes = [
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_HEADER_V1,
+            b"external review evidence archive replace before production body v1",
+        ]
+        .concat();
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_v1(
+                &signed_replace_before_production_archive_package,
+            ),
+            "placeholder audit artifact",
+            "release audit packages must reject signed spaced replace-before-production archive bodies",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_package_digest_v1(
+                &signed_replace_before_production_archive_package,
+            ),
+            "placeholder audit artifact",
+            "release audit package digesting must reject signed spaced replace-before-production archive bodies",
+        );
+        let mut signed_not_ready_report_package = package.clone();
+        signed_not_ready_report_package.audit_report_bytes = [
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1,
+            b"external review not-production-ready release report body v1",
+        ]
+        .concat();
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_v1(&signed_not_ready_report_package),
+            "placeholder audit artifact",
+            "release audit packages must reject signed not-production-ready audit report bodies",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_package_digest_v1(&signed_not_ready_report_package),
+            "placeholder audit artifact",
+            "release audit package digesting must reject signed not-production-ready audit report bodies",
+        );
+        let mut signed_replace_underscore_archive_package = package.clone();
+        signed_replace_underscore_archive_package.audit_evidence_archive_bytes = [
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_HEADER_V1,
+            b"external review evidence archive replace_before_production body v1",
+        ]
+        .concat();
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_v1(
+                &signed_replace_underscore_archive_package,
+            ),
+            "placeholder audit artifact",
+            "release audit packages must reject signed underscore replace-before-production archive bodies",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_package_digest_v1(
+                &signed_replace_underscore_archive_package,
+            ),
+            "placeholder audit artifact",
+            "release audit package digesting must reject signed underscore replace-before-production archive bodies",
         );
         let mut long_placeholder_report_body = b"placeholder external audit report ".to_vec();
         long_placeholder_report_body.resize(
@@ -31851,6 +33380,34 @@ mod tests {
             "release audit evidence validation must reject stale proof-key evidence field counts",
         );
 
+        let mut placeholder_key_digest_evidence = evidence.clone();
+        placeholder_key_digest_evidence.prover_key.key_digest =
+            Hash::new(b"placeholder full-bootstrap prover-key commitment");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_key_evidence_shape_v1(
+                "BFV full-bootstrap release audit prover key",
+                BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+                &placeholder_key_digest_evidence.prover_key,
+            ),
+            "placeholder",
+            "release audit key evidence shape must reject placeholder proof-key digests",
+        );
+
+        let mut placeholder_key_material_commitment_evidence = evidence.clone();
+        placeholder_key_material_commitment_evidence
+            .verifier_key
+            .key_material_commitment =
+            Hash::new(b"placeholder full-bootstrap verifier-key commitment");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_key_evidence_shape_v1(
+                "BFV full-bootstrap release audit verifier key",
+                BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey,
+                &placeholder_key_material_commitment_evidence.verifier_key,
+            ),
+            "placeholder",
+            "release audit key evidence shape must reject placeholder proof-key material commitments",
+        );
+
         let mut wrong_payload_kind_evidence = evidence.clone();
         wrong_payload_kind_evidence.prover_key.native_payload_kind =
             BFV_FULL_BOOTSTRAP_NATIVE_VERIFIER_PAYLOAD_KIND_V1.to_owned();
@@ -31915,7 +33472,7 @@ mod tests {
         let mut empty_payload_digest_evidence = evidence.clone();
         empty_payload_digest_evidence
             .prover_key
-            .native_payload_digest = sha256(&[]);
+            .native_payload_digest = sha256([]);
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_evidence_v1(&empty_payload_digest_evidence),
             "inert native payload digest",
@@ -31925,7 +33482,7 @@ mod tests {
         let mut zero_payload_digest_evidence = evidence.clone();
         zero_payload_digest_evidence
             .verifier_key
-            .native_payload_digest = sha256(&[0_u8; 64]);
+            .native_payload_digest = sha256([0_u8; 64]);
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_evidence_v1(&zero_payload_digest_evidence),
             "inert native payload digest",
@@ -31943,6 +33500,77 @@ mod tests {
             ),
             "inert native payload digest",
             "release audit evidence validation must reject placeholder native-payload digest sentinels",
+        );
+
+        let mut proof_key_placeholder_payload_digest_evidence = evidence.clone();
+        proof_key_placeholder_payload_digest_evidence
+            .verifier_key
+            .native_payload_digest =
+            sha256(b"PLACEHOLDER BFV FULL-BOOTSTRAP NATIVE PROOF KEY PAYLOAD");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_evidence_v1(
+                &proof_key_placeholder_payload_digest_evidence,
+            ),
+            "inert native payload digest",
+            "release audit evidence validation must reject generic proof-key native-payload placeholder digests",
+        );
+
+        let mut draft_payload_digest_evidence = evidence.clone();
+        draft_payload_digest_evidence
+            .prover_key
+            .native_payload_digest = sha256(b"draft");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_evidence_v1(&draft_payload_digest_evidence),
+            "inert native payload digest",
+            "release audit evidence validation must reject draft native-payload digest sentinels",
+        );
+
+        let mut not_for_production_payload_digest_evidence = evidence.clone();
+        not_for_production_payload_digest_evidence
+            .verifier_key
+            .native_payload_digest = sha256(b"not for production");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_evidence_v1(
+                &not_for_production_payload_digest_evidence,
+            ),
+            "inert native payload digest",
+            "release audit evidence validation must reject not-for-production native-payload digest sentinels",
+        );
+
+        let mut spaced_replace_payload_digest_evidence = evidence.clone();
+        spaced_replace_payload_digest_evidence
+            .prover_key
+            .native_payload_digest = sha256(b"replace before production");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_evidence_v1(
+                &spaced_replace_payload_digest_evidence,
+            ),
+            "inert native payload digest",
+            "release audit evidence validation must reject spaced replace-before-production native-payload digest sentinels",
+        );
+
+        let mut underscore_replace_payload_digest_evidence = evidence.clone();
+        underscore_replace_payload_digest_evidence
+            .verifier_key
+            .native_payload_digest = sha256(b"replace_before_production");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_evidence_v1(
+                &underscore_replace_payload_digest_evidence,
+            ),
+            "inert native payload digest",
+            "release audit evidence validation must reject underscore replace-before-production native-payload digest sentinels",
+        );
+
+        let mut not_ready_payload_digest_evidence = evidence.clone();
+        not_ready_payload_digest_evidence
+            .prover_key
+            .native_payload_digest = sha256(b"not-production-ready");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_evidence_v1(
+                &not_ready_payload_digest_evidence,
+            ),
+            "inert native payload digest",
+            "release audit evidence validation must reject not-production-ready native-payload digest sentinels",
         );
 
         let mut whitespace_prefixed_placeholder_payload_digest_evidence = evidence.clone();
@@ -32054,8 +33682,80 @@ mod tests {
         );
         assert_eq!(
             digest.to_string(),
-            "d86954d75b6067eb7f13e3190c3d180a3f343763abbcb8bf334d012d17cbc045",
+            "9ec95abab43275e3a52c296a7d5532861c21db087415a04083fb7dc0433d67eb",
             "canonical full-bootstrap artifact bundle digest drifted"
+        );
+        let mut placeholder_bundle_digest_material =
+            BfvFullBootstrapCircuitArtifactBundleDigestMaterialV1 {
+                version: BFV_FULL_BOOTSTRAP_CIRCUIT_ARTIFACT_BUNDLE_DIGEST_MATERIAL_VERSION_V1,
+                artifact_digest_count:
+                    BFV_FULL_BOOTSTRAP_CIRCUIT_ARTIFACT_BUNDLE_DIGEST_MATERIAL_ARTIFACT_DIGEST_COUNT_V1,
+                coefficient_to_slot_key_digest: material.coefficient_to_slot_key_digest,
+                slot_to_coefficient_key_digest: material.slot_to_coefficient_key_digest,
+                blind_rotation_key_digest: material.blind_rotation_key_digest,
+                sample_extraction_key_digest: material.sample_extraction_key_digest,
+                accumulator_digest: material.accumulator_digest,
+                proof_public_input_schema_digest: material.proof_public_input_schema_digest,
+                arithmetic_air_constraint_system_artifact_digest: material
+                    .arithmetic_air_constraint_system_artifact_digest,
+                prover_key_digest: Hash::new(b"placeholder full-bootstrap prover-key commitment"),
+                verifier_key_digest: material.verifier_key_digest,
+            };
+        assert_error_contains(
+            hash_bfv_full_bootstrap_circuit_artifact_bundle_digest_material_v1(
+                &placeholder_bundle_digest_material,
+            ),
+            "placeholder",
+            "artifact bundle digest material hashing must reject placeholder proof-key digests",
+        );
+        placeholder_bundle_digest_material.prover_key_digest = material.prover_key_digest;
+        placeholder_bundle_digest_material.verifier_key_digest = material.prover_key_digest;
+        assert_error_contains(
+            hash_bfv_full_bootstrap_circuit_artifact_bundle_digest_material_v1(
+                &placeholder_bundle_digest_material,
+            ),
+            "distinct",
+            "artifact bundle digest material hashing must reject duplicate artifact digests",
+        );
+        let mut placeholder_evaluator_digest_material =
+            BfvFullBootstrapEvaluatorArtifactSetDigestMaterialV1 {
+                version: BFV_FULL_BOOTSTRAP_EVALUATOR_ARTIFACT_SET_DIGEST_MATERIAL_VERSION_V1,
+                field_count: BFV_FULL_BOOTSTRAP_EVALUATOR_ARTIFACT_SET_DIGEST_MATERIAL_FIELD_COUNT_V1,
+                evaluator_artifact_digest_count:
+                    BFV_FULL_BOOTSTRAP_EVALUATOR_ARTIFACT_SET_DIGEST_MATERIAL_ARTIFACT_DIGEST_COUNT_V1,
+                circuit_id: material.circuit_id.clone(),
+                parameter_digest: Hash::new(b"replace-before-production"),
+                rns_modulus_chain_digest: material.rns_modulus_chain_digest,
+                key_switch_decomposition_chain_digest: material
+                    .key_switch_decomposition_chain_digest,
+                max_bootstrap_depth: material.max_bootstrap_depth,
+                coefficient_to_slot_key_digest: material.coefficient_to_slot_key_digest,
+                slot_to_coefficient_key_digest: material.slot_to_coefficient_key_digest,
+                blind_rotation_key_digest: material.blind_rotation_key_digest,
+                sample_extraction_key_digest: material.sample_extraction_key_digest,
+                accumulator_digest: material.accumulator_digest,
+                proof_public_input_schema_digest: material.proof_public_input_schema_digest,
+                arithmetic_air_constraint_system_artifact_digest: material
+                    .arithmetic_air_constraint_system_artifact_digest,
+                arithmetic_air_constraint_system_digest:
+                    canonical_bfv_full_bootstrap_arithmetic_air_constraint_system_digest_v1(),
+            };
+        assert_error_contains(
+            hash_bfv_full_bootstrap_evaluator_artifact_set_digest_material_v1(
+                &placeholder_evaluator_digest_material,
+            ),
+            "placeholder",
+            "evaluator artifact set digest material hashing must reject placeholder profile digests",
+        );
+        placeholder_evaluator_digest_material.parameter_digest = material.parameter_digest;
+        placeholder_evaluator_digest_material.accumulator_digest =
+            material.coefficient_to_slot_key_digest;
+        assert_error_contains(
+            hash_bfv_full_bootstrap_evaluator_artifact_set_digest_material_v1(
+                &placeholder_evaluator_digest_material,
+            ),
+            "distinct",
+            "evaluator artifact set digest material hashing must reject duplicate artifact digests",
         );
         validate_bfv_full_bootstrap_execution_artifacts_preflight_v1(
             &params,
@@ -32077,6 +33777,94 @@ mod tests {
             ),
             "must not be empty",
             "artifact bundles must carry the arithmetic AIR contract artifact",
+        );
+
+        assert_error_contains(
+            encode_bfv_full_bootstrap_circuit_artifact_payload_v1(
+                &params,
+                1,
+                BfvFullBootstrapCircuitArtifactRoleV1::Accumulator,
+                &[0_u8; 16],
+            ),
+            "all-zero",
+            "artifact payload wrapping must reject inert all-zero payloads",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_evaluator_artifact_set_digest_v1(
+                &params,
+                1,
+                &[0_u8; 16],
+                &artifacts.slot_to_coefficient_key,
+                &artifacts.blind_rotation_key,
+                &artifacts.sample_extraction_key,
+                &artifacts.accumulator,
+                &artifacts.proof_public_input_schema,
+                &artifacts.arithmetic_air_constraint_system,
+            ),
+            "all-zero",
+            "evaluator artifact-set digesting must reject inert all-zero artifact bytes",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_evaluator_artifact_set_digest_v1(
+                &params,
+                1,
+                b"not-norito-full-bootstrap-evaluator-artifact",
+                &artifacts.slot_to_coefficient_key,
+                &artifacts.blind_rotation_key,
+                &artifacts.sample_extraction_key,
+                &artifacts.accumulator,
+                &artifacts.proof_public_input_schema,
+                &artifacts.arithmetic_air_constraint_system,
+            ),
+            "Norito-encoded",
+            "evaluator artifact-set digesting must reject malformed artifact envelopes",
+        );
+        let opaque_evaluator_artifact = sample_full_bootstrap_artifact_payload(
+            &params,
+            BfvFullBootstrapCircuitArtifactRoleV1::CoefficientToSlotKey,
+            b"opaque-evaluator-artifact-set-coefficient-to-slot-payload",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_evaluator_artifact_set_digest_v1(
+                &params,
+                1,
+                &opaque_evaluator_artifact,
+                &artifacts.slot_to_coefficient_key,
+                &artifacts.blind_rotation_key,
+                &artifacts.sample_extraction_key,
+                &artifacts.accumulator,
+                &artifacts.proof_public_input_schema,
+                &artifacts.arithmetic_air_constraint_system,
+            ),
+            "linear transform",
+            "evaluator artifact-set digesting must reject opaque typed artifact payloads",
+        );
+        let stale_evaluator_profile_payload = BfvFullBootstrapCircuitArtifactPayloadV1 {
+            circuit_id: BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1.to_owned(),
+            parameter_digest: Hash::new(b"stale-bfv-full-bootstrap-evaluator-set-parameter"),
+            rns_modulus_chain_digest: material.rns_modulus_chain_digest,
+            key_switch_decomposition_chain_digest: material.key_switch_decomposition_chain_digest,
+            max_bootstrap_depth: material.max_bootstrap_depth,
+            role: BfvFullBootstrapCircuitArtifactRoleV1::CoefficientToSlotKey,
+            payload: norito::to_bytes(&sample_identity_full_bootstrap_linear_transform(&params))
+                .expect("encode stale evaluator profile transform payload"),
+        };
+        let stale_evaluator_profile_artifact = norito::to_bytes(&stale_evaluator_profile_payload)
+            .expect("encode stale evaluator profile artifact");
+        assert_error_contains(
+            bfv_full_bootstrap_evaluator_artifact_set_digest_v1(
+                &params,
+                1,
+                &stale_evaluator_profile_artifact,
+                &artifacts.slot_to_coefficient_key,
+                &artifacts.blind_rotation_key,
+                &artifacts.sample_extraction_key,
+                &artifacts.accumulator,
+                &artifacts.proof_public_input_schema,
+                &artifacts.arithmetic_air_constraint_system,
+            ),
+            "parameter digest",
+            "evaluator artifact-set digesting must reject stale artifact profile envelopes",
         );
 
         let mut stale_air_material =
@@ -32213,6 +34001,32 @@ mod tests {
                     .expect("encode drifted blind-rotation artifact");
             };
         assert_valid_artifact_drift_changes_digest("blind-rotation", &mut drift_blind_rotation);
+        assert_error_contains(
+            bfv_full_bootstrap_blind_rotation_key_for_packed_left_rotation_v1(
+                &params,
+                Hash::new(b"draft"),
+                1,
+            ),
+            "placeholder",
+            "blind-rotation key construction must reject placeholder accumulator digests",
+        );
+        let mut placeholder_accumulator_blind_rotation =
+            bfv_full_bootstrap_blind_rotation_key_for_packed_left_rotation_v1(
+                &params,
+                Hash::new(&artifacts.accumulator),
+                1,
+            )
+            .expect("build canonical blind-rotation key");
+        placeholder_accumulator_blind_rotation.accumulator_digest =
+            Hash::new(b"replace before production");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_blind_rotation_key_v1(
+                &params,
+                &placeholder_accumulator_blind_rotation,
+            ),
+            "placeholder",
+            "blind-rotation key validation must reject placeholder accumulator digests",
+        );
         let mut drift_sample_extraction =
             |drifted_artifacts: &mut BfvFullBootstrapCircuitArtifactBundleV1| {
                 let (alternate_secret_key, _public_key, _relinearization_key) =
@@ -32622,11 +34436,26 @@ mod tests {
         let schema_digest = Hash::new(&schema_artifact);
         let evaluator_artifact_set_digest =
             sample_full_bootstrap_evaluator_artifact_set_digest(&params);
-        let (canonical_prover_key, _) = sample_full_bootstrap_proof_key_pair(
+        let (canonical_prover_key, canonical_verifier_key) = sample_full_bootstrap_proof_key_pair(
             &params,
             schema_digest,
             evaluator_artifact_set_digest,
         );
+        validate_no_full_bootstrap_placeholder_material_digest(
+            "generated proof-key pair commitment",
+            &canonical_prover_key.proof_key_pair_commitment,
+        )
+        .expect("generated proof-key pair commitment is not a placeholder");
+        validate_no_full_bootstrap_placeholder_material_digest(
+            "generated prover key material commitment",
+            &canonical_prover_key.key_material_commitment,
+        )
+        .expect("generated prover key material commitment is not a placeholder");
+        validate_no_full_bootstrap_placeholder_material_digest(
+            "generated verifier key material commitment",
+            &canonical_verifier_key.key_material_commitment,
+        )
+        .expect("generated verifier key material commitment is not a placeholder");
         let proof_key_pair_commitment = canonical_prover_key.proof_key_pair_commitment;
         let material = BfvFullBootstrapCircuitMaterialV1 {
             proof_public_input_schema_digest: schema_digest,
@@ -33021,6 +34850,64 @@ mod tests {
             "proof keys must bind the governed evaluator artifact set digest",
         );
 
+        let placeholder_schema_digest_key = BfvFullBootstrapProofKeyV1 {
+            public_input_schema_digest: Hash::new(b"draft"),
+            ..prover_key.clone()
+        };
+        assert_error_contains(
+            validate_bfv_full_bootstrap_proof_key_v1(
+                &material,
+                BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+                &placeholder_schema_digest_key,
+            ),
+            "placeholder",
+            "proof keys must reject placeholder public-input schema digests",
+        );
+
+        let placeholder_evaluator_digest_key = BfvFullBootstrapProofKeyV1 {
+            evaluator_artifact_set_digest: Hash::new(b"replace before production"),
+            ..prover_key.clone()
+        };
+        assert_error_contains(
+            validate_bfv_full_bootstrap_proof_key_v1(
+                &material,
+                BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+                &placeholder_evaluator_digest_key,
+            ),
+            "placeholder",
+            "proof keys must reject placeholder evaluator artifact-set digests",
+        );
+
+        let placeholder_pair_commitment_key = BfvFullBootstrapProofKeyV1 {
+            proof_key_pair_commitment: Hash::new(
+                b"pending BFV full-bootstrap proof-key pair commitment",
+            ),
+            ..prover_key.clone()
+        };
+        assert_error_contains(
+            validate_bfv_full_bootstrap_proof_key_v1(
+                &material,
+                BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+                &placeholder_pair_commitment_key,
+            ),
+            "placeholder",
+            "proof keys must reject placeholder proof-key pair commitments",
+        );
+
+        let placeholder_key_material_commitment = BfvFullBootstrapProofKeyV1 {
+            key_material_commitment: Hash::new(b"placeholder full-bootstrap prover-key commitment"),
+            ..prover_key.clone()
+        };
+        assert_error_contains(
+            validate_bfv_full_bootstrap_proof_key_v1(
+                &material,
+                BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+                &placeholder_key_material_commitment,
+            ),
+            "placeholder",
+            "proof keys must reject placeholder material commitments before recomputing",
+        );
+
         let stale_key_material_commitment = BfvFullBootstrapProofKeyV1 {
             key_material_commitment: Hash::new(b"stale-full-bootstrap-proof-key-material"),
             ..prover_key.clone()
@@ -33037,7 +34924,7 @@ mod tests {
 
         let empty_key_material = BfvFullBootstrapProofKeyV1 {
             key_material: Vec::new(),
-            ..prover_key
+            ..prover_key.clone()
         };
         let empty_key_material = BfvFullBootstrapProofKeyV1 {
             key_material_commitment: bfv_full_bootstrap_proof_key_material_commitment_v1(
@@ -33112,6 +34999,55 @@ mod tests {
             ),
             "native material payload",
             "proof-key material envelope encoding must reject raw native key bytes",
+        );
+
+        let native_key_material = sample_full_bootstrap_native_proof_key_material_for_circuit(
+            BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+            BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+        );
+        assert_error_contains(
+            encode_bfv_full_bootstrap_proof_key_material_envelope_v1(
+                &params,
+                1,
+                Hash::new(b"draft"),
+                evaluator_artifact_set_digest,
+                BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+                &native_key_material,
+            ),
+            "placeholder",
+            "proof-key material envelope encoding must reject draft public-input schema digests",
+        );
+        assert_error_contains(
+            encode_bfv_full_bootstrap_proof_key_material_envelope_v1(
+                &params,
+                1,
+                schema_digest,
+                Hash::new(b"replace-before-production"),
+                BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+                &native_key_material,
+            ),
+            "placeholder",
+            "proof-key material envelope encoding must reject placeholder evaluator artifact set digests",
+        );
+
+        let mut hand_encoded_placeholder_envelope =
+            decode_bfv_full_bootstrap_proof_key_material_envelope_from_key_v1(&prover_key)
+                .expect("decode canonical proof-key material envelope");
+        hand_encoded_placeholder_envelope.public_input_schema_digest = Hash::new(b"draft");
+        let hand_encoded_placeholder_key_material =
+            norito::to_bytes(&hand_encoded_placeholder_envelope)
+                .expect("encode hand-built placeholder proof-key envelope");
+        let hand_encoded_placeholder_key = BfvFullBootstrapProofKeyV1 {
+            public_input_schema_digest: Hash::new(b"draft"),
+            key_material: hand_encoded_placeholder_key_material,
+            ..prover_key.clone()
+        };
+        assert_error_contains(
+            decode_bfv_full_bootstrap_proof_key_material_envelope_from_key_v1(
+                &hand_encoded_placeholder_key,
+            ),
+            "placeholder",
+            "proof-key material envelope decoding must reject hand-built placeholder digest metadata",
         );
     }
 
@@ -33658,6 +35594,12 @@ mod tests {
             "AIR contract material must pin the transparent verifier opening count"
         );
         expect_air_material_rejection!(
+            composition_challenge_domain:
+                b"wrong-bfv-full-bootstrap-air-composition-challenge-domain".to_vec(),
+            "composition challenge domain",
+            "AIR contract material must pin the composition challenge domain"
+        );
+        expect_air_material_rejection!(
             enforces_goldilocks_field_canonicality: false,
             "Goldilocks field canonicality",
             "AIR contract material must require canonical field elements"
@@ -33708,9 +35650,29 @@ mod tests {
             "AIR contract material must forbid duplicate openings"
         );
         expect_air_material_rejection!(
+            binds_composition_challenges_to_statement_hash: false,
+            "composition challenges to statement hash",
+            "AIR contract material must bind composition challenges to the statement hash"
+        );
+        expect_air_material_rejection!(
             binds_composition_challenges_to_trace_material_digest: false,
             "composition challenges",
             "AIR contract material must bind composition challenges to trace material"
+        );
+        expect_air_material_rejection!(
+            binds_composition_challenges_to_row_index: false,
+            "composition challenges to row index",
+            "AIR contract material must bind composition challenges to row indexes"
+        );
+        expect_air_material_rejection!(
+            binds_composition_challenges_to_column_index: false,
+            "composition challenges to column index",
+            "AIR contract material must bind composition challenges to column indexes"
+        );
+        expect_air_material_rejection!(
+            maps_zero_composition_challenge_to_one: false,
+            "nonzero composition challenges",
+            "AIR contract material must reject zero composition challenges"
         );
         expect_air_material_rejection!(
             supports_exact_residual_multiple: false,
@@ -33739,6 +35701,16 @@ mod tests {
             bfv_full_bootstrap_arithmetic_trace_profile_digest_from_profile_v1(&profile)
                 .expect("digest canonical arithmetic trace profile"),
             profile_digest
+        );
+        let placeholder_profile_digest =
+            Hash::new(b"pending BFV full-bootstrap execution witness digest");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_arithmetic_trace_profile_digest_v1(
+                "test arithmetic trace profile digest",
+                &placeholder_profile_digest,
+            ),
+            "placeholder",
+            "trace profile digest admission must reject placeholder full-bootstrap digests",
         );
 
         let mut missing_trace_stage = profile.clone();
@@ -33806,6 +35778,16 @@ mod tests {
             schema.arithmetic_air_constraint_system_digest,
             air_contract_digest
         );
+        let placeholder_air_contract_digest =
+            Hash::new(b"pending BFV full-bootstrap execution witness digest");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_arithmetic_air_constraint_system_digest_v1(
+                "test arithmetic AIR constraint-system digest",
+                &placeholder_air_contract_digest,
+            ),
+            "placeholder",
+            "AIR constraint-system digest admission must reject placeholder full-bootstrap digests",
+        );
         assert!(
             schema.binds_release_prover_verifier_key,
             "proof schema must advertise release-prover verifier-key binding"
@@ -33838,9 +35820,30 @@ mod tests {
             schema.requires_zero_arithmetic_air_composition_values,
             "proof schema must advertise first-release zero-composition AIR evaluation"
         );
+        assert_eq!(
+            schema.composition_challenge_domain.as_slice(),
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_COMPOSITION_CHALLENGE_DOMAIN,
+            "proof schema must advertise the AIR composition challenge domain"
+        );
+        assert!(
+            schema.binds_composition_challenges_to_statement_hash,
+            "proof schema must advertise statement-hash-bound AIR composition challenges"
+        );
         assert!(
             schema.binds_composition_challenges_to_trace_material_digest,
             "proof schema must advertise trace-material-bound AIR composition challenges"
+        );
+        assert!(
+            schema.binds_composition_challenges_to_row_index,
+            "proof schema must advertise row-index-bound AIR composition challenges"
+        );
+        assert!(
+            schema.binds_composition_challenges_to_column_index,
+            "proof schema must advertise column-index-bound AIR composition challenges"
+        );
+        assert!(
+            schema.maps_zero_composition_challenge_to_one,
+            "proof schema must advertise nonzero AIR composition challenges"
         );
         let mut stale_schema = schema.clone();
         stale_schema.arithmetic_trace_profile_digest =
@@ -33850,6 +35853,13 @@ mod tests {
             "arithmetic trace profile",
             "proof public-input schemas must bind the arithmetic trace profile",
         );
+        let mut placeholder_schema = schema.clone();
+        placeholder_schema.arithmetic_trace_profile_digest = placeholder_profile_digest;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_proof_public_input_schema_v1(&placeholder_schema),
+            "placeholder",
+            "proof public-input schemas must reject placeholder arithmetic trace profile digests",
+        );
         let mut stale_air_schema = schema.clone();
         stale_air_schema.arithmetic_air_constraint_system_digest =
             Hash::new(b"stale-full-bootstrap-arithmetic-air-schema");
@@ -33857,6 +35867,14 @@ mod tests {
             validate_bfv_full_bootstrap_proof_public_input_schema_v1(&stale_air_schema),
             "arithmetic AIR constraint-system",
             "proof public-input schemas must bind the arithmetic AIR contract",
+        );
+        let mut placeholder_air_schema = schema.clone();
+        placeholder_air_schema.arithmetic_air_constraint_system_digest =
+            placeholder_air_contract_digest;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_proof_public_input_schema_v1(&placeholder_air_schema),
+            "placeholder",
+            "proof public-input schemas must reject placeholder arithmetic AIR contract digests",
         );
         let schema_artifact =
             encode_bfv_full_bootstrap_proof_public_input_schema_artifact_v1(&params, 1, &schema)
@@ -34188,6 +36206,16 @@ mod tests {
             "arithmetic AIR contract field count",
             "proof public-input schemas must pin the arithmetic AIR contract field count",
         );
+        let mut wrong_composition_challenge_domain = schema.clone();
+        wrong_composition_challenge_domain.composition_challenge_domain =
+            b"wrong-full-bootstrap-air-composition-challenge-domain".to_vec();
+        assert_error_contains(
+            validate_bfv_full_bootstrap_proof_public_input_schema_v1(
+                &wrong_composition_challenge_domain,
+            ),
+            "composition challenge domain",
+            "proof public-input schemas must pin the AIR composition challenge domain",
+        );
         let mut wrong_proof_input_version = schema.clone();
         wrong_proof_input_version.proof_input_material_version = wrong_proof_input_version
             .proof_input_material_version
@@ -34385,9 +36413,29 @@ mod tests {
             "proof public-input schemas must require first-release zero AIR composition values"
         );
         expect_schema_flag_rejection!(
+            binds_composition_challenges_to_statement_hash,
+            "composition challenges",
+            "proof public-input schemas must bind AIR composition challenges to the statement hash"
+        );
+        expect_schema_flag_rejection!(
             binds_composition_challenges_to_trace_material_digest,
             "composition challenges",
             "proof public-input schemas must bind AIR composition challenges to trace material"
+        );
+        expect_schema_flag_rejection!(
+            binds_composition_challenges_to_row_index,
+            "composition challenges",
+            "proof public-input schemas must bind AIR composition challenges to row indexes"
+        );
+        expect_schema_flag_rejection!(
+            binds_composition_challenges_to_column_index,
+            "composition challenges",
+            "proof public-input schemas must bind AIR composition challenges to column indexes"
+        );
+        expect_schema_flag_rejection!(
+            maps_zero_composition_challenge_to_one,
+            "nonzero composition challenges",
+            "proof public-input schemas must require nonzero AIR composition challenges"
         );
         expect_schema_flag_rejection!(
             hashes_proof_input_material,
@@ -34608,6 +36656,43 @@ mod tests {
             ),
             "material envelope public-input schema digest",
             "proof-key validation must reject key-material envelope metadata drift",
+        );
+
+        let placeholder_parameter_key = BfvFullBootstrapProofKeyV1 {
+            parameter_digest: Hash::new(b"not for production"),
+            ..prover_key.clone()
+        };
+        assert_error_contains(
+            validate_bfv_full_bootstrap_proof_key_v1(
+                &material,
+                BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+                &placeholder_parameter_key,
+            ),
+            "placeholder",
+            "proof-key profile validation must reject placeholder parameter digests before governed material matching",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_proof_key_material_commitment_v1(&placeholder_parameter_key),
+            "placeholder",
+            "proof-key material commitment derivation must reject placeholder parameter digests before hashing",
+        );
+
+        let mut placeholder_envelope =
+            decode_bfv_full_bootstrap_proof_key_material_envelope_from_key_v1(&prover_key)
+                .expect("decode canonical proof-key material envelope");
+        placeholder_envelope.rns_modulus_chain_digest = Hash::new(b"replace before production");
+        let placeholder_envelope_key = BfvFullBootstrapProofKeyV1 {
+            rns_modulus_chain_digest: placeholder_envelope.rns_modulus_chain_digest,
+            key_material: norito::to_bytes(&placeholder_envelope)
+                .expect("encode placeholder proof-key envelope"),
+            ..prover_key.clone()
+        };
+        assert_error_contains(
+            decode_bfv_full_bootstrap_proof_key_material_envelope_from_key_v1(
+                &placeholder_envelope_key,
+            ),
+            "placeholder",
+            "proof-key material envelope validation must reject placeholder RNS profile digests",
         );
 
         let verifier_role_key = BfvFullBootstrapProofKeyV1 {
@@ -34882,7 +36967,7 @@ mod tests {
         let schema_digest = Hash::new(&schema_artifact);
         assert_eq!(
             schema_digest.to_string(),
-            "86bd36705c111180a6160721ae83740c0abaaf9178e309e999fa1b8a21370fc1",
+            "5902fb2992319943fafd5ea3fae5c458ac592536b5ad0c5f5b969e9354bcd95b",
             "canonical proof public-input schema artifact digest drifted"
         );
         let evaluator_artifact_set_digest =
@@ -34942,7 +37027,7 @@ mod tests {
             .expect("derive canonical prover-key material commitment");
         assert_eq!(
             prover_commitment.to_string(),
-            "1924f0a980223492cc91bbfebb5e34f563a2ca5b51f1a86d693087ec8d588ceb",
+            "5bd946666975109fe236b5a56db7088abae8f44d189ccc67e7299580256daa61",
             "canonical prover-key material commitment drifted"
         );
     }
@@ -35019,6 +37104,26 @@ mod tests {
             ),
             "linear transform",
             "coefficient-to-slot artifacts must carry typed linear-transform payloads",
+        );
+
+        let mut all_zero_diagonal = transform.clone();
+        all_zero_diagonal.diagonals[0].plaintext =
+            encode_packed_plaintext_slots(&params, &vec![0; params.degree()])
+                .expect("encode all-zero diagonal slots");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_linear_transform_v1(&params, &all_zero_diagonal),
+            "all-zero slots",
+            "linear-transform diagonals must reject inert all-zero slot masks",
+        );
+        assert_error_contains(
+            encode_bfv_full_bootstrap_linear_transform_artifact_v1(
+                &params,
+                1,
+                BfvFullBootstrapCircuitArtifactRoleV1::CoefficientToSlotKey,
+                &all_zero_diagonal,
+            ),
+            "all-zero slots",
+            "linear-transform artifact encoding must reject inert all-zero diagonals",
         );
 
         let mut duplicate_rotation = transform;
@@ -35463,6 +37568,54 @@ mod tests {
         .expect("decode switch-key artifact through sample-extraction metadata view");
         assert_eq!(decoded_switch_metadata, sample_extraction);
 
+        let mut inert_switch_key = switch_key.clone();
+        let zero_entry = BfvRelinearizationKeyEntry {
+            b: zero_poly(&params),
+            a: zero_poly(&params),
+        };
+        inert_switch_key.coefficient_entries[0].entries[0] = zero_entry;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_sample_extraction_switch_key_v1(&params, &inert_switch_key),
+            "all zero",
+            "sample-extraction switch key validation must reject any inert key-switch entry",
+        );
+        assert_error_contains(
+            encode_bfv_full_bootstrap_sample_extraction_switch_key_artifact_v1(
+                &params,
+                1,
+                &inert_switch_key,
+            ),
+            "all zero",
+            "sample-extraction switch-key artifact encoding must reject any inert key-switch entry",
+        );
+
+        {
+            let mut malformed_switch_key = switch_key.clone();
+            malformed_switch_key.coefficient_entries[0].entries[0].b = zero_poly(&params);
+            assert_error_contains(
+                validate_bfv_full_bootstrap_sample_extraction_switch_key_v1(
+                    &params,
+                    &malformed_switch_key,
+                ),
+                "b limb must not be all zero",
+                "sample-extraction switch key validation must reject all-zero b limbs",
+            );
+        }
+
+        {
+            let mut malformed_switch_key = switch_key.clone();
+            malformed_switch_key.coefficient_entries[0].entries[0].a = zero_poly(&params);
+            assert_error_contains(
+                encode_bfv_full_bootstrap_sample_extraction_switch_key_artifact_v1(
+                    &params,
+                    1,
+                    &malformed_switch_key,
+                ),
+                "a limb must not be all zero",
+                "sample-extraction switch-key artifact encoding must reject all-zero a limbs",
+            );
+        }
+
         let opaque_payload = sample_full_bootstrap_artifact_payload(
             &params,
             BfvFullBootstrapCircuitArtifactRoleV1::SampleExtractionKey,
@@ -35841,6 +37994,24 @@ mod tests {
             "secret_coefficients",
             "coefficient-zero repack must reject malformed raw samples",
         );
+        let all_zero_sample = BfvFullBootstrapRawExtractedSampleV1 {
+            source_coefficient_index: coefficient_index,
+            constant_term: 0,
+            secret_coefficients: zero_poly(&params),
+        };
+        assert_error_contains(
+            validate_bfv_full_bootstrap_raw_extracted_sample_v1(&params, &all_zero_sample),
+            "all zero",
+            "raw extracted samples must reject inert all-zero placeholders",
+        );
+        assert_error_contains(
+            repack_bfv_full_bootstrap_raw_sample_as_coefficient_zero_ciphertext_v1(
+                &params,
+                &all_zero_sample,
+            ),
+            "all zero",
+            "coefficient-zero repack must reject inert all-zero raw samples",
+        );
         let mismatched_sample = BfvFullBootstrapRawExtractedSampleV1 {
             source_coefficient_index: coefficient_index.saturating_sub(1),
             secret_coefficients: vec![0; params.degree()],
@@ -36107,6 +38278,51 @@ mod tests {
             &format!("automorphism power {missing_power}"),
             "artifact-aware exact full bootstrap must reject missing Galois keys before final output",
         );
+        let required_powers = galois_keys
+            .iter()
+            .map(|key| key.automorphism_power)
+            .collect::<std::collections::BTreeSet<_>>();
+        let extra_power = canonical_galois_automorphism_powers(&params)
+            .expect("canonical Galois powers")
+            .into_iter()
+            .find(|power| !required_powers.contains(power))
+            .expect("sample full-bootstrap schedule leaves an unused Galois power");
+        let mut extra_galois_keys = galois_keys.clone();
+        extra_galois_keys.push(
+            galois_key_from_seed(
+                &params,
+                &secret_key,
+                extra_power,
+                b"bfv-full-bootstrap-prefix-extra-galois",
+            )
+            .expect("extra exact Galois key"),
+        );
+        assert_error_contains(
+            apply_bfv_full_bootstrap_execution_prefix_trace_registered_rns_exact_v1(
+                &params,
+                &bootstrap_key,
+                &artifacts,
+                &extra_galois_keys,
+                &ciphertext,
+            ),
+            &format!(
+                "unexpected BFV Galois key for full-bootstrap execution automorphism power {extra_power}"
+            ),
+            "exact full-bootstrap prefix trace must reject unused Galois keys",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_execution_prefix_trace_output_residual_multiple_bounds_v1(
+                &params,
+                &bootstrap_key,
+                &artifacts,
+                &extra_galois_keys,
+                input_bound,
+            ),
+            &format!(
+                "unexpected BFV Galois key for full-bootstrap execution automorphism power {extra_power}"
+            ),
+            "exact full-bootstrap prefix bounds must reject unused Galois keys",
+        );
 
         let (bounded_secret_key, bounded_public_key) =
             keygen_bounded_noise_from_seed(&params, b"bfv-full-bootstrap-bounded-prefix-keygen")
@@ -36333,6 +38549,49 @@ mod tests {
             &format!("automorphism power {missing_power}"),
             "artifact-aware bounded full bootstrap must reject missing Galois keys before final output",
         );
+        let bounded_required_powers = bounded_galois_keys
+            .iter()
+            .map(|key| key.automorphism_power)
+            .collect::<std::collections::BTreeSet<_>>();
+        let bounded_extra_power = canonical_galois_automorphism_powers(&params)
+            .expect("canonical Galois powers")
+            .into_iter()
+            .find(|power| !bounded_required_powers.contains(power))
+            .expect("sample bounded full-bootstrap schedule leaves an unused Galois power");
+        let mut bounded_extra_galois_keys = bounded_galois_keys.clone();
+        bounded_extra_galois_keys.push(
+            galois_key_bounded_noise_from_seed(
+                &params,
+                &bounded_secret_key,
+                bounded_extra_power,
+                b"bfv-full-bootstrap-prefix-bounded-extra-galois",
+            )
+            .expect("extra bounded Galois key"),
+        );
+        assert_error_contains(
+            apply_bfv_full_bootstrap_execution_prefix_trace_bounded_noise_registered_rns_basis_extension_exact_v1(
+                &params,
+                &bounded_bootstrap_key,
+                &bounded_artifacts,
+                &bounded_extra_galois_keys,
+                &bounded_ciphertext,
+            ),
+            &format!("unexpected BFV Galois key for full-bootstrap execution automorphism power {bounded_extra_power}"),
+            "bounded full-bootstrap prefix trace must reject unused Galois keys",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_execution_prefix_trace_bounded_noise_output_bounds_v1(
+                &params,
+                &bounded_bootstrap_key,
+                &bounded_artifacts,
+                &bounded_extra_galois_keys,
+                input_noise_bound,
+            ),
+            &format!(
+                "unexpected BFV Galois key for full-bootstrap execution automorphism power {bounded_extra_power}"
+            ),
+            "bounded full-bootstrap prefix bounds must reject unused Galois keys",
+        );
     }
 
     #[test]
@@ -36415,6 +38674,11 @@ mod tests {
             output_bound,
         )
         .expect("derive execution claim witness digest");
+        validate_no_full_bootstrap_placeholder_material_digest(
+            "generated execution witness digest",
+            &claim.execution_witness_digest,
+        )
+        .expect("generated execution witness digest is not a placeholder");
         let witness_material = bfv_full_bootstrap_execution_witness_digest_material_v1(
             &params,
             &bootstrap_key,
@@ -36459,6 +38723,16 @@ mod tests {
             bfv_full_bootstrap_galois_key_set_digest_v1(&params, &galois_keys)
                 .expect("Galois key set digest"),
             "execution witness material must bind the exact Galois key set used by the trace"
+        );
+        let mut inert_galois_keys = galois_keys.clone();
+        inert_galois_keys[0].entries[0] = BfvRelinearizationKeyEntry {
+            b: zero_poly(&params),
+            a: zero_poly(&params),
+        };
+        assert_error_contains(
+            bfv_full_bootstrap_galois_key_set_digest_v1(&params, &inert_galois_keys),
+            "all zero",
+            "Galois key-set digesting must reject inert all-zero key-switch entries",
         );
         assert_eq!(witness_material.trace.slot_to_coefficient_output, output);
         assert_eq!(
@@ -36513,6 +38787,52 @@ mod tests {
         assert_eq!(
             artifact_bound_witness_digest, claim.execution_witness_digest,
             "artifact-bound witness digest must match the public execution claim"
+        );
+
+        let all_zero_ciphertext = zero_ciphertext(&params);
+        let all_zero_input_claim = BfvFullBootstrapExecutionProofClaimV1 {
+            input_ciphertext: all_zero_ciphertext.clone(),
+            ..claim.clone()
+        };
+        assert_error_contains(
+            bfv_full_bootstrap_execution_witness_digest_material_v1(
+                &params,
+                &bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                &all_zero_input_claim,
+            ),
+            "all-zero ciphertext",
+            "execution witness material must reject inert all-zero claim inputs",
+        );
+        let all_zero_output_claim = BfvFullBootstrapExecutionProofClaimV1 {
+            output_ciphertext: all_zero_ciphertext.clone(),
+            ..claim.clone()
+        };
+        assert_error_contains(
+            bfv_full_bootstrap_execution_witness_digest_material_v1(
+                &params,
+                &bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                &all_zero_output_claim,
+            ),
+            "all-zero ciphertext",
+            "execution witness material must reject inert all-zero claim outputs",
+        );
+        let mut all_zero_input_material = witness_material.clone();
+        all_zero_input_material.input_ciphertext = all_zero_ciphertext.clone();
+        assert_error_contains(
+            bfv_full_bootstrap_execution_witness_digest_from_material_v1(&all_zero_input_material),
+            "all-zero ciphertext",
+            "public witness material hashing must reject inert all-zero inputs",
+        );
+        let mut all_zero_output_material = witness_material.clone();
+        all_zero_output_material.output_ciphertext = all_zero_ciphertext;
+        assert_error_contains(
+            bfv_full_bootstrap_execution_witness_digest_from_material_v1(&all_zero_output_material),
+            "all-zero ciphertext",
+            "public witness material hashing must reject inert all-zero outputs",
         );
 
         let mut stale_version_material = witness_material.clone();
@@ -36572,6 +38892,17 @@ mod tests {
             ),
             "zero hash",
             "public witness material hashing must reject missing Galois key set digests",
+        );
+
+        let mut aliased_galois_digest_material = witness_material.clone();
+        aliased_galois_digest_material.galois_key_set_digest =
+            witness_material.artifact_bundle_digest;
+        assert_error_contains(
+            bfv_full_bootstrap_execution_witness_digest_from_material_v1(
+                &aliased_galois_digest_material,
+            ),
+            "must be distinct from artifact bundle digest",
+            "public witness material hashing must reject aliased Galois key set digests",
         );
 
         let mut stale_galois_digest_material = witness_material.clone();
@@ -36638,6 +38969,18 @@ mod tests {
             bfv_full_bootstrap_execution_witness_digest_from_material_v1(&malformed_trace_material),
             "ciphertext c0 length",
             "public witness material hashing must reject malformed trace ciphertexts",
+        );
+
+        let mut all_zero_trace_stage_material = witness_material.clone();
+        all_zero_trace_stage_material
+            .trace
+            .coefficient_to_slot_output = zero_ciphertext(&params);
+        assert_error_contains(
+            bfv_full_bootstrap_execution_witness_digest_from_material_v1(
+                &all_zero_trace_stage_material,
+            ),
+            "all-zero ciphertext",
+            "public witness material hashing must reject inert all-zero trace ciphertexts",
         );
 
         let mut malformed_sample_material = witness_material.clone();
@@ -36752,6 +39095,58 @@ mod tests {
             ),
             "governed artifact trace",
             "artifact-aware witness validation must reject coefficient-to-slot trace drift",
+        );
+
+        let mut stale_diagnostic_slot_to_coefficient_trace = witness_material.clone();
+        let stale_diagnostic_slot_to_coefficient_c0 =
+            &mut stale_diagnostic_slot_to_coefficient_trace
+                .trace
+                .diagnostic_slot_to_coefficient_output
+                .c0[0];
+        *stale_diagnostic_slot_to_coefficient_c0 =
+            (*stale_diagnostic_slot_to_coefficient_c0 + 1) % params.ciphertext_modulus;
+        assert_ne!(
+            bfv_full_bootstrap_execution_witness_digest_from_material_v1(
+                &stale_diagnostic_slot_to_coefficient_trace,
+            )
+            .expect("shape-only witness digest accepts self-consistent diagnostic trace drift"),
+            claim.execution_witness_digest,
+            "shape-only witness digest must still bind diagnostic trace bytes"
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_witness_digest_material_for_artifacts_v1(
+                &params,
+                &bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                &stale_diagnostic_slot_to_coefficient_trace,
+            ),
+            "diagnostic slot-to-coefficient output does not match governed artifact trace",
+            "artifact-aware witness validation must reject diagnostic slot-to-coefficient trace drift",
+        );
+
+        let mut stale_sample_switch_trace = witness_material.clone();
+        let stale_sample_switch_c0 =
+            &mut stale_sample_switch_trace.trace.sample_switch_output.c0[0];
+        *stale_sample_switch_c0 = (*stale_sample_switch_c0 + 1) % params.ciphertext_modulus;
+        assert_ne!(
+            bfv_full_bootstrap_execution_witness_digest_from_material_v1(
+                &stale_sample_switch_trace,
+            )
+            .expect("shape-only witness digest accepts self-consistent sample-switch trace drift"),
+            claim.execution_witness_digest,
+            "shape-only witness digest must still bind sample-switch trace bytes"
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_witness_digest_material_for_artifacts_v1(
+                &params,
+                &bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                &stale_sample_switch_trace,
+            ),
+            "sample-switch output does not match governed artifact trace",
+            "artifact-aware witness validation must reject sample-switch trace drift",
         );
 
         let mut stale_sample_switch_bound = witness_material.clone();
@@ -36972,6 +39367,17 @@ mod tests {
             "proof input material must reject zero statement hashes",
         );
 
+        let mut placeholder_statement_input = proof_input.clone();
+        placeholder_statement_input.statement_hash =
+            Hash::new(b"pending BFV full-bootstrap execution witness digest");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_proof_input_material_v1(
+                &placeholder_statement_input,
+            ),
+            "placeholder",
+            "proof input material must reject placeholder statement hashes",
+        );
+
         let (_other_secret_key, other_public_key, _other_relinearization_key) =
             keygen_from_seed(&params, b"bfv-full-bootstrap-proof-input-other-keygen")
                 .expect("other proof input keygen");
@@ -37096,11 +39502,18 @@ mod tests {
                 .raw_extracted_sample
                 .secret_coefficients[0]
         );
-        assert_eq!(first_row[26], witness_material.input_bound as u64);
-        assert_eq!(first_row[27], witness_material.output_bound as u64);
+        assert_eq!(
+            first_row[26],
+            u64::try_from(witness_material.input_bound).expect("input bound fits trace row")
+        );
+        assert_eq!(
+            first_row[27],
+            u64::try_from(witness_material.output_bound).expect("output bound fits trace row")
+        );
         assert_eq!(
             first_row[33],
-            witness_material.trace_bounds.slot_to_coefficient as u64
+            u64::try_from(witness_material.trace_bounds.slot_to_coefficient)
+                .expect("slot-to-coefficient bound fits trace row")
         );
 
         let first_padding_index = params.degree();
@@ -37154,6 +39567,18 @@ mod tests {
             ),
             "zero hash",
             "public padding row construction must reject zero statement hashes",
+        );
+        let placeholder_statement_hash =
+            Hash::new(b"pending BFV full-bootstrap execution witness digest");
+        assert_error_contains(
+            bfv_full_bootstrap_arithmetic_trace_public_padding_row_v1(
+                first_padding_index_u32,
+                placeholder_statement_hash,
+                witness_material.slot_index,
+                witness_material.bound_mode,
+            ),
+            "placeholder",
+            "public padding row construction must reject placeholder statement hashes",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_arithmetic_trace_public_padding_opening_v1(
@@ -37308,6 +39733,23 @@ mod tests {
             ),
             "trace material digest mismatch",
             "trace-bound AIR evaluation digest must reject material retargeted to another trace",
+        );
+        let mut placeholder_trace_air_evaluation_material = air_evaluation_material.clone();
+        placeholder_trace_air_evaluation_material.arithmetic_trace_material_digest =
+            Hash::new(b"pending BFV full-bootstrap execution witness digest");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_arithmetic_air_evaluation_material_v1(
+                &placeholder_trace_air_evaluation_material,
+            ),
+            "placeholder",
+            "AIR evaluation material must reject placeholder trace material digests",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_arithmetic_air_evaluation_material_digest_v1(
+                &placeholder_trace_air_evaluation_material,
+            ),
+            "placeholder",
+            "AIR evaluation material digesting must reject placeholder trace material digests",
         );
         assert_eq!(
             prover_input_material.arithmetic_air_evaluation_material,
@@ -37484,6 +39926,67 @@ mod tests {
             challenge_changes_with_trace_material,
             "AIR composition challenges must bind the arithmetic trace material digest"
         );
+        let challenge_changes_with_row_index = (1..usize::from(trace_material.padded_row_count))
+            .any(|row_index| {
+                let original_challenge =
+                    bfv_full_bootstrap_arithmetic_air_composition_challenge_v1(
+                        proof_input.statement_hash,
+                        trace_material_digest,
+                        0,
+                        0,
+                    )
+                    .expect("derive original row-zero AIR composition challenge");
+                let shifted_challenge = bfv_full_bootstrap_arithmetic_air_composition_challenge_v1(
+                    proof_input.statement_hash,
+                    trace_material_digest,
+                    row_index,
+                    0,
+                )
+                .expect("derive row-shifted AIR composition challenge");
+                original_challenge != shifted_challenge
+            });
+        assert!(
+            challenge_changes_with_row_index,
+            "AIR composition challenges must bind the arithmetic trace row index"
+        );
+        let challenge_changes_with_column_index =
+            (1..usize::from(trace_material.row_width)).any(|column_index| {
+                let original_challenge =
+                    bfv_full_bootstrap_arithmetic_air_composition_challenge_v1(
+                        proof_input.statement_hash,
+                        trace_material_digest,
+                        0,
+                        0,
+                    )
+                    .expect("derive original column-zero AIR composition challenge");
+                let shifted_challenge = bfv_full_bootstrap_arithmetic_air_composition_challenge_v1(
+                    proof_input.statement_hash,
+                    trace_material_digest,
+                    0,
+                    column_index,
+                )
+                .expect("derive column-shifted AIR composition challenge");
+                original_challenge != shifted_challenge
+            });
+        assert!(
+            challenge_changes_with_column_index,
+            "AIR composition challenges must bind the arithmetic trace column index"
+        );
+        for row_index in 0..usize::from(trace_material.padded_row_count) {
+            for column_index in 0..usize::from(trace_material.row_width) {
+                assert_ne!(
+                    bfv_full_bootstrap_arithmetic_air_composition_challenge_v1(
+                        proof_input.statement_hash,
+                        trace_material_digest,
+                        row_index,
+                        column_index,
+                    )
+                    .expect("derive nonzero AIR composition challenge"),
+                    0,
+                    "AIR composition challenges must be nonzero for every trace coordinate"
+                );
+            }
+        }
         assert_ne!(
             alternate_slot_proof_input, proof_input,
             "alternate slot must produce a distinct proof input material package"
@@ -37552,6 +40055,16 @@ mod tests {
             "arithmetic trace material digest",
             "prover input material must reject stale arithmetic trace material digests",
         );
+        let mut placeholder_prover_input_trace_digest = prover_input_material.clone();
+        placeholder_prover_input_trace_digest.arithmetic_trace_material_digest =
+            Hash::new(b"pending BFV full-bootstrap execution witness digest");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_prover_input_material_v1(
+                &placeholder_prover_input_trace_digest,
+            ),
+            "placeholder",
+            "prover input material must reject placeholder arithmetic trace material digests",
+        );
 
         let mut stale_prover_input_air_digest = prover_input_material.clone();
         stale_prover_input_air_digest.arithmetic_air_constraint_system_digest =
@@ -37573,6 +40086,18 @@ mod tests {
             ),
             "zero hash",
             "prover input material must reject zero arithmetic AIR artifact digests",
+        );
+
+        let mut placeholder_prover_input_air_artifact_digest = prover_input_material.clone();
+        placeholder_prover_input_air_artifact_digest
+            .arithmetic_air_constraint_system_artifact_digest =
+            Hash::new(b"pending BFV full-bootstrap execution witness digest");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_prover_input_material_v1(
+                &placeholder_prover_input_air_artifact_digest,
+            ),
+            "placeholder",
+            "prover input material must reject placeholder arithmetic AIR artifact digests",
         );
 
         let mut stale_prover_input_air_artifact_digest = prover_input_material.clone();
@@ -37633,6 +40158,17 @@ mod tests {
             ),
             "zero hash",
             "prover input material must reject zero AIR evaluation material digests",
+        );
+
+        let mut placeholder_air_evaluation_digest = prover_input_material.clone();
+        placeholder_air_evaluation_digest.arithmetic_air_evaluation_material_digest =
+            Hash::new(b"pending BFV full-bootstrap execution witness digest");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_prover_input_material_v1(
+                &placeholder_air_evaluation_digest,
+            ),
+            "placeholder",
+            "prover input material must reject placeholder AIR evaluation material digests",
         );
 
         let mut stale_air_evaluation_digest = prover_input_material.clone();
@@ -37963,7 +40499,7 @@ mod tests {
         );
         assert_eq!(
             exact_statement.to_string(),
-            "efeba218641192a5a2e20178b4d60805700cd40e9e3ad479b82da0c0f1110acb",
+            "265255ef470a38506d2c54b621a228ec9071ee7591eb0e716b502eeb992ebd6f",
             "canonical exact full-bootstrap execution proof statement digest drifted"
         );
         let bounded_claim = BfvFullBootstrapExecutionProofClaimV1 {
@@ -37984,7 +40520,7 @@ mod tests {
         );
         assert_eq!(
             bounded_statement.to_string(),
-            "1fc0c7408948cfffc52ce8c64e0d1651616cbd8121726f84917e7c7796863513",
+            "3667316ab74969bd7111dc3ca53f633f6a5963df834d359674c2143347632e35",
             "canonical bounded full-bootstrap execution proof statement digest drifted"
         );
 
@@ -38046,10 +40582,29 @@ mod tests {
                 &params,
                 alternate_accumulator_digest,
             );
-        let mut alternate_material = material.clone();
-        alternate_material.accumulator_digest = alternate_accumulator_digest;
-        alternate_material.blind_rotation_key_digest =
-            Hash::new(&alternate_artifacts.blind_rotation_key);
+        let alternate_evaluator_artifact_set_digest =
+            bfv_full_bootstrap_evaluator_artifact_set_digest_v1(
+                &params,
+                1,
+                &alternate_artifacts.coefficient_to_slot_key,
+                &alternate_artifacts.slot_to_coefficient_key,
+                &alternate_artifacts.blind_rotation_key,
+                &alternate_artifacts.sample_extraction_key,
+                &alternate_artifacts.accumulator,
+                &alternate_artifacts.proof_public_input_schema,
+                &alternate_artifacts.arithmetic_air_constraint_system,
+            )
+            .expect("alternate evaluator artifact-set digest");
+        let (alternate_prover_key, alternate_verifier_key) =
+            sample_full_bootstrap_proof_key_artifact_payloads(
+                &params,
+                Hash::new(&alternate_artifacts.proof_public_input_schema),
+                alternate_evaluator_artifact_set_digest,
+            );
+        alternate_artifacts.prover_key = alternate_prover_key;
+        alternate_artifacts.verifier_key = alternate_verifier_key;
+        let alternate_material =
+            sample_full_bootstrap_circuit_material_for_artifacts(&params, &alternate_artifacts);
         let mut alternate_bootstrap_key = bootstrap_key.clone();
         alternate_bootstrap_key.full_bootstrap_material = Some(alternate_material);
         let alternate_artifact_statement = bfv_full_bootstrap_execution_proof_statement_digest_v1(
@@ -38192,6 +40747,38 @@ mod tests {
             ),
             "zero hash",
             "execution proof statements must reject missing witness digests",
+        );
+
+        let all_zero_ciphertext = zero_ciphertext(&params);
+        let all_zero_input_claim = BfvFullBootstrapExecutionProofClaimV1 {
+            input_ciphertext: all_zero_ciphertext.clone(),
+            ..exact_claim.clone()
+        };
+        assert_error_contains(
+            bfv_full_bootstrap_execution_proof_statement_digest_v1(
+                &params,
+                &public_key,
+                &bootstrap_key,
+                &artifacts,
+                &all_zero_input_claim,
+            ),
+            "all-zero ciphertext",
+            "execution proof statements must reject inert all-zero claimed inputs",
+        );
+        let all_zero_output_claim = BfvFullBootstrapExecutionProofClaimV1 {
+            output_ciphertext: all_zero_ciphertext,
+            ..exact_claim.clone()
+        };
+        assert_error_contains(
+            bfv_full_bootstrap_execution_proof_statement_digest_v1(
+                &params,
+                &public_key,
+                &bootstrap_key,
+                &artifacts,
+                &all_zero_output_claim,
+            ),
+            "all-zero ciphertext",
+            "execution proof statements must reject inert all-zero claimed outputs",
         );
 
         let malformed_input = BfvCiphertext {
@@ -38449,6 +41036,19 @@ mod tests {
             "unexpected error: {err}"
         );
 
+        let all_zero_rotation_seed = vec![0_u8; 32];
+        let err = rotation_key_from_seed(
+            &material.params,
+            &material.public_key,
+            1,
+            &all_zero_rotation_seed,
+        )
+        .expect_err("all-zero rotation transcript seeds must not generate keys");
+        assert!(
+            err.to_string().contains("all zero"),
+            "unexpected error: {err}"
+        );
+
         let oversized_rotation_seed = vec![0xA5; BFV_REFRESH_TRANSCRIPT_SEED_MAX_BYTES + 1];
         let err = rotation_key_from_seed(
             &material.params,
@@ -38472,6 +41072,19 @@ mod tests {
         .expect_err("empty bootstrap transcript seeds must not generate keys");
         assert!(
             err.to_string().contains("must not be empty"),
+            "unexpected error: {err}"
+        );
+
+        let all_zero_bootstrap_seed = vec![0_u8; 32];
+        let err = bootstrap_key_from_seed(
+            &material.params,
+            &material.public_key,
+            "bootstrap-refresh-key",
+            &all_zero_bootstrap_seed,
+        )
+        .expect_err("all-zero bootstrap transcript seeds must not generate keys");
+        assert!(
+            err.to_string().contains("all zero"),
             "unexpected error: {err}"
         );
 
@@ -38940,6 +41553,24 @@ mod tests {
             "unexpected error: {err}"
         );
 
+        let all_zero_rotation_seed = vec![0_u8; 32];
+        let all_zero_rotation_transcripts = [BfvRotationKeyTranscriptSeed {
+            rotation_steps: material.rotation_key.rotation_steps,
+            seed: &all_zero_rotation_seed,
+        }];
+        let err = bundle
+            .validate_refresh_transcripts(
+                &material.params,
+                &material.public_key,
+                &all_zero_rotation_transcripts,
+                valid_bootstrap_transcript,
+            )
+            .expect_err("all-zero rotation transcript seeds must fail metadata preflight");
+        assert!(
+            err.to_string().contains("all zero"),
+            "unexpected error: {err}"
+        );
+
         let zero_rotation_steps = [BfvRotationKeyTranscriptSeed {
             rotation_steps: 0,
             seed: b"bfv-eval-key-rotation",
@@ -39013,6 +41644,24 @@ mod tests {
             .expect_err("empty bootstrap transcript seeds must fail metadata preflight");
         assert!(
             err.to_string().contains("must not be empty"),
+            "unexpected error: {err}"
+        );
+
+        let all_zero_bootstrap_seed = Some(BfvBootstrapKeyTranscriptSeed {
+            key_id: "bootstrap-refresh-key",
+            max_refresh_rounds: 2,
+            seed: &all_zero_rotation_seed,
+        });
+        let err = bundle
+            .validate_refresh_transcripts(
+                &material.params,
+                &material.public_key,
+                &valid_rotation_transcripts,
+                all_zero_bootstrap_seed,
+            )
+            .expect_err("all-zero bootstrap transcript seeds must fail metadata preflight");
+        assert!(
+            err.to_string().contains("all zero"),
             "unexpected error: {err}"
         );
 
@@ -39141,6 +41790,57 @@ mod tests {
             ),
             "public key b length",
             "bounded transcript digest must reject public-key shape before bundle shapes",
+        );
+
+        let valid_bundle = BfvEvaluationKeyBundle {
+            relinearization_key: material.relinearization_key.clone(),
+            rotation_keys: vec![material.rotation_key.clone()],
+            galois_keys: Vec::new(),
+            bootstrap_key: None,
+        };
+        let all_zero_public_key = BfvPublicKey {
+            b: zero_poly(&material.params),
+            a: zero_poly(&material.params),
+        };
+        assert_error_contains(
+            valid_bundle.validate_refresh_transcripts(
+                &material.params,
+                &all_zero_public_key,
+                &rotation_transcripts,
+                None,
+            ),
+            "all zero",
+            "exact transcript validation must reject inert public-key material",
+        );
+        assert_error_contains(
+            valid_bundle.refresh_transcript_digest(
+                &material.params,
+                &all_zero_public_key,
+                &rotation_transcripts,
+                None,
+            ),
+            "all zero",
+            "exact transcript digest must reject inert public-key material",
+        );
+        assert_error_contains(
+            valid_bundle.validate_bounded_noise_refresh_transcripts(
+                &material.params,
+                &all_zero_public_key,
+                &rotation_transcripts,
+                None,
+            ),
+            "all zero",
+            "bounded transcript validation must reject inert public-key material",
+        );
+        assert_error_contains(
+            valid_bundle.bounded_noise_refresh_transcript_digest(
+                &material.params,
+                &all_zero_public_key,
+                &rotation_transcripts,
+                None,
+            ),
+            "all zero",
+            "bounded transcript digest must reject inert public-key material",
         );
 
         let empty_rotation_seed = [BfvRotationKeyTranscriptSeed {
@@ -41026,6 +43726,28 @@ mod tests {
             ]),
             "material proof statement digest must hash self-describing typed material"
         );
+        let mut placeholder_public_key_digest_bundle = bundle.clone();
+        placeholder_public_key_digest_bundle
+            .bootstrap_key
+            .as_mut()
+            .expect("bundle carries a bootstrap key")
+            .public_key_digest = Some(Hash::new(b"replace before production"));
+        assert_error_contains(
+            placeholder_public_key_digest_bundle.validate(&params),
+            "placeholder",
+            "full-bootstrap bundle validation must reject placeholder public-key digest metadata",
+        );
+        assert_error_contains(
+            placeholder_public_key_digest_bundle.digest(&params),
+            "placeholder",
+            "full-bootstrap bundle digesting must reject placeholder public-key digest metadata",
+        );
+        assert_error_contains(
+            placeholder_public_key_digest_bundle
+                .full_bootstrap_material_proof_statement_digest(&params, &public_key),
+            "placeholder",
+            "full-bootstrap material proof statements must reject placeholder public-key digest metadata",
+        );
 
         let proof_input = bfv_full_bootstrap_material_proof_input_material_v1(
             &params,
@@ -41182,6 +43904,16 @@ mod tests {
             "material proof input material must reject zero statement hashes",
         );
 
+        let mut placeholder_statement_input = proof_input.clone();
+        placeholder_statement_input.statement_hash = Hash::new(b"not for production");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_material_proof_input_material_v1(
+                &placeholder_statement_input,
+            ),
+            "placeholder",
+            "material proof input material must reject placeholder statement hashes",
+        );
+
         let (_, other_public_key_for_input, _) =
             keygen_from_seed(&params, b"bfv-full-bootstrap-proof-input-other-public-key")
                 .expect("proof input public-key drift keygen");
@@ -41269,6 +44001,22 @@ mod tests {
                 .expect("missing bootstrap statement lookup validates"),
             None,
             "bundles without bootstrap keys must not produce a full-bootstrap statement"
+        );
+        let all_zero_public_key = BfvPublicKey {
+            b: zero_poly(&params),
+            a: zero_poly(&params),
+        };
+        assert_error_contains(
+            refresh_bundle
+                .full_bootstrap_material_proof_statement_digest(&params, &all_zero_public_key),
+            "all zero",
+            "refresh-only statement lookup must still reject inert public-key material",
+        );
+        assert_error_contains(
+            no_bootstrap_bundle
+                .full_bootstrap_material_proof_statement_digest(&params, &all_zero_public_key),
+            "all zero",
+            "missing-bootstrap statement lookup must still reject inert public-key material",
         );
 
         let mut drifted_material_bundle = bundle.clone();
@@ -44352,6 +47100,72 @@ mod tests {
     }
 
     #[test]
+    fn evaluation_key_bundle_digest_rejects_inert_refresh_material() {
+        let material = evaluation_key_adversarial_material();
+        let all_zero_refresh = BfvCiphertext {
+            c0: zero_poly(&material.params),
+            c1: zero_poly(&material.params),
+        };
+        let all_zero_rotation = BfvEvaluationKeyBundle {
+            relinearization_key: material.relinearization_key.clone(),
+            rotation_keys: vec![BfvRotationKey {
+                rotation_steps: material.rotation_key.rotation_steps,
+                zero_refresh: all_zero_refresh.clone(),
+            }],
+            galois_keys: Vec::new(),
+            bootstrap_key: None,
+        };
+        all_zero_rotation.validate(&material.params).expect(
+            "shape validation remains available for owner diagnostics over all-zero refresh masks",
+        );
+        assert_error_contains(
+            all_zero_rotation.digest(&material.params),
+            "all-zero refresh ciphertext",
+            "evaluation-key bundle digesting must reject inert all-zero rotation refresh masks",
+        );
+
+        let all_zero_bootstrap_descriptor = BfvEvaluationKeyBundle {
+            relinearization_key: material.relinearization_key.clone(),
+            rotation_keys: Vec::new(),
+            galois_keys: Vec::new(),
+            bootstrap_key: Some(bootstrap_key_with_rounds(
+                "bootstrap-refresh-key",
+                1,
+                &all_zero_refresh,
+                vec![all_zero_refresh.clone()],
+            )),
+        };
+        all_zero_bootstrap_descriptor.validate(&material.params).expect(
+            "shape validation remains available for owner diagnostics over all-zero bootstrap descriptors",
+        );
+        assert_error_contains(
+            all_zero_bootstrap_descriptor.digest(&material.params),
+            "all-zero refresh ciphertext",
+            "evaluation-key bundle digesting must reject inert all-zero bootstrap zero_refresh descriptors",
+        );
+
+        let all_zero_bootstrap_round = BfvEvaluationKeyBundle {
+            relinearization_key: material.relinearization_key,
+            rotation_keys: Vec::new(),
+            galois_keys: Vec::new(),
+            bootstrap_key: Some(bootstrap_key_with_rounds(
+                "bootstrap-refresh-key",
+                2,
+                &material.zero_refresh,
+                vec![material.zero_refresh.clone(), all_zero_refresh],
+            )),
+        };
+        all_zero_bootstrap_round.validate(&material.params).expect(
+            "shape validation remains available for owner diagnostics over all-zero bootstrap rounds",
+        );
+        assert_error_contains(
+            all_zero_bootstrap_round.digest(&material.params),
+            "all-zero refresh ciphertext",
+            "evaluation-key bundle digesting must reject inert all-zero bootstrap round refresh masks",
+        );
+    }
+
+    #[test]
     fn evaluation_key_bundle_rejects_adversarial_bootstrap_key_ids() {
         let material = evaluation_key_adversarial_material();
         let blank_bootstrap_key = BfvEvaluationKeyBundle {
@@ -44909,6 +47723,54 @@ mod tests {
     }
 
     #[test]
+    fn identifier_public_parameters_reject_all_zero_public_key_material() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let public_parameters = BfvIdentifierPublicParameters {
+            parameters: params,
+            public_key: BfvPublicKey {
+                b: zero_poly(&params),
+                a: zero_poly(&params),
+            },
+            max_input_bytes: 63,
+        };
+
+        let err = public_parameters
+            .validate()
+            .expect_err("identifier public parameters must reject all-zero public keys");
+        assert!(
+            err.to_string().contains("all zero"),
+            "unexpected error: {err}"
+        );
+
+        let zero_a_public_parameters = BfvIdentifierPublicParameters {
+            parameters: params,
+            public_key: BfvPublicKey {
+                b: vec![1; params.degree()],
+                a: zero_poly(&params),
+            },
+            max_input_bytes: 63,
+        };
+        let err = zero_a_public_parameters
+            .validate()
+            .expect_err("identifier public parameters must reject zero-a public keys");
+        assert!(
+            err.to_string().contains("a component"),
+            "unexpected error: {err}"
+        );
+
+        let err = encrypt_identifier_from_seed(
+            &public_parameters,
+            b"abc",
+            b"bfv-identifier-all-zero-public-key",
+        )
+        .expect_err("identifier encryption must reject all-zero public keys");
+        assert!(
+            err.to_string().contains("all zero"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn identifier_public_parameters_reject_overwide_envelope_capacity() {
         let params = ram_lfe_bfv_parameters_v1();
         let (_, public_key, _) =
@@ -44989,6 +47851,15 @@ mod tests {
         let err = decrypt_identifier(&public_parameters, &secret_key, &byte_out_of_range)
             .expect_err("byte slots outside u8 must be rejected");
         assert!(err.to_string().contains("does not fit into u8"));
+
+        let mut all_zero_slot = ciphertext.clone();
+        all_zero_slot.slots[0] = zero_ciphertext(&params);
+        let err = decrypt_identifier(&public_parameters, &secret_key, &all_zero_slot)
+            .expect_err("all-zero identifier ciphertext slots must be rejected");
+        assert!(
+            err.to_string().contains("all-zero ciphertext"),
+            "unexpected error: {err}"
+        );
 
         ciphertext.slots[0].c1.pop();
         let err = decrypt_identifier(&public_parameters, &secret_key, &ciphertext)

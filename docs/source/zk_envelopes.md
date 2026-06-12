@@ -227,12 +227,15 @@ Verifier behavior (native STARK)
   - Verifies `y0`, `y1` Merkle openings under `roots[k]` and `z` under `roots[k+1]`.
   - Derives the pair domain element `x` from the layer domain and checks
     `z == (y0 + y1)/2 + r_k * (y0 - y1)/(2x)` in the field.
-- If `comp_root` present, verifies the composition leaf/path and checks it matches
+- If `comp_root` is present on a raw generic STARK envelope, verifies the
+  composition leaf/path and checks it matches
   `constant + z_coeff * z_final + Σ coeff_i * value_i`. Auxiliary terms must appear
   in strictly increasing `wire_index` order.
-- `OpenVerifyEnvelope` STARK verification requires `comp_root` and `comp_values`; the
-  high-level verifier reconstructs the V1 binding-AIR terms from backend, circuit id,
-  VK hash, schema descriptor, and public input columns before accepting the raw FRI proof.
+- `OpenVerifyEnvelope` STARK verification rejects inner `comp_root`/`comp_values`
+  sidecars. The high-level verifier reconstructs the V1 binding-AIR digest from
+  backend, circuit id, VK hash, schema descriptor, and public input columns, and
+  ZK-ACE wrappers reconstruct the ZK-ACE AIR/public-input digests from the outer
+  public-input payload.
 - Validation: query indices derive from the transcript label + params + roots; the verifier
   rejects mismatched `j`, missing folds, bad roots/paths, non-canonical field encodings,
   unsupported hash selectors, and mismatched query-count headers. Depth/size caps guard
@@ -262,9 +265,42 @@ Verifier behavior (native STARK)
 	- `VerifyingKeyBox.bytes` (for `stark/fri/*`): Norito `StarkFriVerifyingKeyV1`
 	  containing the expected `circuit_id` and the FRI parameter set (`n_log2`, `blowup_log2`,
 	  `fold_arity`, `queries`, `merkle_arity`, `hash_fn`).
-	- The verifier enforces that the outer wrapper metadata is bound into the inner STARK
-	  envelope (via `domain_tag`), that the inner envelope parameters match the VK payload,
-	  and that the composition terms match the verifier-reconstructed V1 binding AIR.
+	  `VerifyingKeyBox.backend` must exactly match the `ProofBox.backend` /
+	  `verify_backend` label.
+	  Consensus `verify_backend("stark/fri/*", ...)` admission requires this payload
+	  to satisfy the ledger-grade production FRI floors; PoC-sized domain/query
+	  settings are rejected before wrapper verification.
+- The verifier enforces that the outer wrapper metadata is bound into the inner STARK
+  envelope (via `domain_tag`), that the inner envelope parameters match the VK payload,
+  that the transcript label matches the canonical wrapper AIR domain
+  (`IROHA-STARK-AIR-V1` or `IROHA-STARK-ZK-ACE-AIR-V1`), and that the AIR public
+  digest matches the verifier-reconstructed generic binding or ZK-ACE statement.
+- Runtime STARK guardrails require the outer `OpenVerifyEnvelope`, decode
+  `StarkFriOpenProofV1` before verifier dispatch, and reject malformed outer or
+  wrapper bytes, unsupported wrapper versions, and empty native STARK envelope
+  bytes with zero-duration failures.
+- Runtime OpenVerify guardrails also reject `ProofBox.backend`,
+  `VerifyingKeyBox.backend`, or decoded envelope backend tags that do not match
+  the selected production verifier family before dispatch.
+- Generic STARK `OpenVerifyEnvelope` construction and verification reserve the
+  ZK-ACE and BFV full-bootstrap circuit ids for their dedicated wrappers. BFV
+  full-bootstrap native AIR proofs must use the BFV-specific verifier path so
+  sampled openings are checked against the public-padding row policy. Generic
+  preverification rejects metadata-valid OpenVerify wrappers that advertise
+  noncanonical ZK-ACE colon/slash aliases or the BFV full-bootstrap circuit id,
+  including backend-prefixed colon/slash aliases, before deduplication. The
+  canonical ZK-ACE id remains reserved for the ZK-ACE-specific wrapper. The BFV
+  wrapper accepts only the base native AIR transcript label or canonical
+  unpadded retry suffixes emitted by the prover, and rejects generic
+  `comp_root`/`comp_values` sidecars instead of accepting auxiliary composition
+  commitments on top of the verifier-reconstructed arithmetic trace. Malformed
+  BFV proof/commitment version tags, missing or foreign AIR sections, root
+  drift, query/opening count drift, duplicate openings, opened row/path drift,
+  FRI base-value drift, STARK parameter-profile drift, and caller-supplied
+  verifier-limit violations fail before native BFV acceptance. A valid envelope
+  also cannot be replayed with stale BFV prover-input material, including
+  layout metadata, trace/AIR digests, trace rows, composition values, or
+  prover/verifier proof-key roles.
 
 	Example (JSON-like, annotated)
 	```jsonc

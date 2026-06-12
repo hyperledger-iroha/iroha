@@ -835,6 +835,7 @@ impl RelayCertificateSignaturesV2 {
                                 field: "signatures.ed25519",
                                 reason: format!("expected 64 bytes, got {len}"),
                             })?;
+                    validate_decoded_signature_not_all_zero("signatures.ed25519", &array)?;
                     set_decoded_once(&mut ed25519, array, "signatures.ed25519")?;
                 }
                 x if x == SignatureField::MlDsa65 as u8 => {
@@ -848,6 +849,7 @@ impl RelayCertificateSignaturesV2 {
                             bytes.len(),
                             MlDsaSuite::MlDsa65.signature_len(),
                         )?;
+                        validate_decoded_signature_not_all_zero("signatures.mldsa65", &bytes)?;
                         Some(bytes)
                     };
                     set_decoded_once(&mut mldsa, value, "signatures.mldsa65")?;
@@ -966,6 +968,7 @@ impl RelayCertificateBundleV2 {
                 "Ed25519 public key is small-order (weak); rejected".to_owned(),
             ));
         }
+        validate_verify_signature_not_all_zero("Ed25519 signature", &self.signatures.ed25519)?;
         ed25519_public
             .verify_strict(&ed_digest, &Signature::from_bytes(&self.signatures.ed25519))
             .map_err(|err| {
@@ -1012,6 +1015,7 @@ fn validate_mldsa_verify_material(
         .map_err(|err| {
             CertificateError::SignatureFailure(format!("ML-DSA signature is invalid: {err}"))
         })?;
+    validate_verify_signature_not_all_zero("ML-DSA signature", signature)?;
     Ok(())
 }
 
@@ -1185,6 +1189,10 @@ impl CertificateFieldAccumulator {
             identity_mldsa65.len(),
             MlDsaSuite::MlDsa65.public_key_len(),
         )?;
+        validate_public_key_material_not_all_zero(
+            "certificate.identity_mldsa65",
+            &identity_mldsa65,
+        )?;
         validate_ed25519_identity_key(&identity_ed25519)?;
         let preferred_suite =
             MlKemSuite::from_kem_id(kem_policy.preferred_suite).ok_or_else(|| {
@@ -1198,6 +1206,7 @@ impl CertificateFieldAccumulator {
             pq_kem_public.len(),
             preferred_suite.public_key_len(),
         )?;
+        validate_public_key_material_not_all_zero("certificate.pq_kem_public", &pq_kem_public)?;
         validate_certificate_time_bounds(published_at, valid_after, valid_until)?;
 
         Ok(RelayCertificateV2 {
@@ -1242,6 +1251,19 @@ fn validate_exact_len(
         return Err(CertificateError::InvalidFieldValue {
             field,
             reason: format!("expected {expected} bytes, got {actual}"),
+        });
+    }
+    Ok(())
+}
+
+fn validate_public_key_material_not_all_zero(
+    field: &'static str,
+    bytes: &[u8],
+) -> Result<(), CertificateError> {
+    if bytes.iter().all(|&byte| byte == 0) {
+        return Err(CertificateError::InvalidFieldValue {
+            field,
+            reason: "public key material must not be all zero".to_owned(),
         });
     }
     Ok(())
@@ -1483,6 +1505,31 @@ fn capacity_from_len(len: u64, field: &'static str) -> Result<usize, Certificate
         field,
         reason: format!("array length {len} exceeds usize::MAX"),
     })
+}
+
+fn validate_decoded_signature_not_all_zero(
+    field: &'static str,
+    signature: &[u8],
+) -> Result<(), CertificateError> {
+    if signature.iter().all(|&byte| byte == 0) {
+        return Err(CertificateError::InvalidFieldValue {
+            field,
+            reason: "signature must not be all zero".to_owned(),
+        });
+    }
+    Ok(())
+}
+
+fn validate_verify_signature_not_all_zero(
+    label: &str,
+    signature: &[u8],
+) -> Result<(), CertificateError> {
+    if signature.iter().all(|&byte| byte == 0) {
+        return Err(CertificateError::SignatureFailure(format!(
+            "{label} must not be all zero"
+        )));
+    }
+    Ok(())
 }
 
 /// Minimal CBOR encoder specialised for `SRCv2` structures.
@@ -2197,7 +2244,7 @@ mod tests {
         encoder.write_map_header(2);
         encoder.write_unsigned(SignatureField::Ed25519 as u64);
         encoder
-            .write_bytes(&[0; 64], "signatures.ed25519")
+            .write_bytes(&[2; 64], "signatures.ed25519")
             .expect("test signature encodes");
         encoder.write_unsigned(SignatureField::Ed25519 as u64);
         encoder
@@ -2255,7 +2302,7 @@ mod tests {
         let bundle = RelayCertificateBundleV2 {
             certificate: sample_certificate(),
             signatures: RelayCertificateSignaturesV2 {
-                ed25519: [0; 64],
+                ed25519: [2; 64],
                 mldsa65: None,
             },
         };
@@ -2520,6 +2567,33 @@ mod tests {
     }
 
     #[test]
+    fn parse_certificate_payload_rejects_all_zero_public_key_material() {
+        let mut certificate = sample_certificate();
+        certificate.identity_mldsa65 = vec![0u8; MlDsaSuite::MlDsa65.public_key_len()];
+        let err = parse_certificate_payload(&certificate.to_cbor())
+            .expect_err("all-zero ML-DSA identity key material should fail");
+        match err {
+            CertificateError::InvalidFieldValue { field, reason } => {
+                assert_eq!(field, "certificate.identity_mldsa65");
+                assert!(reason.contains("all zero"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+
+        let mut certificate = sample_certificate();
+        certificate.pq_kem_public = vec![0u8; MlKemSuite::MlKem768.public_key_len()];
+        let err = parse_certificate_payload(&certificate.to_cbor())
+            .expect_err("all-zero ML-KEM relay key material should fail");
+        match err {
+            CertificateError::InvalidFieldValue { field, reason } => {
+                assert_eq!(field, "certificate.pq_kem_public");
+                assert!(reason.contains("all zero"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
     fn bundle_decode_rejects_invalid_mldsa65_signature_length() {
         let bundle = RelayCertificateBundleV2 {
             certificate: sample_certificate(),
@@ -2534,6 +2608,40 @@ mod tests {
         match err {
             CertificateError::InvalidFieldValue { field, .. } => {
                 assert_eq!(field, "signatures.mldsa65");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn bundle_decode_rejects_all_zero_signature_material() {
+        let mut bundle = RelayCertificateBundleV2 {
+            certificate: sample_certificate(),
+            signatures: RelayCertificateSignaturesV2 {
+                ed25519: [0xAA; 64],
+                mldsa65: Some(vec![0xBB; MlDsaSuite::MlDsa65.signature_len()]),
+            },
+        };
+
+        bundle.signatures.ed25519 = [0u8; 64];
+        let err = RelayCertificateBundleV2::from_cbor(&bundle.to_cbor())
+            .expect_err("all-zero Ed25519 signature should fail");
+        match err {
+            CertificateError::InvalidFieldValue { field, reason } => {
+                assert_eq!(field, "signatures.ed25519");
+                assert!(reason.contains("all zero"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+
+        bundle.signatures.ed25519 = [0xAA; 64];
+        bundle.signatures.mldsa65 = Some(vec![0u8; MlDsaSuite::MlDsa65.signature_len()]);
+        let err = RelayCertificateBundleV2::from_cbor(&bundle.to_cbor())
+            .expect_err("all-zero ML-DSA signature should fail");
+        match err {
+            CertificateError::InvalidFieldValue { field, reason } => {
+                assert_eq!(field, "signatures.mldsa65");
+                assert!(reason.contains("all zero"));
             }
             other => panic!("unexpected error: {other:?}"),
         }
@@ -2841,6 +2949,58 @@ mod tests {
         match err {
             CertificateError::SignatureFailure(message) => {
                 assert!(message.contains("signature"), "unexpected error: {message}");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn verification_rejects_all_zero_signature_material_before_backend() {
+        let certificate = sample_certificate();
+
+        let mut rng = StdRng::seed_from_u64(8);
+        let mut seed = [0u8; SECRET_KEY_LENGTH];
+        rng.fill_bytes(&mut seed);
+        let signing_key = SigningKey::from_bytes(&seed);
+        let verifying_key = VerifyingKey::from(&signing_key);
+
+        let mldsa_keys = generate_mldsa_keypair_from_os(MlDsaSuite::MlDsa65)
+            .expect("ML-DSA keypair generation should succeed");
+
+        let bundle = certificate
+            .issue(&signing_key, mldsa_keys.secret_key())
+            .expect("issue");
+
+        let mut ed25519_zero = bundle.clone();
+        ed25519_zero.signatures.ed25519 = [0u8; 64];
+        let err = ed25519_zero
+            .verify(
+                &verifying_key,
+                mldsa_keys.public_key(),
+                CertificateValidationPhase::Phase3RequireDual,
+            )
+            .expect_err("all-zero Ed25519 signature must fail before backend verify");
+        match err {
+            CertificateError::SignatureFailure(message) => {
+                assert!(message.contains("Ed25519 signature"));
+                assert!(message.contains("all zero"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+
+        let mut mldsa_zero = bundle;
+        mldsa_zero.signatures.mldsa65 = Some(vec![0u8; MlDsaSuite::MlDsa65.signature_len()]);
+        let err = mldsa_zero
+            .verify(
+                &verifying_key,
+                mldsa_keys.public_key(),
+                CertificateValidationPhase::Phase3RequireDual,
+            )
+            .expect_err("all-zero ML-DSA signature must fail before backend verify");
+        match err {
+            CertificateError::SignatureFailure(message) => {
+                assert!(message.contains("ML-DSA signature"));
+                assert!(message.contains("all zero"));
             }
             other => panic!("unexpected error: {other:?}"),
         }

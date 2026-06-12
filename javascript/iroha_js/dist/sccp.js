@@ -29827,7 +29827,11 @@ export function canonicalTonSccpSourceStateVerificationProofBytes(input) {
     input,
     "sourceStateProof",
   );
-  if (!TON_SOURCE_STATE_VERIFICATION_CIRCUIT_IDS.has(proof.circuitId)) {
+  if (
+    proof.version !== 1 ||
+    proof.proofFamily !== SCCP_STARK_FRI_PROOF_FAMILY_V1 ||
+    !TON_SOURCE_STATE_VERIFICATION_CIRCUIT_IDS.has(proof.circuitId)
+  ) {
     throw new TypeError(
       "sourceStateProof must be a TON source-state stark-fri-v1 proof",
     );

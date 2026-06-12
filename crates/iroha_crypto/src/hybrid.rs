@@ -188,6 +188,7 @@ impl HybridPublicKey {
         HYBRID_KEM_SUITE
             .validate_public_key(kyber_bytes)
             .map_err(|_| HybridError::InvalidKyberPublicKey)?;
+        validate_kyber_public_not_all_zero(kyber_bytes)?;
 
         Ok(Self {
             x25519,
@@ -268,6 +269,7 @@ impl HybridSecretKey {
         HYBRID_KEM_SUITE
             .validate_secret_key(kyber_bytes)
             .map_err(|_| HybridError::InvalidKyberSecretKey)?;
+        validate_kyber_secret_not_all_zero(kyber_bytes)?;
         let kyber_secret = Zeroizing::new(kyber_bytes.to_vec());
 
         // Kyber secret keys embed the public key in their trailing bytes per PQClean.
@@ -733,6 +735,20 @@ fn x25519_public_key_is_low_order(public_key: &X25519PublicKey) -> bool {
         .all(|&byte| byte == 0)
 }
 
+fn validate_kyber_public_not_all_zero(kyber_public: &[u8]) -> Result<(), HybridError> {
+    if kyber_public.iter().all(|&byte| byte == 0) {
+        return Err(HybridError::InvalidKyberPublicKey);
+    }
+    Ok(())
+}
+
+fn validate_kyber_secret_not_all_zero(kyber_secret: &[u8]) -> Result<(), HybridError> {
+    if kyber_secret.iter().all(|&byte| byte == 0) {
+        return Err(HybridError::InvalidKyberSecretKey);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use rand::SeedableRng as _;
@@ -1051,6 +1067,18 @@ mod tests {
     }
 
     #[test]
+    fn public_key_decode_rejects_all_zero_kyber_public_key() {
+        let mut rng = ChaCha20Rng::from_seed([0x7C; 32]);
+        let pair = HybridKeyPair::generate(&mut rng).expect("generated hybrid keypair");
+        let all_zero_kyber = vec![0_u8; HYBRID_KEM_SUITE.public_key_len()];
+
+        let err = HybridPublicKey::from_bytes(pair.public().x25519_bytes(), all_zero_kyber)
+            .expect_err("all-zero Kyber public key must be rejected while decoding");
+
+        assert_eq!(err, HybridError::InvalidKyberPublicKey);
+    }
+
+    #[test]
     fn secret_key_decode_rejects_noncanonical_kyber_secret_key() {
         let mut rng = ChaCha20Rng::from_seed([0x7B; 32]);
         let pair = HybridKeyPair::generate(&mut rng).expect("generated hybrid keypair");
@@ -1059,6 +1087,18 @@ mod tests {
 
         let err = HybridSecretKey::from_bytes(x25519, kyber_secret)
             .expect_err("noncanonical Kyber secret key must be rejected while decoding");
+        assert_eq!(err, HybridError::InvalidKyberSecretKey);
+    }
+
+    #[test]
+    fn secret_key_decode_rejects_all_zero_kyber_secret_key() {
+        let mut rng = ChaCha20Rng::from_seed([0x7D; 32]);
+        let pair = HybridKeyPair::generate(&mut rng).expect("generated hybrid keypair");
+        let all_zero_kyber = vec![0_u8; HYBRID_KEM_SUITE.secret_key_len()];
+
+        let err = HybridSecretKey::from_bytes(pair.secret().x25519().to_bytes(), all_zero_kyber)
+            .expect_err("all-zero Kyber secret key must be rejected while decoding");
+
         assert_eq!(err, HybridError::InvalidKyberSecretKey);
     }
 

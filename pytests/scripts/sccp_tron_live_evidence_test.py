@@ -515,7 +515,9 @@ def test_tron_api_response_size_is_bounded():
 
 def test_tron_api_http_error_detail_is_bounded():
     module = load_live_module()
-    error_body = b"x" * (module.TRON_API_MAX_ERROR_BYTES + 128)
+    error_body = b"secret-token-tron-error" * (
+        module.TRON_API_MAX_ERROR_BYTES + 128
+    )
 
     def error_opener(_request, timeout):
         del timeout
@@ -537,8 +539,9 @@ def test_tron_api_http_error_detail_is_bounded():
         )
     except RuntimeError as exc:
         message = str(exc)
-        assert "... [truncated]" in message
-        assert len(message) < module.TRON_API_MAX_ERROR_BYTES + 256
+        assert message == "TRON API /wallet/getnowblock failed with HTTP 500"
+        assert "secret-token" not in message
+        assert len(message) < 100
     else:
         raise AssertionError("oversized TRON API error body was accepted")
 
@@ -546,7 +549,8 @@ def test_tron_api_http_error_detail_is_bounded():
 def test_tron_api_rejects_duplicate_json_keys():
     module = load_live_module()
     duplicate_payload = (
-        b'{"result":{"result":true},"result":{"result":false}}'
+        b'{"secret-token-result":{"result":true},'
+        b'"secret-token-result":{"result":false},"result":{"result":true}}'
     )
 
     def duplicate_json_opener(_request, timeout):
@@ -562,10 +566,90 @@ def test_tron_api_rejects_duplicate_json_keys():
             timeout=1.0,
         )
     except RuntimeError as exc:
-        assert "invalid JSON" in str(exc)
-        assert "duplicate JSON key" in str(exc.__cause__)
+        message = str(exc)
+        assert message == (
+            "TRON API /wallet/triggerconstantcontract returned duplicate JSON keys"
+        )
+        assert "secret-token" not in message
+        assert "duplicate JSON key " not in message
+        assert exc.__cause__ is None
     else:
         raise AssertionError("duplicate-key TRON API response was accepted")
+
+
+def test_tron_api_redacts_transport_and_error_response_details():
+    module = load_live_module()
+
+    def secret_url_error_opener(_request, timeout):
+        del timeout
+        raise urllib.error.URLError(
+            "secret-token provider URL leaked from transport"
+        )
+
+    def secret_error_object_opener(_request, timeout):
+        del timeout
+        return FakeResponse(
+            {
+                "Error": "secret-token TRON API error object",
+            }
+        )
+
+    try:
+        module._post_json(
+            "https://tron.example",
+            "/wallet/getnowblock",
+            {},
+            opener=secret_url_error_opener,
+            timeout=1.0,
+        )
+    except RuntimeError as exc:
+        message = str(exc)
+        assert message == "TRON API /wallet/getnowblock request failed"
+        assert "secret-token" not in message
+    else:
+        raise AssertionError("secret-bearing TRON transport error was accepted")
+
+    try:
+        module._post_json(
+            "https://tron.example",
+            "/wallet/getnowblock",
+            {},
+            opener=secret_error_object_opener,
+            timeout=1.0,
+        )
+    except RuntimeError as exc:
+        message = str(exc)
+        assert message == "TRON API /wallet/getnowblock returned error response"
+        assert "secret-token" not in message
+        assert "error object" not in message
+    else:
+        raise AssertionError("secret-bearing TRON API error response was accepted")
+
+
+def test_tron_live_cli_redacts_top_level_exception_details(monkeypatch, capsys):
+    module = load_live_module()
+
+    def fail_collect(_args):
+        raise RuntimeError("secret-token /tmp/operator/private-path")
+
+    monkeypatch.setattr(module, "collect_live_evidence", fail_collect)
+
+    try:
+        module.main(
+            [
+                "--source-bridge-address",
+                module.tron_base58check_from_address20(TRON_TEST_BRIDGE20),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("TRON live CLI accepted top-level collection failure")
+
+    captured = capsys.readouterr()
+    assert "SCCP TRON live evidence collection failed" in captured.err
+    assert "secret-token" not in captured.err
+    assert "private-path" not in captured.err
 
 
 def test_tron_api_key_is_runtime_exact_ascii(tmp_path):
@@ -621,8 +705,8 @@ def test_tron_api_key_is_runtime_exact_ascii(tmp_path):
 def test_witness_schedule_transition_json_rejects_duplicate_keys(tmp_path):
     module = load_live_module()
     duplicate_transition = (
-        '{"parent_witness_schedule_payload":"0x11",'
-        '"parent_witness_schedule_payload":"0x22"}'
+        '{"secret-token-parent-witness-schedule-payload":"0x11",'
+        '"secret-token-parent-witness-schedule-payload":"0x22"}'
     )
     for value in (duplicate_transition, None):
         if value is None:
@@ -634,7 +718,11 @@ def test_witness_schedule_transition_json_rejects_duplicate_keys(tmp_path):
                 SimpleNamespace(witness_schedule_transition_json=[value])
             )
         except ValueError as exc:
-            assert "duplicate JSON keys" in str(exc)
+            rendered = str(exc)
+            assert "duplicate JSON keys" in rendered
+            assert "duplicate JSON keys:" not in rendered
+            assert "secret-token" not in rendered
+            assert "parent-witness-schedule" not in rendered
         else:
             raise AssertionError("duplicate transition JSON key was accepted")
 
@@ -2669,6 +2757,61 @@ def test_live_evidence_emits_solid_block_header_proof_hash_when_roots_present():
     assert solid_block["block_witness_weight"] == 7
     assert solid_block["parent_block_witness_in_schedule"] is True
     assert solid_block["parent_block_witness_weight"] == 7
+
+
+def test_live_evidence_redacts_solid_block_header_proof_encoder_failures(monkeypatch):
+    module = load_live_module()
+    witness_payload = tron_witness_schedule_payload_hex(
+        ["0x41" + TRON_TEST_OWNER20.hex()],
+        [1],
+    )
+    fake = fake_opener_for(
+        module,
+        submitted_source_event_digests=[TRON_SOURCE_EVENT_DIGEST_VECTOR],
+        source_event_transaction_id=TRON_SOURCE_EVENT_TRANSACTION_ID_VECTOR,
+        source_event_block_account_state_root="ee" * 32,
+        source_event_parent_block_account_state_root="aa" * 32,
+        source_event_parent_block_tx_trie_root="dd" * 32,
+    )
+
+    def fail_header_proof(_proof_input):
+        raise ValueError("secret-token solid block proof parser detail")
+
+    monkeypatch.setattr(
+        module.sccp_client,
+        "canonical_tron_solid_block_header_proof_bytes",
+        fail_header_proof,
+    )
+
+    summary = module.collect_live_evidence(
+        SimpleNamespace(
+            tron_node_url="https://tron.example",
+            source_bridge_address=fake.bridge,
+            destination_verifier_address=None,
+            caller_address=None,
+            no_getcontract=False,
+            source_event_digest=bytes.fromhex(TRON_SOURCE_EVENT_DIGEST_VECTOR),
+            source_event_transaction_id=bytes.fromhex(
+                TRON_SOURCE_EVENT_TRANSACTION_ID_VECTOR
+            ),
+            witness_schedule_payload_hex=witness_payload,
+            witness_schedule_payload_file=None,
+            expected_witness_schedule_hash=None,
+            full_toml=False,
+            timeout=1.0,
+        ),
+        opener=fake.opener,
+    )
+
+    solid_block = summary["source_event_transaction"]["solid_block"]
+    assert solid_block["solid_block_header_proof_ready"] is False
+    assert solid_block["solid_block_header_proof_blocker"] == (
+        "solid block header proof is invalid"
+    )
+    rendered = json.dumps(solid_block, sort_keys=True)
+    assert "secret-token" not in rendered
+    assert "parser detail" not in rendered
+    assert "ValueError" not in rendered
 
 
 def test_live_evidence_emits_witness_seal_hash_when_certificate_supplied():
@@ -6257,6 +6400,12 @@ def test_live_evidence_preflights_source_records_and_full_rollout_args():
         ),
         (
             lambda destination: destination.update(
+                {"destination_verifier_runtime_bytecode_hex": "0xsecret-token"}
+            ),
+            "TRON destination verifier runtime bytecode metadata is invalid",
+        ),
+        (
+            lambda destination: destination.update(
                 {"destination_verifier_runtime_bytecode_hex": "0x600260ff55"}
             ),
             "destination runtime bytecode hash does not match",
@@ -6273,6 +6422,8 @@ def test_live_evidence_preflights_source_records_and_full_rollout_args():
             module.render_offline_full_toml(tampered_summary)
         except ValueError as exc:
             assert expected_message in str(exc)
+            assert "secret-token" not in str(exc)
+            assert "must be hex" not in str(exc)
         else:
             raise AssertionError(
                 "TRON full TOML rendered without destination bytecode/hash match"

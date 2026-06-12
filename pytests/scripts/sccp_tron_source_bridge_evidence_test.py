@@ -279,6 +279,36 @@ def sample_full_toml_cli_args(*, include_route_canary=True):
     return args
 
 
+def test_tron_source_cli_redacts_top_level_exception_details(monkeypatch, capsys):
+    module = load_evidence_module()
+
+    def fail_apply(_args):
+        raise ValueError("secret-token /tmp/operator/private-path")
+
+    monkeypatch.setattr(module, "apply_runtime_bytecode_hashes", fail_apply)
+
+    try:
+        module.main(
+            [
+                "--bridge-address",
+                "0x1111111111111111111111111111111111111111",
+                "--owner-address",
+                "0x2222222222222222222222222222222222222222",
+                "--network-id",
+                "0x" + "33" * 32,
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("TRON source CLI accepted top-level render failure")
+
+    captured = capsys.readouterr()
+    assert "SCCP TRON source bridge evidence rendering failed" in captured.err
+    assert "secret-token" not in captured.err
+    assert "private-path" not in captured.err
+
+
 def sample_runtime_full_toml_args(module):
     source_runtime_bytecode = bytes.fromhex(TRON_SOURCE_RUNTIME_BYTECODE)
     destination_runtime_bytecode = bytes.fromhex(TRON_DESTINATION_RUNTIME_BYTECODE)

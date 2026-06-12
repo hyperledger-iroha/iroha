@@ -35,6 +35,52 @@ def load_evidence_module():
     return module
 
 
+def test_solana_destination_cli_redacts_top_level_exception_details(monkeypatch, capsys):
+    module = load_evidence_module()
+
+    def fail_apply(_args):
+        raise ValueError("secret-token /tmp/operator/private-path")
+
+    monkeypatch.setattr(module, "apply_verifier_program_code_hash", fail_apply)
+
+    try:
+        module.main(["--verifier-program-id", SOLANA_VERIFIER_PROGRAM_ID])
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("Solana destination CLI accepted top-level render failure")
+
+    captured = capsys.readouterr()
+    assert "SCCP Solana destination evidence rendering failed" in captured.err
+    assert "secret-token" not in captured.err
+    assert "private-path" not in captured.err
+
+
+def test_solana_destination_redacts_verifier_program_parser_failures(monkeypatch):
+    """Destination verifier program parser failures must not echo parser payloads."""
+
+    module = load_evidence_module()
+    args = solana_args(module)
+
+    def fail_program_id(_value, *, label):
+        raise module.argparse.ArgumentTypeError(
+            f"secret-token {label} parser detail"
+        )
+
+    monkeypatch.setattr(module, "normalize_solana_program_id", fail_program_id)
+    try:
+        module._require_destination_evidence(args)
+    except ValueError as exc:
+        rendered = str(exc)
+        assert rendered == "verifier_program_id metadata is invalid"
+        assert "secret-token" not in rendered
+        assert "parser detail" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("Solana destination leaked verifier parser detail")
+
+
 def noncanonical_base64_alias(raw: bytes) -> str:
     encoded = base64.b64encode(raw).decode("ascii")
     alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"

@@ -3280,7 +3280,7 @@ def _solana_audit_role_verifier_hash(
     )
 
 
-def _normalize_solana_source_state_verification_proof(
+def _normalize_source_state_verification_proof(
     input_value: Any,
     label: str,
 ) -> Dict[str, Any]:
@@ -3390,7 +3390,7 @@ def _canonical_source_state_verification_proof_bytes(proof: Mapping[str, Any]) -
 def canonical_solana_sccp_source_state_verification_proof_bytes(input_value: Any) -> bytes:
     """Return canonical bytes for a Solana source-state proof capsule."""
 
-    proof = _normalize_solana_source_state_verification_proof(
+    proof = _normalize_source_state_verification_proof(
         input_value,
         "sourceStateProof",
     )
@@ -3406,7 +3406,7 @@ def canonical_solana_sccp_source_state_verification_proof_bytes(input_value: Any
 def solana_sccp_accounts_lt_hash_proof_hash(input_value: Any) -> str:
     """Hash the completed Solana AccountsLtHash proof capsule for audit roles."""
 
-    proof = _normalize_solana_source_state_verification_proof(
+    proof = _normalize_source_state_verification_proof(
         input_value,
         "accountsLtHashProof",
     )
@@ -11116,7 +11116,7 @@ def _normalize_ton_audit_material_and_deployment(
 def ton_sccp_shard_state_verification_proof_hash(input_value: Any) -> str:
     """Hash the completed TON shard-state source proof capsule for audit roles."""
 
-    proof = _normalize_solana_source_state_verification_proof(
+    proof = _normalize_source_state_verification_proof(
         input_value,
         "shardStateVerificationProof",
     )
@@ -11147,11 +11147,15 @@ _TON_SOURCE_STATE_VERIFICATION_CIRCUIT_IDS = frozenset(
 def canonical_ton_sccp_source_state_verification_proof_bytes(input_value: Any) -> bytes:
     """Return canonical bytes for a TON source-state proof capsule."""
 
-    proof = _normalize_solana_source_state_verification_proof(
+    proof = _normalize_source_state_verification_proof(
         input_value,
         "sourceStateProof",
     )
-    if proof["circuit_id"] not in _TON_SOURCE_STATE_VERIFICATION_CIRCUIT_IDS:
+    if (
+        proof["version"] != 1
+        or proof["proof_family"] != SCCP_STARK_FRI_PROOF_FAMILY_V1
+        or proof["circuit_id"] not in _TON_SOURCE_STATE_VERIFICATION_CIRCUIT_IDS
+    ):
         raise TypeError("sourceStateProof must be a TON source-state stark-fri-v1 proof")
     return _canonical_source_state_verification_proof_bytes(proof)
 

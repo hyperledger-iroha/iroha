@@ -31,7 +31,9 @@ fn mldsa_suite_from_id(id: c_uint) -> Result<MlDsaSuite, c_int> {
 
 fn map_mldsa_error(err: &MlDsaError) -> c_int {
     match err {
-        MlDsaError::BadEncoding(_) | MlDsaError::SecretKeyMismatch { .. } => ERR_ENCODING,
+        MlDsaError::BadEncoding(_)
+        | MlDsaError::SecretKeyMismatch { .. }
+        | MlDsaError::InertKeyMaterial { .. } => ERR_ENCODING,
         MlDsaError::ContextTooLong { .. } => ERR_LENGTH_MISMATCH,
         MlDsaError::VerificationFailed(_) => ERR_VERIFICATION_FAILED,
         MlDsaError::KeyGenerationFailed { .. } | MlDsaError::Rng(_) => ERR_KEYGEN,
@@ -43,6 +45,7 @@ fn map_mlkem_error(err: &MlKemError) -> c_int {
         MlKemError::BadEncoding { .. }
         | MlKemError::KeyPairMismatch { .. }
         | MlKemError::KeyPairPublicHashMismatch { .. }
+        | MlKemError::InertKeyMaterial { .. }
         | MlKemError::NonCanonicalEncoding { .. } => ERR_ENCODING,
         MlKemError::BackendFailure { .. } | MlKemError::Rng(_) => ERR_KEYGEN,
     }
@@ -634,6 +637,30 @@ mod tests {
     }
 
     #[test]
+    fn ffi_mlkem_encapsulate_rejects_all_zero_public_key() {
+        let suite = MlKemSuite::MlKem512;
+        let suite_id = c_uint::from(suite.kem_id());
+        let params = suite.parameters();
+        let public_key = vec![0u8; params.public_key];
+        let mut ciphertext = vec![0u8; params.ciphertext];
+        let mut shared_secret = vec![0u8; params.shared_secret];
+
+        let rc = unsafe {
+            soranet_mlkem_encapsulate(
+                suite_id,
+                public_key.as_ptr(),
+                public_key.len() as c_ulong,
+                ciphertext.as_mut_ptr(),
+                ciphertext.len() as c_ulong,
+                shared_secret.as_mut_ptr(),
+                shared_secret.len() as c_ulong,
+            )
+        };
+
+        assert_eq!(rc, ERR_ENCODING);
+    }
+
+    #[test]
     fn ffi_mlkem_decapsulate_rejects_noncanonical_secret_key_private_component() {
         let suite = MlKemSuite::MlKem768;
         let suite_id = c_uint::from(suite.kem_id());
@@ -641,6 +668,31 @@ mod tests {
         let (public_key, mut secret_key) = ffi_mlkem_keypair(suite);
         let (ciphertext, _) = ffi_mlkem_encapsulate(suite, &public_key);
         set_first_mlkem_12_bit_coefficient_noncanonical(&mut secret_key);
+        let mut shared_secret = vec![0u8; params.shared_secret];
+
+        let rc = unsafe {
+            soranet_mlkem_decapsulate(
+                suite_id,
+                secret_key.as_ptr(),
+                secret_key.len() as c_ulong,
+                ciphertext.as_ptr(),
+                ciphertext.len() as c_ulong,
+                shared_secret.as_mut_ptr(),
+                shared_secret.len() as c_ulong,
+            )
+        };
+
+        assert_eq!(rc, ERR_ENCODING);
+    }
+
+    #[test]
+    fn ffi_mlkem_decapsulate_rejects_all_zero_secret_key() {
+        let suite = MlKemSuite::MlKem512;
+        let suite_id = c_uint::from(suite.kem_id());
+        let params = suite.parameters();
+        let (public_key, _) = ffi_mlkem_keypair(suite);
+        let (ciphertext, _) = ffi_mlkem_encapsulate(suite, &public_key);
+        let secret_key = vec![0u8; params.secret_key];
         let mut shared_secret = vec![0u8; params.shared_secret];
 
         let rc = unsafe {
@@ -1168,6 +1220,27 @@ mod tests {
     }
 
     #[test]
+    fn ffi_mldsa_sign_rejects_all_zero_secret_key() {
+        let suite = MlDsaSuite::MlDsa44;
+        let secret_key = vec![0u8; suite.secret_key_len()];
+        let mut signature = vec![0u8; suite.signature_len()];
+        let message = b"inert secret";
+
+        let rc = unsafe {
+            soranet_mldsa_sign(
+                c_uint::from(suite.suite_id()),
+                secret_key.as_ptr(),
+                secret_key.len() as c_ulong,
+                message.as_ptr(),
+                message.len() as c_ulong,
+                signature.as_mut_ptr(),
+                signature.len() as c_ulong,
+            )
+        };
+        assert_eq!(rc, ERR_ENCODING);
+    }
+
+    #[test]
     fn ffi_mldsa_verify_rejects_null_public_key_and_signature() {
         let suite = MlDsaSuite::MlDsa44;
         let suite_id = c_uint::from(suite.suite_id());
@@ -1329,6 +1402,55 @@ mod tests {
     }
 
     #[test]
+    fn ffi_mldsa_verify_rejects_all_zero_public_key_and_signature() {
+        let suite = MlDsaSuite::MlDsa44;
+        let suite_id = c_uint::from(suite.suite_id());
+        let (public_key, secret_key) = ffi_mldsa_keypair(suite);
+        let message = b"inert verify material";
+        let mut signature = vec![0u8; suite.signature_len()];
+        let rc = unsafe {
+            soranet_mldsa_sign(
+                suite_id,
+                secret_key.as_ptr(),
+                secret_key.len() as c_ulong,
+                message.as_ptr(),
+                message.len() as c_ulong,
+                signature.as_mut_ptr(),
+                signature.len() as c_ulong,
+            )
+        };
+        assert_eq!(rc, 0);
+
+        let public_key_zero = vec![0u8; suite.public_key_len()];
+        let rc = unsafe {
+            soranet_mldsa_verify(
+                suite_id,
+                public_key_zero.as_ptr(),
+                public_key_zero.len() as c_ulong,
+                message.as_ptr(),
+                message.len() as c_ulong,
+                signature.as_ptr(),
+                signature.len() as c_ulong,
+            )
+        };
+        assert_eq!(rc, ERR_ENCODING);
+
+        let signature_zero = vec![0u8; suite.signature_len()];
+        let rc = unsafe {
+            soranet_mldsa_verify(
+                suite_id,
+                public_key.as_ptr(),
+                public_key.len() as c_ulong,
+                message.as_ptr(),
+                message.len() as c_ulong,
+                signature_zero.as_ptr(),
+                signature_zero.len() as c_ulong,
+            )
+        };
+        assert_eq!(rc, ERR_ENCODING);
+    }
+
+    #[test]
     fn ffi_mldsa_verify_rejects_tampered_signature() {
         let suite = MlDsaSuite::MlDsa44;
         let suite_id = c_uint::from(suite.suite_id());
@@ -1393,6 +1515,12 @@ mod tests {
             kind: "test",
         };
         assert_eq!(map_mldsa_error(&secret_mismatch), ERR_ENCODING);
+
+        let inert = MlDsaError::InertKeyMaterial {
+            suite: MlDsaSuite::MlDsa44,
+            kind: "test",
+        };
+        assert_eq!(map_mldsa_error(&inert), ERR_ENCODING);
 
         let keygen = MlDsaError::KeyGenerationFailed {
             suite: MlDsaSuite::MlDsa44,

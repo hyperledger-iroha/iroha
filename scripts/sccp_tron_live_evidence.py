@@ -322,20 +322,11 @@ def _tron_pro_api_key_token(value: Any, *, label: str) -> str:
     return value
 
 
-def _tron_api_error_detail(exc: urllib.error.HTTPError) -> str:
-    raw = exc.read(TRON_API_MAX_ERROR_BYTES + 1)
-    truncated = len(raw) > TRON_API_MAX_ERROR_BYTES
-    detail = raw[:TRON_API_MAX_ERROR_BYTES].decode("utf-8", "replace")
-    if truncated:
-        detail += "... [truncated]"
-    return detail
-
-
 def _json_object_without_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for key, value in pairs:
         if key in out:
-            raise ValueError(f"duplicate JSON key {key!r}")
+            raise ValueError("duplicate JSON keys")
         out[key] = value
     return out
 
@@ -368,10 +359,9 @@ def _post_json(
         with opener(request, timeout=timeout) as response:
             raw = response.read(TRON_API_MAX_RESPONSE_BYTES + 1)
     except urllib.error.HTTPError as exc:
-        detail = _tron_api_error_detail(exc)
-        raise RuntimeError(f"TRON API {endpoint} failed with HTTP {exc.code}: {detail}") from exc
+        raise RuntimeError(f"TRON API {endpoint} failed with HTTP {exc.code}") from exc
     except urllib.error.URLError as exc:
-        raise RuntimeError(f"TRON API {endpoint} request failed: {exc.reason}") from exc
+        raise RuntimeError(f"TRON API {endpoint} request failed") from exc
     if len(raw) > TRON_API_MAX_RESPONSE_BYTES:
         raise RuntimeError(
             f"TRON API {endpoint} response exceeds "
@@ -382,10 +372,16 @@ def _post_json(
             raw.decode("utf-8"),
             object_pairs_hook=_json_object_without_duplicate_keys,
         )
-    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise RuntimeError(f"TRON API {endpoint} returned invalid JSON") from exc
+    except ValueError as exc:
+        if str(exc) == "duplicate JSON keys":
+            raise RuntimeError(f"TRON API {endpoint} returned duplicate JSON keys") from None
+        raise RuntimeError(f"TRON API {endpoint} returned invalid JSON") from None
     if not isinstance(decoded, dict):
         raise RuntimeError(f"TRON API {endpoint} returned a non-object response")
+    if decoded.get("Error") is not None or decoded.get("error") is not None:
+        raise RuntimeError(f"TRON API {endpoint} returned error response")
     return decoded
 
 
@@ -1851,10 +1847,10 @@ def _source_event_solid_block_header_proof_summary(
             proof_input
         )
         proof_hash = sccp_client.tron_solid_block_header_proof_hash(proof_input)
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError):
         return {
             "solid_block_header_proof_ready": False,
-            "solid_block_header_proof_blocker": str(exc),
+            "solid_block_header_proof_blocker": "solid block header proof is invalid",
         }
     return {
         "solid_block_header_proof_ready": True,
@@ -5847,8 +5843,8 @@ def _destination_bytecode_metadata_error(destination: dict[str, Any]) -> str | N
             destination_bytecode,
             label="destination verifier runtime bytecode",
         )
-    except argparse.ArgumentTypeError as exc:
-        return f"TRON destination verifier runtime bytecode metadata is invalid: {exc}"
+    except argparse.ArgumentTypeError:
+        return "TRON destination verifier runtime bytecode metadata is invalid"
     recomputed_hash = _hex(evidence.runtime_bytecode_hash(runtime))
     if recomputed_hash != destination_code_hash:
         return (
@@ -6255,7 +6251,7 @@ def _runtime_witness_schedule_transitions(
         except ValueError as exc:
             raise ValueError(
                 f"--witness-schedule-transition-json {index} must not contain "
-                f"duplicate JSON keys: {exc}"
+                "duplicate JSON keys"
             ) from exc
         if not isinstance(parsed, dict):
             raise ValueError(
@@ -7204,6 +7200,39 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+SENSITIVE_CLI_ERROR_MARKERS = (
+    "secret-token",
+    "private-key",
+    "private_key",
+    "password",
+    "passphrase",
+    "bearer ",
+    "authorization",
+    "access-key",
+    "access_key",
+    "api-key",
+    "api_key",
+    "client-secret",
+    "client_secret",
+    "session=",
+    "token=",
+)
+
+
+def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
+    if isinstance(exc, OSError):
+        return fallback
+    text = str(exc)
+    if not text:
+        return fallback
+    lowered = text.lower()
+    if any(marker in lowered for marker in SENSITIVE_CLI_ERROR_MARKERS):
+        return fallback
+    if any((ord(ch) < 0x20 and ch not in "\n\t") or ord(ch) == 0x7F for ch in text):
+        return fallback
+    return text
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -7217,8 +7246,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.full_toml:
             sys.stdout.write(render_offline_full_toml(summary))
             return 0
-    except (RuntimeError, ValueError, argparse.ArgumentTypeError) as exc:
-        parser.error(str(exc))
+    except (OSError, RuntimeError, ValueError, argparse.ArgumentTypeError) as exc:
+        detail = _cli_error_detail(
+            exc,
+            fallback="SCCP TRON live evidence collection failed",
+        )
+        parser.exit(2, f"{parser.prog}: error: {detail}\n")
     print(json.dumps(summary, indent=2, sort_keys=True))
     return 0
 

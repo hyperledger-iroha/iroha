@@ -3972,56 +3972,27 @@ public final class EvmSccpProverTests {
     }
     assert threw : "Ethereum inbound collection must reject non-mainnet RPC";
 
-    threw = false;
-    try {
-      new EthereumMainnetSccp(null, null, (method, params) -> "1", null, null)
-          .collectInboundEvidenceFromReceipt(
-              new EthereumMainnetSccp.InboundEvidence(
-                  EvmSccpProver.DOMAIN_ETH,
-                  EvmSccpProver.DOMAIN_SORA,
-                  null,
-                  receipt,
-                  null,
-                  null,
-                  null));
-    } catch (final IllegalArgumentException ex) {
-      threw = ex.getMessage().contains("canonical JSON-RPC quantity");
+    final Object[] noncanonicalChainIds =
+        new Object[] {"1", "0x01", "0X1", " 0x1", "0x1 ", Long.valueOf(1L)};
+    for (final Object chainId : noncanonicalChainIds) {
+      threw = false;
+      try {
+        new EthereumMainnetSccp(null, null, (method, params) -> chainId, null, null)
+            .collectInboundEvidenceFromReceipt(
+                new EthereumMainnetSccp.InboundEvidence(
+                    EvmSccpProver.DOMAIN_ETH,
+                    EvmSccpProver.DOMAIN_SORA,
+                    null,
+                    receipt,
+                    null,
+                    null,
+                    null));
+      } catch (final IllegalArgumentException ex) {
+        threw = ex.getMessage().contains("canonical JSON-RPC quantity");
+      }
+      assert threw
+          : "Ethereum inbound collection must reject noncanonical eth_chainId RPC " + chainId;
     }
-    assert threw : "Ethereum inbound collection must reject decimal eth_chainId RPC";
-
-    threw = false;
-    try {
-      new EthereumMainnetSccp(null, null, (method, params) -> "0x01", null, null)
-          .collectInboundEvidenceFromReceipt(
-              new EthereumMainnetSccp.InboundEvidence(
-                  EvmSccpProver.DOMAIN_ETH,
-                  EvmSccpProver.DOMAIN_SORA,
-                  null,
-                  receipt,
-                  null,
-                  null,
-                  null));
-    } catch (final IllegalArgumentException ex) {
-      threw = ex.getMessage().contains("canonical JSON-RPC quantity");
-    }
-    assert threw : "Ethereum inbound collection must reject leading-zero eth_chainId RPC";
-
-    threw = false;
-    try {
-      new EthereumMainnetSccp(null, null, (method, params) -> Long.valueOf(1L), null, null)
-          .collectInboundEvidenceFromReceipt(
-              new EthereumMainnetSccp.InboundEvidence(
-                  EvmSccpProver.DOMAIN_ETH,
-                  EvmSccpProver.DOMAIN_SORA,
-                  null,
-                  receipt,
-                  null,
-                  null,
-                  null));
-    } catch (final IllegalArgumentException ex) {
-      threw = ex.getMessage().contains("canonical JSON-RPC quantity");
-    }
-    assert threw : "Ethereum inbound collection must reject numeric eth_chainId RPC";
 
     threw = false;
     try {
