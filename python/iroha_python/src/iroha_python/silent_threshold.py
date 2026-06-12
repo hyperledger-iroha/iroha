@@ -20,6 +20,7 @@ from .verange import (
     _reject_unknown_fields,
     _require_mapping,
     _require_non_blank_string,
+    _require_plain_mapping,
     build_privacy_proof_envelope,
     decode_privacy_proof_envelope,
 )
@@ -466,7 +467,7 @@ def build_silent_threshold_credential_commitments(
 ) -> dict[str, Any]:
     """Normalize silent-threshold credential public-input commitments."""
 
-    source = _require_mapping(options, "silentThresholdCredentialCommitments")
+    source = _require_plain_mapping(options, "silentThresholdCredentialCommitments")
     _reject_unknown_fields(
         source,
         _COMMON_FIELDS,
@@ -699,7 +700,7 @@ _ENVELOPE_FIELDS = {
 def build_silent_threshold_credential_envelope(options: Mapping[str, Any]) -> bytes:
     """Build canonical OpenVerifyEnvelope bytes for a prepared silent-threshold proof."""
 
-    source = _require_mapping(options, "silentThresholdCredentialEnvelope")
+    source = _require_plain_mapping(options, "silentThresholdCredentialEnvelope")
     _reject_unknown_fields(source, _ENVELOPE_FIELDS, "silentThresholdCredentialEnvelope")
     parts = _proof_parts(
         source,
@@ -725,7 +726,7 @@ def build_silent_threshold_credential_showing_proof_v0(
 ) -> bytes:
     """Build canonical production silent-threshold credential showing proof bytes."""
 
-    source = _require_mapping(options, "silentThresholdCredentialShowingProofV0")
+    source = _require_plain_mapping(options, "silentThresholdCredentialShowingProofV0")
     _reject_unknown_fields(source, _ENVELOPE_FIELDS, "silentThresholdCredentialShowingProofV0")
     parts = _proof_parts(
         source,
@@ -772,7 +773,7 @@ def build_silent_threshold_credential_dev_proof_fixture(
 ) -> dict[str, Any]:
     """Build a deterministic silent-threshold dev proof fixture."""
 
-    source = _require_mapping(options, "silentThresholdCredentialDevProofFixture")
+    source = _require_plain_mapping(options, "silentThresholdCredentialDevProofFixture")
     _reject_unknown_fields(
         source,
         _ENVELOPE_FIELDS - {"proofBytes", "proof_bytes", "proof"},
@@ -964,7 +965,10 @@ def verify_silent_threshold_credential_proof_locally(options: Any) -> dict[str, 
     """Verify a deterministic silent-threshold dev fixture."""
 
     if isinstance(options, Mapping):
-        source = options
+        source = _require_plain_mapping(
+            options,
+            "silentThresholdCredentialLocalVerification",
+        )
     else:
         source = {"envelope": options}
     _reject_unknown_fields(
@@ -1032,7 +1036,10 @@ def verify_silent_threshold_credential_showing_proof_v0(
     """Validate a production silent-threshold credential showing proof envelope."""
 
     if isinstance(options, Mapping):
-        source = options
+        source = _require_plain_mapping(
+            options,
+            "silentThresholdCredentialShowingProofV0",
+        )
     else:
         source = {"envelope": options}
     _reject_unknown_fields(

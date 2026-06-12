@@ -865,7 +865,11 @@ private enum CurveId: UInt8 {
     }
 
     static func from(algorithm: String) throws -> CurveId {
-        let normalized = algorithm.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let trimmed = algorithm.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed == algorithm else {
+            throw AccountAddressError.unsupportedAlgorithm(algorithm)
+        }
+        let normalized = algorithm.lowercased()
         guard normalized.allSatisfy({ scalar in
             guard let ascii = scalar.asciiValue else { return false }
             return ascii >= 0x20 && ascii <= 0x7E

@@ -281,7 +281,11 @@ Verifier behavior (native STARK)
   bytes with zero-duration failures.
 - Runtime OpenVerify guardrails also reject `ProofBox.backend`,
   `VerifyingKeyBox.backend`, or decoded envelope backend tags that do not match
-  the selected production verifier family before dispatch.
+  the selected production verifier family before dispatch. Halo2-family
+  guardrails additionally bind decoded `OpenVerifyEnvelope.circuit_id` values to
+  the requested backend label: concrete native Halo2 labels must normalize to the
+  same circuit, and the generic `halo2/ipa` envelope entry point rejects
+  cross-family circuit ids before verifier dispatch.
 - Generic STARK `OpenVerifyEnvelope` construction and verification reserve the
   ZK-ACE and BFV full-bootstrap circuit ids for their dedicated wrappers. BFV
   full-bootstrap native AIR proofs must use the BFV-specific verifier path so

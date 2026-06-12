@@ -129,7 +129,17 @@ public sealed class AccountAddress
 
     public static AccountAddress FromPublicKey(ReadOnlySpan<byte> publicKey, string algorithm = "ed25519")
     {
-        var normalizedAlgorithm = algorithm.Trim();
+        if (string.IsNullOrWhiteSpace(algorithm))
+        {
+            throw NewError(AccountAddressErrorCode.UnsupportedAlgorithm, "signing algorithm must be a non-empty string");
+        }
+
+        if (algorithm.Trim() != algorithm)
+        {
+            throw NewError(AccountAddressErrorCode.UnsupportedAlgorithm, "signing algorithm must not contain surrounding whitespace");
+        }
+
+        var normalizedAlgorithm = algorithm;
         if (!IsPrintableAscii(normalizedAlgorithm) || !CurveAliases.TryGetValue(normalizedAlgorithm, out var curveId))
         {
             throw NewError(AccountAddressErrorCode.UnsupportedAlgorithm, $"unsupported signing algorithm: {algorithm}");

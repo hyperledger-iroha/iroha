@@ -1,6 +1,6 @@
 import Foundation
 
-public enum ConnectCodecError: Error, LocalizedError, Sendable {
+public enum ConnectCodecError: Error, LocalizedError, Sendable, Equatable {
     case bridgeUnavailable
     case encodeFailed
     case decodeFailed
@@ -143,11 +143,11 @@ extension ConnectCodec {
         for key in object.keys where !allowedKeys.contains(key) {
             throw ConnectCodecError.decodeFailed
         }
-        let domain = try decodeOptionalString(object["domain"])
-        let uri = try decodeOptionalString(object["uri"])
-        let statement = try decodeOptionalString(object["statement"])
-        let issuedAt = try decodeOptionalString(object["issued_at"])
-        let nonce = try decodeOptionalString(object["nonce"])
+        let domain = try decodeOptionalExactProofString(object["domain"])
+        let uri = try decodeOptionalExactProofString(object["uri"])
+        let statement = try decodeOptionalExactProofString(object["statement"])
+        let issuedAt = try decodeOptionalExactProofString(object["issued_at"])
+        let nonce = try decodeOptionalExactProofString(object["nonce"])
         guard domain != nil || uri != nil || statement != nil || issuedAt != nil || nonce != nil else { return nil }
         return ConnectSignInProof(domain: domain,
                                   uri: uri,
@@ -171,6 +171,17 @@ extension ConnectCodec {
         guard let value else { return nil }
         if value is NSNull { return nil }
         return try decodeStringArray(value)
+    }
+
+    private static func decodeOptionalExactProofString(_ value: Any?) throws -> String? {
+        guard let value else { return nil }
+        if value is NSNull { return nil }
+        guard let raw = value as? String else { throw ConnectCodecError.decodeFailed }
+        guard !raw.isEmpty,
+              raw.trimmingCharacters(in: .whitespacesAndNewlines) == raw else {
+            throw ConnectCodecError.decodeFailed
+        }
+        return raw
     }
 
     private static func decodeOptionalString(_ value: Any?) throws -> String? {

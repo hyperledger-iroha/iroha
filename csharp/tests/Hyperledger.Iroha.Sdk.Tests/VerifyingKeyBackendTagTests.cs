@@ -297,7 +297,13 @@ public sealed class VerifyingKeyBackendTagTests
     public void ProductionVerifierBackendClassifierRejectsUnsafeLabels(string backend)
     {
         Assert.False(VerifyingKeyBackendTags.IsProductionVerifyBackendLabel(backend));
-        Assert.Throws<ArgumentException>(
+        var error = Assert.Throws<ArgumentException>(
             () => VerifyingKeyBackendTags.RequireProductionVerifyBackendLabel(backend));
+        var expected = backend.Trim().Length == 0
+            ? "must not be blank"
+            : backend.Trim() == backend
+                ? "unsupported production verifier backend"
+                : "surrounding whitespace";
+        Assert.Contains(expected, error.Message);
     }
 }

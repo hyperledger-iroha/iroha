@@ -220,6 +220,72 @@ def test_sis_hints_package_root_exports_catalog_entrypoint_aliases() -> None:
     assert verified["parameter_hash"] == commitments["parameter_hash"].hex()
 
 
+def test_sis_hints_public_helpers_reject_non_plain_mapping_inputs() -> None:
+    class SisHintsDict(dict):
+        pass
+
+    base = _base()
+    proof_options = {
+        **base,
+        "vkHash": bytes([0xBB]) * 32,
+        "proofBytes": b"production-sis-hints-proof",
+    }
+
+    for helper in (
+        build_sis_hints_credential_commitments,
+        buildSisHintsCredentialCommitments,
+    ):
+        with pytest.raises(TypeError, match="sisHintsCredentialCommitments"):
+            helper(SisHintsDict(base))
+
+    for helper in (
+        build_sis_hints_credential_envelope,
+        buildSisHintsCredentialEnvelope,
+    ):
+        with pytest.raises(TypeError, match="sisHintsCredentialEnvelope"):
+            helper(SisHintsDict(proof_options))
+
+    for helper in (
+        build_sis_hints_anonymous_credential_proof_v0,
+        buildSisHintsAnonymousCredentialProofV0,
+    ):
+        with pytest.raises(TypeError, match="sisHintsAnonymousCredentialProofV0"):
+            helper(SisHintsDict(proof_options))
+
+    for helper in (
+        build_sis_hints_credential_dev_proof_fixture,
+        buildSisHintsCredentialDevProofFixture,
+    ):
+        with pytest.raises(TypeError, match="sisHintsCredentialDevProofFixture"):
+            helper(SisHintsDict({**base, "vkHash": bytes([0xBB]) * 32}))
+
+    production_proof = build_sis_hints_anonymous_credential_proof_v0(proof_options)
+    raw_verified = verify_sis_hints_anonymous_credential_proof_v0(production_proof)
+    assert raw_verified["ok"] is True
+
+    verify_options = {"envelope": production_proof, **base}
+    for helper in (
+        verify_sis_hints_anonymous_credential_proof_v0,
+        verifySisHintsAnonymousCredentialProofV0,
+    ):
+        with pytest.raises(TypeError, match="sisHintsAnonymousCredentialProofV0"):
+            helper(SisHintsDict(verify_options))
+
+    fixture = build_sis_hints_credential_dev_proof_fixture(
+        {**base, "vkHash": bytes([0xBB]) * 32}
+    )
+    local_verified = verify_sis_hints_credential_proof_locally(fixture["envelope"])
+    assert local_verified["ok"] is True
+
+    local_options = {**verify_options, "envelope": fixture["envelope"]}
+    for helper in (
+        verify_sis_hints_credential_proof_locally,
+        verifySisHintsCredentialProofLocally,
+    ):
+        with pytest.raises(TypeError, match="sisHintsCredentialLocalVerification"):
+            helper(SisHintsDict(local_options))
+
+
 @pytest.mark.parametrize(
     "input_value",
     [

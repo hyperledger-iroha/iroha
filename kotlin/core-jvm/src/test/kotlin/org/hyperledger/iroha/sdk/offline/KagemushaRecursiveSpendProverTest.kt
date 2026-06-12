@@ -180,6 +180,14 @@ class KagemushaRecursiveSpendProverTest {
                 "unknown-kagemusha-recursive-spend-circuit",
             ),
         )
+        val whitespaceLineageOutputCircuitId =
+            " ${KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1} "
+        assertEquals(
+            whitespaceLineageOutputCircuitId,
+            KagemushaRecursiveSpendProver.normalizeAppendOutputCircuitId(
+                whitespaceLineageOutputCircuitId,
+            ),
+        )
         assertTrue(KagemushaRecursiveSpendProver.isSupportedAppendOutputCircuitId(null))
         assertTrue(KagemushaRecursiveSpendProver.isSupportedAppendOutputCircuitId(""))
         assertTrue(
@@ -256,6 +264,11 @@ class KagemushaRecursiveSpendProverTest {
                 "unknown-kagemusha-recursive-spend-circuit",
             ),
         )
+        assertFalse(
+            KagemushaRecursiveSpendProver.isSupportedAppendOutputCircuitId(
+                whitespaceLineageOutputCircuitId,
+            ),
+        )
         assertTrue(
             KagemushaRecursiveSpendProver.isSupportedPreviousProofCircuitId(
                 KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
@@ -279,6 +292,11 @@ class KagemushaRecursiveSpendProverTest {
         assertFalse(
             KagemushaRecursiveSpendProver.isSupportedPreviousProofCircuitId(
                 "unknown-kagemusha-recursive-spend-circuit",
+            ),
+        )
+        assertFalse(
+            KagemushaRecursiveSpendProver.isSupportedPreviousProofCircuitId(
+                whitespaceLineageOutputCircuitId,
             ),
         )
         assertFalse(
@@ -426,6 +444,12 @@ class KagemushaRecursiveSpendProverTest {
                 1,
             ),
         )
+        assertFalse(
+            KagemushaRecursiveSpendProver.canProveAppendOutputCircuitId(
+                whitespaceLineageOutputCircuitId,
+                1,
+            ),
+        )
         assertTrue(
             KagemushaRecursiveSpendProver.canSelectAppendOutputCircuitId(
                 KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
@@ -473,6 +497,20 @@ class KagemushaRecursiveSpendProverTest {
             KagemushaRecursiveSpendProver.canSelectAppendOutputCircuitId(
                 KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
                 "unknown-kagemusha-recursive-spend-circuit",
+                1,
+            ),
+        )
+        assertFalse(
+            KagemushaRecursiveSpendProver.canSelectAppendOutputCircuitId(
+                KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+                whitespaceLineageOutputCircuitId,
+                1,
+            ),
+        )
+        assertFalse(
+            KagemushaRecursiveSpendProver.canSelectAppendOutputCircuitId(
+                whitespaceLineageOutputCircuitId,
+                KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
                 1,
             ),
         )
@@ -1356,17 +1394,19 @@ class KagemushaRecursiveSpendProverTest {
                 )
             }.message,
         )
-        assertEquals(
-            "lineage_verifier_key",
-            assertFailsWith<IllegalArgumentException> {
-                KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
-                    2,
-                    "halo2/kzg",
-                    ByteArray(64) { 0xE7.toByte() },
-                    ByteArray(64) { 0xE8.toByte() },
-                )
-            }.message,
-        )
+        for (backend in listOf("halo2/kzg", " halo2/ipa", "halo2/ipa ", "HALO2/IPA")) {
+            assertEquals(
+                "lineage_verifier_key",
+                assertFailsWith<IllegalArgumentException> {
+                    KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
+                        2,
+                        backend,
+                        ByteArray(64) { 0xE7.toByte() },
+                        ByteArray(64) { 0xE8.toByte() },
+                    )
+                }.message,
+            )
+        }
         assertEquals(
             "lineage_verifier_key",
             assertFailsWith<IllegalArgumentException> {

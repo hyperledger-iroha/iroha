@@ -4,6 +4,15 @@ import java.util.Arrays;
 import org.junit.Test;
 
 public final class AccountIdLiteralTests {
+  public static void main(final String[] args) throws Exception {
+    final AccountIdLiteralTests tests = new AccountIdLiteralTests();
+    tests.acceptsCanonicalI105Literal();
+    tests.rejectsSurroundingWhitespaceBeforeValidation();
+    tests.rejectsDomainSuffixedLiterals();
+    tests.rejectsMalformedAndHexLiterals();
+    tests.rejectsBlankAccountId();
+    System.out.println("[IrohaAndroid] Account ID literal tests passed.");
+  }
 
   @Test
   public void acceptsCanonicalI105Literal() throws Exception {
@@ -13,11 +22,24 @@ public final class AccountIdLiteralTests {
   }
 
   @Test
-  public void trimsWhitespaceBeforeValidation() throws Exception {
+  public void rejectsSurroundingWhitespaceBeforeValidation() throws Exception {
     final String address = sampleI105(0x22);
-    final String normalized =
-        AccountIdLiteral.requireCanonicalI105Address("  " + address + "  ", "accountId");
-    assert address.equals(normalized) : "validation must trim surrounding whitespace";
+    final String[] paddedInputs = {
+        " " + address,
+        address + " ",
+        "\t" + address,
+        address + "\n",
+        " \t" + address + "\n "
+    };
+    for (final String input : paddedInputs) {
+      try {
+        AccountIdLiteral.requireCanonicalI105Address(input, "accountId");
+        throw new AssertionError("expected surrounding whitespace to be rejected");
+      } catch (final IllegalArgumentException expected) {
+        assert expected.getMessage().contains("surrounding whitespace")
+            : "expected surrounding whitespace rejection";
+      }
+    }
   }
 
   @Test

@@ -218,6 +218,95 @@ def test_anonymous_pgc_production_helpers_reject_dev_fixture_bytes() -> None:
         )
 
 
+def test_anonymous_pgc_public_helpers_reject_non_plain_mapping_inputs() -> None:
+    class AnonymousPgcDict(dict):
+        pass
+
+    account_options: dict[str, object] = {
+        "accountCommitment": bytes([0x21]) * 32,
+        "anonymitySetRoot": bytes([0x41]) * 32,
+        "chainId": "boi-localnet",
+        "domainSeparator": "boi:anonymous-pgc:v1",
+    }
+    proof_options = {**_base_fixture(), "proofBytes": b"external-anonymous-pgc-proof-v1"}
+
+    with pytest.raises(TypeError, match="anonymousPgcReceiverSet"):
+        build_anonymous_pgc_receiver_set(AnonymousPgcDict(_base_receiver_set()))
+    with pytest.raises(TypeError, match=r"anonymousPgcReceiverSet\.receivers\[1\]"):
+        build_anonymous_pgc_receiver_set(
+            {
+                "threshold": 1,
+                "receivers": [_receiver_a(), AnonymousPgcDict(_receiver_b())],
+            }
+        )
+    with pytest.raises(TypeError, match="anonymousPgcDevProofFixture"):
+        build_anonymous_pgc_dev_proof_fixture(AnonymousPgcDict(_base_fixture()))
+    with pytest.raises(TypeError, match=r"anonymousPgcDevProofFixture\.receiverSet"):
+        build_anonymous_pgc_dev_proof_fixture(
+            {
+                **_base_fixture(),
+                "receiverSet": AnonymousPgcDict(
+                    build_anonymous_pgc_receiver_set(_base_receiver_set())
+                ),
+            }
+        )
+    with pytest.raises(TypeError, match=r"anonymousPgcKOutOfNProofV1\.balanceCommitments\[0\]"):
+        build_anonymous_pgc_k_out_of_n_proof_v1(
+            {
+                **proof_options,
+                "balanceCommitments": [
+                    AnonymousPgcDict({"commitment": bytes([0x51]) * 32}),
+                ],
+            }
+        )
+
+    for helper in (
+        build_anonymous_pgc_k_out_of_n_proof_v1,
+        buildAnonymousPgcKOutOfNProofV1,
+    ):
+        with pytest.raises(TypeError, match="anonymousPgcKOutOfNProofV1"):
+            helper(AnonymousPgcDict(proof_options))
+
+    for helper in (
+        build_anonymous_pgc_account_commitment_instruction,
+        buildAnonymousPgcAccountCommitmentInstruction,
+    ):
+        with pytest.raises(TypeError, match="anonymousPgcAccountCommitmentInstruction"):
+            helper(AnonymousPgcDict(account_options))
+
+    envelope = build_anonymous_pgc_k_out_of_n_proof_v1(proof_options)
+    raw_verified = verify_anonymous_pgc_k_out_of_n_proof_v1(envelope)
+    assert raw_verified["ok"] is True
+    transfer_options = _production_transfer_input(envelope)
+    for helper in (
+        verify_anonymous_pgc_k_out_of_n_proof_v1,
+        verifyAnonymousPgcKOutOfNProofV1,
+    ):
+        with pytest.raises(TypeError, match="anonymousPgcKOutOfNProofV1Verification"):
+            helper(AnonymousPgcDict(transfer_options))
+
+    for helper in (
+        build_anonymous_pgc_transfer_instruction,
+        buildAnonymousPgcTransferInstruction,
+    ):
+        with pytest.raises(TypeError, match="anonymousPgcTransferInstruction"):
+            helper(AnonymousPgcDict(transfer_options))
+
+    fixture = build_anonymous_pgc_dev_proof_fixture(_base_fixture())
+    local_verified = verify_anonymous_pgc_dev_proof_locally(fixture["envelope"])
+    assert local_verified["ok"] is True
+    local_options = {
+        **transfer_options,
+        "envelope": fixture["envelope"],
+    }
+    for helper in (
+        verify_anonymous_pgc_dev_proof_locally,
+        verifyAnonymousPgcDevProofLocally,
+    ):
+        with pytest.raises(TypeError, match="anonymousPgcDevProofLocalVerification"):
+            helper(AnonymousPgcDict(local_options))
+
+
 def test_anonymous_pgc_package_root_exports_catalog_entrypoint_aliases() -> None:
     receiver_set = buildAnonymousPgcReceiverSet(_base_receiver_set())
     fixture = buildAnonymousPgcDevProofFixture({**_base_fixture(), "receiverSet": receiver_set})

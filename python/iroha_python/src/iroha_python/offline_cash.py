@@ -51,7 +51,7 @@ class OfflineCashConfigurationSnapshot:
                 "offline_payments_disabled",
                 "Offline cash is disabled in the cached configuration snapshot.",
             )
-        if not (self.issuer_public_key_base64 or "").strip():
+        if not _is_canonical_offline_cash_snapshot_text(self.issuer_public_key_base64):
             raise OfflineCashConfigurationSnapshotError(
                 "missing_issuer_public_key",
                 "Offline cash requires a cached issuer public key before offline exchange.",
@@ -69,6 +69,10 @@ class OfflineCashConfigurationSnapshot:
                 "unsupported_native_bridge_abi",
                 f"Offline cash requires native bridge ABI {required_native_bridge_abi_version}.",
             )
+
+
+def _is_canonical_offline_cash_snapshot_text(value: Optional[str]) -> bool:
+    return value is not None and value != "" and all(0x20 < ord(ch) <= 0x7E for ch in value)
 
 
 @dataclass(frozen=True)

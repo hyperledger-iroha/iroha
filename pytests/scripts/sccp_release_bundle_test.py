@@ -30749,13 +30749,44 @@ def test_release_bundle_verifier_guards_sccp_release_artifact_path_text_inventor
         for path, markers in verifier.SCCP_RELEASE_ARTIFACT_PATH_TEXT_MARKERS
         if path == "pytests/scripts/sccp_release_bundle_test.py"
     )
-    native_percent_marker = (
-        "test_release_bundle_verifier_rejects_native_evm_prover_percent_encoded_path"
-    )
+    removed_bundle_markers = {
+        "test_release_bundle_verifier_rejects_missing_release_artifact_path_text_inventory_gate",
+        "test_release_bundle_rejects_markdown_unsafe_evidence_input_before_copy",
+        "test_release_bundle_rejects_padded_evidence_input_filename_before_copy",
+        "test_release_bundle_rejects_encoded_traversal_evidence_filename_before_copy",
+        "test_release_bundle_rejects_markdown_unsafe_phase_evidence_before_copy",
+        "test_release_bundle_rejects_padded_phase_evidence_filename_before_copy",
+        "test_release_bundle_rejects_encoded_traversal_phase_evidence_filename_before_copy",
+        "test_release_bundle_rejects_markdown_unsafe_native_evm_payload_before_copy",
+        "test_release_bundle_rejects_control_character_native_evm_payload_before_copy",
+        "test_release_bundle_rejects_padded_native_evm_manifest_filename_before_copy",
+        "test_release_bundle_rejects_encoded_traversal_native_evm_manifest_filename_before_copy",
+        "test_release_bundle_rejects_padded_native_evm_payload_filename_before_copy",
+        "test_release_bundle_rejects_encoded_traversal_native_evm_payload_filename_before_copy",
+        "test_release_bundle_rejects_markdown_unsafe_artifact_paths",
+        "test_release_bundle_rejects_padded_artifact_paths",
+        "test_release_bundle_rejects_symlinked_artifact_path_without_path_leak",
+        "test_release_bundle_rejects_percent_encoded_artifact_traversal_paths",
+        "secret-token-complete",
+        'assert "secret-token" not in message',
+        "test_release_bundle_verifier_rejects_markdown_unsafe_manifest_paths",
+        "test_release_bundle_verifier_rejects_padded_manifest_paths",
+        "test_release_bundle_verifier_rejects_percent_encoded_manifest_path_escape",
+        "test_release_bundle_verifier_rejects_markdown_unsafe_report_paths",
+        "test_release_bundle_verifier_rejects_padded_report_paths",
+        "test_release_bundle_verifier_rejects_percent_encoded_report_paths",
+        "test_release_bundle_verifier_rejects_control_character_native_evm_prover_payload_paths",
+        "test_release_bundle_verifier_rejects_markdown_unsafe_native_evm_prover_payload_paths",
+        "test_release_bundle_verifier_rejects_padded_native_evm_prover_payload_paths",
+        "test_release_bundle_verifier_rejects_native_evm_prover_percent_encoded_path",
+        "test_release_bundle_verifier_rejects_markdown_unsafe_filesystem_entries",
+    }
     sparse_bundle_test = tmp_path / "sccp_release_bundle_artifact_path_test.py"
     sparse_bundle_test.write_text(
         "\n".join(
-            marker for marker in bundle_test_markers if marker != native_percent_marker
+            marker
+            for marker in bundle_test_markers
+            if marker not in removed_bundle_markers
         ),
         encoding="utf-8",
     )
@@ -30763,12 +30794,13 @@ def test_release_bundle_verifier_guards_sccp_release_artifact_path_text_inventor
         ((sparse_bundle_test, bundle_test_markers),)
     )
 
-    assert any(
-        "SCCP release artifact path text source inventory" in error
-        and str(sparse_bundle_test) in error
-        and f"missing marker: {native_percent_marker}" in error
-        for error in errors
-    )
+    for marker in removed_bundle_markers:
+        assert any(
+            "SCCP release artifact path text source inventory" in error
+            and str(sparse_bundle_test) in error
+            and f"missing marker: {marker}" in error
+            for error in errors
+        )
 
 
 def test_release_bundle_verifier_guards_contract_smoke_eth_mainnet_network_id(
@@ -31189,6 +31221,22 @@ def test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory(
 
     verifier = load_verify_helpers()
     assert verifier._native_sccp_no_wasm_readiness_inventory_errors() == []
+    markers_by_path = dict(verifier.NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS)
+    package_dist_regression_markers = (
+        "browser SCCP no-WASM guard catches remote-prover identifier variants",
+        "browser BSC mainnet SCCP artifacts stay JS-only and local-prover owned",
+        "ipfs:proof-artifact.bin",
+        "artifacts/eth-mainnet/proof.wasm",
+        "WebAssembly.compile(bytes)",
+        "import './proof.wasm'",
+        "fallback remote prover",
+        "const proverEndpoint = endpoint",
+    )
+    package_dist_markers = markers_by_path[
+        "javascript/iroha_js/test/package_dist.test.js"
+    ]
+    for marker in package_dist_regression_markers:
+        assert marker in package_dist_markers
 
     sparse_report_script = tmp_path / "sccp_release_readiness_report.py"
     sparse_report_script.write_text(
@@ -32282,7 +32330,9 @@ def test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory(
                 '"dist/sccp.js": DIST_SCCP_TEXT',
                 '"dist/index.js": DIST_INDEX_TEXT',
                 '"index.d.ts": DECLARATIONS_TEXT',
+                "browser SCCP no-WASM guard catches remote-prover identifier variants",
                 "browser Ethereum mainnet SCCP artifacts stay JS-only and local-prover owned",
+                "browser BSC mainnet SCCP artifacts stay JS-only and local-prover owned",
                 "parseEthereumMainnetNativeEvmProverBundleManifest(JSON.stringify(nativeProverBundle)",
                 "verifyEthereumMainnetNativeEvmProverArtifacts",
                 "runEthereumMainnetNativeProverSelfTest",
@@ -32297,6 +32347,11 @@ def test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory(
                 "crossSdkFixtureParityBytes must be at least 128 bytes",
                 "nativeProverSelfTestBytes must be at least 128 bytes",
                 "implementationBytes must be at least 1024 bytes",
+                "ipfs:proof-artifact.bin",
+                "artifacts/eth-mainnet/proof.wasm",
+                "WebAssembly.compile(bytes)",
+                "import './proof.wasm'",
+                "fallback remote prover",
                 "const proverEndpoint = endpoint",
             ),
         ),
@@ -32382,6 +32437,12 @@ def test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory(
         and "missing marker: const proverEndpoint = endpoint" in error
         for error in verified["errors"]
     )
+    for marker in package_dist_regression_markers:
+        assert any(
+            "native SCCP no-WASM readiness SDK test inventory" in error
+            and f"missing marker: {marker}" in error
+            for error in verified["errors"]
+        )
 
 
 def test_release_bundle_verifier_guards_ethereum_data_collection_no_proxy(

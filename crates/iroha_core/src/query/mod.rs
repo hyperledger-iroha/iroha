@@ -13,11 +13,10 @@ pub mod snapshot;
 pub mod store;
 
 use std::{
-    collections::HashMap,
     convert::TryFrom,
     num::{NonZeroU64, NonZeroUsize},
     sync::{
-        Mutex, OnceLock,
+        OnceLock,
         atomic::{AtomicUsize, Ordering},
     },
 };
@@ -84,7 +83,7 @@ mod tests {
     }
 
     #[test]
-    fn next_height_for_state_preserves_cached_monotonic_height() {
+    fn next_height_for_state_uses_transaction_storage_height() {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
@@ -92,8 +91,18 @@ mod tests {
         let (first, first_u64) = next_height_for_state(&mut state);
         let (second, second_u64) = next_height_for_state(&mut state);
 
-        assert_eq!(usize::from(second), usize::from(first).saturating_add(1));
-        assert_eq!(second_u64.get(), first_u64.get().saturating_add(1));
+        assert_eq!(usize::from(first), 1);
+        assert_eq!(first, second);
+        assert_eq!(first_u64, second_u64);
+
+        let mut transactions = state.transactions.block();
+        transactions.insert_block(std::collections::HashSet::new(), first);
+        transactions.commit().expect("commit transaction height");
+
+        let (third, third_u64) = next_height_for_state(&mut state);
+
+        assert_eq!(usize::from(third), 2);
+        assert_eq!(third_u64.get(), 2);
     }
 }
 
@@ -105,18 +114,7 @@ fn next_test_block_height() -> NonZeroUsize {
 }
 
 fn next_height_for_state(state: &mut crate::state::State) -> (NonZeroUsize, NonZeroU64) {
-    static STATE_HEIGHTS: OnceLock<Mutex<HashMap<usize, usize>>> = OnceLock::new();
-    let map = STATE_HEIGHTS.get_or_init(|| Mutex::new(HashMap::new()));
-    let state_ptr: *mut crate::state::State = state;
-    let key = state_ptr as usize;
-    let mut guard = map.lock().expect("state height mutex");
-    let committed_height = state.committed_height();
-    let entry = guard.entry(key).or_insert(committed_height);
-    if committed_height > *entry {
-        *entry = committed_height;
-    }
-    *entry = entry.saturating_add(1);
-    let next = *entry;
+    let next = state.transactions.latest_height().saturating_add(1);
     let nz_usize = NonZeroUsize::new(next).expect("height non-zero");
     let nz_u64 =
         NonZeroU64::new(u64::try_from(next).expect("height fits u64")).expect("height non-zero");

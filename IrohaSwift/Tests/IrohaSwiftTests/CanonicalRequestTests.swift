@@ -47,4 +47,48 @@ final class CanonicalRequestTests: XCTestCase {
         XCTAssertEqual(headers["X-Iroha-Nonce"], nonce)
         XCTAssertTrue(publicKey.isValidSignature(signature, for: message))
     }
+
+    func testSigningRejectsPaddedAccountAndNonce() throws {
+        guard #available(macOS 10.15, iOS 13.0, *) else {
+            throw XCTSkip("CryptoKit not available")
+        }
+        let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 6, count: 32))
+
+        XCTAssertThrowsError(
+            try CanonicalRequest.signatureMessage(
+                method: "get",
+                path: "/v1/accounts",
+                timestampMs: 1,
+                nonce: " nonce"
+            )
+        ) { error in
+            XCTAssertEqual(error as? CanonicalRequestError, .invalidNonce)
+        }
+
+        XCTAssertThrowsError(
+            try CanonicalRequest.signingHeaders(
+                accountId: " account",
+                method: "get",
+                path: "/v1/accounts",
+                signer: signingKey,
+                timestampMs: 1,
+                nonce: "nonce"
+            )
+        ) { error in
+            XCTAssertEqual(error as? CanonicalRequestError, .invalidAccountId)
+        }
+
+        XCTAssertThrowsError(
+            try CanonicalRequest.signingHeaders(
+                accountId: "account",
+                method: "get",
+                path: "/v1/accounts",
+                signer: signingKey,
+                timestampMs: 1,
+                nonce: "nonce\n"
+            )
+        ) { error in
+            XCTAssertEqual(error as? CanonicalRequestError, .invalidNonce)
+        }
+    }
 }

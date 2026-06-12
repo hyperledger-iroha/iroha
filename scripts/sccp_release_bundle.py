@@ -4865,7 +4865,10 @@ SENSITIVE_CLI_ERROR_MARKERS = (
 
 
 def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
-    if isinstance(exc, OSError):
+    if isinstance(exc, OSError) and (
+        getattr(exc, "filename", None) is not None
+        or getattr(exc, "filename2", None) is not None
+    ):
         return fallback
     text = str(exc)
     if not text:

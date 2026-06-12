@@ -157,6 +157,11 @@ Release-readiness and bundle verification pin those canonical native SDK-id
 regressions across the public JavaScript, Kotlin/JVM, Java Android, and Swift
 SDK tests before native prover evidence can pass, with sparse inventory checks
 covering Kotlin/JVM and Java Android padded self-test callback non-run markers.
+The native no-WASM/no-remote sparse checks also remove the browser no-WASM
+guard, BSC browser guard, URI proof-artifact, WASM proof-artifact, and
+remote-prover identifier markers from the JavaScript package distribution test,
+so public browser package regressions cannot disappear while source inventory
+still claims readiness.
 Top-level all-lanes, release-readiness, and release-bundle CLI exception
 handlers preserve structured validation categories but replace secret-looking,
 control-character, empty, or OS-error payloads with fixed diagnostics before
@@ -1163,6 +1168,25 @@ same deployment-evidence binding, so callers cannot mistake a material-only
 proof with the right adapter verifier commitment for deployment-bound evidence;
 it also rechecks the adapter OpenVerify proof against the recomputed deployment
 evidence hash, so post-construction evidence splices fail.
+EVM source-adapter deployment readiness also rejects replayed source trust
+anchor, message-inclusion verifier, finality-policy, and source bridge runtime
+code hashes before those records can satisfy source-adapter readiness or
+deployment-bound proof matching.
+Solana and TON deployment-bound production coverage also rejects replayed
+full-light-client audit verifier role hashes for every governed audit role:
+Tower replay, full AccountsDB lattice, and bank/fork-choice on Solana, and
+masterchain config, validator-set transition, and shard-accounts dictionary on
+TON. A replayed audited deployment may remain generally well-shaped and
+source-adapter ready, but it cannot match a previously built source proof,
+satisfy deployment-aware production verification, pass bundle extraction, or
+survive verifier-evidence splicing after the OpenVerify statement is bound.
+TRON deployment-bound production coverage applies the same exact-deployment
+rule to coherent alternative source deployments: source trust anchor, consensus
+verifier, message-inclusion verifier, source bridge emitter address, runtime
+code hash, network id, owner, finality policy, and deployment receipt replays
+are built as production-ready material/deployment pairs with valid DPoS source
+gate hashes, then rejected for proof matching, deployment-aware verification,
+bundle extraction, and verifier-evidence splicing.
 The evidence and adapter-proof helpers let governance/config-sourced material
 replace the placeholder catalog without changing the proof envelope; the
 production verification helpers also require the source-adapter readiness gate.
@@ -2923,7 +2947,11 @@ filenames and native EVM prover manifest-relative payload paths before source
 copying, with category-only diagnostics, and in generated artifacts, manifest
 rows, readiness-report provenance paths, and extracted bundle entries. Source
 inventory pins the percent-encoded native EVM prover payload regressions in both
-readiness generation and strict release-bundle verification.
+readiness generation and strict release-bundle verification. Sparse inventory
+checks now remove the direct release-artifact path, copied filename,
+manifest/report path, native prover payload path, symlinked artifact, extracted
+bundle entry, and secret path-redaction regressions, so deleting those
+artifact-path text tests blocks readiness.
 Native EVM prover manifest-relative payload path diagnostics are also
 category-only for control characters and Markdown-unsafe characters across the
 bundle builder, readiness generator, and strict verifier, so a malformed

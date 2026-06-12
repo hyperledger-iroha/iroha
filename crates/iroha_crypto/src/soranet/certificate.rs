@@ -1206,7 +1206,12 @@ impl CertificateFieldAccumulator {
             pq_kem_public.len(),
             preferred_suite.public_key_len(),
         )?;
-        validate_public_key_material_not_all_zero("certificate.pq_kem_public", &pq_kem_public)?;
+        preferred_suite
+            .validate_public_key(&pq_kem_public)
+            .map_err(|err| CertificateError::InvalidFieldValue {
+                field: "certificate.pq_kem_public",
+                reason: format!("invalid ML-KEM public key: {err}"),
+            })?;
         validate_certificate_time_bounds(published_at, valid_after, valid_until)?;
 
         Ok(RelayCertificateV2 {
@@ -1917,6 +1922,11 @@ mod tests {
         }
     }
 
+    fn set_first_mlkem_12_bit_coefficient_noncanonical(bytes: &mut [u8]) {
+        bytes[0] = 0xFF;
+        bytes[1] = (bytes[1] & 0xF0) | 0x0F;
+    }
+
     #[test]
     fn cbor_decoder_reads_byte_text_and_exact_slices() {
         let mut byte_payload = CborDecoder::new(&[0x42, 0xAA, 0xBB]);
@@ -2588,6 +2598,25 @@ mod tests {
             CertificateError::InvalidFieldValue { field, reason } => {
                 assert_eq!(field, "certificate.pq_kem_public");
                 assert!(reason.contains("all zero"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_certificate_payload_rejects_noncanonical_mlkem_public_key() {
+        let mut certificate = sample_certificate();
+        set_first_mlkem_12_bit_coefficient_noncanonical(&mut certificate.pq_kem_public);
+
+        let err = parse_certificate_payload(&certificate.to_cbor())
+            .expect_err("noncanonical ML-KEM relay public key material should fail");
+        match err {
+            CertificateError::InvalidFieldValue { field, reason } => {
+                assert_eq!(field, "certificate.pq_kem_public");
+                assert!(
+                    reason.contains("not canonical"),
+                    "unexpected reason: {reason}"
+                );
             }
             other => panic!("unexpected error: {other:?}"),
         }

@@ -19,6 +19,22 @@ export {
   configureCurveSupport,
 } from "./address.js";
 export { normalizeIdentifierInput } from "./normalizers.js";
+export {
+  assetReferencesMatch,
+  composeAssetHoldingId,
+  ensureCanonicalAccountId,
+  extractAssetDefinitionId,
+  normalizeAccountAliasFqn,
+  normalizeAssetAliasFqn,
+  normalizeAssetDefinitionId,
+  normalizeI105AccountId,
+  normalizeToriiAccountReference,
+  tryExtractAssetDefinitionId,
+  tryNormalizeAccountAliasFqn,
+  tryNormalizeAssetAliasFqn,
+  tryNormalizeAssetDefinitionId,
+  tryNormalizeI105AccountId,
+} from "./normalizers.js";
 export { MultisigSpecBuilder, MultisigSpec } from "./multisig.js";
 export { ValidationError, ValidationErrorCode } from "./validationError.js";
 export {
@@ -227,6 +243,7 @@ export {
   resignSignedTransaction,
   buildRegisterDomainTransaction,
   buildTransaction,
+  buildRegisterSnsNameTransaction,
   buildIvmProvedTransaction,
   buildKagemushaInstructionArchiveInstruction,
   buildKagemushaInstructionTransaction,
@@ -293,6 +310,7 @@ export {
   buildTimeTriggerAction,
   buildPrecommitTriggerAction,
   submitSignedTransaction,
+  registerSnsNameViaConsensus,
   submitTransactionEntrypoint,
 } from "./transaction.js";
 export {
@@ -456,7 +474,9 @@ export {
   buildRangeCommitment,
   buildVeRangeDevProofFixture,
   buildVeRangeProofEnvelope,
+  buildVeRangeProofV1,
   verifyVeRangeProofLocally,
+  verifyVeRangeProofV1,
   buildPrivacyProofEnvelope,
   buildRegisterPrivacyVerifierKeyInstruction,
   buildRetirePrivacyVerifierKeyInstruction,

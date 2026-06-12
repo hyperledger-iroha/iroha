@@ -23,6 +23,7 @@ from .verange import (
     _reject_unknown_fields,
     _require_mapping,
     _require_non_blank_string,
+    _require_plain_mapping,
 )
 
 SIS_HINTS_BACKEND = "unsupported"
@@ -523,7 +524,7 @@ _COMMON_FIELDS = {
 def build_sis_hints_credential_commitments(options: Mapping[str, Any]) -> dict[str, Any]:
     """Normalize SIS-with-hints anonymous credential public-input commitments."""
 
-    source = _require_mapping(options, "sisHintsCredentialCommitments")
+    source = _require_plain_mapping(options, "sisHintsCredentialCommitments")
     _reject_unknown_fields(source, _COMMON_FIELDS, "sisHintsCredentialCommitments")
     parts = _commitment_parts(source, "sisHintsCredentialCommitments")
     return {
@@ -732,7 +733,7 @@ _ENVELOPE_FIELDS = {
 def build_sis_hints_credential_envelope(options: Mapping[str, Any]) -> bytes:
     """Build canonical OpenVerifyEnvelope bytes for a prepared SIS-with-hints proof."""
 
-    source = _require_mapping(options, "sisHintsCredentialEnvelope")
+    source = _require_plain_mapping(options, "sisHintsCredentialEnvelope")
     _reject_unknown_fields(source, _ENVELOPE_FIELDS, "sisHintsCredentialEnvelope")
     parts = _proof_parts(source, "sisHintsCredentialEnvelope", require_proof_bytes=True)
     return _build_privacy_proof_envelope_internal(
@@ -755,7 +756,7 @@ def build_sis_hints_anonymous_credential_proof_v0(
 ) -> bytes:
     """Build canonical production SIS-with-hints credential proof envelope bytes."""
 
-    source = _require_mapping(options, "sisHintsAnonymousCredentialProofV0")
+    source = _require_plain_mapping(options, "sisHintsAnonymousCredentialProofV0")
     _reject_unknown_fields(source, _ENVELOPE_FIELDS, "sisHintsAnonymousCredentialProofV0")
     parts = _proof_parts(
         source,
@@ -803,7 +804,7 @@ def build_sis_hints_credential_dev_proof_fixture(
 ) -> dict[str, Any]:
     """Build a deterministic SIS-with-hints credential dev proof fixture."""
 
-    source = _require_mapping(options, "sisHintsCredentialDevProofFixture")
+    source = _require_plain_mapping(options, "sisHintsCredentialDevProofFixture")
     _reject_unknown_fields(
         source,
         _ENVELOPE_FIELDS - {"proofBytes", "proof_bytes", "proof"},
@@ -1003,7 +1004,7 @@ def verify_sis_hints_credential_proof_locally(options: Any) -> dict[str, Any]:
     """Verify a deterministic SIS-with-hints credential dev fixture."""
 
     if isinstance(options, Mapping):
-        source = options
+        source = _require_plain_mapping(options, "sisHintsCredentialLocalVerification")
     else:
         source = {"envelope": options}
     _reject_unknown_fields(
@@ -1068,7 +1069,7 @@ def verify_sis_hints_anonymous_credential_proof_v0(options: Any) -> dict[str, An
     """Validate a production SIS-with-hints credential proof envelope binding."""
 
     if isinstance(options, Mapping):
-        source = options
+        source = _require_plain_mapping(options, "sisHintsAnonymousCredentialProofV0")
     else:
         source = {"envelope": options}
     _reject_unknown_fields(

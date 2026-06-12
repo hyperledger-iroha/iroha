@@ -281,6 +281,21 @@ public final class OfflineNoteV2Halo2Prover {
         && transcript.remainingBytes() == 0;
   }
 
+  public static boolean verifyOpenVerifyEnvelope(final byte[] envelope, final long[] publicValues) {
+    return verifyZk1Payload(proofPayloadFromOpenVerifyEnvelope(envelope), publicValues);
+  }
+
+  public static boolean verifyOpenVerifyEnvelope(
+      final byte[] envelope, final String publicInputsHashHex) {
+    final byte[] payload = proofPayloadFromOpenVerifyEnvelope(envelope);
+    final DecodedPayload decoded = decodeZk1ProofPayload(payload);
+    if (!hexLower(publicInputsHash(decoded.publicValues))
+        .equals(publicInputsHashHex.trim().toLowerCase(java.util.Locale.ROOT))) {
+      return false;
+    }
+    return verifyZk1Payload(payload, decoded.publicValues);
+  }
+
   public static byte[] openVerifyEnvelope(final byte[] proofPayload) {
     final Object marker = new Object();
     return NoritoCodec.encode(
@@ -289,20 +304,83 @@ public final class OfflineNoteV2Halo2Prover {
         new TypeAdapter<Object>() {
           @Override
           public void encode(final NoritoEncoder encoder, final Object value) {
-            writeField(encoder, child -> child.writeUInt(BACKEND_TAG, 32));
-            writeField(encoder, child -> writeString(child, CIRCUIT_ID));
-            writeField(encoder, child -> child.writeBytes(CANONICAL_VK_HASH));
-            writeField(encoder, child -> writeBytesVec(child, OfflineNoteV2.RECURSIVE_PUBLIC_INPUTS_SCHEMA_V1.getBytes(StandardCharsets.UTF_8)));
-            writeField(encoder, child -> writeBytesVec(child, proofPayload));
-            writeField(encoder, child -> writeBytesVec(child, new byte[0]));
+            writeOpenVerifyEnvelopeFields(encoder, proofPayload);
           }
 
           @Override
           public Object decode(final org.hyperledger.iroha.norito.NoritoDecoder decoder) {
-            throw new UnsupportedOperationException("OpenVerifyEnvelope decoding is not supported");
+            final byte[] payload = readOpenVerifyEnvelopePayload(decoder);
+            if (payload.length == 0) {
+              throw new IllegalArgumentException("OpenVerifyEnvelope payload is invalid");
+            }
+            return marker;
           }
         },
         NoritoHeader.COMPACT_LEN);
+  }
+
+  private static byte[] proofPayloadFromOpenVerifyEnvelope(final byte[] envelope) {
+    return NoritoCodec.decode(
+        envelope,
+        new TypeAdapter<byte[]>() {
+          @Override
+          public void encode(final NoritoEncoder encoder, final byte[] value) {
+            writeOpenVerifyEnvelopeFields(encoder, value);
+          }
+
+          @Override
+          public byte[] decode(final org.hyperledger.iroha.norito.NoritoDecoder decoder) {
+            return readOpenVerifyEnvelopePayload(decoder);
+          }
+        },
+        "iroha_data_model::zk::OpenVerifyEnvelope");
+  }
+
+  private static void writeOpenVerifyEnvelopeFields(
+      final NoritoEncoder encoder, final byte[] proofPayload) {
+    writeField(encoder, child -> child.writeUInt(BACKEND_TAG, 32));
+    writeField(encoder, child -> writeString(child, CIRCUIT_ID));
+    writeField(encoder, child -> child.writeBytes(CANONICAL_VK_HASH));
+    writeField(
+        encoder,
+        child ->
+            writeBytesVec(
+                child,
+                OfflineNoteV2.RECURSIVE_PUBLIC_INPUTS_SCHEMA_V1.getBytes(StandardCharsets.UTF_8)));
+    writeField(encoder, child -> writeBytesVec(child, proofPayload));
+    writeField(encoder, child -> writeBytesVec(child, new byte[0]));
+  }
+
+  private static byte[] readOpenVerifyEnvelopePayload(
+      final org.hyperledger.iroha.norito.NoritoDecoder decoder) {
+    final long backendTag = readField(decoder, child -> child.readUInt(32));
+    if (backendTag != BACKEND_TAG) {
+      return new byte[0];
+    }
+    final String circuitId = readField(decoder, OfflineNoteV2Halo2Prover::readString);
+    if (!CIRCUIT_ID.equals(circuitId)) {
+      return new byte[0];
+    }
+    final byte[] vkHash = readField(decoder, child -> child.readBytes(32));
+    if (!Arrays.equals(CANONICAL_VK_HASH, vkHash)) {
+      return new byte[0];
+    }
+    final byte[] publicInputSchema =
+        readField(decoder, OfflineNoteV2Halo2Prover::readBytesVec);
+    if (!Arrays.equals(
+        OfflineNoteV2.RECURSIVE_PUBLIC_INPUTS_SCHEMA_V1.getBytes(StandardCharsets.UTF_8),
+        publicInputSchema)) {
+      return new byte[0];
+    }
+    final byte[] proofPayload = readField(decoder, OfflineNoteV2Halo2Prover::readBytesVec);
+    readField(decoder, OfflineNoteV2Halo2Prover::readBytesVec);
+    if (decoder.remaining() != 0) {
+      return new byte[0];
+    }
+    if (proofPayload.length == 0) {
+      throw new IllegalArgumentException("OpenVerifyEnvelope proof payload is empty");
+    }
+    return proofPayload;
   }
 
   private static Context buildContext() {
@@ -727,6 +805,10 @@ public final class OfflineNoteV2Halo2Prover {
     void write(NoritoEncoder encoder);
   }
 
+  private interface FieldReader<T> {
+    T read(org.hyperledger.iroha.norito.NoritoDecoder decoder);
+  }
+
   private static void writeField(final NoritoEncoder parent, final FieldWriter writer) {
     final NoritoEncoder child = parent.childEncoder();
     writer.write(child);
@@ -744,6 +826,50 @@ public final class OfflineNoteV2Halo2Prover {
   private static void writeBytesVec(final NoritoEncoder encoder, final byte[] bytes) {
     encoder.writeUInt(bytes.length, 64);
     encoder.writeBytes(bytes);
+  }
+
+  private static <T> T readField(
+      final org.hyperledger.iroha.norito.NoritoDecoder parent,
+      final FieldReader<T> reader) {
+    final long length = parent.readLength(true);
+    if (length > Integer.MAX_VALUE) {
+      throw new IllegalArgumentException("OpenVerifyEnvelope field length overflow");
+    }
+    final org.hyperledger.iroha.norito.NoritoDecoder child =
+        new org.hyperledger.iroha.norito.NoritoDecoder(
+            parent.readBytes((int) length), parent.flags(), parent.flagsHint());
+    final T value = reader.read(child);
+    if (child.remaining() != 0) {
+      throw new IllegalArgumentException("Trailing bytes after OpenVerifyEnvelope field decode");
+    }
+    return value;
+  }
+
+  private static String readString(final org.hyperledger.iroha.norito.NoritoDecoder decoder) {
+    final long length = decoder.readLength(true);
+    if (length > Integer.MAX_VALUE) {
+      throw new IllegalArgumentException("OpenVerifyEnvelope string length overflow");
+    }
+    return new String(decoder.readBytes((int) length), StandardCharsets.UTF_8);
+  }
+
+  private static byte[] readBytesVec(final org.hyperledger.iroha.norito.NoritoDecoder decoder) {
+    final long length = decoder.readUInt(64);
+    if (length > Integer.MAX_VALUE) {
+      throw new IllegalArgumentException("OpenVerifyEnvelope bytes length overflow");
+    }
+    return decoder.readBytes((int) length);
+  }
+
+  private static String hexLower(final byte[] bytes) {
+    final char[] out = new char[bytes.length * 2];
+    final char[] alphabet = "0123456789abcdef".toCharArray();
+    for (int i = 0; i < bytes.length; i++) {
+      final int value = bytes[i] & 0xFF;
+      out[i * 2] = alphabet[value >>> 4];
+      out[i * 2 + 1] = alphabet[value & 0x0F];
+    }
+    return new String(out);
   }
 
   private static byte[] hexBytes(final String value) {

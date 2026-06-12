@@ -9,6 +9,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import shutil
 import stat
 import sys
@@ -37,6 +38,9 @@ EXIT_MARKER_MAX_BYTES = 32
 RUN_REPORT_FILENAME = "lineage-proof-staged-run.json"
 STAGED_RUN_REPORT_SCHEMA = "iroha.kagemusha.lineage_proof_staged_run.v1"
 MAX_STAGED_RUN_REPORT_BYTES = 16 * 1024
+CONTROL_EXIT_MARKER_REDACTION = "<unsafe-exit-marker>"
+SECRET_EXIT_MARKER_REDACTION = "<redacted-secret-marker>"
+CANONICAL_ELAPSED_SECONDS_RE = re.compile(r"(?:0|[1-9][0-9]*)\.[0-9]{6}\n\Z")
 
 
 def _default_generated_at_utc() -> str:
@@ -49,9 +53,48 @@ def _default_generated_at_utc() -> str:
 
 
 def _secret_path_error(path: Path, label: str) -> str | None:
-    if device_lab.SECRET_RE.search(str(path)):
+    path_text = str(path)
+    if device_lab.SECRET_RE.search(path_text):
         return f"{label} must not contain secret-looking material"
+    if device_lab._contains_control_character(path_text):
+        return f"{label} must not contain control characters"
+    if "\\" in path_text:
+        return f"{label} must not contain backslashes"
+    if ".." in path.parts:
+        return f"{label} must be canonical"
     return None
+
+
+def _display_exit_marker(marker: str) -> str:
+    if not marker:
+        return "<empty>"
+    if device_lab.SECRET_RE.search(marker):
+        return SECRET_EXIT_MARKER_REDACTION
+    if device_lab._contains_control_character(marker):
+        return CONTROL_EXIT_MARKER_REDACTION
+    return marker
+
+
+def _validate_report_command(
+    value: object,
+    label: str,
+    expected: str,
+    description: str,
+) -> list[str]:
+    """Validate a staged report command without echoing unsafe bytes."""
+
+    if not isinstance(value, str) or not value:
+        return [f"{label} command must be a non-empty string"]
+    errors: list[str] = []
+    if value != value.strip():
+        errors.append(f"{label} command must not contain surrounding whitespace")
+    if device_lab._contains_control_character(value):
+        errors.append(f"{label} command must not contain control characters")
+    if device_lab.SECRET_RE.search(value):
+        errors.append(f"{label} command must not contain secret-looking material")
+    if value != expected:
+        errors.append(f"{label} command must match the canonical {description}")
+    return errors
 
 
 def validate_directory_path(path: Path, label: str, *, must_exist: bool) -> list[str]:
@@ -296,13 +339,18 @@ def _read_small_text_file(
 
 
 def read_exit_marker(path: Path) -> tuple[str | None, list[str]]:
-    """Read and normalize the staged lineage proof exit marker."""
+    """Read the staged lineage proof exit marker."""
 
     text, errors = _read_small_text_file(path, "staged lineage proof exit marker")
     if errors:
         return None, errors
     assert text is not None
-    return text.strip(), []
+    marker = text.strip()
+    if text != "0\n" and marker == "0":
+        return marker, [
+            "staged lineage proof exit marker must be exactly 0 followed by newline"
+        ]
+    return marker, []
 
 
 def validate_exit_marker(path: Path) -> tuple[str | None, list[str]]:
@@ -313,8 +361,42 @@ def validate_exit_marker(path: Path) -> tuple[str | None, list[str]]:
         return None, errors
     assert stripped is not None
     if stripped != "0":
-        return stripped, [f"staged lineage proof exit code must be 0, got {stripped or '<empty>'}"]
+        return stripped, [
+            "staged lineage proof exit code must be 0, got "
+            f"{_display_exit_marker(stripped)}"
+        ]
     return stripped, []
+
+
+def _parse_canonical_elapsed_seconds_file_text(
+    text: str,
+) -> tuple[float | None, list[str]]:
+    if CANONICAL_ELAPSED_SECONDS_RE.fullmatch(text) is None:
+        return None, [
+            (
+                "staged lineage proof elapsed-seconds file must be exactly a "
+                "positive finite decimal with six fractional digits followed by newline"
+            )
+        ]
+    value_text = text[:-1]
+    try:
+        value = float(value_text)
+    except ValueError:
+        return None, [
+            "staged lineage proof elapsed-seconds file must contain a positive finite number"
+        ]
+    if not math.isfinite(value) or value <= 0:
+        return None, [
+            "staged lineage proof elapsed-seconds file must contain a positive finite number"
+        ]
+    if f"{value:.6f}\n" != text:
+        return None, [
+            (
+                "staged lineage proof elapsed-seconds file must be exactly a "
+                "positive finite decimal with six fractional digits followed by newline"
+            )
+        ]
+    return value, []
 
 
 def resolve_elapsed_seconds(args: argparse.Namespace) -> tuple[float | None, list[str]]:
@@ -329,11 +411,8 @@ def resolve_elapsed_seconds(args: argparse.Namespace) -> tuple[float | None, lis
         )
         errors.extend(read_errors)
         if text is not None:
-            stripped = text.strip()
-            try:
-                file_value = float(stripped)
-            except ValueError:
-                errors.append("staged lineage proof elapsed-seconds file must contain a number")
+            file_value, parse_errors = _parse_canonical_elapsed_seconds_file_text(text)
+            errors.extend(parse_errors)
     if args.elapsed_seconds is None and file_value is None:
         errors.append("--elapsed-seconds or --elapsed-seconds-file is required")
     if args.elapsed_seconds is not None and file_value is not None:
@@ -358,11 +437,7 @@ def _strict_json_loads(text: str, label: str) -> tuple[object | None, list[str]]
             [],
         )
     except device_lab.DuplicateJsonKeyError as exc:
-        key = (
-            device_lab.SECRET_PATH_REDACTION
-            if device_lab.SECRET_RE.search(exc.key)
-            else exc.key
-        )
+        key = device_lab._display_path(exc.key)
         return None, [f"{label} contains duplicate JSON object key {key}"]
     except device_lab.NonFiniteJsonConstantError as exc:
         return None, [f"{label} is not strict JSON: non-finite constant {exc.constant} is not allowed"]
@@ -405,14 +480,22 @@ def validate_staged_run_report(
     }
     extra_keys = sorted(set(document) - allowed_keys)
     if extra_keys:
-        return [f"{label} contains unexpected field {extra_keys[0]}"]
+        return [
+            f"{label} contains unexpected field {device_lab._display_path(extra_keys[0])}"
+        ]
     missing_keys = sorted(allowed_keys - set(document))
     if missing_keys:
         return [f"{label} is missing {missing_keys[0]}"]
     if document["schema"] != STAGED_RUN_REPORT_SCHEMA:
         return [f"{label} schema must be {STAGED_RUN_REPORT_SCHEMA}"]
-    if document["command"] != expected_command:
-        return [f"{label} command must match the canonical Reserved-lineage proof command"]
+    command_errors = _validate_report_command(
+        document["command"],
+        label,
+        expected_command,
+        "Reserved-lineage proof command",
+    )
+    if command_errors:
+        return command_errors
     exit_code = document["exit_code"]
     if isinstance(exit_code, bool) or not isinstance(exit_code, int):
         return [f"{label} exit_code must be an integer"]
@@ -457,7 +540,7 @@ def validate_staged_run_report(
     if unexpected_profiles:
         return [
             f"{label} lineage_key_artifact_logs contains unexpected profile "
-            f"{unexpected_profiles[0]}"
+            f"{device_lab._display_path(unexpected_profiles[0])}"
         ]
     missing_profiles = sorted(set(expected_key_logs) - set(key_logs))
     if missing_profiles:
@@ -474,7 +557,7 @@ def validate_staged_run_report(
         if entry_extra:
             return [
                 f"{label} {profile} lineage key artifact log contains unexpected "
-                f"field {entry_extra[0]}"
+                f"field {device_lab._display_path(entry_extra[0])}"
             ]
         entry_missing = sorted(allowed_entry_keys - set(entry))
         if entry_missing:

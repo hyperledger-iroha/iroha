@@ -106,7 +106,10 @@ from .client import (
     canonical_request_message,
     canonical_request_signature_message,
     decode_pdp_commitment_header,
+    encode_identifier_resolution_receipt_attestation,
+    encode_identifier_resolution_receipt_payload,
     inspect_i105_network_prefix,
+    verify_identifier_resolution_receipt,
 )
 from .sccp import (
     SCCP_DOMAIN_BSC,

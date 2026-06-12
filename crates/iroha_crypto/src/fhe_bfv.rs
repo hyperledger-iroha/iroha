@@ -3958,9 +3958,10 @@ impl BfvEvaluationKeyBundle {
         params: &BfvParameters,
         secret_key: &BfvSecretKey,
     ) -> Result<(), BfvError> {
-        self.validate(params)?;
+        validate_evaluation_key_bundle_zero_refresh_preflight(params, self)?;
         validate_bfv_seeded_encryption_residual_capacity(params)?;
         validate_secret_key(params, secret_key)?;
+        validate_evaluation_key_bundle_key_switch_entries(params, self)?;
         for (index, rotation_key) in self.rotation_keys.iter().enumerate() {
             validate_refresh_ciphertext_decrypts_to_zero(
                 params,
@@ -3990,9 +3991,10 @@ impl BfvEvaluationKeyBundle {
         params: &BfvParameters,
         secret_key: &BfvSecretKey,
     ) -> Result<(), BfvError> {
-        self.validate(params)?;
+        validate_evaluation_key_bundle_zero_refresh_preflight(params, self)?;
         validate_bfv_bounded_noise_encryption_capacity(params)?;
         validate_secret_key(params, secret_key)?;
+        validate_evaluation_key_bundle_key_switch_entries(params, self)?;
         for (index, rotation_key) in self.rotation_keys.iter().enumerate() {
             validate_rotation_key_bounded_noise_zero_refresh_with_label(
                 params,
@@ -4504,7 +4506,7 @@ pub fn keygen_from_seed(
     validate_bfv_seeded_encryption_residual_capacity(params)?;
 
     let mut rng = derive_rng(KEYGEN_DOMAIN, seed);
-    let secret = sample_small_poly(params, &mut rng);
+    let secret = sample_nonzero_secret_poly(params, &mut rng);
     let a = sample_uniform_poly(params, &mut rng);
     let e = sample_error_poly(params, &mut rng);
     let as_product = poly_mul_mod(params, &a, &secret);
@@ -4618,7 +4620,7 @@ pub fn keygen_bounded_noise_with_relinearization_from_seed(
     validate_bfv_bounded_noise_encryption_capacity(params)?;
 
     let mut rng = derive_rng(KEYGEN_DOMAIN, seed);
-    let secret = sample_small_poly(params, &mut rng);
+    let secret = sample_nonzero_secret_poly(params, &mut rng);
     let a = sample_uniform_poly(params, &mut rng);
     let e = sample_bounded_noise_poly(params, &mut rng);
     let as_product = poly_mul_mod(params, &a, &secret);
@@ -20764,6 +20766,27 @@ fn validate_evaluation_key_bundle_metadata(
     Ok(())
 }
 
+fn validate_evaluation_key_bundle_zero_refresh_preflight(
+    params: &BfvParameters,
+    bundle: &BfvEvaluationKeyBundle,
+) -> Result<(), BfvError> {
+    validate_evaluation_key_bundle_metadata(params, bundle)?;
+    validate_relinearization_key_metadata(params, &bundle.relinearization_key)?;
+    validate_rotation_key_set_entries(params, &bundle.rotation_keys)?;
+    if let Some(bootstrap_key) = bundle.bootstrap_key.as_ref() {
+        validate_bootstrap_key_entries(params, bootstrap_key)?;
+    }
+    Ok(())
+}
+
+fn validate_evaluation_key_bundle_key_switch_entries(
+    params: &BfvParameters,
+    bundle: &BfvEvaluationKeyBundle,
+) -> Result<(), BfvError> {
+    validate_relinearization_key_entries(params, &bundle.relinearization_key)?;
+    validate_galois_key_set_entries(params, &bundle.galois_keys)
+}
+
 fn validate_galois_key_set(
     params: &BfvParameters,
     galois_keys: &[BfvGaloisKey],
@@ -23762,6 +23785,15 @@ fn sample_small_poly(params: &BfvParameters, rng: &mut ChaCha20Rng) -> Polynomia
         .collect()
 }
 
+fn sample_nonzero_secret_poly(params: &BfvParameters, rng: &mut ChaCha20Rng) -> Polynomial {
+    loop {
+        let secret = sample_small_poly(params, rng);
+        if secret.iter().any(|&coefficient| coefficient != 0) {
+            return secret;
+        }
+    }
+}
+
 fn sample_error_poly(params: &BfvParameters, rng: &mut ChaCha20Rng) -> Polynomial {
     (0..params.degree())
         .map(
@@ -24852,6 +24884,38 @@ mod tests {
         BfvRnsModulusChain {
             moduli: vec![73, 89, 97],
         }
+    }
+
+    #[test]
+    fn deterministic_bfv_keygen_resamples_inert_secret_candidates() {
+        let seed = b"bfv-rns-key-switch-chain-preflight-keygen";
+        let exact_params = rns_exact_params();
+        let (exact_secret_key, _, _) = keygen_from_seed(&exact_params, seed).expect("exact keygen");
+        assert!(
+            exact_secret_key
+                .s
+                .iter()
+                .any(|&coefficient| coefficient != 0),
+            "exact keygen must not emit inert all-zero secret material"
+        );
+
+        let bounded_params = BfvParameters {
+            polynomial_degree: 2,
+            ciphertext_modulus: 4_294_967_295,
+            plaintext_modulus: 5,
+            decomposition_base_log: 4,
+        };
+        validate_bfv_bounded_noise_encryption_capacity(&bounded_params)
+            .expect("bounded-noise small profile has enough capacity");
+        let (bounded_secret_key, _) =
+            keygen_bounded_noise_from_seed(&bounded_params, seed).expect("bounded keygen");
+        assert!(
+            bounded_secret_key
+                .s
+                .iter()
+                .any(|&coefficient| coefficient != 0),
+            "bounded keygen must not emit inert all-zero secret material"
+        );
     }
 
     struct EvaluationKeyAdversarialMaterial {

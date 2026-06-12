@@ -103,9 +103,7 @@ public final class CanonicalRequestSigner {
       final byte[] body,
       final long timestampMs,
       final String nonce) {
-    if (nonce == null || nonce.trim().isEmpty()) {
-      throw new IllegalArgumentException("nonce is required");
-    }
+    requireExactNonBlank(nonce, "nonce");
     final String rendered =
         new String(canonicalRequestMessage(method, uri, body), StandardCharsets.UTF_8)
             + "\n"
@@ -207,9 +205,7 @@ public final class CanonicalRequestSigner {
       final long timestampMs,
       final String nonce,
       final String witnessBase64) {
-    if (witnessBase64 == null || witnessBase64.trim().isEmpty()) {
-      throw new IllegalArgumentException("witnessBase64 is required");
-    }
+    requireExactNonBlank(witnessBase64, "witnessBase64");
     final Map<String, Object> body =
         bodyWithBodyAuthFreshness(bodyFields, accountId, timestampMs, nonce);
     body.put(BODY_WITNESS_BASE64, witnessBase64);
@@ -264,12 +260,8 @@ public final class CanonicalRequestSigner {
       final CanonicalRequestSignatureProvider signatureProvider,
       final long timestampMs,
       final String nonce) {
-    if (accountId == null || accountId.trim().isEmpty()) {
-      throw new IllegalArgumentException("accountId is required");
-    }
-    if (nonce == null || nonce.trim().isEmpty()) {
-      throw new IllegalArgumentException("nonce is required");
-    }
+    requireExactNonBlank(accountId, "accountId");
+    requireExactNonBlank(nonce, "nonce");
     final byte[] message =
         canonicalRequestSignatureMessage(method, uri, body, timestampMs, nonce);
     final byte[] signatureBytes = signCanonicalMessage(signatureProvider, message);
@@ -286,12 +278,8 @@ public final class CanonicalRequestSigner {
       final String accountId,
       final long timestampMs,
       final String nonce) {
-    if (accountId == null || accountId.trim().isEmpty()) {
-      throw new IllegalArgumentException("accountId is required");
-    }
-    if (nonce == null || nonce.trim().isEmpty()) {
-      throw new IllegalArgumentException("nonce is required");
-    }
+    requireExactNonBlank(accountId, "accountId");
+    requireExactNonBlank(nonce, "nonce");
     final Map<String, Object> body = new LinkedHashMap<>(bodyFields);
     body.put(BODY_ACCOUNT_ID, accountId);
     body.put(BODY_TIMESTAMP_MS, timestampMs);
@@ -311,6 +299,25 @@ public final class CanonicalRequestSigner {
       throw new IllegalStateException("canonical request signature is empty");
     }
     return signature;
+  }
+
+  private static void requireExactNonBlank(final String value, final String field) {
+    if (value == null || value.isEmpty() || isAllWhitespace(value)) {
+      throw new IllegalArgumentException(field + " is required");
+    }
+    if (Character.isWhitespace(value.charAt(0))
+        || Character.isWhitespace(value.charAt(value.length() - 1))) {
+      throw new IllegalArgumentException(field + " must not contain surrounding whitespace");
+    }
+  }
+
+  private static boolean isAllWhitespace(final String value) {
+    for (int index = 0; index < value.length(); index++) {
+      if (!Character.isWhitespace(value.charAt(index))) {
+        return false;
+      }
+    }
+    return true;
   }
 
   private static String randomNonce() {

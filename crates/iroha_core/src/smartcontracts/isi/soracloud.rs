@@ -25753,6 +25753,7 @@ mod tests {
             vk_commitment,
             &native,
         );
+        enable_stark_sample_proof_quotas(&mut stx, &[proof.proof.proof.bytes.len()]);
 
         let err = verify_soracloud_fhe_full_bootstrap_material_proof(
             &mut stx,

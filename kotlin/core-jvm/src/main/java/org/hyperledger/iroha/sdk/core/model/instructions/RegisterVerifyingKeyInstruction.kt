@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.sdk.core.model.instructions
 
-import org.hyperledger.iroha.sdk.core.model.instructions.VerifyingKeyInstructionUtils.nonEmptyString
+import org.hyperledger.iroha.sdk.core.model.instructions.VerifyingKeyInstructionUtils.exactNonBlank
+import org.hyperledger.iroha.sdk.core.model.instructions.VerifyingKeyInstructionUtils.exactNonEmptyString
 import org.hyperledger.iroha.sdk.core.model.instructions.VerifyingKeyInstructionUtils.parseRecord
 import org.hyperledger.iroha.sdk.core.model.instructions.VerifyingKeyInstructionUtils.productionBackend
 import org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyRecordDescription
@@ -21,9 +22,9 @@ class RegisterVerifyingKeyInstruction private constructor(
         record: VerifyingKeyRecordDescription,
     ) : this(
         backend = productionBackend(backend),
-        name = validatedNotBlank(name, "name"),
+        name = exactNonBlank(name, "name"),
         record = record,
-        arguments = buildArguments(productionBackend(backend), name.trim(), record),
+        arguments = buildArguments(productionBackend(backend), exactNonBlank(name, "name"), record),
     )
 
     override val kind: InstructionKind get() = InstructionKind.CUSTOM
@@ -50,7 +51,7 @@ class RegisterVerifyingKeyInstruction private constructor(
         @JvmStatic
         fun fromArguments(arguments: Map<String, String>): RegisterVerifyingKeyInstruction {
             val backend = arguments.productionBackend("backend")
-            val name = arguments.nonEmptyString("name")
+            val name = arguments.exactNonEmptyString("name")
             val record = arguments.parseRecord(backend)
             return RegisterVerifyingKeyInstruction(backend, name, record)
         }
@@ -68,11 +69,6 @@ class RegisterVerifyingKeyInstruction private constructor(
             return args
         }
 
-        private fun validatedNotBlank(value: String, name: String): String {
-            val trimmed = value.trim()
-            require(trimmed.isNotEmpty()) { "$name must not be blank" }
-            return trimmed
-        }
     }
 
     class Builder internal constructor() {
@@ -85,8 +81,7 @@ class RegisterVerifyingKeyInstruction private constructor(
         }
 
         fun setName(name: String) = apply {
-            require(name.trim().isNotEmpty()) { "name must not be blank" }
-            this.name = name.trim()
+            this.name = exactNonBlank(name, "name")
         }
 
         fun setRecord(record: VerifyingKeyRecordDescription) = apply {

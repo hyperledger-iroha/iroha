@@ -8,6 +8,9 @@ public final class OfflineJsonParserTest {
 
   public static void main(final String[] args) {
     parsesOfflineReadiness();
+    parsesOfflineReadinessShortAbi7Aliases();
+    parsesOfflineReadinessPrefersShortAbi7Aliases();
+    parsesOfflineV2ReadinessShortAbi7Aliases();
     parsesOfflineTransfers();
     canonicalizesJson();
     System.out.println("[IrohaAndroid] OfflineJsonParserTest passed.");
@@ -37,6 +40,79 @@ public final class OfflineJsonParserTest {
     assert "recursive_compact_v1".equals(readiness.offlineKagemushaRecursiveCompactMode());
     assert Integer.valueOf(7).equals(readiness.offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion());
     assert "kagemusha-recursive-compact-v1".equals(readiness.offlineKagemushaRecursiveCompactCircuitId());
+    assert readiness.offlineKagemushaRecursiveCompactArtifactsAvailable();
+  }
+
+  private static void parsesOfflineReadinessShortAbi7Aliases() {
+    final String json =
+        """
+        {
+          "offline_telemetry": true,
+          "offline_kagemusha_abi7": true,
+          "offline_kagemusha_abi7_mode": "recursive_compact_v1",
+          "offline_kagemusha_abi7_bridge_abi_version": "7",
+          "offline_kagemusha_abi7_circuit_id": "kagemusha-recursive-compact-v1",
+          "offline_kagemusha_abi7_artifacts": true
+        }
+        """;
+    final OfflineReadiness readiness =
+        OfflineJsonParser.parseOfflineReadiness(json.getBytes(StandardCharsets.UTF_8));
+    assert readiness.offlineKagemushaRecursiveCompactAvailable();
+    assert "recursive_compact_v1".equals(readiness.offlineKagemushaRecursiveCompactMode());
+    assert Integer.valueOf(7).equals(
+        readiness.offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion());
+    assert "kagemusha-recursive-compact-v1".equals(
+        readiness.offlineKagemushaRecursiveCompactCircuitId());
+    assert readiness.offlineKagemushaRecursiveCompactArtifactsAvailable();
+  }
+
+  private static void parsesOfflineReadinessPrefersShortAbi7Aliases() {
+    final String json =
+        """
+        {
+          "offline_telemetry": true,
+          "offline_kagemusha_abi7": false,
+          "offline_kagemusha_recursive_compact_available": true,
+          "offline_kagemusha_abi7_mode": "short-mode",
+          "offline_kagemusha_recursive_compact_mode": "verbose-mode",
+          "offline_kagemusha_abi7_bridge_abi_version": 7,
+          "offline_kagemusha_recursive_compact_required_native_bridge_abi_version": 99,
+          "offline_kagemusha_abi7_circuit_id": "short-circuit",
+          "offline_kagemusha_recursive_compact_circuit_id": "verbose-circuit",
+          "offline_kagemusha_abi7_artifacts": false,
+          "offline_kagemusha_recursive_compact_artifacts_available": true
+        }
+        """;
+    final OfflineReadiness readiness =
+        OfflineJsonParser.parseOfflineReadiness(json.getBytes(StandardCharsets.UTF_8));
+    assert !readiness.offlineKagemushaRecursiveCompactAvailable();
+    assert "short-mode".equals(readiness.offlineKagemushaRecursiveCompactMode());
+    assert Integer.valueOf(7).equals(
+        readiness.offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion());
+    assert "short-circuit".equals(readiness.offlineKagemushaRecursiveCompactCircuitId());
+    assert !readiness.offlineKagemushaRecursiveCompactArtifactsAvailable();
+  }
+
+  private static void parsesOfflineV2ReadinessShortAbi7Aliases() {
+    final String json =
+        """
+        {
+          "offline_telemetry": true,
+          "offline_kagemusha_abi7": true,
+          "offline_kagemusha_abi7_mode": "recursive_compact_v1",
+          "offline_kagemusha_abi7_bridge_abi_version": 7,
+          "offline_kagemusha_abi7_circuit_id": "kagemusha-recursive-compact-v1",
+          "offline_kagemusha_abi7_artifacts": true
+        }
+        """;
+    final OfflineV2Readiness readiness =
+        OfflineJsonParser.parseOfflineV2Readiness(json.getBytes(StandardCharsets.UTF_8));
+    assert readiness.offlineKagemushaRecursiveCompactAvailable();
+    assert "recursive_compact_v1".equals(readiness.offlineKagemushaRecursiveCompactMode());
+    assert Integer.valueOf(7).equals(
+        readiness.offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion());
+    assert "kagemusha-recursive-compact-v1".equals(
+        readiness.offlineKagemushaRecursiveCompactCircuitId());
     assert readiness.offlineKagemushaRecursiveCompactArtifactsAvailable();
   }
 

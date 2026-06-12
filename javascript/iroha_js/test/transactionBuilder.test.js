@@ -8,6 +8,7 @@ import {
   buildKagemushaInstructionArchiveInstruction,
   buildKagemushaInstructionTransaction,
   buildKagemushaRecursiveRedeemTransaction,
+  buildPrivateKaigiFeeSpend,
   buildMintAssetTransaction,
   buildMintAndTransferTransaction,
   buildRegisterDomainAndMintTransaction,
@@ -327,6 +328,15 @@ baseTest("buildKagemushaInstructionArchiveInstruction normalizes archive bytes",
       }),
     /must be KagemushaTransfer or RedeemKagemushaRecursive/u,
   );
+  const whitespaceInstructionType = " RedeemKagemushaRecursive ";
+  assert.throws(
+    () =>
+      buildKagemushaInstructionArchiveInstruction({
+        type: whitespaceInstructionType,
+        instructionArchive: redeemArchive,
+      }),
+    /must be KagemushaTransfer or RedeemKagemushaRecursive/u,
+  );
   assert.throws(
     () =>
       buildKagemushaInstructionArchiveInstruction({
@@ -448,6 +458,17 @@ baseTest("buildKagemushaInstructionArchiveInstruction normalizes archive bytes",
         instructionArchive: tampered,
       }),
     /checksum is invalid/u,
+  );
+  assert.throws(
+    () =>
+      buildKagemushaInstructionTransaction({
+        chainId: "test-chain",
+        authority: AUTHORITY_ID_INPUT,
+        instructionType: whitespaceInstructionType,
+        instructionArchive: redeemArchive,
+        privateKey: PRIVATE_KEY,
+      }),
+    /must be KagemushaTransfer or RedeemKagemushaRecursive/u,
   );
 });
 
@@ -1606,6 +1627,95 @@ test("buildRemoveSmartContractBytesTransaction wraps removal payload", () => {
   );
   const parsed = JSON.parse(captures[0][0]);
   assert.equal(parsed.RemoveSmartContractBytes.reason, "cleanup");
+});
+
+test("proof builders reject padded inline verifier-key metadata", () => {
+  const captures = [];
+  const verifyingKey = {
+    id: { backend: "halo2/ipa" },
+    record: { circuit_id: "private-kaigi-fee-v1" },
+    inlineKey: { bytesBase64: Buffer.from([1, 2, 3]).toString("base64") },
+  };
+  withNativeBinding(
+    {
+      buildPrivateKaigiFeeSpend: (
+        chainId,
+        assetDefinitionId,
+        actionHash,
+        anchorRootHex,
+        feeAmount,
+        backend,
+        circuitId,
+        bytes,
+      ) => {
+        captures.push({
+          chainId,
+          assetDefinitionId,
+          actionHash,
+          anchorRootHex,
+          feeAmount,
+          backend,
+          circuitId,
+          bytes: Buffer.from(bytes),
+        });
+        return {
+          assetDefinitionId,
+          anchorRoot: Buffer.alloc(32, 0x11),
+          nullifiers: [],
+          outputCommitments: [],
+          encryptedChangePayloads: [],
+          proof: Buffer.from("proof"),
+        };
+      },
+    },
+    () => {
+      buildPrivateKaigiFeeSpend({
+        chainId: "test-chain",
+        assetDefinitionId: ASSET_DEFINITION_ID,
+        actionHash: Buffer.alloc(32, 0xaa),
+        anchorRootHex: normalizedHashHex(Buffer.alloc(32, 0xbb)),
+        feeAmount: "7",
+        verifyingKey,
+      });
+    },
+  );
+  assert.equal(captures[0].backend, "halo2/ipa");
+  assert.equal(captures[0].circuitId, "private-kaigi-fee-v1");
+  assert.deepEqual(captures[0].bytes, Buffer.from([1, 2, 3]));
+
+  for (const [label, patch, message] of [
+    [
+      "backend",
+      { id: { backend: " halo2/ipa " } },
+      /privateKaigiFeeSpend\.verifyingKey\.id\.backend must not contain surrounding whitespace/u,
+    ],
+    [
+      "circuit",
+      { record: { circuit_id: " private-kaigi-fee-v1 " } },
+      /privateKaigiFeeSpend\.verifyingKey\.record\.circuit_id must not contain surrounding whitespace/u,
+    ],
+  ]) {
+    assert.throws(
+      () =>
+        withNativeBinding(
+          {
+            buildPrivateKaigiFeeSpend: () => {
+              throw new Error(`${label} metadata should fail before native call`);
+            },
+          },
+          () =>
+            buildPrivateKaigiFeeSpend({
+              chainId: "test-chain",
+              assetDefinitionId: ASSET_DEFINITION_ID,
+              actionHash: Buffer.alloc(32, 0xaa),
+              anchorRootHex: normalizedHashHex(Buffer.alloc(32, 0xbb)),
+              feeAmount: "7",
+              verifyingKey: { ...verifyingKey, ...patch },
+            }),
+        ),
+      message,
+    );
+  }
 });
 
 test("confidential transaction builders wrap expected instruction payloads", () => {

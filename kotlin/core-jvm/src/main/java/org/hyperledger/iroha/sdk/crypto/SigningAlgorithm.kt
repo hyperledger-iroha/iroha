@@ -60,10 +60,14 @@ enum class SigningAlgorithm(
                 ?: throw IllegalArgumentException("Unsupported signing algorithm code: $code")
 
         private fun normalize(name: String?): String {
-            val trimmed = name?.trim()
-            if (trimmed.isNullOrEmpty()) return ED25519.wireName
-            return buildString(trimmed.length) {
-                for (ch in trimmed) {
+            if (name == null || name.trim().isEmpty()) {
+                throw IllegalArgumentException("signing algorithm must be a non-empty string")
+            }
+            require(name.trim() == name) {
+                "signing algorithm must not contain surrounding whitespace"
+            }
+            return buildString(name.length) {
+                for (ch in name) {
                     if (ch.code < 0x20 || ch.code == 0x7F || ch.code > 0x7F) {
                         throw IllegalArgumentException("Unsupported signing algorithm: $name")
                     }

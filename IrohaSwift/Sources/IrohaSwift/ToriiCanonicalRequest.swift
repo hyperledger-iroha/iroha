@@ -1,6 +1,13 @@
 import Foundation
 import CryptoKit
 
+public enum ToriiCanonicalRequestError: Error, Equatable {
+    case missingAccountId
+    case missingNonce
+    case invalidAccountId
+    case invalidNonce
+}
+
 /// Helpers for building canonical request signatures accepted by Torii app endpoints.
 public enum ToriiCanonicalRequest {
     public static let headerAccount = "X-Iroha-Account"
@@ -64,6 +71,12 @@ public enum ToriiCanonicalRequest {
                                     privateKey: Data,
                                     timestampMs: UInt64 = UInt64(Date().timeIntervalSince1970 * 1000),
                                     nonce: String = UUID().uuidString.replacingOccurrences(of: "-", with: "")) throws -> [String: String] {
+        try validateExactNonEmpty(accountId,
+                                  missing: ToriiCanonicalRequestError.missingAccountId,
+                                  invalid: ToriiCanonicalRequestError.invalidAccountId)
+        try validateExactNonEmpty(nonce,
+                                  missing: ToriiCanonicalRequestError.missingNonce,
+                                  invalid: ToriiCanonicalRequestError.invalidNonce)
         let message = signatureMessage(
             method: method,
             url: url,
@@ -85,6 +98,18 @@ public enum ToriiCanonicalRequest {
         let allowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
         let encoded = value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
         return encoded.replacingOccurrences(of: "%20", with: "+")
+    }
+
+    private static func validateExactNonEmpty(_ value: String,
+                                              missing: ToriiCanonicalRequestError,
+                                              invalid: ToriiCanonicalRequestError) throws {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw missing
+        }
+        guard trimmed == value else {
+            throw invalid
+        }
     }
 
     private static func hexString<D: Sequence>(from bytes: D) -> String where D.Element == UInt8 {

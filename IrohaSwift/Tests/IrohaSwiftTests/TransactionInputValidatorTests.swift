@@ -91,19 +91,53 @@ final class TransactionInputValidatorTests: XCTestCase {
         }
     }
 
-    func testValidateTrimsWhitespace() throws {
+    func testValidateRejectsSurroundingWhitespace() throws {
         let authority = try i105(seed: 4)
         let destination = try i105(seed: 5)
-        let ids = try TransactionInputValidator.validate(
-            chainId: " 0000 ",
-            authorityId: " \(authority) ",
-            assetDefinitionId: " \(sampleAid) ",
-            accountIds: [.init(field: "destination", value: " \(destination) ")]
-        )
-        XCTAssertEqual(ids.chainId, "0000")
-        XCTAssertEqual(ids.authorityId, authority)
-        XCTAssertEqual(ids.assetDefinitionId, sampleAid)
-        XCTAssertEqual(ids.accountIds["destination"], destination)
+
+        XCTAssertThrowsError(
+            try TransactionInputValidator.validate(
+                chainId: " 0000 ",
+                authorityId: authority,
+                assetDefinitionId: sampleAid,
+                accountIds: [.init(field: "destination", value: destination)]
+            )
+        ) { error in
+            XCTAssertEqual(error as? TransactionInputError, .invalidChainId(" 0000 "))
+        }
+        XCTAssertThrowsError(
+            try TransactionInputValidator.validate(
+                chainId: "0000",
+                authorityId: " \(authority) ",
+                assetDefinitionId: sampleAid,
+                accountIds: [.init(field: "destination", value: destination)]
+            )
+        ) { error in
+            XCTAssertEqual(error as? TransactionInputError,
+                           .malformedAccountId(field: "authority", value: " \(authority) "))
+        }
+        XCTAssertThrowsError(
+            try TransactionInputValidator.validate(
+                chainId: "0000",
+                authorityId: authority,
+                assetDefinitionId: " \(sampleAid) ",
+                accountIds: [.init(field: "destination", value: destination)]
+            )
+        ) { error in
+            XCTAssertEqual(error as? TransactionInputError,
+                           .malformedAssetDefinitionId(" \(sampleAid) "))
+        }
+        XCTAssertThrowsError(
+            try TransactionInputValidator.validate(
+                chainId: "0000",
+                authorityId: authority,
+                assetDefinitionId: sampleAid,
+                accountIds: [.init(field: "destination", value: " \(destination) ")]
+            )
+        ) { error in
+            XCTAssertEqual(error as? TransactionInputError,
+                           .malformedAccountId(field: "destination", value: " \(destination) "))
+        }
     }
 
     func testSanitizeMetadataTargetRejectsMalformedAssetId() {
@@ -128,13 +162,32 @@ final class TransactionInputValidatorTests: XCTestCase {
         }
     }
 
-    func testSanitizeMetadataTargetTrimsAccountAndDomainIds() throws {
+    func testSanitizeMetadataTargetRejectsSurroundingWhitespace() throws {
         let authority = try i105(seed: 6)
-        let target = try TransactionInputValidator.sanitizeMetadataTarget(.account("  \(authority)  "))
-        XCTAssertEqual(target.objectId, authority)
-
-        let domainTarget = try TransactionInputValidator.sanitizeMetadataTarget(.domain("  wonderland.universal  "))
-        XCTAssertEqual(domainTarget.objectId, "wonderland.universal")
+        XCTAssertThrowsError(
+            try TransactionInputValidator.sanitizeMetadataTarget(.account("  \(authority)  "))
+        ) { error in
+            XCTAssertEqual(error as? TransactionInputError,
+                           .malformedAccountId(field: "target", value: "  \(authority)  "))
+        }
+        XCTAssertThrowsError(
+            try TransactionInputValidator.sanitizeMetadataTarget(.domain("  wonderland.universal  "))
+        ) { error in
+            XCTAssertEqual(error as? TransactionInputError,
+                           .malformedDomainId(field: "target", value: "  wonderland.universal  "))
+        }
+        XCTAssertThrowsError(
+            try TransactionInputValidator.sanitizeMetadataTarget(.asset("  \(sampleAid)  "))
+        ) { error in
+            XCTAssertEqual(error as? TransactionInputError,
+                           .malformedAssetId("  \(sampleAid)  "))
+        }
+        XCTAssertThrowsError(
+            try TransactionInputValidator.sanitizeLabel(" alias ", field: "alias")
+        ) { error in
+            XCTAssertEqual(error as? TransactionInputError,
+                           .malformedLabel(field: "alias", value: " alias "))
+        }
     }
 
     func testSanitizeMetadataTargetRejectsBareDomainId() {

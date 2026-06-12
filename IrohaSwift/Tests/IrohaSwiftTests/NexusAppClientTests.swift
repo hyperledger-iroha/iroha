@@ -112,6 +112,8 @@ final class NexusAppClientTests: XCTestCase {
             "ed\u{200B}25519",
             "\u{0435}d25519",
             "ed\u{FF0D}25519",
+            "ED25519",
+            "Ed25519",
             " ED25519 ",
         ] {
             let error = await expectNexusErrorAsync {

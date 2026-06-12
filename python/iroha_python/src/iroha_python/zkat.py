@@ -23,6 +23,7 @@ from .verange import (
     _reject_unknown_fields,
     _require_mapping,
     _require_non_blank_string,
+    _require_plain_mapping,
     build_privacy_proof_envelope,
     decode_privacy_proof_envelope,
 )
@@ -196,7 +197,7 @@ def build_zkat_policy_commitment(
 ) -> dict[str, Any]:
     """Normalize or derive a zkAt policy commitment descriptor."""
 
-    source = _require_mapping(options, context)
+    source = _require_plain_mapping(options, context)
     _reject_unknown_fields(
         source,
         {
@@ -634,7 +635,7 @@ _AUTHENTICATOR_FIELDS = {
 def build_zkat_authenticator_envelope(options: Mapping[str, Any]) -> bytes:
     """Build canonical OpenVerifyEnvelope bytes for a prepared zkAt authenticator."""
 
-    source = _require_mapping(options, "zkAtAuthenticatorEnvelope")
+    source = _require_plain_mapping(options, "zkAtAuthenticatorEnvelope")
     _reject_unknown_fields(source, _AUTHENTICATOR_FIELDS, "zkAtAuthenticatorEnvelope")
     parts = _normalize_authenticator_parts(
         source,
@@ -658,7 +659,7 @@ def build_zkat_authenticator_envelope(options: Mapping[str, Any]) -> bytes:
 def build_zkat_policy_proof_v1(options: Mapping[str, Any]) -> bytes:
     """Build canonical production zkAt policy proof envelope bytes."""
 
-    source = _require_mapping(options, "zkAtPolicyProofV1")
+    source = _require_plain_mapping(options, "zkAtPolicyProofV1")
     _reject_unknown_fields(source, _AUTHENTICATOR_FIELDS, "zkAtPolicyProofV1")
     parts = _normalize_authenticator_parts(
         source,
@@ -701,7 +702,7 @@ def _dev_proof_bytes(
 def build_zkat_dev_proof_fixture(options: Mapping[str, Any]) -> dict[str, Any]:
     """Build a deterministic zkAt dev proof fixture."""
 
-    source = _require_mapping(options, "zkAtDevProofFixture")
+    source = _require_plain_mapping(options, "zkAtDevProofFixture")
     _reject_unknown_fields(
         source,
         _AUTHENTICATOR_FIELDS - {"proofBytes", "proof_bytes", "proof"},
@@ -849,7 +850,7 @@ def verify_zkat_authenticator_locally(options: Any) -> dict[str, Any]:
     """Verify a deterministic zkAt dev fixture through an OpenVerify envelope."""
 
     if isinstance(options, Mapping):
-        source = options
+        source = _require_plain_mapping(options, "zkAtAuthenticatorLocalVerification")
     else:
         source = {"envelope": options}
     _reject_unknown_fields(
@@ -924,7 +925,7 @@ def verify_zkat_policy_proof_v1(options: Any) -> dict[str, Any]:
     """Validate a production zkAt policy proof envelope binding."""
 
     if isinstance(options, Mapping):
-        source = options
+        source = _require_plain_mapping(options, "zkAtPolicyProofV1Verification")
     else:
         source = {"envelope": options}
     _reject_unknown_fields(

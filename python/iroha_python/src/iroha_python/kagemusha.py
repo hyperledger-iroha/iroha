@@ -1464,12 +1464,11 @@ def _normalize_kagemusha_instruction_archive_type(
 ) -> KagemushaInstructionArchiveType:
     if not isinstance(instruction_type, str):
         raise TypeError("instruction_type must be a string")
-    normalized = instruction_type.strip()
-    if normalized not in KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPES:
+    if instruction_type not in KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPES:
         raise ValueError(
             "instruction_type must be KagemushaTransfer or RedeemKagemushaRecursive"
         )
-    return normalized  # type: ignore[return-value]
+    return instruction_type  # type: ignore[return-value]
 
 
 def kagemusha_instruction_archive_instruction(

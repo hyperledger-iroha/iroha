@@ -38,7 +38,7 @@ class OfflineCashConfigurationSnapshot(
                 "Offline cash is disabled in the cached configuration snapshot.",
             )
         }
-        if (issuerPublicKeyBase64.isNullOrBlank()) {
+        if (!isCanonicalOfflineCashSnapshotText(issuerPublicKeyBase64)) {
             throw OfflineCashConfigurationSnapshotException(
                 "missing_issuer_public_key",
                 "Offline cash requires a cached issuer public key before offline exchange.",
@@ -60,6 +60,11 @@ class OfflineCashConfigurationSnapshot(
         }
     }
 }
+
+private fun isCanonicalOfflineCashSnapshotText(value: String?): Boolean =
+    value != null && value.isNotEmpty() && value.all { scalar ->
+        scalar.code > 0x20 && scalar.code <= 0x7E
+    }
 
 interface OfflineCashAuditReceiptSynchronizer {
     suspend fun hasPendingAuditReceipts(): Boolean

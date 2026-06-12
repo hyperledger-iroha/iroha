@@ -2141,7 +2141,7 @@ export class ToriiClient {
       assertProductionVerifyBackendLabel(backend, "getVerifyingKey backend"),
     );
     const normalizedName = encodeURIComponent(
-      requireNonEmptyString(name, "getVerifyingKey name"),
+      normalizeVerifyingKeyName(name, "getVerifyingKey name"),
     );
     const { signal } = normalizeSignalOnlyOption(options, "getVerifyingKey");
     const response = await this._request(
@@ -18003,6 +18003,18 @@ function requireNonEmptyString(value, name) {
   return trimmed;
 }
 
+function requireExactNonEmptyString(value, name) {
+  const trimmed = requireNonEmptyString(value, name);
+  if (trimmed !== value) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must not contain surrounding whitespace`,
+      name,
+    );
+  }
+  return value;
+}
+
 function requireHexString(value, name) {
   if (typeof value !== "string") {
     throw createValidationError(
@@ -18030,6 +18042,20 @@ function requireHexString(value, name) {
     );
   }
   return normalized;
+}
+
+function requireExactHexString(value, name) {
+  const normalized = requireHexString(value, name);
+  if (normalized !== value) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_HEX,
+      `${name} must not contain surrounding whitespace`,
+      name,
+    );
+  }
+  return normalized.startsWith("0x") || normalized.startsWith("0X")
+    ? normalized.slice(2)
+    : normalized;
 }
 
 function normalizeStorageTicketHex(value, name) {
@@ -18333,12 +18359,12 @@ function normalizeManifestKotobaPayload(value, context) {
 }
 
 function normalizeManifestPublicKeyPayload(value, context) {
-  const literal = requireNonEmptyString(value, context).trim();
+  const literal = requireExactNonEmptyString(value, context);
   let prefixedAlgorithm = null;
   let multihashLiteral = literal;
   const separator = literal.indexOf(":");
   if (separator > 0) {
-    prefixedAlgorithm = literal.slice(0, separator).trim().toLowerCase();
+    prefixedAlgorithm = literal.slice(0, separator).toLowerCase();
     multihashLiteral = literal.slice(separator + 1);
   }
   const canonical = canonicalizeMultihashHex(multihashLiteral, context);
@@ -22135,7 +22161,7 @@ function normalizeRamLfeProgramPolicySummary(payload, context) {
     program_id: requireNonEmptyString(record.program_id, `${context}.program_id`),
     owner: ToriiClient._requireAccountId(record.owner, `${context}.owner`),
     active: record.active === true,
-    resolver_public_key: requireNonEmptyString(
+    resolver_public_key: requireExactNonEmptyString(
       record.resolver_public_key,
       `${context}.resolver_public_key`,
     ),
@@ -22179,11 +22205,11 @@ function normalizeRamLfeProgramPolicySummary(payload, context) {
 function normalizeIdentifierPolicySummary(payload, context) {
   const record = ensureRecord(payload ?? {}, context);
   const result = {
-    policy_id: requireNonEmptyString(record.policy_id, `${context}.policy_id`),
+    policy_id: requireIdentifierPolicyId(record.policy_id, `${context}.policy_id`),
     owner: ToriiClient._requireAccountId(record.owner, `${context}.owner`),
     active: record.active === true,
     normalization: requireNonEmptyString(record.normalization, `${context}.normalization`),
-    resolver_public_key: requireNonEmptyString(
+    resolver_public_key: requireExactNonEmptyString(
       record.resolver_public_key,
       `${context}.resolver_public_key`,
     ),
@@ -22226,62 +22252,152 @@ function normalizeIdentifierResolutionPayload(
 ) {
   const record = ensureRecord(payload ?? {}, context);
   return {
-    policy_id: requireNonEmptyString(record.policy_id, `${context}.policy_id`),
+    policy_id: requireIdentifierPolicyId(record.policy_id, `${context}.policy_id`),
     execution: normalizeIdentifierResolutionExecutionPayload(
       record.execution,
       `${context}.execution`,
     ),
     opening: normalizeRamLfeOutputOpening(record.opening, `${context}.opening`),
-    opaque_id: normalizeOpaqueLiteral(record.opaque_id, `${context}.opaque_id`),
-    receipt_hash: normalizeHashLike32(record.receipt_hash, `${context}.receipt_hash`),
-    uaid: normalizeUaidLiteral(record.uaid, `${context}.uaid`),
-    account_id: ToriiClient._requireAccountId(record.account_id, `${context}.account_id`),
+    opaque_id: requireExactReceiptPrefixedHash(record.opaque_id, "opaque:", `${context}.opaque_id`),
+    receipt_hash: requireExactReceiptHash(record.receipt_hash, `${context}.receipt_hash`),
+    uaid: requireExactReceiptUaid(record.uaid, `${context}.uaid`),
+    account_id: requireExactAccountId(record.account_id, `${context}.account_id`),
   };
+}
+
+function requireExactReceiptHash(value, name) {
+  return identifierHashBytes(value, name).toString("hex");
+}
+
+function requireExactReceiptPrefixedHash(value, prefix, name) {
+  const literal = requireExactNonEmptyString(value, name);
+  const body = literal.toLowerCase().startsWith(prefix) ? literal.slice(prefix.length) : literal;
+  return `${prefix}${identifierHashBytes(body, name).toString("hex")}`;
+}
+
+function requireExactReceiptUaid(value, name) {
+  const uaid = requireExactReceiptPrefixedHash(value, "uaid:", name);
+  if (!/[13579bdf]$/iu.test(uaid)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_HEX,
+      `${name} must have least significant bit set to 1`,
+      name,
+    );
+  }
+  return uaid;
+}
+
+function requireExactAccountId(value, name) {
+  const literal = requireExactNonEmptyString(value, name);
+  const normalized = normalizeAccountId(literal, name);
+  if (normalized !== literal) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_ACCOUNT_ID,
+      `${name} must be a canonical I105 account id`,
+      name,
+    );
+  }
+  return literal;
+}
+
+function requireIdentifierPolicyId(value, name) {
+  const literal = requireExactNonEmptyString(value, name);
+  const parts = literal.split("#", 2);
+  if (parts.length !== 2 || !parts[0] || !parts[1]) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name} must use kind#rule`,
+      name,
+    );
+  }
+  if (parts[0].trim() !== parts[0]) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${name}.kind must not contain surrounding whitespace`,
+      `${name}.kind`,
+    );
+  }
+  if (parts[1].trim() !== parts[1]) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${name}.rule must not contain surrounding whitespace`,
+      `${name}.rule`,
+    );
+  }
+  return literal;
+}
+
+function requireExactReceiptUnsignedInteger(value, name) {
+  if (typeof value === "string") {
+    const literal = requireExactNonEmptyString(value, name);
+    if (!/^[0-9]+$/.test(literal)) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_NUMERIC,
+        `${name} must be a non-negative integer`,
+        name,
+      );
+    }
+  }
+  return ToriiClient._normalizeUnsignedInteger(value, name, { allowZero: true });
 }
 
 function normalizeIdentifierResolutionExecutionPayload(payload, context) {
   const record = ensureRecord(payload ?? {}, context);
-  return {
-    program_id: requireNonEmptyString(record.program_id, `${context}.program_id`),
-    program_digest: normalizeHashLike32(record.program_digest, `${context}.program_digest`),
-    backend: requireNonEmptyString(record.backend, `${context}.backend`).toLowerCase(),
-    verification_mode: requireNonEmptyString(
-      record.verification_mode,
+  const backend = requireExactNonEmptyString(record.backend, `${context}.backend`);
+  if (backend !== backend.toLowerCase()) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context}.backend must be an exact lowercase RAM-LFE backend tag`,
+      `${context}.backend`,
+    );
+  }
+  const verificationMode = requireExactNonEmptyString(
+    record.verification_mode,
+    `${context}.verification_mode`,
+  );
+  if (verificationMode !== verificationMode.toLowerCase()) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context}.verification_mode must be an exact lowercase RAM-LFE verification mode`,
       `${context}.verification_mode`,
-    ).toLowerCase(),
-    input_ciphertext_hash: normalizeHashLike32(
+    );
+  }
+  return {
+    program_id: requireExactNonEmptyString(record.program_id, `${context}.program_id`),
+    program_digest: requireExactReceiptHash(record.program_digest, `${context}.program_digest`),
+    backend,
+    verification_mode: verificationMode,
+    input_ciphertext_hash: requireExactReceiptHash(
       record.input_ciphertext_hash,
       `${context}.input_ciphertext_hash`,
     ),
-    output_ciphertext_hash: normalizeHashLike32(
+    output_ciphertext_hash: requireExactReceiptHash(
       record.output_ciphertext_hash,
       `${context}.output_ciphertext_hash`,
     ),
-    parameter_digest: normalizeHashLike32(
+    parameter_digest: requireExactReceiptHash(
       record.parameter_digest,
       `${context}.parameter_digest`,
     ),
-    evaluation_key_digest: normalizeHashLike32(
+    evaluation_key_digest: requireExactReceiptHash(
       record.evaluation_key_digest,
       `${context}.evaluation_key_digest`,
     ),
-    output_hash: normalizeHashLike32(record.output_hash, `${context}.output_hash`),
-    associated_data_hash: normalizeHashLike32(
+    output_hash: requireExactReceiptHash(record.output_hash, `${context}.output_hash`),
+    associated_data_hash: requireExactReceiptHash(
       record.associated_data_hash,
       `${context}.associated_data_hash`,
     ),
-    executed_at_ms: ToriiClient._normalizeUnsignedInteger(
+    executed_at_ms: requireExactReceiptUnsignedInteger(
       record.executed_at_ms,
       `${context}.executed_at_ms`,
-      { allowZero: true },
     ),
     expires_at_ms:
       record.expires_at_ms === undefined || record.expires_at_ms === null
         ? null
-        : ToriiClient._normalizeUnsignedInteger(
+        : requireExactReceiptUnsignedInteger(
           record.expires_at_ms,
           `${context}.expires_at_ms`,
-          { allowZero: true },
         ),
   };
 }
@@ -22291,48 +22407,46 @@ function normalizeRamLfeOutputOpening(opening, context) {
   const payload = ensureRecord(record.payload ?? {}, `${context}.payload`);
   return {
     payload: {
-      program_id: requireNonEmptyString(payload.program_id, `${context}.payload.program_id`),
-      input_ciphertext_hash: normalizeHashLike32(
+      program_id: requireExactNonEmptyString(payload.program_id, `${context}.payload.program_id`),
+      input_ciphertext_hash: requireExactReceiptHash(
         payload.input_ciphertext_hash,
         `${context}.payload.input_ciphertext_hash`,
       ),
-      output_ciphertext_hash: normalizeHashLike32(
+      output_ciphertext_hash: requireExactReceiptHash(
         payload.output_ciphertext_hash,
         `${context}.payload.output_ciphertext_hash`,
       ),
-      parameter_digest: normalizeHashLike32(
+      parameter_digest: requireExactReceiptHash(
         payload.parameter_digest,
         `${context}.payload.parameter_digest`,
       ),
-      evaluation_key_digest: normalizeHashLike32(
+      evaluation_key_digest: requireExactReceiptHash(
         payload.evaluation_key_digest,
         `${context}.payload.evaluation_key_digest`,
       ),
-      opened_output_hash: normalizeHashLike32(
+      opened_output_hash: requireExactReceiptHash(
         payload.opened_output_hash,
         `${context}.payload.opened_output_hash`,
       ),
-      opened_at_ms: ToriiClient._normalizeUnsignedInteger(
+      opened_at_ms: requireExactReceiptUnsignedInteger(
         payload.opened_at_ms,
         `${context}.payload.opened_at_ms`,
-        { allowZero: true },
       ),
       expires_at_ms:
         payload.expires_at_ms === undefined || payload.expires_at_ms === null
           ? null
-          : ToriiClient._normalizeUnsignedInteger(
+          : requireExactReceiptUnsignedInteger(
             payload.expires_at_ms,
             `${context}.payload.expires_at_ms`,
-            { allowZero: true },
           ),
     },
-    signature: requireHexString(record.signature, `${context}.signature`).toLowerCase(),
+    signature: requireExactHexString(record.signature, `${context}.signature`).toLowerCase(),
   };
 }
 
 function normalizeIdentifierReceiptAttestation(attestation, context) {
   const record = ensureRecord(attestation ?? {}, context);
-  const kind = requireNonEmptyString(record.kind, `${context}.kind`).toLowerCase();
+  const kind = requireExactNonEmptyString(record.kind, `${context}.kind`);
   if (kind === "signed") {
     if (record.proof_backend !== undefined || record.proof_b64 !== undefined) {
       throw createValidationError(
@@ -22343,7 +22457,7 @@ function normalizeIdentifierReceiptAttestation(attestation, context) {
     }
     return {
       kind,
-      signature: requireHexString(record.signature, `${context}.signature`).toUpperCase(),
+      signature: requireExactHexString(record.signature, `${context}.signature`).toUpperCase(),
     };
   }
   if (kind === "proof") {
@@ -22356,8 +22470,8 @@ function normalizeIdentifierReceiptAttestation(attestation, context) {
     }
     return {
       kind,
-      proof_backend: requireNonEmptyString(record.proof_backend, `${context}.proof_backend`),
-      proof_b64: requireNonEmptyString(record.proof_b64, `${context}.proof_b64`),
+      proof_backend: requireExactNonEmptyString(record.proof_backend, `${context}.proof_backend`),
+      proof_b64: requireExactNonEmptyString(record.proof_b64, `${context}.proof_b64`),
     };
   }
   throw createValidationError(
@@ -26295,7 +26409,7 @@ function normalizeProductionEventFilterBackendPayload(filter, context) {
 }
 
 function normalizeVerifyingKeyEventMatcherName(value, context) {
-  const normalized = requireNonEmptyString(value, context);
+  const normalized = requireExactNonEmptyString(value, context);
   if (normalized.includes(":")) {
     throw createValidationError(
       ValidationErrorCode.INVALID_STRING,
@@ -26632,7 +26746,7 @@ function normalizeVerifyingKeyId(payload, context) {
   const record = ensureRecord(payload, context);
   return {
     backend: assertProductionVerifyBackendLabel(record.backend, `${context}.backend`),
-    name: requireNonEmptyString(record.name, `${context}.name`),
+    name: normalizeVerifyingKeyName(record.name, `${context}.name`),
   };
 }
 
@@ -26664,7 +26778,7 @@ function normalizeVerifyingKeyRecord(payload, context) {
     version: ToriiClient._normalizeUnsignedInteger(record.version, `${context}.version`, {
       allowZero: false,
     }),
-    circuit_id: requireNonEmptyString(
+    circuit_id: requireExactNonEmptyString(
       record.circuit_id,
       `${context}.circuit_id`,
     ),
@@ -26695,7 +26809,9 @@ function normalizeVerifyingKeyRecord(payload, context) {
             { allowZero: false },
           ),
     gas_schedule_id:
-      gasSchedule === null ? null : requireNonEmptyString(gasSchedule, `${context}.gas_schedule_id`),
+      gasSchedule === null
+        ? null
+        : requireExactNonEmptyString(gasSchedule, `${context}.gas_schedule_id`),
     metadata_uri_cid:
       metadataCid === null ? null : requireNonEmptyString(metadataCid, `${context}.metadata_uri_cid`),
     vk_bytes_cid:
@@ -27036,6 +27152,13 @@ function assertProductionVerifyBackendLabel(value, context) {
     );
   }
   const backend = value;
+  if (backend.trim() !== backend) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context} must not contain surrounding whitespace`,
+      context,
+    );
+  }
   if (!isProductionVerifyBackendLabel(backend)) {
     throw createValidationError(
       ValidationErrorCode.INVALID_STRING,
@@ -27064,7 +27187,7 @@ function normalizeVerifyingKeyRegisterPayload(input) {
       "registerVerifyingKey.version",
       { allowZero: false },
     ),
-    circuit_id: requireNonEmptyString(
+    circuit_id: requireExactNonEmptyString(
       record.circuit_id,
       "registerVerifyingKey.circuitId",
     ),
@@ -27076,7 +27199,7 @@ function normalizeVerifyingKeyRegisterPayload(input) {
         record.publicInputsSchemaHash,
       "registerVerifyingKey.publicInputsSchemaHashHex",
     ),
-    gas_schedule_id: requireNonEmptyString(
+    gas_schedule_id: requireExactNonEmptyString(
       record.gas_schedule_id,
       "registerVerifyingKey.gasScheduleId",
     ),
@@ -27103,7 +27226,7 @@ function normalizeVerifyingKeyUpdatePayload(input) {
       "updateVerifyingKey.version",
       { allowZero: false },
     ),
-    circuit_id: requireNonEmptyString(
+    circuit_id: requireExactNonEmptyString(
       record.circuit_id,
       "updateVerifyingKey.circuitId",
     ),
@@ -27118,7 +27241,7 @@ function normalizeVerifyingKeyUpdatePayload(input) {
   };
   const gasSchedule = record.gas_schedule_id;
   if (gasSchedule !== undefined && gasSchedule !== null) {
-    payload.gas_schedule_id = requireNonEmptyString(
+    payload.gas_schedule_id = requireExactNonEmptyString(
       gasSchedule,
       "updateVerifyingKey.gasScheduleId",
     );
@@ -27258,7 +27381,7 @@ function assignVerifyingKeyOptionalFields(record, payload, context) {
 }
 
 function normalizeVerifyingKeyName(value, context) {
-  const name = requireNonEmptyString(value, context);
+  const name = requireExactNonEmptyString(value, context);
   if (name.includes(":")) {
     throw createValidationError(
       ValidationErrorCode.INVALID_STRING,
@@ -29429,8 +29552,8 @@ function identifierNormalizeUnsignedBigInt(value, context) {
     }
     return BigInt(value);
   }
-  if (typeof value === "string" && /^[0-9]+$/.test(value.trim())) {
-    return BigInt(value.trim());
+  if (typeof value === "string" && /^[0-9]+$/.test(value)) {
+    return BigInt(value);
   }
   throw createValidationError(
     ValidationErrorCode.INVALID_NUMERIC,
@@ -29476,6 +29599,14 @@ function identifierCanonicalString(value, context) {
   ]);
 }
 
+function identifierCanonicalExactString(value, context) {
+  const literal = requireExactNonEmptyString(value, context);
+  return Buffer.concat([
+    identifierCanonicalCompactLength(Buffer.byteLength(literal)),
+    Buffer.from(literal, "utf8"),
+  ]);
+}
+
 function identifierCanonicalByteVec(bytes) {
   const payload = Buffer.from(bytes);
   const parts = [identifierCanonicalU64(payload.length, "byteVec.length")];
@@ -29504,28 +29635,26 @@ function identifierCanonicalOptionalU64(value, context) {
 }
 
 function identifierPolicyIdPayload(raw) {
-  const parts = requireNonEmptyString(raw, "payload.policy_id").split("#", 2);
-  if (parts.length !== 2 || !parts[0].trim() || !parts[1].trim()) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      "payload.policy_id must use kind#rule",
-      "payload.policy_id",
-    );
-  }
+  const value = requireIdentifierPolicyId(raw, "payload.policy_id");
+  const parts = value.split("#", 2);
   return Buffer.concat([
-    identifierCanonicalSizedField(identifierCanonicalString(parts[0].trim(), "payload.policy_id.kind")),
-    identifierCanonicalSizedField(identifierCanonicalString(parts[1].trim(), "payload.policy_id.rule")),
+    identifierCanonicalSizedField(identifierCanonicalString(parts[0], "payload.policy_id.kind")),
+    identifierCanonicalSizedField(identifierCanonicalString(parts[1], "payload.policy_id.rule")),
   ]);
 }
 
-function identifierProgramIdPayload(raw) {
+function identifierProgramIdPayload(raw, field) {
   return identifierCanonicalSizedField(
-    identifierCanonicalString(raw, "payload.execution.program_id"),
+    identifierCanonicalExactString(raw, field),
   );
 }
 
 function identifierBackendTag(raw) {
-  switch (requireNonEmptyString(raw, "payload.execution.backend").trim().toLowerCase()) {
+  const tag = requireExactNonEmptyString(raw, "payload.execution.backend");
+  if (tag !== tag.toLowerCase()) {
+    throw new Error("payload.execution.backend must be an exact lowercase RAM-LFE backend tag");
+  }
+  switch (tag) {
     case "hkdf-sha3-512-prf-v1":
       return 0;
     case "bfv-affine-sha3-256-v1":
@@ -29538,7 +29667,11 @@ function identifierBackendTag(raw) {
 }
 
 function identifierVerificationModeTag(raw) {
-  switch (requireNonEmptyString(raw, "payload.execution.verification_mode").trim().toLowerCase()) {
+  const tag = requireExactNonEmptyString(raw, "payload.execution.verification_mode");
+  if (tag !== tag.toLowerCase()) {
+    throw new Error("payload.execution.verification_mode must be an exact lowercase RAM-LFE verification mode");
+  }
+  switch (tag) {
     case "signed":
       return 0;
     case "proof":
@@ -29549,11 +29682,31 @@ function identifierVerificationModeTag(raw) {
 }
 
 function identifierHashBytes(raw, field) {
-  return Buffer.from(normalizeHashLike32(raw, field), "hex");
+  const literal = requireExactNonEmptyString(raw, field);
+  let body = literal;
+  if (body.toLowerCase().startsWith("hash:")) {
+    body = body.slice("hash:".length);
+  }
+  const suffixIndex = body.indexOf("#");
+  if (suffixIndex >= 0) {
+    body = body.slice(0, suffixIndex);
+  }
+  const hex =
+    body.startsWith("0x") || body.startsWith("0X")
+      ? body.slice(2)
+      : body;
+  if (hex.length !== 64 || !/^[0-9a-fA-F]{64}$/u.test(hex)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_HEX,
+      `${field} must be a 32-byte hex string`,
+      field,
+    );
+  }
+  return Buffer.from(hex, "hex");
 }
 
 function identifierPrefixedHashBytes(raw, prefix, field) {
-  const literal = requireNonEmptyString(raw, field).trim();
+  const literal = requireExactNonEmptyString(raw, field);
   const body = literal.toLowerCase().startsWith(prefix) ? literal.slice(prefix.length) : literal;
   return identifierHashBytes(body, field);
 }
@@ -29674,7 +29827,7 @@ function identifierCanonicalU8(value, context) {
 }
 
 function identifierAccountIdPayload(accountId, context) {
-  const literal = ToriiClient._requireAccountId(accountId, context);
+  const literal = requireExactAccountId(accountId, context);
   const address = AccountAddress.fromI105(literal);
   const controller = address._controller;
   if (!controller || typeof controller.tag !== "number") {
@@ -29698,7 +29851,7 @@ function identifierAccountIdPayload(accountId, context) {
 
 function identifierExecutionPayload(execution) {
   return Buffer.concat([
-    identifierCanonicalSizedField(identifierProgramIdPayload(execution.program_id)),
+    identifierCanonicalSizedField(identifierProgramIdPayload(execution.program_id, "payload.execution.program_id")),
     identifierCanonicalSizedField(identifierHashBytes(execution.program_digest, "payload.execution.program_digest")),
     identifierCanonicalSizedField(identifierCanonicalU32(identifierBackendTag(execution.backend))),
     identifierCanonicalSizedField(identifierCanonicalU32(identifierVerificationModeTag(execution.verification_mode))),
@@ -29715,7 +29868,9 @@ function identifierExecutionPayload(execution) {
 
 function identifierOutputOpeningPayload(openingPayload) {
   return Buffer.concat([
-    identifierCanonicalSizedField(identifierProgramIdPayload(openingPayload.program_id)),
+    identifierCanonicalSizedField(
+      identifierProgramIdPayload(openingPayload.program_id, "payload.opening.payload.program_id"),
+    ),
     identifierCanonicalSizedField(identifierHashBytes(openingPayload.input_ciphertext_hash, "payload.opening.payload.input_ciphertext_hash")),
     identifierCanonicalSizedField(identifierHashBytes(openingPayload.output_ciphertext_hash, "payload.opening.payload.output_ciphertext_hash")),
     identifierCanonicalSizedField(identifierHashBytes(openingPayload.parameter_digest, "payload.opening.payload.parameter_digest")),

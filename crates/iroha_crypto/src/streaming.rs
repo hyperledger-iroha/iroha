@@ -2097,6 +2097,39 @@ mod key_update_tests {
 
     use super::*;
 
+    fn mlkem_secret_embedded_public_range(suite: MlKemSuite) -> core::ops::Range<usize> {
+        const PUBLIC_HASH_AND_REJECTION_SEED_BYTES: usize = 64;
+
+        let start =
+            suite.secret_key_len() - suite.public_key_len() - PUBLIC_HASH_AND_REJECTION_SEED_BYTES;
+        start..start + suite.public_key_len()
+    }
+
+    fn mlkem_secret_embedded_public_hash_range(suite: MlKemSuite) -> core::ops::Range<usize> {
+        const PUBLIC_KEY_HASH_BYTES: usize = 32;
+        const PUBLIC_HASH_AND_REJECTION_SEED_BYTES: usize = 64;
+
+        let start = suite.secret_key_len() - PUBLIC_HASH_AND_REJECTION_SEED_BYTES;
+        start..start + PUBLIC_KEY_HASH_BYTES
+    }
+
+    fn mlkem_public_key_hash(public_key: &[u8]) -> [u8; 32] {
+        let digest = Sha3_256::digest(public_key);
+        let mut out = [0u8; 32];
+        out.copy_from_slice(&digest);
+        out
+    }
+
+    fn mlkem_secret_with_zero_embedded_public_key(secret_key: &[u8]) -> Vec<u8> {
+        let suite = STREAMING_DEFAULT_KEM_SUITE;
+        let mut mutated = secret_key.to_vec();
+        let public_range = mlkem_secret_embedded_public_range(suite);
+        mutated[public_range.clone()].fill(0);
+        let public_hash = mlkem_public_key_hash(&mutated[public_range]);
+        mutated[mlkem_secret_embedded_public_hash_range(suite)].copy_from_slice(&public_hash);
+        mutated
+    }
+
     #[test]
     fn x25519_ephemeral_new_random_derives_nonzero_public_key() {
         let ephemeral = X25519Ephemeral::new_random().expect("random x25519 ephemeral");
@@ -2232,6 +2265,8 @@ mod key_update_tests {
             .expect("streaming ML-KEM keypair");
         let all_zero_public = vec![0_u8; STREAMING_DEFAULT_KEM_SUITE.public_key_len()];
         let all_zero_secret = vec![0_u8; STREAMING_DEFAULT_KEM_SUITE.secret_key_len()];
+        let embedded_public_zero_secret =
+            mlkem_secret_with_zero_embedded_public_key(kyber_pair.secret_key.as_slice());
 
         let mut material =
             StreamingKeyMaterial::new(identity.clone()).expect("streaming key material");
@@ -2240,10 +2275,17 @@ mod key_update_tests {
             .expect_err("all-zero Kyber public key must be rejected");
         assert!(matches!(err, KeyMaterialError::InvalidKyberPublicKey));
 
-        let mut material = StreamingKeyMaterial::new(identity).expect("streaming key material");
+        let mut material =
+            StreamingKeyMaterial::new(identity.clone()).expect("streaming key material");
         let err = material
             .set_kyber_keys(&kyber_pair.public_key, &all_zero_secret)
             .expect_err("all-zero Kyber secret key must be rejected");
+        assert!(matches!(err, KeyMaterialError::InvalidKyberSecretKey));
+
+        let mut material = StreamingKeyMaterial::new(identity).expect("streaming key material");
+        let err = material
+            .set_kyber_keys(&kyber_pair.public_key, &embedded_public_zero_secret)
+            .expect_err("all-zero embedded Kyber public key must be rejected");
         assert!(matches!(err, KeyMaterialError::InvalidKyberSecretKey));
     }
 
@@ -2253,6 +2295,8 @@ mod key_update_tests {
             .expect("streaming ML-KEM keypair");
         let all_zero_public = vec![0_u8; STREAMING_DEFAULT_KEM_SUITE.public_key_len()];
         let all_zero_secret = vec![0_u8; STREAMING_DEFAULT_KEM_SUITE.secret_key_len()];
+        let embedded_public_zero_secret =
+            mlkem_secret_with_zero_embedded_public_key(kyber_pair.secret_key.as_slice());
         let fingerprint = fingerprint_kyber_public(&all_zero_public, STREAMING_DEFAULT_KEM_SUITE);
 
         let mut session = StreamingSession::new(CapabilityRole::Viewer);
@@ -2269,6 +2313,12 @@ mod key_update_tests {
 
         let mut session = StreamingSession::new(CapabilityRole::Viewer);
         let err = session
+            .set_kyber_local_secret(&embedded_public_zero_secret)
+            .expect_err("all-zero embedded Kyber public key must be rejected");
+        assert!(matches!(err, HandshakeError::InvalidKyberSecretKey));
+
+        let mut session = StreamingSession::new(CapabilityRole::Viewer);
+        let err = session
             .set_kyber_local_key_pair(&all_zero_public, kyber_pair.secret_key.as_ref())
             .expect_err("all-zero local Kyber public key must be rejected");
         assert!(matches!(err, HandshakeError::InvalidKyberPublicKey));
@@ -2277,6 +2327,12 @@ mod key_update_tests {
         let err = session
             .set_kyber_local_key_pair(&kyber_pair.public_key, &all_zero_secret)
             .expect_err("all-zero local Kyber secret key must be rejected");
+        assert!(matches!(err, HandshakeError::InvalidKyberSecretKey));
+
+        let mut session = StreamingSession::new(CapabilityRole::Viewer);
+        let err = session
+            .set_kyber_local_key_pair(&kyber_pair.public_key, &embedded_public_zero_secret)
+            .expect_err("all-zero embedded Kyber public key must be rejected");
         assert!(matches!(err, HandshakeError::InvalidKyberSecretKey));
     }
 

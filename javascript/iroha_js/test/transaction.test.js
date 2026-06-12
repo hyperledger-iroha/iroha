@@ -4,6 +4,8 @@ import {
   hashSignedTransaction,
   resignSignedTransaction,
   submitSignedTransaction,
+  buildRegisterSnsNameTransaction,
+  registerSnsNameViaConsensus,
   buildMintAndTransferTransaction,
   buildBurnAssetTransaction,
   buildBurnTriggerTransaction,
@@ -469,6 +471,259 @@ test("resignSignedTransaction delegates to native binding", () => {
     () => {
       const result = resignSignedTransaction(input, key);
       assert.deepEqual(result, output);
+    },
+  );
+});
+
+baseTest("buildRegisterSnsNameTransaction yields RegisterSnsName instruction", () => {
+  const captures = [];
+  const request = {
+    selector: { version: 1, suffix_id: 6647857470246403404, label: "is" },
+    owner: AUTHORITY_ID_INPUT,
+  };
+  const result = withNativeBinding(
+    {
+      buildTransaction: (_chain, authority, instructions, metadata, _created, ttl, _nonce, pk) => {
+        captures.push({
+          authority,
+          instructions: instructions.map((j) => JSON.parse(j)),
+          metadata: JSON.parse(metadata),
+          ttl,
+          privateKey: Buffer.from(pk),
+        });
+        return {
+          signed_transaction: Buffer.from([0x45]),
+          hash: Buffer.alloc(32, 0x46),
+        };
+      },
+    },
+    () =>
+      buildRegisterSnsNameTransaction({
+        chainId: "test-chain",
+        authority: AUTHORITY_ID_INPUT,
+        request,
+        metadata: { purpose: "sns-name-registration" },
+        ttlMs: 900_000,
+        privateKey: PRIVATE_KEY,
+      }),
+  );
+
+  assert.equal(result.hash.toString("hex"), "46".repeat(32));
+  assert.equal(captures.length, 1);
+  assert.equal(captures[0].authority, AUTHORITY_ID);
+  assert.deepEqual(captures[0].instructions, [{ RegisterSnsName: request }]);
+  assert.deepEqual(captures[0].metadata, { purpose: "sns-name-registration" });
+  assert.equal(captures[0].ttl, 900_000);
+  assert.deepEqual(captures[0].privateKey, PRIVATE_KEY);
+});
+
+baseTest("buildRegisterSnsNameTransaction rejects malformed registration requests", () => {
+  for (const request of [null, undefined, [], "name.is"]) {
+    assert.throws(
+      () =>
+        buildRegisterSnsNameTransaction({
+          chainId: "test-chain",
+          authority: AUTHORITY_ID_INPUT,
+          request,
+          privateKey: PRIVATE_KEY,
+        }),
+      /request must be a non-null object/,
+    );
+  }
+});
+
+baseTest("buildRegisterSnsNameTransaction ignores caller-supplied instructions", () => {
+  const captures = [];
+  withNativeBinding(
+    {
+      buildTransaction: (_chain, _authority, instructions) => {
+        captures.push(instructions.map((j) => JSON.parse(j)));
+        return {
+          signed_transaction: Buffer.from([0x47]),
+          hash: Buffer.alloc(32, 0x48),
+        };
+      },
+    },
+    () =>
+      buildRegisterSnsNameTransaction({
+        chainId: "test-chain",
+        authority: AUTHORITY_ID_INPUT,
+        request: { selector: { label: "is" } },
+        instructions: [{ Transfer: { Asset: { object: "999999" } } }],
+        privateKey: PRIVATE_KEY,
+      }),
+  );
+
+  assert.deepEqual(captures, [[{ RegisterSnsName: { selector: { label: "is" } } }]]);
+});
+
+baseTest("registerSnsNameViaConsensus returns PendingTimeout status", async () => {
+  const request = {
+    selector: { version: 1, suffix_id: 6647857470246403404, label: "is" },
+    owner: AUTHORITY_ID_INPUT,
+  };
+  const signedTransaction = Buffer.from([0x51, 0x52]);
+  const transactionHash = Buffer.alloc(32, 0x53);
+  const submittedHash = Buffer.alloc(32, 0x54);
+  const fetchImpl = async (url) => {
+    if (url.endsWith("/v1/node/capabilities")) {
+      return createResponse({
+        status: 200,
+        jsonData: NODE_CAPABILITIES,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return createResponse({
+      status: 202,
+      jsonData: { status: "Accepted" },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const result = await withNativeBinding(
+    {
+      buildTransaction: () => ({
+        signed_transaction: signedTransaction,
+        hash: transactionHash,
+      }),
+      hashSignedTransaction: () => submittedHash,
+    },
+    () =>
+      registerSnsNameViaConsensus({
+        client,
+        chainId: "test-chain",
+        authority: AUTHORITY_ID_INPUT,
+        request,
+        privateKey: PRIVATE_KEY,
+        pollIntervalMs: 0,
+        timeoutMs: 1,
+        scope: "global",
+      }),
+  );
+
+  assert.equal(result.hash, transactionHash.toString("hex"));
+  assert.equal(result.submittedHash, submittedHash.toString("hex"));
+  assert.deepEqual(result.submission, { status: "Accepted" });
+  assert.equal(result.status.kind, "PendingTimeout");
+  assert.deepEqual(result.status.lastStatus, { status: "Accepted" });
+});
+
+baseTest("registerSnsNameViaConsensus returns submitted hash when wait is disabled", async () => {
+  const transactionHash = Buffer.alloc(32, 0x56);
+  const submittedHash = Buffer.alloc(32, 0x57);
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    calls.push({ url, init });
+    if (url.endsWith("/v1/node/capabilities")) {
+      return createResponse({
+        status: 200,
+        jsonData: NODE_CAPABILITIES,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    assert.ok(url.endsWith("/v1/pipeline/transactions"));
+    return createResponse({
+      status: 202,
+      jsonData: { status: "Accepted" },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+
+  const result = await withNativeBinding(
+    {
+      buildTransaction: () => ({
+        signed_transaction: Buffer.from([0x58]),
+        hash: transactionHash,
+      }),
+      hashSignedTransaction: () => submittedHash,
+    },
+    () =>
+      registerSnsNameViaConsensus({
+        client,
+        chainId: "test-chain",
+        authority: AUTHORITY_ID_INPUT,
+        request: { selector: { label: "is" } },
+        privateKey: PRIVATE_KEY,
+        waitForCommit: false,
+      }),
+  );
+
+  assert.equal(result.hash, transactionHash.toString("hex"));
+  assert.equal(result.submittedHash, submittedHash.toString("hex"));
+  assert.deepEqual(result.submission, { status: "Accepted" });
+  assert.equal(result.status, null);
+  assert.equal(
+    calls.some((call) =>
+      String(call.url).includes("/v1/pipeline/transactions/status"),
+    ),
+    false,
+  );
+});
+
+baseTest("registerSnsNameViaConsensus validates client inputs and rethrows submit failures", async () => {
+  const request = {
+    selector: { version: 1, suffix_id: 6647857470246403404, label: "is" },
+    owner: AUTHORITY_ID_INPUT,
+  };
+
+  await assert.rejects(
+    () => registerSnsNameViaConsensus(null),
+    /input must be an object/,
+  );
+  await assert.rejects(
+    () => registerSnsNameViaConsensus({ request, privateKey: PRIVATE_KEY }),
+    /client or toriiUrl is required/,
+  );
+  await assert.rejects(
+    () =>
+      registerSnsNameViaConsensus({
+        client: { submitTransaction: async () => ({}) },
+        chainId: "test-chain",
+        authority: AUTHORITY_ID_INPUT,
+        request,
+        privateKey: PRIVATE_KEY,
+      }),
+    /client must be an instance of ToriiClient/,
+  );
+
+  const fetchImpl = async (url) => {
+    if (url.endsWith("/v1/node/capabilities")) {
+      return createResponse({
+        status: 200,
+        jsonData: NODE_CAPABILITIES,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return createResponse({
+      status: 500,
+      jsonData: { error: "submit rejected" },
+      textBody: "submit rejected",
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  await withNativeBinding(
+    {
+      buildTransaction: () => ({
+        signed_transaction: Buffer.from([0x61]),
+        hash: Buffer.alloc(32, 0x62),
+      }),
+      hashSignedTransaction: () => Buffer.alloc(32, 0x63),
+    },
+    async () => {
+      await assert.rejects(
+        () =>
+          registerSnsNameViaConsensus({
+            client,
+            chainId: "test-chain",
+            authority: AUTHORITY_ID_INPUT,
+            request,
+            privateKey: PRIVATE_KEY,
+            waitForCommit: false,
+          }),
+        /submit rejected|status 500|500/,
+      );
     },
   );
 });

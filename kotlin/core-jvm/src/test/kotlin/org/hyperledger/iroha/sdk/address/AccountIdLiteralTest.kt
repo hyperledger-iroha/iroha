@@ -13,10 +13,24 @@ class AccountIdLiteralTest {
     }
 
     @Test
-    fun trimsWhitespaceBeforeValidation() {
+    fun rejectsSurroundingWhitespaceBeforeValidation() {
         val address = sampleI105(0x22)
-        val normalized = requireCanonicalI105Address("  $address  ", "accountId")
-        assertEquals(address, normalized)
+        val paddedInputs = listOf(
+            " $address",
+            "$address ",
+            "\t$address",
+            "$address\n",
+            " \t$address\n ",
+        )
+        for (input in paddedInputs) {
+            val error = assertFailsWith<IllegalArgumentException> {
+                requireCanonicalI105Address(input, "accountId")
+            }
+            assertEquals(
+                "accountId must not contain surrounding whitespace",
+                error.message,
+            )
+        }
     }
 
     @Test

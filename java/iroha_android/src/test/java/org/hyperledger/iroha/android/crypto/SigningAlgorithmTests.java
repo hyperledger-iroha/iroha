@@ -42,9 +42,19 @@ public final class SigningAlgorithmTests {
 
   @Test
   public void unsupportedAndUnicodeConfusableAliasesFailClosed() {
-    assert SigningAlgorithm.fromAlgorithmName(null) == SigningAlgorithm.ED25519;
-    assert SigningAlgorithm.fromAlgorithmName("") == SigningAlgorithm.ED25519;
-    assert SigningAlgorithm.fromAlgorithmName("   ") == SigningAlgorithm.ED25519;
+    final String[] blankAlgorithms = {null, "", "   "};
+    for (final String algorithm : blankAlgorithms) {
+      final IllegalArgumentException error =
+          assertThrows(() -> SigningAlgorithm.fromAlgorithmName(algorithm));
+      assert error.getMessage().contains("non-empty string") : error.getMessage();
+    }
+
+    final String[] paddedAlgorithms = {" ed25519", "ed25519 ", "\ted25519"};
+    for (final String algorithm : paddedAlgorithms) {
+      final IllegalArgumentException error =
+          assertThrows(() -> SigningAlgorithm.fromAlgorithmName(algorithm));
+      assert error.getMessage().contains("surrounding whitespace") : error.getMessage();
+    }
 
     final String[] algorithms = {
       "unknown",
@@ -59,13 +69,12 @@ public final class SigningAlgorithmTests {
     }
   }
 
-  private static void assertThrows(final Runnable action) {
-    boolean failed = false;
+  private static IllegalArgumentException assertThrows(final Runnable action) {
     try {
       action.run();
     } catch (final IllegalArgumentException expected) {
-      failed = true;
+      return expected;
     }
-    assert failed : "expected IllegalArgumentException";
+    throw new AssertionError("expected IllegalArgumentException");
   }
 }

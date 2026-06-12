@@ -141,6 +141,28 @@ def test_offline_cash_snapshot_requires_cached_issuer_key() -> None:
         missing_key.require_usable_for_offline_exchange(now_ms=200)
     assert error.value.code == "missing_issuer_public_key"
 
+    for issuer_key in (
+        "",
+        " issuer-key",
+        "issuer-key ",
+        "issuer key",
+        "issuer-key\n",
+        "issuer-key\u2603",
+    ):
+        noncanonical = OfflineCashConfigurationSnapshot(
+            chain_id="00000042",
+            asset_definition_id="pkr#sbp",
+            offline_payments_enabled=True,
+            issuer_public_key_base64=issuer_key,
+            native_bridge_abi_version=7,
+        )
+        with pytest.raises(OfflineCashConfigurationSnapshotError) as error:
+            noncanonical.require_usable_for_offline_exchange(
+                now_ms=200,
+                required_native_bridge_abi_version=7,
+            )
+        assert error.value.code == "missing_issuer_public_key"
+
     disabled = OfflineCashConfigurationSnapshot(
         chain_id="00000042",
         asset_definition_id="pkr#sbp",

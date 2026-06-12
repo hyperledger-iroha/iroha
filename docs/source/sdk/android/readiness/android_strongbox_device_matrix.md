@@ -22,6 +22,10 @@ Production release criteria:
 - ABI 6 recursive spend JNI probes pass on every required device family.
 - ABI 7 recursive compact-token JNI probes prove and verify the packaged
   one-hop LEN=4 path on every required device family.
+- Slot probe-state fields (`abi6_recursive_spend_jni_probe`,
+  `abi7_recursive_compact_jni_probe`, and
+  `abi7_recursive_compact_prover_state`) must be exact lowercase strings with no
+  surrounding whitespace or control characters.
 - ABI 7 recursive compact prover calls that require multi-hop append-batch
   composition produce package-backed compact tokens when the key package is
   supplied, while empty, malformed, or dummy-proof local archives remain
@@ -49,13 +53,20 @@ Production release criteria:
   `logs/runtime.log`; signed evidence rejects refreshed manifests that omit any
   of those base artifacts. Those required base artifacts must be non-empty and
   no larger than 16 MiB each. Telemetry JSON must bind exactly to the slot id
-  without trimming whitespace,
-  status NDJSON must include an `ok` status and no failure status, and
-  `logs/runtime.log` must carry the Kagemusha device-lab completion marker
-  without build/test failure markers. Attestation harness, result, and
+  without whitespace, control-character, or type normalization and must use the exact `kagemusha-device-lab` suite value.
+  status NDJSON must include an `ok` status as an exact lowercase value,
+  must use LF line endings with a trailing newline, nonblank status lines must
+  not rely on surrounding whitespace being stripped, failure statuses must be
+  absent, and any `slot_id` field in a status record must bind exactly to the
+  slot id without whitespace or control-character normalization. `logs/runtime.log` must carry the Kagemusha device-lab
+  completion marker without build/test failure markers. Attestation harness, result, and
   verifier-report strings are exact: slot bindings, status values, identity
   digests, and StrongBox labels are rejected if they require whitespace
-  trimming, case normalization, or control-character filtering.
+  trimming, case normalization, or control-character filtering. Scanner,
+  raw-puller, attestation-report, readiness, and release-bundle diagnostics must redact
+  control-character-bearing JSON keys, summary fields, and artifact labels
+  instead of echoing unsafe terminal strings, and raw ADB stderr details with
+  control characters must be redacted before CLI display.
   The device-lab root, operator-supplied root ancestors, slot parent
 	  directories, slot path ancestors, slot directories, slot metadata, the
 	  SHA-256 manifest, evidence directories, and artifact files must be ordinary
@@ -89,14 +100,19 @@ Production release criteria:
 	  signed-evidence `artifact_digests` bind each hashed artifact to the opened
 	  file identity. Signed-evidence string fields are exact: surrounding
 	  whitespace and non-printing control characters are rejected before matching
-	  them against `slot.json` or signature metadata.
+	  them against `slot.json` or signature metadata. The signed-evidence
+	  generator enforces the same exactness for slot metadata strings,
+	  `signed_evidence_artifact_path`, `attestation_certificate_chain_path`,
+	  raw test commands, and signer key ids before it can emit signed evidence.
 	  Direct SHA-256 manifest parser and verifier helper calls reject
 	  secret-looking slot paths, unreadable slot-root metadata, symlinked slot
 	  roots, and symlinked slot ancestors before parsing `sha256sum.txt` or
 	  traversing slot artifacts, and reject unreadable-metadata and hardlinked
 	  `sha256sum.txt` manifests before reading manifest bytes or discovering slot
 	  files. The manifest parser binds `sha256sum.txt` bytes to the opened file
-	  identity so post-preflight regular-file swaps fail closed.
+	  identity so post-preflight regular-file swaps fail closed, and nonblank
+	  manifest lines must not rely on leading or trailing whitespace
+	  normalization or leading `*` path normalization before digest/path parsing.
 	  Direct slot-file discovery reports unreadable slot-root and
 	  artifact-directory metadata through caller error lists, returns no artifacts
 	  for secret-looking slot paths, symlinked slot ancestors, missing roots,
@@ -144,10 +160,11 @@ Production release criteria:
   Generate that closed report from the host-side StrongBox verifier output with
   `python3 scripts/kagemusha_android_attestation_report.py --harness-result <android_keystore_attestation_result.json> --slot-id <slot-id> --device-fingerprint <adb-ro.build.fingerprint> --os-build-id <adb-ro.build.id> --attestation-certificate-chain <chain.pem> --physical-device-attestation --out <report.json>`.
   The writer refuses non-StrongBox verifier results, unexpected verifier-result fields,
-  noncanonical harness or expected challenge hex, whitespace-normalized identity
+  noncanonical harness alias, level, or challenge strings, noncanonical expected
+  challenge hex, whitespace-normalized or control-character-bearing identity
   arguments, normalized StrongBox/KeyMint level labels, challenge digest drift,
-  PEM chain-length mismatches, whitespace-normalized or unsafe chain paths, and
-  reports that do not carry an explicit physical-device assertion. It writes the
+  PEM chain-length mismatches, whitespace-normalized, control-character, or unsafe
+  chain paths, and reports that do not carry an explicit physical-device assertion. It writes the
   report through a
   fsynced same-directory temporary file, atomically replaces the output,
   identity-checks failed temporary cleanup, syncs the captured output-parent
@@ -207,12 +224,15 @@ Production release criteria:
   production evidence.
   Pull the newest raw slot from an attached physical device with
   `python3 scripts/kagemusha_pull_android_device_lab_raw_slot.py --serial <adb-serial> --run-as-package org.hyperledger.iroha.sdk.offline.wallet.lab --out-root target/kagemusha-android-raw --summary-out target/kagemusha-android-raw-pull-summary.json`.
-  The puller reads `latest-slot.txt` through `run-as`, requires that query
-  output to be exactly one slot id plus a trailing newline, streams the selected
-  slot with `adb exec-out ... tar`, refuses to overwrite an existing local raw
-  slot, and rejects symlink, hardlink, special-file, traversal, duplicate,
-  oversized, directory-colliding, unreviewed extra-artifact, and
-  slot-mismatched tar members before the raw artifacts can be assembled into
+  The puller rejects empty, surrounding-whitespace-normalized,
+  control-character, or secret-looking ADB executable, serial, run-as package,
+  and device-root arguments before building any `adb` command. It then reads
+  `latest-slot.txt` through `run-as`, requires that query output to be exactly
+  one slot id plus a trailing newline, streams the selected slot with
+  `adb exec-out ... tar`, refuses to overwrite an existing local raw slot, and
+  rejects symlink, hardlink, special-file, traversal, duplicate, oversized,
+  directory-colliding, unreviewed extra-artifact, and slot-mismatched tar
+  members before the raw artifacts can be assembled into
   signed production evidence. The
   `latest-slot.txt` included in the tar stream must also be exactly the selected
   slot id plus a trailing newline; surrounding whitespace or otherwise
@@ -253,18 +273,31 @@ Production release criteria:
   assembly: each slot-bound artifact must match the selected slot id exactly, D2D
   transcript booleans must prove offline payer/payee transport and double-spend
   rejection, and wallet integrity must prove one-use key rotation plus rollback
-  rejection. `telemetry/status.ndjson` is parsed line-by-line with duplicate-key
-  rejection, must not report failure statuses, and must bind status records to
-  the selected slot id when present; `logs/runtime.log` must contain the
-  completion marker and must not contain build, test, panic, traceback, or fatal
+  rejection. D2D and wallet transcript string fields must match slot metadata
+  exactly without whitespace or control-character normalization.
+  `telemetry/telemetry.json` must carry the exact
+  `kagemusha-device-lab` suite label. `telemetry/status.ndjson` is parsed
+  line-by-line with duplicate-key rejection; files must use LF line endings
+  with a trailing newline, nonblank lines must not contain surrounding
+  whitespace, status strings must be exact lowercase values with no surrounding
+  whitespace or control characters, failure statuses are rejected, and any
+  status-record `slot_id` must be an exact selected-slot binding with no
+  whitespace or control-character normalization; `logs/runtime.log` must contain
+  the completion marker and must not contain build, test, panic, traceback, or fatal
   exception markers. Harness strings must be canonical before raw pulls,
   signed-slot assembly, or signed-slot scanning can accept them: aliases cannot
-  carry surrounding whitespace, StrongBox levels must use exact accepted labels,
-  and `challenge_hex` must be lowercase hexadecimal without whitespace. The host attestation report renderer enforces the same
-  canonical challenge format, including `--expected-challenge-hex`, and rejects
-  whitespace-normalized slot id, device fingerprint, OS build, app package,
-  verifier names, StrongBox/KeyMint level labels, and PEM certificate-count
-  mismatches before writing `attestation/report.json`. When `--summary-out`
+  carry surrounding whitespace or control characters, StrongBox levels must use
+  exact accepted labels without surrounding whitespace, control characters, or
+  secret-looking material, and `challenge_hex` must be lowercase hexadecimal
+  without whitespace. Signed slot metadata must also keep
+  `keymint_security_level` as an exact accepted StrongBox label; lowercase or
+  otherwise case-normalized values are rejected. The host attestation report renderer enforces the same
+  alias, StrongBox/KeyMint level, and canonical challenge format, including
+  `--expected-challenge-hex`, and rejects whitespace-normalized or
+  control-character-bearing slot id, device fingerprint, OS build, app package,
+  verifier names, StrongBox/KeyMint level labels, harness strings, chain paths,
+  and PEM certificate-count mismatches before writing
+  `attestation/report.json`. When `--summary-out`
   is supplied, the raw-pull summary is
   serialized as strict JSON, capped before temporary-file creation, atomically
   replaced after fsync, read back through an opened-file identity binding that
@@ -276,10 +309,12 @@ Production release criteria:
 - Assemble a production slot from completed attached-device artifacts with
   `python3 scripts/kagemusha_android_device_lab_slot.py --slot-root artifacts/android/device_lab --slot-id <slot-id> --device-family "<standard-family>" --attestation-result <result.json> --attestation-harness-result <harness-result.json> --attestation-report <report.json> --attestation-certificate-chain <chain.pem> --offline-wallet-apk <offline-wallet-release.apk> --d2d-payment-transcript <d2d-payment.json> --wallet-integrity-transcript <integrity.json> --telemetry-json <telemetry.json> --status-ndjson <status.ndjson> --pending-queue-json <pending_queue.json> --runtime-log <runtime.log> --private-key <runtime-only-lab-private-key.pem> --public-key <lab-public-key.pem> --signer-key-id <lab-signer-id>`.
   The assembler reads the attached device identity from ADB unless explicit
-  device fingerprint and OS build overrides are supplied, refuses to overwrite
-  an existing slot directory, and requires signing inputs by default; unsigned
-  staging slots require the explicit `--allow-unsigned` flag and remain
-  rejected by production readiness. Every source artifact copied by the
+  device fingerprint and OS build overrides are supplied; each `getprop`
+  response must be exactly one LF-terminated value and the value must not rely
+  on trimming surrounding whitespace. It refuses to overwrite an existing slot
+  directory and requires signing inputs by default; unsigned staging slots
+  require the explicit `--allow-unsigned` flag and remain rejected by production
+  readiness. Every source artifact copied by the
   assembler is read through symlink-free ancestors and an opened-file identity
   binding, then the staged copy is parent-synced and read back through its own
   opened-file identity binding, so symlinked source directories, hardlinked
@@ -316,7 +351,11 @@ Production release criteria:
 		  staged-byte readback and signature-output reads are bound to opened file
 		  identities. The
 		  signer helper also rejects secret-looking `--slot`, `--output`, and
-	  `--signer-key-id` runtime arguments before reading slot metadata.
+		  `--signer-key-id` runtime arguments before reading slot metadata, and
+	  rejects padded or control-character signer key ids before metadata reads.
+	  The signed-slot assembler also rejects padded or control-character
+	  `--slot-id`, requested device-family, and device identity override inputs
+	  before path construction or ADB fallback.
 	  Device-lab JSON summaries also carry a local root label instead of the
 	  absolute lab path, and the validator does not print the absolute
 	  `--json-out` path. Secret-looking `--root` and `--json-out` argument
@@ -503,7 +542,8 @@ Production release criteria:
   Reserved-lineage proof evidence before the release cutoff or future-dated
   beyond the validator clock-skew allowance is also blocked, and
 	  `generated_at_utc` must use canonical UTC
-		  `YYYY-MM-DDTHH:MM:SSZ` form. The lineage evidence helper rejects
+		  `YYYY-MM-DDTHH:MM:SSZ` form without whitespace or control-character
+		  normalization. The lineage evidence helper rejects
 		  noncanonical `--generated-at-utc` input, including `+00:00` offsets or
 		  surrounding whitespace, instead of normalizing it, and rejects symlinked
 			  output ancestors before creating missing `--out` parent directories or

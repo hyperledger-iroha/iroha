@@ -991,12 +991,13 @@ fn validate_token_signature_material(
     suite: MlDsaSuite,
     signature: &[u8],
 ) -> Result<(), VerifyError> {
+    let expected = suite.signature_len();
+    if signature.len() == expected && signature.iter().all(|&byte| byte == 0) {
+        return Err(VerifyError::InertSignature);
+    }
     suite
         .validate_signature(signature)
         .map_err(VerifyError::Signature)?;
-    if signature.iter().all(|&byte| byte == 0) {
-        return Err(VerifyError::InertSignature);
-    }
     Ok(())
 }
 
@@ -1970,6 +1971,48 @@ mod tests {
         let err = verifier
             .verify(&token, &RELAY_ID, &TRANSCRIPT, now)
             .expect_err("bad signature length must fail");
+        assert_mldsa_bad_encoding(err, "signature");
+        assert_eq!(store.lock().expect("store lock").len(now), 0);
+    }
+
+    #[test]
+    fn verifier_rejects_short_all_zero_signature_as_bad_encoding() {
+        let suite = MlDsaSuite::MlDsa44;
+        let keypair = generate_mldsa_keypair(suite).expect("ML-DSA keypair generation");
+        let fingerprint = compute_issuer_fingerprint(keypair.public_key());
+        let issued = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let expires = issued + Duration::from_secs(300);
+        let mut rng = StdRng::seed_from_u64(0x51A0);
+        let mut token = AdmissionToken::mint(
+            suite,
+            keypair.secret_key(),
+            fingerprint,
+            RELAY_ID,
+            TRANSCRIPT,
+            issued,
+            expires,
+            0,
+            &mut rng,
+        )
+        .expect("mint");
+        token.signature.fill(0);
+        token.signature.truncate(token.signature.len() - 1);
+
+        let limits = TokenStoreLimits::new(4, Duration::from_secs(900)).expect("limits");
+        let store: Arc<Mutex<dyn TokenStore + Send>> =
+            Arc::new(Mutex::new(InMemoryTokenStore::new(limits)));
+        let verifier = AdmissionTokenVerifier::new(
+            suite,
+            keypair.public_key().to_vec(),
+            Duration::from_secs(900),
+            Duration::from_secs(5),
+        )
+        .with_replay_store(store.clone());
+        let now = issued + Duration::from_secs(5);
+
+        let err = verifier
+            .verify(&token, &RELAY_ID, &TRANSCRIPT, now)
+            .expect_err("short all-zero signature must remain a malformed signature");
         assert_mldsa_bad_encoding(err, "signature");
         assert_eq!(store.lock().expect("store lock").len(now), 0);
     }

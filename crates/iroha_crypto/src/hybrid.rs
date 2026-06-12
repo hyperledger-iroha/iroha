@@ -792,6 +792,37 @@ mod tests {
         bytes[1] = (bytes[1] & 0xF0) | 0x0F;
     }
 
+    fn mlkem_secret_embedded_public_range() -> core::ops::Range<usize> {
+        const PUBLIC_HASH_AND_REJECTION_SEED_BYTES: usize = 64;
+
+        let start = HYBRID_KEM_SUITE.secret_key_len()
+            - HYBRID_KEM_SUITE.public_key_len()
+            - PUBLIC_HASH_AND_REJECTION_SEED_BYTES;
+        start..start + HYBRID_KEM_SUITE.public_key_len()
+    }
+
+    fn mlkem_secret_embedded_public_hash_range() -> core::ops::Range<usize> {
+        const PUBLIC_KEY_HASH_BYTES: usize = 32;
+        const PUBLIC_HASH_AND_REJECTION_SEED_BYTES: usize = 64;
+
+        let start = HYBRID_KEM_SUITE.secret_key_len() - PUBLIC_HASH_AND_REJECTION_SEED_BYTES;
+        start..start + PUBLIC_KEY_HASH_BYTES
+    }
+
+    fn mlkem_public_key_hash(public_key: &[u8]) -> [u8; 32] {
+        let digest = Sha3_256::digest(public_key);
+        let mut out = [0u8; 32];
+        out.copy_from_slice(&digest);
+        out
+    }
+
+    fn mlkem_secret_with_zero_embedded_public_key(secret_key: &mut [u8]) {
+        let public_range = mlkem_secret_embedded_public_range();
+        secret_key[public_range.clone()].fill(0);
+        let public_hash = mlkem_public_key_hash(&secret_key[public_range]);
+        secret_key[mlkem_secret_embedded_public_hash_range()].copy_from_slice(&public_hash);
+    }
+
     #[test]
     fn hybrid_suite_string_is_first_release_transcript_label() {
         let suite = HybridSuite::X25519MlKem768ChaCha20Poly1305;
@@ -1098,6 +1129,19 @@ mod tests {
 
         let err = HybridSecretKey::from_bytes(pair.secret().x25519().to_bytes(), all_zero_kyber)
             .expect_err("all-zero Kyber secret key must be rejected while decoding");
+
+        assert_eq!(err, HybridError::InvalidKyberSecretKey);
+    }
+
+    #[test]
+    fn secret_key_decode_rejects_all_zero_embedded_kyber_public_key() {
+        let mut rng = ChaCha20Rng::from_seed([0x7E; 32]);
+        let pair = HybridKeyPair::generate(&mut rng).expect("generated hybrid keypair");
+        let (x25519, mut kyber_secret) = pair.secret().to_bytes();
+        mlkem_secret_with_zero_embedded_public_key(&mut kyber_secret);
+
+        let err = HybridSecretKey::from_bytes(x25519, kyber_secret)
+            .expect_err("all-zero embedded Kyber public key must be rejected while decoding");
 
         assert_eq!(err, HybridError::InvalidKyberSecretKey);
     }

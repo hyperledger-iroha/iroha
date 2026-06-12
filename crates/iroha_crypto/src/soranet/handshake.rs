@@ -6975,6 +6975,47 @@ mod tests {
     }
 
     #[test]
+    fn process_client_hello_rejects_all_zero_nk2_kem_before_relay_rng() {
+        let defaults = RuntimeParams::soranet_defaults();
+        let client_caps = capabilities_with_suites(
+            defaults.client_capabilities,
+            &[HandshakeSuite::Nk2Hybrid],
+            false,
+        );
+        let relay_caps = capabilities_with_suites(
+            defaults.relay_capabilities,
+            &[HandshakeSuite::Nk2Hybrid],
+            false,
+        );
+        let params = RuntimeParams {
+            descriptor_commit: defaults.descriptor_commit,
+            client_capabilities: client_caps.as_slice(),
+            relay_capabilities: relay_caps.as_slice(),
+            kem_id: defaults.kem_id,
+            sig_id: defaults.sig_id,
+            resume_hash: defaults.resume_hash,
+        };
+        let mut rng_client = StdRng::seed_from_u64(6104);
+        let relay_keys = KeyPair::random();
+        let (mut client_hello, _client_state) =
+            build_client_hello(&params, &mut rng_client).expect("nk2 client");
+        let primary_range = client_hello_primary_kem_range(&client_hello);
+        client_hello[primary_range].fill(0);
+
+        let err = match process_client_hello(&client_hello, &params, &relay_keys, &mut PanicRng) {
+            Ok(_) => panic!("all-zero primary KEM key must fail before relay RNG"),
+            Err(err) => err,
+        };
+        match err {
+            HarnessError::Kem(message) => {
+                assert!(message.contains("client ML-KEM public key"));
+                assert!(message.contains("all zero"));
+            }
+            other => panic!("expected KEM preflight error, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn build_client_hello_supports_nk3_preference() {
         let defaults = RuntimeParams::soranet_defaults();
         let client_caps = capabilities_with_suites(
@@ -7189,6 +7230,53 @@ mod tests {
                 message.contains("forward ML-KEM public key"),
                 "unexpected error: {message}"
             ),
+            other => panic!("expected KEM preflight error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn process_client_hello_rejects_all_zero_nk3_forward_kem_before_relay_rng() {
+        let defaults = RuntimeParams::soranet_defaults();
+        let client_caps = capabilities_with_suites(
+            defaults.client_capabilities,
+            &[
+                HandshakeSuite::Nk3PqForwardSecure,
+                HandshakeSuite::Nk2Hybrid,
+            ],
+            false,
+        );
+        let relay_caps = capabilities_with_suites(
+            defaults.relay_capabilities,
+            &[
+                HandshakeSuite::Nk3PqForwardSecure,
+                HandshakeSuite::Nk2Hybrid,
+            ],
+            false,
+        );
+        let params = RuntimeParams {
+            descriptor_commit: defaults.descriptor_commit,
+            client_capabilities: client_caps.as_slice(),
+            relay_capabilities: relay_caps.as_slice(),
+            kem_id: defaults.kem_id,
+            sig_id: defaults.sig_id,
+            resume_hash: defaults.resume_hash,
+        };
+        let mut rng_client = StdRng::seed_from_u64(6105);
+        let relay_keys = KeyPair::random();
+        let (mut client_hello, _client_state) =
+            build_client_hello(&params, &mut rng_client).expect("nk3 client");
+        let forward_range = client_hello_forward_kem_range(&client_hello);
+        client_hello[forward_range].fill(0);
+
+        let err = match process_client_hello(&client_hello, &params, &relay_keys, &mut PanicRng) {
+            Ok(_) => panic!("all-zero forward KEM key must fail before relay RNG"),
+            Err(err) => err,
+        };
+        match err {
+            HarnessError::Kem(message) => {
+                assert!(message.contains("forward ML-KEM public key"));
+                assert!(message.contains("all zero"));
+            }
             other => panic!("expected KEM preflight error, got {other:?}"),
         }
     }

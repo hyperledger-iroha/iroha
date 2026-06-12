@@ -112,6 +112,8 @@ public final class NexusAppClientTest {
           "ed\u200B25519",
           "\u0435d25519",
           "ed\uFF0D25519",
+          "ED25519",
+          "Ed25519",
           " ED25519 ",
         }) {
       final NexusAppError error =

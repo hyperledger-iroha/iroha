@@ -16,13 +16,36 @@ internal object VerifyingKeyInstructionUtils {
         }
     }
 
+    internal fun Map<String, String>.exactNonEmptyString(key: String): String {
+        val value = nonEmptyString(key)
+        require(value.trim() == value) {
+            "Instruction argument '$key' must not contain surrounding whitespace"
+        }
+        return value
+    }
+
+    internal fun exactNonBlank(value: String, name: String): String {
+        val trimmed = value.trim()
+        require(trimmed.isNotEmpty()) { "$name must not be blank" }
+        require(trimmed == value) { "$name must not contain surrounding whitespace" }
+        return value
+    }
+
     internal fun Map<String, String>.productionBackend(key: String): String =
         VerifyingKeyBackendTag.requireProductionVerifyBackendLabel(nonEmptyString(key), key)
 
     internal fun productionBackend(value: String): String =
         VerifyingKeyBackendTag.requireProductionVerifyBackendLabel(value)
 
-    internal fun Map<String, String>.nonEmptyOrNull(key: String) = this[key]?.trim()?.takeIf { it.isNotBlank() }
+    internal fun Map<String, String>.nonEmptyOrNull(key: String): String? {
+        val value = this[key] ?: return null
+        val trimmed = value.trim()
+        if (trimmed.isEmpty()) return null
+        require(trimmed == value) {
+            "Instruction argument '$key' must not contain surrounding whitespace"
+        }
+        return value
+    }
     internal fun Map<String, String>.intOrNull(key: String): Int? = nonEmptyOrNull(key)?.toInt()
     internal fun Map<String, String>.longOrNull(key: String): Long? = nonEmptyOrNull(key)?.toLong()
 
@@ -44,9 +67,9 @@ internal object VerifyingKeyInstructionUtils {
         return VerifyingKeyRecordDescription.create(
             backend = backend,
             version = Integer.parseUnsignedInt(nonEmptyString("record.version")),
-            circuitId = nonEmptyString("record.circuit_id"),
+            circuitId = exactNonEmptyString("record.circuit_id"),
             schemaHashHex = nonEmptyString("record.public_inputs_schema_hash_hex"),
-            gasScheduleId = nonEmptyString("record.gas_schedule_id"),
+            gasScheduleId = exactNonEmptyString("record.gas_schedule_id"),
             backendTag = VerifyingKeyBackendTag.parse(nonEmptyString("record.backend_tag")),
             curve = nonEmptyOrNull("record.curve") ?: "unknown",
             commitmentHex = nonEmptyOrNull("record.commitment_hex"),

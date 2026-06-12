@@ -5442,6 +5442,19 @@ def test_release_readiness_report_guards_native_sccp_no_wasm_readiness_gate_inve
     package_dist_markers = markers_by_path[
         "javascript/iroha_js/test/package_dist.test.js"
     ]
+    package_dist_regression_markers = (
+        "browser SCCP no-WASM guard catches remote-prover identifier variants",
+        "browser BSC mainnet SCCP artifacts stay JS-only and local-prover owned",
+        "ipfs:proof-artifact.bin",
+        "artifacts/eth-mainnet/proof.wasm",
+        "WebAssembly.compile(bytes)",
+        "import './proof.wasm'",
+        "fallback remote prover",
+        "const proverEndpoint = endpoint",
+    )
+    for marker in package_dist_regression_markers:
+        assert marker in package_dist_markers
+
     sparse_package_dist = tmp_path / "package_dist.test.js"
     sparse_package_dist.write_text(
         "function assertBrowserMainnetSccpArtifactsStayJsOnlyAndLocalProverOwned() {}\n",
@@ -5469,6 +5482,13 @@ def test_release_readiness_report_guards_native_sccp_no_wasm_readiness_gate_inve
             "native SCCP no-WASM readiness SDK test inventory" in error
             and str(sparse_package_dist) in error
             and f"missing marker: {role_floor_marker}" in error
+            for error in errors
+        )
+    for marker in package_dist_regression_markers:
+        assert any(
+            "native SCCP no-WASM readiness SDK test inventory" in error
+            and str(sparse_package_dist) in error
+            and f"missing marker: {marker}" in error
             for error in errors
         )
 
@@ -6868,15 +6888,24 @@ def test_release_readiness_report_guards_sccp_release_artifact_path_text_gate_in
         for path, markers in verifier.SCCP_RELEASE_ARTIFACT_PATH_TEXT_MARKERS
         if path == "pytests/scripts/sccp_release_readiness_report_test.py"
     )
-    native_percent_marker = (
-        "test_release_readiness_report_blocks_native_evm_prover_percent_encoded_path"
-    )
+    removed_readiness_markers = {
+        "test_release_readiness_report_blocks_missing_sccp_release_artifact_path_text_gate",
+        "test_release_readiness_rejects_markdown_unsafe_artifact_paths",
+        "test_release_readiness_rejects_padded_artifact_paths",
+        "test_release_readiness_rejects_percent_encoded_artifact_traversal_paths",
+        "secret-token-complete",
+        'assert "secret-token" not in completed.stderr',
+        "test_release_readiness_rejects_markdown_unsafe_native_evm_payload_paths",
+        "test_release_readiness_rejects_control_character_native_evm_payload_paths",
+        "test_release_readiness_rejects_padded_native_evm_payload_paths",
+        "test_release_readiness_report_blocks_native_evm_prover_percent_encoded_path",
+    }
     sparse_readiness_test = tmp_path / "sccp_release_readiness_artifact_path_test.py"
     sparse_readiness_test.write_text(
         "\n".join(
             marker
             for marker in readiness_test_markers
-            if marker != native_percent_marker
+            if marker not in removed_readiness_markers
         ),
         encoding="utf-8",
     )
@@ -6884,12 +6913,13 @@ def test_release_readiness_report_guards_sccp_release_artifact_path_text_gate_in
         ((sparse_readiness_test, readiness_test_markers),)
     )
 
-    assert any(
-        "SCCP release artifact path text source inventory" in error
-        and str(sparse_readiness_test) in error
-        and f"missing marker: {native_percent_marker}" in error
-        for error in errors
-    )
+    for marker in removed_readiness_markers:
+        assert any(
+            "SCCP release artifact path text source inventory" in error
+            and str(sparse_readiness_test) in error
+            and f"missing marker: {marker}" in error
+            for error in errors
+        )
 
 
 def test_release_readiness_report_guards_release_input_provenance_schema_gate_inventory(

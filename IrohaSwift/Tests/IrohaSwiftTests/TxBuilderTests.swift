@@ -1015,6 +1015,12 @@ final class TxBuilderTests: XCTestCase {
         XCTAssertThrowsError(try VerifyingKeyIdReference(backend: "halo2:ipa", name: "vk")) { error in
             XCTAssertEqual(error as? VerifyingKeyIdError, .invalidSeparator)
         }
+        XCTAssertThrowsError(try VerifyingKeyIdReference(backend: " halo2/ipa ", name: "vk")) { error in
+            XCTAssertEqual(error as? VerifyingKeyIdError, .surroundingWhitespace)
+        }
+        XCTAssertThrowsError(try VerifyingKeyIdReference(backend: "halo2/ipa", name: " vk ")) { error in
+            XCTAssertEqual(error as? VerifyingKeyIdError, .surroundingWhitespace)
+        }
     }
 
     func testSubmitPropagatesError() throws {

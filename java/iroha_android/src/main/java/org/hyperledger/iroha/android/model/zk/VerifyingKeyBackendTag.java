@@ -73,9 +73,8 @@ public enum VerifyingKeyBackendTag {
     if (value == null) {
       throw new IllegalArgumentException("backend tag must not be null");
     }
-    final String normalized = trimWhitespace(value).toLowerCase(Locale.ROOT);
     for (final VerifyingKeyBackendTag tag : values()) {
-      if (tag.noritoValue.equals(normalized)) {
+      if (tag.noritoValue.equals(value)) {
         return tag;
       }
     }
@@ -124,6 +123,9 @@ public enum VerifyingKeyBackendTag {
       throw new IllegalArgumentException(context + " must not be blank");
     }
     final String backend = raw;
+    if (!trimWhitespace(backend).equals(backend)) {
+      throw new IllegalArgumentException(context + " must not contain surrounding whitespace");
+    }
     if (!isProductionVerifyBackendLabel(backend)) {
       throw new IllegalArgumentException(
           context + " uses unsupported production verifier backend " + backend);

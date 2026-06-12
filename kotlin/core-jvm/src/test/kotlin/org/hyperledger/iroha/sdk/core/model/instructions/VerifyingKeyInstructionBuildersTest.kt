@@ -12,7 +12,7 @@ class VerifyingKeyInstructionBuildersTest {
     fun `register verifying key builder accepts only production verifier backends`() {
         val instruction = RegisterVerifyingKeyInstruction.builder()
             .setBackend("halo2/ipa")
-            .setName(" treasury-spend ")
+            .setName("treasury-spend")
             .setRecord(sampleRecord("halo2/ipa"))
             .build()
 
@@ -84,10 +84,52 @@ class VerifyingKeyInstructionBuildersTest {
     }
 
     @Test
-    fun `register and update reject blank verifying key names`() {
+    fun `fromArguments rejects noncanonical record fields before decoding records`() {
+        val canonicalArguments = baseArguments("halo2/ipa")
+        for ((key, value) in listOf(
+            "record.circuit_id" to " vk-test",
+            "record.circuit_id" to "vk-test ",
+            "record.backend_tag" to " halo2-ipa-pasta",
+            "record.backend_tag" to "HALO2-IPA-PASTA",
+            "record.curve" to " pallas",
+            "record.curve" to "pallas ",
+            "record.public_inputs_schema_hash_hex" to " ${canonicalArguments.getValue("record.public_inputs_schema_hash_hex")}",
+            "record.public_inputs_schema_hash_hex" to "${canonicalArguments.getValue("record.public_inputs_schema_hash_hex")} ",
+            "record.commitment_hex" to " ${canonicalArguments.getValue("record.commitment_hex")}",
+            "record.commitment_hex" to "${canonicalArguments.getValue("record.commitment_hex")} ",
+            "record.vk_bytes_b64" to " ${canonicalArguments.getValue("record.vk_bytes_b64")}",
+            "record.vk_bytes_b64" to "${canonicalArguments.getValue("record.vk_bytes_b64")} ",
+            "record.vk_len" to " ${canonicalArguments.getValue("record.vk_len")}",
+            "record.max_proof_bytes" to " 1024",
+            "record.gas_schedule_id" to " default",
+            "record.gas_schedule_id" to "default ",
+            "record.metadata_uri_cid" to " bafy-metadata",
+            "record.metadata_uri_cid" to "bafy-metadata ",
+            "record.vk_bytes_cid" to " bafy-vk",
+            "record.vk_bytes_cid" to "bafy-vk ",
+            "record.activation_height" to " 10",
+            "record.withdraw_height" to "10 ",
+            "record.deprecation_height" to " 10",
+            "record.status" to " Active",
+            "record.status" to "active",
+        )) {
+            val registerArguments = baseArguments("halo2/ipa").also { it[key] = value }
+            assertFailsWith<IllegalArgumentException>(key) {
+                RegisterVerifyingKeyInstruction.fromArguments(registerArguments)
+            }
+
+            val updateArguments = baseArguments("halo2/ipa").also { it[key] = value }
+            assertFailsWith<IllegalArgumentException>(key) {
+                UpdateVerifyingKeyInstruction.fromArguments(updateArguments)
+            }
+        }
+    }
+
+    @Test
+    fun `register and update reject blank or padded verifying key names`() {
         val record = sampleRecord("halo2/ipa")
 
-        for (name in listOf("", "   ", "\t", "\n")) {
+        for (name in listOf("", "   ", "\t", "\n", " vk", "vk ")) {
             assertFailsWith<IllegalArgumentException>(name) {
                 RegisterVerifyingKeyInstruction.builder()
                     .setBackend("halo2/ipa")

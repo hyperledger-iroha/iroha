@@ -155,6 +155,71 @@ def test_vega_package_root_exports_catalog_entrypoint_aliases() -> None:
     assert production_verified["kind"] == "vega-existing-credential-zk-v0"
 
 
+def test_vega_public_helpers_reject_non_plain_mapping_inputs() -> None:
+    class VegaDict(dict):
+        pass
+
+    predicate_options: dict[str, object] = {
+        "predicateJson": _predicate(),
+        "credentialSchema": "boi-age-credential-v1",
+        "domainSeparator": "boi:vega:pilot:v0",
+    }
+    proof_options = {
+        **_base(),
+        "vkHash": bytes([0x77]) * 32,
+        "proofBytes": b"production-vega-predicate-proof",
+    }
+
+    for helper in (
+        build_vega_credential_predicate_commitment,
+        buildVegaCredentialPredicateCommitment,
+    ):
+        with pytest.raises(TypeError, match="vegaCredentialPredicateCommitment"):
+            helper(VegaDict(predicate_options))
+
+    for helper in (build_vega_credential_proof_envelope, buildVegaCredentialProofEnvelope):
+        with pytest.raises(TypeError, match="vegaCredentialProofEnvelope"):
+            helper(VegaDict(proof_options))
+
+    for helper in (
+        build_vega_credential_predicate_proof_v0,
+        buildVegaCredentialPredicateProofV0,
+    ):
+        with pytest.raises(TypeError, match="vegaCredentialPredicateProofV0"):
+            helper(VegaDict(proof_options))
+
+    for helper in (
+        build_vega_credential_dev_proof_fixture,
+        buildVegaCredentialDevProofFixture,
+    ):
+        with pytest.raises(TypeError, match="vegaCredentialDevProofFixture"):
+            helper(VegaDict({**_base(), "vkHash": bytes([0x77]) * 32}))
+
+    production_proof = build_vega_credential_predicate_proof_v0(proof_options)
+    raw_verified = verify_vega_credential_predicate_proof_v0(production_proof)
+    assert raw_verified["ok"] is True
+    verify_options = {"envelope": production_proof, **_base()}
+    for helper in (
+        verify_vega_credential_predicate_proof_v0,
+        verifyVegaCredentialPredicateProofV0,
+    ):
+        with pytest.raises(TypeError, match="vegaCredentialPredicateProofV0"):
+            helper(VegaDict(verify_options))
+
+    fixture = build_vega_credential_dev_proof_fixture(
+        {**_base(), "vkHash": bytes([0x77]) * 32}
+    )
+    local_verified = verify_vega_credential_proof_locally(fixture["envelope"])
+    assert local_verified["ok"] is True
+    local_options = {
+        **verify_options,
+        "envelope": fixture["envelope"],
+    }
+    for helper in (verify_vega_credential_proof_locally, verifyVegaCredentialProofLocally):
+        with pytest.raises(TypeError, match="vegaCredentialLocalVerification"):
+            helper(VegaDict(local_options))
+
+
 def test_vega_production_builder_and_verifier_reject_dev_fixtures() -> None:
     proof = build_vega_credential_predicate_proof_v0(
         {

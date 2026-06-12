@@ -19487,7 +19487,7 @@ impl State {
     #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Latest committed block height recorded in the transactions storage (0 when empty).
     pub fn transactions_latest_height_for_testing(&self) -> usize {
-        self.transactions.view().latest_height_for_tests()
+        self.transactions.latest_height()
     }
 
     #[cfg(any(test, feature = "app_api"))]

@@ -28,9 +28,8 @@ public enum VerifyingKeyStatus {
     if (value == null) {
       throw new IllegalArgumentException("status must not be null");
     }
-    final String normalized = value.trim();
     for (final VerifyingKeyStatus status : values()) {
-      if (status.wireName.equalsIgnoreCase(normalized)) {
+      if (status.wireName.equals(value)) {
         return status;
       }
     }

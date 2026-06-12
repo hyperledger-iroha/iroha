@@ -2496,8 +2496,9 @@ redistributable schemas, and official trust/revocation bundles.
   SoraNet admission-token replay-store reload now rejects duplicate persisted
   token IDs and overflowing expiry timestamps, and admission-token verification
   rejects zero-length or inverted validity windows and preflights ML-DSA issuer
-  public-key and detached-signature lengths plus all-zero detached signatures
-  before backend verification or replay-store mutation. Torii SoraFS stream-token
+  public-key and detached-signature lengths before classifying full-length
+  all-zero detached signatures, all before backend verification or replay-store
+  mutation. Torii SoraFS stream-token
   issuance now generates token IDs through checked OS RNG fills and returns
   labelled issuance errors before
   signed token bodies are emitted; Torii internal operator-signature request
@@ -2593,8 +2594,9 @@ redistributable schemas, and official trust/revocation bundles.
   dual-signature gate;
   SoraNet SRCv2 certificate decode now rejects unknown ML-KEM suite ids and
   key-material length drift for ML-DSA-65 identity keys and advertised ML-KEM
-  relay public keys, rejects all-zero ML-DSA identity and ML-KEM relay
-  public-key material, rejects malformed/noncanonical/weak Ed25519 identity
+  relay public keys, rejects all-zero ML-DSA identity and all-zero or
+  noncanonical ML-KEM relay public-key material, rejects
+  malformed/noncanonical/weak Ed25519 identity
   public keys, rejects ML-DSA-65 detached signature length drift and all-zero
   Ed25519/ML-DSA signature fields, and its
   canonical CBOR parser rejects trailing payload/bundle bytes plus non-shortest

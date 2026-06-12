@@ -58,6 +58,73 @@ test("canonical request signing: headers include a verifiable signature", () => 
   assert.equal(verifyEd25519(message, signature, publicKey), true);
 });
 
+test("canonical request signing: rejects padded auth fields", async () => {
+  const { privateKey, publicKey } = generateKeyPair({
+    seed: Buffer.alloc(32, 11),
+  });
+  const accountId = AccountAddress.fromAccount({ publicKey }).toI105();
+  const timestampMs = 1_717_171_717_003;
+
+  assert.throws(
+    () =>
+      canonicalRequestSignatureMessage({
+        method: "get",
+        path: "/v1/accounts",
+        timestampMs,
+        nonce: " nonce",
+      }),
+    /surrounding whitespace/,
+  );
+  assert.throws(
+    () =>
+      buildCanonicalRequestHeaders({
+        accountId: ` ${accountId}`,
+        method: "get",
+        path: "/v1/accounts",
+        privateKey,
+        timestampMs,
+        nonce: "nonce",
+      }),
+    /surrounding whitespace/,
+  );
+  assert.throws(
+    () =>
+      buildCanonicalRequestHeaders({
+        accountId,
+        method: "get",
+        path: "/v1/accounts",
+        privateKey,
+        timestampMs,
+        nonce: "nonce\n",
+      }),
+    /surrounding whitespace/,
+  );
+  await assert.rejects(
+    () =>
+      buildCanonicalJsonRequest({
+        accountId: `${accountId} `,
+        path: "/v1/accounts",
+        body: {},
+        privateKey,
+        timestampMs,
+        nonce: "nonce",
+      }),
+    /surrounding whitespace/,
+  );
+  await assert.rejects(
+    () =>
+      buildCanonicalJsonRequest({
+        accountId,
+        path: "/v1/accounts",
+        body: {},
+        privateKey,
+        timestampMs,
+        nonce: "\tnonce",
+      }),
+    /surrounding whitespace/,
+  );
+});
+
 test("canonical request signing: JSON helper signs the exact request body with callback signers", async () => {
   const { privateKey, publicKey } = generateKeyPair({
     seed: Buffer.alloc(32, 8),

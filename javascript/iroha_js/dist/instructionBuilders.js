@@ -226,6 +226,21 @@ function assertNonBlankString(value, name) {
   return trimmed;
 }
 
+function assertExactNonBlankString(value, name) {
+  const raw = assertString(value, name);
+  if (raw.trim().length === 0) {
+    fail(ValidationErrorCode.INVALID_STRING, `${name} must be a non-empty string`, name);
+  }
+  if (raw.trim() !== raw) {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must not contain surrounding whitespace`,
+      name,
+    );
+  }
+  return raw;
+}
+
 function readSingleAlias(source, aliases, name, description) {
   const present = aliases.filter((key) => Object.prototype.hasOwnProperty.call(source, key));
   if (present.length > 1) {
@@ -1187,11 +1202,16 @@ function normalizeVerifyingKeyId(value, name) {
       );
     }
     const backend = parts[0];
-    const keyName = parts[1].trim();
-    if (backend.trim().length === 0 || keyName.length === 0) {
+    const keyName = parts[1];
+    if (
+      backend.trim().length === 0 ||
+      keyName.trim().length === 0 ||
+      backend.trim() !== backend ||
+      keyName.trim() !== keyName
+    ) {
       fail(
         ValidationErrorCode.INVALID_STRING,
-        `${name} must be in 'backend:name' format`,
+        `${name} must be in clean 'backend:name' format`,
         name,
       );
     }
@@ -1223,11 +1243,8 @@ function normalizeVerifyingKeyId(value, name) {
     `${name}.name`,
     "name",
   );
-  const backend = assertString(backendAlias.value, `${name}.backend`);
-  if (backend.trim().length === 0) {
-    fail(ValidationErrorCode.INVALID_STRING, `${name}.backend must be a non-empty string`, `${name}.backend`);
-  }
-  const keyName = assertNonBlankString(nameAlias.value, `${name}.name`);
+  const backend = assertExactNonBlankString(backendAlias.value, `${name}.backend`);
+  const keyName = assertExactNonBlankString(nameAlias.value, `${name}.name`);
   return { backend, name: keyName };
 }
 
@@ -1908,6 +1925,13 @@ function assertProductionVerifyBackendLabel(value, name) {
   if (backend.trim().length === 0) {
     fail(ValidationErrorCode.INVALID_STRING, `${name} must be a non-empty string`, name);
   }
+  if (backend.trim() !== backend) {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must not contain surrounding whitespace`,
+      name,
+    );
+  }
   if (!isProductionVerifyBackendLabel(backend)) {
     fail(
       ValidationErrorCode.INVALID_STRING,
@@ -1960,6 +1984,7 @@ function normalizePrivacyBackendTag(value, name) {
     case "unsupported":
       return "Unsupported";
     case "halo2ipaorchard":
+    case "halo2pastaactionbundle":
     case "orchard":
     case "zcashorchard":
       return "Halo2IpaOrchard";
@@ -1974,6 +1999,7 @@ function normalizePrivacyBackendTag(value, name) {
     case "halo2ipamasp":
       return "Groth16Bls12377";
     case "fcmppluspluscurvetree":
+    case "fcmppluspluscurvetreesbulletproofs":
     case "fcmp":
     case "monero":
     case "monerofcmp":
@@ -1991,9 +2017,11 @@ function normalizePrivacyBackendTag(value, name) {
       return "LatticePcsSis";
     case "starkfrimiden":
     case "midenstark":
+    case "starkvmnotetransaction":
       return "MidenStark";
     case "aztecplonkishprivatekernel":
     case "aztecprivatekernel":
+    case "plonkishprivatekernelrollup":
       return "AztecPlonkishPrivateKernel";
     case "pqmaspstarkfri":
     case "pqmaspstark":
@@ -15903,7 +15931,7 @@ export function buildVeRangeProofEnvelope(options) {
  * @param {object} options
  * @returns {Buffer}
  */
-function buildVeRangeProofV1(options) {
+export function buildVeRangeProofV1(options) {
   const source = assertPlainObject(options, "veRangeProofV1");
   assertAllowedFields(
     source,
@@ -16182,7 +16210,7 @@ export function verifyVeRangeProofLocally(options) {
  * @param {object|Buffer|string} options
  * @returns {object}
  */
-function verifyVeRangeProofV1(options) {
+export function verifyVeRangeProofV1(options) {
   const source =
     options &&
     typeof options === "object" &&
@@ -16491,7 +16519,7 @@ const RESEARCH_PROTOCOL_SPECS = Object.freeze({
   }),
   pqMasp: Object.freeze({
     algorithmId: "pq-masp-stark-v0",
-    backend: "stark-fri",
+    backend: "pq-masp-stark-fri",
     circuitId: "pq_masp_stark_v0",
     instruction: "zk::SubmitPqMaspStarkTransfer",
   }),
@@ -16603,7 +16631,12 @@ function buildResearchProtocolInstruction(options, specName) {
   );
   const proofEnvelope =
     envelopeAlias.key === null
-      ? buildResearchProtocolProof(source, specName)
+      ? buildResearchProtocolProof(
+          Object.fromEntries(
+            Object.entries(source).filter(([key]) => key !== "metadata"),
+          ),
+          specName,
+        )
       : normalizeOpenVerifyByteArray(
           envelopeAlias.value,
           `${specName}.proofEnvelope`,

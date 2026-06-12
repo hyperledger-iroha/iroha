@@ -1767,6 +1767,14 @@ test("Kagemusha recursive spend exports stable proof circuit ids", () => {
     ),
     "unknown-kagemusha-recursive-spend-circuit",
   );
+  const whitespaceLineageOutputCircuitId =
+    ` ${KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1} `;
+  assert.equal(
+    normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(
+      whitespaceLineageOutputCircuitId,
+    ),
+    whitespaceLineageOutputCircuitId,
+  );
   for (const circuitId of [
     undefined,
     null,
@@ -1789,6 +1797,12 @@ test("Kagemusha recursive spend exports stable proof circuit ids", () => {
   assert.equal(
     isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId(
       "unknown-kagemusha-recursive-spend-circuit",
+    ),
+    false,
+  );
+  assert.equal(
+    isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId(
+      whitespaceLineageOutputCircuitId,
     ),
     false,
   );
@@ -1904,6 +1918,18 @@ test("Kagemusha recursive spend exports stable proof circuit ids", () => {
       ),
     /lineage_verifier_key/,
   );
+  for (const backend of ["halo2/kzg", " halo2/ipa", "halo2/ipa ", "HALO2/IPA"]) {
+    assert.throws(
+      () =>
+        kagemushaRecursiveSpendLineageKeyArtifactsForInit(
+          128,
+          backend,
+          initVerifierKey,
+          initProvingKeyArchive,
+        ),
+      /lineage_verifier_key/,
+    );
+  }
   const whitespaceCidVerifierKey = kagemushaLineageVerifierKey(
     ` ${KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1} `,
     0xa5,
@@ -2353,6 +2379,12 @@ test("Kagemusha recursive spend exports stable proof circuit ids", () => {
     false,
   );
   assert.equal(
+    isSupportedKagemushaRecursiveSpendPreviousProofCircuitId(
+      whitespaceLineageOutputCircuitId,
+    ),
+    false,
+  );
+  assert.equal(
     requiresKagemushaRecursiveSpendPreviousLineageVerifierRecordForAppend(
       KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
     ),
@@ -2575,6 +2607,7 @@ test("Kagemusha recursive spend exports stable proof circuit ids", () => {
     [KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1, KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS],
     [KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, 64],
     ["unknown-kagemusha-recursive-spend-circuit", 1],
+    [whitespaceLineageOutputCircuitId, 1],
     [KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1, 1.5],
     [KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1, Number.NaN],
     [KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1, Number.POSITIVE_INFINITY],
@@ -2645,6 +2678,16 @@ test("Kagemusha recursive spend exports stable proof circuit ids", () => {
     [
       KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
       "unknown-kagemusha-recursive-spend-circuit",
+      1,
+    ],
+    [
+      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      whitespaceLineageOutputCircuitId,
+      1,
+    ],
+    [
+      whitespaceLineageOutputCircuitId,
+      KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
       1,
     ],
     [

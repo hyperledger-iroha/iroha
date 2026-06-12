@@ -14,9 +14,8 @@ enum class VerifyingKeyStatus(@JvmField val wireName: String) {
         /** Parses the wire representation into an enum value. */
         @JvmStatic
         fun parse(value: String): VerifyingKeyStatus {
-            val normalized = value.trim()
             for (status in entries) {
-                if (status.wireName.equals(normalized, ignoreCase = true)) {
+                if (status.wireName == value) {
                     return status
                 }
             }

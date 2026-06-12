@@ -13,7 +13,7 @@ use iroha_data_model::{
     HasMetadata, Identifiable, ValidationFail,
     account::{AccountEntry, AccountId},
     asset::{AssetDefinition, AssetDefinitionId, AssetEntry, AssetId, Mintable},
-    block::SignedBlock,
+    block::{BlockHeader, SignedBlock},
     domain::{Domain, DomainId},
     isi::{
         self, CustomInstruction, ExecuteTrigger, GrantBox, Instruction as IsiInstruction,
@@ -589,6 +589,22 @@ impl ExplorerBlockDto {
             transactions_hash: header.merkle_root().map(|hash| hash.to_string()),
             transactions_rejected: count_rejected_transactions(block, external_total),
             transactions_total: saturating_usize_to_u32(external_total),
+        }
+    }
+
+    pub(crate) fn from_hash_only(
+        height: u64,
+        hash: HashOf<BlockHeader>,
+        prev_block_hash: Option<HashOf<BlockHeader>>,
+    ) -> Self {
+        Self {
+            hash: hash.to_string(),
+            height,
+            created_at: String::new(),
+            prev_block_hash: prev_block_hash.map(|hash| hash.to_string()),
+            transactions_hash: None,
+            transactions_rejected: 0,
+            transactions_total: 0,
         }
     }
 }
@@ -2202,6 +2218,26 @@ mod tests {
         assert_eq!(dto.transactions_rejected, 1);
         assert_eq!(dto.created_at, "2023-11-14T22:13:20Z");
         assert!(dto.transactions_hash.is_some());
+    }
+
+    #[test]
+    fn block_dto_from_hash_only_reports_verified_hash_fields() {
+        let prev_hash = HashOf::<BlockHeader>::from_untyped_unchecked(
+            iroha_crypto::Hash::prehashed([0x11; iroha_crypto::Hash::LENGTH]),
+        );
+        let hash = HashOf::<BlockHeader>::from_untyped_unchecked(iroha_crypto::Hash::prehashed(
+            [0x22; iroha_crypto::Hash::LENGTH],
+        ));
+
+        let dto = ExplorerBlockDto::from_hash_only(2, hash, Some(prev_hash));
+
+        assert_eq!(dto.height, 2);
+        assert_eq!(dto.hash, hash.to_string());
+        assert_eq!(dto.prev_block_hash, Some(prev_hash.to_string()));
+        assert_eq!(dto.created_at, "");
+        assert_eq!(dto.transactions_hash, None);
+        assert_eq!(dto.transactions_rejected, 0);
+        assert_eq!(dto.transactions_total, 0);
     }
 
     #[test]

@@ -413,6 +413,7 @@ mod tests {
     use core::ptr;
 
     use pqcrypto_traits::sign::VerificationError;
+    use sha3::{Digest, Sha3_256};
 
     use crate::{HedgedRngSeed, deterministic_chacha20_rng, sign_mldsa};
 
@@ -475,6 +476,29 @@ mod tests {
         };
         assert_eq!(rc, 0);
         (ciphertext, shared_secret)
+    }
+
+    fn mlkem_secret_embedded_public_range(suite: MlKemSuite) -> core::ops::Range<usize> {
+        const PUBLIC_HASH_AND_REJECTION_SEED_BYTES: usize = 64;
+
+        let start =
+            suite.secret_key_len() - suite.public_key_len() - PUBLIC_HASH_AND_REJECTION_SEED_BYTES;
+        start..start + suite.public_key_len()
+    }
+
+    fn mlkem_secret_embedded_public_hash_range(suite: MlKemSuite) -> core::ops::Range<usize> {
+        const PUBLIC_KEY_HASH_BYTES: usize = 32;
+        const PUBLIC_HASH_AND_REJECTION_SEED_BYTES: usize = 64;
+
+        let start = suite.secret_key_len() - PUBLIC_HASH_AND_REJECTION_SEED_BYTES;
+        start..start + PUBLIC_KEY_HASH_BYTES
+    }
+
+    fn mlkem_public_key_hash(public_key: &[u8]) -> [u8; 32] {
+        let digest = Sha3_256::digest(public_key);
+        let mut out = [0u8; 32];
+        out.copy_from_slice(&digest);
+        out
     }
 
     fn set_first_mlkem_12_bit_coefficient_noncanonical(bytes: &mut [u8]) {
@@ -693,6 +717,34 @@ mod tests {
         let (public_key, _) = ffi_mlkem_keypair(suite);
         let (ciphertext, _) = ffi_mlkem_encapsulate(suite, &public_key);
         let secret_key = vec![0u8; params.secret_key];
+        let mut shared_secret = vec![0u8; params.shared_secret];
+
+        let rc = unsafe {
+            soranet_mlkem_decapsulate(
+                suite_id,
+                secret_key.as_ptr(),
+                secret_key.len() as c_ulong,
+                ciphertext.as_ptr(),
+                ciphertext.len() as c_ulong,
+                shared_secret.as_mut_ptr(),
+                shared_secret.len() as c_ulong,
+            )
+        };
+
+        assert_eq!(rc, ERR_ENCODING);
+    }
+
+    #[test]
+    fn ffi_mlkem_decapsulate_rejects_all_zero_embedded_public_key() {
+        let suite = MlKemSuite::MlKem512;
+        let suite_id = c_uint::from(suite.kem_id());
+        let params = suite.parameters();
+        let (public_key, mut secret_key) = ffi_mlkem_keypair(suite);
+        let (ciphertext, _) = ffi_mlkem_encapsulate(suite, &public_key);
+        let public_range = mlkem_secret_embedded_public_range(suite);
+        secret_key[public_range.clone()].fill(0);
+        let public_hash = mlkem_public_key_hash(&secret_key[public_range]);
+        secret_key[mlkem_secret_embedded_public_hash_range(suite)].copy_from_slice(&public_hash);
         let mut shared_secret = vec![0u8; params.shared_secret];
 
         let rc = unsafe {

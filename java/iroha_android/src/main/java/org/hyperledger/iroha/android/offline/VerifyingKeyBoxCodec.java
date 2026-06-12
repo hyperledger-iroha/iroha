@@ -15,15 +15,8 @@ public final class VerifyingKeyBoxCodec {
   private VerifyingKeyBoxCodec() {}
 
   public static byte[] encodeNorito(final String backend, final byte[] bytes) {
-    final String normalizedBackend = backend == null ? "" : backend.trim();
-    if (normalizedBackend.isEmpty()) {
-      throw new IllegalArgumentException("backend must not be blank");
-    }
-    if (bytes == null || bytes.length == 0) {
-      throw new IllegalArgumentException("bytes must not be empty");
-    }
     return NoritoCodec.encode(
-        new VerifyingKeyBox(normalizedBackend, bytes.clone()),
+        new VerifyingKeyBox(backend, bytes),
         SCHEMA,
         ADAPTER,
         NoritoHeader.COMPACT_LEN);
@@ -31,6 +24,14 @@ public final class VerifyingKeyBoxCodec {
 
   public static byte[] encode(final String backend, final byte[] bytes) {
     return encodeNorito(backend, bytes);
+  }
+
+  public static VerifyingKeyBox decodeNorito(final byte[] payload) {
+    return NoritoCodec.decode(payload, ADAPTER, SCHEMA);
+  }
+
+  public static VerifyingKeyBox decode(final byte[] payload) {
+    return decodeNorito(payload);
   }
 
   private static final TypeAdapter<VerifyingKeyBox> ADAPTER =
@@ -43,7 +44,9 @@ public final class VerifyingKeyBoxCodec {
 
         @Override
         public VerifyingKeyBox decode(final NoritoDecoder decoder) {
-          throw new UnsupportedOperationException("VerifyingKeyBox decoding is not supported");
+          return new VerifyingKeyBox(
+              readField(decoder, VerifyingKeyBoxCodec::readString),
+              readField(decoder, VerifyingKeyBoxCodec::readBytesVec));
         }
       };
 
@@ -66,21 +69,82 @@ public final class VerifyingKeyBoxCodec {
     encoder.writeBytes(bytes);
   }
 
+  private static <T> T readField(
+      final NoritoDecoder parent, final FieldReader<T> readPayload) {
+    final int length = checkedLength(parent.readLength(compact(parent)), "field length");
+    final NoritoDecoder child =
+        new NoritoDecoder(parent.readBytes(length), parent.flags(), parent.flagsHint());
+    final T value = readPayload.read(child);
+    if (child.remaining() != 0) {
+      throw new IllegalArgumentException("Trailing bytes after VerifyingKeyBox field decode");
+    }
+    return value;
+  }
+
+  private static String readString(final NoritoDecoder decoder) {
+    final int length = checkedLength(decoder.readLength(compact(decoder)), "string length");
+    return new String(decoder.readBytes(length), StandardCharsets.UTF_8);
+  }
+
+  private static byte[] readBytesVec(final NoritoDecoder decoder) {
+    final int length = checkedLength(decoder.readUInt(64), "byte vector length");
+    return decoder.readBytes(length);
+  }
+
+  private static int checkedLength(final long value, final String field) {
+    if (value < 0) {
+      throw new IllegalArgumentException(field + " must be non-negative");
+    }
+    if (value > Integer.MAX_VALUE) {
+      throw new IllegalArgumentException(field + " exceeds JVM array limit");
+    }
+    return (int) value;
+  }
+
   private static boolean compact(final NoritoEncoder encoder) {
     return (encoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
+  }
+
+  private static boolean compact(final NoritoDecoder decoder) {
+    return (decoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
+  }
+
+  private static String requireNonBlankUnpadded(final String value, final String field) {
+    if (value == null || value.trim().isEmpty()) {
+      throw new IllegalArgumentException(field + " must not be blank");
+    }
+    if (!value.trim().equals(value)) {
+      throw new IllegalArgumentException(field + " must not contain surrounding whitespace");
+    }
+    return value;
   }
 
   private interface FieldWriter {
     void write(NoritoEncoder encoder);
   }
 
-  private static final class VerifyingKeyBox {
+  private interface FieldReader<T> {
+    T read(NoritoDecoder decoder);
+  }
+
+  public static final class VerifyingKeyBox {
     private final String backend;
     private final byte[] bytes;
 
     private VerifyingKeyBox(final String backend, final byte[] bytes) {
-      this.backend = backend;
-      this.bytes = bytes;
+      this.backend = requireNonBlankUnpadded(backend, "backend");
+      if (bytes == null || bytes.length == 0) {
+        throw new IllegalArgumentException("bytes must not be empty");
+      }
+      this.bytes = bytes.clone();
+    }
+
+    public String backend() {
+      return backend;
+    }
+
+    public byte[] bytes() {
+      return bytes.clone();
     }
 
     @Override

@@ -149,14 +149,12 @@ class VerifyingKeyRecordDescription private constructor(
         ): VerifyingKeyRecordDescription {
             require(version >= 0) { "version must be non-negative" }
 
-            val trimmedCircuitId = circuitId.trim()
-            require(trimmedCircuitId.isNotEmpty()) { "circuitId must not be blank" }
+            val exactCircuitId = requireExactNonBlank(circuitId, "circuitId")
 
             val normalizedSchemaHash = validateHex(schemaHashHex, "public_inputs_schema_hash_hex")
             requireNotNull(normalizedSchemaHash) { "public_inputs_schema_hash_hex must be provided" }
 
-            val trimmedGasScheduleId = gasScheduleId.trim()
-            require(trimmedGasScheduleId.isNotEmpty()) { "gasScheduleId must not be blank" }
+            val exactGasScheduleId = requireExactNonBlank(gasScheduleId, "gasScheduleId")
 
             if (vkLength != null) require(vkLength > 0) { "vkLength must be greater than zero" }
             if (maxProofBytes != null) require(maxProofBytes >= 0) { "maxProofBytes must be non-negative" }
@@ -164,9 +162,9 @@ class VerifyingKeyRecordDescription private constructor(
             if (withdrawHeight != null) require(withdrawHeight >= 0) { "withdrawHeight must be non-negative" }
 
             val normalizedCommitmentHex = validateHex(commitmentHex, "commitment_hex")
-            val normalizedCurve = curve.trim().ifEmpty { "unknown" }
-            val normalizedMetadataUriCid = metadataUriCid?.trim()?.ifEmpty { null }
-            val normalizedVkBytesCid = vkBytesCid?.trim()?.ifEmpty { null }
+            val normalizedCurve = optionalExactNonBlank(curve, "curve") ?: "unknown"
+            val normalizedMetadataUriCid = optionalExactNonBlank(metadataUriCid, "metadataUriCid")
+            val normalizedVkBytesCid = optionalExactNonBlank(vkBytesCid, "vkBytesCid")
 
             val inlineBytes = inlineKeyBytes?.copyOf()
             val resolvedVkLength: Int?
@@ -207,7 +205,7 @@ class VerifyingKeyRecordDescription private constructor(
 
             return VerifyingKeyRecordDescription(
                 version = version,
-                circuitId = trimmedCircuitId,
+                circuitId = exactCircuitId,
                 backendTag = backendTag,
                 curve = normalizedCurve,
                 schemaHashHex = normalizedSchemaHash,
@@ -215,7 +213,7 @@ class VerifyingKeyRecordDescription private constructor(
                 inlineKeyBytes = inlineBytes,
                 vkLength = resolvedVkLength,
                 maxProofBytes = maxProofBytes,
-                gasScheduleId = trimmedGasScheduleId,
+                gasScheduleId = exactGasScheduleId,
                 metadataUriCid = normalizedMetadataUriCid,
                 vkBytesCid = normalizedVkBytesCid,
                 activationHeight = activationHeight,
@@ -226,17 +224,36 @@ class VerifyingKeyRecordDescription private constructor(
 
         private fun validateHex(value: String?, field: String): String? {
             if (value == null) return null
-            val normalized = value.trim()
-            if (normalized.isEmpty()) return null
-            require(normalized.length == 64) {
+            if (value.isEmpty()) return null
+            require(value.trim() == value) {
+                "$field must not contain surrounding whitespace"
+            }
+            require(value.length == 64) {
                 "$field must contain exactly 64 hexadecimal characters"
             }
-            for (c in normalized) {
+            for (c in value) {
                 require(c in '0'..'9' || c in 'a'..'f' || c in 'A'..'F') {
                     "$field must contain only hexadecimal characters"
                 }
             }
-            return normalized.lowercase()
+            return value.lowercase()
+        }
+
+        private fun optionalExactNonBlank(value: String?, field: String): String? {
+            if (value == null) return null
+            val trimmed = value.trim()
+            if (trimmed.isEmpty()) return null
+            require(trimmed == value) {
+                "$field must not contain surrounding whitespace"
+            }
+            return value
+        }
+
+        private fun requireExactNonBlank(value: String, field: String): String {
+            val trimmed = value.trim()
+            require(trimmed.isNotEmpty()) { "$field must not be blank" }
+            require(trimmed == value) { "$field must not contain surrounding whitespace" }
+            return value
         }
 
         private fun computeCommitmentHex(backend: String, bytes: ByteArray): String {

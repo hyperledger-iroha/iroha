@@ -60,6 +60,16 @@ const txStatusErrorMessageContract = JSON.parse(
 );
 const nativeTest = makeNativeTest(test);
 
+function expectedProductionBackendRejectionPattern(backend) {
+  if (typeof backend !== "string" || backend.trim() === "") {
+    return /non-empty string/;
+  }
+  if (backend.trim() !== backend) {
+    return /surrounding whitespace/;
+  }
+  return /unsupported production verifier backend/;
+}
+
 function cloneFixture(value) {
   return JSON.parse(JSON.stringify(value));
 }
@@ -1226,11 +1236,28 @@ test("verifying key read paths reject unsupported production backends before fet
   ]) {
     await assert.rejects(
       () => client.getVerifyingKey(backend, "vk_main"),
-      /unsupported production verifier backend/,
+      expectedProductionBackendRejectionPattern(backend),
     );
     await assert.rejects(
       () => client.listVerifyingKeys({ backend }),
-      /unsupported production verifier backend/,
+      expectedProductionBackendRejectionPattern(backend),
+    );
+  }
+  assert.equal(calls, 0);
+});
+
+test("verifying key get path rejects padded selector names before fetch", async () => {
+  let calls = 0;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      calls += 1;
+      throw new Error("unexpected fetch");
+    },
+  });
+  for (const name of [" vk_main", "vk_main "]) {
+    await assert.rejects(
+      () => client.getVerifyingKey("halo2/ipa", name),
+      /getVerifyingKey name must not contain surrounding whitespace/,
     );
   }
   assert.equal(calls, 0);
@@ -1305,7 +1332,47 @@ test("listVerifyingKeysTyped rejects noncanonical response backends", async () =
     });
     await assert.rejects(
       () => client.listVerifyingKeysTyped(),
-      /unsupported production verifier backend/,
+      /unsupported production verifier backend|surrounding whitespace/,
+    );
+  }
+});
+
+test("listVerifyingKeysTyped rejects padded response selector metadata", async () => {
+  const baseRecord = {
+    version: 1,
+    circuit_id: "halo2/ipa::transfer_v1",
+    backend: "halo2/ipa",
+    curve: "pallas",
+    public_inputs_schema_hash: "deadbeef",
+    commitment: "1234",
+    vk_len: 32,
+    max_proof_bytes: 4096,
+    gas_schedule_id: "default",
+    status: "Active",
+  };
+  for (const entry of [
+    { backend: "halo2/ipa", name: " flat_vk" },
+    { id: { backend: "halo2/ipa", name: "object_vk " } },
+    {
+      id: { backend: "halo2/ipa", name: "circuit_vk" },
+      record: { ...baseRecord, circuit_id: " halo2/ipa::transfer_v1" },
+    },
+    {
+      id: { backend: "halo2/ipa", name: "gas_vk" },
+      record: { ...baseRecord, gas_schedule_id: "default " },
+    },
+  ]) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () =>
+        createResponse({
+          status: 200,
+          jsonData: { items: [entry] },
+          headers: { "content-type": "application/json" },
+        }),
+    });
+    await assert.rejects(
+      () => client.listVerifyingKeysTyped(),
+      /must not contain surrounding whitespace/,
     );
   }
 });
@@ -1687,6 +1754,54 @@ test("verifying key requests reject withdraw height before activation height", a
   assert.equal(fetchCount, 0);
 });
 
+test("verifying key requests reject padded selector metadata before fetch", async () => {
+  let fetchCount = 0;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      fetchCount += 1;
+      throw new Error("unexpected fetch");
+    },
+  });
+  const payload = sampleVerifyingKeyRegisterPayload();
+
+  for (const [label, action, pattern] of [
+    [
+      "register padded name",
+      () => client.registerVerifyingKey({ ...payload, name: " vk_main" }),
+      /registerVerifyingKey\.name must not contain surrounding whitespace/,
+    ],
+    [
+      "register padded circuit id",
+      () => client.registerVerifyingKey({ ...payload, circuit_id: " halo2/ipa::transfer_v1" }),
+      /registerVerifyingKey\.circuitId must not contain surrounding whitespace/,
+    ],
+    [
+      "register padded gas schedule id",
+      () => client.registerVerifyingKey({ ...payload, gas_schedule_id: "default " }),
+      /registerVerifyingKey\.gasScheduleId must not contain surrounding whitespace/,
+    ],
+    [
+      "update padded name",
+      () => client.updateVerifyingKey({ ...payload, version: 2, name: "vk_main " }),
+      /updateVerifyingKey\.name must not contain surrounding whitespace/,
+    ],
+    [
+      "update padded circuit id",
+      () => client.updateVerifyingKey({ ...payload, version: 2, circuit_id: "halo2/ipa::transfer_v1 " }),
+      /updateVerifyingKey\.circuitId must not contain surrounding whitespace/,
+    ],
+    [
+      "update padded gas schedule id",
+      () => client.updateVerifyingKey({ ...payload, version: 2, gas_schedule_id: " default" }),
+      /updateVerifyingKey\.gasScheduleId must not contain surrounding whitespace/,
+    ],
+  ]) {
+    await assert.rejects(action, pattern, label);
+  }
+
+  assert.equal(fetchCount, 0);
+});
+
 test("verifying key registration rejects unsupported production backends before fetch", async () => {
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () => {
@@ -1814,7 +1929,7 @@ test("verifying key registration rejects unsupported production backends before 
   for (const [label, action] of cases) {
     await assert.rejects(
       action,
-      /unsupported production verifier backend/,
+      /unsupported production verifier backend|surrounding whitespace/,
       label,
     );
   }
@@ -18107,7 +18222,7 @@ test("streamEvents rejects unsupported production backend event filters before f
             },
           },
         }),
-      /unsupported production verifier backend/,
+      expectedProductionBackendRejectionPattern(backend),
     );
     assert.throws(
       () =>
@@ -18119,7 +18234,7 @@ test("streamEvents rejects unsupported production backend event filters before f
             },
           },
         }),
-      /unsupported production verifier backend/,
+      expectedProductionBackendRejectionPattern(backend),
     );
     assert.throws(
       () =>
@@ -18131,7 +18246,7 @@ test("streamEvents rejects unsupported production backend event filters before f
             },
           }),
         }),
-      /unsupported production verifier backend/,
+      expectedProductionBackendRejectionPattern(backend),
     );
   }
   assert.equal(calls, 0);
@@ -18145,7 +18260,7 @@ test("streamEvents rejects malformed verifying key event names before fetch", ()
       throw new Error("unexpected fetch");
     },
   });
-  for (const name of ["", "   ", "\t", "\n", "vk:main", 42]) {
+  for (const name of ["", "   ", "\t", "\n", " vk_main ", "vk_main ", "vk:main", 42]) {
     assert.throws(
       () =>
         client.streamEvents({
@@ -18156,7 +18271,7 @@ test("streamEvents rejects malformed verifying key event names before fetch", ()
             },
           },
         }),
-      /id_matcher\.name.*(must not be empty|must be a string|must not contain ':')/,
+      /id_matcher\.name.*(must not be empty|must be a string|must not contain surrounding whitespace|must not contain ':')/,
     );
     assert.throws(
       () =>
@@ -18168,14 +18283,14 @@ test("streamEvents rejects malformed verifying key event names before fetch", ()
             },
           }),
         }),
-      /id_matcher\.name.*(must not be empty|must be a string|must not contain ':')/,
+      /id_matcher\.name.*(must not be empty|must be a string|must not contain surrounding whitespace|must not contain ':')/,
     );
   }
 
   const iterator = client.streamEvents({
     filter: {
       VerifyingKey: {
-        id_matcher: { backend: "halo2/ipa", name: " vk_main " },
+        id_matcher: { backend: "halo2/ipa", name: "vk_main" },
         event_set: { Registered: true, Updated: true },
       },
     },

@@ -323,8 +323,8 @@ object OfflineNoteV2 {
         backend: String = RECURSIVE_BACKEND,
         name: String = RECURSIVE_VERIFIER_NAME,
     ) {
-        val backend: String = requireNonBlank(backend, "verifying key backend")
-        val name: String = requireNonBlank(name, "verifying key name")
+        val backend: String = requireNonBlankUnpadded(backend, "verifying key backend")
+        val name: String = requireNonBlankUnpadded(name, "verifying key name")
 
         init {
             require(this.backend.indexOf(':') < 0) { "verifying key backend must not contain ':'" }
@@ -333,7 +333,7 @@ object OfflineNoteV2 {
     }
 
     class ProofBox(backend: String, bytes: ByteArray) {
-        val backend: String = requireNonBlank(backend, "proof backend")
+        val backend: String = requireNonBlankUnpadded(backend, "proof backend")
         private val _bytes = bytes.copyOf()
 
         init {
@@ -375,6 +375,9 @@ object OfflineNoteV2 {
         private val _assertionPublicKey = assertionPublicKey.copyOf()
 
         init {
+            require(domain == KEY_CERTIFICATE_PAYLOAD_DOMAIN) {
+                "unsupported key certificate payload domain"
+            }
             requireCertificateCore(version, accountId, _publicKey, oneUse)
             require(assertionUsageCountLimit == null || assertionUsageCountLimit >= 0) {
                 "assertion usage count limit must be non-negative"
@@ -472,6 +475,7 @@ object OfflineNoteV2 {
         val canonicalAmount: String = parseNumeric(amount).canonicalString
 
         init {
+            require(domain == ISSUED_CLAIM_DOMAIN) { "unsupported issued claim domain" }
             requireHash(_noteCommitment, "note_commitment")
             requireHash(_keyCertificatePayloadHash, "key_certificate_payload_hash")
             parseAssetId(assetId)
@@ -521,6 +525,7 @@ object OfflineNoteV2 {
         val canonicalAmount: String = parseNumeric(amount).canonicalString
 
         init {
+            require(domain == REDEEM_PUBLIC_INPUTS_DOMAIN) { "unsupported redeem public inputs domain" }
             requireHash(_sourceNoteCommitment, "source_note_commitment")
             requireHashes(_inputNullifiers, "input_nullifiers")
             requireHash(_keyCertificatePayloadHash, "key_certificate_payload_hash")
@@ -600,6 +605,7 @@ object OfflineNoteV2 {
         private val _outputCommitments = outputCommitments.map { it.copyOf() }
 
         init {
+            require(domain == AUDIT_PUBLIC_INPUTS_DOMAIN) { "unsupported audit public inputs domain" }
             requireHash(_tokenId, "token_id")
             requireHash(_keyCertificatePayloadHash, "key_certificate_payload_hash")
             requireHashes(_inputNullifiers, "input_nullifiers")
@@ -1581,6 +1587,12 @@ object OfflineNoteV2 {
         val trimmed = value.trim()
         require(trimmed.isNotEmpty()) { "$field must not be empty" }
         return trimmed
+    }
+
+    private fun requireNonBlankUnpadded(value: String, field: String): String {
+        require(value.trim().isNotEmpty()) { "$field must not be empty" }
+        require(value.trim() == value) { "$field must not contain surrounding whitespace" }
+        return value
     }
 
     private fun canonicalSortKey(member: MultisigMemberPayload): ByteArray {

@@ -207,6 +207,7 @@ public final class HttpClientTransportTests {
     identifierBfvEnvelopeBuilderRejectsAdversarialPublicParameters();
     identifierReceiptVerifierAcceptsEd25519Receipt();
     identifierReceiptVerifierRejectsAdversarialReceipts();
+    identifierResolutionReceiptParserRejectsNonExactReceiptTags();
     identifierReceiptVerifierMatchesSharedReceiptVectors();
     invalidateAndCancelDelegatesToExecutor();
     System.out.println("[IrohaAndroid] HTTP client transport tests passed.");
@@ -1963,21 +1964,48 @@ public final class HttpClientTransportTests {
 
   private static String identifierReceiptJson(
       final IdentifierResolutionPayload payload, final String signatureHex) {
+    return identifierReceiptJson(
+        payload,
+        signatureHex,
+        payload.execution().backend(),
+        payload.execution().verificationMode(),
+        null);
+  }
+
+  private static String identifierReceiptJson(
+      final IdentifierResolutionPayload payload,
+      final String signatureHex,
+      final String backend,
+      final String verificationMode,
+      final String attestationJsonOverride) {
+    final String attestationJson =
+        attestationJsonOverride != null
+            ? attestationJsonOverride
+            : "{\"kind\":\"signed\",\"signature\":" + jsonString(signatureHex) + "}";
     return "{"
         + "\"payload\":"
-        + identifierPayloadJson(payload)
-        + ",\"attestation\":{\"kind\":\"signed\",\"signature\":"
-        + jsonString(signatureHex)
-        + "}"
+        + identifierPayloadJson(payload, backend, verificationMode)
+        + ",\"attestation\":"
+        + attestationJson
         + "}";
   }
 
   private static String identifierPayloadJson(final IdentifierResolutionPayload payload) {
+    return identifierPayloadJson(
+        payload,
+        payload.execution().backend(),
+        payload.execution().verificationMode());
+  }
+
+  private static String identifierPayloadJson(
+      final IdentifierResolutionPayload payload,
+      final String backend,
+      final String verificationMode) {
     return "{"
         + "\"policy_id\":"
         + jsonString(payload.policyId())
         + ",\"execution\":"
-        + identifierExecutionJson(payload.execution())
+        + identifierExecutionJson(payload.execution(), backend, verificationMode)
         + ",\"opening\":"
         + identifierOpeningJson(payload.opening())
         + ",\"opaque_id\":"
@@ -1993,6 +2021,16 @@ public final class HttpClientTransportTests {
 
   private static String identifierExecutionJson(
       final IdentifierResolutionExecutionPayload execution) {
+    return identifierExecutionJson(
+        execution,
+        execution.backend(),
+        execution.verificationMode());
+  }
+
+  private static String identifierExecutionJson(
+      final IdentifierResolutionExecutionPayload execution,
+      final String backend,
+      final String verificationMode) {
     final String expires =
         execution.expiresAtMs() == null ? "" : ",\"expires_at_ms\":" + execution.expiresAtMs();
     return "{"
@@ -2001,9 +2039,9 @@ public final class HttpClientTransportTests {
         + ",\"program_digest\":"
         + jsonString(execution.programDigest())
         + ",\"backend\":"
-        + jsonString(execution.backend())
+        + jsonString(backend)
         + ",\"verification_mode\":"
-        + jsonString(execution.verificationMode())
+        + jsonString(verificationMode)
         + ",\"input_ciphertext_hash\":"
         + jsonString(execution.inputCiphertextHash())
         + ",\"output_ciphertext_hash\":"
@@ -3016,6 +3054,7 @@ public final class HttpClientTransportTests {
                     .addInstructionBytes(instructionBytes)
                     .setCreationTimeMs(123L)
                     .setFeeSponsor("fee-sponsor")
+                    .setMemo("QR invoice 42")
                     .build())
             .join();
 
@@ -3039,6 +3078,7 @@ public final class HttpClientTransportTests {
         : "multisig_account_alias mismatch";
     assert "alice".equals(payload.get("signer_account_id")) : "signer_account_id mismatch";
     assert "fee-sponsor".equals(payload.get("fee_sponsor")) : "fee_sponsor mismatch";
+    assert "QR invoice 42".equals(payload.get("memo")) : "memo mismatch";
     assert Long.valueOf(123L).equals(((Number) payload.get("creation_time_ms")).longValue())
         : "creation_time_ms mismatch";
     @SuppressWarnings("unchecked")
@@ -3777,8 +3817,62 @@ public final class HttpClientTransportTests {
       final String outputCiphertextHashOverride,
       final String signatureOverride,
       final Map<String, Object> attestationOverride) {
+    return identifierReceiptFromFixture(
+        receipt, outputCiphertextHashOverride, signatureOverride, attestationOverride, null);
+  }
+
+  private static IdentifierResolutionReceipt identifierReceiptFromFixture(
+      final Map<String, Object> receipt,
+      final String outputCiphertextHashOverride,
+      final String signatureOverride,
+      final Map<String, Object> attestationOverride,
+      final String policyIdOverride) {
+    return identifierReceiptFromFixture(
+        receipt,
+        outputCiphertextHashOverride,
+        signatureOverride,
+        attestationOverride,
+        policyIdOverride,
+        null,
+        null);
+  }
+
+  private static IdentifierResolutionReceipt identifierReceiptFromFixture(
+      final Map<String, Object> receipt,
+      final String outputCiphertextHashOverride,
+      final String signatureOverride,
+      final Map<String, Object> attestationOverride,
+      final String policyIdOverride,
+      final String executionProgramIdOverride,
+      final String openingProgramIdOverride) {
+    return identifierReceiptFromFixture(
+        receipt,
+        outputCiphertextHashOverride,
+        signatureOverride,
+        attestationOverride,
+        policyIdOverride,
+        executionProgramIdOverride,
+        openingProgramIdOverride,
+        null);
+  }
+
+  private static IdentifierResolutionReceipt identifierReceiptFromFixture(
+      final Map<String, Object> receipt,
+      final String outputCiphertextHashOverride,
+      final String signatureOverride,
+      final Map<String, Object> attestationOverride,
+      final String policyIdOverride,
+      final String executionProgramIdOverride,
+      final String openingProgramIdOverride,
+      final String accountIdOverride) {
     return new IdentifierResolutionReceipt(
-        identifierPayloadFromFixture(object(receipt, "payload"), outputCiphertextHashOverride),
+        identifierPayloadFromFixture(
+            object(receipt, "payload"),
+            outputCiphertextHashOverride,
+            policyIdOverride,
+            executionProgramIdOverride,
+            openingProgramIdOverride,
+            accountIdOverride),
         identifierAttestationFromFixture(
             attestationOverride != null ? attestationOverride : object(receipt, "attestation"),
             signatureOverride));
@@ -3786,20 +3880,61 @@ public final class HttpClientTransportTests {
 
   private static IdentifierResolutionPayload identifierPayloadFromFixture(
       final Map<String, Object> payload, final String outputCiphertextHashOverride) {
+    return identifierPayloadFromFixture(payload, outputCiphertextHashOverride, null);
+  }
+
+  private static IdentifierResolutionPayload identifierPayloadFromFixture(
+      final Map<String, Object> payload,
+      final String outputCiphertextHashOverride,
+      final String policyIdOverride) {
+    return identifierPayloadFromFixture(
+        payload, outputCiphertextHashOverride, policyIdOverride, null, null);
+  }
+
+  private static IdentifierResolutionPayload identifierPayloadFromFixture(
+      final Map<String, Object> payload,
+      final String outputCiphertextHashOverride,
+      final String policyIdOverride,
+      final String executionProgramIdOverride,
+      final String openingProgramIdOverride) {
+    return identifierPayloadFromFixture(
+        payload,
+        outputCiphertextHashOverride,
+        policyIdOverride,
+        executionProgramIdOverride,
+        openingProgramIdOverride,
+        null);
+  }
+
+  private static IdentifierResolutionPayload identifierPayloadFromFixture(
+      final Map<String, Object> payload,
+      final String outputCiphertextHashOverride,
+      final String policyIdOverride,
+      final String executionProgramIdOverride,
+      final String openingProgramIdOverride,
+      final String accountIdOverride) {
     return new IdentifierResolutionPayload(
-        string(payload, "policy_id"),
-        identifierExecutionFromFixture(object(payload, "execution"), outputCiphertextHashOverride),
-        outputOpeningFromFixture(object(payload, "opening")),
+        policyIdOverride != null ? policyIdOverride : string(payload, "policy_id"),
+        identifierExecutionFromFixture(
+            object(payload, "execution"), outputCiphertextHashOverride, executionProgramIdOverride),
+        outputOpeningFromFixture(object(payload, "opening"), openingProgramIdOverride),
         string(payload, "opaque_id"),
         string(payload, "receipt_hash"),
         string(payload, "uaid"),
-        string(payload, "account_id"));
+        accountIdOverride != null ? accountIdOverride : string(payload, "account_id"));
   }
 
   private static IdentifierResolutionExecutionPayload identifierExecutionFromFixture(
       final Map<String, Object> execution, final String outputCiphertextHashOverride) {
+    return identifierExecutionFromFixture(execution, outputCiphertextHashOverride, null);
+  }
+
+  private static IdentifierResolutionExecutionPayload identifierExecutionFromFixture(
+      final Map<String, Object> execution,
+      final String outputCiphertextHashOverride,
+      final String programIdOverride) {
     return new IdentifierResolutionExecutionPayload(
-        string(execution, "program_id"),
+        programIdOverride != null ? programIdOverride : string(execution, "program_id"),
         string(execution, "program_digest"),
         string(execution, "backend"),
         string(execution, "verification_mode"),
@@ -3816,10 +3951,15 @@ public final class HttpClientTransportTests {
   }
 
   private static RamLfeOutputOpening outputOpeningFromFixture(final Map<String, Object> opening) {
+    return outputOpeningFromFixture(opening, null);
+  }
+
+  private static RamLfeOutputOpening outputOpeningFromFixture(
+      final Map<String, Object> opening, final String programIdOverride) {
     final Map<String, Object> payload = object(opening, "payload");
     return new RamLfeOutputOpening(
         new RamLfeOutputOpeningPayload(
-            string(payload, "program_id"),
+            programIdOverride != null ? programIdOverride : string(payload, "program_id"),
             string(payload, "input_ciphertext_hash"),
             string(payload, "output_ciphertext_hash"),
             string(payload, "parameter_digest"),
@@ -4597,6 +4737,222 @@ public final class HttpClientTransportTests {
         "identifier verifier must reject malformed signature hex");
   }
 
+  private static void identifierResolutionReceiptParserRejectsNonExactReceiptTags() {
+    final String accountId = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+    final IdentifierResolutionPayload payload = sampleIdentifierResolutionPayload(accountId, "66");
+    final IdentifierReceiptFixture signed = signedIdentifierReceiptFixture(payload);
+
+    for (final String backend :
+        new String[] {
+          " bfv-affine-sha3-256-v1", "bfv-affine-sha3-256-v1 ", "BFV-AFFINE-SHA3-256-V1"
+        }) {
+      expectRuntimeException(
+          () ->
+              IdentifierJsonParser.parseResolutionReceipt(
+                  identifierReceiptJson(
+                          payload,
+                          signed.signatureHex(),
+                          backend,
+                          payload.execution().verificationMode(),
+                          null)
+                      .getBytes(StandardCharsets.UTF_8)),
+          "identifier parser must reject non-exact execution backend tags");
+    }
+
+    for (final String mode : new String[] {" signed", "signed ", "Signed"}) {
+      expectRuntimeException(
+          () ->
+              IdentifierJsonParser.parseResolutionReceipt(
+                  identifierReceiptJson(
+                          payload,
+                          signed.signatureHex(),
+                          payload.execution().backend(),
+                          mode,
+                          null)
+                      .getBytes(StandardCharsets.UTF_8)),
+          "identifier parser must reject non-exact execution verification modes");
+    }
+
+    for (final String kind : new String[] {" signed", "signed ", "Signed"}) {
+      final String attestationJson =
+          "{\"kind\":" + jsonString(kind) + ",\"signature\":\"" + signed.signatureHex() + "\"}";
+      expectRuntimeException(
+          () ->
+              IdentifierJsonParser.parseResolutionReceipt(
+                  identifierReceiptJson(
+                          payload,
+                          signed.signatureHex(),
+                          payload.execution().backend(),
+                          payload.execution().verificationMode(),
+                          attestationJson)
+                      .getBytes(StandardCharsets.UTF_8)),
+          "identifier parser must reject non-exact attestation kind tags");
+    }
+
+    for (final String signature :
+        new String[] {" " + signed.signatureHex(), signed.signatureHex() + " "}) {
+      final String attestationJson =
+          "{\"kind\":\"signed\",\"signature\":" + jsonString(signature) + "}";
+      expectRuntimeException(
+          () ->
+              IdentifierJsonParser.parseResolutionReceipt(
+                  identifierReceiptJson(
+                          payload,
+                          signed.signatureHex(),
+                          payload.execution().backend(),
+                          payload.execution().verificationMode(),
+                          attestationJson)
+                      .getBytes(StandardCharsets.UTF_8)),
+          "identifier parser must reject non-exact attestation signatures");
+    }
+
+    for (final String signature :
+        new String[] {" " + payload.opening().signature(), payload.opening().signature() + " "}) {
+      final String receiptJson =
+          identifierReceiptJson(
+                  payload,
+                  signed.signatureHex(),
+                  payload.execution().backend(),
+                  payload.execution().verificationMode(),
+                  null)
+              .replace(
+                  "\"signature\":" + jsonString(payload.opening().signature()),
+                  "\"signature\":" + jsonString(signature));
+      expectRuntimeException(
+          () -> IdentifierJsonParser.parseResolutionReceipt(receiptJson.getBytes(StandardCharsets.UTF_8)),
+          "identifier parser must reject non-exact opening signatures");
+    }
+
+    final String canonicalReceiptJson =
+        identifierReceiptJson(
+            payload,
+            signed.signatureHex(),
+            payload.execution().backend(),
+            payload.execution().verificationMode(),
+            null);
+    for (final String[] hashCase :
+        new String[][] {
+          {
+            "\"opaque_id\":" + jsonString(payload.opaqueId()),
+            "\"opaque_id\":" + jsonString(" " + payload.opaqueId()),
+            "opaque_id"
+          },
+          {
+            "\"receipt_hash\":" + jsonString(payload.receiptHash()),
+            "\"receipt_hash\":" + jsonString(payload.receiptHash() + " "),
+            "receipt_hash"
+          },
+          {
+            "\"uaid\":" + jsonString(payload.uaid()),
+            "\"uaid\":" + jsonString(" " + payload.uaid()),
+            "uaid"
+          },
+          {
+            "\"program_digest\":" + jsonString(payload.execution().programDigest()),
+            "\"program_digest\":" + jsonString(" " + payload.execution().programDigest()),
+            "program_digest"
+          },
+          {
+            "\"input_ciphertext_hash\":" + jsonString(payload.opening().payload().inputCiphertextHash()),
+            "\"input_ciphertext_hash\":"
+                + jsonString(payload.opening().payload().inputCiphertextHash() + " "),
+            "opening input_ciphertext_hash"
+          },
+        }) {
+      final String receiptJson = canonicalReceiptJson.replace(hashCase[0], hashCase[1]);
+      expectRuntimeException(
+          () -> IdentifierJsonParser.parseResolutionReceipt(receiptJson.getBytes(StandardCharsets.UTF_8)),
+          "identifier parser hash exactness must reject non-exact " + hashCase[2]);
+    }
+
+    for (final String[] timestampCase :
+        new String[][] {
+          {
+            "\"executed_at_ms\":" + payload.execution().executedAtMs(),
+            "\"executed_at_ms\":-1",
+            "executed_at_ms"
+          },
+          {
+            "\"executed_at_ms\":" + payload.execution().executedAtMs(),
+            "\"executed_at_ms\":\"9223372036854775808\"",
+            "executed_at_ms overflow"
+          },
+          {
+            "\"expires_at_ms\":" + payload.execution().expiresAtMs(),
+            "\"expires_at_ms\":-1",
+            "execution expires_at_ms"
+          },
+          {
+            "\"opened_at_ms\":" + payload.opening().payload().openedAtMs(),
+            "\"opened_at_ms\":-1",
+            "opened_at_ms"
+          },
+          {
+            "\"opened_at_ms\":"
+                + payload.opening().payload().openedAtMs()
+                + ",\"expires_at_ms\":"
+                + payload.opening().payload().expiresAtMs(),
+            "\"opened_at_ms\":"
+                + payload.opening().payload().openedAtMs()
+                + ",\"expires_at_ms\":-1",
+            "opening expires_at_ms"
+          },
+        }) {
+      final String receiptJson = canonicalReceiptJson.replace(timestampCase[0], timestampCase[1]);
+      expectRuntimeException(
+          () -> IdentifierJsonParser.parseResolutionReceipt(receiptJson.getBytes(StandardCharsets.UTF_8)),
+          "identifier parser timestamp u64 must reject " + timestampCase[2]);
+    }
+
+    for (final String proofBackend : new String[] {" halo2/ipa", "halo2/ipa "}) {
+      final String attestationJson =
+          "{\"kind\":\"proof\",\"proof_backend\":"
+              + jsonString(proofBackend)
+              + ",\"proof_b64\":\"AQID\"}";
+      expectRuntimeException(
+          () ->
+              IdentifierJsonParser.parseResolutionReceipt(
+                  identifierReceiptJson(
+                          payload,
+                          signed.signatureHex(),
+                          payload.execution().backend(),
+                          payload.execution().verificationMode(),
+                          attestationJson)
+                      .getBytes(StandardCharsets.UTF_8)),
+          "identifier parser must reject non-exact proof backend tags");
+    }
+    for (final String proofB64 : new String[] {" AQID", "AQID "}) {
+      final String attestationJson =
+          "{\"kind\":\"proof\",\"proof_backend\":\"halo2/ipa\",\"proof_b64\":"
+              + jsonString(proofB64)
+              + "}";
+      expectRuntimeException(
+          () ->
+              IdentifierJsonParser.parseResolutionReceipt(
+                  identifierReceiptJson(
+                          payload,
+                          signed.signatureHex(),
+                          payload.execution().backend(),
+                          payload.execution().verificationMode(),
+                          attestationJson)
+                      .getBytes(StandardCharsets.UTF_8)),
+          "identifier parser must reject non-exact proof_b64");
+    }
+    final String malformedProofAttestationJson =
+        "{\"kind\":\"proof\",\"proof_backend\":\"halo2/ipa\",\"proof_b64\":\"@@@\"}";
+    expectRuntimeException(
+        () ->
+            IdentifierJsonParser.parseResolutionReceipt(
+                identifierReceiptJson(
+                        payload,
+                        signed.signatureHex(),
+                        payload.execution().backend(),
+                        payload.execution().verificationMode(),
+                        malformedProofAttestationJson)
+                    .getBytes(StandardCharsets.UTF_8)),
+        "identifier parser must reject malformed proof_b64");
+  }
+
   private static void identifierReceiptVerifierMatchesSharedReceiptVectors()
       throws Exception {
     final Map<String, Object> fixture = loadSharedReceiptFixture();
@@ -4610,6 +4966,49 @@ public final class HttpClientTransportTests {
         : "canonical receipt payload digest mismatch";
     assert receipt.verifyAttestation(policy)
         : "shared identifier receipt vector must verify";
+
+    for (final String policyId :
+        new String[] {" phone#retail", "phone#retail ", "phone #retail", "phone# retail"}) {
+      final IdentifierResolutionReceipt mutatedReceipt =
+          identifierReceiptFromFixture(object(fixture, "receipt"), null, null, null, policyId);
+      expectIllegalArgument(
+          () -> mutatedReceipt.verifyAttestation(policy),
+          "policy_id exactness " + policyId);
+    }
+
+    for (final String programId :
+        new String[] {" identifier_lookup_retail", "identifier_lookup_retail "}) {
+      final IdentifierResolutionReceipt mutatedExecutionProgram =
+          identifierReceiptFromFixture(
+              object(fixture, "receipt"), null, null, null, null, programId, null);
+      expectIllegalArgument(
+          () -> mutatedExecutionProgram.verifyAttestation(policy),
+          "execution program_id exactness " + programId);
+
+      final IdentifierResolutionReceipt mutatedOpeningProgram =
+          identifierReceiptFromFixture(
+              object(fixture, "receipt"), null, null, null, null, null, programId);
+      expectIllegalArgument(
+          () -> mutatedOpeningProgram.verifyAttestation(policy),
+          "opening program_id exactness " + programId);
+    }
+
+    final String accountId = string(object(object(fixture, "receipt"), "payload"), "account_id");
+    for (final String paddedAccountId : new String[] {" " + accountId, accountId + " "}) {
+      final IdentifierResolutionReceipt mutatedAccount =
+          identifierReceiptFromFixture(
+              object(fixture, "receipt"),
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              paddedAccountId);
+      expectIllegalArgument(
+          () -> mutatedAccount.verifyAttestation(policy),
+          "account_id exactness " + paddedAccountId);
+    }
 
     for (final Map<String, Object> vector : objectList(fixture, "attestation_vectors")) {
       final String name = string(vector, "name");

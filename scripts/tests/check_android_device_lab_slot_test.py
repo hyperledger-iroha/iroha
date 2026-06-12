@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import hashlib
 import importlib.util
 import io
@@ -913,7 +914,14 @@ def create_slot(
     raw_test_commands = list(KAGEMUSHA_ANDROID_RAW_TEST_COMMANDS)
     write_json(
         slot / "telemetry" / "telemetry.json",
-        {"schema_version": 1, "slot_id": name, "suite": "kagemusha-device-lab"},
+        {
+            "schema_version": 1,
+            "slot_id": name,
+            "suite": "kagemusha-device-lab",
+            "device_model": "Pixel 8",
+            "device_codename": "husky",
+            "app_package_name": app_package_name,
+        },
     )
     write_text(slot / "telemetry" / "status.ndjson", '{"status":"ok"}\n')
     write_json(
@@ -1323,6 +1331,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             attestation_result={
                 "app_signing_certificate_sha256": "1" * 64,
                 "attestation_challenge_sha256": "2" * 64,
+                "offline_wallet_policy_sha256": "7" * 64,
                 "strongbox_attestation": True,
                 "physical_device_attestation": True,
                 "keymint_security_level": "STRONGBOX",
@@ -1343,6 +1352,39 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             metadata["app_package_name"],
             "org.hyperledger.iroha.sdk.offline.wallet.lab",
         )
+        self.assertEqual(metadata["offline_wallet_policy_sha256"], "7" * 64)
+
+    def test_kagemusha_slot_metadata_rejects_missing_source_policy_digest(self) -> None:
+        family = device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0]
+        with self.assertRaisesRegex(
+            ValueError,
+            "attestation_result offline_wallet_policy_sha256 must be lowercase sha256 hex",
+        ):
+            slot_assembler.build_slot_metadata(
+                slot_id="pixel6",
+                family=family,
+                facts={
+                    "device_fingerprint": "google/oriole/oriole:16/test:user/release-keys",
+                    "os_build_id": "TEST.1",
+                },
+                attestation_result={
+                    "app_signing_certificate_sha256": "1" * 64,
+                    "attestation_challenge_sha256": "2" * 64,
+                    "strongbox_attestation": True,
+                    "physical_device_attestation": True,
+                    "keymint_security_level": "STRONGBOX",
+                },
+                attestation_chain_path="attestation/keymint-certificate-chain.pem",
+                attestation_chain_sha256="3" * 64,
+                offline_wallet_apk_sha256="4" * 64,
+                d2d_payment_transcript_sha256="5" * 64,
+                wallet_integrity_transcript={
+                    "one_use_key_rotation_passed": True,
+                    "rollback_rejection_passed": True,
+                },
+                wallet_integrity_transcript_sha256="6" * 64,
+                raw_test_commands=[],
+            )
 
     def test_kagemusha_slot_assembler_builds_signed_production_slot(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -1413,6 +1455,354 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         )
         self.assertFalse((slot_root / "pixel6").exists())
 
+    def test_kagemusha_slot_assembler_rejects_control_root_before_classify(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            source_slot = Path(temp) / "source" / "pixel6"
+            slot_root = Path(temp) / "device-lab\x1b[31m"
+            args = slot_assembler.parse_args(
+                slot_assembler_args(slot_root=slot_root, source_slot=source_slot)
+            )
+
+            with mock.patch.object(
+                slot_assembler.device_lab,
+                "classify_device_lab_root_path",
+                side_effect=AssertionError(
+                    "control root path should fail before classification"
+                ),
+            ):
+                status, slot_path, errors = slot_assembler.assemble_slot(args)
+
+            root_exists = slot_root.exists()
+
+        rendered = "\n".join(errors)
+        self.assertEqual(status, 1)
+        self.assertIsNone(slot_path)
+        self.assertEqual(
+            errors,
+            ["device-lab root path must not contain control characters"],
+        )
+        self.assertFalse(root_exists)
+        self.assertNotIn("\x1b", rendered)
+
+    def test_kagemusha_slot_assembler_rejects_control_source_metadata_string(
+        self,
+    ) -> None:
+        errors: list[str] = []
+
+        value = slot_assembler._require_source_string(  # type: ignore[attr-defined]
+            {"device_fingerprint": "pixel6\x1b[31m"},
+            "device_fingerprint",
+            "slot.json",
+            errors,
+        )
+
+        rendered = "\n".join(errors)
+        self.assertIsNone(value)
+        self.assertEqual(
+            errors,
+            ["slot.json device_fingerprint must not contain control characters"],
+        )
+        self.assertNotIn("\x1b", rendered)
+
+    def test_kagemusha_slot_assembler_rejects_padded_slot_id_before_path_join(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            source_signer = create_test_signer(Path(temp) / "source-keys")
+            signer = create_test_signer(Path(temp) / "slot-keys")
+            source_slot = create_slot(
+                Path(temp) / "source",
+                "pixel6",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+                source_signer,
+            )
+            slot_root = Path(temp) / "device-lab"
+            args = slot_assembler_args(
+                slot_root=slot_root,
+                source_slot=source_slot,
+                signer=signer,
+            )
+            args[args.index("--slot-id") + 1] = " pixel6 "
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = slot_assembler.main(args)
+
+        self.assertEqual(status, 1)
+        self.assertIn("slot id must not contain whitespace", stderr.getvalue())
+        self.assertFalse((slot_root / "pixel6").exists())
+        self.assertFalse((slot_root / " pixel6 ").exists())
+
+    def test_kagemusha_slot_assembler_rejects_noncanonical_slot_id_before_path_join(
+        self,
+    ) -> None:
+        cases = ("./pixel6", "pixel6/", "pixel6/.")
+        for slot_id in cases:
+            with self.subTest(slot_id=slot_id):
+                with tempfile.TemporaryDirectory() as temp:
+                    source_signer = create_test_signer(Path(temp) / "source-keys")
+                    signer = create_test_signer(Path(temp) / "slot-keys")
+                    source_slot = create_slot(
+                        Path(temp) / "source",
+                        "pixel6",
+                        device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+                        source_signer,
+                    )
+                    slot_root = Path(temp) / "device-lab"
+                    args = slot_assembler_args(
+                        slot_root=slot_root,
+                        source_slot=source_slot,
+                        signer=signer,
+                    )
+                    args[args.index("--slot-id") + 1] = slot_id
+
+                    stderr = io.StringIO()
+                    with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                        status = slot_assembler.main(args)
+
+                self.assertEqual(status, 1)
+                self.assertIn(
+                    "slot id must be a single safe directory name",
+                    stderr.getvalue(),
+                )
+                self.assertFalse((slot_root / "pixel6").exists())
+
+    def test_kagemusha_slot_assembler_rejects_backslash_slot_id_before_path_join(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            source_signer = create_test_signer(Path(temp) / "source-keys")
+            signer = create_test_signer(Path(temp) / "slot-keys")
+            source_slot = create_slot(
+                Path(temp) / "source",
+                "pixel6",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+                source_signer,
+            )
+            slot_root = Path(temp) / "device-lab"
+            args = slot_assembler_args(
+                slot_root=slot_root,
+                source_slot=source_slot,
+                signer=signer,
+            )
+            args[args.index("--slot-id") + 1] = "pixel\\6"
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = slot_assembler.main(args)
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "slot id must be a single safe directory name",
+            stderr.getvalue(),
+        )
+        self.assertFalse((slot_root / "pixel\\6").exists())
+
+    def test_kagemusha_slot_assembler_rejects_control_slot_id_without_echo(
+        self,
+    ) -> None:
+        unsafe_slot_id = "pixel6\x1b[31m"
+        with tempfile.TemporaryDirectory() as temp:
+            source_signer = create_test_signer(Path(temp) / "source-keys")
+            signer = create_test_signer(Path(temp) / "slot-keys")
+            source_slot = create_slot(
+                Path(temp) / "source",
+                "pixel6",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+                source_signer,
+            )
+            slot_root = Path(temp) / "device-lab"
+            args = slot_assembler_args(
+                slot_root=slot_root,
+                source_slot=source_slot,
+                signer=signer,
+            )
+            args[args.index("--slot-id") + 1] = unsafe_slot_id
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = slot_assembler.main(args)
+            rendered = stderr.getvalue()
+
+        self.assertEqual(status, 1)
+        self.assertIn("slot id must not contain control characters", rendered)
+        self.assertNotIn(unsafe_slot_id, rendered)
+        self.assertNotIn("\x1b", rendered)
+        self.assertFalse((slot_root / unsafe_slot_id).exists())
+
+    def test_kagemusha_slot_assembler_rejects_padded_device_family(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            source_signer = create_test_signer(Path(temp) / "source-keys")
+            signer = create_test_signer(Path(temp) / "slot-keys")
+            source_slot = create_slot(
+                Path(temp) / "source",
+                "pixel6",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+                source_signer,
+            )
+            slot_root = Path(temp) / "device-lab"
+            args = slot_assembler_args(
+                slot_root=slot_root,
+                source_slot=source_slot,
+                signer=signer,
+            )
+            args[args.index("--device-family") + 1] = (
+                f" {device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0]} "
+            )
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = slot_assembler.main(args)
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "device family must not contain surrounding whitespace",
+            stderr.getvalue(),
+        )
+        self.assertFalse((slot_root / "pixel6").exists())
+
+    def test_kagemusha_slot_assembler_rejects_padded_identity_override(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            source_signer = create_test_signer(Path(temp) / "source-keys")
+            signer = create_test_signer(Path(temp) / "slot-keys")
+            source_slot = create_slot(
+                Path(temp) / "source",
+                "pixel6",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+                source_signer,
+            )
+            slot_root = Path(temp) / "device-lab"
+            args = slot_assembler_args(
+                slot_root=slot_root,
+                source_slot=source_slot,
+                signer=signer,
+            )
+            args[args.index("--device-fingerprint") + 1] = " pixel6/fingerprint "
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = slot_assembler.main(args)
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "device_fingerprint must not contain surrounding whitespace",
+            stderr.getvalue(),
+        )
+        self.assertFalse((slot_root / "pixel6").exists())
+
+    def test_kagemusha_slot_assembler_rejects_padded_adb_identity(self) -> None:
+        outputs = {
+            "ro.build.fingerprint": " google/oriole/oriole:16/test:user/release-keys \n",
+            "ro.build.id": "CP1A.260405.005\n",
+            "ro.product.model": "Pixel 6\n",
+            "ro.product.device": "oriole\n",
+        }
+
+        def fake_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=outputs[command[-1]],
+                stderr="",
+            )
+
+        errors: list[str] = []
+        with mock.patch.object(slot_assembler.subprocess, "run", side_effect=fake_run):
+            facts = slot_assembler.read_device_identity(
+                adb="adb",
+                serial="ABC123",
+                device_fingerprint=None,
+                os_build_id=None,
+                device_model=None,
+                device_codename=None,
+                errors=errors,
+            )
+
+        self.assertIn(
+            "device_fingerprint must not contain surrounding whitespace",
+            errors,
+        )
+        self.assertNotIn("device_fingerprint", facts)
+        self.assertEqual(facts["os_build_id"], "CP1A.260405.005")
+        self.assertEqual(facts["device_model"], "Pixel 6")
+        self.assertEqual(facts["device_codename"], "oriole")
+
+    def test_kagemusha_slot_assembler_rejects_noncanonical_adb_identity_output(
+        self,
+    ) -> None:
+        outputs = {
+            "ro.build.fingerprint": "google/oriole/oriole:16/test:user/release-keys",
+            "ro.build.id": "CP1A.260405.005\n",
+            "ro.product.model": "Pixel 6\n",
+            "ro.product.device": "oriole\n",
+        }
+
+        def fake_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=outputs[command[-1]],
+                stderr="",
+            )
+
+        errors: list[str] = []
+        with mock.patch.object(slot_assembler.subprocess, "run", side_effect=fake_run):
+            facts = slot_assembler.read_device_identity(
+                adb="adb",
+                serial=None,
+                device_fingerprint=None,
+                os_build_id=None,
+                device_model=None,
+                device_codename=None,
+                errors=errors,
+            )
+
+        self.assertIn(
+            (
+                "adb getprop ro.build.fingerprint failed: adb getprop output "
+                "must be exactly one LF-terminated value"
+            ),
+            errors,
+        )
+        self.assertNotIn("device_fingerprint", facts)
+        self.assertEqual(facts["os_build_id"], "CP1A.260405.005")
+        self.assertEqual(facts["device_model"], "Pixel 6")
+        self.assertEqual(facts["device_codename"], "oriole")
+
+    def test_kagemusha_slot_assembler_rejects_control_identity_override_without_echo(
+        self,
+    ) -> None:
+        unsafe_codename = "oriole\x1b[31m"
+        with tempfile.TemporaryDirectory() as temp:
+            source_signer = create_test_signer(Path(temp) / "source-keys")
+            signer = create_test_signer(Path(temp) / "slot-keys")
+            source_slot = create_slot(
+                Path(temp) / "source",
+                "pixel6",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+                source_signer,
+            )
+            slot_root = Path(temp) / "device-lab"
+            args = slot_assembler_args(
+                slot_root=slot_root,
+                source_slot=source_slot,
+                signer=signer,
+            )
+            args[args.index("--device-codename") + 1] = unsafe_codename
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = slot_assembler.main(args)
+            rendered = stderr.getvalue()
+
+        self.assertEqual(status, 1)
+        self.assertIn("device_codename must not contain control characters", rendered)
+        self.assertNotIn(unsafe_codename, rendered)
+        self.assertNotIn("\x1b", rendered)
+        self.assertFalse((slot_root / "pixel6").exists())
+
     def test_kagemusha_slot_assembler_rejects_report_device_mismatch_before_install(
         self,
     ) -> None:
@@ -1447,6 +1837,366 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             stderr.getvalue(),
         )
         self.assertFalse((slot_root / "pixel6").exists())
+
+    def test_kagemusha_slot_assembler_rejects_report_app_package_mismatch_before_publish(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            source_signer = create_test_signer(Path(temp) / "source-keys")
+            source_slot = create_slot(
+                Path(temp) / "source",
+                "pixel6",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+                source_signer,
+            )
+            report_path = source_slot / "attestation" / "report.json"
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            report["app_package_name"] = "org.hyperledger.iroha.android.other"
+            write_json(report_path, report)
+            slot_root = Path(temp) / "device-lab"
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = slot_assembler.main(
+                    slot_assembler_args(
+                        slot_root=slot_root,
+                        source_slot=source_slot,
+                    )
+                    + ["--allow-unsigned"]
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "attestation/report.json app_package_name must match "
+            "attestation/result.json app_package_name",
+            stderr.getvalue(),
+        )
+        self.assertFalse((slot_root / "pixel6").exists())
+
+    def test_kagemusha_slot_assembler_rejects_unexpected_attestation_source_fields_before_publish(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "result",
+                lambda result, _report: result.__setitem__("unexpected", "drift"),
+                "attestation/result.json contains unexpected field unexpected",
+            ),
+            (
+                "report",
+                lambda _result, report: report.__setitem__("unexpected", "drift"),
+                "attestation/report.json contains unexpected field unexpected",
+            ),
+            (
+                "verification",
+                lambda _result, report: report["verification"].__setitem__("debug", True),
+                "attestation/report.json verification contains unexpected field debug",
+            ),
+        )
+        for name, mutate, expected_error in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as temp:
+                    source_signer = create_test_signer(Path(temp) / "source-keys")
+                    source_slot = create_slot(
+                        Path(temp) / "source",
+                        "pixel6",
+                        device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+                        source_signer,
+                    )
+                    result_path = source_slot / "attestation" / "result.json"
+                    report_path = source_slot / "attestation" / "report.json"
+                    result = json.loads(result_path.read_text(encoding="utf-8"))
+                    report = json.loads(report_path.read_text(encoding="utf-8"))
+                    mutate(result, report)
+                    write_json(result_path, result)
+                    write_json(report_path, report)
+                    slot_root = Path(temp) / "device-lab"
+
+                    stderr = io.StringIO()
+                    with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                        status = slot_assembler.main(
+                            slot_assembler_args(
+                                slot_root=slot_root,
+                                source_slot=source_slot,
+                            )
+                            + ["--allow-unsigned"]
+                        )
+
+                self.assertEqual(status, 1)
+                self.assertIn(expected_error, stderr.getvalue())
+                self.assertFalse((slot_root / "pixel6").exists())
+
+    def test_kagemusha_slot_assembler_rejects_bad_attestation_report_metadata_before_publish(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "schema",
+                lambda report: report.__setitem__(
+                    "schema",
+                    "iroha.android.device_lab.kagemusha.attestation_report.v0",
+                ),
+                f"attestation/report.json schema must be {device_lab.ATTESTATION_REPORT_SCHEMA}",
+            ),
+            (
+                "verifier",
+                lambda report: report.__setitem__("verifier", "token=supersecret"),
+                "attestation/report.json verifier must not contain secret-looking material",
+            ),
+        )
+        for name, mutate, expected_error in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as temp:
+                    source_signer = create_test_signer(Path(temp) / "source-keys")
+                    source_slot = create_slot(
+                        Path(temp) / "source",
+                        "pixel6",
+                        device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+                        source_signer,
+                    )
+                    report_path = source_slot / "attestation" / "report.json"
+                    report = json.loads(report_path.read_text(encoding="utf-8"))
+                    mutate(report)
+                    write_json(report_path, report)
+                    slot_root = Path(temp) / "device-lab"
+
+                    stderr = io.StringIO()
+                    with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                        status = slot_assembler.main(
+                            slot_assembler_args(
+                                slot_root=slot_root,
+                                source_slot=source_slot,
+                            )
+                            + ["--allow-unsigned"]
+                        )
+
+                self.assertEqual(status, 1)
+                self.assertIn(expected_error, stderr.getvalue())
+                self.assertFalse((slot_root / "pixel6").exists())
+
+    def test_kagemusha_slot_assembler_rejects_unexpected_transcript_source_fields_before_publish(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "d2d",
+                Path("handoff/d2d-payment.json"),
+                "d2d payment transcript contains unexpected field unexpected",
+            ),
+            (
+                "wallet",
+                Path("wallet/integrity.json"),
+                "wallet integrity transcript contains unexpected field unexpected",
+            ),
+        )
+        for name, relative, expected_error in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as temp:
+                    source_signer = create_test_signer(Path(temp) / "source-keys")
+                    source_slot = create_slot(
+                        Path(temp) / "source",
+                        "pixel6",
+                        device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+                        source_signer,
+                    )
+                    transcript_path = source_slot / relative
+                    transcript = json.loads(transcript_path.read_text(encoding="utf-8"))
+                    transcript["unexpected"] = "drift"
+                    write_json(transcript_path, transcript)
+                    slot_root = Path(temp) / "device-lab"
+
+                    stderr = io.StringIO()
+                    with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                        status = slot_assembler.main(
+                            slot_assembler_args(
+                                slot_root=slot_root,
+                                source_slot=source_slot,
+                            )
+                            + ["--allow-unsigned"]
+                        )
+
+                self.assertEqual(status, 1)
+                self.assertIn(expected_error, stderr.getvalue())
+                self.assertFalse((slot_root / "pixel6").exists())
+
+    def test_kagemusha_slot_assembler_rejects_transcript_schema_mismatch_before_publish(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "d2d",
+                Path("handoff/d2d-payment.json"),
+                "d2d payment transcript schema must be "
+                f"{device_lab.D2D_PAYMENT_TRANSCRIPT_SCHEMA}",
+            ),
+            (
+                "wallet",
+                Path("wallet/integrity.json"),
+                "wallet integrity transcript schema must be "
+                f"{device_lab.WALLET_INTEGRITY_TRANSCRIPT_SCHEMA}",
+            ),
+        )
+        for name, relative, expected_error in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as temp:
+                    source_signer = create_test_signer(Path(temp) / "source-keys")
+                    source_slot = create_slot(
+                        Path(temp) / "source",
+                        "pixel6",
+                        device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+                        source_signer,
+                    )
+                    transcript_path = source_slot / relative
+                    transcript = json.loads(transcript_path.read_text(encoding="utf-8"))
+                    transcript["schema"] = "iroha.android.device_lab.kagemusha.legacy.v0"
+                    write_json(transcript_path, transcript)
+                    slot_root = Path(temp) / "device-lab"
+
+                    stderr = io.StringIO()
+                    with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                        status = slot_assembler.main(
+                            slot_assembler_args(
+                                slot_root=slot_root,
+                                source_slot=source_slot,
+                            )
+                            + ["--allow-unsigned"]
+                        )
+
+                self.assertEqual(status, 1)
+                self.assertIn(expected_error, stderr.getvalue())
+                self.assertFalse((slot_root / "pixel6").exists())
+
+    def test_kagemusha_slot_assembler_rejects_d2d_transcript_semantic_mismatch_before_publish(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            source_signer = create_test_signer(Path(temp) / "source-keys")
+            source_slot = create_slot(
+                Path(temp) / "source",
+                "pixel6",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+                source_signer,
+            )
+            transcript_path = source_slot / "handoff" / "d2d-payment.json"
+            transcript = json.loads(transcript_path.read_text(encoding="utf-8"))
+            transcript["queue_after_sha256"] = "22" * 32
+            write_json(transcript_path, transcript)
+            slot_root = Path(temp) / "device-lab"
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = slot_assembler.main(
+                    slot_assembler_args(
+                        slot_root=slot_root,
+                        source_slot=source_slot,
+                    )
+                    + ["--allow-unsigned"]
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "d2d payment transcript queue_after_sha256 must match queue/pending_queue.json",
+            stderr.getvalue(),
+        )
+        self.assertFalse((slot_root / "pixel6").exists())
+
+    def test_kagemusha_slot_assembler_rejects_wallet_transcript_semantic_mismatch_before_publish(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            source_signer = create_test_signer(Path(temp) / "source-keys")
+            source_slot = create_slot(
+                Path(temp) / "source",
+                "pixel6",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+                source_signer,
+            )
+            transcript_path = source_slot / "wallet" / "integrity.json"
+            transcript = json.loads(transcript_path.read_text(encoding="utf-8"))
+            transcript["wallet_state_after_rotation_sha256"] = transcript[
+                "wallet_state_before_sha256"
+            ]
+            write_json(transcript_path, transcript)
+            slot_root = Path(temp) / "device-lab"
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = slot_assembler.main(
+                    slot_assembler_args(
+                        slot_root=slot_root,
+                        source_slot=source_slot,
+                    )
+                    + ["--allow-unsigned"]
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "wallet integrity transcript wallet_state_before_sha256 must differ "
+            "from wallet_state_after_rotation_sha256",
+            stderr.getvalue(),
+        )
+        self.assertFalse((slot_root / "pixel6").exists())
+
+    def test_kagemusha_slot_assembler_rejects_malformed_required_runtime_artifacts_before_publish(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "queue",
+                lambda slot: write_json(
+                    slot / "queue" / "pending_queue.json",
+                    {"slot_id": "pixel7", "pending_transactions": []},
+                ),
+                "queue/pending_queue.json slot_id must match slot id",
+            ),
+            (
+                "telemetry",
+                lambda slot: write_json(
+                    slot / "telemetry" / "telemetry.json",
+                    {"schema_version": 0, "slot_id": "pixel6", "suite": "kagemusha-device-lab"},
+                ),
+                "telemetry/telemetry.json schema_version must be 1",
+            ),
+            (
+                "status",
+                lambda slot: write_text(
+                    slot / "telemetry" / "status.ndjson",
+                    '{"status":"failed","slot_id":"pixel6"}\n',
+                ),
+                "telemetry/status.ndjson line 1 status must not be 'failed'",
+            ),
+            (
+                "runtime",
+                lambda slot: write_text(slot / "logs" / "runtime.log", "device-lab run started\n"),
+                "logs/runtime.log must contain Kagemusha device-lab completion marker",
+            ),
+        )
+        for name, mutate, expected_error in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as temp:
+                    source_signer = create_test_signer(Path(temp) / "source-keys")
+                    source_slot = create_slot(
+                        Path(temp) / "source",
+                        "pixel6",
+                        device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+                        source_signer,
+                    )
+                    mutate(source_slot)
+                    slot_root = Path(temp) / "device-lab"
+
+                    stderr = io.StringIO()
+                    with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                        status = slot_assembler.main(
+                            slot_assembler_args(
+                                slot_root=slot_root,
+                                source_slot=source_slot,
+                            )
+                            + ["--allow-unsigned"]
+                        )
+
+                self.assertEqual(status, 1)
+                self.assertIn(expected_error, stderr.getvalue())
+                self.assertFalse((slot_root / "pixel6").exists())
 
     def test_kagemusha_slot_assembler_rejects_symlinked_source_ancestor(
         self,
@@ -1879,6 +2629,33 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         )
         self.assertEqual(copied_bytes, b"source apk bytes")
 
+    def test_kagemusha_slot_assembler_copy_rejects_control_source_path_before_copy(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            wrapper = Path(temp)
+            source = wrapper / "control\nsource.apk"
+            source.write_bytes(b"source apk bytes")
+            destination = wrapper / "slot" / "evidence" / "offline-wallet-release.apk"
+            errors: list[str] = []
+
+            digest = slot_assembler._copy_source_file(
+                source=source,
+                destination=destination,
+                label="offline wallet release APK source",
+                errors=errors,
+            )
+            rendered = "\n".join(errors)
+
+        self.assertIsNone(digest)
+        self.assertEqual(
+            errors,
+            ["offline wallet release APK source path must not contain control characters"],
+        )
+        self.assertFalse(destination.exists())
+        self.assertFalse(destination.parent.exists())
+        self.assertNotIn(str(source), rendered)
+
     def test_kagemusha_slot_assembler_copy_verifies_installed_bytes(
         self,
     ) -> None:
@@ -1980,6 +2757,159 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertIn(
             "attestation harness result challenge_hex digest must match "
             "attestation/result.json attestation_challenge_sha256",
+            stderr.getvalue(),
+        )
+        self.assertFalse((slot_root / "pixel6").exists())
+
+    def test_kagemusha_slot_assembler_rejects_blank_source_challenge_before_unsigned_publish(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            source_signer = create_test_signer(Path(temp) / "source-keys")
+            source_slot = create_slot(
+                Path(temp) / "source",
+                "pixel6",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+                source_signer,
+            )
+            for relative in (
+                "attestation/result.json",
+                "attestation/report.json",
+            ):
+                path = source_slot / relative
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                payload["attestation_challenge_sha256"] = " "
+                write_json(path, payload)
+            slot_root = Path(temp) / "device-lab"
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = slot_assembler.main(
+                    slot_assembler_args(
+                        slot_root=slot_root,
+                        source_slot=source_slot,
+                    )
+                    + ["--allow-unsigned"]
+                )
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "attestation/result.json attestation_challenge_sha256 must be a non-empty string",
+            rendered,
+        )
+        self.assertIn(
+            "attestation/report.json attestation_challenge_sha256 must be a non-empty string",
+            rendered,
+        )
+        self.assertFalse((slot_root / "pixel6").exists())
+
+    def test_kagemusha_slot_assembler_rejects_noncanonical_source_policy_before_unsigned_publish(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            source_signer = create_test_signer(Path(temp) / "source-keys")
+            source_slot = create_slot(
+                Path(temp) / "source",
+                "pixel6",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+                source_signer,
+            )
+            result_path = source_slot / "attestation" / "result.json"
+            result = json.loads(result_path.read_text(encoding="utf-8"))
+            result["offline_wallet_policy_sha256"] = "AA" * 32
+            write_json(result_path, result)
+            slot_root = Path(temp) / "device-lab"
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = slot_assembler.main(
+                    slot_assembler_args(
+                        slot_root=slot_root,
+                        source_slot=source_slot,
+                    )
+                    + ["--allow-unsigned"]
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "attestation/result.json offline_wallet_policy_sha256 must be lowercase sha256 hex",
+            stderr.getvalue(),
+        )
+        self.assertFalse((slot_root / "pixel6").exists())
+
+    def test_kagemusha_slot_assembler_rejects_report_level_mismatch_before_publish(
+        self,
+    ) -> None:
+        for level_key in (
+            "keymint_security_level",
+            "attestation_security_level",
+            "keymaster_security_level",
+        ):
+            with self.subTest(level_key=level_key):
+                with tempfile.TemporaryDirectory() as temp:
+                    source_signer = create_test_signer(Path(temp) / "source-keys")
+                    source_slot = create_slot(
+                        Path(temp) / "source",
+                        "pixel6",
+                        device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+                        source_signer,
+                    )
+                    report_path = source_slot / "attestation" / "report.json"
+                    report = json.loads(report_path.read_text(encoding="utf-8"))
+                    report["verification"][level_key] = "STRONG_BOX"
+                    write_json(report_path, report)
+                    slot_root = Path(temp) / "device-lab"
+
+                    stderr = io.StringIO()
+                    with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                        status = slot_assembler.main(
+                            slot_assembler_args(
+                                slot_root=slot_root,
+                                source_slot=source_slot,
+                            )
+                            + ["--allow-unsigned"]
+                        )
+
+                self.assertEqual(status, 1)
+                self.assertIn(
+                    f"attestation/report.json verification.{level_key} must match "
+                    f"attestation/result.json {level_key}",
+                    stderr.getvalue(),
+                )
+                self.assertFalse((slot_root / "pixel6").exists())
+
+    def test_kagemusha_slot_assembler_rejects_report_status_mismatch_before_publish(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            source_signer = create_test_signer(Path(temp) / "source-keys")
+            source_slot = create_slot(
+                Path(temp) / "source",
+                "pixel6",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+                source_signer,
+            )
+            report_path = source_slot / "attestation" / "report.json"
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            report["verification"]["status"] = "passed"
+            write_json(report_path, report)
+            slot_root = Path(temp) / "device-lab"
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = slot_assembler.main(
+                    slot_assembler_args(
+                        slot_root=slot_root,
+                        source_slot=source_slot,
+                    )
+                    + ["--allow-unsigned"]
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "attestation/report.json verification.status must match "
+            "attestation/result.json status",
             stderr.getvalue(),
         )
         self.assertFalse((slot_root / "pixel6").exists())
@@ -2451,6 +3381,213 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                 self.assertIn(expected, stderr.getvalue())
                 self.assertFalse(out_path.exists())
 
+    def test_kagemusha_attestation_report_writer_rejects_noncanonical_slot_id(
+        self,
+    ) -> None:
+        cases = ("./pixel6", "pixel6/", "pixel6/.")
+        for slot_id in cases:
+            with self.subTest(slot_id=slot_id):
+                with tempfile.TemporaryDirectory() as temp:
+                    temp_path = Path(temp)
+                    result_path = temp_path / "result.json"
+                    chain_path = temp_path / "keymint-certificate-chain.pem"
+                    out_path = temp_path / "report.json"
+                    write_attestation_harness_result(result_path)
+                    write_attestation_chain(chain_path)
+                    args = attestation_report_args(
+                        harness_result=result_path,
+                        chain=chain_path,
+                        out=out_path,
+                    )
+                    args[args.index("--slot-id") + 1] = slot_id
+
+                    stderr = io.StringIO()
+                    with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                        status = attestation_report.main(args)
+
+                self.assertEqual(status, 1)
+                self.assertIn(
+                    "slot id must be a canonical single directory name",
+                    stderr.getvalue(),
+                )
+                self.assertFalse(out_path.exists())
+
+    def test_kagemusha_attestation_report_writer_rejects_backslash_slot_id(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            temp_path = Path(temp)
+            result_path = temp_path / "result.json"
+            chain_path = temp_path / "keymint-certificate-chain.pem"
+            out_path = temp_path / "report.json"
+            write_attestation_harness_result(result_path)
+            write_attestation_chain(chain_path)
+            args = attestation_report_args(
+                harness_result=result_path,
+                chain=chain_path,
+                out=out_path,
+            )
+            args[args.index("--slot-id") + 1] = "pixel\\6"
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = attestation_report.main(args)
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "slot id must be a single safe directory name",
+            stderr.getvalue(),
+        )
+        self.assertFalse(out_path.exists())
+
+    def test_kagemusha_attestation_report_writer_rejects_control_identity_args(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "--slot-id",
+                "pixel6\x1b[31m",
+                "slot id must not contain control characters",
+                None,
+            ),
+            (
+                "--device-fingerprint",
+                "google/oriole/oriole:16/CP1A.260405.005/15001963:user/release-keys\x1b[31m",
+                "device fingerprint must not contain control characters",
+                None,
+            ),
+            (
+                "--os-build-id",
+                "CP1A.260405.005\x1b[31m",
+                "os build id must not contain control characters",
+                None,
+            ),
+            (
+                "--app-package-name",
+                "org.hyperledger.iroha\x1b[31m",
+                "app package name must not contain control characters",
+                "append",
+            ),
+            (
+                "--verifier",
+                "android-keystore-attestation-harness\x1b[31m",
+                "verifier must not contain control characters",
+                "append",
+            ),
+        )
+        for option, value, expected, mode in cases:
+            with self.subTest(option=option):
+                with tempfile.TemporaryDirectory() as temp:
+                    temp_path = Path(temp)
+                    result_path = temp_path / "result.json"
+                    chain_path = temp_path / "keymint-certificate-chain.pem"
+                    out_path = temp_path / "report.json"
+                    write_attestation_harness_result(result_path)
+                    write_attestation_chain(chain_path)
+                    args = attestation_report_args(
+                        harness_result=result_path,
+                        chain=chain_path,
+                        out=out_path,
+                    )
+                    if mode == "append":
+                        args.extend([option, value])
+                    else:
+                        args[args.index(option) + 1] = value
+
+                    stderr = io.StringIO()
+                    with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                        status = attestation_report.main(args)
+                    rendered = stderr.getvalue()
+
+                self.assertEqual(status, 1)
+                self.assertIn(expected, rendered)
+                self.assertNotIn(value, rendered)
+                self.assertNotIn("\x1b", rendered)
+                self.assertFalse(out_path.exists())
+
+    def test_kagemusha_attestation_report_writer_rejects_control_harness_strings(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            temp_path = Path(temp)
+            result_path = temp_path / "result.json"
+            chain_path = temp_path / "keymint-certificate-chain.pem"
+            out_path = temp_path / "report.json"
+            write_attestation_harness_result(
+                result_path,
+                challenge_hex="4145454245\x1b[31m",
+                attestation_security_level="STRONGBOX\x1b[31m",
+                keymaster_security_level="STRONGBOX\x1b[31m",
+                extra={"alias": "strongbox-alias\x1b[31m"},
+            )
+            write_attestation_chain(chain_path)
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = attestation_report.main(
+                    attestation_report_args(
+                        harness_result=result_path,
+                        chain=chain_path,
+                        out=out_path,
+                    )
+                )
+            rendered = stderr.getvalue()
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "attestation harness result alias must not contain control characters",
+            rendered,
+        )
+        self.assertIn(
+            "attestation harness result attestation_security_level must not contain "
+            "control characters",
+            rendered,
+        )
+        self.assertIn(
+            "attestation harness result keymaster_security_level must not contain "
+            "control characters",
+            rendered,
+        )
+        self.assertIn(
+            "attestation harness result challenge_hex must not contain control characters",
+            rendered,
+        )
+        self.assertNotIn("\x1b", rendered)
+        self.assertFalse(out_path.exists())
+
+    def test_kagemusha_attestation_report_writer_rejects_control_expected_challenge(
+        self,
+    ) -> None:
+        expected_challenge = "4145454245\x1b[31m"
+        with tempfile.TemporaryDirectory() as temp:
+            temp_path = Path(temp)
+            result_path = temp_path / "result.json"
+            chain_path = temp_path / "keymint-certificate-chain.pem"
+            out_path = temp_path / "report.json"
+            write_attestation_harness_result(result_path)
+            write_attestation_chain(chain_path)
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = attestation_report.main(
+                    attestation_report_args(
+                        harness_result=result_path,
+                        chain=chain_path,
+                        out=out_path,
+                        extra=["--expected-challenge-hex", expected_challenge],
+                    )
+                )
+            rendered = stderr.getvalue()
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "--expected-challenge-hex must not contain control characters",
+            rendered,
+        )
+        self.assertNotIn(expected_challenge, rendered)
+        self.assertNotIn("\x1b", rendered)
+        self.assertFalse(out_path.exists())
+
     def test_kagemusha_attestation_report_writer_rejects_unexpected_result_fields(
         self,
     ) -> None:
@@ -2482,6 +3619,105 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         )
         self.assertFalse(out_path.exists())
 
+    def test_kagemusha_attestation_report_writer_redacts_control_unexpected_result_field(
+        self,
+    ) -> None:
+        unsafe_key = "debug\x1b[31m"
+        with tempfile.TemporaryDirectory() as temp:
+            temp_path = Path(temp)
+            result_path = temp_path / "result.json"
+            chain_path = temp_path / "keymint-certificate-chain.pem"
+            out_path = temp_path / "report.json"
+            write_attestation_harness_result(
+                result_path,
+                extra={unsafe_key: "operator-local"},
+            )
+            write_attestation_chain(chain_path)
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = attestation_report.main(
+                    attestation_report_args(
+                        harness_result=result_path,
+                        chain=chain_path,
+                        out=out_path,
+                    )
+                )
+            rendered = stderr.getvalue()
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "attestation harness result contains unexpected field "
+            f"{device_lab.CONTROL_PATH_REDACTION}",
+            rendered,
+        )
+        self.assertNotIn(unsafe_key, rendered)
+        self.assertNotIn("\x1b", rendered)
+        self.assertFalse(out_path.exists())
+
+    def test_kagemusha_attestation_report_writer_rejects_chain_path_control(
+        self,
+    ) -> None:
+        unsafe_path = "attestation/keymint-certificate-chain.pem\x1b[31m"
+        with tempfile.TemporaryDirectory() as temp:
+            temp_path = Path(temp)
+            result_path = temp_path / "result.json"
+            chain_path = temp_path / "keymint-certificate-chain.pem"
+            out_path = temp_path / "report.json"
+            write_attestation_harness_result(result_path)
+            write_attestation_chain(chain_path)
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = attestation_report.main(
+                    attestation_report_args(
+                        harness_result=result_path,
+                        chain=chain_path,
+                        out=out_path,
+                        extra=[
+                            "--attestation-certificate-chain-path",
+                            unsafe_path,
+                        ],
+                    )
+                )
+            rendered = stderr.getvalue()
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "attestation certificate chain path must not contain control characters",
+            rendered,
+        )
+        self.assertNotIn(unsafe_path, rendered)
+        self.assertNotIn("\x1b", rendered)
+        self.assertFalse(out_path.exists())
+
+    def test_kagemusha_attestation_report_writer_rejects_control_chain_source_path_before_ancestor_check(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            chain_path = Path(temp) / "chain\x1b[31m" / "keymint-certificate-chain.pem"
+            errors: list[str] = []
+
+            with mock.patch.object(
+                attestation_report.device_lab,
+                "validate_no_symlink_ancestors",
+                side_effect=AssertionError(
+                    "control chain source path should fail before ancestor checks"
+                ),
+            ):
+                chain_data, chain_digest = (  # type: ignore[attr-defined]
+                    attestation_report._read_validated_chain(chain_path, errors)
+                )
+
+        rendered = "\n".join(errors)
+        self.assertIsNone(chain_data)
+        self.assertIsNone(chain_digest)
+        self.assertEqual(
+            errors,
+            ["attestation certificate chain path must not contain control characters"],
+        )
+        self.assertNotIn("\x1b", rendered)
+
     def test_kagemusha_attestation_report_writer_rejects_chain_path_escape(
         self,
     ) -> None:
@@ -2510,6 +3746,77 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertIn(
             "attestation certificate chain path must stay under attestation/",
+            stderr.getvalue(),
+        )
+        self.assertFalse(out_path.exists())
+
+    def test_kagemusha_attestation_report_writer_rejects_noncanonical_chain_path(
+        self,
+    ) -> None:
+        cases = (
+            "attestation/./keymint-certificate-chain.pem",
+            "attestation//keymint-certificate-chain.pem",
+            "attestation/keymint-certificate-chain.pem/",
+        )
+        for chain_relative in cases:
+            with self.subTest(chain_relative=chain_relative):
+                with tempfile.TemporaryDirectory() as temp:
+                    temp_path = Path(temp)
+                    result_path = temp_path / "result.json"
+                    chain_path = temp_path / "keymint-certificate-chain.pem"
+                    out_path = temp_path / "report.json"
+                    write_attestation_harness_result(result_path)
+                    write_attestation_chain(chain_path)
+
+                    stderr = io.StringIO()
+                    with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                        status = attestation_report.main(
+                            attestation_report_args(
+                                harness_result=result_path,
+                                chain=chain_path,
+                                out=out_path,
+                                extra=[
+                                    "--attestation-certificate-chain-path",
+                                    chain_relative,
+                                ],
+                            )
+                        )
+
+                self.assertEqual(status, 1)
+                self.assertIn(
+                    "attestation certificate chain path must be canonical",
+                    stderr.getvalue(),
+                )
+                self.assertFalse(out_path.exists())
+
+    def test_kagemusha_attestation_report_writer_rejects_backslash_chain_path(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            temp_path = Path(temp)
+            result_path = temp_path / "result.json"
+            chain_path = temp_path / "keymint-certificate-chain.pem"
+            out_path = temp_path / "report.json"
+            write_attestation_harness_result(result_path)
+            write_attestation_chain(chain_path)
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = attestation_report.main(
+                    attestation_report_args(
+                        harness_result=result_path,
+                        chain=chain_path,
+                        out=out_path,
+                        extra=[
+                            "--attestation-certificate-chain-path",
+                            "attestation/keymint\\certificate-chain.pem",
+                        ],
+                    )
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "attestation certificate chain path must not contain backslashes",
             stderr.getvalue(),
         )
         self.assertFalse(out_path.exists())
@@ -2583,6 +3890,260 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertTrue(any("cat" in call for call in runner.calls))  # type: ignore[attr-defined]
         self.assertTrue(any("exec-out" in call for call in runner.calls))  # type: ignore[attr-defined]
 
+    def test_kagemusha_android_raw_puller_rejects_noncanonical_slot_id_before_adb(
+        self,
+    ) -> None:
+        def forbidden_runner(command: list[str], **kwargs):
+            raise AssertionError("raw puller must reject slot id before ADB")
+
+        for slot_id in ("./pixel6", "pixel6/", "pixel6/."):
+            with self.subTest(slot_id=slot_id):
+                with tempfile.TemporaryDirectory() as temp:
+                    out_root = Path(temp) / "raw"
+
+                    status, slot_path, errors = raw_puller.pull_raw_slot(
+                        raw_pull_args(out_root, slot_id=slot_id),
+                        runner=forbidden_runner,
+                    )
+
+                self.assertEqual(status, 1)
+                self.assertIsNone(slot_path)
+                self.assertEqual(
+                    errors,
+                    [
+                        f"slot id {slot_id!r} must be a canonical single directory name"
+                    ],
+                )
+                self.assertFalse(out_root.exists())
+
+    def test_kagemusha_android_raw_puller_rejects_noncanonical_adb_arguments_before_command(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "adb",
+                " adb ",
+                "adb executable must not contain surrounding whitespace",
+            ),
+            (
+                "run_as_package",
+                f" {raw_puller.DEFAULT_RUN_AS_PACKAGE}",
+                "run-as package must not contain surrounding whitespace",
+            ),
+            (
+                "device_lab_root",
+                raw_puller.DEFAULT_DEVICE_LAB_DEVICE_ROOT + "\x1b",
+                "device lab root must not contain control characters",
+            ),
+            (
+                "serial",
+                "ABC123\x00",
+                "ADB serial must not contain control characters",
+            ),
+            (
+                "run_as_package",
+                "token=supersecret",
+                "run-as package must not contain secret-looking material",
+            ),
+        )
+        for attr, value, expected_error in cases:
+            with self.subTest(attr=attr, expected_error=expected_error):
+                with tempfile.TemporaryDirectory() as temp:
+                    args = raw_pull_args(Path(temp) / "raw")
+                    setattr(args, attr, value)
+                    runner = fake_raw_pull_runner(raw_slot_tar_bytes("pixel6"), "pixel6")
+
+                    status, slot_path, errors = raw_puller.pull_raw_slot(
+                        args,
+                        runner=runner,
+                    )
+
+                rendered = "\n".join(errors)
+                self.assertEqual(status, 1)
+                self.assertIsNone(slot_path)
+                self.assertIn(expected_error, errors)
+                self.assertNotIn("\x00", rendered)
+                self.assertNotIn("\x1b", rendered)
+                self.assertEqual(runner.calls, [])  # type: ignore[attr-defined]
+
+    def test_kagemusha_android_raw_puller_rejects_control_out_root_before_adb(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            out_root = Path(temp) / "raw\x1b[31m"
+            args = raw_pull_args(out_root, slot_id="pixel6")
+            runner = fake_raw_pull_runner(raw_slot_tar_bytes("pixel6"), "pixel6")
+
+            status, slot_path, errors = raw_puller.pull_raw_slot(
+                args,
+                runner=runner,
+            )
+
+            out_root_exists = out_root.exists()
+
+        rendered = "\n".join(errors)
+        self.assertEqual(status, 1)
+        self.assertIsNone(slot_path)
+        self.assertIn(
+            "raw output root path must not contain control characters",
+            errors,
+        )
+        self.assertFalse(out_root_exists)
+        self.assertEqual(runner.calls, [])  # type: ignore[attr-defined]
+        self.assertNotIn("\x1b", rendered)
+
+    def test_kagemusha_android_raw_puller_rejects_control_summary_out_before_adb(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            out_root = Path(temp) / "raw"
+            summary_out = Path(temp) / "summary\x1b[31m.json"
+            runner = fake_raw_pull_runner(raw_slot_tar_bytes("pixel6"), "pixel6")
+
+            status, slot_path, errors = raw_puller.pull_raw_slot(
+                raw_pull_args(out_root, summary_out=summary_out),
+                runner=runner,
+            )
+
+            out_root_exists = out_root.exists()
+
+        rendered = "\n".join(errors)
+        self.assertEqual(status, 1)
+        self.assertIsNone(slot_path)
+        self.assertIn(
+            "raw pull summary output must not contain control characters",
+            errors,
+        )
+        self.assertFalse(out_root_exists)
+        self.assertEqual(runner.calls, [])  # type: ignore[attr-defined]
+        self.assertNotIn("\x1b", rendered)
+
+    def test_kagemusha_android_raw_puller_rejects_control_raw_slot_path_before_stat(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            slot_path = Path(temp) / "pixel6\x1b[31m"
+            latest_path = Path(temp) / "latest-slot.txt"
+
+            with mock.patch.object(
+                Path,
+                "lstat",
+                side_effect=AssertionError("raw slot path should not be statted"),
+            ):
+                errors = raw_puller._validate_raw_slot_files(  # type: ignore[attr-defined]
+                    slot_path,
+                    "pixel6",
+                    latest_path,
+                )
+
+        rendered = "\n".join(errors)
+        self.assertEqual(errors, ["raw slot path must not contain control characters"])
+        self.assertNotIn("\x1b", rendered)
+
+    def test_kagemusha_android_raw_puller_redacts_control_raw_artifact_path(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            temp_path = Path(temp)
+            slot_path = write_raw_stage_slot(temp_path, "pixel6")
+            latest_path = temp_path / "latest-slot.txt"
+            latest_path.write_text("pixel6\n", encoding="utf-8")
+            unsafe_artifact = slot_path / "logs" / "debug\x1b[31m.log"
+            unsafe_artifact.write_text("debug\n", encoding="utf-8")
+
+            errors = raw_puller._validate_raw_slot_files(  # type: ignore[attr-defined]
+                slot_path,
+                "pixel6",
+                latest_path,
+            )
+
+        rendered = "\n".join(errors)
+        self.assertIn(
+            "raw slot artifact paths must not contain control characters",
+            errors,
+        )
+        self.assertNotIn("debug\x1b[31m.log", rendered)
+        self.assertNotIn("\x1b", rendered)
+
+    def test_kagemusha_android_raw_puller_rejects_control_tar_member_path_before_normalise(
+        self,
+    ) -> None:
+        errors: list[str] = []
+        with mock.patch.object(
+            raw_puller,
+            "PurePosixPath",
+            side_effect=AssertionError(
+                "control tar member paths should fail before normalisation"
+            ),
+        ):
+            normalised = raw_puller._normalise_tar_member_name(  # type: ignore[attr-defined]
+                "pixel6/logs/debug\x1b[31m.log",
+                errors,
+            )
+
+        rendered = "\n".join(errors)
+        self.assertIsNone(normalised)
+        self.assertEqual(
+            errors,
+            ["raw slot tar member path must not contain control characters"],
+        )
+        self.assertNotIn("\x1b", rendered)
+
+    def test_kagemusha_android_raw_puller_redacts_control_latest_adb_stderr(
+        self,
+    ) -> None:
+        def runner(command: list[str], **_kwargs):  # type: ignore[no-untyped-def]
+            return subprocess.CompletedProcess(
+                command,
+                1,
+                stdout="",
+                stderr="adb failed\x1b[31m",
+            )
+
+        with tempfile.TemporaryDirectory() as temp:
+            status, slot_path, errors = raw_puller.pull_raw_slot(
+                raw_pull_args(Path(temp) / "raw"),
+                runner=runner,
+            )
+
+        rendered = "\n".join(errors)
+        self.assertEqual(status, 1)
+        self.assertIsNone(slot_path)
+        self.assertIn(raw_puller.CONTROL_OUTPUT_REDACTION, rendered)
+        self.assertNotIn("adb failed\x1b[31m", rendered)
+        self.assertNotIn("\x1b", rendered)
+
+    def test_kagemusha_android_raw_puller_redacts_control_tar_adb_stderr(
+        self,
+    ) -> None:
+        def runner(command: list[str], **_kwargs):  # type: ignore[no-untyped-def]
+            if "cat" in command:
+                return subprocess.CompletedProcess(
+                    command,
+                    0,
+                    stdout="pixel6\n",
+                    stderr="",
+                )
+            return subprocess.CompletedProcess(
+                command,
+                1,
+                stdout=b"",
+                stderr=b"tar failed\x1b[31m",
+            )
+
+        with tempfile.TemporaryDirectory() as temp:
+            status, slot_path, errors = raw_puller.pull_raw_slot(
+                raw_pull_args(Path(temp) / "raw"),
+                runner=runner,
+            )
+
+        rendered = "\n".join(errors)
+        self.assertEqual(status, 1)
+        self.assertIsNone(slot_path)
+        self.assertIn(raw_puller.CONTROL_OUTPUT_REDACTION, rendered)
+        self.assertNotIn("tar failed\x1b[31m", rendered)
+        self.assertNotIn("\x1b", rendered)
+
     def test_kagemusha_android_raw_puller_install_refuses_late_existing_slot(
         self,
     ) -> None:
@@ -2631,6 +4192,68 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             errors,
             ["raw slot install source contains unexpected top-level entry surprise"],
         )
+        self.assertFalse(final_slot_exists)
+
+    def test_kagemusha_android_raw_puller_install_redacts_secret_top_level_entry(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            temp_path = Path(temp)
+            out_root = temp_path / "raw"
+            temp_parent = out_root / ".pixel6.stage"
+            final_slot = out_root / "pixel6"
+            out_root.mkdir()
+            stage_slot = write_raw_stage_slot(temp_parent, "pixel6")
+            (stage_slot / "token=supersecret").mkdir()
+
+            errors = raw_puller._install_validated_slot(
+                stage_slot,
+                final_slot,
+                out_root,
+            )
+            final_slot_exists = final_slot.exists()
+            rendered = "\n".join(errors)
+
+        self.assertEqual(
+            errors,
+            [
+                "raw slot install source contains unexpected top-level entry "
+                f"{device_lab.SECRET_PATH_REDACTION}"
+            ],
+        )
+        self.assertNotIn("supersecret", rendered)
+        self.assertFalse(final_slot_exists)
+
+    def test_kagemusha_android_raw_puller_install_redacts_control_top_level_entry(
+        self,
+    ) -> None:
+        unsafe_name = "debug\x1b[31m"
+        with tempfile.TemporaryDirectory() as temp:
+            temp_path = Path(temp)
+            out_root = temp_path / "raw"
+            temp_parent = out_root / ".pixel6.stage"
+            final_slot = out_root / "pixel6"
+            out_root.mkdir()
+            stage_slot = write_raw_stage_slot(temp_parent, "pixel6")
+            (stage_slot / unsafe_name).mkdir()
+
+            errors = raw_puller._install_validated_slot(
+                stage_slot,
+                final_slot,
+                out_root,
+            )
+            final_slot_exists = final_slot.exists()
+            rendered = "\n".join(errors)
+
+        self.assertEqual(
+            errors,
+            [
+                "raw slot install source contains unexpected top-level entry "
+                f"{device_lab.CONTROL_PATH_REDACTION}"
+            ],
+        )
+        self.assertNotIn(unsafe_name, rendered)
+        self.assertNotIn("\x1b", rendered)
         self.assertFalse(final_slot_exists)
 
     def test_kagemusha_android_raw_puller_install_syncs_directories_and_cleans_failure(
@@ -3601,6 +5224,75 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertIn("raw slot tar member has unsafe path '../escape'", errors)
         self.assertFalse((out_root / "escape").exists())
 
+    def test_kagemusha_android_raw_puller_rejects_compressed_tar_stream(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            out_root = Path(temp) / "raw"
+            tar_bytes = gzip.compress(raw_slot_tar_bytes("pixel6"))
+
+            status, slot_path, errors = raw_puller.pull_raw_slot(
+                raw_pull_args(out_root),
+                runner=fake_raw_pull_runner(tar_bytes, "pixel6"),
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIsNone(slot_path)
+        self.assertEqual(errors, ["raw slot tar stream could not be parsed"])
+        self.assertFalse((out_root / "pixel6").exists())
+
+    def test_kagemusha_android_raw_puller_rejects_noncanonical_tar_member_path(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "pixel6/./logs/runtime.log",
+                "raw slot tar member has noncanonical path "
+                "'pixel6/./logs/runtime.log'",
+            ),
+            (
+                "pixel6//logs/runtime.log",
+                "raw slot tar member has noncanonical path "
+                "'pixel6//logs/runtime.log'",
+            ),
+            (
+                "pixel6/logs/runtime.log/",
+                "raw slot tar member has noncanonical path "
+                "'pixel6/logs/runtime.log/'",
+            ),
+        )
+        for member_name, expected_error in cases:
+            with self.subTest(member_name=member_name):
+                with tempfile.TemporaryDirectory() as temp:
+                    out_root = Path(temp) / "raw"
+                    tar_bytes = raw_slot_tar_bytes(
+                        "pixel6",
+                        omit_files={"logs/runtime.log"},
+                        extra_files={member_name: b"kagemusha device-lab run complete\n"},
+                    )
+
+                    status, slot_path, errors = raw_puller.pull_raw_slot(
+                        raw_pull_args(out_root),
+                        runner=fake_raw_pull_runner(tar_bytes, "pixel6"),
+                    )
+
+                self.assertEqual(status, 1)
+                self.assertIsNone(slot_path)
+                self.assertIn(expected_error, errors)
+                self.assertFalse((out_root / "pixel6").exists())
+
+    def test_kagemusha_android_raw_puller_allows_trailing_slash_directory_members(
+        self,
+    ) -> None:
+        errors: list[str] = []
+
+        normalised = raw_puller._normalise_tar_member_name(  # type: ignore[attr-defined]
+            "pixel6/logs/",
+            errors,
+            allow_trailing_slash=True,
+        )
+
+        self.assertEqual(errors, [])
+        self.assertEqual(normalised, "pixel6/logs")
+
     def test_kagemusha_android_raw_puller_rejects_tar_symlink_member(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             out_root = Path(temp) / "raw"
@@ -3982,6 +5674,39 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             errors,
         )
 
+    def test_kagemusha_android_raw_puller_rejects_control_result_identity_strings(
+        self,
+    ) -> None:
+        result = json.loads(raw_slot_artifacts("pixel6")["attestation/result.json"])
+        result["os_build_id"] = "TQ3A\x1b[31m"
+        with tempfile.TemporaryDirectory() as temp:
+            out_root = Path(temp) / "raw"
+            tar_bytes = raw_slot_tar_bytes(
+                "pixel6",
+                omit_files={"attestation/result.json"},
+                extra_files={
+                    "pixel6/attestation/result.json": json.dumps(
+                        result,
+                        sort_keys=True,
+                    ).encode("utf-8")
+                    + b"\n",
+                },
+            )
+
+            status, slot_path, errors = raw_puller.pull_raw_slot(
+                raw_pull_args(out_root),
+                runner=fake_raw_pull_runner(tar_bytes, "pixel6"),
+            )
+
+        rendered = "\n".join(errors)
+        self.assertEqual(status, 1)
+        self.assertIsNone(slot_path)
+        self.assertIn(
+            "attestation/result.json os_build_id must not contain control characters",
+            errors,
+        )
+        self.assertNotIn("\x1b", rendered)
+
     def test_kagemusha_android_raw_puller_requires_result_sdk_digests(self) -> None:
         result = json.loads(raw_slot_artifacts("pixel6")["attestation/result.json"])
         del result["app_signing_certificate_sha256"]
@@ -4075,6 +5800,64 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertIsNone(slot_path)
         self.assertIn("queue/pending_queue.json slot_id must match slot id", errors)
 
+    def test_kagemusha_android_raw_puller_rejects_queue_extra_field(self) -> None:
+        queue = json.loads(raw_slot_artifacts("pixel6")["queue/pending_queue.json"])
+        queue["debug_note"] = "not production evidence"
+        with tempfile.TemporaryDirectory() as temp:
+            out_root = Path(temp) / "raw"
+            tar_bytes = raw_slot_tar_bytes(
+                "pixel6",
+                omit_files={"queue/pending_queue.json"},
+                extra_files={
+                    "pixel6/queue/pending_queue.json": json.dumps(
+                        queue,
+                        sort_keys=True,
+                    ).encode("utf-8")
+                    + b"\n",
+                },
+            )
+
+            status, slot_path, errors = raw_puller.pull_raw_slot(
+                raw_pull_args(out_root),
+                runner=fake_raw_pull_runner(tar_bytes, "pixel6"),
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIsNone(slot_path)
+        self.assertIn(
+            "queue/pending_queue.json contains unexpected field debug_note",
+            errors,
+        )
+
+    def test_kagemusha_android_raw_puller_rejects_nonempty_pending_queue(self) -> None:
+        queue = json.loads(raw_slot_artifacts("pixel6")["queue/pending_queue.json"])
+        queue["pending_transactions"] = [{"id": "leftover-transfer"}]
+        with tempfile.TemporaryDirectory() as temp:
+            out_root = Path(temp) / "raw"
+            tar_bytes = raw_slot_tar_bytes(
+                "pixel6",
+                omit_files={"queue/pending_queue.json"},
+                extra_files={
+                    "pixel6/queue/pending_queue.json": json.dumps(
+                        queue,
+                        sort_keys=True,
+                    ).encode("utf-8")
+                    + b"\n",
+                },
+            )
+
+            status, slot_path, errors = raw_puller.pull_raw_slot(
+                raw_pull_args(out_root),
+                runner=fake_raw_pull_runner(tar_bytes, "pixel6"),
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIsNone(slot_path)
+        self.assertIn(
+            "queue/pending_queue.json pending_transactions must be empty after D2D handoff",
+            errors,
+        )
+
     def test_kagemusha_android_raw_puller_rejects_telemetry_slot_mismatch(
         self,
     ) -> None:
@@ -4129,7 +5912,203 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
 
         self.assertEqual(status, 1)
         self.assertIsNone(slot_path)
-        self.assertIn("telemetry/telemetry.json slot_id must match slot id", errors)
+        self.assertIn(
+            "telemetry/telemetry.json slot_id must not contain surrounding whitespace",
+            errors,
+        )
+
+    def test_kagemusha_android_raw_puller_rejects_telemetry_extra_field(self) -> None:
+        telemetry = json.loads(raw_slot_artifacts("pixel6")["telemetry/telemetry.json"])
+        telemetry["debug_note"] = "not production evidence"
+        with tempfile.TemporaryDirectory() as temp:
+            out_root = Path(temp) / "raw"
+            tar_bytes = raw_slot_tar_bytes(
+                "pixel6",
+                omit_files={"telemetry/telemetry.json"},
+                extra_files={
+                    "pixel6/telemetry/telemetry.json": json.dumps(
+                        telemetry,
+                        sort_keys=True,
+                    ).encode("utf-8")
+                    + b"\n",
+                },
+            )
+
+            status, slot_path, errors = raw_puller.pull_raw_slot(
+                raw_pull_args(out_root),
+                runner=fake_raw_pull_runner(tar_bytes, "pixel6"),
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIsNone(slot_path)
+        self.assertIn(
+            "telemetry/telemetry.json contains unexpected field debug_note",
+            errors,
+        )
+
+    def test_kagemusha_android_raw_puller_rejects_noncanonical_telemetry_identity_strings(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "device_model",
+                " Pixel 6 ",
+                "telemetry/telemetry.json device_model must not contain surrounding whitespace",
+            ),
+            (
+                "device_codename",
+                "oriole\u0000",
+                "telemetry/telemetry.json device_codename must not contain control characters",
+            ),
+            (
+                "app_package_name",
+                "",
+                "telemetry/telemetry.json app_package_name must be a non-empty string",
+            ),
+            (
+                "app_package_name",
+                "client_secret=not-for-telemetry",
+                "telemetry/telemetry.json app_package_name must not contain secret-looking material",
+            ),
+        )
+        for field, value, expected_error in cases:
+            with self.subTest(field=field, expected_error=expected_error):
+                telemetry = json.loads(
+                    raw_slot_artifacts("pixel6")["telemetry/telemetry.json"]
+                )
+                telemetry[field] = value
+                with tempfile.TemporaryDirectory() as temp:
+                    out_root = Path(temp) / "raw"
+                    tar_bytes = raw_slot_tar_bytes(
+                        "pixel6",
+                        omit_files={"telemetry/telemetry.json"},
+                        extra_files={
+                            "pixel6/telemetry/telemetry.json": json.dumps(
+                                telemetry,
+                                sort_keys=True,
+                            ).encode("utf-8")
+                            + b"\n",
+                        },
+                    )
+
+                    status, slot_path, errors = raw_puller.pull_raw_slot(
+                        raw_pull_args(out_root),
+                        runner=fake_raw_pull_runner(tar_bytes, "pixel6"),
+                    )
+
+                self.assertEqual(status, 1)
+                self.assertIsNone(slot_path)
+                self.assertIn(expected_error, errors)
+
+    def test_kagemusha_android_raw_puller_rejects_noncanonical_json_slot_bindings(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "queue/pending_queue.json",
+                "pixel6/queue/pending_queue.json",
+                " pixel6 ",
+                "queue/pending_queue.json slot_id must not contain surrounding whitespace",
+            ),
+            (
+                "telemetry/telemetry.json",
+                "pixel6/telemetry/telemetry.json",
+                "pixel6\u0000",
+                "telemetry/telemetry.json slot_id must not contain control characters",
+            ),
+            (
+                "handoff/d2d-payment.json",
+                "pixel6/handoff/d2d-payment.json",
+                7,
+                "handoff/d2d-payment.json slot_id must be a non-empty string",
+            ),
+            (
+                "wallet/integrity.json",
+                "pixel6/wallet/integrity.json",
+                "",
+                "wallet/integrity.json slot_id must be a non-empty string",
+            ),
+        )
+        for relative, tar_member, slot_value, expected_error in cases:
+            with self.subTest(relative=relative, expected_error=expected_error):
+                payload = json.loads(raw_slot_artifacts("pixel6")[relative])
+                payload["slot_id"] = slot_value
+                with tempfile.TemporaryDirectory() as temp:
+                    out_root = Path(temp) / "raw"
+                    tar_bytes = raw_slot_tar_bytes(
+                        "pixel6",
+                        omit_files={relative},
+                        extra_files={
+                            tar_member: json.dumps(
+                                payload,
+                                sort_keys=True,
+                            ).encode("utf-8")
+                            + b"\n",
+                        },
+                    )
+
+                    status, slot_path, errors = raw_puller.pull_raw_slot(
+                        raw_pull_args(out_root),
+                        runner=fake_raw_pull_runner(tar_bytes, "pixel6"),
+                    )
+
+                self.assertEqual(status, 1)
+                self.assertIsNone(slot_path)
+                self.assertIn(expected_error, errors)
+
+    def test_kagemusha_android_raw_puller_rejects_noncanonical_telemetry_suite(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "KAGEMUSHA-DEVICE-LAB",
+                "telemetry/telemetry.json suite must identify a Kagemusha device-lab run",
+            ),
+            (
+                " kagemusha-device-lab ",
+                "telemetry/telemetry.json suite must not contain surrounding whitespace",
+            ),
+            (
+                "kagemusha-device-lab\u0000",
+                "telemetry/telemetry.json suite must not contain control characters",
+            ),
+            (
+                "",
+                "telemetry/telemetry.json suite must be a non-empty string",
+            ),
+            (
+                7,
+                "telemetry/telemetry.json suite must be a non-empty string",
+            ),
+        )
+        for suite, expected_error in cases:
+            with self.subTest(expected_error=expected_error):
+                telemetry = json.loads(
+                    raw_slot_artifacts("pixel6")["telemetry/telemetry.json"]
+                )
+                telemetry["suite"] = suite
+                with tempfile.TemporaryDirectory() as temp:
+                    out_root = Path(temp) / "raw"
+                    tar_bytes = raw_slot_tar_bytes(
+                        "pixel6",
+                        omit_files={"telemetry/telemetry.json"},
+                        extra_files={
+                            "pixel6/telemetry/telemetry.json": json.dumps(
+                                telemetry,
+                                sort_keys=True,
+                            ).encode("utf-8")
+                            + b"\n",
+                        },
+                    )
+
+                    status, slot_path, errors = raw_puller.pull_raw_slot(
+                        raw_pull_args(out_root),
+                        runner=fake_raw_pull_runner(tar_bytes, "pixel6"),
+                    )
+
+                self.assertEqual(status, 1)
+                self.assertIsNone(slot_path)
+                self.assertIn(expected_error, errors)
 
     def test_kagemusha_android_raw_puller_rejects_d2d_online_handoff(self) -> None:
         d2d = json.loads(raw_slot_artifacts("pixel6")["handoff/d2d-payment.json"])
@@ -4215,6 +6194,63 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         )
         self.assertIn("telemetry/status.ndjson must contain at least one ok status", errors)
 
+    def test_kagemusha_android_raw_puller_rejects_noncanonical_status_ndjson(
+        self,
+    ) -> None:
+        cases = (
+            (
+                b' {"status":"ok","slot_id":"pixel6"}\n',
+                "telemetry/status.ndjson line 1 must not contain surrounding whitespace",
+            ),
+            (
+                b'{"status":"ok","slot_id":"pixel6"} \n',
+                "telemetry/status.ndjson line 1 must not contain surrounding whitespace",
+            ),
+            (
+                b'{"status":"ok","slot_id":"pixel6"}\r\n',
+                "telemetry/status.ndjson must use LF line endings",
+            ),
+            (
+                b'{"status":"ok","slot_id":"pixel6"}',
+                "telemetry/status.ndjson must end with a trailing newline",
+            ),
+            (
+                b'{"status":"OK","slot_id":"pixel6"}\n',
+                "telemetry/status.ndjson line 1 status must be lowercase",
+            ),
+            (
+                b'{"status":" ok ","slot_id":"pixel6"}\n',
+                "telemetry/status.ndjson line 1 status must not contain surrounding whitespace",
+            ),
+            (
+                b'{"status":"ok\\u0000","slot_id":"pixel6"}\n',
+                "telemetry/status.ndjson line 1 status must not contain control characters",
+            ),
+        )
+        for payload, expected_error in cases:
+            with self.subTest(expected_error=expected_error):
+                with tempfile.TemporaryDirectory() as temp:
+                    out_root = Path(temp) / "raw"
+                    tar_bytes = raw_slot_tar_bytes(
+                        "pixel6",
+                        omit_files={"telemetry/status.ndjson"},
+                        extra_files={"pixel6/telemetry/status.ndjson": payload},
+                    )
+
+                    status, slot_path, errors = raw_puller.pull_raw_slot(
+                        raw_pull_args(out_root),
+                        runner=fake_raw_pull_runner(tar_bytes, "pixel6"),
+                    )
+
+                self.assertEqual(status, 1)
+                self.assertIsNone(slot_path)
+                self.assertIn(expected_error, errors)
+                if not expected_error.startswith("telemetry/status.ndjson must "):
+                    self.assertIn(
+                        "telemetry/status.ndjson must contain at least one ok status",
+                        errors,
+                    )
+
     def test_kagemusha_android_raw_puller_rejects_status_slot_mismatch(
         self,
     ) -> None:
@@ -4239,6 +6275,42 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             "telemetry/status.ndjson line 1 slot_id must match slot id",
             errors,
         )
+
+    def test_kagemusha_android_raw_puller_rejects_noncanonical_status_slot_binding(
+        self,
+    ) -> None:
+        cases = (
+            (
+                b'{"status":"ok","slot_id":" pixel6 "}\n',
+                "telemetry/status.ndjson line 1 slot_id must not contain surrounding whitespace",
+            ),
+            (
+                b'{"status":"ok","slot_id":"pixel6\\u0000"}\n',
+                "telemetry/status.ndjson line 1 slot_id must not contain control characters",
+            ),
+            (
+                b'{"status":"ok","slot_id":6}\n',
+                "telemetry/status.ndjson line 1 slot_id must be a string",
+            ),
+        )
+        for payload, expected_error in cases:
+            with self.subTest(expected_error=expected_error):
+                with tempfile.TemporaryDirectory() as temp:
+                    out_root = Path(temp) / "raw"
+                    tar_bytes = raw_slot_tar_bytes(
+                        "pixel6",
+                        omit_files={"telemetry/status.ndjson"},
+                        extra_files={"pixel6/telemetry/status.ndjson": payload},
+                    )
+
+                    status, slot_path, errors = raw_puller.pull_raw_slot(
+                        raw_pull_args(out_root),
+                        runner=fake_raw_pull_runner(tar_bytes, "pixel6"),
+                    )
+
+                self.assertEqual(status, 1)
+                self.assertIsNone(slot_path)
+                self.assertIn(expected_error, errors)
 
     def test_kagemusha_android_raw_puller_rejects_runtime_failure_marker(
         self,
@@ -4305,7 +6377,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             errors,
         )
         self.assertIn(
-            "attestation/harness-result.json attestation_security_level must be STRONGBOX",
+            "attestation/harness-result.json attestation_security_level must not have surrounding whitespace",
             errors,
         )
         self.assertIn(
@@ -4322,8 +6394,8 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
     ) -> None:
         harness = {
             "alias": "android-keystore-alias\x1b[31m",
-            "attestation_security_level": "STRONG_BOX",
-            "keymaster_security_level": "STRONG_BOX",
+            "attestation_security_level": "STRONG_BOX\x1b[31m",
+            "keymaster_security_level": "STRONG_BOX\x1b[31m",
             "strongbox_attestation": True,
             "challenge_hex": "01020304",
             "chain_length": 4,
@@ -4351,6 +6423,14 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertIsNone(slot_path)
         self.assertIn(
             "attestation/harness-result.json alias must not contain control characters",
+            errors,
+        )
+        self.assertIn(
+            "attestation/harness-result.json attestation_security_level must not contain control characters",
+            errors,
+        )
+        self.assertIn(
+            "attestation/harness-result.json keymaster_security_level must not contain control characters",
             errors,
         )
         self.assertNotIn("\x1b", "\n".join(errors))
@@ -4487,6 +6567,49 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             rendered,
         )
         self.assertNotIn("token=supersecret", rendered)
+
+    def test_kagemusha_android_raw_puller_redacts_control_unexpected_harness_field(
+        self,
+    ) -> None:
+        unsafe_key = "debug\x1b[31m"
+        harness = {
+            "alias": "android-keystore-alias",
+            "attestation_security_level": "STRONG_BOX",
+            "keymaster_security_level": "STRONG_BOX",
+            "strongbox_attestation": True,
+            "challenge_hex": "01020304",
+            "chain_length": 4,
+            unsafe_key: "field",
+        }
+        with tempfile.TemporaryDirectory() as temp:
+            out_root = Path(temp) / "raw"
+            tar_bytes = raw_slot_tar_bytes(
+                "pixel6",
+                omit_files={"attestation/harness-result.json"},
+                extra_files={
+                    "pixel6/attestation/harness-result.json": json.dumps(
+                        harness,
+                        sort_keys=True,
+                    ).encode("utf-8")
+                    + b"\n",
+                },
+            )
+
+            status, slot_path, errors = raw_puller.pull_raw_slot(
+                raw_pull_args(out_root),
+                runner=fake_raw_pull_runner(tar_bytes, "pixel6"),
+            )
+
+        rendered = "\n".join(errors)
+        self.assertEqual(status, 1)
+        self.assertIsNone(slot_path)
+        self.assertIn(
+            "attestation/harness-result.json contains unexpected field "
+            f"{device_lab.CONTROL_PATH_REDACTION}",
+            rendered,
+        )
+        self.assertNotIn(unsafe_key, rendered)
+        self.assertNotIn("\x1b", rendered)
 
     def test_scan_slot_rejects_missing_attestation_harness_result(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -4631,6 +6754,115 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
 
         self.assertEqual(report["status"], "error")
         self.assertIn("sha256sum.txt digest mismatch for logs/runtime.log", report["errors"])
+
+    def test_scan_slot_rejects_padded_sha256sum_line(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            slot = create_slot(Path(temp), "slot-a")
+            manifest = slot / "sha256sum.txt"
+            lines = manifest.read_text(encoding="utf-8").splitlines()
+            lines[0] = f"{lines[0]} "
+            write_text(manifest, "\n".join(lines) + "\n")
+
+            report = device_lab.scan_slot(slot)
+
+        self.assertEqual(report["status"], "error")
+        self.assertIn(
+            "sha256sum.txt line 1: must not contain surrounding whitespace",
+            report["errors"],
+        )
+
+    def test_scan_slot_rejects_star_normalized_sha256sum_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            slot = create_slot(Path(temp), "slot-a")
+            runtime_log = slot / "logs" / "runtime.log"
+            digest = hashlib.sha256(runtime_log.read_bytes()).hexdigest()
+            write_text(slot / "sha256sum.txt", f"{digest}  *logs/runtime.log\n")
+
+            report = device_lab.scan_slot(slot)
+
+        self.assertEqual(report["status"], "error")
+        self.assertIn(
+            "sha256sum.txt line 1: unsafe path '*logs/runtime.log'",
+            report["errors"],
+        )
+
+    def test_scan_slot_rejects_noncanonical_sha256sum_path(self) -> None:
+        cases = ("logs/./runtime.log", "logs//runtime.log", "logs/runtime.log/")
+        for relative in cases:
+            with self.subTest(relative=relative):
+                with tempfile.TemporaryDirectory() as temp:
+                    slot = create_slot(Path(temp), "slot-a")
+                    runtime_log = slot / "logs" / "runtime.log"
+                    digest = hashlib.sha256(runtime_log.read_bytes()).hexdigest()
+                    write_text(slot / "sha256sum.txt", f"{digest}  {relative}\n")
+
+                    report = device_lab.scan_slot(slot)
+
+                self.assertEqual(report["status"], "error")
+                self.assertIn(
+                    "sha256sum.txt line 1: unsafe path is not canonical",
+                    report["errors"],
+                )
+
+    def test_normalise_safe_relative_path_rejects_control_before_strip(
+        self,
+    ) -> None:
+        errors: list[str] = []
+
+        normalised = device_lab._normalise_safe_relative_path(  # type: ignore[attr-defined]
+            "\nlogs/runtime.log",
+            errors,
+            "slot artifact path",
+        )
+
+        rendered = "\n".join(errors)
+        self.assertIsNone(normalised)
+        self.assertEqual(
+            errors,
+            ["slot artifact path: unsafe path contains control characters"],
+        )
+        self.assertNotIn("\nlogs/runtime.log", rendered)
+
+    def test_normalise_safe_relative_path_rejects_surrounding_whitespace(
+        self,
+    ) -> None:
+        errors: list[str] = []
+
+        normalised = device_lab._normalise_safe_relative_path(  # type: ignore[attr-defined]
+            " logs/runtime.log ",
+            errors,
+            "slot artifact path",
+        )
+
+        self.assertIsNone(normalised)
+        self.assertEqual(
+            errors,
+            ["slot artifact path: unsafe path contains surrounding whitespace"],
+        )
+
+    def test_normalise_safe_relative_path_rejects_noncanonical_aliases(
+        self,
+    ) -> None:
+        cases = (
+            "logs/./runtime.log",
+            "logs//runtime.log",
+            "logs/runtime.log/",
+        )
+        for relative in cases:
+            with self.subTest(relative=relative):
+                errors: list[str] = []
+
+                normalised = device_lab._normalise_safe_relative_path(  # type: ignore[attr-defined]
+                    relative,
+                    errors,
+                    "slot artifact path",
+                )
+
+                self.assertIsNone(normalised)
+                self.assertEqual(
+                    errors,
+                    ["slot artifact path: unsafe path is not canonical"],
+                )
 
     def test_scan_slot_rejects_symlinked_slot_directory(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -5055,6 +7287,22 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertNotIn("token=supersecret", rendered)
         self.assertNotIn(str(payload), rendered)
 
+    def test_load_json_rejects_control_path_directly_before_parse(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            control_dir = Path(temp) / "control\njson"
+            control_dir.mkdir()
+            payload = control_dir / "payload.json"
+            payload.write_text("{not-json", encoding="utf-8")
+            errors: list[str] = []
+
+            data = device_lab._load_json(payload, "test json", errors)
+            rendered = "\n".join(errors)
+
+        self.assertIsNone(data)
+        self.assertEqual(errors, ["test json path must not contain control characters"])
+        self.assertNotIn("not valid JSON", rendered)
+        self.assertNotIn(str(payload), rendered)
+
     def test_load_json_rejects_nonfinite_json_constant(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             payload = Path(temp) / "payload.json"
@@ -5304,6 +7552,60 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertIn("[device-lab] missing-slot: slot directory missing", stderr.getvalue())
         self.assertNotIn("Traceback", stderr.getvalue())
 
+    def test_validate_slot_ids_rejects_duplicate_explicit_slots(self) -> None:
+        slot_ids, errors = device_lab.validate_slot_ids(
+            ["slot-a", "slot-a", "slot-b", "slot-b"]
+        )
+
+        self.assertEqual(slot_ids, ["slot-a", "slot-b"])
+        self.assertEqual(
+            errors,
+            [
+                "slot id 1 must not duplicate slot id 0",
+                "slot id 3 must not duplicate slot id 2",
+            ],
+        )
+
+    def test_validate_slot_ids_rejects_noncanonical_slot_aliases(self) -> None:
+        slot_ids, errors = device_lab.validate_slot_ids(
+            ["./slot-a", "slot-b/", "slot-c/."]
+        )
+
+        self.assertEqual(slot_ids, [])
+        self.assertEqual(
+            errors,
+            [
+                "slot id './slot-a' must be a canonical single directory name",
+                "slot id 'slot-b/' must be a canonical single directory name",
+                "slot id 'slot-c/.' must be a canonical single directory name",
+            ],
+        )
+
+    def test_explicit_duplicate_slot_id_rejected_before_scan(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "slots"
+            create_slot(root, "slot-a")
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                status = device_lab.main(
+                    [
+                        "--root",
+                        str(root),
+                        "--slot",
+                        "slot-a",
+                        "--slot",
+                        "slot-a",
+                        "--require-slot",
+                    ]
+                )
+
+        self.assertEqual(status, 1)
+        rendered = stdout.getvalue() + stderr.getvalue()
+        self.assertIn("slot id 1 must not duplicate slot id 0", rendered)
+        self.assertNotIn("[device-lab] slot-a: ok", rendered)
+        self.assertNotIn("Traceback", rendered)
+
     def test_root_validator_rejects_secret_path_directly_without_leak(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             secret_root = Path(temp) / "token=supersecret-slots"
@@ -5317,6 +7619,16 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         )
         self.assertNotIn(str(secret_root), rendered)
         self.assertNotIn("token=supersecret", rendered)
+
+    def test_root_validator_rejects_control_path_directly_without_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            control_root = Path(temp) / "control\nslots"
+
+            errors = device_lab.validate_device_lab_root_path(control_root)
+            rendered = json.dumps(errors)
+
+        self.assertEqual(errors, ["device-lab root path must not contain control characters"])
+        self.assertNotIn(str(control_root), rendered)
 
     def test_root_validator_rejects_metadata_failure_directly_without_leak(self) -> None:
         path_type = type(Path("."))
@@ -5527,6 +7839,54 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertEqual(slot_paths, [linked_slot])
         self.assertEqual(errors, [])
 
+    def test_discover_slots_returns_stable_sorted_order(self) -> None:
+        original_iterdir = Path.iterdir
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp) / "device_lab"
+                slot_b = create_slot(root, "slot-b")
+                slot_a = create_slot(root, "slot-a")
+
+                def reverse_iterdir(path: Path):
+                    if path == root:
+                        return iter([slot_b, slot_a])
+                    return original_iterdir(path)
+
+                Path.iterdir = reverse_iterdir
+
+                slot_paths, errors = device_lab.discover_slots(root, None)
+        finally:
+            Path.iterdir = original_iterdir
+
+        self.assertEqual(slot_paths, [slot_a, slot_b])
+        self.assertEqual(errors, [])
+
+    def test_discover_slots_revalidates_explicit_slot_ids_directly(self) -> None:
+        original_iterdir = Path.iterdir
+
+        def unexpected_iterdir(path: Path):
+            raise AssertionError("root discovery must not run for invalid slot ids")
+
+        try:
+            Path.iterdir = unexpected_iterdir
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp) / "device_lab"
+
+                slot_paths, errors = device_lab.discover_slots(
+                    root,
+                    ["slot-a", "slot-a", "../outside"],
+                )
+        finally:
+            Path.iterdir = original_iterdir
+
+        self.assertEqual(slot_paths, [])
+        self.assertIn("slot id 1 must not duplicate slot id 0", errors)
+        self.assertIn(
+            "slot id '../outside' must be a single safe directory name",
+            errors,
+        )
+
     def test_main_rejects_device_lab_root_list_failure_without_traceback(self) -> None:
         original_iterdir = Path.iterdir
 
@@ -5585,6 +7945,34 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         )
         self.assertNotIn("[device-lab] outside: ok", rendered)
         self.assertNotIn("Traceback", rendered)
+
+    def test_explicit_noncanonical_slot_id_rejected_before_path_join(self) -> None:
+        for slot_id in ("./slot-a", "slot-a/", "slot-a/."):
+            with self.subTest(slot_id=slot_id):
+                with tempfile.TemporaryDirectory() as temp:
+                    root = Path(temp) / "slots"
+                    create_slot(root, "slot-a")
+                    stdout = io.StringIO()
+                    stderr = io.StringIO()
+                    with redirect_stdout(stdout), redirect_stderr(stderr):
+                        status = device_lab.main(
+                            [
+                                "--root",
+                                str(root),
+                                "--slot",
+                                slot_id,
+                                "--require-slot",
+                            ]
+                        )
+
+                self.assertEqual(status, 1)
+                rendered = stdout.getvalue() + stderr.getvalue()
+                self.assertIn(
+                    f"slot id {slot_id!r} must be a canonical single directory name",
+                    rendered,
+                )
+                self.assertNotIn("[device-lab] slot-a: ok", rendered)
+                self.assertNotIn("Traceback", rendered)
 
     def test_explicit_slot_id_rejects_surrounding_whitespace_before_path_join(
         self,
@@ -5818,6 +8206,39 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertNotIn("Traceback", rendered)
         self.assertTrue(slot_still_exists)
 
+    def test_discovered_backslash_slot_directory_is_rejected_before_metadata(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "slots"
+            slot = create_slot(root, "slot-a\\b")
+            summary_path = Path(temp) / "summary.json"
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                status = device_lab.main(
+                    [
+                        "--root",
+                        str(root),
+                        "--require-slot",
+                        "--json-out",
+                        str(summary_path),
+                    ]
+                )
+            rendered = stdout.getvalue() + stderr.getvalue()
+            summary_text = summary_path.read_text(encoding="utf-8")
+            slot_still_exists = slot.exists()
+
+        self.assertEqual(status, 1)
+        self.assertIn("slot directory name must not contain backslashes", rendered)
+        self.assertIn(
+            "slot directory name must not contain backslashes",
+            summary_text,
+        )
+        self.assertNotIn("[device-lab] slot-a\\b: ok", rendered)
+        self.assertNotIn("Traceback", rendered)
+        self.assertTrue(slot_still_exists)
+
     def test_scan_slot_rejects_control_slot_directory_before_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             slot = create_slot(Path(temp), "slot-a\x1b[31m")
@@ -5829,6 +8250,18 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertEqual(
             report["errors"],
             ["slot directory name must not contain control characters"],
+        )
+
+    def test_scan_slot_rejects_backslash_slot_directory_before_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            slot = create_slot(Path(temp), "slot-a\\b")
+
+            report = device_lab.scan_slot(slot)
+
+        self.assertEqual(report["status"], "error")
+        self.assertEqual(
+            report["errors"],
+            ["slot directory name must not contain backslashes"],
         )
 
     def test_scan_slot_rejects_newline_slot_directory_before_metadata(self) -> None:
@@ -5871,6 +8304,35 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             files = device_lab._slot_files(slot)  # type: ignore[attr-defined]
 
         self.assertEqual(files, set())
+
+    def test_slot_root_entries_returns_stable_sorted_order(self) -> None:
+        original_iterdir = Path.iterdir
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                slot = create_slot(Path(temp), "slot-a")
+                z_entry = slot / "z-extra"
+                a_entry = slot / "a-extra"
+                write_text(z_entry, "z\n")
+                write_text(a_entry, "a\n")
+
+                def reverse_iterdir(path: Path):
+                    if path == slot:
+                        return iter([z_entry, a_entry])
+                    return original_iterdir(path)
+
+                Path.iterdir = reverse_iterdir
+
+                errors: list[str] = []
+                entries = device_lab._slot_root_entries(  # type: ignore[attr-defined]
+                    slot,
+                    errors,
+                )
+        finally:
+            Path.iterdir = original_iterdir
+
+        self.assertEqual(entries, [a_entry, z_entry])
+        self.assertEqual(errors, [])
 
     def test_slot_files_non_directory_root_returns_empty_without_traceback(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -6090,6 +8552,22 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertEqual(errors, ["slot path must not contain secret-looking material"])
         self.assertNotIn("expected '<sha256> <path>'", rendered)
         self.assertNotIn("token=supersecret", rendered)
+        self.assertNotIn(str(slot), rendered)
+
+    def test_parse_sha256_manifest_rejects_control_slot_path_directly_before_parse(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            slot = Path(temp) / "control\nslot"
+            slot.mkdir()
+            write_text(slot / "sha256sum.txt", "not-a-manifest-line\n")
+
+            entries, errors = device_lab.parse_sha256_manifest(slot)
+            rendered = "\n".join(errors)
+
+        self.assertEqual(entries, {})
+        self.assertEqual(errors, ["slot path must not contain control characters"])
+        self.assertNotIn("expected '<sha256> <path>'", rendered)
         self.assertNotIn(str(slot), rendered)
 
     def test_parse_sha256_manifest_rejects_symlinked_slot_root_directly_before_parse(
@@ -6451,6 +8929,27 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertEqual(errors, ["slot artifacts must not contain secret-looking material"])
         self.assertNotIn(secret_relative, rendered)
         self.assertNotIn("token=supersecret", rendered)
+
+    def test_manifest_artifact_digest_rejects_control_relative_path_directly(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            slot = create_slot(Path(temp), "slot-a")
+            control_relative = "logs/runtime\x1b[31m.log"
+
+            digest, errors = device_lab._manifest_artifact_sha256(
+                slot,
+                control_relative,
+            )
+            rendered = "\n".join(errors)
+
+        self.assertIsNone(digest)
+        self.assertEqual(
+            errors,
+            ["sha256sum.txt artifact path: unsafe path contains control characters"],
+        )
+        self.assertNotIn(control_relative, rendered)
+        self.assertNotIn("\x1b", rendered)
 
     def test_manifest_artifact_digest_rejects_symlink_directly(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -7735,6 +10234,38 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         )
         self.assertNotIn("token=supersecret", rendered)
 
+    def test_production_metadata_redacts_control_duplicate_json_key(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            signer = create_test_signer(Path(temp))
+            trusted = trusted_signers_for(signer)
+            slot = create_slot(
+                Path(temp),
+                "pixel8",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                signer,
+            )
+            write_text(
+                slot / "slot.json",
+                '{"debug\\u001b[31m": 1, "debug\\u001b[31m": 2}\n',
+            )
+            rewrite_sha256sum(slot)
+
+            report = device_lab.scan_slot(
+                slot,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys=trusted,
+            )
+            rendered = "\n".join(report["errors"])
+
+        self.assertEqual(report["status"], "error")
+        self.assertIn(
+            "slot.json contains duplicate JSON object key "
+            f"{device_lab.CONTROL_PATH_REDACTION}",
+            rendered,
+        )
+        self.assertNotIn("debug\x1b[31m", rendered)
+        self.assertNotIn("\x1b", rendered)
+
     def test_production_metadata_rejects_duplicate_attestation_json_key(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             signer = create_test_signer(Path(temp))
@@ -7901,6 +10432,60 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             report["errors"],
         )
 
+    def test_production_metadata_rejects_noncanonical_probe_states(self) -> None:
+        cases = (
+            (
+                "abi6_recursive_spend_jni_probe",
+                " passed ",
+                "slot.json abi6_recursive_spend_jni_probe must not contain surrounding whitespace",
+            ),
+            (
+                "abi6_recursive_spend_jni_probe",
+                "PASSED",
+                "slot.json abi6_recursive_spend_jni_probe must be lowercase",
+            ),
+            (
+                "abi7_recursive_compact_jni_probe",
+                "one_hop_verified\u0000",
+                "slot.json abi7_recursive_compact_jni_probe must not contain control characters",
+            ),
+            (
+                "abi7_recursive_compact_jni_probe",
+                "",
+                "slot.json abi7_recursive_compact_jni_probe must be a non-empty string",
+            ),
+            (
+                "abi7_recursive_compact_prover_state",
+                7,
+                "slot.json abi7_recursive_compact_prover_state must be a non-empty string",
+            ),
+        )
+        for field, value, expected_error in cases:
+            with self.subTest(field=field, expected_error=expected_error):
+                with tempfile.TemporaryDirectory() as temp:
+                    signer = create_test_signer(Path(temp))
+                    trusted = trusted_signers_for(signer)
+                    slot = create_slot(
+                        Path(temp),
+                        "pixel8",
+                        device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                        signer,
+                    )
+                    metadata_path = slot / "slot.json"
+                    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+                    metadata[field] = value
+                    write_json(metadata_path, metadata)
+                    rewrite_sha256sum(slot)
+
+                    report = device_lab.scan_slot(
+                        slot,
+                        require_kagemusha_production_evidence=True,
+                        trusted_signer_public_keys=trusted,
+                    )
+
+                self.assertEqual(report["status"], "error")
+                self.assertIn(expected_error, report["errors"])
+
     def test_production_metadata_rejects_signed_evidence_digest_drift(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             signer = create_test_signer(Path(temp))
@@ -8000,6 +10585,33 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         )
         self.assertNotIn(secret_relative, rendered)
         self.assertNotIn("token=supersecret", rendered)
+
+    def test_metadata_artifact_digest_rejects_control_relative_path_directly(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            slot = create_slot(Path(temp), "slot-a")
+            control_relative = "evidence/offline-wallet\x1b[31m.apk"
+
+            payload, digest, errors = device_lab._metadata_artifact_bytes_and_sha256(
+                slot,
+                control_relative,
+                "slot.json offline_wallet_apk_path",
+                "slot.json offline_wallet_apk_path must point to an existing file",
+            )
+            rendered = "\n".join(errors)
+
+        self.assertIsNone(payload)
+        self.assertIsNone(digest)
+        self.assertEqual(
+            errors,
+            [
+                "slot.json offline_wallet_apk_path: unsafe path contains "
+                "control characters"
+            ],
+        )
+        self.assertNotIn(control_relative, rendered)
+        self.assertNotIn("\x1b", rendered)
 
     def test_metadata_artifact_digest_rejects_file_metadata_failure(self) -> None:
         path_type = type(Path("."))
@@ -8313,6 +10925,76 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             report["errors"],
         )
 
+    def test_production_metadata_rejects_star_normalized_signed_evidence_path(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            signer = create_test_signer(Path(temp))
+            trusted = trusted_signers_for(signer)
+            slot = create_slot(
+                Path(temp),
+                "pixel8",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                signer,
+            )
+            metadata_path = slot / "slot.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata["signed_evidence_artifact_path"] = "*evidence/signed-evidence.json"
+            write_json(metadata_path, metadata)
+            rewrite_sha256sum(slot)
+
+            report = device_lab.scan_slot(
+                slot,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys=trusted,
+            )
+
+        self.assertEqual(report["status"], "error")
+        self.assertIn(
+            (
+                "slot.json signed_evidence_artifact_path: unsafe path "
+                "'*evidence/signed-evidence.json'"
+            ),
+            report["errors"],
+        )
+
+    def test_production_metadata_rejects_noncanonical_signed_evidence_path(
+        self,
+    ) -> None:
+        cases = (
+            "evidence/./signed-evidence.json",
+            "evidence//signed-evidence.json",
+            "evidence/signed-evidence.json/",
+        )
+        for relative in cases:
+            with self.subTest(relative=relative):
+                with tempfile.TemporaryDirectory() as temp:
+                    signer = create_test_signer(Path(temp))
+                    trusted = trusted_signers_for(signer)
+                    slot = create_slot(
+                        Path(temp),
+                        "pixel8",
+                        device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                        signer,
+                    )
+                    metadata_path = slot / "slot.json"
+                    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+                    metadata["signed_evidence_artifact_path"] = relative
+                    write_json(metadata_path, metadata)
+                    rewrite_sha256sum(slot)
+
+                    report = device_lab.scan_slot(
+                        slot,
+                        require_kagemusha_production_evidence=True,
+                        trusted_signer_public_keys=trusted,
+                    )
+
+                self.assertEqual(report["status"], "error")
+                self.assertIn(
+                    "slot.json signed_evidence_artifact_path: unsafe path is not canonical",
+                    report["errors"],
+                )
+
     def test_production_metadata_rejects_whitespace_normalized_signed_evidence_path(
         self,
     ) -> None:
@@ -8507,6 +11189,39 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             rendered,
         )
         self.assertNotIn("token=supersecret", rendered)
+
+    def test_production_metadata_redacts_control_unexpected_slot_field(self) -> None:
+        unsafe_key = "debug\x1b[31m"
+        with tempfile.TemporaryDirectory() as temp:
+            signer = create_test_signer(Path(temp))
+            trusted = trusted_signers_for(signer)
+            slot = create_slot(
+                Path(temp),
+                "pixel8",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                signer,
+            )
+            metadata_path = slot / "slot.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata[unsafe_key] = "must not ship"
+            write_json(metadata_path, metadata)
+            rewrite_sha256sum(slot)
+
+            report = device_lab.scan_slot(
+                slot,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys=trusted,
+            )
+
+        rendered = "\n".join(report["errors"])
+        self.assertEqual(report["status"], "error")
+        self.assertIn(
+            "slot.json contains unexpected field "
+            f"{device_lab.CONTROL_PATH_REDACTION}",
+            rendered,
+        )
+        self.assertNotIn(unsafe_key, rendered)
+        self.assertNotIn("\x1b", rendered)
 
     def test_production_metadata_rejects_unexpected_attestation_fields_with_redaction(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -9014,6 +11729,65 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             report["errors"],
         )
 
+    def test_production_metadata_rejects_pending_queue_shape(self) -> None:
+        cases = (
+            (
+                {"slot_id": "pixel7", "pending_transactions": []},
+                "queue/pending_queue.json slot_id must match slot id",
+            ),
+            (
+                {"slot_id": " pixel8 ", "pending_transactions": []},
+                "queue/pending_queue.json slot_id must not contain surrounding whitespace",
+            ),
+            (
+                {"slot_id": "pixel8", "pending_transactions": {}},
+                "queue/pending_queue.json pending_transactions must be an array",
+            ),
+            (
+                {
+                    "slot_id": "pixel8",
+                    "pending_transactions": [{"id": "leftover-transfer"}],
+                },
+                "queue/pending_queue.json pending_transactions must be empty after D2D handoff",
+            ),
+            (
+                {
+                    "slot_id": "pixel8",
+                    "pending_transactions": [],
+                    "debug_note": "not production evidence",
+                },
+                "queue/pending_queue.json contains unexpected field debug_note",
+            ),
+        )
+        for payload, expected_error in cases:
+            with self.subTest(expected_error=expected_error):
+                with tempfile.TemporaryDirectory() as temp:
+                    signer = create_test_signer(Path(temp))
+                    trusted = trusted_signers_for(signer)
+                    slot = create_slot(
+                        Path(temp),
+                        "pixel8",
+                        device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                        signer,
+                    )
+                    write_json(slot / "queue" / "pending_queue.json", payload)
+                    transcript_path = slot / "handoff" / "d2d-payment.json"
+                    transcript = json.loads(transcript_path.read_text(encoding="utf-8"))
+                    transcript["queue_after_sha256"] = hashlib.sha256(
+                        (slot / "queue" / "pending_queue.json").read_bytes()
+                    ).hexdigest()
+                    write_json(transcript_path, transcript)
+                    refresh_d2d_payment_transcript_hash(slot, signer)
+
+                    report = device_lab.scan_slot(
+                        slot,
+                        require_kagemusha_production_evidence=True,
+                        trusted_signer_public_keys=trusted,
+                    )
+
+                self.assertEqual(report["status"], "error")
+                self.assertIn(expected_error, report["errors"])
+
     def test_production_metadata_rejects_wallet_integrity_false_rollback_claim(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             signer = create_test_signer(Path(temp))
@@ -9041,6 +11815,67 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             "wallet integrity transcript stale_snapshot_rejected must be true",
             report["errors"],
         )
+
+    def test_production_metadata_rejects_noncanonical_transcript_strings(self) -> None:
+        cases = (
+            (
+                "d2d_payment_transcript_path",
+                "device_family",
+                " Google Pixel 8 / 8a / 8 Pro ",
+                "d2d payment transcript device_family must not contain surrounding whitespace",
+                refresh_d2d_payment_transcript_hash,
+            ),
+            (
+                "d2d_payment_transcript_path",
+                "slot_id",
+                "pixel8\u0000",
+                "d2d payment transcript slot_id must not contain control characters",
+                refresh_d2d_payment_transcript_hash,
+            ),
+            (
+                "wallet_integrity_transcript_path",
+                "device_family",
+                " Google Pixel 8 / 8a / 8 Pro ",
+                "wallet integrity transcript device_family must not contain surrounding whitespace",
+                refresh_wallet_integrity_transcript_hash,
+            ),
+            (
+                "wallet_integrity_transcript_path",
+                "slot_id",
+                "pixel8\u0000",
+                "wallet integrity transcript slot_id must not contain control characters",
+                refresh_wallet_integrity_transcript_hash,
+            ),
+        )
+        for metadata_path_key, field, value, expected_error, refresh in cases:
+            with self.subTest(metadata_path_key=metadata_path_key, field=field):
+                with tempfile.TemporaryDirectory() as temp:
+                    signer = create_test_signer(Path(temp))
+                    trusted = trusted_signers_for(signer)
+                    slot = create_slot(
+                        Path(temp),
+                        "pixel8",
+                        device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                        signer,
+                    )
+                    metadata = json.loads(
+                        (slot / "slot.json").read_text(encoding="utf-8")
+                    )
+                    relative = metadata[metadata_path_key]
+                    transcript_path = slot / relative
+                    transcript = json.loads(transcript_path.read_text(encoding="utf-8"))
+                    transcript[field] = value
+                    write_json(transcript_path, transcript)
+                    refresh(slot, signer)
+
+                    report = device_lab.scan_slot(
+                        slot,
+                        require_kagemusha_production_evidence=True,
+                        trusted_signer_public_keys=trusted,
+                    )
+
+                self.assertEqual(report["status"], "error")
+                self.assertIn(expected_error, report["errors"])
 
     def test_production_metadata_rejects_wallet_integrity_unchanged_rotation_key(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -9516,6 +12351,71 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             report["errors"],
         )
 
+    def test_production_metadata_rejects_noncanonical_slot_keymint_level(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            signer = create_test_signer(Path(temp))
+            trusted = trusted_signers_for(signer)
+            slot = create_slot(
+                Path(temp),
+                "pixel8",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                signer,
+            )
+            metadata_path = slot / "slot.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata["keymint_security_level"] = "strongbox"
+            write_json(metadata_path, metadata)
+            resign_signed_evidence_artifacts(slot, signer)
+
+            report = device_lab.scan_slot(
+                slot,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys=trusted,
+            )
+
+        self.assertEqual(report["status"], "error")
+        self.assertIn(
+            "slot.json keymint_security_level must be STRONGBOX",
+            report["errors"],
+        )
+
+    def test_production_metadata_rejects_attestation_result_slot_keymint_mismatch(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            signer = create_test_signer(Path(temp))
+            trusted = trusted_signers_for(signer)
+            slot = create_slot(
+                Path(temp),
+                "pixel8",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                signer,
+            )
+            metadata_path = slot / "slot.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata["keymint_security_level"] = "STRONG_BOX"
+            write_json(metadata_path, metadata)
+            evidence_path = slot / "evidence" / "signed-evidence.json"
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["keymint_security_level"] = "STRONG_BOX"
+            write_json(evidence_path, sign_evidence(evidence, signer))
+            refresh_signed_evidence_hash(slot)
+
+            report = device_lab.scan_slot(
+                slot,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys=trusted,
+            )
+
+        self.assertEqual(report["status"], "error")
+        self.assertIn(
+            "attestation/result.json keymint_security_level must match "
+            "slot.json keymint_security_level",
+            report["errors"],
+        )
+
     def test_production_metadata_rejects_missing_attestation_report(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             signer = create_test_signer(Path(temp))
@@ -9654,6 +12554,111 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertIn(
             "attestation/report.json verification.keymint_security_level "
             "must not contain surrounding whitespace",
+            report["errors"],
+        )
+
+    def test_production_metadata_rejects_missing_attestation_report_level_fields(
+        self,
+    ) -> None:
+        for level_key in ("attestation_security_level", "keymaster_security_level"):
+            with self.subTest(level_key=level_key):
+                with tempfile.TemporaryDirectory() as temp:
+                    signer = create_test_signer(Path(temp))
+                    trusted = trusted_signers_for(signer)
+                    slot = create_slot(
+                        Path(temp),
+                        "pixel8",
+                        device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                        signer,
+                    )
+                    report_path = slot / "attestation" / "report.json"
+                    attestation_report = json.loads(
+                        report_path.read_text(encoding="utf-8")
+                    )
+                    del attestation_report["verification"][level_key]
+                    write_json(report_path, attestation_report)
+                    resign_signed_evidence_artifacts(slot, signer)
+
+                    report = device_lab.scan_slot(
+                        slot,
+                        require_kagemusha_production_evidence=True,
+                        trusted_signer_public_keys=trusted,
+                    )
+
+                self.assertEqual(report["status"], "error")
+                self.assertIn(
+                    f"attestation/report.json verification.{level_key} "
+                    "must be a non-empty string",
+                    report["errors"],
+                )
+
+    def test_production_metadata_rejects_attestation_report_result_level_mismatch(
+        self,
+    ) -> None:
+        for level_key in (
+            "keymint_security_level",
+            "attestation_security_level",
+            "keymaster_security_level",
+        ):
+            with self.subTest(level_key=level_key):
+                with tempfile.TemporaryDirectory() as temp:
+                    signer = create_test_signer(Path(temp))
+                    trusted = trusted_signers_for(signer)
+                    slot = create_slot(
+                        Path(temp),
+                        "pixel8",
+                        device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                        signer,
+                    )
+                    report_path = slot / "attestation" / "report.json"
+                    attestation_report = json.loads(
+                        report_path.read_text(encoding="utf-8")
+                    )
+                    attestation_report["verification"][level_key] = "STRONG_BOX"
+                    write_json(report_path, attestation_report)
+                    resign_signed_evidence_artifacts(slot, signer)
+
+                    report = device_lab.scan_slot(
+                        slot,
+                        require_kagemusha_production_evidence=True,
+                        trusted_signer_public_keys=trusted,
+                    )
+
+                self.assertEqual(report["status"], "error")
+                self.assertIn(
+                    f"attestation/report.json verification.{level_key} must match "
+                    f"attestation/result.json {level_key}",
+                    report["errors"],
+                )
+
+    def test_production_metadata_rejects_attestation_report_result_status_mismatch(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            signer = create_test_signer(Path(temp))
+            trusted = trusted_signers_for(signer)
+            slot = create_slot(
+                Path(temp),
+                "pixel8",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                signer,
+            )
+            report_path = slot / "attestation" / "report.json"
+            attestation_report = json.loads(report_path.read_text(encoding="utf-8"))
+            attestation_report["verification"]["status"] = "passed"
+            write_json(report_path, attestation_report)
+            resign_signed_evidence_artifacts(slot, signer)
+
+            report = device_lab.scan_slot(
+                slot,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys=trusted,
+            )
+
+        self.assertEqual(report["status"], "error")
+        self.assertIn(
+            "attestation/report.json verification.status must match "
+            "attestation/result.json status",
             report["errors"],
         )
 
@@ -9999,6 +13004,57 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             "signed evidence artifact raw_test_commands must match slot.json raw_test_commands",
             report["errors"],
         )
+
+    def test_production_metadata_rejects_noncanonical_raw_test_command_strings(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            signer = create_test_signer(Path(temp))
+            trusted = trusted_signers_for(signer)
+            slot = create_slot(
+                Path(temp),
+                "pixel8",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                signer,
+            )
+            commands = list(device_lab.KAGEMUSHA_ANDROID_PRODUCTION_RAW_TEST_COMMANDS)
+            commands[0] = f" {commands[0]} "
+            commands[1] = f"{commands[1]}\x1b[31m"
+            metadata_path = slot / "slot.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata["raw_test_commands"] = commands
+            write_json(metadata_path, metadata)
+            evidence_path = slot / "evidence" / "signed-evidence.json"
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["raw_test_commands"] = commands
+            write_json(evidence_path, sign_evidence(evidence, signer))
+            refresh_signed_evidence_hash(slot)
+
+            report = device_lab.scan_slot(
+                slot,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys=trusted,
+            )
+            rendered = "\n".join(report["errors"])
+
+        self.assertEqual(report["status"], "error")
+        self.assertIn(
+            "slot.json raw_test_commands[0] must not contain surrounding whitespace",
+            rendered,
+        )
+        self.assertIn(
+            "slot.json raw_test_commands[1] must not contain control characters",
+            rendered,
+        )
+        self.assertIn(
+            "signed evidence artifact raw_test_commands[0] must not contain surrounding whitespace",
+            rendered,
+        )
+        self.assertIn(
+            "signed evidence artifact raw_test_commands[1] must not contain control characters",
+            rendered,
+        )
+        self.assertNotIn("\x1b", rendered)
 
     def test_production_metadata_rejects_irrelevant_raw_test_commands(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -10378,6 +13434,30 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         )
         self.assertNotIn(secret_relative, rendered)
         self.assertNotIn("token=supersecret", rendered)
+
+    def test_signed_evidence_artifact_digest_rejects_control_relative_path_directly(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            slot = create_slot(Path(temp), "slot-a")
+            control_relative = "logs/runtime\x1b[31m.log"
+
+            digest, errors = device_lab._signed_evidence_artifact_sha256(
+                slot,
+                control_relative,
+            )
+            rendered = "\n".join(errors)
+
+        self.assertIsNone(digest)
+        self.assertEqual(
+            errors,
+            [
+                "signed evidence artifact digest path: unsafe path contains "
+                "control characters"
+            ],
+        )
+        self.assertNotIn(control_relative, rendered)
+        self.assertNotIn("\x1b", rendered)
 
     def test_signed_evidence_artifact_digest_rejects_symlink_directly(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -10859,9 +13939,180 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
 
         self.assertEqual(report["status"], "error")
         self.assertIn(
-            "telemetry/telemetry.json slot_id must match the slot directory name",
+            "telemetry/telemetry.json slot_id must not contain surrounding whitespace",
             report["errors"],
         )
+
+    def test_production_metadata_rejects_telemetry_extra_field(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            signer = create_test_signer(Path(temp))
+            trusted = trusted_signers_for(signer)
+            slot = create_slot(
+                Path(temp),
+                "pixel8",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                signer,
+            )
+            telemetry_path = slot / "telemetry" / "telemetry.json"
+            telemetry = json.loads(telemetry_path.read_text(encoding="utf-8"))
+            telemetry["debug_note"] = "not production evidence"
+            write_json(telemetry_path, telemetry)
+            rewrite_sha256sum(slot)
+
+            report = device_lab.scan_slot(
+                slot,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys=trusted,
+            )
+
+        self.assertEqual(report["status"], "error")
+        self.assertIn(
+            "telemetry/telemetry.json contains unexpected field debug_note",
+            report["errors"],
+        )
+
+    def test_production_metadata_rejects_noncanonical_telemetry_identity_strings(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "device_model",
+                " Pixel 8 ",
+                "telemetry/telemetry.json device_model must not contain surrounding whitespace",
+            ),
+            (
+                "device_codename",
+                "husky\u0000",
+                "telemetry/telemetry.json device_codename must not contain control characters",
+            ),
+            (
+                "app_package_name",
+                "",
+                "telemetry/telemetry.json app_package_name must be a non-empty string",
+            ),
+            (
+                "app_package_name",
+                "client_secret=not-for-telemetry",
+                "telemetry/telemetry.json app_package_name must not contain secret-looking material",
+            ),
+        )
+        for field, value, expected_error in cases:
+            with self.subTest(field=field, expected_error=expected_error):
+                with tempfile.TemporaryDirectory() as temp:
+                    signer = create_test_signer(Path(temp))
+                    trusted = trusted_signers_for(signer)
+                    slot = create_slot(
+                        Path(temp),
+                        "pixel8",
+                        device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                        signer,
+                    )
+                    telemetry_path = slot / "telemetry" / "telemetry.json"
+                    telemetry = json.loads(telemetry_path.read_text(encoding="utf-8"))
+                    telemetry[field] = value
+                    write_json(telemetry_path, telemetry)
+                    rewrite_sha256sum(slot)
+
+                    report = device_lab.scan_slot(
+                        slot,
+                        require_kagemusha_production_evidence=True,
+                        trusted_signer_public_keys=trusted,
+                    )
+
+                self.assertEqual(report["status"], "error")
+                self.assertIn(expected_error, report["errors"])
+
+    def test_production_metadata_rejects_noncanonical_telemetry_slot_binding(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "pixel8\u0000",
+                "telemetry/telemetry.json slot_id must not contain control characters",
+            ),
+            (
+                "",
+                "telemetry/telemetry.json slot_id must be a non-empty string",
+            ),
+            (
+                8,
+                "telemetry/telemetry.json slot_id must be a non-empty string",
+            ),
+        )
+        for slot_value, expected_error in cases:
+            with self.subTest(expected_error=expected_error):
+                with tempfile.TemporaryDirectory() as temp:
+                    signer = create_test_signer(Path(temp))
+                    trusted = trusted_signers_for(signer)
+                    slot = create_slot(
+                        Path(temp),
+                        "pixel8",
+                        device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                        signer,
+                    )
+                    telemetry_path = slot / "telemetry" / "telemetry.json"
+                    telemetry = json.loads(telemetry_path.read_text(encoding="utf-8"))
+                    telemetry["slot_id"] = slot_value
+                    write_json(telemetry_path, telemetry)
+                    rewrite_sha256sum(slot)
+
+                    report = device_lab.scan_slot(
+                        slot,
+                        require_kagemusha_production_evidence=True,
+                        trusted_signer_public_keys=trusted,
+                    )
+
+                self.assertEqual(report["status"], "error")
+                self.assertIn(expected_error, report["errors"])
+
+    def test_production_metadata_rejects_noncanonical_telemetry_suite(self) -> None:
+        cases = (
+            (
+                "KAGEMUSHA-DEVICE-LAB",
+                "telemetry/telemetry.json suite must identify a Kagemusha device-lab run",
+            ),
+            (
+                " kagemusha-device-lab ",
+                "telemetry/telemetry.json suite must not contain surrounding whitespace",
+            ),
+            (
+                "kagemusha-device-lab\u0000",
+                "telemetry/telemetry.json suite must not contain control characters",
+            ),
+            (
+                "",
+                "telemetry/telemetry.json suite must be a non-empty string",
+            ),
+            (
+                7,
+                "telemetry/telemetry.json suite must be a non-empty string",
+            ),
+        )
+        for suite, expected_error in cases:
+            with self.subTest(expected_error=expected_error):
+                with tempfile.TemporaryDirectory() as temp:
+                    signer = create_test_signer(Path(temp))
+                    trusted = trusted_signers_for(signer)
+                    slot = create_slot(
+                        Path(temp),
+                        "pixel8",
+                        device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                        signer,
+                    )
+                    telemetry_path = slot / "telemetry" / "telemetry.json"
+                    telemetry = json.loads(telemetry_path.read_text(encoding="utf-8"))
+                    telemetry["suite"] = suite
+                    write_json(telemetry_path, telemetry)
+                    rewrite_sha256sum(slot)
+
+                    report = device_lab.scan_slot(
+                        slot,
+                        require_kagemusha_production_evidence=True,
+                        trusted_signer_public_keys=trusted,
+                    )
+
+                self.assertEqual(report["status"], "error")
+                self.assertIn(expected_error, report["errors"])
 
     def test_production_metadata_rejects_failed_status_ndjson(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -10891,6 +14142,103 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             "telemetry/status.ndjson must contain at least one ok status",
             report["errors"],
         )
+
+    def test_production_metadata_rejects_noncanonical_status_ndjson(self) -> None:
+        cases = (
+            (
+                ' {"status":"ok","slot_id":"pixel8"}\n',
+                "telemetry/status.ndjson line 1 must not contain surrounding whitespace",
+            ),
+            (
+                '{"status":"ok","slot_id":"pixel8"} \n',
+                "telemetry/status.ndjson line 1 must not contain surrounding whitespace",
+            ),
+            (
+                '{"status":"ok","slot_id":"pixel8"}\r\n',
+                "telemetry/status.ndjson must use LF line endings",
+            ),
+            (
+                '{"status":"ok","slot_id":"pixel8"}',
+                "telemetry/status.ndjson must end with a trailing newline",
+            ),
+            (
+                '{"status":"OK","slot_id":"pixel8"}\n',
+                "telemetry/status.ndjson line 1 status must be lowercase",
+            ),
+            (
+                '{"status":" ok ","slot_id":"pixel8"}\n',
+                "telemetry/status.ndjson line 1 status must not contain surrounding whitespace",
+            ),
+            (
+                '{"status":"ok\\u0000","slot_id":"pixel8"}\n',
+                "telemetry/status.ndjson line 1 status must not contain control characters",
+            ),
+        )
+        for payload, expected_error in cases:
+            with self.subTest(expected_error=expected_error):
+                with tempfile.TemporaryDirectory() as temp:
+                    signer = create_test_signer(Path(temp))
+                    trusted = trusted_signers_for(signer)
+                    slot = create_slot(
+                        Path(temp),
+                        "pixel8",
+                        device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                        signer,
+                    )
+                    write_text(slot / "telemetry" / "status.ndjson", payload)
+                    rewrite_sha256sum(slot)
+
+                    report = device_lab.scan_slot(
+                        slot,
+                        require_kagemusha_production_evidence=True,
+                        trusted_signer_public_keys=trusted,
+                    )
+
+                self.assertEqual(report["status"], "error")
+                self.assertIn(expected_error, report["errors"])
+                if not expected_error.startswith("telemetry/status.ndjson must "):
+                    self.assertIn(
+                        "telemetry/status.ndjson must contain at least one ok status",
+                        report["errors"],
+                    )
+
+    def test_production_metadata_rejects_status_ndjson_slot_mismatch(self) -> None:
+        cases = (
+            (
+                '{"status":"ok","slot_id":" pixel8 "}\n',
+                "telemetry/status.ndjson line 1 slot_id must not contain surrounding whitespace",
+            ),
+            (
+                '{"status":"ok","slot_id":"pixel8\\u0000"}\n',
+                "telemetry/status.ndjson line 1 slot_id must not contain control characters",
+            ),
+            (
+                '{"status":"ok","slot_id":8}\n',
+                "telemetry/status.ndjson line 1 slot_id must be a string",
+            ),
+        )
+        for payload, expected_error in cases:
+            with self.subTest(expected_error=expected_error):
+                with tempfile.TemporaryDirectory() as temp:
+                    signer = create_test_signer(Path(temp))
+                    trusted = trusted_signers_for(signer)
+                    slot = create_slot(
+                        Path(temp),
+                        "pixel8",
+                        device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                        signer,
+                    )
+                    write_text(slot / "telemetry" / "status.ndjson", payload)
+                    rewrite_sha256sum(slot)
+
+                    report = device_lab.scan_slot(
+                        slot,
+                        require_kagemusha_production_evidence=True,
+                        trusted_signer_public_keys=trusted,
+                    )
+
+                self.assertEqual(report["status"], "error")
+                self.assertIn(expected_error, report["errors"])
 
     def test_production_metadata_rejects_runtime_log_without_completion_marker(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -11048,6 +14396,70 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertNotIn(str(linked_public_key), rendered)
         self.assertNotIn(str(real_parent), rendered)
         self.assertNotIn(str(linked_parent), rendered)
+
+    def test_production_metadata_rejects_control_trusted_signer_map_before_metadata_read(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            slot = Path(temp) / "pixel8"
+            trusted = {"0" * 64: Path(temp) / "control\nsigner.pem"}
+
+            with mock.patch.object(
+                device_lab,
+                "_load_json",
+                side_effect=AssertionError("slot metadata must not be read"),
+            ) as load_json:
+                errors, details = device_lab.validate_kagemusha_production_metadata(
+                    slot,
+                    trusted_signer_public_keys=trusted,
+                )
+
+            rendered = "\n".join(errors)
+
+        load_json.assert_not_called()
+        self.assertEqual(details, {})
+        self.assertEqual(
+            errors,
+            ["trusted signer public key path must not contain control characters"],
+        )
+        self.assertNotIn("control\nsigner.pem", rendered)
+
+    def test_production_metadata_rejects_alias_trusted_signer_map_before_metadata_read(
+        self,
+    ) -> None:
+        cases = (
+            (
+                Path("keys") / ".." / "signer.pem",
+                "trusted signer public key path must be canonical",
+            ),
+            (
+                Path("keys\\signer.pem"),
+                "trusted signer public key path must not contain backslashes",
+            ),
+        )
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for key_path, expected_error in cases:
+                key_path = root / key_path
+                with self.subTest(key_path=key_path):
+                    slot = root / "pixel8"
+                    trusted = {"0" * 64: key_path}
+
+                    with mock.patch.object(
+                        device_lab,
+                        "_load_json",
+                        side_effect=AssertionError("slot metadata must not be read"),
+                    ) as load_json:
+                        errors, details = device_lab.validate_kagemusha_production_metadata(
+                            slot,
+                            trusted_signer_public_keys=trusted,
+                        )
+                    rendered = "\n".join(errors)
+
+                    load_json.assert_not_called()
+                    self.assertEqual(details, {})
+                    self.assertEqual(errors, [expected_error])
+                    self.assertNotIn(str(key_path), rendered)
 
     def test_production_metadata_rejects_signed_evidence_payload_hash_drift(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -11339,6 +14751,62 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertNotIn("openssl is required", rendered)
         self.assertNotIn(str(secret_public_key), rendered)
         self.assertNotIn("token=supersecret", rendered)
+
+    def test_trusted_signer_public_key_rejects_control_path_before_openssl_lookup(
+        self,
+    ) -> None:
+        original_which = device_lab.shutil.which
+        try:
+            device_lab.shutil.which = lambda _command: None
+            with tempfile.TemporaryDirectory() as temp:
+                control_public_key = Path(temp) / "control\npublic.pem"
+
+                trusted, errors = device_lab.load_trusted_signer_public_keys(
+                    [control_public_key]
+                )
+                rendered = "\n".join(errors)
+        finally:
+            device_lab.shutil.which = original_which
+
+        self.assertEqual(trusted, {})
+        self.assertEqual(
+            errors,
+            ["trusted signer public key path must not contain control characters"],
+        )
+        self.assertNotIn("openssl is required", rendered)
+        self.assertNotIn(str(control_public_key), rendered)
+
+    def test_trusted_signer_public_key_rejects_aliases_before_openssl_lookup(
+        self,
+    ) -> None:
+        cases = (
+            (
+                Path("keys") / ".." / "trusted-public.pem",
+                "trusted signer public key path must be canonical",
+            ),
+            (
+                Path("keys\\trusted-public.pem"),
+                "trusted signer public key path must not contain backslashes",
+            ),
+        )
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for public_key, expected_error in cases:
+                public_key = root / public_key
+                with self.subTest(public_key=public_key):
+                    with mock.patch.object(
+                        device_lab.shutil,
+                        "which",
+                        side_effect=AssertionError("OpenSSL lookup must not run"),
+                    ):
+                        trusted, errors = device_lab.load_trusted_signer_public_keys(
+                            [public_key]
+                        )
+                    rendered = "\n".join(errors)
+
+                    self.assertEqual(trusted, {})
+                    self.assertEqual(errors, [expected_error])
+                    self.assertNotIn(str(public_key), rendered)
 
     def test_verify_signature_rejects_secret_public_key_path_before_openssl_lookup(
         self,
@@ -12111,6 +15579,99 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertNotIn("token=supersecret", rendered)
         self.assertFalse((slot / "evidence" / "signed-evidence.json").exists())
 
+    def test_signer_helper_rejects_control_public_key_path_before_write(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "slots"
+            signer = create_test_signer(Path(temp) / "keys")
+            slot = create_slot(root, "pixel8")
+            write_unsigned_production_slot_metadata(
+                slot,
+                "pixel8",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+            )
+            control_public_key = Path(temp) / "control\npublic.pem"
+            control_public_key.write_text("not an ed25519 public key\n", encoding="utf-8")
+
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                status = evidence_signer.main(
+                    [
+                        "--slot",
+                        str(slot),
+                        "--private-key",
+                        str(signer["private_key"]),
+                        "--public-key",
+                        str(control_public_key),
+                        "--signer-key-id",
+                        "android-lab-release-signer-v1",
+                        "--signed-at-utc",
+                        "2026-06-06T00:00:00Z",
+                    ]
+                )
+            rendered = stdout.getvalue() + stderr.getvalue()
+
+        self.assertEqual(status, 1)
+        self.assertIn("signer public key path must not contain control characters", rendered)
+        self.assertNotIn(str(control_public_key), rendered)
+        self.assertFalse((slot / "evidence" / "signed-evidence.json").exists())
+
+    def test_signer_helper_rejects_key_aliases_before_metadata_read(self) -> None:
+        cases = (
+            (
+                "private",
+                Path("keys") / ".." / "private.pem",
+                "private key path must be canonical",
+            ),
+            (
+                "private",
+                Path("keys\\private.pem"),
+                "private key path must not contain backslashes",
+            ),
+            (
+                "public",
+                Path("keys") / ".." / "public.pem",
+                "signer public key path must be canonical",
+            ),
+            (
+                "public",
+                Path("keys\\public.pem"),
+                "signer public key path must not contain backslashes",
+            ),
+        )
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            slot = root / "pixel8"
+            for key_kind, key_path, expected_error in cases:
+                key_path = root / key_path
+                private_key = key_path if key_kind == "private" else root / "private.pem"
+                public_key = key_path if key_kind == "public" else root / "public.pem"
+                with self.subTest(key_kind=key_kind, key_path=key_path):
+                    with mock.patch.object(
+                        evidence_signer,
+                        "_require_slot_metadata",
+                        side_effect=AssertionError("slot metadata must not be read"),
+                    ) as require_slot_metadata:
+                        status, output_relative, errors = evidence_signer.sign_slot_evidence(
+                            slot_path=slot,
+                            private_key_path=private_key,
+                            public_key_path=public_key,
+                            signer_key_id="android-lab-release-signer-v1",
+                            signed_at_utc="2026-06-06T00:00:00Z",
+                            output=None,
+                            update_slot_json=False,
+                            update_sha256sum=False,
+                        )
+                    rendered = "\n".join(errors)
+
+                    require_slot_metadata.assert_not_called()
+                    self.assertEqual(status, 1)
+                    self.assertIsNone(output_relative)
+                    self.assertEqual(errors, [expected_error])
+                    self.assertNotIn(str(key_path), rendered)
+
     def test_signer_helper_rejects_secret_looking_slot_path_before_metadata_read(
         self,
     ) -> None:
@@ -12141,6 +15702,37 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertIn("slot path must not contain secret-looking material", rendered)
         self.assertNotIn(str(secret_slot), rendered)
         self.assertNotIn("token=supersecret", rendered)
+        self.assertNotIn("slot directory missing", rendered)
+
+    def test_signer_helper_rejects_control_slot_path_before_metadata_read(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            signer = create_test_signer(Path(temp) / "keys")
+            control_slot = Path(temp) / "control\nslot"
+
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                status = evidence_signer.main(
+                    [
+                        "--slot",
+                        str(control_slot),
+                        "--private-key",
+                        str(signer["private_key"]),
+                        "--public-key",
+                        str(signer["public_key"]),
+                        "--signer-key-id",
+                        "android-lab-release-signer-v1",
+                        "--signed-at-utc",
+                        "2026-06-06T00:00:00Z",
+                    ]
+                )
+            rendered = stdout.getvalue() + stderr.getvalue()
+
+        self.assertEqual(status, 1)
+        self.assertIn("slot path must not contain control characters", rendered)
+        self.assertNotIn(str(control_slot), rendered)
         self.assertNotIn("slot directory missing", rendered)
 
     def test_signer_helper_rejects_slot_directory_metadata_failure_before_read(
@@ -12265,6 +15857,40 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertNotIn("token=supersecret", rendered)
         self.assertNotIn("slot directory missing", rendered)
 
+    def test_signer_helper_rejects_control_output_before_metadata_read(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            signer = create_test_signer(Path(temp) / "keys")
+            slot = Path(temp) / "slots" / "pixel8"
+            control_output = "evidence/control\nsigned-evidence.json"
+
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                status = evidence_signer.main(
+                    [
+                        "--slot",
+                        str(slot),
+                        "--private-key",
+                        str(signer["private_key"]),
+                        "--public-key",
+                        str(signer["public_key"]),
+                        "--signer-key-id",
+                        "android-lab-release-signer-v1",
+                        "--signed-at-utc",
+                        "2026-06-06T00:00:00Z",
+                        "--output",
+                        control_output,
+                    ]
+                )
+            rendered = stdout.getvalue() + stderr.getvalue()
+
+        self.assertEqual(status, 1)
+        self.assertIn("signed evidence output path must not contain control characters", rendered)
+        self.assertNotIn(control_output, rendered)
+        self.assertNotIn("slot directory missing", rendered)
+
     def test_signer_helper_rejects_secret_looking_signer_key_id_before_metadata_read(
         self,
     ) -> None:
@@ -12299,6 +15925,69 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         )
         self.assertNotIn(secret_signer_key_id, rendered)
         self.assertNotIn("token=supersecret", rendered)
+        self.assertNotIn("slot directory missing", rendered)
+
+    def test_signer_helper_rejects_padded_signer_key_id_before_metadata_read(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            signer = create_test_signer(Path(temp) / "keys")
+            slot = Path(temp) / "slots" / "pixel8"
+
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                status = evidence_signer.main(
+                    [
+                        "--slot",
+                        str(slot),
+                        "--private-key",
+                        str(signer["private_key"]),
+                        "--public-key",
+                        str(signer["public_key"]),
+                        "--signer-key-id",
+                        " android-lab-release-signer-v1 ",
+                        "--signed-at-utc",
+                        "2026-06-06T00:00:00Z",
+                    ]
+                )
+            rendered = stdout.getvalue() + stderr.getvalue()
+
+        self.assertEqual(status, 1)
+        self.assertIn("signer key id must not contain surrounding whitespace", rendered)
+        self.assertNotIn("slot directory missing", rendered)
+
+    def test_signer_helper_rejects_control_signer_key_id_before_metadata_read(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            signer = create_test_signer(Path(temp) / "keys")
+            slot = Path(temp) / "slots" / "pixel8"
+            unsafe_signer_key_id = "android-lab\x1b[31m"
+
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                status = evidence_signer.main(
+                    [
+                        "--slot",
+                        str(slot),
+                        "--private-key",
+                        str(signer["private_key"]),
+                        "--public-key",
+                        str(signer["public_key"]),
+                        "--signer-key-id",
+                        unsafe_signer_key_id,
+                        "--signed-at-utc",
+                        "2026-06-06T00:00:00Z",
+                    ]
+                )
+            rendered = stdout.getvalue() + stderr.getvalue()
+
+        self.assertEqual(status, 1)
+        self.assertIn("signer key id must not contain control characters", rendered)
+        self.assertNotIn(unsafe_signer_key_id, rendered)
+        self.assertNotIn("\x1b", rendered)
         self.assertNotIn("slot directory missing", rendered)
 
     def test_signer_helper_rejects_output_outside_evidence_before_write(self) -> None:
@@ -12377,6 +16066,126 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertFalse((slot / "evidence" / "signed-evidence-copy.json").exists())
         self.assertFalse((slot / "evidence" / "signed-evidence.json").exists())
 
+    def test_signer_helper_rejects_backslash_output_path_before_write(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "slots"
+            signer = create_test_signer(Path(temp) / "keys")
+            slot = create_slot(root, "pixel8")
+            write_unsigned_production_slot_metadata(
+                slot,
+                "pixel8",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+            )
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = evidence_signer.main(
+                    [
+                        "--slot",
+                        str(slot),
+                        "--private-key",
+                        str(signer["private_key"]),
+                        "--public-key",
+                        str(signer["public_key"]),
+                        "--signer-key-id",
+                        "android-lab-release-signer-v1",
+                        "--signed-at-utc",
+                        "2026-06-06T00:00:00Z",
+                        "--output",
+                        "evidence\\signed-evidence.json",
+                    ]
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "signed evidence output path must not contain backslashes",
+            stderr.getvalue(),
+        )
+        self.assertFalse((slot / "evidence" / "signed-evidence.json").exists())
+
+    def test_signer_helper_rejects_absolute_parent_segment_output_path_before_write(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "slots"
+            signer = create_test_signer(Path(temp) / "keys")
+            slot = create_slot(root, "pixel8")
+            write_unsigned_production_slot_metadata(
+                slot,
+                "pixel8",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+            )
+            alias_output = (
+                slot
+                / "evidence"
+                / ".."
+                / "evidence"
+                / "signed-evidence.json"
+            )
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = evidence_signer.main(
+                    [
+                        "--slot",
+                        str(slot),
+                        "--private-key",
+                        str(signer["private_key"]),
+                        "--public-key",
+                        str(signer["public_key"]),
+                        "--signer-key-id",
+                        "android-lab-release-signer-v1",
+                        "--signed-at-utc",
+                        "2026-06-06T00:00:00Z",
+                        "--output",
+                        str(alias_output),
+                    ]
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn("signed evidence output path must be canonical", stderr.getvalue())
+        self.assertFalse((slot / "evidence" / "signed-evidence.json").exists())
+
+    def test_signer_helper_rejects_padded_metadata_output_path_before_write(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "slots"
+            signer = create_test_signer(Path(temp) / "keys")
+            slot = create_slot(root, "pixel8")
+            write_unsigned_production_slot_metadata(
+                slot,
+                "pixel8",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+            )
+            metadata_path = slot / "slot.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata["signed_evidence_artifact_path"] = " evidence/signed-evidence.json "
+            write_json(metadata_path, metadata)
+            rewrite_sha256sum(slot)
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = evidence_signer.main(
+                    [
+                        "--slot",
+                        str(slot),
+                        "--private-key",
+                        str(signer["private_key"]),
+                        "--public-key",
+                        str(signer["public_key"]),
+                        "--signer-key-id",
+                        "android-lab-release-signer-v1",
+                        "--signed-at-utc",
+                        "2026-06-06T00:00:00Z",
+                    ]
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "slot.json signed_evidence_artifact_path must not contain surrounding whitespace",
+            stderr.getvalue(),
+        )
+        self.assertFalse((slot / "evidence" / "signed-evidence.json").exists())
+
     def test_signer_output_normalise_rejects_output_resolve_failure(self) -> None:
         path_type = type(Path("."))
         original_resolve = path_type.resolve
@@ -12443,6 +16252,59 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertIsNone(result)
         self.assertEqual(errors, ["signed evidence output path could not be resolved"])
         self.assertFalse(output.exists())
+
+    def test_signer_output_normalise_rejects_absolute_symlinked_output_ancestor(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            slot = root / "slots" / "pixel8"
+            slot.joinpath("evidence").mkdir(parents=True)
+            alias = root / "linked-slot"
+            create_dir_symlink(self, alias, slot)
+            errors: list[str] = []
+
+            result = evidence_signer._normalise_output_path(  # type: ignore[attr-defined]
+                slot,
+                {},
+                str(alias / "evidence" / "signed-evidence.json"),
+                errors,
+            )
+
+        self.assertIsNone(result)
+        self.assertEqual(
+            errors,
+            ["signed evidence output path ancestor directory must not be a symlink"],
+        )
+        self.assertFalse((slot / "evidence" / "signed-evidence.json").exists())
+
+    def test_signer_output_normalise_rejects_absolute_symlinked_output_leaf(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            slot = root / "slots" / "pixel8"
+            output = slot / "evidence" / "signed-evidence.json"
+            target = root / "external-signed-evidence.json"
+            output.parent.mkdir(parents=True)
+            target.write_text("external\n", encoding="utf-8")
+            try:
+                output.symlink_to(target)
+            except (NotImplementedError, OSError) as exc:
+                self.skipTest(f"symlinks are not available in this test environment: {exc}")
+            errors: list[str] = []
+
+            result = evidence_signer._normalise_output_path(  # type: ignore[attr-defined]
+                slot,
+                {},
+                str(output),
+                errors,
+            )
+            target_text = target.read_text(encoding="utf-8")
+
+        self.assertIsNone(result)
+        self.assertEqual(errors, ["signed evidence output path must not be a symlink"])
+        self.assertEqual(target_text, "external\n")
 
     def test_signer_write_json_rejects_symlinked_output_parent_before_write(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -12694,6 +16556,30 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertFalse(output.exists())
         self.assertFalse(output.parent.exists())
         self.assertNotIn("token=supersecret", rendered)
+        self.assertNotIn(str(output), rendered)
+
+    def test_signer_write_json_rejects_control_output_path_directly_without_write(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            output = (
+                Path(temp)
+                / "slot"
+                / "control\noutput"
+                / "signed-evidence.json"
+            )
+
+            errors = evidence_signer._write_json(
+                output,
+                {"schema": "test"},
+                "signed evidence output path",
+            )
+            rendered = "\n".join(errors)
+
+        self.assertEqual(
+            errors,
+            ["signed evidence output path must not contain control characters"],
+        )
+        self.assertFalse(output.exists())
+        self.assertFalse(output.parent.exists())
         self.assertNotIn(str(output), rendered)
 
     def test_signer_write_json_rejects_nonfinite_json_before_write(self) -> None:
@@ -14078,6 +17964,27 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertNotIn(secret_relative, rendered)
         self.assertNotIn("token=supersecret", rendered)
 
+    def test_signer_slot_artifact_digest_rejects_control_relative_path_directly(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            slot = create_slot(Path(temp), "pixel8")
+            control_relative = "logs/runtime\x1b[31m.log"
+
+            digest, errors = evidence_signer._slot_artifact_sha256(
+                slot,
+                control_relative,
+            )
+            rendered = "\n".join(errors)
+
+        self.assertIsNone(digest)
+        self.assertEqual(
+            errors,
+            ["slot artifact path: unsafe path contains control characters"],
+        )
+        self.assertNotIn(control_relative, rendered)
+        self.assertNotIn("\x1b", rendered)
+
     def test_signer_slot_artifact_digest_rejects_symlink_directly(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -14949,6 +18856,132 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         )
         self.assertFalse((slot / "evidence" / "signed-evidence.json").exists())
 
+    def test_signer_helper_rejects_padded_slot_string_before_write(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "slots"
+            signer = create_test_signer(Path(temp) / "keys")
+            slot = create_slot(root, "pixel7")
+            write_unsigned_production_slot_metadata(
+                slot,
+                "pixel7",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[1],
+            )
+            metadata_path = slot / "slot.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata["device_family"] = (
+                f" {device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[1]} "
+            )
+            write_json(metadata_path, metadata)
+            rewrite_sha256sum(slot)
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = evidence_signer.main(
+                    [
+                        "--slot",
+                        str(slot),
+                        "--private-key",
+                        str(signer["private_key"]),
+                        "--public-key",
+                        str(signer["public_key"]),
+                        "--signer-key-id",
+                        "android-lab-release-signer-v1",
+                        "--signed-at-utc",
+                        "2026-06-06T00:00:00Z",
+                    ]
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "slot.json device_family must not contain surrounding whitespace",
+            stderr.getvalue(),
+        )
+        self.assertFalse((slot / "evidence" / "signed-evidence.json").exists())
+
+    def test_signer_helper_rejects_control_slot_string_before_write(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "slots"
+            signer = create_test_signer(Path(temp) / "keys")
+            slot = create_slot(root, "pixel7")
+            write_unsigned_production_slot_metadata(
+                slot,
+                "pixel7",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[1],
+            )
+            metadata_path = slot / "slot.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata["app_package_name"] = "org.hyperledger.iroha\x1b[31m"
+            write_json(metadata_path, metadata)
+            rewrite_sha256sum(slot)
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = evidence_signer.main(
+                    [
+                        "--slot",
+                        str(slot),
+                        "--private-key",
+                        str(signer["private_key"]),
+                        "--public-key",
+                        str(signer["public_key"]),
+                        "--signer-key-id",
+                        "android-lab-release-signer-v1",
+                        "--signed-at-utc",
+                        "2026-06-06T00:00:00Z",
+                    ]
+                )
+            rendered = stderr.getvalue()
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "slot.json app_package_name must not contain control characters",
+            rendered,
+        )
+        self.assertNotIn("\x1b", rendered)
+        self.assertFalse((slot / "evidence" / "signed-evidence.json").exists())
+
+    def test_signer_helper_rejects_padded_attestation_chain_path_before_write(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "slots"
+            signer = create_test_signer(Path(temp) / "keys")
+            slot = create_slot(root, "pixel7")
+            write_unsigned_production_slot_metadata(
+                slot,
+                "pixel7",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[1],
+            )
+            metadata_path = slot / "slot.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata["attestation_certificate_chain_path"] = (
+                " attestation/keymint-certificate-chain.pem "
+            )
+            write_json(metadata_path, metadata)
+            rewrite_sha256sum(slot)
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = evidence_signer.main(
+                    [
+                        "--slot",
+                        str(slot),
+                        "--private-key",
+                        str(signer["private_key"]),
+                        "--public-key",
+                        str(signer["public_key"]),
+                        "--signer-key-id",
+                        "android-lab-release-signer-v1",
+                        "--signed-at-utc",
+                        "2026-06-06T00:00:00Z",
+                    ]
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "slot.json attestation_certificate_chain_path must not contain surrounding whitespace",
+            stderr.getvalue(),
+        )
+        self.assertFalse((slot / "evidence" / "signed-evidence.json").exists())
+
     def test_signer_helper_rejects_irrelevant_raw_test_commands(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / "slots"
@@ -15009,6 +19042,48 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         )
         self.assertIn(
             "slot.json raw_test_commands must include org.hyperledger.iroha.android.offline.OfflineNoteTransferHandoffTest",
+            stderr.getvalue(),
+        )
+        self.assertFalse((slot / "evidence" / "signed-evidence.json").exists())
+
+    def test_signer_helper_rejects_padded_raw_test_command_before_write(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "slots"
+            signer = create_test_signer(Path(temp) / "keys")
+            slot = create_slot(root, "pixel7")
+            write_unsigned_production_slot_metadata(
+                slot,
+                "pixel7",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[1],
+            )
+            metadata_path = slot / "slot.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            commands = list(device_lab.KAGEMUSHA_ANDROID_PRODUCTION_RAW_TEST_COMMANDS)
+            commands[0] = f" {commands[0]} "
+            metadata["raw_test_commands"] = commands
+            write_json(metadata_path, metadata)
+            rewrite_sha256sum(slot)
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = evidence_signer.main(
+                    [
+                        "--slot",
+                        str(slot),
+                        "--private-key",
+                        str(signer["private_key"]),
+                        "--public-key",
+                        str(signer["public_key"]),
+                        "--signer-key-id",
+                        "android-lab-release-signer-v1",
+                        "--signed-at-utc",
+                        "2026-06-06T00:00:00Z",
+                    ]
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "slot.json raw_test_commands[0] must not contain surrounding whitespace",
             stderr.getvalue(),
         )
         self.assertFalse((slot / "evidence" / "signed-evidence.json").exists())
@@ -15182,6 +19257,49 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertIn(
             "attestation/report.json verification.strongbox_attestation must be true",
+            stderr.getvalue(),
+        )
+        self.assertFalse((slot / "evidence" / "signed-evidence.json").exists())
+
+    def test_signer_helper_rejects_missing_attestation_report_level_before_write(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "slots"
+            signer = create_test_signer(Path(temp) / "keys")
+            slot = create_slot(root, "pixel7")
+            write_unsigned_production_slot_metadata(
+                slot,
+                "pixel7",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[1],
+            )
+            report_path = slot / "attestation" / "report.json"
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            del report["verification"]["keymaster_security_level"]
+            write_json(report_path, report)
+            rewrite_sha256sum(slot)
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = evidence_signer.main(
+                    [
+                        "--slot",
+                        str(slot),
+                        "--private-key",
+                        str(signer["private_key"]),
+                        "--public-key",
+                        str(signer["public_key"]),
+                        "--signer-key-id",
+                        "android-lab-release-signer-v1",
+                        "--signed-at-utc",
+                        "2026-06-06T00:00:00Z",
+                    ]
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "attestation/report.json verification.keymaster_security_level "
+            "must be a non-empty string",
             stderr.getvalue(),
         )
         self.assertFalse((slot / "evidence" / "signed-evidence.json").exists())
@@ -15571,6 +19689,81 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertNotIn("openssl is required", rendered)
         self.assertNotIn(str(secret_private_key), rendered)
         self.assertNotIn("private_key=supersecret", rendered)
+
+    def test_sign_ed25519_rejects_control_private_key_path_before_openssl_lookup(
+        self,
+    ) -> None:
+        original_which = device_lab.shutil.which
+        try:
+            device_lab.shutil.which = lambda _command: None
+            with tempfile.TemporaryDirectory() as temp:
+                control_private_key = Path(temp) / "control\nprivate.pem"
+                errors: list[str] = []
+
+                signature = evidence_signer._sign_ed25519(  # type: ignore[attr-defined]
+                    control_private_key,
+                    b"payload",
+                    errors,
+                )
+                rendered = "\n".join(errors)
+        finally:
+            device_lab.shutil.which = original_which
+
+        self.assertIsNone(signature)
+        self.assertEqual(
+            errors,
+            ["private key path must not contain control characters"],
+        )
+        self.assertNotIn("openssl is required", rendered)
+        self.assertNotIn(str(control_private_key), rendered)
+
+    def test_sign_ed25519_rejects_private_key_aliases_before_metadata_or_openssl(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        cases = (
+            (
+                Path("keys") / ".." / "private.pem",
+                "private key path must be canonical",
+            ),
+            (
+                Path("keys\\private.pem"),
+                "private key path must not contain backslashes",
+            ),
+        )
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for private_key, expected_error in cases:
+                private_key = root / private_key
+                with self.subTest(private_key=private_key):
+                    with (
+                        mock.patch.object(
+                            path_type,
+                            "lstat",
+                            side_effect=AssertionError(
+                                "private key metadata must not be read"
+                            ),
+                        ) as lstat,
+                        mock.patch.object(
+                            device_lab,
+                            "_require_openssl",
+                            side_effect=AssertionError("OpenSSL lookup must not run"),
+                        ) as require_openssl,
+                    ):
+                        errors: list[str] = []
+                        signature = evidence_signer._sign_ed25519(  # type: ignore[attr-defined]
+                            private_key,
+                            b"payload",
+                            errors,
+                        )
+                    rendered = "\n".join(errors)
+
+                    self.assertIsNone(signature)
+                    self.assertEqual(errors, [expected_error])
+                    self.assertNotIn("openssl is required", rendered)
+                    self.assertNotIn(str(private_key), rendered)
+                    lstat.assert_not_called()
+                    require_openssl.assert_not_called()
 
     def test_sign_ed25519_rejects_missing_private_key_before_openssl_lookup(
         self,
@@ -16219,6 +20412,484 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             hashlib.sha256(b"slot-0:attestation-challenge").hexdigest(),
         )
 
+    def test_duplicate_matrix_bindings_redacts_unsafe_direct_report_slots(self) -> None:
+        duplicate_fingerprint = "a" * 64
+        reports = [
+            {
+                "slot": "token=supersecret-slot",
+                "status": "ok",
+                "kagemusha": {
+                    "device_fingerprint_sha256": duplicate_fingerprint,
+                },
+            },
+            {
+                "slot": "slot-\x1b[31m",
+                "status": "ok",
+                "kagemusha": {
+                    "device_fingerprint_sha256": duplicate_fingerprint,
+                },
+            },
+        ]
+
+        duplicates = device_lab.kagemusha_duplicate_matrix_bindings(reports)
+        rendered = json.dumps(duplicates, allow_nan=False)
+
+        duplicate = duplicates["device_fingerprint_sha256"][0]
+        self.assertEqual(
+            duplicate["slots"],
+            [device_lab.SECRET_PATH_REDACTION, "<unsafe-slot-name>"],
+        )
+        self.assertNotIn("supersecret", rendered)
+        self.assertNotIn("token=supersecret-slot", rendered)
+        self.assertNotIn("slot-\\u001b[31m", rendered)
+        self.assertNotIn("\\u001b", rendered)
+
+    def test_duplicate_matrix_bindings_ignores_non_sha256_direct_values(self) -> None:
+        reports = [
+            {
+                "slot": "slot-0",
+                "status": "ok",
+                "kagemusha": {
+                    "device_fingerprint_sha256": "token=supersecret-fingerprint",
+                },
+            },
+            {
+                "slot": "slot-1",
+                "status": "ok",
+                "kagemusha": {
+                    "device_fingerprint_sha256": "token=supersecret-fingerprint",
+                },
+            },
+        ]
+
+        duplicates = device_lab.kagemusha_duplicate_matrix_bindings(reports)
+        rendered = json.dumps(duplicates, allow_nan=False)
+
+        self.assertEqual(duplicates, {})
+        self.assertNotIn("supersecret", rendered)
+
+    def test_build_summary_redacts_unsafe_direct_report_strings(self) -> None:
+        duplicate_fingerprint = "b" * 64
+        duplicate_challenge = "c" * 64
+        family = device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0]
+        reports = [
+            {
+                "slot": "token=supersecret-slot",
+                "status": "ok",
+                "errors": ["bearer supersecret-token"],
+                "kagemusha": {
+                    "device_family": family,
+                    "device_fingerprint_sha256": duplicate_fingerprint,
+                    "attestation_challenge_sha256": duplicate_challenge,
+                    "unsafe_note": "x-iroha-signature supersecret-signature",
+                },
+            },
+            {
+                "slot": "slot-\x1b[31m",
+                "status": "ok",
+                "errors": ["plain error"],
+                "kagemusha": {
+                    "device_family": family,
+                    "device_fingerprint_sha256": duplicate_fingerprint,
+                    "attestation_challenge_sha256": duplicate_challenge,
+                },
+            },
+        ]
+
+        with tempfile.TemporaryDirectory() as temp:
+            summary = device_lab.build_summary(
+                Path(temp),
+                reports,
+                require_kagemusha_production_evidence=True,
+                require_kagemusha_standard_matrix=True,
+            )
+        rendered = json.dumps(summary, allow_nan=False)
+
+        self.assertEqual(summary["slots"][0]["slot"], device_lab.SECRET_PATH_REDACTION)
+        self.assertEqual(summary["slots"][1]["slot"], "<unsafe-slot-name>")
+        self.assertEqual(
+            summary["slots"][0]["errors"],
+            [device_lab.SECRET_PATH_REDACTION],
+        )
+        self.assertEqual(
+            summary["slots"][0]["kagemusha"]["unsafe_note"],
+            device_lab.SECRET_PATH_REDACTION,
+        )
+        duplicate_fingerprint_summary = summary["kagemusha"]["duplicate_bindings"][
+            "device_fingerprint_sha256"
+        ][0]
+        self.assertEqual(
+            duplicate_fingerprint_summary["slots"],
+            [device_lab.SECRET_PATH_REDACTION, "<unsafe-slot-name>"],
+        )
+        duplicate_challenge_summary = summary["kagemusha"]["duplicate_bindings"][
+            "attestation_challenge_sha256"
+        ][0]
+        self.assertEqual(
+            duplicate_challenge_summary["slots"],
+            [device_lab.SECRET_PATH_REDACTION, "<unsafe-slot-name>"],
+        )
+        self.assertNotIn("supersecret", rendered)
+        self.assertNotIn("token=supersecret-slot", rendered)
+        self.assertNotIn("slot-\\u001b[31m", rendered)
+        self.assertNotIn("\\u001b", rendered)
+
+    def test_build_summary_marks_redacted_key_collision_without_overwrite(self) -> None:
+        reports = [
+            {
+                "slot": "slot-0",
+                "status": "error",
+                "token=supersecret-first-key": "first-value",
+                "token=supersecret-second-key": "second-value",
+                "kagemusha": {
+                    "token=supersecret-nested-first": "nested-first",
+                    "token=supersecret-nested-second": "nested-second",
+                },
+            }
+        ]
+
+        with tempfile.TemporaryDirectory() as temp:
+            summary = device_lab.build_summary(Path(temp), reports)
+        rendered = json.dumps(summary, allow_nan=False, sort_keys=True)
+
+        slot_summary = summary["slots"][0]
+        self.assertTrue(slot_summary[device_lab.SUMMARY_REDACTION_KEY_COLLISION_FIELD])
+        self.assertEqual(slot_summary[device_lab.SECRET_PATH_REDACTION], "first-value")
+        self.assertEqual(
+            slot_summary["kagemusha"][device_lab.SECRET_PATH_REDACTION],
+            "nested-first",
+        )
+        self.assertNotIn("second-value", rendered)
+        self.assertNotIn("nested-second", rendered)
+        self.assertNotIn("supersecret", rendered)
+
+    def test_build_summary_normalizes_malformed_direct_report_status(self) -> None:
+        reports = [
+            {
+                "slot": "slot-0",
+                "errors": ["scan aborted"],
+                "kagemusha": {"required": True},
+            },
+            {
+                "slot": "slot-1",
+                "status": "OK",
+                "errors": ["status was uppercase"],
+                "kagemusha": {"required": True},
+            },
+            "not-a-report",
+        ]
+
+        with tempfile.TemporaryDirectory() as temp:
+            summary = device_lab.build_summary(Path(temp), reports)
+        rendered = json.dumps(summary, allow_nan=False, sort_keys=True)
+
+        self.assertEqual(summary["ok"], 0)
+        self.assertEqual(summary["failed"], 3)
+        self.assertEqual(summary["slots"][0]["status"], "error")
+        self.assertEqual(summary["slots"][1]["status"], "error")
+        self.assertEqual(summary["slots"][2]["status"], "error")
+        self.assertTrue(summary["slots"][0][device_lab.SUMMARY_STATUS_NORMALIZED_FIELD])
+        self.assertTrue(summary["slots"][1][device_lab.SUMMARY_STATUS_NORMALIZED_FIELD])
+        self.assertTrue(summary["slots"][2][device_lab.SUMMARY_STATUS_NORMALIZED_FIELD])
+        self.assertNotIn("Traceback", rendered)
+
+    def test_build_summary_normalizes_malformed_direct_report_errors(self) -> None:
+        reports = [
+            {
+                "slot": "slot-0",
+                "status": "error",
+                "errors": "token=supersecret-error",
+            },
+            {
+                "slot": "slot-1",
+                "status": "error",
+                "errors": [
+                    "plain error",
+                    {"token=supersecret-error-key": "secret-value"},
+                    7,
+                ],
+            },
+        ]
+
+        with tempfile.TemporaryDirectory() as temp:
+            summary = device_lab.build_summary(Path(temp), reports)
+        rendered = json.dumps(summary, allow_nan=False, sort_keys=True)
+
+        self.assertEqual(
+            summary["slots"][0]["errors"],
+            [device_lab.SUMMARY_ERROR_REDACTION],
+        )
+        self.assertEqual(
+            summary["slots"][1]["errors"],
+            [
+                "plain error",
+                device_lab.SUMMARY_ERROR_REDACTION,
+                device_lab.SUMMARY_ERROR_REDACTION,
+            ],
+        )
+        self.assertTrue(summary["slots"][0][device_lab.SUMMARY_ERRORS_NORMALIZED_FIELD])
+        self.assertTrue(summary["slots"][1][device_lab.SUMMARY_ERRORS_NORMALIZED_FIELD])
+        self.assertNotIn("supersecret", rendered)
+        self.assertNotIn("secret-value", rendered)
+
+    def test_build_summary_normalizes_non_string_direct_report_keys(self) -> None:
+        reports = [
+            {
+                "slot": "slot-0",
+                "status": "error",
+                7: "first-value",
+                ("tuple-key",): "second-value",
+                "kagemusha": {11: "nested-first", 12: "nested-second"},
+            }
+        ]
+
+        with tempfile.TemporaryDirectory() as temp:
+            summary = device_lab.build_summary(Path(temp), reports)
+        rendered = json.dumps(summary, allow_nan=False, sort_keys=True)
+        slot_summary = summary["slots"][0]
+
+        self.assertTrue(
+            slot_summary[device_lab.SUMMARY_NON_STRING_KEY_NORMALIZED_FIELD]
+        )
+        self.assertTrue(slot_summary[device_lab.SUMMARY_REDACTION_KEY_COLLISION_FIELD])
+        self.assertEqual(
+            slot_summary[device_lab.SUMMARY_NON_STRING_KEY_REDACTION],
+            "first-value",
+        )
+        self.assertEqual(
+            slot_summary["kagemusha"][device_lab.SUMMARY_NON_STRING_KEY_REDACTION],
+            "nested-first",
+        )
+        self.assertNotIn("second-value", rendered)
+        self.assertNotIn("nested-second", rendered)
+        self.assertNotIn("tuple-key", rendered)
+
+    def test_build_summary_redacts_nonfinite_direct_report_values(self) -> None:
+        reports = [
+            {
+                "slot": "slot-0",
+                "status": "error",
+                "duration_seconds": float("nan"),
+                "kagemusha": {
+                    "required": True,
+                    "latency_seconds": float("inf"),
+                },
+                "samples": [1.0, float("-inf")],
+            }
+        ]
+
+        with tempfile.TemporaryDirectory() as temp:
+            summary = device_lab.build_summary(Path(temp), reports)
+        rendered = json.dumps(summary, allow_nan=False, sort_keys=True)
+        slot_summary = summary["slots"][0]
+
+        self.assertTrue(
+            slot_summary[device_lab.SUMMARY_NONFINITE_NUMBER_NORMALIZED_FIELD]
+        )
+        self.assertEqual(
+            slot_summary["duration_seconds"],
+            device_lab.SUMMARY_NONFINITE_NUMBER_REDACTION,
+        )
+        self.assertEqual(
+            slot_summary["kagemusha"]["latency_seconds"],
+            device_lab.SUMMARY_NONFINITE_NUMBER_REDACTION,
+        )
+        self.assertEqual(
+            slot_summary["samples"][1],
+            device_lab.SUMMARY_NONFINITE_NUMBER_REDACTION,
+        )
+        self.assertNotIn("NaN", rendered)
+        self.assertNotIn("Infinity", rendered)
+
+    def test_build_summary_normalizes_finite_float_direct_report_values(self) -> None:
+        reports = [
+            {
+                "slot": "slot-0",
+                "status": "error",
+                "duration_seconds": 0.25,
+                "kagemusha": {
+                    "required": True,
+                    "latency_seconds": 1.5,
+                },
+                "samples": [1.0, {"nested": 2.5}],
+            }
+        ]
+
+        with tempfile.TemporaryDirectory() as temp:
+            summary = device_lab.build_summary(Path(temp), reports)
+        rendered = json.dumps(summary, allow_nan=False, sort_keys=True)
+        slot_summary = summary["slots"][0]
+
+        self.assertTrue(
+            slot_summary[device_lab.SUMMARY_UNSUPPORTED_VALUE_NORMALIZED_FIELD]
+        )
+        self.assertEqual(
+            slot_summary["duration_seconds"],
+            device_lab.SUMMARY_UNSUPPORTED_VALUE_REDACTION,
+        )
+        self.assertEqual(
+            slot_summary["kagemusha"]["latency_seconds"],
+            device_lab.SUMMARY_UNSUPPORTED_VALUE_REDACTION,
+        )
+        self.assertEqual(
+            slot_summary["samples"][0],
+            device_lab.SUMMARY_UNSUPPORTED_VALUE_REDACTION,
+        )
+        self.assertEqual(
+            slot_summary["samples"][1]["nested"],
+            device_lab.SUMMARY_UNSUPPORTED_VALUE_REDACTION,
+        )
+        self.assertNotIn("0.25", rendered)
+        self.assertNotIn("1.5", rendered)
+        self.assertNotIn("2.5", rendered)
+
+    def test_build_summary_normalizes_unsupported_direct_report_values(self) -> None:
+        reports = [
+            {
+                "slot": "slot-0",
+                "status": "error",
+                "raw_bytes": b"token=supersecret-bytes",
+                "path_value": Path("token=supersecret-path"),
+                "kagemusha": {
+                    "required": True,
+                    "object_value": object(),
+                },
+                "samples": [{"nested_set"}],
+            }
+        ]
+
+        with tempfile.TemporaryDirectory() as temp:
+            summary = device_lab.build_summary(Path(temp), reports)
+        rendered = json.dumps(summary, allow_nan=False, sort_keys=True)
+        slot_summary = summary["slots"][0]
+
+        self.assertTrue(
+            slot_summary[device_lab.SUMMARY_UNSUPPORTED_VALUE_NORMALIZED_FIELD]
+        )
+        self.assertEqual(
+            slot_summary["raw_bytes"],
+            device_lab.SUMMARY_UNSUPPORTED_VALUE_REDACTION,
+        )
+        self.assertEqual(
+            slot_summary["path_value"],
+            device_lab.SUMMARY_UNSUPPORTED_VALUE_REDACTION,
+        )
+        self.assertEqual(
+            slot_summary["kagemusha"]["object_value"],
+            device_lab.SUMMARY_UNSUPPORTED_VALUE_REDACTION,
+        )
+        self.assertEqual(
+            slot_summary["samples"][0],
+            device_lab.SUMMARY_UNSUPPORTED_VALUE_REDACTION,
+        )
+        self.assertNotIn("supersecret", rendered)
+        self.assertNotIn("nested_set", rendered)
+
+    def test_build_summary_normalizes_malformed_kagemusha_report_shape(self) -> None:
+        reports = [
+            {
+                "slot": "slot-0",
+                "status": "ok",
+                "kagemusha": "token=supersecret-kagemusha",
+            }
+        ]
+
+        with tempfile.TemporaryDirectory() as temp:
+            summary = device_lab.build_summary(
+                Path(temp),
+                reports,
+                require_kagemusha_production_evidence=True,
+                require_kagemusha_standard_matrix=True,
+            )
+        rendered = json.dumps(summary, allow_nan=False, sort_keys=True)
+        slot_summary = summary["slots"][0]
+
+        self.assertTrue(slot_summary[device_lab.SUMMARY_KAGEMUSHA_SHAPE_NORMALIZED_FIELD])
+        self.assertEqual(slot_summary["kagemusha"], {})
+        self.assertEqual(summary["kagemusha"]["covered_device_families"], [])
+        self.assertEqual(summary["kagemusha"]["duplicate_bindings"], {})
+        self.assertEqual(
+            summary["kagemusha"]["missing_device_families"],
+            list(device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES),
+        )
+        self.assertNotIn("supersecret", rendered)
+
+    def test_build_summary_ignores_malformed_direct_device_family_values(self) -> None:
+        reports = [
+            {
+                "slot": "slot-0",
+                "status": "ok",
+                "kagemusha": {
+                    "device_family": [
+                        device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0]
+                    ],
+                },
+            },
+            {
+                "slot": "slot-1",
+                "status": "ok",
+                "kagemusha": {
+                    "device_family": "token=supersecret-family",
+                },
+            },
+            {
+                "slot": "slot-2",
+                "status": "ok",
+                "kagemusha": {
+                    "device_family": "Unreviewed Device",
+                },
+            },
+        ]
+
+        with tempfile.TemporaryDirectory() as temp:
+            summary = device_lab.build_summary(
+                Path(temp),
+                reports,
+                require_kagemusha_production_evidence=True,
+                require_kagemusha_standard_matrix=True,
+            )
+        rendered = json.dumps(summary, allow_nan=False, sort_keys=True)
+
+        self.assertEqual(summary["kagemusha"]["covered_device_families"], [])
+        self.assertEqual(
+            summary["kagemusha"]["missing_device_families"],
+            list(device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES),
+        )
+        self.assertNotIn("supersecret", rendered)
+        self.assertNotIn("Unreviewed Device", summary["kagemusha"]["covered_device_families"])
+
+    def test_build_summary_ignores_non_sha256_direct_trusted_signer_keys(self) -> None:
+        signer_digest = "d" * 64
+        reports = [
+            {
+                "slot": "slot-0",
+                "status": "ok",
+                "kagemusha": {
+                    "device_family": device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+                },
+            }
+        ]
+
+        with tempfile.TemporaryDirectory() as temp:
+            summary = device_lab.build_summary(
+                Path(temp),
+                reports,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys={
+                    signer_digest: Path(temp) / "safe.pem",
+                    "token=supersecret-signer": Path(temp) / "unsafe.pem",
+                    "E" * 64: Path(temp) / "uppercase.pem",
+                },
+            )
+        rendered = json.dumps(summary, allow_nan=False)
+
+        self.assertEqual(
+            summary["kagemusha"]["trusted_signer_public_key_sha256"],
+            [signer_digest],
+        )
+        self.assertNotIn("supersecret", rendered)
+        self.assertNotIn("E" * 64, rendered)
+
     def test_json_summary_reports_kagemusha_matrix_and_signer_pins(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / "slots"
@@ -16351,6 +21022,107 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertNotIn("token=supersecret", rendered)
         self.assertNotIn("root missing; skipping", rendered)
 
+    def test_main_rejects_control_root_without_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            control_root = Path(temp) / "control\nslots"
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                status = device_lab.main(
+                    [
+                        "--root",
+                        str(control_root),
+                        "--allow-missing-root",
+                    ]
+                )
+            rendered = stdout.getvalue() + stderr.getvalue()
+
+        self.assertEqual(status, 1)
+        self.assertIn("--root must not contain control characters", rendered)
+        self.assertNotIn(str(control_root), rendered)
+        self.assertNotIn("root missing; skipping", rendered)
+
+    def test_main_rejects_control_slot_before_root_classify_without_leak(
+        self,
+    ) -> None:
+        unsafe_slot = "slot-a\x1b[31m"
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "slots"
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+
+            with (
+                mock.patch.object(
+                    device_lab,
+                    "classify_device_lab_root_path",
+                    side_effect=AssertionError("root classification must not run"),
+                ) as classify_root,
+                redirect_stdout(stdout),
+                redirect_stderr(stderr),
+            ):
+                status = device_lab.main(
+                    [
+                        "--root",
+                        str(root),
+                        "--slot",
+                        unsafe_slot,
+                        "--require-slot",
+                    ]
+                )
+            rendered = stdout.getvalue() + stderr.getvalue()
+
+        self.assertEqual(status, 1)
+        classify_root.assert_not_called()
+        self.assertIn("slot id 0 must not contain control characters", rendered)
+        self.assertNotIn(unsafe_slot, rendered)
+        self.assertNotIn("\x1b", rendered)
+
+    def test_main_rejects_control_trusted_signer_before_slot_discovery_without_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "slots"
+            root.mkdir()
+            unsafe_key = Path(temp) / "control\nsigner.pem"
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+
+            with (
+                mock.patch.object(
+                    device_lab,
+                    "discover_slots",
+                    side_effect=AssertionError("slot discovery must not run"),
+                ) as discover_slots,
+                mock.patch.object(
+                    device_lab,
+                    "load_trusted_signer_public_keys",
+                    side_effect=AssertionError("trusted signer loading must not run"),
+                ) as load_signers,
+                redirect_stdout(stdout),
+                redirect_stderr(stderr),
+            ):
+                status = device_lab.main(
+                    [
+                        "--root",
+                        str(root),
+                        "--require-slot",
+                        "--require-kagemusha-production-evidence",
+                        "--trusted-signer-public-key",
+                        str(unsafe_key),
+                    ]
+                )
+            rendered = stdout.getvalue() + stderr.getvalue()
+
+        self.assertEqual(status, 1)
+        discover_slots.assert_not_called()
+        load_signers.assert_not_called()
+        self.assertIn(
+            "--trusted-signer-public-key[0] must not contain control characters",
+            rendered,
+        )
+        self.assertNotIn(str(unsafe_key), rendered)
+
     def test_json_summary_rejects_secret_looking_output_without_leak(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / "slots"
@@ -16382,6 +21154,42 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertNotIn("token=supersecret", rendered)
         self.assertNotIn("[device-lab] wrote summary", rendered)
 
+    def test_json_summary_rejects_control_output_without_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "slots"
+            control_summary_path = Path(temp) / "control\nsummary" / "summary.json"
+            signer = create_test_signer(Path(temp) / "keys")
+            create_slot(
+                root,
+                "pixel8",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                signer,
+            )
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                status = device_lab.main(
+                    [
+                        "--root",
+                        str(root),
+                        "--require-slot",
+                        "--require-kagemusha-production-evidence",
+                        "--trusted-signer-public-key",
+                        str(signer["public_key"]),
+                        "--json-out",
+                        str(control_summary_path),
+                    ]
+                )
+            rendered = stdout.getvalue() + stderr.getvalue()
+
+        self.assertEqual(status, 1)
+        self.assertFalse(control_summary_path.exists())
+        self.assertFalse(control_summary_path.parent.exists())
+        self.assertIn("--json-out must not contain control characters", rendered)
+        self.assertNotIn(str(control_summary_path), rendered)
+        self.assertNotIn("[device-lab] wrote summary", rendered)
+
     def test_write_summary_rejects_secret_output_path_directly_without_leak(
         self,
     ) -> None:
@@ -16395,6 +21203,20 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertFalse(secret_summary_path.exists())
         self.assertNotIn(str(secret_summary_path), rendered)
         self.assertNotIn("token=supersecret", rendered)
+
+    def test_write_summary_rejects_control_output_path_directly_without_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            control_summary_path = Path(temp) / "control\nsummary" / "summary.json"
+
+            errors = device_lab.write_summary(control_summary_path, {"ok": False})
+            rendered = json.dumps(errors)
+
+        self.assertEqual(errors, ["--json-out must not contain control characters"])
+        self.assertFalse(control_summary_path.exists())
+        self.assertFalse(control_summary_path.parent.exists())
+        self.assertNotIn(str(control_summary_path), rendered)
 
     def test_write_summary_rejects_nonfinite_json_before_write(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

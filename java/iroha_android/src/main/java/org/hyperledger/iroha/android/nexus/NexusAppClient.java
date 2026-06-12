@@ -236,7 +236,7 @@ public final class NexusAppClient {
 
   private static void ensureEd25519(final String algorithm) {
     if (!isPrintableAscii(algorithm)
-        || !(SIGNATURE_ALGORITHM_ED25519.equalsIgnoreCase(algorithm) || "0".equals(algorithm))) {
+        || !(SIGNATURE_ALGORITHM_ED25519.equals(algorithm) || "0".equals(algorithm))) {
       throw new NexusAppError(
           "unsupported_signature_algorithm",
           "Nexus App Facade V1 supports Ed25519 signatures only");

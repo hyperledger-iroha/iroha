@@ -60,7 +60,7 @@ public struct OfflineCashConfigurationSnapshot: Codable, Equatable, Sendable {
         guard offlinePaymentsEnabled else {
             throw OfflineCashConfigurationSnapshotError.offlinePaymentsDisabled
         }
-        guard issuerPublicKeyBase64?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+        guard Self.isCanonicalSnapshotText(issuerPublicKeyBase64) else {
             throw OfflineCashConfigurationSnapshotError.missingIssuerPublicKey
         }
         if let expiresAtMs, expiresAtMs <= nowMs {
@@ -72,6 +72,13 @@ public struct OfflineCashConfigurationSnapshot: Codable, Equatable, Sendable {
                 required: requiredNativeBridgeAbiVersion,
                 actual: nativeBridgeAbiVersion
             )
+        }
+    }
+
+    private static func isCanonicalSnapshotText(_ value: String?) -> Bool {
+        guard let value, !value.isEmpty else { return false }
+        return value.unicodeScalars.allSatisfy { scalar in
+            scalar.value > 0x20 && scalar.value <= 0x7E
         }
     }
 }
