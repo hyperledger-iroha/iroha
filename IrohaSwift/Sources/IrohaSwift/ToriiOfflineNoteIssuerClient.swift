@@ -245,8 +245,7 @@ public final class ToriiOfflineNoteIssuerClient: OfflineNoteIssuerClient {
             "attestation_key_id": try binding.attestationKeyId(),
             "asset_definition_id": assetDefinitionId,
             "local_revision": NSNumber(value: existing?.revision ?? 0),
-            "local_state_hash": (existing?.lineageState["server_state_hash"] as? String)?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
+            "local_state_hash": (existing?.lineageState["server_state_hash"] as? String) ?? "",
             "device_binding": try binding.deviceBinding(),
         ]
         if let existing = existing {

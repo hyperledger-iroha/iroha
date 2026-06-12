@@ -27,6 +27,7 @@ use norito::streaming::{
         derive_content_key, encrypt_chunk, nonce_len_for_suite, wrap_gck,
     },
 };
+use sha3::{Digest, Sha3_256};
 use soranet_pq::{MlKemKeyPair, MlKemSuite, generate_mlkem_keypair_from_os};
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
 
@@ -47,6 +48,37 @@ fn mlkem_keypair_bytes() -> (Vec<u8>, Vec<u8>) {
 fn set_first_mlkem_12_bit_coefficient_noncanonical(bytes: &mut [u8]) {
     bytes[0] = 0xFF;
     bytes[1] = (bytes[1] & 0xF0) | 0x0F;
+}
+
+fn mlkem_secret_embedded_public_range() -> core::ops::Range<usize> {
+    const PUBLIC_HASH_AND_REJECTION_SEED_BYTES: usize = 64;
+
+    let start = TEST_KEM_SUITE.secret_key_len()
+        - TEST_KEM_SUITE.public_key_len()
+        - PUBLIC_HASH_AND_REJECTION_SEED_BYTES;
+    start..start + TEST_KEM_SUITE.public_key_len()
+}
+
+fn mlkem_secret_embedded_public_hash_range() -> core::ops::Range<usize> {
+    const PUBLIC_KEY_HASH_BYTES: usize = 32;
+    const PUBLIC_HASH_AND_REJECTION_SEED_BYTES: usize = 64;
+
+    let start = TEST_KEM_SUITE.secret_key_len() - PUBLIC_HASH_AND_REJECTION_SEED_BYTES;
+    start..start + PUBLIC_KEY_HASH_BYTES
+}
+
+fn mlkem_public_key_hash(public_key: &[u8]) -> [u8; 32] {
+    let digest = Sha3_256::digest(public_key);
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&digest);
+    out
+}
+
+fn mlkem_secret_with_zero_embedded_public_key(secret_key: &mut [u8]) {
+    let public_range = mlkem_secret_embedded_public_range();
+    secret_key[public_range.clone()].fill(0);
+    let public_hash = mlkem_public_key_hash(&secret_key[public_range]);
+    secret_key[mlkem_secret_embedded_public_hash_range()].copy_from_slice(&public_hash);
 }
 
 fn fingerprint(bytes: &[u8]) -> Hash {
@@ -1173,6 +1205,22 @@ fn streaming_key_material_rejects_noncanonical_kyber_secret_key() {
 }
 
 #[test]
+fn streaming_key_material_rejects_all_zero_embedded_kyber_public_key() {
+    let identity = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let mut material = StreamingKeyMaterial::new(identity).expect("ed25519 identity accepted");
+    let (public_key, mut secret_key) = mlkem_keypair_bytes();
+    mlkem_secret_with_zero_embedded_public_key(&mut secret_key);
+
+    let err = material
+        .set_kyber_keys(public_key.as_slice(), secret_key.as_slice())
+        .expect_err("all-zero embedded Kyber public key must fail");
+    assert!(matches!(err, KeyMaterialError::InvalidKyberSecretKey));
+    assert_eq!(material.kyber_public(), None);
+    assert_eq!(material.kyber_fingerprint(), None);
+    assert!(material.kyber_secret().is_none());
+}
+
+#[test]
 fn streaming_session_rejects_noncanonical_kyber_remote_public() {
     let (mut public_key, _secret_key) = mlkem_keypair_bytes();
     let expected_fingerprint = fingerprint(public_key.as_slice());
@@ -1194,6 +1242,24 @@ fn streaming_session_rejects_noncanonical_kyber_local_secret() {
     let err = session
         .set_kyber_local_secret(secret_key.as_slice())
         .expect_err("noncanonical local Kyber secret key must fail");
+    assert!(matches!(err, HandshakeError::InvalidKyberSecretKey));
+}
+
+#[test]
+fn streaming_session_rejects_all_zero_embedded_kyber_public_key() {
+    let (public_key, mut secret_key) = mlkem_keypair_bytes();
+    mlkem_secret_with_zero_embedded_public_key(&mut secret_key);
+
+    let mut session = StreamingSession::new(CapabilityRole::Viewer);
+    let err = session
+        .set_kyber_local_secret(secret_key.as_slice())
+        .expect_err("all-zero embedded Kyber public key must fail as a local secret");
+    assert!(matches!(err, HandshakeError::InvalidKyberSecretKey));
+
+    let mut session = StreamingSession::new(CapabilityRole::Viewer);
+    let err = session
+        .set_kyber_local_key_pair(public_key.as_slice(), secret_key.as_slice())
+        .expect_err("all-zero embedded Kyber public key must fail as a local key pair");
     assert!(matches!(err, HandshakeError::InvalidKyberSecretKey));
 }
 

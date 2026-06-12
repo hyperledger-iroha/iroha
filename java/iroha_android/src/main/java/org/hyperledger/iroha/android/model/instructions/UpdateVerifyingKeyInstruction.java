@@ -46,7 +46,7 @@ public final class UpdateVerifyingKeyInstruction implements InstructionTemplate 
 
   public static UpdateVerifyingKeyInstruction fromArguments(final Map<String, String> arguments) {
     final String backend = VerifyingKeyInstructionUtils.requireProductionBackend(arguments, "backend");
-    final String name = VerifyingKeyInstructionUtils.require(arguments, "name");
+    final String name = VerifyingKeyInstructionUtils.requireExact(arguments, "name");
     final VerifyingKeyRecordDescription record =
         VerifyingKeyInstructionUtils.parseRecord(arguments, backend);
     final Builder builder =
@@ -89,10 +89,7 @@ public final class UpdateVerifyingKeyInstruction implements InstructionTemplate 
     }
 
     public Builder setName(final String name) {
-      if (name == null || name.trim().isEmpty()) {
-        throw new IllegalArgumentException("name must not be blank");
-      }
-      this.name = name.trim();
+      this.name = VerifyingKeyInstructionUtils.requireExactNonBlank(name, "name");
       return this;
     }
 

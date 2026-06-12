@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.sdk.client
 
 import java.nio.charset.StandardCharsets
+import java.util.Base64
 import org.hyperledger.iroha.sdk.nexus.UaidLiteral
 
 /** Minimal JSON parser for identifier-policy and identifier-resolution payloads. */
@@ -15,13 +16,13 @@ object IdentifierJsonParser {
             val item = expectObject(itemValues[i], "identifier policy list.items[$i]")
             items.add(
                 IdentifierPolicySummary(
-                    requiredString(item["policy_id"], "identifier policy list.items[$i].policy_id"),
+                    requiredExactString(item["policy_id"], "identifier policy list.items[$i].policy_id"),
                     requiredString(item["owner"], "identifier policy list.items[$i].owner"),
                     item["active"] == true,
                     IdentifierNormalization.fromWireValue(
                         requiredString(item["normalization"], "identifier policy list.items[$i].normalization")
                     ),
-                    requiredString(item["resolver_public_key"], "identifier policy list.items[$i].resolver_public_key"),
+                    requiredExactString(item["resolver_public_key"], "identifier policy list.items[$i].resolver_public_key"),
                     requiredString(item["backend"], "identifier policy list.items[$i].backend"),
                     optionalString(item["input_encryption"]),
                     optionalString(item["input_encryption_public_parameters"]),
@@ -103,6 +104,19 @@ object IdentifierJsonParser {
         return string.trim()
     }
 
+    private fun requiredExactString(value: Any?, path: String): String {
+        val string = optionalString(value)
+        check(!string.isNullOrBlank()) { "$path must be a non-empty string" }
+        check(string.trim() == string) { "$path must not contain surrounding whitespace" }
+        return string
+    }
+
+    private fun requiredExactLowercaseString(value: Any?, path: String): String {
+        val string = requiredExactString(value, path)
+        check(string == string.lowercase()) { "$path must be an exact lowercase RAM-LFE tag" }
+        return string
+    }
+
     private fun optionalString(value: Any?): String? {
         if (value == null) return null
         return if (value is String) value else value.toString()
@@ -118,34 +132,44 @@ object IdentifierJsonParser {
         return asLong(value, path)
     }
 
+    private fun asUnsignedLong(value: Any?, path: String): Long {
+        val parsed = asLong(value, path)
+        require(parsed >= 0L) { "$path must be a non-negative u64" }
+        return parsed
+    }
+
+    private fun asOptionalUnsignedLong(value: Any?, path: String): Long? {
+        if (value == null) return null
+        return asUnsignedLong(value, path)
+    }
+
     private fun canonicalizeOpaque(value: String, context: String): String {
-        val literal = value.trim()
+        val literal = value
         require(literal.isNotEmpty()) { "$context must not be blank" }
         val hexPortion = if (literal.lowercase().startsWith("opaque:")) literal.substring("opaque:".length) else literal
-        val trimmedHex = hexPortion.trim()
-        require(trimmedHex.length == 64 && trimmedHex.matches(Regex("(?i)[0-9a-f]{64}"))) {
+        require(hexPortion.length == 64 && hexPortion.matches(Regex("(?i)[0-9a-f]{64}"))) {
             "$context must contain 64 hex characters"
         }
-        return "opaque:${trimmedHex.lowercase()}"
+        return "opaque:${hexPortion.lowercase()}"
     }
 
     private fun canonicalizeHex32(value: String, context: String): String {
-        var trimmed = value.trim()
-        require(trimmed.isNotEmpty()) { "$context must not be blank" }
-        if (trimmed.lowercase().startsWith("hash:")) {
-            trimmed = trimmed.substring("hash:".length)
+        var body = value
+        require(body.isNotEmpty()) { "$context must not be blank" }
+        if (body.lowercase().startsWith("hash:")) {
+            body = body.substring("hash:".length)
         }
-        val suffixIndex = trimmed.indexOf('#')
+        val suffixIndex = body.indexOf('#')
         if (suffixIndex >= 0) {
-            trimmed = trimmed.substring(0, suffixIndex)
+            body = body.substring(0, suffixIndex)
         }
-        if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) {
-            trimmed = trimmed.substring(2)
+        if (body.startsWith("0x") || body.startsWith("0X")) {
+            body = body.substring(2)
         }
-        require(trimmed.length == 64 && trimmed.matches(Regex("(?i)[0-9a-f]{64}"))) {
+        require(body.length == 64 && body.matches(Regex("(?i)[0-9a-f]{64}"))) {
             "$context must contain 64 hex characters"
         }
-        return trimmed.lowercase()
+        return body.lowercase()
     }
 
     private fun canonicalizeHex(value: String, context: String): String {
@@ -197,62 +221,67 @@ object IdentifierJsonParser {
             "$context.opening"
         )
         return IdentifierResolutionPayload(
-            requiredString(root["policy_id"], "$context.policy_id"),
+            requiredExactString(root["policy_id"], "$context.policy_id"),
             execution,
             opening,
-            canonicalizeOpaque(requiredString(root["opaque_id"], "$context.opaque_id"), "$context.opaque_id"),
-            canonicalizeHex32(requiredString(root["receipt_hash"], "$context.receipt_hash"), "$context.receipt_hash"),
-            UaidLiteral.canonicalize(requiredString(root["uaid"], "$context.uaid"), "$context.uaid"),
-            requiredString(root["account_id"], "$context.account_id")
+            canonicalizeOpaque(requiredExactString(root["opaque_id"], "$context.opaque_id"), "$context.opaque_id"),
+            canonicalizeHex32(requiredExactString(root["receipt_hash"], "$context.receipt_hash"), "$context.receipt_hash"),
+            UaidLiteral.canonicalize(requiredExactString(root["uaid"], "$context.uaid"), "$context.uaid"),
+            requiredExactString(root["account_id"], "$context.account_id")
         )
     }
 
     private fun parseResolutionExecutionPayload(root: Map<String, Any?>, context: String): IdentifierResolutionExecutionPayload =
         IdentifierResolutionExecutionPayload(
-            requiredString(root["program_id"], "$context.program_id"),
-            canonicalizeHex32(requiredString(root["program_digest"], "$context.program_digest"), "$context.program_digest"),
-            requiredString(root["backend"], "$context.backend").lowercase(),
-            requiredString(root["verification_mode"], "$context.verification_mode").lowercase(),
-            canonicalizeHex32(requiredString(root["input_ciphertext_hash"], "$context.input_ciphertext_hash"), "$context.input_ciphertext_hash"),
-            canonicalizeHex32(requiredString(root["output_ciphertext_hash"], "$context.output_ciphertext_hash"), "$context.output_ciphertext_hash"),
-            canonicalizeHex32(requiredString(root["parameter_digest"], "$context.parameter_digest"), "$context.parameter_digest"),
-            canonicalizeHex32(requiredString(root["evaluation_key_digest"], "$context.evaluation_key_digest"), "$context.evaluation_key_digest"),
-            canonicalizeHex32(requiredString(root["output_hash"], "$context.output_hash"), "$context.output_hash"),
-            canonicalizeHex32(requiredString(root["associated_data_hash"], "$context.associated_data_hash"), "$context.associated_data_hash"),
-            asLong(root["executed_at_ms"], "$context.executed_at_ms"),
-            if (root.containsKey("expires_at_ms")) asOptionalLong(root["expires_at_ms"], "$context.expires_at_ms") else null
+            requiredExactString(root["program_id"], "$context.program_id"),
+            canonicalizeHex32(requiredExactString(root["program_digest"], "$context.program_digest"), "$context.program_digest"),
+            requiredExactLowercaseString(root["backend"], "$context.backend"),
+            requiredExactLowercaseString(root["verification_mode"], "$context.verification_mode"),
+            canonicalizeHex32(requiredExactString(root["input_ciphertext_hash"], "$context.input_ciphertext_hash"), "$context.input_ciphertext_hash"),
+            canonicalizeHex32(requiredExactString(root["output_ciphertext_hash"], "$context.output_ciphertext_hash"), "$context.output_ciphertext_hash"),
+            canonicalizeHex32(requiredExactString(root["parameter_digest"], "$context.parameter_digest"), "$context.parameter_digest"),
+            canonicalizeHex32(requiredExactString(root["evaluation_key_digest"], "$context.evaluation_key_digest"), "$context.evaluation_key_digest"),
+            canonicalizeHex32(requiredExactString(root["output_hash"], "$context.output_hash"), "$context.output_hash"),
+            canonicalizeHex32(requiredExactString(root["associated_data_hash"], "$context.associated_data_hash"), "$context.associated_data_hash"),
+            asUnsignedLong(root["executed_at_ms"], "$context.executed_at_ms"),
+            if (root.containsKey("expires_at_ms")) asOptionalUnsignedLong(root["expires_at_ms"], "$context.expires_at_ms") else null
         )
 
     private fun parseOutputOpening(root: Map<String, Any?>, context: String): RamLfeOutputOpening {
         val payload = expectObject(root["payload"], "$context.payload")
         return RamLfeOutputOpening(
             RamLfeOutputOpeningPayload(
-                requiredString(payload["program_id"], "$context.payload.program_id"),
-                canonicalizeHex32(requiredString(payload["input_ciphertext_hash"], "$context.payload.input_ciphertext_hash"), "$context.payload.input_ciphertext_hash"),
-                canonicalizeHex32(requiredString(payload["output_ciphertext_hash"], "$context.payload.output_ciphertext_hash"), "$context.payload.output_ciphertext_hash"),
-                canonicalizeHex32(requiredString(payload["parameter_digest"], "$context.payload.parameter_digest"), "$context.payload.parameter_digest"),
-                canonicalizeHex32(requiredString(payload["evaluation_key_digest"], "$context.payload.evaluation_key_digest"), "$context.payload.evaluation_key_digest"),
-                canonicalizeHex32(requiredString(payload["opened_output_hash"], "$context.payload.opened_output_hash"), "$context.payload.opened_output_hash"),
-                asLong(payload["opened_at_ms"], "$context.payload.opened_at_ms"),
-                if (payload.containsKey("expires_at_ms")) asOptionalLong(payload["expires_at_ms"], "$context.payload.expires_at_ms") else null
+                requiredExactString(payload["program_id"], "$context.payload.program_id"),
+                canonicalizeHex32(requiredExactString(payload["input_ciphertext_hash"], "$context.payload.input_ciphertext_hash"), "$context.payload.input_ciphertext_hash"),
+                canonicalizeHex32(requiredExactString(payload["output_ciphertext_hash"], "$context.payload.output_ciphertext_hash"), "$context.payload.output_ciphertext_hash"),
+                canonicalizeHex32(requiredExactString(payload["parameter_digest"], "$context.payload.parameter_digest"), "$context.payload.parameter_digest"),
+                canonicalizeHex32(requiredExactString(payload["evaluation_key_digest"], "$context.payload.evaluation_key_digest"), "$context.payload.evaluation_key_digest"),
+                canonicalizeHex32(requiredExactString(payload["opened_output_hash"], "$context.payload.opened_output_hash"), "$context.payload.opened_output_hash"),
+                asUnsignedLong(payload["opened_at_ms"], "$context.payload.opened_at_ms"),
+                if (payload.containsKey("expires_at_ms")) asOptionalUnsignedLong(payload["expires_at_ms"], "$context.payload.expires_at_ms") else null
             ),
-            canonicalizeHex(requiredString(root["signature"], "$context.signature"), "$context.signature")
+            canonicalizeHex(requiredExactString(root["signature"], "$context.signature"), "$context.signature")
         )
     }
 
     private fun parseReceiptAttestation(root: Map<String, Any?>, context: String): IdentifierReceiptAttestation {
-        val kind = requiredString(root["kind"], "$context.kind").lowercase()
+        val kind = requiredExactString(root["kind"], "$context.kind")
         return when (kind) {
             "signed" -> {
-                val signature = canonicalizeHex(requiredString(root["signature"], "$context.signature"), "$context.signature")
+                val signature = canonicalizeHex(requiredExactString(root["signature"], "$context.signature"), "$context.signature")
                 check(root["proof_backend"] == null && root["proof_b64"] == null) {
                     "$context signed attestation must not include proof fields"
                 }
                 IdentifierReceiptAttestation(kind, signature, null, null)
             }
             "proof" -> {
-                val backend = requiredString(root["proof_backend"], "$context.proof_backend")
-                val proofB64 = requiredString(root["proof_b64"], "$context.proof_b64")
+                val backend = requiredExactString(root["proof_backend"], "$context.proof_backend")
+                val proofB64 = requiredExactString(root["proof_b64"], "$context.proof_b64")
+                try {
+                    Base64.getDecoder().decode(proofB64)
+                } catch (ex: IllegalArgumentException) {
+                    throw IllegalStateException("$context.proof_b64 must be valid base64", ex)
+                }
                 check(root["signature"] == null) {
                     "$context proof attestation must not include signature"
                 }

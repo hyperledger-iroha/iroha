@@ -16,6 +16,7 @@ public final class IdentifierReceiptVerifier {
       final IdentifierResolutionReceipt receipt, final IdentifierPolicySummary policy) {
     Objects.requireNonNull(receipt, "receipt");
     Objects.requireNonNull(policy, "policy");
+    requireExactPolicyId(policy.policyId());
     if (!receipt.policyId().equals(policy.policyId())) {
       throw new IllegalArgumentException("receipt policyId does not match the supplied policy");
     }
@@ -28,9 +29,10 @@ public final class IdentifierReceiptVerifier {
     final byte[] signatureBytes =
         hexToBytes(
             Objects.requireNonNull(
-                receipt.attestation().signature(), "signed attestation is missing signature"));
+                receipt.attestation().signature(), "signed attestation is missing signature"),
+            "attestation.signature");
     final PublicKeyCodec.PublicKeyPayload keyPayload =
-        PublicKeyCodec.decodePublicKeyLiteral(policy.resolverPublicKey());
+        PublicKeyCodec.decodePublicKeyLiteral(requireExactResolverPublicKey(policy.resolverPublicKey()));
     if (keyPayload == null) {
       throw new IllegalArgumentException("resolverPublicKey is not a valid multihash literal");
     }
@@ -40,6 +42,28 @@ public final class IdentifierReceiptVerifier {
       default:
         return verifyNativeBacked(keyPayload.curveId(), keyPayload.keyBytes(), message, signatureBytes);
     }
+  }
+
+  private static String requireExactResolverPublicKey(final String literal) {
+    Objects.requireNonNull(literal, "resolverPublicKey");
+    if (literal.isBlank()) {
+      throw new IllegalArgumentException("resolverPublicKey must not be empty");
+    }
+    if (!literal.trim().equals(literal)) {
+      throw new IllegalArgumentException("resolverPublicKey must not contain surrounding whitespace");
+    }
+    return literal;
+  }
+
+  private static String requireExactPolicyId(final String literal) {
+    Objects.requireNonNull(literal, "policy.policy_id");
+    if (literal.isBlank()) {
+      throw new IllegalArgumentException("policy.policy_id must not be empty");
+    }
+    if (!literal.trim().equals(literal)) {
+      throw new IllegalArgumentException("policy.policy_id must not contain surrounding whitespace");
+    }
+    return literal;
   }
 
   private static boolean verifyEd25519(
@@ -94,21 +118,28 @@ public final class IdentifierReceiptVerifier {
     }
   }
 
-  private static byte[] hexToBytes(final String hex) {
+  private static byte[] hexToBytes(final String hex, final String field) {
     Objects.requireNonNull(hex, "hex");
+    Objects.requireNonNull(field, "field");
     String trimmed = hex.trim();
+    if (trimmed.isEmpty()) {
+      throw new IllegalArgumentException(field + " must not be blank");
+    }
+    if (!trimmed.equals(hex)) {
+      throw new IllegalArgumentException(field + " must not contain surrounding whitespace");
+    }
     if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) {
       trimmed = trimmed.substring(2);
     }
     if ((trimmed.length() & 1) == 1) {
-      throw new IllegalArgumentException("hex value must contain an even number of characters");
+      throw new IllegalArgumentException(field + " must contain an even number of characters");
     }
     final byte[] out = new byte[trimmed.length() / 2];
     for (int i = 0; i < trimmed.length(); i += 2) {
       final int high = Character.digit(trimmed.charAt(i), 16);
       final int low = Character.digit(trimmed.charAt(i + 1), 16);
       if (high < 0 || low < 0) {
-        throw new IllegalArgumentException("hex value contains non-hex characters");
+        throw new IllegalArgumentException(field + " contains non-hex characters");
       }
       out[i / 2] = (byte) ((high << 4) | low);
     }

@@ -174,6 +174,58 @@ def test_zk_x509_package_root_exports_catalog_entrypoint_aliases() -> None:
     assert production_verified["address_binding"] == commitments["address_binding"].hex()
 
 
+def test_zk_x509_public_helpers_reject_non_plain_mapping_inputs() -> None:
+    class ZkX509Dict(dict):
+        pass
+
+    base = _base()
+    proof_options = {
+        **base,
+        "vkHash": bytes([0x99]) * 32,
+        "proofBytes": b"production-zk-x509-identity-proof",
+    }
+
+    for helper in (build_zk_x509_identity_commitments, buildZkX509IdentityCommitments):
+        with pytest.raises(TypeError, match="zkX509IdentityCommitments"):
+            helper(ZkX509Dict(base))
+
+    for helper in (build_zk_x509_identity_envelope, buildZkX509IdentityEnvelope):
+        with pytest.raises(TypeError, match="zkX509IdentityEnvelope"):
+            helper(ZkX509Dict(proof_options))
+
+    for helper in (build_zk_x509_identity_proof_v0, buildZkX509IdentityProofV0):
+        with pytest.raises(TypeError, match="zkX509IdentityProofV0"):
+            helper(ZkX509Dict(proof_options))
+
+    for helper in (
+        build_zk_x509_identity_dev_proof_fixture,
+        buildZkX509IdentityDevProofFixture,
+    ):
+        with pytest.raises(TypeError, match="zkX509IdentityDevProofFixture"):
+            helper(ZkX509Dict({**base, "vkHash": bytes([0x99]) * 32}))
+
+    production_proof = build_zk_x509_identity_proof_v0(proof_options)
+    raw_verified = verify_zk_x509_identity_proof_v0(production_proof)
+    assert raw_verified["ok"] is True
+    verify_options = {"envelope": production_proof, **base}
+    for helper in (verify_zk_x509_identity_proof_v0, verifyZkX509IdentityProofV0):
+        with pytest.raises(TypeError, match="zkX509IdentityProofV0"):
+            helper(ZkX509Dict(verify_options))
+
+    fixture = build_zk_x509_identity_dev_proof_fixture(
+        {**base, "vkHash": bytes([0x99]) * 32}
+    )
+    local_verified = verify_zk_x509_identity_proof_locally(fixture["envelope"])
+    assert local_verified["ok"] is True
+    local_options = {
+        **verify_options,
+        "envelope": fixture["envelope"],
+    }
+    for helper in (verify_zk_x509_identity_proof_locally, verifyZkX509IdentityProofLocally):
+        with pytest.raises(TypeError, match="zkX509IdentityLocalVerification"):
+            helper(ZkX509Dict(local_options))
+
+
 def test_zk_x509_wallet_address_alias_derives_address_binding() -> None:
     wallet_base = {
         "caRootJson": _ca_root(),

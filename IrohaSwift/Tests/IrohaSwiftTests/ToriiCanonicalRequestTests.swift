@@ -41,4 +41,35 @@ final class ToriiCanonicalRequestTests: XCTestCase {
         XCTAssertEqual(headers[ToriiCanonicalRequest.headerNonce], nonce)
         XCTAssertTrue(publicKey.isValidSignature(signature, for: message))
     }
+
+    func testHeadersRejectPaddedAccountAndNonce() throws {
+        let seed = Data(repeating: 8, count: 32)
+        let url = URL(string: "https://example.com/v1/accounts")!
+
+        XCTAssertThrowsError(
+            try ToriiCanonicalRequest.buildHeaders(
+                method: "get",
+                url: url,
+                accountId: " account",
+                privateKey: seed,
+                timestampMs: 1,
+                nonce: "nonce"
+            )
+        ) { error in
+            XCTAssertEqual(error as? ToriiCanonicalRequestError, .invalidAccountId)
+        }
+
+        XCTAssertThrowsError(
+            try ToriiCanonicalRequest.buildHeaders(
+                method: "get",
+                url: url,
+                accountId: "account",
+                privateKey: seed,
+                timestampMs: 1,
+                nonce: "nonce "
+            )
+        ) { error in
+            XCTAssertEqual(error as? ToriiCanonicalRequestError, .invalidNonce)
+        }
+    }
 }

@@ -39,6 +39,11 @@ import org.hyperledger.iroha.android.model.JsonValue;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.tx.SignedTransaction;
+import org.hyperledger.iroha.norito.NoritoCodec;
+import org.hyperledger.iroha.norito.NoritoDecoder;
+import org.hyperledger.iroha.norito.NoritoEncoder;
+import org.hyperledger.iroha.norito.NoritoHeader;
+import org.hyperledger.iroha.norito.TypeAdapter;
 
 public final class OfflineNoteTest {
 
@@ -54,13 +59,17 @@ public final class OfflineNoteTest {
     publicInputHashesMatchRustVectors();
     proofBindingRejectsMismatch();
     proofBindingRejectsRecursiveMetadataSubstitution();
-    recursiveProofMetadataNormalizesAndRejectsMalformedVerifierKeys();
+    recursiveProofMetadataRejectsPaddedAndMalformedVerifierKeys();
+    commitmentOriginIdsRejectSurroundingWhitespace();
+    derivationPreimageIdsRejectSurroundingWhitespace();
+    offlineNoteDomainsRejectSubstitutionAndPadding();
     instanceValuesMatchRustVectors();
     auditInstanceValuesRejectUnanchoredClaimsAndHiddenOutputs();
     kagemushaRecordBackedNativeProverValidatesInput();
     kagemushaCompactNativeInputCopiesBeforeDispatch();
     kagemushaRecursiveAggregationNativeProverValidatesInput();
     kagemushaRecursiveSpendNativeProverValidatesInput();
+    verifyingKeyBoxStandaloneCodecDecodesAndRejectsMalformedArchives();
     kagemushaNativeProversRejectMissingAndEmptyNativeOutputs();
     kagemushaNativeAvailabilityRequiresJniEntrypoint();
     kagemushaRecursiveAggregationNativeAvailabilityRequiresJniEntrypoint();
@@ -73,6 +82,7 @@ public final class OfflineNoteTest {
     receiveRequestCodecRoundTripsNoritoTextAndQrFrames();
     receiptAckCodecRoundTripsNoritoTextAndQrFrames();
     receiptAckCodecRejectsNonPositiveAcceptedAtDecode();
+    receiptAckRejectsPaddedIdentifiers();
     qrStreamRejectsAdversarialEnvelopesAndChunkShapes();
     transferHandoffSupportsQrNfcAndNearbyPayloads();
     transferHandoffRejectsAdversarialStreamsAndMetadata();
@@ -85,6 +95,7 @@ public final class OfflineNoteTest {
     walletAcceptsCanonicalSdkInteropPaymentToken();
     walletRejectsBearerCashCustodyPolicyOverflow();
     walletNoteJsonCodecRoundTripsFixtureNote();
+    walletNoteScopeIdsRejectSurroundingWhitespace();
     walletLoadDerivesCommitmentBeforeIssuerSubmission();
     walletLoadDoesNotBlockIssuerCompletionThread();
     walletLoadCompletesExceptionallyWhenIssuerThrowsSynchronously();
@@ -536,28 +547,46 @@ public final class OfflineNoteTest {
     }
   }
 
-  private static void recursiveProofMetadataNormalizesAndRejectsMalformedVerifierKeys() {
+  private static void recursiveProofMetadataRejectsPaddedAndMalformedVerifierKeys() {
+    assertThrows(
+        () ->
+            new OfflineNote.VerifyingKeyIdReference(
+                "  " + OfflineNote.RECURSIVE_BACKEND + "  ",
+                OfflineNote.RECURSIVE_VERIFIER_NAME),
+        "padded verifier backend must be rejected");
+    assertThrows(
+        () ->
+            new OfflineNote.VerifyingKeyIdReference(
+                OfflineNote.RECURSIVE_BACKEND,
+                "  " + OfflineNote.RECURSIVE_VERIFIER_NAME + "  "),
+        "padded verifier name must be rejected");
     final OfflineNote.VerifyingKeyIdReference verifier =
         new OfflineNote.VerifyingKeyIdReference(
-            "  " + OfflineNote.RECURSIVE_BACKEND + "  ",
-            "  " + OfflineNote.RECURSIVE_VERIFIER_NAME + "  ");
+            OfflineNote.RECURSIVE_BACKEND,
+            OfflineNote.RECURSIVE_VERIFIER_NAME);
     assertEquals(
         OfflineNote.RECURSIVE_BACKEND,
         verifier.backend(),
-        "verifier backend should be trimmed");
+        "verifier backend should be preserved exactly");
     assertEquals(
         OfflineNote.RECURSIVE_VERIFIER_NAME,
         verifier.name(),
-        "verifier name should be trimmed");
+        "verifier name should be preserved exactly");
 
+    assertThrows(
+        () ->
+            new OfflineNote.ProofBox(
+                "  " + OfflineNote.RECURSIVE_BACKEND + "  ",
+                new byte[] {0x01}),
+        "padded proof backend must be rejected");
     final OfflineNote.ProofBox proof =
         new OfflineNote.ProofBox(
-            "  " + OfflineNote.RECURSIVE_BACKEND + "  ",
+            OfflineNote.RECURSIVE_BACKEND,
             new byte[] {0x01});
     assertEquals(
         OfflineNote.RECURSIVE_BACKEND,
         proof.backend(),
-        "proof backend should be trimmed");
+        "proof backend should be preserved exactly");
 
     assertThrows(
         () ->
@@ -569,6 +598,130 @@ public final class OfflineNoteTest {
             new OfflineNote.VerifyingKeyIdReference(
                 OfflineNote.RECURSIVE_BACKEND, "offline:note"),
         "verifier name must reject colon separators");
+  }
+
+  private static void commitmentOriginIdsRejectSurroundingWhitespace() {
+    final OfflineNote.CommitmentOrigin.IssuerLoad issuerLoad =
+        new OfflineNote.CommitmentOrigin.IssuerLoad("operation-1", "lineage-1", 0L);
+    assertEquals("operation-1", issuerLoad.operationId(), "issuer operation id");
+    assertEquals("lineage-1", issuerLoad.lineageId(), "issuer lineage id");
+
+    final OfflineNote.CommitmentOrigin.P2pOutput p2pOutput =
+        new OfflineNote.CommitmentOrigin.P2pOutput("payment-1", 0);
+    assertEquals("payment-1", p2pOutput.paymentRequestId(), "p2p payment request id");
+
+    assertThrows(
+        () -> new OfflineNote.CommitmentOrigin.IssuerLoad(" operation-1", "lineage-1", 0L),
+        "padded operation id must be rejected");
+    assertThrows(
+        () -> new OfflineNote.CommitmentOrigin.IssuerLoad("operation-1\n", "lineage-1", 0L),
+        "control-character operation id must be rejected");
+    assertThrows(
+        () -> new OfflineNote.CommitmentOrigin.IssuerLoad("operation-1", " lineage-1", 0L),
+        "padded lineage id must be rejected");
+    assertThrows(
+        () -> new OfflineNote.CommitmentOrigin.P2pOutput("payment-1 ", 0),
+        "padded payment request id must be rejected");
+  }
+
+  private static void derivationPreimageIdsRejectSurroundingWhitespace() throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final Map<String, Object> chain = obj(fixture, "chain_vectors");
+    final Map<String, Object> derivation = obj(chain, "derivation");
+    final String chainId = string(derivation, "chain_id");
+    final String assetId = string(obj(chain, "issue"), "asset_id");
+    final String paymentRequestId = string(derivation, "payment_request_id");
+    final byte[] hash = filledBytes(32, 0x11);
+    final OfflineNote.CommitmentOrigin.IssuerLoad origin =
+        new OfflineNote.CommitmentOrigin.IssuerLoad(
+            string(derivation, "issuer_load_operation_id"),
+            string(derivation, "issuer_load_lineage_id"),
+            0L);
+
+    new OfflineNote.NoteCommitmentPreimage(
+        chainId, hash, assetId, "1", hash, origin);
+    new OfflineNote.InputNullifierPreimage(chainId, hash, hash, hash);
+    new OfflineNote.PaymentTokenIdPreimage(
+        chainId, paymentRequestId, 1_700_000_000_000L, hash, hash, List.of(hash), List.of(hash));
+
+    assertThrows(
+        () ->
+            new OfflineNote.NoteCommitmentPreimage(
+                " " + chainId, hash, assetId, "1", hash, origin),
+        "padded note commitment chain id must be rejected");
+    assertThrows(
+        () -> new OfflineNote.InputNullifierPreimage(chainId + "\n", hash, hash, hash),
+        "control-character nullifier chain id must be rejected");
+    assertThrows(
+        () ->
+            new OfflineNote.PaymentTokenIdPreimage(
+                chainId,
+                paymentRequestId + " ",
+                1_700_000_000_000L,
+                hash,
+                hash,
+                List.of(hash),
+                List.of(hash)),
+        "padded payment-token request id must be rejected");
+  }
+
+  private static void offlineNoteDomainsRejectSubstitutionAndPadding() throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final OfflineNote.KeyCertificate certificate =
+        certificate(obj(obj(fixture, "payment_token"), "sender_key_certificate"));
+    final OfflineNote.AuditBundle audit = audit(fixture);
+    final OfflineNote.Redeem redeem = redeem(fixture);
+    final OfflineNote.IssuedClaim claim = audit.inputClaims().get(0);
+    final OfflineNote.AuditPublicInputs auditPublic = audit.publicInputs();
+    final OfflineNote.RedeemPublicInputs redeemPublic = redeem.publicInputs();
+
+    assertThrows(
+        () ->
+            new OfflineNote.KeyCertificatePayload(
+                OfflineNote.KEY_CERTIFICATE_PAYLOAD_DOMAIN + " ",
+                certificate.version(),
+                certificate.platform(),
+                certificate.keyId(),
+                certificate.deviceId(),
+                certificate.accountId(),
+                certificate.publicKey(),
+                certificate.assertionScheme(),
+                certificate.assertionKeyAlgorithm(),
+                certificate.assertionPublicKey(),
+                certificate.assertionUsageCountLimit(),
+                certificate.oneUse()),
+        "padded key-certificate payload domain must be rejected");
+    assertThrows(
+        () ->
+            new OfflineNote.IssuedClaim(
+                OfflineNote.ISSUED_CLAIM_DOMAIN + "\n",
+                claim.noteCommitment(),
+                claim.keyCertificatePayloadHash(),
+                claim.assetId(),
+                claim.amount()),
+        "padded issued-claim domain must be rejected");
+    assertThrows(
+        () ->
+            new OfflineNote.RedeemPublicInputs(
+                "forged:" + OfflineNote.REDEEM_PUBLIC_INPUTS_DOMAIN,
+                redeemPublic.sourceNoteCommitment(),
+                redeemPublic.inputNullifiers(),
+                redeemPublic.keyCertificatePayloadHash(),
+                redeemPublic.recipient(),
+                redeemPublic.assetId(),
+                redeemPublic.amount()),
+        "forged redeem-public-inputs domain must be rejected");
+    assertThrows(
+        () ->
+            new OfflineNote.AuditPublicInputs(
+                " " + OfflineNote.AUDIT_PUBLIC_INPUTS_DOMAIN,
+                auditPublic.tokenId(),
+                auditPublic.keyCertificatePayloadHash(),
+                auditPublic.inputNullifiers(),
+                auditPublic.inputClaims(),
+                auditPublic.outputCommitments(),
+                auditPublic.outputClaims()),
+        "padded audit-public-inputs domain must be rejected");
   }
 
   private static void instanceValuesMatchRustVectors() throws Exception {
@@ -820,6 +973,9 @@ public final class OfflineNoteTest {
         () -> VerifyingKeyBoxCodec.encodeNorito(" ", new byte[] {1}),
         "blank verifying key backend should fail");
     assertThrows(
+        () -> VerifyingKeyBoxCodec.encodeNorito(" halo2/ipa ", new byte[] {1}),
+        "padded verifying key backend should fail");
+    assertThrows(
         () -> VerifyingKeyBoxCodec.encodeNorito("halo2/ipa", new byte[0]),
         "empty verifying key bytes should fail");
     assertEquals(
@@ -950,6 +1106,41 @@ public final class OfflineNoteTest {
           () -> KagemushaRecursiveSpendProver.redeemSpend(new byte[] {0x01, 0x02}),
           "Kagemusha recursive spend redeem must reject malformed archives");
     }
+  }
+
+  private static void verifyingKeyBoxStandaloneCodecDecodesAndRejectsMalformedArchives() {
+    final byte[] encoded = VerifyingKeyBoxCodec.encodeNorito("halo2/ipa", new byte[] {1, 2, 3});
+    final VerifyingKeyBoxCodec.VerifyingKeyBox decoded =
+        VerifyingKeyBoxCodec.decodeNorito(encoded);
+
+    assertEquals("halo2/ipa", decoded.backend(), "decoded verifying-key backend");
+    assertTrue(
+        Arrays.equals(new byte[] {1, 2, 3}, decoded.bytes()),
+        "decoded verifying-key bytes");
+    final byte[] decodedBytes = decoded.bytes();
+    decodedBytes[0] = 0x7f;
+    assertTrue(
+        Arrays.equals(new byte[] {1, 2, 3}, decoded.bytes()),
+        "decoded verifying-key bytes must be defensive copies");
+    assertTrue(
+        Arrays.equals(encoded, VerifyingKeyBoxCodec.encodeNorito(decoded.backend(), decoded.bytes())),
+        "decoded verifying-key box must re-encode canonically");
+
+    assertIllegalArgumentContains(
+        () -> VerifyingKeyBoxCodec.decodeNorito(
+            rawVerifyingKeyBoxNorito(" halo2/ipa ", new byte[] {1})),
+        "backend must not contain surrounding whitespace");
+    assertIllegalArgumentContains(
+        () -> VerifyingKeyBoxCodec.decodeNorito(
+            rawVerifyingKeyBoxNorito("halo2/ipa", new byte[0])),
+        "bytes must not be empty");
+    assertIllegalArgumentContains(
+        () ->
+            VerifyingKeyBoxCodec.decodeNorito(
+                rawVerifyingKeyBoxNoritoFields(
+                    concat(encodeString("halo2/ipa", true), new byte[] {0}),
+                    encodeBytesVec(new byte[] {1}))),
+        "Trailing bytes after VerifyingKeyBox field decode");
   }
 
   private static void chainVkOfflineNoteProofWrappersValidateInputs() {
@@ -1523,6 +1714,47 @@ public final class OfflineNoteTest {
                 OfflineNoteReceiptAckCodec.TEXT_PREFIX
                     + Base64.getUrlEncoder().withoutPadding().encodeToString(malformed)),
         "zero text receipt ACK acceptance time should fail");
+  }
+
+  private static void receiptAckRejectsPaddedIdentifiers() throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final Map<String, Object> payment = obj(fixture, "payment_token");
+    final OfflineNotePaymentToken token =
+        OfflineNotePaymentTokenCodec.decodeNorito(
+            base64Bytes(string(obj(fixture, "sdk_interop"), "payment_token_norito_base64")));
+    final String recipientAccountId = string(payment, "recipient_account_id");
+    final long acceptedAtMs = longValue(obj(fixture, "receipt_ack"), "accepted_at_ms");
+
+    assertThrows(
+        () ->
+            new OfflineNoteReceiptAck(
+                " " + token.chainId(),
+                token.paymentRequestId(),
+                token.tokenId(),
+                recipientAccountId,
+                acceptedAtMs),
+        "padded receipt ACK chain id should fail");
+    assertThrows(
+        () ->
+            new OfflineNoteReceiptAck(
+                token.chainId(),
+                token.paymentRequestId() + "\n",
+                token.tokenId(),
+                recipientAccountId,
+                acceptedAtMs),
+        "padded receipt ACK payment request id should fail");
+    assertThrows(
+        () ->
+            new OfflineNoteReceiptAck(
+                token.chainId(),
+                token.paymentRequestId(),
+                token.tokenId(),
+                recipientAccountId + " ",
+                acceptedAtMs),
+        "padded receipt ACK recipient should fail");
+    assertThrows(
+        () -> OfflineNoteReceiptAck.fromPaymentToken(token, " " + recipientAccountId, acceptedAtMs),
+        "padded receipt ACK recipient should fail before token matching");
   }
 
   private static OfflineNoteReceiveRequest receiveRequestFixture(
@@ -2782,6 +3014,54 @@ public final class OfflineNoteTest {
         "migrated change pending state");
   }
 
+  private static void walletNoteScopeIdsRejectSurroundingWhitespace() throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final Map<String, Object> derivation = obj(obj(fixture, "chain_vectors"), "derivation");
+    final OfflineNote.KeyCertificate senderCertificate =
+        certificate(obj(obj(fixture, "payment_token"), "sender_key_certificate"));
+    final OfflineNoteWalletNote note = sourceWalletNote(fixture, senderCertificate);
+    final String spentPaymentRequestId = string(derivation, "payment_request_id");
+
+    assertEquals(
+        spentPaymentRequestId,
+        walletNoteCopy(note, note.chainId(), note.accountId(), spentPaymentRequestId)
+            .spentPaymentRequestId(),
+        "canonical spent payment request id");
+    assertThrows(
+        () -> walletNoteCopy(note, " " + note.chainId(), note.accountId(), null),
+        "padded wallet-note chain id should reject");
+    assertThrows(
+        () -> walletNoteCopy(note, note.chainId(), note.accountId() + "\n", null),
+        "padded wallet-note account id should reject");
+    assertThrows(
+        () -> walletNoteCopy(note, note.chainId(), note.accountId(), spentPaymentRequestId + " "),
+        "padded spent payment request id should reject");
+    assertThrows(
+        () -> walletNoteCopy(note, note.chainId(), note.accountId(), ""),
+        "blank spent payment request id should reject");
+  }
+
+  private static OfflineNoteWalletNote walletNoteCopy(
+      final OfflineNoteWalletNote note,
+      final String chainId,
+      final String accountId,
+      final String spentPaymentRequestId) {
+    return new OfflineNoteWalletNote(
+        chainId,
+        accountId,
+        note.assetId(),
+        note.canonicalAmount(),
+        note.keyCertificate(),
+        note.noteCommitment(),
+        note.noteSecret(),
+        note.origin(),
+        note.bearerAuditTrail(),
+        note.state(),
+        note.createdAtMs(),
+        note.updatedAtMs(),
+        spentPaymentRequestId);
+  }
+
   private static void walletLoadDerivesCommitmentBeforeIssuerSubmission() throws Exception {
     final Map<String, Object> fixture = loadFixture();
     final Map<String, Object> chain = obj(fixture, "chain_vectors");
@@ -2845,8 +3125,10 @@ public final class OfflineNoteTest {
     bindingJson.put("signature_base64", "nested-device-signature-is-not-body-auth");
     final OfflineNoteIssuerDeviceBinding binding =
         new OfflineNoteIssuerDeviceBinding("device-1", offlinePublicKey, bindingJson);
-    final OfflineIssuerExecutor executor = new OfflineIssuerExecutor(certificateJson);
+    final OfflineIssuerExecutor executor =
+        new OfflineIssuerExecutor(certificateJson, " lineage-state-hash ");
     final List<byte[]> signedMessages = new ArrayList<>();
+    final long[] nowMs = new long[] {1_700_000_000_000L};
     final ToriiOfflineNoteIssuerClient client =
         new ToriiOfflineNoteIssuerClient(
             new ToriiCanonicalRequestAuth(
@@ -2870,8 +3152,13 @@ public final class OfflineNoteTest {
             java.time.Duration.ofSeconds(15),
             Map.of(),
             List.of(),
-            () -> 1_700_000_000_000L,
-            new SequenceIdGenerator("operation-refill-1", "auth-refill-1", "auth-issue-1"));
+            () -> nowMs[0],
+            new SequenceIdGenerator(
+                "operation-refill-1",
+                "auth-refill-1",
+                "auth-issue-1",
+                "operation-refill-2",
+                "auth-refill-2"));
 
     final OfflineNoteLoadContext context =
         client.prepareLoad("chain-1", accountId, assetDefinitionId, "5").get();
@@ -2940,6 +3227,10 @@ public final class OfflineNoteTest {
     assertEquals(hex(commitment), string(issueBody, "note_commitment"), "issue commitment");
     assertEquals(0L, longValue(issueBody, "local_revision"), "pre-issue revision");
     assertEquals("0", string(issueBody, "local_balance"), "pre-issue balance");
+    assertEquals(
+        " lineage-state-hash ",
+        string(issueBody, "local_state_hash"),
+        "issue local state hash exactness");
     final byte[] issueMessage =
         CanonicalRequestSigner.canonicalBodyAuthSignatureMessage(
             "POST",
@@ -2957,6 +3248,17 @@ public final class OfflineNoteTest {
         "load", string(obj(issueBody, "device_proof"), "operation"), "issue device proof");
     assertEquals("5", string(obj(issueBody, "device_proof"), "amount"), "issue proof amount");
     obj(issueBody, "lineage_state");
+
+    nowMs[0] = 1_700_000_060_001L;
+    final OfflineNoteLoadContext refillContext =
+        client.prepareLoad("chain-1", accountId, assetDefinitionId, "7").get();
+    assertEquals("operation-refill-2", refillContext.operationId(), "second refill operation id");
+    assertEquals(3L, executor.requests.size(), "issuer request count after second refill");
+    final Map<String, Object> secondRefillBody = executor.requestBody(2);
+    assertEquals(
+        " lineage-state-hash ",
+        string(secondRefillBody, "local_state_hash"),
+        "second refill local state hash exactness");
   }
 
   private static byte[] fakeIssuerSignature(final byte[] message) {
@@ -4709,10 +5011,17 @@ public final class OfflineNoteTest {
 
   private static final class OfflineIssuerExecutor implements HttpTransportExecutor {
     private final Map<String, Object> certificateJson;
+    private final String serverStateHash;
     private final List<TransportRequest> requests = new ArrayList<>();
 
     private OfflineIssuerExecutor(final Map<String, Object> certificateJson) {
+      this(certificateJson, null);
+    }
+
+    private OfflineIssuerExecutor(
+        final Map<String, Object> certificateJson, final String serverStateHash) {
       this.certificateJson = certificateJson;
+      this.serverStateHash = serverStateHash;
     }
 
     @Override
@@ -4774,6 +5083,9 @@ public final class OfflineNoteTest {
       state.put("balance", balance);
       state.put("locked_balance", "0");
       state.put("authorization", authorization);
+      if (serverStateHash != null) {
+        state.put("server_state_hash", serverStateHash);
+      }
       return state;
     }
   }
@@ -5064,6 +5376,37 @@ public final class OfflineNoteTest {
     return out.toByteArray();
   }
 
+  private static byte[] rawVerifyingKeyBoxNorito(final String backend, final byte[] bytes) {
+    return rawVerifyingKeyBoxNoritoFields(encodeString(backend, true), encodeBytesVec(bytes));
+  }
+
+  private static byte[] rawVerifyingKeyBoxNoritoFields(
+      final byte[] backendFieldPayload, final byte[] bytesFieldPayload) {
+    return NoritoCodec.encode(
+        "raw-vk-box",
+        "iroha_data_model::proof::VerifyingKeyBox",
+        new TypeAdapter<>() {
+          @Override
+          public void encode(final NoritoEncoder encoder, final String value) {
+            writeRawVerifyingKeyBoxField(encoder, backendFieldPayload);
+            writeRawVerifyingKeyBoxField(encoder, bytesFieldPayload);
+          }
+
+          @Override
+          public String decode(final NoritoDecoder decoder) {
+            throw new AssertionError("raw VerifyingKeyBox test adapter is encode-only");
+          }
+        },
+        NoritoHeader.COMPACT_LEN);
+  }
+
+  private static void writeRawVerifyingKeyBoxField(
+      final NoritoEncoder encoder, final byte[] payload) {
+    final boolean compact = (encoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
+    encoder.writeLength(payload.length, compact);
+    encoder.writeBytes(payload);
+  }
+
   private static byte[] encodeString(final String value, final boolean compact) {
     final byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
     final ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -5105,6 +5448,12 @@ public final class OfflineNoteTest {
       out.write((int) (remaining & 0xFF));
       remaining >>>= 8;
     }
+  }
+
+  private static byte[] concat(final byte[] first, final byte[] second) {
+    final byte[] out = Arrays.copyOf(first, first.length + second.length);
+    System.arraycopy(second, 0, out, first.length, second.length);
+    return out;
   }
 
   @SuppressWarnings("unchecked")

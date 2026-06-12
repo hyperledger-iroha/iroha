@@ -351,6 +351,10 @@ final class AccountAddressTests: XCTestCase {
     func testConfusableAlgorithmAliasesRejected() {
         let publicKey = Data(repeating: 0xAA, count: 32)
         let algorithms = [
+            "",
+            "   ",
+            " ed25519",
+            "ed25519 ",
             "future-curve",
             "ed\t25519",
             "ed\u{200B}25519",

@@ -237,13 +237,18 @@ import {
   buildZkX509IdentityDevProofFixture,
   buildZkX509IdentityProofV0,
   verifyZkX509IdentityProofV0,
+  buildJindoLatticePublicInputs,
+  buildJindoLatticeProofEnvelope,
   buildJindoLatticeProofV0,
   buildJindoLatticeDevProofFixture,
   verifyJindoPolynomialCommitmentV0,
   verifyJindoLatticeProofLocally,
+  buildSisHintsCredentialCommitments,
+  buildSisHintsCredentialEnvelope,
   buildSisHintsAnonymousCredentialProofV0,
   buildSisHintsCredentialDevProofFixture,
   verifySisHintsAnonymousCredentialProofV0,
+  verifySisHintsCredentialProofLocally,
   buildAnonymousPgcReceiverSet,
   buildAnonymousPgcAccountCommitmentInstruction,
   buildAnonymousPgcKOutOfNProofV1,
@@ -251,6 +256,20 @@ import {
   buildAnonymousPgcTransferInstruction,
   buildAnonymousPgcDevProofFixture,
   buildVeRangeDevProofFixture,
+  buildOrchardActionBundleProofV1,
+  buildOrchardActionBundleInstruction,
+  buildPenumbraSpendProofV1,
+  buildPenumbraOutputProofV1,
+  buildPenumbraShieldedPoolTransaction,
+  buildFcmpPlusPlusMembershipProofV1,
+  buildFcmpPlusPlusTransferInstruction,
+  buildMidenStarkTransactionProofV1,
+  buildMidenNoteTransactionInstruction,
+  buildAztecPrivateKernelProofV1,
+  buildAztecPrivateRollupTransactionInstruction,
+  buildPqMaspStarkTransferProofV0,
+  buildPqMaspStarkRegisterPoolInstruction,
+  buildPqMaspStarkTransferInstruction,
   noritoDecodePrivacyProofEnvelope,
   canonicalBscCommitMessageBytes,
   canonicalBscCommitSealBytes,
@@ -1500,6 +1519,9 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     [{ ...initArtifacts, verifierOpeningLen: 3 }, /verifier_opening_len/],
     [{ ...initArtifacts, verifierOpeningLen: true }, /verifier_opening_len/],
     [{ ...initArtifacts, lineageVerifierKeyBackend: "halo2/kzg" }, /lineage_verifier_key/],
+    [{ ...initArtifacts, lineageVerifierKeyBackend: " halo2/ipa" }, /lineage_verifier_key/],
+    [{ ...initArtifacts, lineageVerifierKeyBackend: "halo2/ipa " }, /lineage_verifier_key/],
+    [{ ...initArtifacts, lineageVerifierKeyBackend: "HALO2/IPA" }, /lineage_verifier_key/],
     [{ ...initArtifacts, lineageVerifierKey: Buffer.alloc(0) }, /lineage_verifier_key/],
     [{ ...initArtifacts, lineageProvingKeyArchive: Buffer.alloc(0) }, /lineage_proving_key_archive/],
     [{ ...initArtifacts, lineageVerifierKey: "not-bytes" }, /lineage_verifier_key/],
@@ -2364,6 +2386,7 @@ test("package dist privacy proof envelopes preserve pending production backend t
   const cases = [
     ["halo2-ipa-orchard", "Halo2IpaOrchard"],
     ["halo2/ipa/orchard", "Halo2IpaOrchard"],
+    ["halo2-pasta-action-bundle", "Halo2IpaOrchard"],
     ["orchard", "Halo2IpaOrchard"],
     ["zcash-orchard", "Halo2IpaOrchard"],
     ["groth16-bls12-377", "Groth16Bls12377"],
@@ -2375,6 +2398,7 @@ test("package dist privacy proof envelopes preserve pending production backend t
     ["halo2/ipa/penumbra", "Groth16Bls12377"],
     ["halo2/ipa/masp", "Groth16Bls12377"],
     ["fcmp-plus-plus-curve-tree", "FcmpPlusPlusCurveTree"],
+    ["fcmp-plus-plus-curve-trees-bulletproofs", "FcmpPlusPlusCurveTree"],
     ["fcmp++", "FcmpPlusPlusCurveTree"],
     ["monero-fcmp++", "FcmpPlusPlusCurveTree"],
     ["halo2/ipa/monero", "FcmpPlusPlusCurveTree"],
@@ -2394,8 +2418,10 @@ test("package dist privacy proof envelopes preserve pending production backend t
     ["stark/fri/sha256_goldilocks.v1", "Stark"],
     ["miden-stark", "MidenStark"],
     ["stark/fri/miden", "MidenStark"],
+    ["stark-vm-note-transaction", "MidenStark"],
     ["aztec-plonkish-private-kernel", "AztecPlonkishPrivateKernel"],
     ["aztec/private-kernel", "AztecPlonkishPrivateKernel"],
+    ["plonkish-private-kernel-rollup", "AztecPlonkishPrivateKernel"],
     ["pq-masp-stark-fri", "PqMaspStarkFri"],
     ["stark/fri/pq-masp-stark-fri", "PqMaspStarkFri"],
     ["post-quantum-masp", "PqMaspStarkFri"],
@@ -2437,6 +2463,66 @@ test("package dist privacy proof envelopes preserve pending production backend t
     const decoded = noritoDecodePrivacyProofEnvelope(encoded);
     assert.equal(decoded.backend, expected);
   }
+});
+
+test("package dist research privacy adapters build envelopes and reject class options", () => {
+  class PrivacyOptions {
+    constructor(values) {
+      Object.assign(this, values);
+    }
+  }
+
+  const options = {
+    vkHash: Buffer.alloc(32, 0x42),
+    publicInputs: Buffer.from("production-research-public-inputs"),
+    proofBytes: Buffer.from("production-research-proof"),
+  };
+  const proofHelpers = [
+    [buildOrchardActionBundleProofV1, "Halo2IpaOrchard"],
+    [buildPenumbraSpendProofV1, "Groth16Bls12377"],
+    [buildPenumbraOutputProofV1, "Groth16Bls12377"],
+    [buildFcmpPlusPlusMembershipProofV1, "FcmpPlusPlusCurveTree"],
+    [buildMidenStarkTransactionProofV1, "MidenStark"],
+    [buildAztecPrivateKernelProofV1, "AztecPlonkishPrivateKernel"],
+    [buildPqMaspStarkTransferProofV0, "PqMaspStarkFri"],
+  ];
+  for (const [helper, expectedBackend] of proofHelpers) {
+    const envelope = helper(options);
+    const decoded = noritoDecodePrivacyProofEnvelope(envelope);
+    assert.equal(decoded.backend, expectedBackend);
+    assert.deepEqual(decoded.proof_bytes, Array.from(options.proofBytes));
+    assert.throws(() => helper(new PrivacyOptions(options)), /plain object/);
+  }
+
+  const instructionHelpers = [
+    [buildOrchardActionBundleInstruction, "zk::SubmitOrchardActionBundle"],
+    [buildPenumbraShieldedPoolTransaction, "zk::SubmitPenumbraShieldedPoolTransaction"],
+    [buildFcmpPlusPlusTransferInstruction, "zk::SubmitFcmpPlusPlusTransfer"],
+    [buildMidenNoteTransactionInstruction, "zk::SubmitMidenNoteTransaction"],
+    [buildAztecPrivateRollupTransactionInstruction, "zk::SubmitAztecPrivateRollupTransaction"],
+    [buildPqMaspStarkRegisterPoolInstruction, "zk::SubmitPqMaspStarkTransfer"],
+    [buildPqMaspStarkTransferInstruction, "zk::SubmitPqMaspStarkTransfer"],
+  ];
+  for (const [helper, instructionKind] of instructionHelpers) {
+    const instruction = helper(options);
+    assert.equal(instruction.instruction, instructionKind);
+    assert.ok(instruction.proof_envelope_sha256);
+    assert.throws(() => helper(new PrivacyOptions(options)), /plain object/);
+  }
+
+  const instruction = buildOrchardActionBundleInstruction({
+    ...options,
+    metadata: { purpose: "boundary-test" },
+  });
+  assert.deepEqual(instruction.metadata, { purpose: "boundary-test" });
+  assert.throws(
+    () =>
+      buildOrchardActionBundleInstruction({
+        ...options,
+        metadata: new PrivacyOptions({ purpose: "test" }),
+      }),
+    /plain object/,
+  );
 });
 
 test("package dist Jindo production helpers reject dev fixture bytes", () => {
@@ -2507,6 +2593,110 @@ test("package dist Jindo production helpers reject dev fixture bytes", () => {
       /backend/,
     );
   }
+});
+
+test("package dist Jindo and SIS public helpers reject class-instance options", () => {
+  class PrivacyOptions {
+    constructor(values) {
+      Object.assign(this, values);
+    }
+  }
+
+  const jindoBase = {
+    polynomialJson: { ring: "Rq", degree: 1024, digest: "poly" },
+    openingClaimJson: { point: "x=42", value_digest: "value" },
+    querySetJson: { queries: [0, 7, 42] },
+    parametersJson: { scheme: "jindo-pcs-v0", q_bits: 64 },
+    domainSeparator: "boi:jindo:pcs:pilot:v0",
+  };
+  const jindoProofOptions = {
+    ...jindoBase,
+    vkHash: Buffer.alloc(32, 0xaa),
+    proofBytes: Buffer.from("production-jindo-lattice-proof"),
+  };
+
+  for (const [helper, options] of [
+    [buildJindoLatticePublicInputs, jindoBase],
+    [buildJindoLatticeProofEnvelope, jindoProofOptions],
+    [buildJindoLatticeProofV0, jindoProofOptions],
+    [buildJindoLatticeDevProofFixture, {
+      ...jindoBase,
+      vkHash: Buffer.alloc(32, 0xaa),
+    }],
+  ]) {
+    assert.throws(() => helper(new PrivacyOptions(options)), /plain object/);
+  }
+
+  const jindoProof = buildJindoLatticeProofV0(jindoProofOptions);
+  assert.equal(verifyJindoPolynomialCommitmentV0(jindoProof).ok, true);
+  assert.throws(
+    () =>
+      verifyJindoPolynomialCommitmentV0(
+        new PrivacyOptions({ envelope: jindoProof, ...jindoBase }),
+      ),
+    /plain object/,
+  );
+
+  const jindoFixture = buildJindoLatticeDevProofFixture({
+    ...jindoBase,
+    vkHash: Buffer.alloc(32, 0xaa),
+  });
+  assert.equal(verifyJindoLatticeProofLocally(jindoFixture.envelope).ok, true);
+  assert.throws(
+    () =>
+      verifyJindoLatticeProofLocally(
+        new PrivacyOptions({ envelope: jindoFixture.envelope, ...jindoBase }),
+      ),
+    /plain object/,
+  );
+
+  const sisBase = {
+    issuerJson: { issuer: "boi", scheme: "sis-hints-v0" },
+    credentialJson: { credential_type: "wallet", nonce: "n-1" },
+    showingPolicyJson: { verifier: "boi", purpose: "wallet" },
+    parametersJson: { scheme: "sis-hints-anoncred-v0", q_bits: 64 },
+    domainSeparator: "boi:sis-hints:pilot:v0",
+  };
+  const sisProofOptions = {
+    ...sisBase,
+    vkHash: Buffer.alloc(32, 0xbb),
+    proofBytes: Buffer.from("production-sis-hints-proof"),
+  };
+
+  for (const [helper, options] of [
+    [buildSisHintsCredentialCommitments, sisBase],
+    [buildSisHintsCredentialEnvelope, sisProofOptions],
+    [buildSisHintsAnonymousCredentialProofV0, sisProofOptions],
+    [buildSisHintsCredentialDevProofFixture, {
+      ...sisBase,
+      vkHash: Buffer.alloc(32, 0xbb),
+    }],
+  ]) {
+    assert.throws(() => helper(new PrivacyOptions(options)), /plain object/);
+  }
+
+  const sisProof = buildSisHintsAnonymousCredentialProofV0(sisProofOptions);
+  assert.equal(verifySisHintsAnonymousCredentialProofV0(sisProof).ok, true);
+  assert.throws(
+    () =>
+      verifySisHintsAnonymousCredentialProofV0(
+        new PrivacyOptions({ envelope: sisProof, ...sisBase }),
+      ),
+    /plain object/,
+  );
+
+  const sisFixture = buildSisHintsCredentialDevProofFixture({
+    ...sisBase,
+    vkHash: Buffer.alloc(32, 0xbb),
+  });
+  assert.equal(verifySisHintsCredentialProofLocally(sisFixture.envelope).ok, true);
+  assert.throws(
+    () =>
+      verifySisHintsCredentialProofLocally(
+        new PrivacyOptions({ envelope: sisFixture.envelope, ...sisBase }),
+      ),
+    /plain object/,
+  );
 });
 
 test("package dist SIS-with-hints production helpers reject dev fixture bytes", () => {
@@ -4961,6 +5151,110 @@ test("package dist entrypoint exports Solana source-state helpers", () => {
   );
 });
 
+test("package dist entrypoint enforces SCCP route-canary role separation", () => {
+  const distSolanaRouteCanaryEvidence = {
+    routeAllowlistHash: `0x${"31".repeat(32)}`,
+    destinationBindingHash: sccpDestinationBindingHash(SCCP_DOMAIN_SOL),
+    sourceVerifierMaterialHash: `0x${"33".repeat(32)}`,
+    sourceAdapterEngineDeploymentHash: `0x${"34".repeat(32)}`,
+    verifierIdentity: "3JF3sEqM796hk5WFqA6EtmEwJQ9quALszsfJyvXNQKy3",
+    verifierCodeHash:
+      "0xc81178d11a4de525782fe7ac6f5accc2056fa15d1b8c2bfd819eb2ef179c3411",
+    solanaRpcCommitment: "finalized",
+    solanaProgramOwner: SCCP_SOLANA_UPGRADEABLE_LOADER_ID,
+    solanaProgramdataOwner: SCCP_SOLANA_UPGRADEABLE_LOADER_ID,
+    solanaProgramImmutable: true,
+    solanaProgramAccountDataBase64:
+      "AgAAABERERERERERERERERERERERERERERERERERERERERER",
+    solanaProgramdataAddress: "29d2S7vB453rNYFdR5Ycwt7y9haRT5fwVwL9zTmBhfV2",
+    solanaProgramdataSlot: "4321",
+    solanaExpectedProgramdataSlot: "4321",
+    solanaProgramAccountContextSlot: "5000",
+    solanaProgramdataAccountContextSlot: "5001",
+    solanaProgramdataMetadataBlake2b256:
+      "0x2b5f26278ea949463e97c1dc5e53a821b82515b405454a1b0e3cd652c3b00209",
+    solanaProgramdataMetadataBase64:
+      "AwAAAOEQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    solanaProgramdataExecutableBlake2b256:
+      "0xc81178d11a4de525782fe7ac6f5accc2056fa15d1b8c2bfd819eb2ef179c3411",
+    solanaProgramdataExecutableBase64: "f0VMRgECAwQF",
+  };
+  const distSolanaRouteCanaryGovernedHashReuse = {
+    ...distSolanaRouteCanaryEvidence,
+    routeAllowlistHash: distSolanaRouteCanaryEvidence.sourceVerifierMaterialHash,
+  };
+  assert.throws(
+    () =>
+      solanaSccpRouteCanaryEvidenceHash(
+        distSolanaRouteCanaryGovernedHashReuse,
+      ),
+    /Solana route canary governed hashes/u,
+  );
+
+  const distTonRouteCanaryEvidence = {
+    routeAllowlistHash: `0x${"31".repeat(32)}`,
+    destinationBindingHash: sccpDestinationBindingHash(SCCP_DOMAIN_TON),
+    sourceVerifierMaterialHash: `0x${"33".repeat(32)}`,
+    sourceAdapterEngineDeploymentHash: `0x${"34".repeat(32)}`,
+    verifierContractAddress: `0:${"11".repeat(32)}`,
+    verifierCodeHash: `0x${"44".repeat(32)}`,
+    accountStatus: "active",
+    accountStateHash: `0x${"55".repeat(32)}`,
+    lastTransactionLt: "123456789",
+    lastTransactionHash: `0x${"66".repeat(32)}`,
+    verifierCodeBocRootHash: `0x${"44".repeat(32)}`,
+  };
+  const distTonRouteCanaryGovernedHashReuse = {
+    ...distTonRouteCanaryEvidence,
+    routeAllowlistHash: distTonRouteCanaryEvidence.sourceVerifierMaterialHash,
+  };
+  assert.throws(
+    () => tonSccpRouteCanaryEvidenceHash(distTonRouteCanaryGovernedHashReuse),
+    /TON route canary governed hashes/u,
+  );
+
+  const distTronRouteCanaryEvidence = {
+    routeAllowlistHash:
+      "0xfea8effb3cddfa458ea79a5a9af6f2d2c33a460b3a66d9305963908c2a3ea67a",
+    destinationBindingHash:
+      "0x17c953ad5b8c9a2b6f7102aca993fa7c427d018505cf4f58fac35ea454caba7f",
+    sourceVerifierMaterialHash:
+      "0x68c20262e44676bd5f3c4ec428f063373147a1ca14c5885648a9c651b3bcd8d8",
+    sourceAdapterEngineDeploymentHash:
+      "0x94dbe28a2fb16e043b83639b6dea8ec62f53679599ef1dd220fd13c71c7bdcb8",
+    networkId: `0x${"33".repeat(32)}`,
+    verifierAddress: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
+    verifierCodeHash: `0x${"bb".repeat(32)}`,
+    verifierKeyHash: `0x${"cc".repeat(32)}`,
+    transactionId: `0x${"fa".repeat(32)}`,
+    transactionOwnerAddress: "0x417e5f4552091a69125d5dfcb7b8c2659029395bdf",
+    blockNumber: 234n,
+    blockTimestamp: 567000n,
+    logIndex: 0,
+    messageId: `0x${"dd".repeat(32)}`,
+    callDataSha256:
+      "0xf96dfb36d47a61e7e80df4f19e00b78c12f9a3f3c542e8dac06a7422e1d5f951",
+    payloadHash: `0x${"ab".repeat(32)}`,
+    commitmentRoot: `0x${"ee".repeat(32)}`,
+    finalityHeight: `0x${"00".repeat(31)}7b`,
+    finalityBlockHash: `0x${"cd".repeat(32)}`,
+    statementHash: `0x${"f1".repeat(32)}`,
+    usedMessageProof: true,
+    rawDataOwnerMatchesTransaction: true,
+    signatureSha256: `0x${"c4".repeat(32)}`,
+    signatureRecoveredAddress: "0x417e5f4552091a69125d5dfcb7b8c2659029395bdf",
+    signatureRecoversToOwner: true,
+  };
+  const distTronRouteCanaryGovernedHashReuse = {
+    ...distTronRouteCanaryEvidence,
+    routeAllowlistHash: distTronRouteCanaryEvidence.sourceVerifierMaterialHash,
+  };
+  assert.throws(
+    () => tronSccpRouteCanaryEvidenceHash(distTronRouteCanaryGovernedHashReuse),
+    /TRON route canary governed hashes/u,
+  );
+});
+
 test("package dist entrypoint exports Solana tower lockout helpers", () => {
   assert.equal(SCCP_DOMAIN_SOL, 3);
   assert.equal(SCCP_SOLANA_TOWER_LOCKOUT_CONFIRMATION_DEPTH, 32n);
@@ -5107,9 +5401,19 @@ test("package dist entrypoint enforces TON source-state proof cap", async () => 
   const request = buildTonShardStateProofRequest(
     sampleDistTonShardStateSourceStateInput(),
   );
+  const distTonDebugProofFamily = "debug-proof-family";
   const oversizedTonDistSourceStateProofBytes = new Uint8Array(
     SCCP_SOURCE_STATE_MAX_PROOF_BYTES + 1,
   ).fill(1);
+  assert.throws(
+    () =>
+      canonicalTonSccpSourceStateVerificationProofBytes({
+        circuitId: SCCP_TON_SHARD_STATE_OPEN_VERIFY_CIRCUIT_ID_V1,
+        proofFamily: distTonDebugProofFamily,
+        proofBytes: new Uint8Array([1, 2, 3]),
+      }),
+    /TON source-state stark-fri-v1 proof/u,
+  );
   assert.throws(
     () =>
       wrapTonSccpSourceStateVerificationProof(
@@ -5825,6 +6129,14 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     () =>
       validateEthereumMainnetNativeEvmProverBundle(
         { ...nativeProverBundle, proof_artifact: "ipfs:proof-artifact.r1cs" },
+        { destinationBinding: ethereumMainnetBinding },
+      ),
+    /proofArtifact must not contain URI schemes or drive prefixes/u,
+  );
+  assert.throws(
+    () =>
+      validateEthereumMainnetNativeEvmProverBundle(
+        { ...nativeProverBundle, proof_artifact: "ipfs:proof-artifact.bin" },
         { destinationBinding: ethereumMainnetBinding },
       ),
     /proofArtifact must not contain URI schemes or drive prefixes/u,

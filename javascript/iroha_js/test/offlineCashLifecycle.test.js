@@ -115,6 +115,30 @@ test("offline cash configuration snapshot requires cached issuer key and ABI", (
       error.code === "missing_issuer_public_key",
   );
 
+  for (const issuerPublicKeyBase64 of [
+    "",
+    " issuer-key",
+    "issuer-key ",
+    "issuer key",
+    "issuer-key\n",
+    "issuer-key\u2603",
+  ]) {
+    assert.throws(
+      () =>
+        assertOfflineCashConfigurationSnapshotUsable({
+          chainId: "00000042",
+          assetDefinitionId: "pkr#sbp",
+          offlinePaymentsEnabled: true,
+          issuerPublicKeyBase64,
+          nativeBridgeAbiVersion: 7,
+          createdAtMs: 100,
+        }),
+      error =>
+        error instanceof OfflineCashConfigurationSnapshotError &&
+        error.code === "missing_issuer_public_key",
+    );
+  }
+
   assert.throws(
     () =>
       assertOfflineCashConfigurationSnapshotUsable({

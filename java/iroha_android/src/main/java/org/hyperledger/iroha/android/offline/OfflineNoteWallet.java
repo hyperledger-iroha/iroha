@@ -1199,10 +1199,25 @@ public final class OfflineNoteWallet {
   }
 
   private static String requireNonBlank(final String value, final String field) {
-    if (value == null || value.trim().isEmpty()) {
+    if (value == null || trimWhitespace(value).isEmpty()) {
       throw new IllegalArgumentException(field + " must not be blank");
     }
+    if (!trimWhitespace(value).equals(value)) {
+      throw new IllegalArgumentException(field + " must not contain surrounding whitespace");
+    }
     return value;
+  }
+
+  private static String trimWhitespace(final String value) {
+    int start = 0;
+    int end = value.length();
+    while (start < end && Character.isWhitespace(value.charAt(start))) {
+      start++;
+    }
+    while (end > start && Character.isWhitespace(value.charAt(end - 1))) {
+      end--;
+    }
+    return value.substring(start, end);
   }
 
   static String hexLower(final byte[] bytes) {

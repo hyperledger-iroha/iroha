@@ -74,6 +74,22 @@ final class ConnectFramesTests: XCTestCase {
         XCTAssertEqual(decoded, proof)
     }
 
+    func testProofJSONRejectsPaddedOrBlankFields() throws {
+        for (field, value) in [
+            ("domain", " example.com"),
+            ("uri", "https://example.com "),
+            ("statement", "\nSign in"),
+            ("issued_at", " now"),
+            ("nonce", "123\t"),
+            ("nonce", " "),
+        ] {
+            let data = try JSONSerialization.data(withJSONObject: [field: value], options: [])
+            XCTAssertThrowsError(try ConnectCodec.decodeProofJSON(data), "\(field)=\(value)") { error in
+                XCTAssertEqual(error as? ConnectCodecError, .decodeFailed)
+            }
+        }
+    }
+
     func testRejectFrameRoundTrip() throws {
         try requireConnectCodec()
         let frame = ConnectFrame(sessionID: Data(repeating: 0xAA, count: 32),

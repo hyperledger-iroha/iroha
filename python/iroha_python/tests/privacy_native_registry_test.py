@@ -4,6 +4,7 @@ import importlib
 import re
 from pathlib import Path
 
+from iroha_python import privacy_catalog
 from iroha_python.privacy_catalog import (
     PRODUCTION_GATE_REQUIREMENTS,
     get_privacy_algorithm_descriptors,
@@ -143,8 +144,12 @@ def test_python_component_modules_match_cataloged_sdk_builder_surface() -> None:
                 f"{algorithm_id} must not retain planned entrypoints after production hardening"
             )
         else:
-            assert descriptor["planned_sdk_entrypoints"], (
-                f"{algorithm_id} must keep production entrypoints planned until gates pass"
+            assert descriptor["planned_sdk_entrypoints"] or any(
+                privacy_catalog._entrypoint_is_production_proof_builder(entrypoint)
+                for entrypoint in descriptor["sdk_entrypoints"]
+            ), (
+                f"{algorithm_id} must keep production entrypoints planned or "
+                "export an executable proof builder until gates pass"
             )
         for entrypoint in descriptor["sdk_entrypoints"]:
             assert entrypoint in exports, f"{module_name}.__all__ dropped {entrypoint}"

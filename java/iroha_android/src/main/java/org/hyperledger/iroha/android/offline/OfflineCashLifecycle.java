@@ -159,7 +159,7 @@ public final class OfflineCashLifecycle {
             "offline_payments_disabled",
             "Offline cash is disabled in the cached configuration snapshot.");
       }
-      if (issuerPublicKeyBase64 == null || issuerPublicKeyBase64.trim().isEmpty()) {
+      if (!isCanonicalSnapshotText(issuerPublicKeyBase64)) {
         throw new ConfigurationSnapshotException(
             "missing_issuer_public_key",
             "Offline cash requires a cached issuer public key before offline exchange.");
@@ -176,6 +176,19 @@ public final class OfflineCashLifecycle {
             "Offline cash requires native bridge ABI " + requiredNativeBridgeAbiVersion + ".");
       }
     }
+  }
+
+  private static boolean isCanonicalSnapshotText(final String value) {
+    if (value == null || value.isEmpty()) {
+      return false;
+    }
+    for (int i = 0; i < value.length(); i++) {
+      final char c = value.charAt(i);
+      if (c <= 0x20 || c > 0x7E) {
+        return false;
+      }
+    }
+    return true;
   }
 
   public static final class ConfigurationSnapshotException extends IllegalStateException {

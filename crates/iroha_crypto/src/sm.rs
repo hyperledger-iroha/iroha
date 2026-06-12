@@ -355,9 +355,7 @@ impl Sm2PublicKey {
             }
         }
 
-        let sig = signature
-            .as_sm2()
-            .map_err(|_| Error::Parse(ParseError("invalid SM2 signature".into())))?;
+        let sig = signature.as_sm2().map_err(|_| Error::BadSignature)?;
         self.0
             .verify(message, &sig)
             .map_err(|_| Error::BadSignature)
@@ -776,6 +774,12 @@ impl Sm2Signature {
     /// # Errors
     /// Returns [`ParseError`] when `bytes` do not describe a valid SM2 signature.
     pub fn from_bytes(bytes: &[u8; Self::LENGTH]) -> Result<Self, ParseError> {
+        if bytes.iter().all(|&byte| byte == 0) {
+            return Err(ParseError("invalid SM2 signature: all-zero payload".into()));
+        }
+        if bytes[..32].iter().all(|&byte| byte == 0) || bytes[32..].iter().all(|&byte| byte == 0) {
+            return Err(ParseError("invalid SM2 signature: zero scalar".into()));
+        }
         sm::parse_signature(bytes).map_err(|_| ParseError("invalid SM2 signature".into()))?;
         let mut r = [0u8; 32];
         r.copy_from_slice(&bytes[..32]);
@@ -858,7 +862,8 @@ impl Sm2Signature {
     /// Prefer [`Self::try_as_der`] on production error-propagating paths.
     #[must_use]
     pub fn as_der(&self) -> Vec<u8> {
-        self.try_as_der().unwrap_or_default()
+        self.try_as_der()
+            .expect("SM2 DER export should fit short-form lengths for 32-byte integers")
     }
 }
 
@@ -3418,6 +3423,42 @@ mod tests {
     }
 
     #[test]
+    fn sm2_signature_from_bytes_rejects_zero_scalars_before_backend() {
+        let all_zero = [0u8; Sm2Signature::LENGTH];
+        let err = Sm2Signature::from_bytes(&all_zero)
+            .expect_err("all-zero SM2 signature must fail before backend parsing");
+        assert!(err.to_string().contains("all-zero"));
+
+        let mut zero_r = [0u8; Sm2Signature::LENGTH];
+        zero_r[Sm2Signature::LENGTH - 1] = 1;
+        let err =
+            Sm2Signature::from_bytes(&zero_r).expect_err("zero r scalar must fail before backend");
+        assert!(err.to_string().contains("zero scalar"));
+
+        let mut zero_s = [0u8; Sm2Signature::LENGTH];
+        zero_s[31] = 1;
+        let err =
+            Sm2Signature::from_bytes(&zero_s).expect_err("zero s scalar must fail before backend");
+        assert!(err.to_string().contains("zero scalar"));
+    }
+
+    #[test]
+    fn sm2_public_key_verify_maps_malformed_signature_to_bad_signature() {
+        let private =
+            Sm2PrivateKey::new(Sm2PublicKey::DEFAULT_DISTID, [0x13; 32]).expect("secret key");
+        let public = private.public_key();
+        let mut s = [0u8; 32];
+        s[31] = 1;
+        let malformed = Sm2Signature { r: [0u8; 32], s };
+
+        let err = public
+            .verify(b"message", &malformed)
+            .expect_err("malformed in-memory signature must fail closed");
+
+        assert!(matches!(err, Error::BadSignature));
+    }
+
+    #[test]
     fn sm2_try_sign_roundtrip_and_verify() {
         let private =
             Sm2PrivateKey::new(Sm2PublicKey::DEFAULT_DISTID, [0x12; 32]).expect("secret key");
@@ -3626,6 +3667,7 @@ mod tests {
             .expect("SM2 DER short-form lengths fit");
 
         assert_eq!(checked, signature.as_der());
+        assert!(!checked.is_empty(), "SM2 DER export must not be empty");
         assert_eq!(
             checked.get(1).copied().map(usize::from),
             Some(checked.len() - 2)

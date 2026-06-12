@@ -13,6 +13,7 @@ data class MultisigProposeRequest @JvmOverloads constructor(
     val signatureB64: String? = null,
     val creationTimeMs: Long? = null,
     val feeSponsor: String? = null,
+    val memo: String? = null,
 ) {
     companion object {
         /** Builds a request from typed instruction boxes by encoding each box as native Norito. */
@@ -27,6 +28,7 @@ data class MultisigProposeRequest @JvmOverloads constructor(
             signatureB64: String? = null,
             creationTimeMs: Long? = null,
             feeSponsor: String? = null,
+            memo: String? = null,
         ): MultisigProposeRequest = MultisigProposeRequest(
             multisigAccountId = multisigAccountId,
             multisigAccountAlias = multisigAccountAlias,
@@ -36,6 +38,7 @@ data class MultisigProposeRequest @JvmOverloads constructor(
             signatureB64 = signatureB64,
             creationTimeMs = creationTimeMs,
             feeSponsor = feeSponsor,
+            memo = memo,
         )
     }
 }

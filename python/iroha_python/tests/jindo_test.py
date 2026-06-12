@@ -212,6 +212,60 @@ def test_jindo_package_root_exports_catalog_entrypoint_aliases() -> None:
     assert verified["parameter_hash"] == public_inputs["parameter_hash"].hex()
 
 
+def test_jindo_public_helpers_reject_non_plain_mapping_inputs() -> None:
+    class JindoDict(dict):
+        pass
+
+    base = _base()
+    proof_options = {
+        **base,
+        "vkHash": bytes([0xAA]) * 32,
+        "proofBytes": b"production-jindo-lattice-proof",
+    }
+
+    for helper in (build_jindo_lattice_public_inputs, buildJindoLatticePublicInputs):
+        with pytest.raises(TypeError, match="jindoLatticePublicInputs"):
+            helper(JindoDict(base))
+
+    for helper in (build_jindo_lattice_proof_envelope, buildJindoLatticeProofEnvelope):
+        with pytest.raises(TypeError, match="jindoLatticeProofEnvelope"):
+            helper(JindoDict(proof_options))
+
+    for helper in (build_jindo_lattice_proof_v0, buildJindoLatticeProofV0):
+        with pytest.raises(TypeError, match="jindoLatticeProofV0"):
+            helper(JindoDict(proof_options))
+
+    for helper in (
+        build_jindo_lattice_dev_proof_fixture,
+        buildJindoLatticeDevProofFixture,
+    ):
+        with pytest.raises(TypeError, match="jindoLatticeDevProofFixture"):
+            helper(JindoDict({**base, "vkHash": bytes([0xAA]) * 32}))
+
+    production_proof = build_jindo_lattice_proof_v0(proof_options)
+    raw_verified = verify_jindo_polynomial_commitment_v0(production_proof)
+    assert raw_verified["ok"] is True
+
+    verify_options = {"envelope": production_proof, **base}
+    for helper in (
+        verify_jindo_polynomial_commitment_v0,
+        verifyJindoPolynomialCommitmentV0,
+    ):
+        with pytest.raises(TypeError, match="jindoPolynomialCommitmentV0"):
+            helper(JindoDict(verify_options))
+
+    fixture = build_jindo_lattice_dev_proof_fixture(
+        {**base, "vkHash": bytes([0xAA]) * 32}
+    )
+    local_verified = verify_jindo_lattice_proof_locally(fixture["envelope"])
+    assert local_verified["ok"] is True
+
+    local_options = {**verify_options, "envelope": fixture["envelope"]}
+    for helper in (verify_jindo_lattice_proof_locally, verifyJindoLatticeProofLocally):
+        with pytest.raises(TypeError, match="jindoLatticeLocalVerification"):
+            helper(JindoDict(local_options))
+
+
 @pytest.mark.parametrize(
     "input_value",
     [

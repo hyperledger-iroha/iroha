@@ -50,6 +50,16 @@ class FakeRawResponse:
         return self.payload[:size]
 
 
+class SecretErrorBody:
+    def read(self, size=-1):
+        if size is None or size < 0:
+            size = 4097
+        return b"secret-token-receipt-rpc-error" * size
+
+    def close(self):
+        return None
+
+
 def rpc_response(result):
     return {"jsonrpc": "2.0", "id": 1, "result": result}
 
@@ -60,6 +70,37 @@ def quantity(value):
 
 def hex_bytes(byte, count):
     return "0x" + f"{byte:02x}" * count
+
+
+def test_receipt_cli_redacts_top_level_exception_details(monkeypatch, capsys):
+    module = load_module()
+
+    def fail_collect(*_args, **_kwargs):
+        raise RuntimeError("secret-token /tmp/operator/private-path")
+
+    monkeypatch.setattr(module, "collect_receipt_proof_evidence", fail_collect)
+
+    try:
+        module.main(
+            [
+                "--rpc-url",
+                "https://evm.example.invalid",
+                "--domain",
+                "eth",
+                "--transaction-hash",
+                "0x" + "11" * 32,
+                "--allow-receipt-only-evidence",
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("receipt proof CLI accepted top-level collection failure")
+
+    captured = capsys.readouterr()
+    assert "SCCP EVM receipt proof evidence collection failed" in captured.err
+    assert "secret-token" not in captured.err
+    assert "private-path" not in captured.err
 
 
 def source_log(module, *, duplicate=False, **overrides):
@@ -381,27 +422,31 @@ def test_collect_receipt_proof_rejects_non_mainnet_chain_id():
 
 def test_collect_receipt_proof_rejects_noncanonical_chain_id_quantity():
     module = load_module()
-    calls = []
 
-    def opener(request, timeout=15.0):
-        del timeout
-        payload = json.loads(request.data.decode("utf-8"))
-        calls.append(payload["method"])
-        return FakeResponse(rpc_response("0x01"))
+    for chain_id_result in ("0x01", "0X1", " 0x1", "0x1 ", 1):
+        calls = []
 
-    try:
-        module.collect_receipt_proof_evidence(
-            "https://rpc.example",
-            domain=module.SCCP_DOMAIN_ETH,
-            transaction_hash=bytes.fromhex("11" * 32),
-            allow_receipt_only_evidence=True,
-            opener=opener,
-        )
-    except RuntimeError as exc:
-        assert "eth_chainId returned non-canonical quantity" in str(exc)
-    else:
-        raise AssertionError("noncanonical eth_chainId quantity was accepted")
-    assert calls == ["eth_chainId"]
+        def opener(request, timeout=15.0):
+            del timeout
+            payload = json.loads(request.data.decode("utf-8"))
+            calls.append(payload["method"])
+            return FakeResponse(rpc_response(chain_id_result))
+
+        try:
+            module.collect_receipt_proof_evidence(
+                "https://rpc.example",
+                domain=module.SCCP_DOMAIN_ETH,
+                transaction_hash=bytes.fromhex("11" * 32),
+                allow_receipt_only_evidence=True,
+                opener=opener,
+            )
+        except RuntimeError as exc:
+            assert "eth_chainId returned non-canonical quantity" in str(exc)
+        else:
+            raise AssertionError(
+                f"noncanonical eth_chainId quantity {chain_id_result!r} was accepted"
+            )
+        assert calls == ["eth_chainId"], chain_id_result
 
 
 def test_collect_receipt_proof_rejects_duplicate_json_rpc_result_keys():
@@ -413,7 +458,9 @@ def test_collect_receipt_proof_rejects_duplicate_json_rpc_result_keys():
         payload = json.loads(request.data.decode("utf-8"))
         calls.append(payload["method"])
         return FakeRawResponse(
-            '{"jsonrpc":"2.0","id":1,"result":"0x1","result":"0x2"}'
+            '{"jsonrpc":"2.0","id":1,'
+            '"secret-token-result":"0x1","secret-token-result":"0x2",'
+            '"result":"0x3"}'
         )
 
     try:
@@ -425,7 +472,12 @@ def test_collect_receipt_proof_rejects_duplicate_json_rpc_result_keys():
             opener=opener,
         )
     except RuntimeError as exc:
-        assert "JSON-RPC returned duplicate JSON key 'result'" in str(exc)
+        message = str(exc)
+        assert message == "JSON-RPC eth_chainId returned duplicate JSON keys"
+        assert "secret-token" not in message
+        assert "duplicate JSON key " not in message
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
     else:
         raise AssertionError("duplicate JSON-RPC result keys were accepted")
     assert calls == ["eth_chainId"]
@@ -462,10 +514,82 @@ def test_collect_receipt_proof_rejects_duplicate_json_receipt_fields():
             opener=opener,
         )
     except RuntimeError as exc:
-        assert "JSON-RPC returned duplicate JSON key 'transactionHash'" in str(exc)
+        message = str(exc)
+        assert message == "JSON-RPC eth_getTransactionReceipt returned duplicate JSON keys"
+        assert "transactionHash" not in message
+        assert "duplicate JSON key " not in message
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
     else:
         raise AssertionError("duplicate JSON receipt fields were accepted")
     assert calls == ["eth_chainId", "eth_getTransactionReceipt"]
+
+
+def test_receipt_json_rpc_redacts_transport_and_error_response_details():
+    module = load_module()
+
+    def secret_http_error_opener(request, timeout=15.0):
+        del timeout
+        raise module.urllib.error.HTTPError(
+            request.full_url,
+            503,
+            "secret-token gateway",
+            {},
+            SecretErrorBody(),
+        )
+
+    def secret_url_error_opener(_request, timeout=15.0):
+        del timeout
+        raise module.urllib.error.URLError(
+            "secret-token provider URL leaked from transport"
+        )
+
+    def secret_error_object_opener(_request, timeout=15.0):
+        del timeout
+        return FakeResponse(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "error": {
+                    "code": -32000,
+                    "message": "secret-token receipt proof error object",
+                },
+            }
+        )
+
+    cases = (
+        (
+            secret_http_error_opener,
+            "JSON-RPC eth_chainId failed with HTTP 503",
+            "secret-bearing HTTP receipt RPC error was accepted",
+        ),
+        (
+            secret_url_error_opener,
+            "JSON-RPC eth_chainId request failed",
+            "secret-bearing receipt RPC transport error was accepted",
+        ),
+        (
+            secret_error_object_opener,
+            "JSON-RPC eth_chainId returned error response",
+            "secret-bearing receipt RPC error object was accepted",
+        ),
+    )
+    for opener, expected_message, failure in cases:
+        try:
+            module._json_rpc(
+                "https://rpc.example",
+                "eth_chainId",
+                [],
+                opener=opener,
+                timeout=3.0,
+            )
+        except RuntimeError as exc:
+            message = str(exc)
+            assert message == expected_message
+            assert "secret-token" not in message
+            assert "error object" not in message
+        else:
+            raise AssertionError(failure)
 
 
 def test_collect_receipt_proof_rejects_failed_receipt():

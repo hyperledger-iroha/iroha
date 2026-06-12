@@ -5188,6 +5188,7 @@ function encodeBackendTagValue(value, context) {
     case "unsupported":
       return encodeEnumTagValue(4);
     case "halo2ipaorchard":
+    case "halo2pastaactionbundle":
     case "orchard":
     case "zcashorchard":
       return encodeEnumTagValue(5);
@@ -5202,6 +5203,7 @@ function encodeBackendTagValue(value, context) {
     case "halo2ipamasp":
       return encodeEnumTagValue(6);
     case "fcmppluspluscurvetree":
+    case "fcmppluspluscurvetreesbulletproofs":
     case "fcmp":
     case "monero":
     case "monerofcmp":
@@ -5219,9 +5221,11 @@ function encodeBackendTagValue(value, context) {
       return encodeEnumTagValue(8);
     case "starkfrimiden":
     case "midenstark":
+    case "starkvmnotetransaction":
       return encodeEnumTagValue(9);
     case "aztecplonkishprivatekernel":
     case "aztecprivatekernel":
+    case "plonkishprivatekernelrollup":
       return encodeEnumTagValue(10);
     case "pqmaspstarkfri":
     case "pqmaspstark":

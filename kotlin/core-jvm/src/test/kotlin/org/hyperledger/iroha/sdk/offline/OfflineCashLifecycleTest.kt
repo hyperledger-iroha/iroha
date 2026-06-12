@@ -101,6 +101,26 @@ class OfflineCashLifecycleTest {
         }
         assertEquals("missing_issuer_public_key", error.code)
 
+        for (issuerKey in listOf(
+            "",
+            " issuer-key",
+            "issuer-key ",
+            "issuer key",
+            "issuer-key\n",
+            "issuer-key\u2603",
+        )) {
+            val noncanonical = assertFailsWith<OfflineCashConfigurationSnapshotException> {
+                OfflineCashConfigurationSnapshot(
+                    chainId = "00000042",
+                    assetDefinitionId = "pkr#sbp",
+                    offlinePaymentsEnabled = true,
+                    issuerPublicKeyBase64 = issuerKey,
+                    nativeBridgeAbiVersion = 7,
+                ).requireUsableForOfflineExchange(nowMs = 200, requiredNativeBridgeAbiVersion = 7)
+            }
+            assertEquals("missing_issuer_public_key", noncanonical.code)
+        }
+
         val disabled = assertFailsWith<OfflineCashConfigurationSnapshotException> {
             OfflineCashConfigurationSnapshot(
                 chainId = "00000042",

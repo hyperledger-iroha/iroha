@@ -10086,6 +10086,11 @@ Temporal properties:
   delivery preserves the delivered RBC evidence, view/GST/vote counters, empty
   commit witnesses, closed RBC/fault gates, and the exact progress/timer
   surface used by later delivered-pending closure proofs.
+- `RbcDeliveryEntryCommitEvidenceBranchAlwaysHandsOffToDeliveredPendingWaitState`
+  proves that the same first-delivery branch selector enters the named
+  `DeliveredPendingCompleteWaitState` exactly on the non-final branch, while
+  the certified branch remains outside that wait state with committed finality,
+  exact commit witnesses, and closed progress gates.
 - `RbcProgressEvidenceNeverDiverges` proves that every reachable RBC progress
   state keeps the evidence expected for that state: initialized states keep
   validated header/digest evidence, chunk-covered states keep full chunk
@@ -10656,6 +10661,57 @@ Temporal properties:
   post-state simultaneously satisfies the source, counter, phase/gate, timer,
   view/evidence, finality, and RBC-surface obligations with commit artifacts
   absent and only the consensus/GST/stutter action surface exposed.
+- `DeliveredPendingCompleteWaitStateSpecStepAlwaysCloses` proves that the named
+  delivered-pending complete wait state is closed by every spec step: commit
+  artifact changes install certified finality with exact witnesses and closed
+  progress gates, while stable commit artifacts re-enter the same complete
+  wait-state predicate.
+- `DeliveredPendingCompleteWaitStateCommitVoteStepAlwaysSplits` proves that an
+  honest or Byzantine commit vote from the named delivered-pending complete
+  wait state has exact vote/stake deltas and splits only into certified
+  finality or the same named wait state, depending on whether the added vote
+  completes `CanCommit`.
+- `DeliveredPendingCompleteWaitStateCommitVoteStepAlwaysPreservesWaitState`
+  proves the non-final side of that split: an honest or Byzantine commit vote
+  that still lacks `CanCommit` preserves delivered RBC evidence, keeps commit
+  witnesses absent, re-enters the named wait state, and exposes exactly the
+  remaining commit-vote progress/timer surface.
+- `DeliveredPendingCompleteWaitStateCommitVoteStepAlwaysCompletesFinality`
+  proves the final side of that split: an honest or Byzantine commit vote that
+  satisfies `CanCommit` exits the named wait state, installs the complete
+  finality certificate stack with exact vote/stake witnesses for the current
+  view, and closes every post-commit progress, timeout, RBC, and fault gate
+  except the pre-GST `GstElapsed` observation surface.
+- `DeliveredPendingCompleteWaitStatePrepareVoteStepAlwaysSplits` proves that
+  an honest prepare vote from the named delivered-pending complete wait state
+  preserves delivered RBC evidence and absent commit witnesses, increments the
+  prepare counter exactly once, and splits only between the same named
+  `Prepare` wait surface and the named `CommitVote` wait surface depending on
+  whether the added prepare vote reaches quorum.
+- `DeliveredPendingCompleteWaitStateTimeoutStepAlwaysStartsNewView` proves
+  that a timeout from the named delivered-pending complete wait state preserves
+  delivered RBC evidence and absent commit witnesses, advances the view up to
+  `MaxView`, clears prepare/commit/NewView handoff counters and view evidence,
+  and re-enters the named wait state with only the NewView vote progress gate
+  plus the expected GST/timer surface exposed.
+- `DeliveredPendingCompleteWaitStateNewViewVoteStepAlwaysSplits` proves that
+  an honest NewView vote from the named delivered-pending complete wait state
+  preserves delivered RBC evidence and absent commit witnesses, increments the
+  NewView counter exactly once, and splits only between the same named NewView
+  wait surface and the named Propose wait surface with installed view evidence
+  when the added vote reaches quorum.
+- `DeliveredPendingCompleteWaitStateHonestProposeStepAlwaysStartsPrepare`
+  proves that an honest proposal from the named delivered-pending complete wait
+  state preserves delivered RBC evidence and absent commit witnesses, resets
+  transient consensus counters, preserves view evidence, and re-enters the
+  named wait state with exactly the prepare-vote progress/timer surface
+  exposed.
+- `DeliveredPendingCompleteWaitStateGstElapsedStepAlwaysKeepsWaitState` proves
+  that GST observation from the named delivered-pending complete wait state
+  changes only the GST flag, preserves delivered RBC evidence and absent commit
+  witnesses, keeps the current phase/gate surface stable, and re-enters the
+  named wait state with `GstElapsed` closed and timeout tracking only the
+  remaining post-GST progress surface.
 - `PendingProtocolStepsNeverChangeGst` proves that non-final NewView,
   prepare-vote, honest commit-vote, Byzantine commit-vote, and RBC DELIVER
   pending branches preserve the GST observation flag; synchrony observation

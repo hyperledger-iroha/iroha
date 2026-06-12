@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { ToriiBrowserClient, ToriiBrowserHttpError } from "../src/toriiBrowserClient.js";
+import * as browserSdk from "../src/browser.js";
 
 const BASE_URL = "https://localhost:8080/v1/explorer";
 
@@ -89,6 +90,38 @@ test("ToriiBrowserClient queryVisibleTransactions posts a browser-safe envelope"
   assert.deepEqual(payload, { items: [], total: 0 });
 });
 
+test("ToriiBrowserClient rejects adversarial query options before fetch", async () => {
+  const fetchImpl = async () => {
+    throw new Error("fetch should not be called for invalid local options");
+  };
+  const client = new ToriiBrowserClient("https://torii.example", { fetchImpl });
+
+  assert.throws(
+    () => client.listExplorerBlocks({ page: 0 }),
+    /positive safe integer/,
+  );
+  assert.throws(
+    () => client.queryVisibleTransactions({ sort: "timestamp_ms:drop" }),
+    /asc or desc/,
+  );
+  assert.throws(
+    () => client.queryVisibleTransactions({ sort: "timestamp_ms:desc:extra" }),
+    /key:asc\/key:desc/,
+  );
+  assert.throws(
+    () => client.queryVisibleTransactions({ sort: [{ key: "timestamp ms", order: "desc" }] }),
+    /ASCII field name/,
+  );
+  assert.throws(
+    () => client.queryVisibleTransactions({ select: "entrypoint_hash" }),
+    /select must be an array/,
+  );
+  assert.throws(
+    () => client.resolveAlias("  "),
+    /alias must not be empty/,
+  );
+});
+
 test("ToriiBrowserClient preserves error responses for callers", async () => {
   const fetchImpl = async () => new Response("not found", { status: 404 });
   const client = new ToriiBrowserClient("https://localhost:8080", { fetchImpl });
@@ -101,4 +134,23 @@ test("ToriiBrowserClient preserves error responses for callers", async () => {
       return true;
     },
   );
+});
+
+test("browser aggregate exports reusable browser-safe SDK APIs", () => {
+  assert.equal(typeof browserSdk.AccountAddress, "function");
+  assert.equal(typeof browserSdk.ToriiBrowserClient, "function");
+  assert.equal(typeof browserSdk.normalizeAccountAliasFqn, "function");
+  assert.equal(typeof browserSdk.noritoEncodeMultisigProposeRequest, "function");
+});
+
+test("ToriiBrowserClient resolves aliases with JSON body", async () => {
+  const fetchImpl = async (url, init) => {
+    assert.equal(String(url), "https://torii.example/v1/aliases/resolve");
+    assert.equal(init.method, "POST");
+    assert.deepEqual(JSON.parse(init.body), { alias: "cbdc@pob.cbsi" });
+    return jsonResponse({ resolved: true, account_id: "account" });
+  };
+  const client = new ToriiBrowserClient("https://torii.example", { fetchImpl });
+  const payload = await client.resolveAlias("cbdc@pob.cbsi");
+  assert.deepEqual(payload, { resolved: true, account_id: "account" });
 });

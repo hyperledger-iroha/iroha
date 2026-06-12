@@ -23,6 +23,7 @@ from .verange import (
     _reject_unknown_fields,
     _require_mapping,
     _require_non_blank_string,
+    _require_plain_mapping,
 )
 
 JINDO_BACKEND = "unsupported"
@@ -491,7 +492,7 @@ _COMMON_FIELDS = {
 def build_jindo_lattice_public_inputs(options: Mapping[str, Any]) -> dict[str, Any]:
     """Normalize Jindo lattice PCS public inputs for SDK/dev-fixture use."""
 
-    source = _require_mapping(options, "jindoLatticePublicInputs")
+    source = _require_plain_mapping(options, "jindoLatticePublicInputs")
     _reject_unknown_fields(source, _COMMON_FIELDS, "jindoLatticePublicInputs")
     parts = _public_input_parts(source, "jindoLatticePublicInputs")
     return {
@@ -699,7 +700,7 @@ _ENVELOPE_FIELDS = {
 def build_jindo_lattice_proof_envelope(options: Mapping[str, Any]) -> bytes:
     """Build canonical OpenVerifyEnvelope bytes for a prepared Jindo proof."""
 
-    source = _require_mapping(options, "jindoLatticeProofEnvelope")
+    source = _require_plain_mapping(options, "jindoLatticeProofEnvelope")
     _reject_unknown_fields(source, _ENVELOPE_FIELDS, "jindoLatticeProofEnvelope")
     parts = _proof_parts(source, "jindoLatticeProofEnvelope", require_proof_bytes=True)
     return _build_privacy_proof_envelope_internal(
@@ -720,7 +721,7 @@ def build_jindo_lattice_proof_envelope(options: Mapping[str, Any]) -> bytes:
 def build_jindo_lattice_proof_v0(options: Mapping[str, Any]) -> bytes:
     """Build canonical production Jindo lattice PCS proof envelope bytes."""
 
-    source = _require_mapping(options, "jindoLatticeProofV0")
+    source = _require_plain_mapping(options, "jindoLatticeProofV0")
     _reject_unknown_fields(source, _ENVELOPE_FIELDS, "jindoLatticeProofV0")
     parts = _proof_parts(
         source,
@@ -764,7 +765,7 @@ def _dev_proof_bytes(
 def build_jindo_lattice_dev_proof_fixture(options: Mapping[str, Any]) -> dict[str, Any]:
     """Build a deterministic Jindo lattice PCS dev proof fixture."""
 
-    source = _require_mapping(options, "jindoLatticeDevProofFixture")
+    source = _require_plain_mapping(options, "jindoLatticeDevProofFixture")
     _reject_unknown_fields(
         source,
         _ENVELOPE_FIELDS - {"proofBytes", "proof_bytes", "proof"},
@@ -950,7 +951,7 @@ def verify_jindo_lattice_proof_locally(options: Any) -> dict[str, Any]:
     """Verify a deterministic Jindo lattice PCS dev fixture."""
 
     if isinstance(options, Mapping):
-        source = options
+        source = _require_plain_mapping(options, "jindoLatticeLocalVerification")
     else:
         source = {"envelope": options}
     _reject_unknown_fields(
@@ -1015,7 +1016,7 @@ def verify_jindo_polynomial_commitment_v0(options: Any) -> dict[str, Any]:
     """Validate a production Jindo lattice PCS proof envelope binding."""
 
     if isinstance(options, Mapping):
-        source = options
+        source = _require_plain_mapping(options, "jindoPolynomialCommitmentV0")
     else:
         source = {"envelope": options}
     _reject_unknown_fields(

@@ -7,26 +7,29 @@ import kotlin.test.assertNotNull
 
 class ConnectEnvelopeCodecTest {
     @Test
-    fun signResultOkAcceptsTrimmedEd25519Alias() {
+    fun signResultOkAcceptsExactEd25519Algorithm() {
         val signature = ByteArray(64) { it.toByte() }
 
-        for (algorithm in listOf("ed25519", "ED25519", " Ed25519 ")) {
-            val encoded = ConnectEnvelopeCodec.encodeSignResultOkEnvelope(7L, signature, algorithm)
-            val decoded = ConnectEnvelopeCodec.decodeEnvelope(encoded)
+        val encoded = ConnectEnvelopeCodec.encodeSignResultOkEnvelope(7L, signature, "ed25519")
+        val decoded = ConnectEnvelopeCodec.decodeEnvelope(encoded)
 
-            assertEquals(7L, decoded.sequence)
-            assertEquals(ConnectEnvelopeCodec.PayloadKind.SIGN_RESULT_OK, decoded.payload.kind())
-            val payload = decoded.payload as ConnectEnvelopeCodec.SignResultOkPayload
-            assertEquals("ed25519", payload.algorithm)
-            assertEquals(signature.toList(), payload.signature().toList())
-        }
+        assertEquals(7L, decoded.sequence)
+        assertEquals(ConnectEnvelopeCodec.PayloadKind.SIGN_RESULT_OK, decoded.payload.kind())
+        val payload = decoded.payload as ConnectEnvelopeCodec.SignResultOkPayload
+        assertEquals("ed25519", payload.algorithm)
+        assertEquals(signature.toList(), payload.signature().toList())
     }
 
     @Test
-    fun signResultOkRejectsControlAndUnicodeConfusableAlgorithms() {
+    fun signResultOkRejectsNonExactControlAndUnicodeConfusableAlgorithms() {
         val signature = ByteArray(64) { 0x55 }
 
         for (algorithm in listOf(
+            "",
+            " ",
+            "ED25519",
+            " Ed25519 ",
+            "ed25519 ",
             "secp256k1",
             "ed\t25519",
             "ed\u200B25519",

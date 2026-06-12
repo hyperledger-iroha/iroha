@@ -917,6 +917,11 @@ const PRIVACY_PRODUCTION_SDK_PARITY_ARTIFACT_KINDS: &[&str] =
 
 const PRIVACY_REQUIRED_PRODUCTION_PLAN_ROWS: &[(&str, &str, &str)] = &[
     (
+        "zk-ace-pq-authorization-v0",
+        "stark/fri/sha256-goldilocks",
+        "stark-fri",
+    ),
+    (
         "anonymous-pgc-k-out-of-n-v1",
         "anonymous-pgc-k-out-of-n",
         "anonymous-pgc",
@@ -990,14 +995,7 @@ const PRIVACY_REQUIRED_PRODUCTION_PLAN_ROWS: &[(&str, &str, &str)] = &[
 ];
 
 const PRIVACY_COMPONENT_ALGORITHM_IDS: &[&str] = &["verange-transparent-range-v1"];
-const PRIVACY_RESEARCH_TARGET_ALGORITHM_IDS: &[&str] = &[
-    "orchard-halo2-actions-v1",
-    "penumbra-masp-v1",
-    "monero-fcmp-plus-plus-v1",
-    "miden-stark-note-v1",
-    "aztec-private-rollup-v1",
-    "pq-masp-stark-v0",
-];
+const PRIVACY_RESEARCH_TARGET_ALGORITHM_IDS: &[&str] = &[];
 const PRIVACY_EXPOSED_PRODUCTION_CLAIM_FRAGMENTS: &[&str] = &[
     "productionready",
     "productionhardened",
@@ -1131,9 +1129,11 @@ const PRIVACY_ALGORITHM_ENTRIES: &[PrivacyAlgorithmEntry] = &[
             "buildRangeCommitment",
             "buildVeRangeDevProofFixture",
             "buildVeRangeProofEnvelope",
+            "buildVeRangeProofV1",
             "verifyVeRangeProofLocally",
+            "verifyVeRangeProofV1",
         ],
-        planned_entrypoints: &["buildVeRangeProofV1"],
+        planned_entrypoints: &[],
     },
     PrivacyAlgorithmEntry {
         id: "zkat-policy-private-auth-v1",
@@ -2357,8 +2357,7 @@ fn privacy_algorithm_entry_invariants_hold(entry: &PrivacyAlgorithmEntry) -> boo
         })
         && (!has_local_verifier || has_explicit_dev_fixture)
         && (!has_explicit_dev_fixture || has_local_verifier)
-        && (!has_explicit_dev_fixture
-            || privacy_entrypoints_include_production_proof_builder(entry.planned_entrypoints))
+        && (!has_explicit_dev_fixture || has_production_proof_builder)
         && (!has_planned_ledger_mutation || has_production_proof_builder)
         && (!proofed_privacy_row || !has_sdk_ledger_mutation || has_production_proof_builder)
         && (!proofed_privacy_row || !has_generic_ledger_mutation)
@@ -24640,8 +24639,8 @@ mod tests {
         assert!(
             PRIVACY_ALGORITHM_ENTRIES
                 .iter()
-                .any(|entry| !entry.planned_entrypoints.is_empty()),
-            "catalog invariant test must cover planned entrypoint rows",
+                .all(|entry| entry.planned_entrypoints.is_empty()),
+            "catalog invariant test must keep required privacy proof builders exported",
         );
         assert!(
             PRIVACY_ALGORITHM_ENTRIES.iter().any(|entry| entry
@@ -24653,8 +24652,8 @@ mod tests {
         assert!(privacy_required_production_plan_rows_are_present(
             PRIVACY_ALGORITHM_ENTRIES
         ));
-        assert_eq!(PRIVACY_REQUIRED_PRODUCTION_PLAN_ROWS.len(), 15);
-        assert_eq!(PRIVACY_RESEARCH_TARGET_ALGORITHM_IDS.len(), 6);
+        assert_eq!(PRIVACY_REQUIRED_PRODUCTION_PLAN_ROWS.len(), 16);
+        assert_eq!(PRIVACY_RESEARCH_TARGET_ALGORITHM_IDS.len(), 0);
         assert!(
             PRIVACY_ALGORITHM_ENTRIES
                 .iter()
@@ -25252,19 +25251,8 @@ mod tests {
         const PLANNED_LOCAL_VERIFIER_SUFFIX: &[&str] = &["verifyShapeProofLocalVerifier"];
         const PLANNED_INSTRUCTION: &[&str] = &["buildShapeProductionInstruction"];
         const PLANNED_PROOF_HELPER: &[&str] = &["buildShapeProofEnvelope"];
-        const RESEARCH_SDK: &[&str] = &["verifySharedResearchProof"];
 
         for (case, entry) in [
-            (
-                "research target executable entrypoint",
-                privacy_catalog_entry_for_test(
-                    "pq-masp-stark-v0",
-                    "stark-fri",
-                    "pq-masp-stark-fri",
-                    RESEARCH_SDK,
-                    PLANNED_PROOF,
-                ),
-            ),
             (
                 "planned fixture entrypoint",
                 privacy_catalog_entry_for_test(
@@ -25389,7 +25377,9 @@ mod tests {
             "buildRangeCommitment",
             "buildVeRangeDevProofFixture",
             "buildVeRangeProofEnvelope",
+            "buildVeRangeProofV1",
             "verifyVeRangeProofLocally",
+            "verifyVeRangeProofV1",
         ];
         const SDK_INSTRUCTION: &[&str] = &["buildVeRangeInstruction"];
         const SDK_QUALIFIED_INSTRUCTION: &[&str] = &["Iroha.Privacy.buildVeRangeInstruction"];

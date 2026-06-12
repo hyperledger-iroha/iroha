@@ -17,13 +17,13 @@ public final class OfflineNoteReceiptAck {
       final byte[] tokenId,
       final String recipientAccountId,
       final long acceptedAtMs) {
-    this.chainId = requireNonBlank(chainId, "chainId");
-    this.paymentRequestId = requireNonBlank(paymentRequestId, "paymentRequestId");
+    this.chainId = requireNonBlankUnpadded(chainId, "chainId");
+    this.paymentRequestId = requireNonBlankUnpadded(paymentRequestId, "paymentRequestId");
     this.tokenId = Objects.requireNonNull(tokenId, "tokenId").clone();
     if (this.tokenId.length != 32) {
       throw new IllegalArgumentException("tokenId must be 32 bytes");
     }
-    this.recipientAccountId = requireNonBlank(recipientAccountId, "recipientAccountId");
+    this.recipientAccountId = requireNonBlankUnpadded(recipientAccountId, "recipientAccountId");
     if (acceptedAtMs <= 0L) {
       throw new IllegalArgumentException("acceptedAtMs must be positive");
     }
@@ -35,7 +35,7 @@ public final class OfflineNoteReceiptAck {
       final String recipientAccountId,
       final long acceptedAtMs) {
     final OfflineNotePaymentToken checkedToken = Objects.requireNonNull(token, "token");
-    final String checkedRecipient = requireNonBlank(recipientAccountId, "recipientAccountId");
+    final String checkedRecipient = requireNonBlankUnpadded(recipientAccountId, "recipientAccountId");
     if (!tokenHasRecipientOutput(checkedToken, checkedRecipient)) {
       throw new IllegalArgumentException("payment token does not contain recipient output");
     }
@@ -100,5 +100,13 @@ public final class OfflineNoteReceiptAck {
       throw new IllegalArgumentException(field + " must not be blank");
     }
     return value;
+  }
+
+  private static String requireNonBlankUnpadded(final String value, final String field) {
+    final String checked = requireNonBlank(value, field);
+    if (!checked.trim().equals(checked)) {
+      throw new IllegalArgumentException(field + " must not contain surrounding whitespace");
+    }
+    return checked;
   }
 }

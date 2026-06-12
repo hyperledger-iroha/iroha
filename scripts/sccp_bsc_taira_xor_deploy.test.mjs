@@ -23,6 +23,7 @@ import {
   SCCP_DOMAIN_BSC,
   SCCP_DOMAIN_SORA,
   bscCanonicalProductionOutputProblems,
+  buildBscTairaXorRouteManifestDraft,
   canonicalBscNativeEvmProverBundleHash,
   bscDestinationBindingHash,
   bscDestinationBindingKey,
@@ -36,6 +37,7 @@ import {
   isCanonicalBscProductionArtifactPath,
   isSmokeFixtureGroth16VerifierMaterial,
   normalizeBscRpcUrl,
+  parseJsonWithoutDuplicateKeys,
   normalizeVerifierMaterial,
   unsafeSecretReason,
   validateBscReadbackEvidence,
@@ -358,6 +360,20 @@ const routeManifest = (overrides = {}) => {
   };
 };
 
+const tairaBurnRecordContract = (overrides = {}) => ({
+  schema: "iroha-sccp-taira-xor-burn-record-contract/v1",
+  route_id: "taira_bsc_xor",
+  asset_key: "xor",
+  artifact_b64: BURN_RECORD_B64,
+  artifact_sha256: BURN_RECORD_SHA256,
+  code_hash: HASH_33,
+  vk_ref: {
+    backend: "halo2_ipa",
+    name: "taira_bsc_xor_burn_record_v1",
+  },
+  ...overrides,
+});
+
 const productionReadyRouteManifest = (overrides = {}) => {
   const {
     bundleOverrides,
@@ -663,6 +679,432 @@ test("BSC deployment evidence accepts only matching live readback", () => {
   );
 });
 
+test("BSC route-manifest command binds deployment evidence and TAIRA burn-record material", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "iroha-bsc-route-manifest-"));
+  const evidencePath = join(dir, "deployment.evidence.json");
+  const contractPath = join(dir, "burn-record.contract.json");
+  const out = join(dir, "route.manifest.json");
+  const evidence = buildDeploymentEvidence({
+    tokenAddress: BSC_TOKEN_ADDRESS,
+    bridgeAddress: BSC_BRIDGE_ADDRESS,
+    sourceBridgeAddress: BSC_SOURCE_BRIDGE_ADDRESS,
+    verifierAddress: BSC_VERIFIER_ADDRESS,
+    verifierCodeHash: HASH_11,
+    verifierKeyHash: HASH_22,
+    readback: readyReadback(),
+  });
+  await writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
+  await writeFile(
+    contractPath,
+    `${JSON.stringify(tairaBurnRecordContract(), null, 2)}\n`,
+  );
+
+  const result = await main([
+    "route-manifest",
+    "--evidence",
+    evidencePath,
+    "--taira-contract",
+    contractPath,
+    "--settlement-asset-definition-id",
+    "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+    "--proof-artifact-hash",
+    HASH_44,
+    "--proving-key-hash",
+    HASH_55,
+    "--out",
+    out,
+  ]);
+  const manifest = JSON.parse(await readFile(out, "utf8"));
+
+  assert.equal(result.ok, true);
+  assert.equal(manifest.schema, ROUTE_MANIFEST_SCHEMA);
+  assert.equal(manifest.routeId, "taira_bsc_xor");
+  assert.equal(manifest.bscNetwork, "testnet");
+  assert.equal(manifest.productionReady, false);
+  assert.equal(manifest.bscBridgeAddress, BSC_BRIDGE_ADDRESS);
+  assert.equal(manifest.bscTokenAddress, BSC_TOKEN_ADDRESS);
+  assert.equal(manifest.bscVerifierAddress, BSC_VERIFIER_ADDRESS);
+  assert.equal(manifest.proofArtifactHash, HASH_44);
+  assert.equal(manifest.provingKeyHash, HASH_55);
+  assert.equal(
+    manifest.destinationRollout.destinationBindingHash,
+    bindingHash(),
+  );
+  assert.equal(
+    manifest.tairaXorBurnRecord.artifactSha256,
+    BURN_RECORD_SHA256,
+  );
+  assert.deepEqual(manifest.tairaXorBurnRecord.vkRef, {
+    backend: "halo2_ipa",
+    name: "taira_bsc_xor_burn_record_v1",
+  });
+  assert.doesNotMatch(JSON.stringify(manifest), /private[_-]?key|mnemonic|seed/iu);
+});
+
+test("BSC route-manifest command builds production-ready manifests only with bound native and post-deploy evidence", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "iroha-bsc-route-manifest-ready-"));
+  const evidencePath = join(dir, "deployment.evidence.json");
+  const contractPath = join(dir, "burn-record.contract.json");
+  const bundlePath = join(dir, "native-prover-bundle.json");
+  const out = join(dir, "route.manifest.json");
+  const evidence = buildDeploymentEvidence({
+    tokenAddress: BSC_TOKEN_ADDRESS,
+    bridgeAddress: BSC_BRIDGE_ADDRESS,
+    sourceBridgeAddress: BSC_SOURCE_BRIDGE_ADDRESS,
+    verifierAddress: BSC_VERIFIER_ADDRESS,
+    verifierCodeHash: HASH_11,
+    verifierKeyHash: HASH_22,
+    readback: readyReadback(),
+  });
+  const bundle = nativeProverBundleForRollout(routeManifest().destinationRollout);
+  await writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
+  await writeFile(
+    contractPath,
+    `${JSON.stringify(tairaBurnRecordContract(), null, 2)}\n`,
+  );
+  await writeFile(bundlePath, `${JSON.stringify(bundle, null, 2)}\n`);
+
+  const result = await main([
+    "route-manifest",
+    "--evidence",
+    evidencePath,
+    "--taira-contract",
+    contractPath,
+    "--settlement-asset-definition-id",
+    "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+    "--native-prover-bundle",
+    bundlePath,
+    "--source-bridge-config-hash",
+    HASH_33,
+    "--source-event-transaction-id",
+    HASH_55,
+    "--source-event-explorer-url",
+    SOURCE_EVENT_EXPLORER_URL,
+    "--route-canary-evidence-hash",
+    HASH_66,
+    "--route-canary-transaction-id",
+    HASH_77,
+    "--route-canary-explorer-url",
+    ROUTE_CANARY_EXPLORER_URL,
+    "--full-toml-ready",
+    "true",
+    "--offline-full-toml-sha256",
+    hex32("88"),
+    "--production-ready",
+    "true",
+    "--live-readback-checked",
+    "true",
+    "--confirm-testnet",
+    "taira_bsc_xor",
+    "--out",
+    out,
+  ]);
+  const manifest = JSON.parse(await readFile(out, "utf8"));
+  const expectedBundleHash = canonicalBscNativeEvmProverBundleHash(
+    validateBscTestnetNativeEvmProverBundle(bundle, {
+      expectedDestinationBindingHash: bindingHash(),
+    }),
+  );
+
+  assert.equal(result.productionReady, true);
+  assert.equal(manifest.productionReady, true);
+  assert.equal(manifest.disabledReason, undefined);
+  assert.equal(manifest.postDeployReadbackChecked, true);
+  assert.equal(manifest.proofArtifactHash, HASH_44);
+  assert.equal(manifest.provingKeyHash, HASH_55);
+  assert.equal(manifest.nativeEvmProverBundleHash, expectedBundleHash);
+  assert.equal(
+    manifest.destinationRollout.nativeEvmProverBundleHash,
+    expectedBundleHash,
+  );
+  assert.equal(
+    manifest.postDeployLiveEvidence.offlineFullTomlSha256,
+    hex32("88"),
+  );
+});
+
+test("BSC route-manifest production readiness rejects missing TOML hash and diagnostic verifier material", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "iroha-bsc-route-manifest-bad-"));
+  const evidencePath = join(dir, "deployment.evidence.json");
+  const diagnosticEvidencePath = join(dir, "diagnostic.evidence.json");
+  const contractPath = join(dir, "burn-record.contract.json");
+  const bundlePath = join(dir, "native-prover-bundle.json");
+  const diagnosticBundlePath = join(dir, "diagnostic-native-prover-bundle.json");
+  const evidence = buildDeploymentEvidence({
+    tokenAddress: BSC_TOKEN_ADDRESS,
+    bridgeAddress: BSC_BRIDGE_ADDRESS,
+    sourceBridgeAddress: BSC_SOURCE_BRIDGE_ADDRESS,
+    verifierAddress: BSC_VERIFIER_ADDRESS,
+    verifierCodeHash: HASH_11,
+    verifierKeyHash: HASH_22,
+    readback: readyReadback(),
+  });
+  const diagnosticEvidence = buildDeploymentEvidence({
+    tokenAddress: BSC_TOKEN_ADDRESS,
+    bridgeAddress: BSC_BRIDGE_ADDRESS,
+    sourceBridgeAddress: BSC_SOURCE_BRIDGE_ADDRESS,
+    verifierAddress: BSC_VERIFIER_ADDRESS,
+    verifierCodeHash: HASH_11,
+    verifierKeyHash: DIAGNOSTIC_BSC_VERIFIER_KEY_HASH,
+    readback: readyReadback({
+      verifierKeyHash: DIAGNOSTIC_BSC_VERIFIER_KEY_HASH,
+      bridgeVerifierKeyHash: DIAGNOSTIC_BSC_VERIFIER_KEY_HASH,
+      bridgeDestinationBindingHash: diagnosticBindingHash(),
+    }),
+  });
+  const bundle = nativeProverBundleForRollout(routeManifest().destinationRollout);
+  const diagnosticRoute = routeManifest({
+    destinationRollout: {
+      verifierKeyHash: DIAGNOSTIC_BSC_VERIFIER_KEY_HASH,
+      destinationBindingHash: diagnosticBindingHash(),
+      destinationBindingKey: diagnosticBindingKey(),
+    },
+    destinationBinding: {
+      key: diagnosticBindingKey(),
+      bindingHash: diagnosticBindingHash(),
+    },
+  });
+  const diagnosticBundle = nativeProverBundleForRollout(
+    diagnosticRoute.destinationRollout,
+  );
+  await writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
+  await writeFile(
+    diagnosticEvidencePath,
+    `${JSON.stringify(diagnosticEvidence, null, 2)}\n`,
+  );
+  await writeFile(
+    contractPath,
+    `${JSON.stringify(tairaBurnRecordContract(), null, 2)}\n`,
+  );
+  await writeFile(bundlePath, `${JSON.stringify(bundle, null, 2)}\n`);
+  await writeFile(
+    diagnosticBundlePath,
+    `${JSON.stringify(diagnosticBundle, null, 2)}\n`,
+  );
+  const readyArgs = [
+    "route-manifest",
+    "--taira-contract",
+    contractPath,
+    "--settlement-asset-definition-id",
+    "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+    "--source-bridge-config-hash",
+    HASH_33,
+    "--source-event-transaction-id",
+    HASH_55,
+    "--source-event-explorer-url",
+    SOURCE_EVENT_EXPLORER_URL,
+    "--route-canary-evidence-hash",
+    HASH_66,
+    "--route-canary-transaction-id",
+    HASH_77,
+    "--route-canary-explorer-url",
+    ROUTE_CANARY_EXPLORER_URL,
+    "--full-toml-ready",
+    "true",
+    "--production-ready",
+    "true",
+    "--live-readback-checked",
+    "true",
+    "--confirm-testnet",
+    "taira_bsc_xor",
+    "--out",
+    join(dir, "bad-route.manifest.json"),
+  ];
+
+  await assert.rejects(
+    () =>
+      main([
+        ...readyArgs,
+        "--evidence",
+        evidencePath,
+        "--native-prover-bundle",
+        bundlePath,
+      ]),
+    /offlineFullTomlSha256/u,
+  );
+  await assert.rejects(
+    () =>
+      main([
+        ...readyArgs,
+        "--evidence",
+        diagnosticEvidencePath,
+        "--native-prover-bundle",
+        diagnosticBundlePath,
+        "--offline-full-toml-sha256",
+        hex32("88"),
+      ]),
+    /diagnostic BSC verifier material/u,
+  );
+});
+
+test("BSC route-manifest command refuses draft manifests in the canonical default output", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "iroha-bsc-route-manifest-default-"));
+  const evidencePath = join(dir, "deployment.evidence.json");
+  const contractPath = join(dir, "burn-record.contract.json");
+  const evidence = buildDeploymentEvidence({
+    tokenAddress: BSC_TOKEN_ADDRESS,
+    bridgeAddress: BSC_BRIDGE_ADDRESS,
+    sourceBridgeAddress: BSC_SOURCE_BRIDGE_ADDRESS,
+    verifierAddress: BSC_VERIFIER_ADDRESS,
+    verifierCodeHash: HASH_11,
+    verifierKeyHash: HASH_22,
+    readback: readyReadback(),
+  });
+  await writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
+  await writeFile(
+    contractPath,
+    `${JSON.stringify(tairaBurnRecordContract(), null, 2)}\n`,
+  );
+
+  await assert.rejects(
+    () =>
+      main([
+        "route-manifest",
+        "--evidence",
+        evidencePath,
+        "--taira-contract",
+        contractPath,
+        "--settlement-asset-definition-id",
+        "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+      ]),
+    /cannot be written to canonical BSC production artifact path.*not productionReady true/u,
+  );
+});
+
+test("BSC route-manifest command rejects duplicate JSON keys in operator inputs", async () => {
+  const dir = await mkdtemp(
+    join(tmpdir(), "iroha-bsc-route-manifest-duplicates-"),
+  );
+  const evidencePath = join(dir, "deployment.evidence.json");
+  const duplicateEvidencePath = join(dir, "deployment.duplicate.json");
+  const contractPath = join(dir, "burn-record.contract.json");
+  const duplicateContractPath = join(dir, "burn-record.duplicate.json");
+  const evidence = buildDeploymentEvidence({
+    tokenAddress: BSC_TOKEN_ADDRESS,
+    bridgeAddress: BSC_BRIDGE_ADDRESS,
+    sourceBridgeAddress: BSC_SOURCE_BRIDGE_ADDRESS,
+    verifierAddress: BSC_VERIFIER_ADDRESS,
+    verifierCodeHash: HASH_11,
+    verifierKeyHash: HASH_22,
+    readback: readyReadback(),
+  });
+  const contract = tairaBurnRecordContract();
+  await writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
+  await writeFile(
+    duplicateEvidencePath,
+    `${JSON.stringify(evidence, null, 2).replace(
+      '"routeId": "taira_bsc_xor"',
+      '"routeId": "shadow",\n  "routeId": "taira_bsc_xor"',
+    )}\n`,
+  );
+  await writeFile(contractPath, `${JSON.stringify(contract, null, 2)}\n`);
+  await writeFile(
+    duplicateContractPath,
+    `${JSON.stringify(contract, null, 2).replace(
+      '"artifact_b64":',
+      '"artifact_b64": "unsafe-overwrite",\n  "artifact_b64":',
+    )}\n`,
+  );
+  const baseArgs = [
+    "route-manifest",
+    "--settlement-asset-definition-id",
+    "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+    "--proof-artifact-hash",
+    HASH_44,
+    "--proving-key-hash",
+    HASH_55,
+  ];
+
+  await assert.rejects(
+    () =>
+      main([
+        ...baseArgs,
+        "--evidence",
+        duplicateEvidencePath,
+        "--taira-contract",
+        contractPath,
+        "--out",
+        join(dir, "duplicate-evidence.manifest.json"),
+      ]),
+    /BSC deployment evidence is not valid JSON: BSC deployment evidence contains a duplicate JSON object key/u,
+  );
+  await assert.rejects(
+    () =>
+      main([
+        ...baseArgs,
+        "--evidence",
+        evidencePath,
+        "--taira-contract",
+        duplicateContractPath,
+        "--out",
+        join(dir, "duplicate-contract.manifest.json"),
+      ]),
+    /TAIRA burn-record contract is not valid JSON: TAIRA burn-record contract contains a duplicate JSON object key/u,
+  );
+});
+
+test("BSC route-manifest command rejects non-object JSON operator inputs", async () => {
+  const dir = await mkdtemp(
+    join(tmpdir(), "iroha-bsc-route-manifest-non-object-"),
+  );
+  const evidencePath = join(dir, "deployment.evidence.json");
+  const arrayEvidencePath = join(dir, "deployment.array.json");
+  const contractPath = join(dir, "burn-record.contract.json");
+  const arrayContractPath = join(dir, "burn-record.array.json");
+  const evidence = buildDeploymentEvidence({
+    tokenAddress: BSC_TOKEN_ADDRESS,
+    bridgeAddress: BSC_BRIDGE_ADDRESS,
+    sourceBridgeAddress: BSC_SOURCE_BRIDGE_ADDRESS,
+    verifierAddress: BSC_VERIFIER_ADDRESS,
+    verifierCodeHash: HASH_11,
+    verifierKeyHash: HASH_22,
+    readback: readyReadback(),
+  });
+  await writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
+  await writeFile(arrayEvidencePath, "[]\n");
+  await writeFile(
+    contractPath,
+    `${JSON.stringify(tairaBurnRecordContract(), null, 2)}\n`,
+  );
+  await writeFile(arrayContractPath, "[]\n");
+  const baseArgs = [
+    "route-manifest",
+    "--settlement-asset-definition-id",
+    "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+    "--proof-artifact-hash",
+    HASH_44,
+    "--proving-key-hash",
+    HASH_55,
+  ];
+
+  await assert.rejects(
+    () =>
+      main([
+        ...baseArgs,
+        "--evidence",
+        arrayEvidencePath,
+        "--taira-contract",
+        contractPath,
+        "--out",
+        join(dir, "array-evidence.manifest.json"),
+      ]),
+    /BSC deployment evidence is not valid JSON: BSC deployment evidence must be a JSON object/u,
+  );
+  await assert.rejects(
+    () =>
+      main([
+        ...baseArgs,
+        "--evidence",
+        evidencePath,
+        "--taira-contract",
+        arrayContractPath,
+        "--out",
+        join(dir, "array-contract.manifest.json"),
+      ]),
+    /TAIRA burn-record contract is not valid JSON: TAIRA burn-record contract must be a JSON object/u,
+  );
+});
+
 test("BSC deployment evidence rejects duplicate contract addresses", () => {
   assert.throws(
     () =>
@@ -744,6 +1186,27 @@ test("BSC deployment helper rejects unsafe secret-like evidence material", () =>
       notes: "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----",
     }),
     /private key material/u,
+  );
+});
+
+test("BSC JSON input parser rejects duplicate keys before overwrite", () => {
+  assert.throws(
+    () =>
+      parseJsonWithoutDuplicateKeys(
+        '{"\\u0072outeId":"shadow","routeId":"taira_bsc_xor"}',
+        "BSC fixture",
+      ),
+    /BSC fixture contains a duplicate JSON object key/u,
+  );
+  assert.deepEqual(
+    parseJsonWithoutDuplicateKeys(
+      '{"routeId":"taira_bsc_xor","nested":[{"routeId":"shadow"},{"routeId":"taira_bsc_xor"}]}',
+      "BSC fixture",
+    ),
+    {
+      routeId: "taira_bsc_xor",
+      nested: [{ routeId: "shadow" }, { routeId: "taira_bsc_xor" }],
+    },
   );
 });
 
@@ -1185,6 +1648,71 @@ test("BSC route-config requires explicit post-deploy evidence for production-rea
     () =>
       buildBscTairaXorRouteConfigToml(
         productionReadyManifest({
+          source_event_transaction_production_blockers: [
+            "witness seal proof required",
+          ],
+        }),
+      ),
+    /productionReady requires empty postDeployLiveEvidence production blockers.*source_event_transaction_production_blockers: witness seal proof required/u,
+    "BSC source event transaction contradictory blockers",
+  );
+  assert.throws(
+    () =>
+      buildBscTairaXorRouteConfigToml(
+        productionReadyManifest({
+          source_event_transaction_production_blockers:
+            "witness seal proof required",
+        }),
+      ),
+    /source_event_transaction_production_blockers must be a list/u,
+    "BSC source event transaction scalar blockers",
+  );
+  assert.throws(
+    () =>
+      buildBscTairaXorRouteConfigToml(
+        productionReadyManifest({
+          source_event_transaction_production_blockers: [
+            " witness seal proof required",
+          ],
+        }),
+      ),
+    /source_event_transaction_production_blockers\[0\].*non-empty canonical string/u,
+    "BSC source event transaction malformed blocker entry",
+  );
+  assert.throws(
+    () =>
+      buildBscTairaXorRouteConfigToml(
+        productionReadyManifest({
+          post_deploy_production_blockers: ["route overlay still pending"],
+        }),
+      ),
+    /productionReady requires empty postDeployLiveEvidence production blockers.*post_deploy_production_blockers: route overlay still pending/u,
+    "BSC post-deploy blocker contradictory blockers",
+  );
+  assert.throws(
+    () =>
+      buildBscTairaXorRouteConfigToml(
+        productionReadyManifest({
+          full_toml_production_blockers: [123],
+        }),
+      ),
+    /full_toml_production_blockers\[0\].*non-empty canonical string/u,
+    "BSC full TOML blocker malformed entry",
+  );
+  assert.throws(
+    () =>
+      buildBscTairaXorRouteConfigToml(
+        productionReadyManifest({
+          route_canary_production_blockers: [" route canary evidence is stale"],
+        }),
+      ),
+    /route_canary_production_blockers\[0\].*non-empty canonical string/u,
+    "BSC route canary blocker malformed entry",
+  );
+  assert.throws(
+    () =>
+      buildBscTairaXorRouteConfigToml(
+        productionReadyManifest({
           productionBlockers: "source event transaction is still pending",
         }),
       ),
@@ -1539,6 +2067,52 @@ test("BSC native-prover-bundle builds SDK-valid route-bound bundles from artifac
   assert.equal(
     JSON.parse(await readFile(attachedOut, "utf8")).nativeEvmProverBundleHash,
     canonicalBscNativeEvmProverBundleHash(result.descriptor),
+  );
+});
+
+test("BSC native-prover-bundle rejects duplicate JSON keys in route manifests", async () => {
+  const fixture = await writeNativeProverFixtureFiles();
+  const duplicateRouteManifestPath = join(fixture.workDir, "route.duplicate.json");
+  await writeFile(
+    duplicateRouteManifestPath,
+    `${(await readFile(fixture.routeManifestPath, "utf8")).replace(
+      '"routeId": "taira_bsc_xor"',
+      '"routeId": "shadow",\n  "routeId": "taira_bsc_xor"',
+    )}\n`,
+  );
+
+  await assert.rejects(
+    () =>
+      main([
+        "native-prover-bundle",
+        ...Object.entries({
+          ...fixture.options,
+          "route-manifest": duplicateRouteManifestPath,
+        }).flatMap(([key, value]) => [`--${key}`, value]),
+        "--out",
+        join(fixture.workDir, "bundle.duplicate.json"),
+      ]),
+    /BSC route manifest is not valid JSON: BSC route manifest contains a duplicate JSON object key/u,
+  );
+});
+
+test("BSC native-prover-bundle rejects non-object JSON route manifests", async () => {
+  const fixture = await writeNativeProverFixtureFiles();
+  const arrayRouteManifestPath = join(fixture.workDir, "route.array.json");
+  await writeFile(arrayRouteManifestPath, "[]\n");
+
+  await assert.rejects(
+    () =>
+      main([
+        "native-prover-bundle",
+        ...Object.entries({
+          ...fixture.options,
+          "route-manifest": arrayRouteManifestPath,
+        }).flatMap(([key, value]) => [`--${key}`, value]),
+        "--out",
+        join(fixture.workDir, "bundle.array.json"),
+      ]),
+    /BSC route manifest is not valid JSON: BSC route manifest must be a JSON object/u,
   );
 });
 
@@ -2370,6 +2944,8 @@ test("BSC route-config command writes an operator overlay", async () => {
   assert.equal(result.mode, "overlay");
   assert.equal(result.routeId, "taira_bsc_xor");
   const toml = await readFile(out, "utf8");
+  assert.equal(result.renderedTomlSha256, sha256Hex(Buffer.from(toml, "utf8")));
+  assert.equal(result.offlineFullTomlSha256, null);
   assert.match(toml, /route_id = "taira_bsc_xor"/u);
   assert.match(
     toml,
@@ -2382,6 +2958,53 @@ test("BSC route-config command writes an operator overlay", async () => {
   assert.doesNotMatch(toml, /(^|\n)source_bridge_address =/u);
   assert.doesNotMatch(toml, /(^|\n)destination_verifier_address =/u);
   assert.doesNotMatch(toml, /(^|\n)tron_verifier_address =/u);
+});
+
+test("BSC route-config command reports the exact merged full-config hash", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "iroha-bsc-route-config-full-"));
+  const manifestPath = join(dir, "manifest.json");
+  const baseConfigPath = join(dir, "base.toml");
+  const out = join(dir, "full-config.toml");
+  await writeFile(
+    manifestPath,
+    `${JSON.stringify(routeManifest(), null, 2)}\n`,
+  );
+  await writeFile(
+    baseConfigPath,
+    [
+      "[network]",
+      'address = "127.0.0.1:1337"',
+      "",
+      "[zk]",
+      "sccp_allow_unready_transparent_proofs = false",
+      "",
+      "[torii]",
+      'address = "127.0.0.1:8080"',
+      "",
+    ].join("\n"),
+  );
+
+  const result = await main([
+    "route-config",
+    "--manifest",
+    manifestPath,
+    "--base-config",
+    baseConfigPath,
+    "--out",
+    out,
+    "--allow-unready",
+    "true",
+  ]);
+  const toml = await readFile(out, "utf8");
+  const expectedHash = sha256Hex(Buffer.from(toml, "utf8"));
+
+  assert.equal(result.ok, true);
+  assert.equal(result.mode, "merged-full-config");
+  assert.equal(result.baseConfig, baseConfigPath);
+  assert.equal(result.renderedTomlSha256, expectedHash);
+  assert.equal(result.offlineFullTomlSha256, expectedHash);
+  assert.match(toml, /\[network\]/u);
+  assert.match(toml, /\[\[zk\.sccp_route_manifests\]\]/u);
 });
 
 test("BSC route-config command refuses draft manifests in the canonical default output", async () => {
@@ -2402,6 +3025,52 @@ test("BSC route-config command refuses draft manifests in the canonical default 
         "true",
       ]),
     /cannot be written to canonical BSC production artifact path.*not productionReady true/u,
+  );
+});
+
+test("BSC route-config command rejects duplicate JSON keys in manifests", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "iroha-bsc-route-config-duplicates-"));
+  const manifestPath = join(dir, "manifest.duplicate.json");
+  await writeFile(
+    manifestPath,
+    `${JSON.stringify(routeManifest(), null, 2).replace(
+      '"routeId": "taira_bsc_xor"',
+      '"routeId": "shadow",\n  "routeId": "taira_bsc_xor"',
+    )}\n`,
+  );
+
+  await assert.rejects(
+    () =>
+      main([
+        "route-config",
+        "--manifest",
+        manifestPath,
+        "--out",
+        join(dir, "route.toml"),
+        "--allow-unready",
+        "true",
+      ]),
+    /BSC route manifest is not valid JSON: BSC route manifest contains a duplicate JSON object key/u,
+  );
+});
+
+test("BSC route-config command rejects non-object JSON manifests", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "iroha-bsc-route-config-non-object-"));
+  const manifestPath = join(dir, "manifest.array.json");
+  await writeFile(manifestPath, "[]\n");
+
+  await assert.rejects(
+    () =>
+      main([
+        "route-config",
+        "--manifest",
+        manifestPath,
+        "--out",
+        join(dir, "route.toml"),
+        "--allow-unready",
+        "true",
+      ]),
+    /BSC route manifest is not valid JSON: BSC route manifest must be a JSON object/u,
   );
 });
 
@@ -2544,6 +3213,28 @@ test("BSC production requirements expose network-specific public handoff inputs"
     testnet.commands.requirements,
     /requirements --bsc-network testnet --out artifacts\/sccp-bsc\/taira-bsc-xor-production-requirements\.json/u,
   );
+  for (const required of [
+    "--taira-contract artifacts/sccp-bsc/taira-bsc-xor-burn-record.contract.json",
+    "--settlement-asset-definition-id <canonical-asset-definition-id>",
+    "--native-prover-bundle artifacts/sccp-bsc/bsc-testnet-native-evm-prover-bundle.json",
+    "--source-bridge-config-hash <0x...>",
+    "--source-event-transaction-id <0x...>",
+    "--source-event-explorer-url <url>",
+    "--route-canary-evidence-hash <0x...>",
+    "--route-canary-transaction-id <0x...>",
+    "--route-canary-explorer-url <url>",
+    "--full-toml-ready true",
+    "--offline-full-toml-sha256 <0x...>",
+    "--production-ready true",
+    "--live-readback-checked true",
+    "--confirm-testnet taira_bsc_xor",
+    "--out artifacts/sccp-bsc/taira-bsc-xor-route.manifest.json",
+  ]) {
+    assert.ok(
+      testnet.commands.routeManifest.includes(required),
+      `routeManifest command should include ${required}`,
+    );
+  }
   assert.doesNotMatch(testnet.commands.deploy, /--confirm-mainnet true/u);
   assert.doesNotMatch(testnet.commands.deploy, /--confirm-testnet/u);
   assert.deepEqual(
@@ -2552,6 +3243,8 @@ test("BSC production requirements expose network-specific public handoff inputs"
         [
           "production-groth16-verifier-key-json",
           "testnet-funded-bsc-deployer",
+          "taira-burn-record-contract",
+          "post-deploy-live-evidence",
           "burn-record-proof-artifact",
           "burn-record-proving-key",
           "cross-sdk-fixture-parity-report",
@@ -2562,6 +3255,8 @@ test("BSC production requirements expose network-specific public handoff inputs"
     [
       "production-groth16-verifier-key-json",
       "testnet-funded-bsc-deployer",
+      "taira-burn-record-contract",
+      "post-deploy-live-evidence",
       "burn-record-proof-artifact",
       "burn-record-proving-key",
       "cross-sdk-fixture-parity-report",
@@ -2596,8 +3291,43 @@ test("BSC production requirements expose network-specific public handoff inputs"
     mainnet.commands.requirements,
     /requirements --bsc-network mainnet --out artifacts\/sccp-bsc\/taira-bsc-mainnet-xor-production-requirements\.json/u,
   );
+  assert.match(mainnet.commands.routeManifest, /--confirm-mainnet true/u);
+  assert.match(mainnet.commands.routeManifest, /--confirm-network taira_bsc_xor/u);
+  assert.doesNotMatch(mainnet.commands.routeManifest, /--confirm-testnet/u);
+  for (const required of [
+    "--evidence artifacts/sccp-bsc/taira-bsc-mainnet-xor-deployment.evidence.json",
+    "--native-prover-bundle artifacts/sccp-bsc/bsc-mainnet-native-evm-prover-bundle.json",
+    "--out artifacts/sccp-bsc/taira-bsc-mainnet-xor-route.manifest.json",
+  ]) {
+    assert.ok(
+      mainnet.commands.routeManifest.includes(required),
+      `mainnet routeManifest command should include ${required}`,
+    );
+  }
+  for (const required of [
+    "--route-manifest artifacts/sccp-bsc/taira-bsc-mainnet-xor-route.manifest.json",
+    "--out artifacts/sccp-bsc/bsc-mainnet-native-evm-prover-bundle.json",
+    "--attach-route-manifest-out artifacts/sccp-bsc/taira-bsc-mainnet-xor-route.manifest.json",
+  ]) {
+    assert.ok(
+      mainnet.commands.nativeProverBundle.includes(required),
+      `mainnet nativeProverBundle command should include ${required}`,
+    );
+  }
+  assert.match(
+    mainnet.commands.routeConfig,
+    /--manifest artifacts\/sccp-bsc\/taira-bsc-mainnet-xor-route\.manifest\.json/u,
+  );
   assert.match(mainnet.commands.deploy, /--confirm-mainnet true/u);
   assert.doesNotMatch(JSON.stringify(mainnet), /testnet-funded-bsc-deployer/u);
+  assert.doesNotMatch(
+    JSON.stringify(mainnet),
+    /bsc-testnet-native-evm-prover-bundle\.json/u,
+  );
+  assert.doesNotMatch(
+    JSON.stringify(mainnet),
+    /artifacts\/sccp-bsc\/taira-bsc-xor-route\.manifest\.json/u,
+  );
   assert.match(JSON.stringify(mainnet), /mainnet-funded-bsc-deployer/u);
 });
 
@@ -2618,7 +3348,7 @@ test("BSC production requirements command writes public artifact without deploye
     assert.equal(result.wrote, out);
     assert.equal(result.schema, PRODUCTION_REQUIREMENTS_SCHEMA);
     assert.equal(result.bscNetwork, "mainnet");
-    assert.equal(result.inputCount, 19);
+    assert.equal(result.inputCount, 21);
     assert.deepEqual(result.requiredReports, [
       "route-preflight",
       "peer-config-audit",

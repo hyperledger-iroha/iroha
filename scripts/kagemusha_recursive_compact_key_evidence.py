@@ -27,6 +27,8 @@ PLACEHOLDER_ARTIFACT_MESSAGE_FRAGMENT = "not a placeholder fixture"
 def _secret_path_error(path: str | None, label: str) -> str | None:
     if path is not None and device_lab.SECRET_RE.search(path):
         return f"{label} must not contain secret-looking material"
+    if path is not None and device_lab._contains_control_character(path):
+        return f"{label} must not contain control characters"
     return None
 
 
@@ -202,6 +204,44 @@ def validate_artifact_dir_path(artifact_dir: Path) -> list[str]:
     return []
 
 
+def validate_generator_log_path(
+    artifact_dir: Path,
+    generator_log_path: Path,
+) -> list[str]:
+    """Reject generator-log paths that could alias unreviewed local bytes."""
+
+    errors: list[str] = []
+    secret_error = _secret_path_error(str(generator_log_path), "--generator-log")
+    if secret_error is not None:
+        return [secret_error]
+    artifact_dir_secret_error = _secret_path_error(str(artifact_dir), "--artifact-dir")
+    if artifact_dir_secret_error is not None:
+        return [artifact_dir_secret_error]
+    if generator_log_path.name != readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME:
+        errors.append(
+            f"--generator-log must be named {readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME}"
+        )
+    try:
+        generator_log_parent = generator_log_path.parent.resolve()
+        artifact_dir_resolved = artifact_dir.resolve()
+    except OSError:
+        errors.append("--generator-log parent could not be resolved")
+    else:
+        if generator_log_parent != artifact_dir_resolved:
+            errors.append("--generator-log must live directly under --artifact-dir")
+    if errors:
+        return errors
+    _file_stat, file_errors = readiness._validate_lineage_local_file_for_read(
+        generator_log_path,
+        "recursive compact key generator log",
+    )
+    if file_errors == ["recursive compact key generator log is missing"]:
+        errors.append("missing recursive compact key generator log")
+    else:
+        errors.extend(file_errors)
+    return errors
+
+
 def _cleanup_validation_temp_output(
     path: Path,
     expected_identity: tuple[int, int] | None,
@@ -264,7 +304,19 @@ def build_evidence(
 ) -> tuple[dict[str, Any] | None, list[str]]:
     """Build an ABI-7 recursive compact key evidence document from local artifacts."""
 
-    errors = validate_artifact_dir_path(artifact_dir)
+    generator_log_path_was_explicit = generator_log_path is not None
+    if generator_log_path is None:
+        generator_log_path = artifact_dir / readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME
+    generator_log_secret_error = (
+        _secret_path_error(str(generator_log_path), "--generator-log")
+        if generator_log_path_was_explicit
+        else None
+    )
+    errors = []
+    if generator_log_secret_error is not None:
+        errors.append(generator_log_secret_error)
+    else:
+        errors.extend(validate_artifact_dir_path(artifact_dir))
     errors.extend(_validate_generated_at_utc(generated_at_utc))
     generated_at, timestamp_error = readiness.parse_utc_timestamp(
         generated_at_utc,
@@ -273,20 +325,10 @@ def build_evidence(
     if timestamp_error is not None:
         errors.append(timestamp_error["message"])
     errors.extend(readiness.validate_compact_key_command(command))
-    if generator_log_path is None:
-        generator_log_path = artifact_dir / readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME
-    if generator_log_path.name != readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME:
-        errors.append(
-            f"--generator-log must be named {readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME}"
-        )
-    try:
-        generator_log_parent = generator_log_path.resolve().parent
-        artifact_dir_resolved = artifact_dir.resolve()
-    except OSError:
-        errors.append("--generator-log parent could not be resolved")
-    else:
-        if generator_log_parent != artifact_dir_resolved:
-            errors.append("--generator-log must live directly under --artifact-dir")
+    if generator_log_secret_error is None:
+        errors.extend(validate_generator_log_path(artifact_dir, generator_log_path))
+    if errors:
+        return None, errors
 
     artifact_digests: dict[str, str] = {}
     artifact_sizes: dict[str, int] = {}
@@ -439,6 +481,12 @@ def _resolve_corridor_path(path: Path, label: str) -> tuple[Path | None, list[st
 def validate_output_corridor(out_path: Path, artifact_dir: Path) -> list[str]:
     """Validate that --out resolves directly under --artifact-dir."""
 
+    out_secret_error = _secret_path_error(str(out_path), "--out")
+    if out_secret_error is not None:
+        return [out_secret_error]
+    artifact_dir_secret_error = _secret_path_error(str(artifact_dir), "--artifact-dir")
+    if artifact_dir_secret_error is not None:
+        return [artifact_dir_secret_error]
     output_parent, output_parent_errors = _resolve_corridor_path(
         out_path.parent,
         "--out parent",

@@ -422,6 +422,15 @@ fn ed25519_seed_from_material(seed: &[u8]) -> Zeroizing<[u8; 32]> {
     out
 }
 
+fn validate_ed25519_seed_not_all_zero(seed: &[u8; 32]) -> Result<(), ParseError> {
+    if seed.iter().all(|&byte| byte == 0) {
+        return Err(ParseError(
+            "ed25519 private key seed material must not be all zero".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct Ed25519Sha512;
 
@@ -437,6 +446,8 @@ impl Ed25519Sha512 {
             KeyGenOption::UseSeed(mut seed) => {
                 let seed_bytes = ed25519_seed_from_material(&seed);
                 seed.zeroize();
+                validate_ed25519_seed_not_all_zero(&seed_bytes)
+                    .map_err(|err| Error::KeyGen(err.to_string()))?;
                 PrivateKey::from_bytes(&seed_bytes)
             }
             KeyGenOption::FromPrivateKey(ref s) => PrivateKey::clone(s),
@@ -450,6 +461,7 @@ impl Ed25519Sha512 {
         OsRng
             .try_fill_bytes(seed.as_mut())
             .map_err(|err| Error::KeyGen(format!("Ed25519 OS RNG failed: {err}")))?;
+        validate_ed25519_seed_not_all_zero(&seed).map_err(|err| Error::KeyGen(err.to_string()))?;
         Ok(PrivateKey::from_bytes(&seed))
     }
 
@@ -506,11 +518,13 @@ impl Ed25519Sha512 {
             32 => {
                 let mut seed = Zeroizing::new([0u8; 32]);
                 seed.as_mut().copy_from_slice(payload);
+                validate_ed25519_seed_not_all_zero(&seed)?;
                 Ok(PrivateKey::from_bytes(&seed))
             }
             64 => {
                 let mut seed = Zeroizing::new([0u8; 32]);
                 seed.as_mut().copy_from_slice(&payload[..32]);
+                validate_ed25519_seed_not_all_zero(&seed)?;
                 let mut public = [0u8; 32];
                 public.copy_from_slice(&payload[32..]);
                 let signing_key = PrivateKey::from_bytes(&seed);
@@ -922,7 +936,7 @@ mod test {
 
         reset_verify_ok_cache_for_tests();
         let mut seen = StdHashMap::<usize, (Vec<u8>, Vec<u8>, PublicKey)>::new();
-        let ((msg_a, sig_a, pk_a), (msg_b, sig_b, pk_b), slot) = (0u32..4096)
+        let ((msg_a, sig_a, pk_a), (msg_b, sig_b, pk_b), slot) = (1u32..4096)
             .find_map(|idx| {
                 let mut secret_seed = [0u8; 32];
                 secret_seed[..4].copy_from_slice(&idx.to_le_bytes());
@@ -1282,6 +1296,16 @@ mod test {
     }
 
     #[test]
+    fn try_keypair_rejects_all_zero_seed_material() {
+        let err = Ed25519Sha512::try_keypair(KeyGenOption::UseSeed(vec![0u8; 32]))
+            .expect_err("all-zero seed material must fail");
+        assert!(matches!(
+            err,
+            Error::KeyGen(message) if message.contains("all zero")
+        ));
+    }
+
+    #[test]
     fn parse_private_key_accepts_seed_or_keypair_bytes() {
         let seed = [0x42; 32];
         let signing_key = PrivateKey::from_bytes(&seed);
@@ -1296,6 +1320,31 @@ mod test {
         let keypair_parsed =
             Ed25519Sha512::parse_private_key(&keypair_bytes).expect("keypair parse");
         assert_eq!(keypair_parsed.to_bytes(), signing_key.to_bytes());
+    }
+
+    #[test]
+    fn parse_private_key_rejects_all_zero_seed_material() {
+        let err = Ed25519Sha512::parse_private_key(&[0u8; 32])
+            .expect_err("all-zero seed material must fail");
+        assert!(
+            err.0.contains("all zero"),
+            "unexpected error for all-zero seed: {err:?}"
+        );
+    }
+
+    #[test]
+    fn parse_private_key_rejects_all_zero_keypair_seed_material() {
+        let zero_seed = [0u8; 32];
+        let signing_key = PrivateKey::from_bytes(&zero_seed);
+        let mut keypair_bytes = [0u8; 64];
+        keypair_bytes[32..].copy_from_slice(&signing_key.verifying_key().to_bytes());
+
+        let err = Ed25519Sha512::parse_private_key(&keypair_bytes)
+            .expect_err("all-zero keypair seed material must fail");
+        assert!(
+            err.0.contains("all zero"),
+            "unexpected error for all-zero keypair seed: {err:?}"
+        );
     }
 
     #[test]

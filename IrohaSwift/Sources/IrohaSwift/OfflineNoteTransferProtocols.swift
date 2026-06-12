@@ -59,9 +59,31 @@ public enum OfflineNoteNfcApduError: Error, LocalizedError, Equatable {
     }
 }
 
+public enum OfflineNoteNfcAidError: Error, LocalizedError, Equatable {
+    case missing
+    case invalidHexLength
+    case invalidHexCharacter
+    case invalidLength(actual: Int, minimum: Int, maximum: Int)
+
+    public var errorDescription: String? {
+        switch self {
+        case .missing:
+            return "Offline Note NFC AID is missing."
+        case .invalidHexLength:
+            return "Offline Note NFC AID hex must contain an even number of characters."
+        case .invalidHexCharacter:
+            return "Offline Note NFC AID hex contains non-hex characters."
+        case .invalidLength(let actual, let minimum, let maximum):
+            return "Offline Note NFC AID must be \(minimum)-\(maximum) bytes, got \(actual)."
+        }
+    }
+}
+
 public enum OfflineNoteNfcApduProtocol {
     public static let aid = Data([0xF0, 0x49, 0x52, 0x4F, 0x48, 0x41, 0x32])
     public static let aidHex = "F049524F484132"
+    public static let minAidBytes = 5
+    public static let maxAidBytes = 16
     public static let androidSafeChunkBytes = 240
     public static let maxExtendedReadChunkBytes = 1_024
     public static let maxExtendedWriteChunkBytes = 16_384
@@ -85,11 +107,48 @@ public enum OfflineNoteNfcApduProtocol {
     }
 
     public static func selectAidAPDUData(aid: Data) -> Data {
-        Data([0x00, 0xA4, 0x04, 0x00, UInt8(aid.count)]) + aid + Data([0x00])
+        precondition(isValidAid(aid), "Offline Note NFC AID must be \(minAidBytes)-\(maxAidBytes) bytes.")
+        return Data([0x00, 0xA4, 0x04, 0x00, UInt8(aid.count)]) + aid + Data([0x00])
     }
 
     public static func aidHex(for aid: Data) -> String {
         aid.map { String(format: "%02X", $0) }.joined()
+    }
+
+    public static func validateAid(_ aid: Data) throws -> Data {
+        guard aid.count >= minAidBytes, aid.count <= maxAidBytes else {
+            throw OfflineNoteNfcAidError.invalidLength(
+                actual: aid.count,
+                minimum: minAidBytes,
+                maximum: maxAidBytes
+            )
+        }
+        return aid
+    }
+
+    public static func isValidAid(_ aid: Data) -> Bool {
+        (try? validateAid(aid)) != nil
+    }
+
+    public static func aidData(hexString rawValue: String) throws -> Data {
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw OfflineNoteNfcAidError.missing
+        }
+        guard trimmed.allSatisfy(\.isHexDigit) else {
+            throw OfflineNoteNfcAidError.invalidHexCharacter
+        }
+        guard trimmed.count.isMultiple(of: 2) else {
+            throw OfflineNoteNfcAidError.invalidHexLength
+        }
+        guard let data = Data(hexString: trimmed) else {
+            throw OfflineNoteNfcAidError.invalidHexCharacter
+        }
+        return try validateAid(data)
+    }
+
+    public static func normalizedAidHex(_ rawValue: String) throws -> String {
+        aidHex(for: try aidData(hexString: rawValue))
     }
 
     public static func getInfoAPDUData() -> Data {
@@ -355,7 +414,7 @@ public enum OfflineNoteNfcApduProtocol {
     }
 
     private static func isReadChunkAPDU(_ apdu: Data) -> Bool {
-        if apdu.count == 4 { return true }
+        if apdu.count == 4 { return false }
         if apdu.count == 5 { return apdu[apdu.startIndex + 4] != 0x00 }
         guard apdu.count == 7,
               apdu[apdu.startIndex + 4] == 0x00 else {
@@ -527,6 +586,426 @@ public final class OfflineNoteNfcPayloadAssembler {
     }
 }
 
+public final class OfflineNoteNfcPayloadReadTracker {
+    public let expectedLength: Int
+    private var read: [Bool]
+    private var readCount = 0
+
+    public init(expectedLength: Int) throws {
+        guard expectedLength > 0,
+              expectedLength <= OfflineNoteNfcApduProtocol.maxIncomingPayloadBytes else {
+            throw OfflineNoteNfcApduError.invalidPayloadLength
+        }
+        self.expectedLength = expectedLength
+        self.read = Array(repeating: false, count: expectedLength)
+    }
+
+    public var isComplete: Bool {
+        readCount == expectedLength
+    }
+
+    public var readByteCount: Int {
+        readCount
+    }
+
+    @discardableResult
+    public func markRead(offset: Int, length: Int) -> Bool {
+        guard offset >= 0,
+              offset < expectedLength,
+              length > 0,
+              length <= OfflineNoteNfcApduProtocol.maxExtendedReadChunkBytes,
+              length <= expectedLength - offset else {
+            return false
+        }
+        let end = offset + length
+        for index in offset..<end where !read[index] {
+            read[index] = true
+            readCount += 1
+        }
+        return true
+    }
+}
+
+public enum OfflineNoteNfcCardIncomingWriteDecision: Equatable, Sendable {
+    case accept
+    case rejectNotReady
+    case rejectWrongKind
+}
+
+public enum OfflineNoteNfcCardSessionWritePolicy {
+    public static func decision(
+        currentKind: OfflineNoteNfcPayloadKind,
+        incomingKind: OfflineNoteNfcPayloadKind,
+        hasPendingWrite: Bool,
+        readable: Bool,
+        didComplete: Bool
+    ) -> OfflineNoteNfcCardIncomingWriteDecision {
+        guard !didComplete, !hasPendingWrite, readable, currentKind == .receiveRequest else {
+            return .rejectNotReady
+        }
+        guard incomingKind == .paymentToken else {
+            return .rejectWrongKind
+        }
+        return .accept
+    }
+
+    public static func shouldAcceptIncomingWrite(
+        currentKind: OfflineNoteNfcPayloadKind,
+        incomingKind: OfflineNoteNfcPayloadKind,
+        hasPendingWrite: Bool,
+        readable: Bool,
+        didComplete: Bool
+    ) -> Bool {
+        decision(
+            currentKind: currentKind,
+            incomingKind: incomingKind,
+            hasPendingWrite: hasPendingWrite,
+            readable: readable,
+            didComplete: didComplete
+        ) == .accept
+    }
+}
+
+public enum OfflineNoteNfcReaderExchangePolicy {
+    public static func shouldBeginTagExchange(
+        hasActiveSession: Bool,
+        didComplete: Bool,
+        isExchangeInFlight: Bool
+    ) -> Bool {
+        hasActiveSession && !didComplete && !isExchangeInFlight
+    }
+}
+
+public enum OfflineNoteNfcReaderPayloadReadPolicy {
+    public static func acceptsChunkResponse(
+        responseLength: Int,
+        requestedLength: Int,
+        remainingLength: Int
+    ) -> Bool {
+        guard responseLength > 0,
+              requestedLength > 0,
+              requestedLength <= OfflineNoteNfcApduProtocol.maxExtendedReadChunkBytes,
+              remainingLength > 0 else {
+            return false
+        }
+        return responseLength == min(requestedLength, remainingLength)
+    }
+}
+
+public struct OfflineNoteNfcCardSessionCommittedPayload: Equatable, Sendable {
+    public let kind: OfflineNoteNfcPayloadKind
+    public let payloadBytes: Data
+
+    public init(kind: OfflineNoteNfcPayloadKind, payloadBytes: Data) {
+        self.kind = kind
+        self.payloadBytes = payloadBytes
+    }
+}
+
+public enum OfflineNoteNfcCardSessionRejectionReason: Equatable, Sendable {
+    case conditionsNotSatisfied
+    case wrongData
+    case unsupportedCommand
+    case incompletePayload
+    case checksumMismatch
+    case invalidCommittedPayload
+}
+
+public struct OfflineNoteNfcCardSessionHandleResult: Equatable, Sendable {
+    public let response: Data
+    public let committedPayload: OfflineNoteNfcCardSessionCommittedPayload?
+    public let receiptAckReadRange: Range<Int>?
+    public let rejectionReason: OfflineNoteNfcCardSessionRejectionReason?
+
+    public init(
+        response: Data,
+        committedPayload: OfflineNoteNfcCardSessionCommittedPayload? = nil,
+        receiptAckReadRange: Range<Int>? = nil,
+        rejectionReason: OfflineNoteNfcCardSessionRejectionReason? = nil
+    ) {
+        self.response = response
+        self.committedPayload = committedPayload
+        self.receiptAckReadRange = receiptAckReadRange
+        self.rejectionReason = rejectionReason
+    }
+}
+
+public struct OfflineNoteNfcPayloadReadProgress: Equatable, Sendable {
+    public let readByteCount: Int
+    public let expectedLength: Int
+    public let isComplete: Bool
+
+    public init(readByteCount: Int, expectedLength: Int, isComplete: Bool) {
+        self.readByteCount = readByteCount
+        self.expectedLength = expectedLength
+        self.isComplete = isComplete
+    }
+}
+
+public final class OfflineNoteNfcCardSessionStateMachine {
+    public typealias CommittedPayloadValidator = (OfflineNoteNfcPayloadKind, Data) -> Bool
+
+    public let applicationIdentifier: Data
+    private let committedPayloadValidator: CommittedPayloadValidator
+    private var currentKind: OfflineNoteNfcPayloadKind
+    private var currentPayloadBytes: Data
+    private var currentPayloadInfo: Data
+    private var currentPayloadReadTracker: OfflineNoteNfcPayloadReadTracker?
+    private var readable = true
+    private var pendingWrite: OfflineNoteNfcPayloadAssembler?
+    private var didComplete = false
+
+    public init(
+        applicationIdentifier: Data = OfflineNoteNfcApduProtocol.aid,
+        initialKind: OfflineNoteNfcPayloadKind = .receiveRequest,
+        initialPayloadBytes: Data,
+        committedPayloadValidator: @escaping CommittedPayloadValidator = { _, _ in true }
+    ) throws {
+        self.applicationIdentifier = try OfflineNoteNfcApduProtocol.validateAid(applicationIdentifier)
+        self.committedPayloadValidator = committedPayloadValidator
+        self.currentKind = initialKind
+        self.currentPayloadBytes = initialPayloadBytes
+        self.currentPayloadInfo = try OfflineNoteNfcApduProtocol.encodeInfo(
+            kind: initialKind,
+            payloadBytes: initialPayloadBytes
+        )
+        self.currentPayloadReadTracker = initialKind == .receiptAck
+            ? try OfflineNoteNfcPayloadReadTracker(expectedLength: initialPayloadBytes.count)
+            : nil
+    }
+
+    public var currentPayloadKind: OfflineNoteNfcPayloadKind {
+        currentKind
+    }
+
+    public var currentPayloadLength: Int {
+        currentPayloadBytes.count
+    }
+
+    public var isReadable: Bool {
+        readable
+    }
+
+    public var hasPendingWrite: Bool {
+        pendingWrite != nil
+    }
+
+    public var hasCompleted: Bool {
+        didComplete
+    }
+
+    public var receiptAckReadProgress: OfflineNoteNfcPayloadReadProgress? {
+        guard currentKind == .receiptAck,
+              let tracker = currentPayloadReadTracker else {
+            return nil
+        }
+        return OfflineNoteNfcPayloadReadProgress(
+            readByteCount: tracker.readByteCount,
+            expectedLength: tracker.expectedLength,
+            isComplete: tracker.isComplete
+        )
+    }
+
+    public func handle(_ commandAPDU: Data) -> OfflineNoteNfcCardSessionHandleResult {
+        switch OfflineNoteNfcApduProtocol.parseCommand(commandAPDU, aid: applicationIdentifier) {
+        case .select:
+            pendingWrite = nil
+            return OfflineNoteNfcCardSessionHandleResult(response: OfflineNoteNfcApduProtocol.response())
+        case .getInfo:
+            guard readable else {
+                return OfflineNoteNfcCardSessionHandleResult(
+                    response: OfflineNoteNfcApduProtocol.statusConditionsNotSatisfied,
+                    rejectionReason: .conditionsNotSatisfied
+                )
+            }
+            return OfflineNoteNfcCardSessionHandleResult(
+                response: OfflineNoteNfcApduProtocol.response(currentPayloadInfo)
+            )
+        case .readChunk(let offset, let requestedLength):
+            return readChunk(offset: offset, requestedLength: requestedLength)
+        case .writeMeta(let kind, let payloadLength, let sha256):
+            return beginWrite(kind: kind, payloadLength: payloadLength, sha256: sha256)
+        case .writeChunk(let offset, let bytes):
+            return writeChunk(offset: offset, bytes: bytes)
+        case .commit:
+            return commitWrite()
+        case .unsupported:
+            return OfflineNoteNfcCardSessionHandleResult(
+                response: OfflineNoteNfcApduProtocol.statusUnsupported,
+                rejectionReason: .unsupportedCommand
+            )
+        case .invalid:
+            return OfflineNoteNfcCardSessionHandleResult(
+                response: OfflineNoteNfcApduProtocol.statusWrongData,
+                rejectionReason: .wrongData
+            )
+        }
+    }
+
+    @discardableResult
+    public func markReceiptAckBytesRead(_ range: Range<Int>) -> Bool {
+        guard currentKind == .receiptAck,
+              let tracker = currentPayloadReadTracker,
+              tracker.markRead(offset: range.lowerBound, length: range.upperBound - range.lowerBound) else {
+            return false
+        }
+        if tracker.isComplete {
+            didComplete = true
+        }
+        return tracker.isComplete
+    }
+
+    public func publishPayload(
+        kind: OfflineNoteNfcPayloadKind,
+        payloadBytes: Data
+    ) throws {
+        let payloadInfo = try OfflineNoteNfcApduProtocol.encodeInfo(kind: kind, payloadBytes: payloadBytes)
+        let payloadReadTracker = kind == .receiptAck
+            ? try OfflineNoteNfcPayloadReadTracker(expectedLength: payloadBytes.count)
+            : nil
+        currentKind = kind
+        currentPayloadBytes = payloadBytes
+        currentPayloadInfo = payloadInfo
+        currentPayloadReadTracker = payloadReadTracker
+        pendingWrite = nil
+        readable = true
+    }
+
+    public func markPayloadProcessing() {
+        readable = false
+        currentPayloadReadTracker = nil
+    }
+
+    private func readChunk(offset: Int, requestedLength: Int) -> OfflineNoteNfcCardSessionHandleResult {
+        guard readable else {
+            return OfflineNoteNfcCardSessionHandleResult(
+                response: OfflineNoteNfcApduProtocol.statusConditionsNotSatisfied,
+                rejectionReason: .conditionsNotSatisfied
+            )
+        }
+        guard offset >= 0, offset < currentPayloadBytes.count else {
+            return OfflineNoteNfcCardSessionHandleResult(
+                response: OfflineNoteNfcApduProtocol.statusWrongData,
+                rejectionReason: .wrongData
+            )
+        }
+        let chunkLength = min(max(requestedLength, 1), OfflineNoteNfcApduProtocol.maxExtendedReadChunkBytes)
+        let end = min(offset + chunkLength, currentPayloadBytes.count)
+        let receiptAckReadRange = currentKind == .receiptAck ? offset..<end : nil
+        return OfflineNoteNfcCardSessionHandleResult(
+            response: OfflineNoteNfcApduProtocol.response(currentPayloadBytes.subdata(in: offset..<end)),
+            receiptAckReadRange: receiptAckReadRange
+        )
+    }
+
+    private func beginWrite(
+        kind: OfflineNoteNfcPayloadKind,
+        payloadLength: Int,
+        sha256: Data
+    ) -> OfflineNoteNfcCardSessionHandleResult {
+        switch OfflineNoteNfcCardSessionWritePolicy.decision(
+            currentKind: currentKind,
+            incomingKind: kind,
+            hasPendingWrite: pendingWrite != nil,
+            readable: readable,
+            didComplete: didComplete
+        ) {
+        case .accept:
+            break
+        case .rejectNotReady:
+            return OfflineNoteNfcCardSessionHandleResult(
+                response: OfflineNoteNfcApduProtocol.statusConditionsNotSatisfied,
+                rejectionReason: .conditionsNotSatisfied
+            )
+        case .rejectWrongKind:
+            return OfflineNoteNfcCardSessionHandleResult(
+                response: OfflineNoteNfcApduProtocol.statusWrongData,
+                rejectionReason: .wrongData
+            )
+        }
+        guard payloadLength <= OfflineNoteNfcApduProtocol.maxIncomingPayloadBytes else {
+            return OfflineNoteNfcCardSessionHandleResult(
+                response: OfflineNoteNfcApduProtocol.statusWrongData,
+                rejectionReason: .wrongData
+            )
+        }
+        do {
+            pendingWrite = try OfflineNoteNfcPayloadAssembler(
+                kind: kind,
+                expectedLength: payloadLength,
+                expectedSha256: sha256
+            )
+            return OfflineNoteNfcCardSessionHandleResult(response: OfflineNoteNfcApduProtocol.response())
+        } catch {
+            return OfflineNoteNfcCardSessionHandleResult(
+                response: OfflineNoteNfcApduProtocol.statusWrongData,
+                rejectionReason: .wrongData
+            )
+        }
+    }
+
+    private func writeChunk(offset: Int, bytes: Data) -> OfflineNoteNfcCardSessionHandleResult {
+        guard let pendingWrite else {
+            return OfflineNoteNfcCardSessionHandleResult(
+                response: OfflineNoteNfcApduProtocol.statusConditionsNotSatisfied,
+                rejectionReason: .conditionsNotSatisfied
+            )
+        }
+        guard pendingWrite.write(offset: offset, chunk: bytes) else {
+            return OfflineNoteNfcCardSessionHandleResult(
+                response: OfflineNoteNfcApduProtocol.statusWrongData,
+                rejectionReason: .wrongData
+            )
+        }
+        return OfflineNoteNfcCardSessionHandleResult(response: OfflineNoteNfcApduProtocol.response())
+    }
+
+    private func commitWrite() -> OfflineNoteNfcCardSessionHandleResult {
+        guard let pendingWrite else {
+            return OfflineNoteNfcCardSessionHandleResult(
+                response: OfflineNoteNfcApduProtocol.statusConditionsNotSatisfied,
+                rejectionReason: .conditionsNotSatisfied
+            )
+        }
+        let payloadBytes: Data
+        do {
+            payloadBytes = try pendingWrite.commit()
+        } catch OfflineNoteNfcApduError.checksumMismatch {
+            return OfflineNoteNfcCardSessionHandleResult(
+                response: OfflineNoteNfcApduProtocol.statusWrongData,
+                rejectionReason: .checksumMismatch
+            )
+        } catch OfflineNoteNfcApduError.incompletePayload {
+            return OfflineNoteNfcCardSessionHandleResult(
+                response: OfflineNoteNfcApduProtocol.statusWrongData,
+                rejectionReason: .incompletePayload
+            )
+        } catch {
+            return OfflineNoteNfcCardSessionHandleResult(
+                response: OfflineNoteNfcApduProtocol.statusWrongData,
+                rejectionReason: .wrongData
+            )
+        }
+        guard committedPayloadValidator(pendingWrite.kind, payloadBytes) else {
+            return OfflineNoteNfcCardSessionHandleResult(
+                response: OfflineNoteNfcApduProtocol.statusWrongData,
+                rejectionReason: .invalidCommittedPayload
+            )
+        }
+        let committedPayload = OfflineNoteNfcCardSessionCommittedPayload(
+            kind: pendingWrite.kind,
+            payloadBytes: payloadBytes
+        )
+        self.pendingWrite = nil
+        readable = false
+        currentPayloadReadTracker = nil
+        return OfflineNoteNfcCardSessionHandleResult(
+            response: OfflineNoteNfcApduProtocol.response(),
+            committedPayload: committedPayload
+        )
+    }
+}
+
 public enum OfflineNoteNearbyMessageKind: String, Codable, Sendable {
     case receiveRequest = "receive_request"
     case payment
@@ -543,6 +1022,90 @@ public enum OfflineNoteNearbyTransportPolicy {
 
     public static func disconnectGraceNanosecondsAfterSending(_ kind: OfflineNoteNearbyMessageKind) -> UInt64 {
         requiresDisconnectGraceAfterSending(kind) ? receiptAckDisconnectGraceNanoseconds : 0
+    }
+}
+
+public enum OfflineNoteNearbyDiscoveryPolicy {
+    public static let protocolKey = "protocol"
+    public static let protocolVersion = "offline-bearer-cash-v1"
+
+    public static var discoveryInfo: [String: String] {
+        [protocolKey: protocolVersion]
+    }
+
+    public static func isExpectedDiscoveryInfo(_ discoveryInfo: [String: String]?) -> Bool {
+        guard let value = discoveryInfo?[protocolKey] else {
+            return false
+        }
+        return value == protocolVersion
+    }
+}
+
+public enum OfflineNoteNearbyPeerSelection {
+    public static func shouldAcceptInvitation(
+        didFinish: Bool,
+        connectedPeerName: String?
+    ) -> Bool {
+        !didFinish && connectedPeerName == nil
+    }
+
+    public static func shouldInvite(
+        foundPeerName: String,
+        didFinish: Bool,
+        connectedPeerName: String?,
+        invitedPeerNames: Set<String>
+    ) -> Bool {
+        !didFinish
+            && connectedPeerName == nil
+            && !invitedPeerNames.contains(foundPeerName)
+    }
+
+    public static func shouldUseConnectedPeer(
+        peerName: String,
+        didFinish: Bool,
+        connectedPeerName: String?
+    ) -> Bool {
+        !didFinish && (connectedPeerName == nil || connectedPeerName == peerName)
+    }
+
+    public static func shouldAcceptMessage(
+        from peerName: String,
+        didFinish: Bool,
+        connectedPeerName: String?
+    ) -> Bool {
+        !didFinish && connectedPeerName == peerName
+    }
+
+    public static func shouldFailDisconnect(
+        from peerName: String,
+        didFinish: Bool,
+        connectedPeerName: String?
+    ) -> Bool {
+        !didFinish && connectedPeerName == peerName
+    }
+}
+
+public enum OfflineNoteNearbyMessageHandlingPolicy {
+    public static func shouldAcceptSenderReceiveRequest(
+        didFinish: Bool,
+        isProcessingReceiveRequest: Bool,
+        hasQueuedPaymentPayload: Bool
+    ) -> Bool {
+        !didFinish && !isProcessingReceiveRequest && !hasQueuedPaymentPayload
+    }
+
+    public static func shouldAcceptSenderReceiptAck(
+        didFinish: Bool,
+        hasQueuedPaymentPayload: Bool
+    ) -> Bool {
+        !didFinish && hasQueuedPaymentPayload
+    }
+
+    public static func shouldAcceptReceiverPayment(
+        didFinish: Bool,
+        isProcessingPayment: Bool
+    ) -> Bool {
+        !didFinish && !isProcessingPayment
     }
 }
 
@@ -634,6 +1197,8 @@ public struct OfflineNoteNearbyPairingChallenge: Codable, Equatable, Hashable, S
 }
 
 public struct OfflineNoteNearbyEnvelope: Codable, Equatable, Sendable {
+    public static let maxEncodedBytes = 96 * 1024
+
     public let kind: OfflineNoteNearbyMessageKind
     public let payload: Data
     public let contentType: String
@@ -680,10 +1245,17 @@ public struct OfflineNoteNearbyEnvelope: Codable, Equatable, Sendable {
     public func encoded() throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        return try encoder.encode(self)
+        let data = try encoder.encode(self)
+        guard data.count <= Self.maxEncodedBytes else {
+            throw OfflineNoteNearbyError.invalidMessage
+        }
+        return data
     }
 
     public static func decode(_ data: Data) throws -> OfflineNoteNearbyEnvelope {
+        guard data.count <= maxEncodedBytes else {
+            throw OfflineNoteNearbyError.invalidMessage
+        }
         let allowedKeys: Set<String> = ["kind", "payload", "contentType", "pairingChallenge"]
         guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               object.keys.allSatisfy({ allowedKeys.contains($0) }) else {
@@ -792,7 +1364,7 @@ public struct OfflineNoteNearbyEnvelope: Codable, Equatable, Sendable {
 
     private func requireTextPayload(_ expectedKind: OfflineNoteTextPayloadKind) throws {
         guard let payloadText = String(data: payload, encoding: .utf8),
-              OfflineNoteTransferHandoff.isValidTextTransportPayload(payloadText, expectedKind: expectedKind) else {
+              OfflineNoteTransferHandoff.isValidDeviceToDeviceTextPayload(payloadText, expectedKind: expectedKind) else {
             throw OfflineNoteNearbyError.invalidMessage
         }
     }
@@ -809,30 +1381,10 @@ public struct OfflineNoteNearbyEnvelope: Codable, Equatable, Sendable {
     }
 
     private static func base64UrlEncode(_ data: Data) -> String {
-        data.base64EncodedString()
-            .replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_")
-            .trimmingCharacters(in: CharacterSet(charactersIn: "="))
+        OfflineNoteTextTransferContract.base64URLEncodedString(data)
     }
 
     private static func base64UrlDecode(_ value: String) -> Data? {
-        guard !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              !value.contains("="),
-              value.unicodeScalars.allSatisfy({ scalar in
-                  let byte = scalar.value
-                  return (65...90).contains(byte)
-                      || (97...122).contains(byte)
-                      || (48...57).contains(byte)
-                      || byte == 45
-                      || byte == 95
-              }) else {
-            return nil
-        }
-        var normalized = value
-            .replacingOccurrences(of: "-", with: "+")
-            .replacingOccurrences(of: "_", with: "/")
-        let padding = (4 - normalized.count % 4) % 4
-        normalized.append(String(repeating: "=", count: padding))
-        return Data(base64Encoded: normalized)
+        OfflineNoteTextTransferContract.base64URLDecodedData(value)
     }
 }

@@ -15,6 +15,7 @@ public sealed class PrivacyNativeTests
             ("confidential unshield", bytes => PrivacyNative.buildConfidentialUnshieldProofV3(bytes)),
             ("zk-ace authorization", bytes => PrivacyNative.buildZkAceAuthorizationProofV1(bytes)),
             ("verange proof", bytes => PrivacyNative.buildVeRangeProofV1(bytes)),
+            ("VeRange proof", bytes => PrivacyNative.BuildVeRangeProofV1(bytes)),
             ("jindo lattice proof", bytes => PrivacyNative.buildJindoLatticeProofV0(bytes)),
             (
                 "sis-hints anonymous credential proof",
@@ -46,6 +47,7 @@ public sealed class PrivacyNativeTests
                 bytes => PrivacyNative.verifyZkAmsAdmissionBatchProofV0(bytes)),
             ("zkat policy verify", bytes => PrivacyNative.verifyZkAtPolicyProofV1(bytes)),
             ("verange verify", bytes => PrivacyNative.verifyVeRangeProofV1(bytes)),
+            ("VeRange verify", bytes => PrivacyNative.VerifyVeRangeProofV1(bytes)),
             ("verify", bytes => PrivacyNative.VerifyProofV1(bytes)),
         };
 
@@ -1079,27 +1081,25 @@ public sealed class PrivacyNativeTests
     public void PrivacyNativeRejectsMalformedProofRequestsBeforeLoadingNativeBridge()
     {
         var emptyPayloadRequest = PrivacyNoritoFrame(0x52);
-        var emptyBuildPayloadError = Assert.Throws<ArgumentException>(() =>
-            PrivacyNative.BuildProofV1(emptyPayloadRequest));
-        var emptyVerifyPayloadError = Assert.Throws<ArgumentException>(() =>
-            PrivacyNative.VerifyProofV1(emptyPayloadRequest));
-
-        Assert.Contains(
-            "non-empty privacy request payload",
-            emptyBuildPayloadError.Message);
-        Assert.Contains(
-            "non-empty privacy request payload",
-            emptyVerifyPayloadError.Message);
+        foreach (var (_, helper) in PrivacyProofArchiveHelpers)
+        {
+            var emptyPayloadError = Assert.Throws<ArgumentException>(() =>
+                helper(emptyPayloadRequest));
+            Assert.Contains(
+                "non-empty privacy request payload",
+                emptyPayloadError.Message);
+            Assert.Equal("requestArchive", emptyPayloadError.ParamName);
+        }
 
         foreach (var malformed in InvalidPrivacyRequestArchives())
         {
-            var buildError = Assert.Throws<ArgumentException>(() =>
-                PrivacyNative.BuildProofV1(malformed));
-            var verifyError = Assert.Throws<ArgumentException>(() =>
-                PrivacyNative.VerifyProofV1(malformed));
-
-            Assert.Contains("valid Norito V1 archive", buildError.Message);
-            Assert.Contains("valid Norito V1 archive", verifyError.Message);
+            foreach (var (_, helper) in PrivacyProofArchiveHelpers)
+            {
+                var error = Assert.Throws<ArgumentException>(() =>
+                    helper(malformed));
+                Assert.Contains("valid Norito V1 archive", error.Message);
+                Assert.Equal("requestArchive", error.ParamName);
+            }
         }
     }
 

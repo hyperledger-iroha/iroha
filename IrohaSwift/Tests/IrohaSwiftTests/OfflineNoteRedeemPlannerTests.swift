@@ -152,6 +152,67 @@ final class OfflineNoteRedeemPlannerTests: XCTestCase {
         }
     }
 
+    func testOwnedInputRejectsPaddedScopeIdentifiers() throws {
+        let source = try makeOwnedInput(amount: "500")
+
+        XCTAssertThrowsError(
+            try OfflineNoteOwnedInput(
+                chainId: " \(source.chainId)",
+                accountId: source.accountId,
+                assetId: source.assetId,
+                amount: source.amount,
+                keyCertificate: source.keyCertificate,
+                noteCommitment: source.noteCommitment,
+                noteSecret: source.noteSecret,
+                origin: source.origin
+            )
+        ) { error in
+            XCTAssertEqual(error as? OfflineNoteRedeemPlannerError, .invalidField("chain_id"))
+        }
+        XCTAssertThrowsError(
+            try OfflineNoteOwnedInput(
+                chainId: source.chainId,
+                accountId: "\(source.accountId)\n",
+                assetId: source.assetId,
+                amount: source.amount,
+                keyCertificate: source.keyCertificate,
+                noteCommitment: source.noteCommitment,
+                noteSecret: source.noteSecret,
+                origin: source.origin
+            )
+        ) { error in
+            XCTAssertEqual(error as? OfflineNoteRedeemPlannerError, .invalidField("account_id"))
+        }
+
+        let origin = try XCTUnwrap(source.origin)
+        XCTAssertThrowsError(
+            try OfflineNoteOwnedOutput(
+                chainId: "\(source.chainId) ",
+                accountId: source.accountId,
+                assetId: source.assetId,
+                amount: "80",
+                keyCertificate: source.keyCertificate,
+                noteSecret: bytes(0x66),
+                origin: origin
+            )
+        ) { error in
+            XCTAssertEqual(error as? OfflineNoteRedeemPlannerError, .invalidField("chain_id"))
+        }
+        XCTAssertThrowsError(
+            try OfflineNoteOwnedOutput(
+                chainId: source.chainId,
+                accountId: " \(source.accountId)",
+                assetId: source.assetId,
+                amount: "80",
+                keyCertificate: source.keyCertificate,
+                noteSecret: bytes(0x67),
+                origin: origin
+            )
+        ) { error in
+            XCTAssertEqual(error as? OfflineNoteRedeemPlannerError, .invalidField("account_id"))
+        }
+    }
+
     func testFinalizeRejectsTamperedProofBindings() throws {
         let source = try makeOwnedInput(amount: "500")
         let draft = try OfflineNoteRedeemPlanner.partialRedeemDraft(

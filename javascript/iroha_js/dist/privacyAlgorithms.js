@@ -634,54 +634,72 @@ const BACKEND_FAMILY_BY_ALGORITHM_ID = Object.freeze({
   "aztec-private-rollup-v1": "aztec-plonkish-private-kernel",
   "pq-masp-stark-v0": "pq-masp-stark-fri",
 });
+const PENDING_PRODUCTION_BACKEND_FAMILIES = new Set([
+  "anonymous-pgc",
+  "aztec-plonkish-private-kernel",
+  "fcmp-plus-plus-curve-tree",
+  "groth16-bls12-377",
+  "halo2-ipa-orchard",
+  "lattice-pcs-sis",
+  "miden-stark",
+  "pq-masp-stark-fri",
+  "recursive-anonymous-admission",
+  "silent-threshold-anoncred",
+  "sis-with-hints",
+  "vega-existing-credential-zk",
+  "verange",
+  "zk-x509",
+  "zkat",
+]);
 const REQUIRED_PRIVACY_PLAN_ROWS = Object.freeze([
-  Object.freeze(["anonymous-pgc-k-out-of-n-v1", "production-hardened", "anonymous-pgc"]),
+  Object.freeze(["zk-ace-pq-authorization-v0", "chain-executable", "stark-fri"]),
+  Object.freeze(["anonymous-pgc-k-out-of-n-v1", "sdk-builder", "anonymous-pgc"]),
   Object.freeze(["verange-transparent-range-v1", "component", "verange"]),
-  Object.freeze(["zkat-policy-private-auth-v1", "production-hardened", "zkat"]),
+  Object.freeze(["zkat-policy-private-auth-v1", "sdk-builder", "zkat"]),
   Object.freeze([
     "zk-ams-recursive-admission-v0",
-    "production-hardened",
+    "sdk-builder",
     "recursive-anonymous-admission",
   ]),
   Object.freeze([
     "vega-existing-credential-zk-v0",
-    "production-hardened",
+    "sdk-builder",
     "vega-existing-credential-zk",
   ]),
   Object.freeze([
     "silent-threshold-anoncred-v0",
-    "production-hardened",
+    "sdk-builder",
     "silent-threshold-anoncred",
   ]),
-  Object.freeze(["zk-x509-onchain-identity-v0", "production-hardened", "zk-x509"]),
-  Object.freeze(["jindo-lattice-pcs-zk-v0", "production-hardened", "lattice-pcs-sis"]),
-  Object.freeze(["sis-hints-anoncred-pq-v0", "production-hardened", "sis-with-hints"]),
+  Object.freeze(["zk-x509-onchain-identity-v0", "sdk-builder", "zk-x509"]),
+  Object.freeze(["jindo-lattice-pcs-zk-v0", "sdk-builder", "lattice-pcs-sis"]),
+  Object.freeze(["sis-hints-anoncred-pq-v0", "sdk-builder", "sis-with-hints"]),
   Object.freeze([
     "orchard-halo2-actions-v1",
-    "production-hardened",
+    "sdk-builder",
     "halo2-ipa-orchard",
   ]),
   Object.freeze([
     "penumbra-masp-v1",
-    "production-hardened",
+    "sdk-builder",
     "groth16-bls12-377",
   ]),
   Object.freeze([
     "monero-fcmp-plus-plus-v1",
-    "production-hardened",
+    "sdk-builder",
     "fcmp-plus-plus-curve-tree",
   ]),
   Object.freeze([
     "miden-stark-note-v1",
-    "production-hardened",
+    "sdk-builder",
     "miden-stark",
   ]),
   Object.freeze([
     "aztec-private-rollup-v1",
-    "production-hardened",
+    "sdk-builder",
     "aztec-plonkish-private-kernel",
   ]),
-  Object.freeze(["pq-masp-stark-v0", "production-hardened", "pq-masp-stark-fri"]),
+  Object.freeze(["pq-masp-stark-v0", "sdk-builder", "pq-masp-stark-fri"]),
 ]);
 const REQUIRED_PRIVACY_PLAN_DISPLAY_TEXT_BY_ALGORITHM_ID = Object.freeze({
   "anonymous-pgc-k-out-of-n-v1": Object.freeze(["Anonymous PGC k-out-of-n payments v1", "Anonymous PGC", "Account-based anonymous confidential payment target with hidden sender, hidden amount, receiver privacy, and k-out-of-n receiver-set proofs."]),
@@ -1220,7 +1238,14 @@ const REQUIRED_PRIVACY_PLAN_SDK_ENTRYPOINTS_BY_ALGORITHM_ID = Object.freeze({
     "buildAnonymousPgcKOutOfNProofV1",
     "buildAnonymousPgcTransferInstruction",
   ]),
-  "verange-transparent-range-v1": Object.freeze(["buildRangeCommitment", "buildVeRangeDevProofFixture", "buildVeRangeProofEnvelope", "verifyVeRangeProofLocally"]),
+  "verange-transparent-range-v1": Object.freeze([
+    "buildRangeCommitment",
+    "buildVeRangeDevProofFixture",
+    "buildVeRangeProofEnvelope",
+    "buildVeRangeProofV1",
+    "verifyVeRangeProofLocally",
+    "verifyVeRangeProofV1",
+  ]),
   "zkat-policy-private-auth-v1": Object.freeze(["buildZkAtPolicyCommitment", "buildZkAtAuthenticatorEnvelope", "buildZkAtPolicyProofV1", "verifyZkAtPolicyProofV1"]),
   "zk-ams-recursive-admission-v0": Object.freeze(["buildZkAmsAdmissionBatch", "buildZkAmsAdmissionProofEnvelope", "buildZkAmsAdmissionBatchProofV0", "verifyZkAmsAdmissionBatchProofV0"]),
   "vega-existing-credential-zk-v0": Object.freeze(["buildVegaCredentialPredicateCommitment", "buildVegaCredentialProofEnvelope", "buildVegaCredentialPredicateProofV0", "verifyVegaCredentialPredicateProofV0"]),
@@ -1260,7 +1285,7 @@ const REQUIRED_PRIVACY_PLAN_SDK_ENTRYPOINTS_BY_ALGORITHM_ID = Object.freeze({
 });
 const REQUIRED_PRIVACY_PLAN_PLANNED_SDK_ENTRYPOINTS_BY_ALGORITHM_ID = Object.freeze({
   "anonymous-pgc-k-out-of-n-v1": Object.freeze([]),
-  "verange-transparent-range-v1": Object.freeze(["buildVeRangeProofV1"]),
+  "verange-transparent-range-v1": Object.freeze([]),
   "zkat-policy-private-auth-v1": Object.freeze([]),
   "zk-ams-recursive-admission-v0": Object.freeze([]),
   "vega-existing-credential-zk-v0": Object.freeze([]),
@@ -2677,6 +2702,10 @@ function trustedProductionEvidence(descriptor, evidenceRows, options = undefined
   if (!evidenceNullableEquals(source.public_inputs_schema, descriptor.publicInputsSchema)) {
     return null;
   }
+  const backendFamily = BACKEND_FAMILY_BY_ALGORITHM_ID[descriptor.id];
+  if (PENDING_PRODUCTION_BACKEND_FAMILIES.has(backendFamily)) {
+    return null;
+  }
   const sdkEntrypoints = evidenceSdkEntrypoints(source.sdk_entrypoints, descriptor);
   if (sdkEntrypoints === null) {
     return null;
@@ -3049,10 +3078,10 @@ function validateRequiredPrivacyPlanRows(descriptors) {
         `privacy algorithm catalog required production privacy plan row ${algorithmId} must keep planned SDK entrypoints ${plannedSdkEntrypoints.join(",")} until the production inventory is deliberately updated`,
       );
     }
-    const proofBuilderEntrypoints =
-      descriptor.implementationStage === "production-hardened"
-        ? descriptor.sdkEntrypoints ?? []
-        : descriptorPlannedSdkEntrypoints;
+    const proofBuilderEntrypoints = [
+      ...(descriptor.sdkEntrypoints ?? []),
+      ...descriptorPlannedSdkEntrypoints,
+    ];
     if (!proofBuilderEntrypoints.some(entrypointIsProductionProofBuilder)) {
       throw new Error(
         `privacy algorithm catalog required production privacy plan row ${algorithmId} must retain or export a production proof builder`,
@@ -3133,6 +3162,15 @@ export function validatePrivacyAlgorithmDescriptor(descriptor, index = 0) {
   ) {
     throw new Error(
       `privacy algorithm descriptor ${index}.implementationStage must be a known implementation stage`,
+    );
+  }
+  const backendFamily = BACKEND_FAMILY_BY_ALGORITHM_ID[descriptor.id];
+  if (
+    descriptor.implementationStage === "production-hardened" &&
+    PENDING_PRODUCTION_BACKEND_FAMILIES.has(backendFamily)
+  ) {
+    throw new Error(
+      `privacy algorithm descriptor ${index} backend family ${backendFamily} is still pending production chain admission`,
     );
   }
 
@@ -3443,16 +3481,21 @@ export function validatePrivacyAlgorithmDescriptor(descriptor, index = 0) {
       `privacy algorithm descriptor ${index} executable DevFixture SDK entrypoints must include a security note that marks dev fixtures as non-production and unavailable for production use`,
     );
   }
+  const hasExportedProductionProofBuilder = sdkEntrypoints.some(
+    entrypointIsProductionProofBuilder,
+  );
   if (
     sdkEntrypoints.some(entrypointIsExplicitDevFixture) &&
-    plannedSdkEntrypoints.length === 0
+    plannedSdkEntrypoints.length === 0 &&
+    !hasExportedProductionProofBuilder
   ) {
     throw new Error(
-      `privacy algorithm descriptor ${index} executable DevFixture SDK entrypoints must retain planned production SDK entrypoints until production gates pass`,
+      `privacy algorithm descriptor ${index} executable DevFixture SDK entrypoints must retain planned production SDK entrypoints or export a production proof builder until production gates pass`,
     );
   }
   if (
     sdkEntrypoints.some(entrypointIsExplicitDevFixture) &&
+    !hasExportedProductionProofBuilder &&
     !plannedSdkEntrypoints.some(entrypointIsProductionProofBuilder)
   ) {
     throw new Error(
@@ -3624,10 +3667,10 @@ export function validatePrivacyAlgorithmDescriptor(descriptor, index = 0) {
         `privacy algorithm descriptor ${index}.sourceReferences must include NIST FIPS 203, FIPS 204, and FIPS 205 URLs for post_quantum coverage; missing ${missingSourceUrls.join(", ")}`,
       );
     }
-    const postQuantumEntrypoints =
-      descriptor.implementationStage === "production-hardened"
-        ? descriptor.sdkEntrypoints ?? []
-        : plannedSdkEntrypoints;
+    const postQuantumEntrypoints = [
+      ...(descriptor.sdkEntrypoints ?? []),
+      ...plannedSdkEntrypoints,
+    ];
     const plannedEntrypointNames = postQuantumEntrypoints.map((entrypoint) => {
       const segments = entrypoint.split(".");
       return segments[segments.length - 1];
@@ -3753,10 +3796,11 @@ export function validatePrivacyAlgorithmDescriptor(descriptor, index = 0) {
     }
     if (
       PRE_PRODUCTION_SOURCE_REFERENCED_IMPLEMENTATION_STAGES.has(descriptor.implementationStage) &&
-      (descriptor.plannedSdkEntrypoints ?? []).length === 0
+      (descriptor.plannedSdkEntrypoints ?? []).length === 0 &&
+      !(descriptor.sdkEntrypoints ?? []).some(entrypointIsProductionProofBuilder)
     ) {
       throw new Error(
-        `privacy algorithm descriptor ${index}.plannedSdkEntrypoints must be non-empty for pre-production source-referenced implementation stages`,
+        `privacy algorithm descriptor ${index}.plannedSdkEntrypoints must be non-empty or a production proof builder must be exported for pre-production source-referenced implementation stages`,
       );
     }
     if (
@@ -4273,7 +4317,7 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       authorization: true,
       noteEncryption: false,
     }),
-    implementationStage: "production-hardened",
+    implementationStage: "chain-executable",
     recommendedFor: Object.freeze([
       "post-quantum transaction authorization migration",
       "identity-private source-account authorization",
@@ -4357,7 +4401,7 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       "anonymity_set_root,tx_digest,balance_commitments,receiver_set_commitment,receiver_ciphertext_commitments,receiver_threshold,receiver_count,link_tag,range_commitments,chain_id,domain_separator",
     verifierKeyId: "anonymous_pgc_k_out_of_n_v1",
     pqLayers: PQ_LAYER_NONE,
-    implementationStage: "production-hardened",
+    implementationStage: "sdk-builder",
     recommendedFor: Object.freeze([
       "account-based private payments",
       "multi-receiver confidential transfers",
@@ -4486,9 +4530,11 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       "buildRangeCommitment",
       "buildVeRangeDevProofFixture",
       "buildVeRangeProofEnvelope",
+      "buildVeRangeProofV1",
       "verifyVeRangeProofLocally",
+      "verifyVeRangeProofV1",
     ]),
-    plannedSdkEntrypoints: Object.freeze(["buildVeRangeProofV1"]),
+    plannedSdkEntrypoints: Object.freeze([]),
     chainRequirements: Object.freeze([
       "VeRange verifier registry entry",
       "range commitment binding rules",
@@ -4509,7 +4555,7 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       "policy_commitment,tx_digest,account_id,action_class,domain_separator,policy_epoch",
     verifierKeyId: "zkat_policy_private_auth_v1",
     pqLayers: PQ_LAYER_NONE,
-    implementationStage: "production-hardened",
+    implementationStage: "sdk-builder",
     recommendedFor: Object.freeze([
       "institutional wallet policy privacy",
       "hidden threshold authorization",
@@ -4585,7 +4631,7 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       "issuer_root,admission_batch_root,admission_nullifiers,anonymous_account_commitments,recursive_admission_digest,domain_separator",
     verifierKeyId: "zk_ams_recursive_admission_v0",
     pqLayers: PQ_LAYER_NONE,
-    implementationStage: "production-hardened",
+    implementationStage: "sdk-builder",
     recommendedFor: Object.freeze([
       "anonymous onboarding",
       "Sybil-resistant wallet issuance",
@@ -4661,7 +4707,7 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       "issuer_commitment,credential_schema,predicate_commitment,subject_binding,expiration_epoch,domain_separator",
     verifierKeyId: "vega_existing_credential_zk_v0",
     pqLayers: PQ_LAYER_NONE,
-    implementationStage: "production-hardened",
+    implementationStage: "sdk-builder",
     recommendedFor: Object.freeze([
       "legacy credential bridges",
       "private eligibility checks",
@@ -4738,7 +4784,7 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       "issuer_set_commitment,threshold_policy_hash,credential_showing_commitment,showing_nullifier,verifier_policy_hash,domain_separator",
     verifierKeyId: "silent_threshold_anoncred_v0",
     pqLayers: PQ_LAYER_NONE,
-    implementationStage: "production-hardened",
+    implementationStage: "sdk-builder",
     recommendedFor: Object.freeze([
       "multi-authority regulated credentials",
       "issuer-hiding eligibility proofs",
@@ -4813,7 +4859,7 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       "ca_root_commitment,certificate_policy_hash,revocation_root,subject_commitment,address_binding,domain_separator",
     verifierKeyId: "zk_x509_onchain_identity_v0",
     pqLayers: PQ_LAYER_NONE,
-    implementationStage: "production-hardened",
+    implementationStage: "sdk-builder",
     recommendedFor: Object.freeze([
       "institutional wallet identity",
       "legal-entity account binding",
@@ -4894,7 +4940,7 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       authorization: false,
       noteEncryption: false,
     }),
-    implementationStage: "production-hardened",
+    implementationStage: "sdk-builder",
     recommendedFor: Object.freeze([
       "post-quantum proof-system research",
       "future PQ verifier backend evaluation",
@@ -4966,7 +5012,7 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       authorization: false,
       noteEncryption: false,
     }),
-    implementationStage: "production-hardened",
+    implementationStage: "sdk-builder",
     recommendedFor: Object.freeze([
       "post-quantum anonymous credential research",
       "future PQ KYC or eligibility proofs",
@@ -5038,7 +5084,7 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       "anchor,nullifiers,cmx,value_commitments,binding_signature",
     verifierKeyId: "orchard_halo2_action_bundle_v1",
     pqLayers: PQ_LAYER_NONE,
-    implementationStage: "production-hardened",
+    implementationStage: "sdk-builder",
     recommendedFor: Object.freeze([
       "single-asset private transfers",
       "mature note/nullifier wallet design",
@@ -5116,7 +5162,7 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       "state_commitment_anchor,nullifiers,note_commitments,balance_commitment,asset_id_commitment",
     verifierKeyId: "penumbra_masp_v1",
     pqLayers: PQ_LAYER_NONE,
-    implementationStage: "production-hardened",
+    implementationStage: "sdk-builder",
     recommendedFor: Object.freeze([
       "multi-asset shielded pools",
       "IBC-style asset privacy",
@@ -5191,7 +5237,7 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       "membership_root,key_image_or_link_tag,amount_commitments,range_commitments,spend_authorization,chain_tag",
     verifierKeyId: "monero_fcmp_plus_plus_v1",
     pqLayers: PQ_LAYER_NONE,
-    implementationStage: "production-hardened",
+    implementationStage: "sdk-builder",
     recommendedFor: Object.freeze([
       "maximal sender anonymity sets",
       "decoy-ring replacement research",
@@ -5269,7 +5315,7 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       authorization: false,
       noteEncryption: false,
     }),
-    implementationStage: "production-hardened",
+    implementationStage: "sdk-builder",
     recommendedFor: Object.freeze([
       "client-side proving",
       "private programmable note workflows",
@@ -5344,7 +5390,7 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       "note_hashes,nullifiers,encrypted_logs,public_call_requests,private_kernel_commitment,rollup_state_roots",
     verifierKeyId: "aztec_private_kernel_v1",
     pqLayers: PQ_LAYER_NONE,
-    implementationStage: "production-hardened",
+    implementationStage: "sdk-builder",
     recommendedFor: Object.freeze([
       "programmable private payments",
       "hybrid public/private contract workflows",
@@ -5430,7 +5476,7 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       authorization: true,
       noteEncryption: true,
     }),
-    implementationStage: "production-hardened",
+    implementationStage: "sdk-builder",
     recommendedFor: Object.freeze([
       "end-to-end post-quantum privacy target",
       "long-horizon central-bank pilot research",

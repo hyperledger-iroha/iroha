@@ -18,6 +18,7 @@ public final class MultisigProposeRequest {
   private final String signatureB64;
   private final Long creationTimeMs;
   private final String feeSponsor;
+  private final String memo;
 
   private MultisigProposeRequest(final Builder builder) {
     this.multisigAccountId = builder.multisigAccountId;
@@ -28,6 +29,7 @@ public final class MultisigProposeRequest {
     this.signatureB64 = builder.signatureB64;
     this.creationTimeMs = builder.creationTimeMs;
     this.feeSponsor = builder.feeSponsor;
+    this.memo = builder.memo;
   }
 
   public static Builder builder() {
@@ -42,6 +44,7 @@ public final class MultisigProposeRequest {
   public String signatureB64() { return signatureB64; }
   public Long creationTimeMs() { return creationTimeMs; }
   public String feeSponsor() { return feeSponsor; }
+  public String memo() { return memo; }
 
   private static List<byte[]> copyInstructions(final List<byte[]> source) {
     final List<byte[]> copy = new ArrayList<>();
@@ -62,6 +65,7 @@ public final class MultisigProposeRequest {
     private String signatureB64;
     private Long creationTimeMs;
     private String feeSponsor;
+    private String memo;
 
     public Builder setMultisigAccountId(final String value) {
       this.multisigAccountId = value;
@@ -120,6 +124,11 @@ public final class MultisigProposeRequest {
 
     public Builder setFeeSponsor(final String value) {
       this.feeSponsor = value;
+      return this;
+    }
+
+    public Builder setMemo(final String value) {
+      this.memo = value;
       return this;
     }
 

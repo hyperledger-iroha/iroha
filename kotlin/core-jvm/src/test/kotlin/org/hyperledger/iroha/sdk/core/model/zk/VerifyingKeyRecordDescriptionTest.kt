@@ -62,9 +62,12 @@ class VerifyingKeyRecordDescriptionTest {
     }
 
     @Test
-    fun `create trims circuitId`() {
-        val desc = createWithInlineBytes(circuitId = "  circuit-1  ")
-        assertEquals("circuit-1", desc.circuitId)
+    fun `create throws on padded circuitId`() {
+        for (circuitId in listOf(" circuit-1", "circuit-1 ")) {
+            assertFailsWith<IllegalArgumentException> {
+                createWithInlineBytes(circuitId = circuitId)
+            }
+        }
     }
 
     @Test
@@ -82,9 +85,36 @@ class VerifyingKeyRecordDescriptionTest {
     }
 
     @Test
+    fun `create throws on padded schemaHashHex`() {
+        for (schemaHashHex in listOf(" $validSchemaHash", "$validSchemaHash ")) {
+            assertFailsWith<IllegalArgumentException> {
+                createWithInlineBytes(schemaHashHex = schemaHashHex)
+            }
+        }
+    }
+
+    @Test
+    fun `create throws on padded commitmentHex`() {
+        for (commitmentHex in listOf(" $validCommitment", "$validCommitment ")) {
+            assertFailsWith<IllegalArgumentException> {
+                createWithCommitment(commitmentHex = commitmentHex)
+            }
+        }
+    }
+
+    @Test
     fun `create throws on blank gasScheduleId`() {
         assertFailsWith<IllegalArgumentException> {
             createWithInlineBytes(gasScheduleId = "  ")
+        }
+    }
+
+    @Test
+    fun `create throws on padded gasScheduleId`() {
+        for (gasScheduleId in listOf(" gas-1", "gas-1 ")) {
+            assertFailsWith<IllegalArgumentException> {
+                createWithInlineBytes(gasScheduleId = gasScheduleId)
+            }
         }
     }
 
@@ -176,6 +206,84 @@ class VerifyingKeyRecordDescriptionTest {
                 activationHeight = 100,
                 withdrawHeight = 50,
             )
+        }
+    }
+
+    @Test
+    fun `create throws on padded optional string fields`() {
+        val cases: List<() -> VerifyingKeyRecordDescription> = listOf(
+            {
+                VerifyingKeyRecordDescription.create(
+                    backend = backend,
+                    version = 1,
+                    circuitId = "c",
+                    schemaHashHex = validSchemaHash,
+                    gasScheduleId = "g",
+                    inlineKeyBytes = inlineBytes,
+                    curve = " pallas",
+                )
+            },
+            {
+                VerifyingKeyRecordDescription.create(
+                    backend = backend,
+                    version = 1,
+                    circuitId = "c",
+                    schemaHashHex = validSchemaHash,
+                    gasScheduleId = "g",
+                    inlineKeyBytes = inlineBytes,
+                    curve = "pallas ",
+                )
+            },
+            {
+                VerifyingKeyRecordDescription.create(
+                    backend = backend,
+                    version = 1,
+                    circuitId = "c",
+                    schemaHashHex = validSchemaHash,
+                    gasScheduleId = "g",
+                    inlineKeyBytes = inlineBytes,
+                    metadataUriCid = " bafy-metadata",
+                )
+            },
+            {
+                VerifyingKeyRecordDescription.create(
+                    backend = backend,
+                    version = 1,
+                    circuitId = "c",
+                    schemaHashHex = validSchemaHash,
+                    gasScheduleId = "g",
+                    inlineKeyBytes = inlineBytes,
+                    metadataUriCid = "bafy-metadata ",
+                )
+            },
+            {
+                VerifyingKeyRecordDescription.create(
+                    backend = backend,
+                    version = 1,
+                    circuitId = "c",
+                    schemaHashHex = validSchemaHash,
+                    gasScheduleId = "g",
+                    inlineKeyBytes = inlineBytes,
+                    vkBytesCid = " bafy-vk",
+                )
+            },
+            {
+                VerifyingKeyRecordDescription.create(
+                    backend = backend,
+                    version = 1,
+                    circuitId = "c",
+                    schemaHashHex = validSchemaHash,
+                    gasScheduleId = "g",
+                    inlineKeyBytes = inlineBytes,
+                    vkBytesCid = "bafy-vk ",
+                )
+            },
+        )
+
+        for (create in cases) {
+            assertFailsWith<IllegalArgumentException> {
+                create()
+            }
         }
     }
 

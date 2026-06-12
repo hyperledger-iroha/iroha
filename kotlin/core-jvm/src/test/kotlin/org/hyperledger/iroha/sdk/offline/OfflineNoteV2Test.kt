@@ -1,11 +1,13 @@
 package org.hyperledger.iroha.sdk.offline
 
+import java.io.ByteArrayOutputStream
 import java.nio.file.Files
 import java.nio.file.Paths
 import java.util.Base64
 import java.util.Locale
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import org.hyperledger.iroha.sdk.client.JsonParser
@@ -306,6 +308,65 @@ class OfflineNoteV2Test {
     }
 
     @Test
+    fun offlineNoteV2DomainsRejectSubstitutionAndPadding() {
+        val fixture = loadFixture()
+        val certificate = certificate(obj(obj(fixture, "payment_token"), "sender_key_certificate"))
+        val audit = audit(fixture)
+        val redeem = redeem(fixture)
+        val claim = audit.inputClaims.first()
+        val auditPublic = audit.publicInputs()
+        val redeemPublic = redeem.publicInputs()
+
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2.KeyCertificatePayloadV2(
+                domain = "${OfflineNoteV2.KEY_CERTIFICATE_PAYLOAD_DOMAIN} ",
+                version = certificate.version,
+                platform = certificate.platform,
+                keyId = certificate.keyId,
+                deviceId = certificate.deviceId,
+                accountId = certificate.accountId,
+                publicKey = certificate.publicKey(),
+                assertionScheme = certificate.assertionScheme,
+                assertionKeyAlgorithm = certificate.assertionKeyAlgorithm,
+                assertionPublicKey = certificate.assertionPublicKey(),
+                assertionUsageCountLimit = certificate.assertionUsageCountLimit,
+                oneUse = certificate.oneUse,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2.IssuedClaimV2(
+                domain = "${OfflineNoteV2.ISSUED_CLAIM_DOMAIN}\n",
+                noteCommitment = claim.noteCommitment(),
+                keyCertificatePayloadHash = claim.keyCertificatePayloadHash(),
+                assetId = claim.assetId,
+                amount = claim.amount,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2.RedeemPublicInputsV2(
+                domain = "forged:${OfflineNoteV2.REDEEM_PUBLIC_INPUTS_DOMAIN}",
+                sourceNoteCommitment = redeemPublic.sourceNoteCommitment(),
+                inputNullifiers = redeemPublic.inputNullifiers(),
+                keyCertificatePayloadHash = redeemPublic.keyCertificatePayloadHash(),
+                recipient = redeemPublic.recipient,
+                assetId = redeemPublic.assetId,
+                amount = redeemPublic.amount,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2.AuditPublicInputsV2(
+                domain = " ${OfflineNoteV2.AUDIT_PUBLIC_INPUTS_DOMAIN}",
+                tokenId = auditPublic.tokenId(),
+                keyCertificatePayloadHash = auditPublic.keyCertificatePayloadHash(),
+                inputNullifiers = auditPublic.inputNullifiers(),
+                inputClaims = auditPublic.inputClaims,
+                outputCommitments = auditPublic.outputCommitments(),
+                outputClaims = auditPublic.outputClaims,
+            )
+        }
+    }
+
+    @Test
     fun publicInputHashesMatchRustVectors() {
         val fixture = loadFixture()
         val chain = obj(fixture, "chain_vectors")
@@ -349,9 +410,12 @@ class OfflineNoteV2Test {
     @Test
     fun proofVerifierAndHashValidationRejectsMalformedValues() {
         val publicInputsHash = audit(loadFixture()).publicInputsHash()
-        val trimmedProof = OfflineNoteV2.ProofBox("  ${OfflineNoteV2.RECURSIVE_BACKEND}  ", byteArrayOf(1))
-        assertEquals(OfflineNoteV2.RECURSIVE_BACKEND, trimmedProof.backend)
+        val proof = OfflineNoteV2.ProofBox(OfflineNoteV2.RECURSIVE_BACKEND, byteArrayOf(1))
+        assertEquals(OfflineNoteV2.RECURSIVE_BACKEND, proof.backend)
 
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2.ProofBox("  ${OfflineNoteV2.RECURSIVE_BACKEND}  ", byteArrayOf(1))
+        }
         assertFailsWith<IllegalArgumentException> {
             OfflineNoteV2.ProofBox(" \n ", byteArrayOf(1))
         }
@@ -376,11 +440,47 @@ class OfflineNoteV2Test {
             OfflineNoteV2.VerifyingKeyIdReference(backend = "", name = "vk")
         }
         assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2.VerifyingKeyIdReference(backend = " halo2/ipa ", name = "vk")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2.VerifyingKeyIdReference(backend = "halo2/ipa", name = " vk ")
+        }
+        assertFailsWith<IllegalArgumentException> {
             OfflineNoteV2.VerifyingKeyIdReference(backend = "halo2:ipa", name = "vk")
         }
         assertFailsWith<IllegalArgumentException> {
             OfflineNoteV2.VerifyingKeyIdReference(backend = "halo2/ipa", name = "bad:vk")
         }
+    }
+
+    @Test
+    fun openVerifyEnvelopeDecoderRejectsMalformedV2EnvelopeFields() {
+        val values = OfflineNoteV2.InstanceBuilder.auditInstanceValues(audit(loadFixture())).publicValues()
+        val payload = fakeZk1ProofPayload(byteArrayOf(1, 2, 3), values)
+        val envelope = OfflineNoteV2Halo2Prover.openVerifyEnvelope(payload)
+
+        assertFalse(OfflineNoteV2Halo2Prover.verifyOpenVerifyEnvelope(envelope, "00".repeat(32)))
+
+        val emptyProofError = assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2Halo2Prover.verifyOpenVerifyEnvelope(
+                OfflineNoteV2Halo2Prover.openVerifyEnvelope(ByteArray(0)),
+                "00".repeat(32),
+            )
+        }
+        assertTrue(emptyProofError.message.orEmpty().contains("OpenVerifyEnvelope proof payload is empty"))
+
+        val trailingCircuitError = assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2Halo2Prover.verifyOpenVerifyEnvelope(
+                rawOpenVerifyEnvelopeWithCircuitPayload(
+                    openEnvelopeStringPayload(OfflineNoteV2Halo2Prover.CIRCUIT_ID) + byteArrayOf(0),
+                ),
+                values,
+            )
+        }
+        assertTrue(
+            trailingCircuitError.message.orEmpty()
+                .contains("Trailing bytes after OpenVerifyEnvelope field decode"),
+        )
     }
 
     @Test
@@ -848,6 +948,71 @@ class OfflineNoteV2Test {
 
     private fun wirePayloadBytes(instruction: InstructionBox): ByteArray =
         (instruction.payload as WirePayload).payloadBytes
+
+    private fun fakeZk1ProofPayload(proofTranscript: ByteArray, publicValues: LongArray): ByteArray {
+        val out = ByteArrayOutputStream()
+        out.write(byteArrayOf(0x5A, 0x4B, 0x31, 0x00))
+        appendTlv(out, "PROF", proofTranscript)
+        val instances = ByteArrayOutputStream()
+        writeUInt32Le(instances, 16)
+        writeUInt32Le(instances, 1)
+        for (value in publicValues) {
+            instances.write(OfflineNoteV2.instanceScalarBytes(value))
+        }
+        appendTlv(out, "I10P", instances.toByteArray())
+        return out.toByteArray()
+    }
+
+    private fun appendTlv(out: ByteArrayOutputStream, tag: String, value: ByteArray) {
+        out.write(tag.toByteArray(Charsets.UTF_8))
+        writeUInt32Le(out, value.size)
+        out.write(value)
+    }
+
+    private fun writeUInt32Le(out: ByteArrayOutputStream, value: Int) {
+        var remaining = value
+        repeat(4) {
+            out.write(remaining and 0xff)
+            remaining = remaining ushr 8
+        }
+    }
+
+    private fun rawOpenVerifyEnvelopeWithCircuitPayload(circuitFieldPayload: ByteArray): ByteArray {
+        val adapter = object : TypeAdapter<Unit> {
+            override fun encode(encoder: NoritoEncoder, value: Unit) {
+                writeOpenEnvelopeField(encoder) {
+                    it.writeUInt(OfflineNoteV2Halo2Prover.BACKEND_TAG.toLong(), 32)
+                }
+                writeOpenEnvelopeRawField(encoder, circuitFieldPayload)
+            }
+
+            override fun decode(decoder: NoritoDecoder): Unit =
+                throw AssertionError("raw OpenVerifyEnvelope test adapter is encode-only")
+        }
+        return NoritoCodec.encode(
+            Unit,
+            "iroha_data_model::zk::OpenVerifyEnvelope",
+            adapter,
+            NoritoHeader.COMPACT_LEN,
+        )
+    }
+
+    private fun openEnvelopeStringPayload(value: String): ByteArray {
+        val encoder = NoritoEncoder(NoritoHeader.COMPACT_LEN)
+        writeInstructionString(encoder, value)
+        return encoder.toByteArray()
+    }
+
+    private fun writeOpenEnvelopeField(encoder: NoritoEncoder, writePayload: (NoritoEncoder) -> Unit) {
+        val child = encoder.childEncoder()
+        writePayload(child)
+        writeOpenEnvelopeRawField(encoder, child.toByteArray())
+    }
+
+    private fun writeOpenEnvelopeRawField(encoder: NoritoEncoder, payload: ByteArray) {
+        encoder.writeLength(payload.size.toLong(), compact(encoder))
+        encoder.writeBytes(payload)
+    }
 
     private fun rawInstructionPair(wireName: String, wirePayload: ByteArray, compact: Boolean = true): ByteArray {
         val flags = if (compact) NoritoHeader.COMPACT_LEN else 0

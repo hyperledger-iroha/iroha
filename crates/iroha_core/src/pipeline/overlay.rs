@@ -3270,10 +3270,10 @@ mod tests {
         let vk_payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
             version: 1,
             circuit_id: circuit_id.to_owned(),
-            n_log2: 4,
-            blowup_log2: 2,
+            n_log2: crate::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2,
+            blowup_log2: crate::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2,
             fold_arity: 2,
-            queries: 2,
+            queries: crate::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES,
             merkle_arity: 2,
             hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
         };
@@ -3421,10 +3421,10 @@ mod tests {
         let vk_payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
             version: 1,
             circuit_id: circuit_id.to_owned(),
-            n_log2: 4,
-            blowup_log2: 2,
+            n_log2: crate::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2,
+            blowup_log2: crate::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2,
             fold_arity: 2,
-            queries: 2,
+            queries: crate::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES,
             merkle_arity: 2,
             hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
         };

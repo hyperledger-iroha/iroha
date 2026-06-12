@@ -26,7 +26,6 @@ import sign_android_device_lab_evidence as evidence_signer  # noqa: E402
 
 
 DEFAULT_APP_PACKAGE_NAME = "org.hyperledger.iroha.sdk.offline.wallet.lab"
-DEFAULT_POLICY_BYTES = b"kagemusha-offline-wallet-policy-v1"
 DEFAULT_ATTESTATION_HARNESS_RESULT_PATH = "attestation/harness-result.json"
 DEFAULT_ATTESTATION_CHAIN_PATH = "attestation/keymint-certificate-chain.pem"
 DEFAULT_OFFLINE_WALLET_APK_PATH = "evidence/offline-wallet-release.apk"
@@ -349,13 +348,18 @@ def _sha256_bytes(data: bytes) -> str:
 def _single_safe_slot_id(slot_id: str) -> str | None:
     candidate = PurePosixPath(slot_id)
     if (
-        not slot_id.strip()
+        not slot_id
+        or any(character.isspace() for character in slot_id)
+        or device_lab._contains_control_character(slot_id)
         or device_lab.SECRET_RE.search(slot_id)
         or candidate.is_absolute()
+        or "\\" in slot_id
         or len(candidate.parts) != 1
         or candidate.name in {"", ".", ".."}
         or ".." in candidate.parts
     ):
+        return None
+    if candidate.as_posix() != slot_id:
         return None
     return candidate.name
 
@@ -367,6 +371,9 @@ def _normalise_source_path(
 ) -> tuple[Path, os.stat_result] | None:
     if device_lab.SECRET_RE.search(str(path)):
         errors.append(f"{label} path must not contain secret-looking material")
+        return None
+    if device_lab._contains_control_character(str(path)):
+        errors.append(f"{label} path must not contain control characters")
         return None
     ancestor_errors = device_lab.validate_no_symlink_ancestors(
         path,
@@ -504,8 +511,26 @@ def _require_source_string(
     if value != value.strip():
         errors.append(f"{label} {key} must not have surrounding whitespace")
         return None
+    if device_lab._contains_control_character(value):
+        errors.append(f"{label} {key} must not contain control characters")
+        return None
     if device_lab.SECRET_RE.search(value):
         errors.append(f"{label} {key} must not contain secret-looking material")
+        return None
+    return value
+
+
+def _require_source_sha256(
+    payload: dict[str, Any],
+    key: str,
+    label: str,
+    errors: list[str],
+) -> str | None:
+    value = _require_source_string(payload, key, label, errors)
+    if value is None:
+        return None
+    if not device_lab.SHA256_HEX_RE.fullmatch(value):
+        errors.append(f"{label} {key} must be lowercase sha256 hex")
         return None
     return value
 
@@ -532,7 +557,29 @@ def _run_adb_getprop(adb: str, serial: str | None, prop: str) -> str:
         stderr=subprocess.PIPE,
         text=True,
     )
-    return result.stdout.strip()
+    stdout = result.stdout
+    if stdout.count("\n") != 1 or not stdout.endswith("\n"):
+        raise ValueError("adb getprop output must be exactly one LF-terminated value")
+    return stdout[:-1]
+
+
+def _device_identity_override(
+    override: str | None,
+    key: str,
+    errors: list[str],
+) -> str | None:
+    if override is None or override == "":
+        return None
+    if override != override.strip():
+        errors.append(f"{key} must not contain surrounding whitespace")
+        return None
+    if device_lab._contains_control_character(override):
+        errors.append(f"{key} must not contain control characters")
+        return None
+    if device_lab.SECRET_RE.search(override):
+        errors.append(f"{key} must not contain secret-looking material")
+        return None
+    return override
 
 
 def read_device_identity(
@@ -555,15 +602,24 @@ def read_device_identity(
         "device_codename": ("ro.product.device", device_codename),
     }
     for key, (prop, override) in queries.items():
-        value = override.strip() if isinstance(override, str) and override.strip() else None
+        error_count = len(errors)
+        value = _device_identity_override(override, key, errors)
+        if len(errors) != error_count:
+            continue
         if value is None:
             try:
                 value = _run_adb_getprop(adb, serial, prop)
-            except (OSError, subprocess.CalledProcessError) as exc:
+            except (OSError, ValueError, subprocess.CalledProcessError) as exc:
                 errors.append(f"adb getprop {prop} failed: {exc}")
                 continue
         if not value:
             errors.append(f"{key} could not be determined")
+            continue
+        if value != value.strip():
+            errors.append(f"{key} must not contain surrounding whitespace")
+            continue
+        if device_lab._contains_control_character(value):
+            errors.append(f"{key} must not contain control characters")
             continue
         if device_lab.SECRET_RE.search(value):
             errors.append(f"{key} must not contain secret-looking material")
@@ -587,7 +643,18 @@ def resolve_device_family(
     facts: dict[str, str],
     errors: list[str],
 ) -> str | None:
-    family = requested.strip() if isinstance(requested, str) and requested.strip() else None
+    family: str | None = None
+    if isinstance(requested, str) and requested != "":
+        if requested != requested.strip():
+            errors.append("device family must not contain surrounding whitespace")
+            return None
+        if device_lab._contains_control_character(requested):
+            errors.append("device family must not contain control characters")
+            return None
+        if device_lab.SECRET_RE.search(requested):
+            errors.append("device family must not contain secret-looking material")
+            return None
+        family = requested
     if family is None:
         family = infer_device_family(facts.get("device_model"), facts.get("device_codename"))
     if family is None:
@@ -704,8 +771,13 @@ def validate_attestation_harness_source_claims(
             (attestation_result, "attestation/result.json"),
             (attestation_report, "attestation/report.json"),
         ):
-            expected = payload.get("attestation_challenge_sha256")
-            if isinstance(expected, str) and expected.strip() and expected != challenge_digest:
+            expected = _require_source_sha256(
+                payload,
+                "attestation_challenge_sha256",
+                label,
+                errors,
+            )
+            if expected is not None and expected != challenge_digest:
                 errors.append(
                     "attestation harness result challenge_hex digest must match "
                     f"{label} attestation_challenge_sha256"
@@ -742,9 +814,16 @@ def build_slot_metadata(
     raw_test_commands: list[str],
 ) -> dict[str, Any]:
     app_package_name = attestation_result.get("app_package_name") or DEFAULT_APP_PACKAGE_NAME
-    offline_policy_sha256 = attestation_result.get("offline_wallet_policy_sha256")
-    if not isinstance(offline_policy_sha256, str) or not offline_policy_sha256.strip():
-        offline_policy_sha256 = _sha256_bytes(DEFAULT_POLICY_BYTES)
+    source_digests: dict[str, str] = {}
+    for key in (
+        "app_signing_certificate_sha256",
+        "attestation_challenge_sha256",
+        "offline_wallet_policy_sha256",
+    ):
+        value = attestation_result.get(key)
+        if not isinstance(value, str) or not device_lab.SHA256_HEX_RE.fullmatch(value):
+            raise ValueError(f"attestation_result {key} must be lowercase sha256 hex")
+        source_digests[key] = value
     return {
         "schema": "iroha.android.device_lab.kagemusha.v1",
         "slot_id": slot_id,
@@ -757,14 +836,16 @@ def build_slot_metadata(
         "offline_wallet_apk_path": DEFAULT_OFFLINE_WALLET_APK_PATH,
         "d2d_payment_transcript_path": DEFAULT_D2D_TRANSCRIPT_PATH,
         "wallet_integrity_transcript_path": DEFAULT_WALLET_TRANSCRIPT_PATH,
-        "app_signing_certificate_sha256": attestation_result.get(
+        "app_signing_certificate_sha256": source_digests[
             "app_signing_certificate_sha256"
-        ),
-        "attestation_challenge_sha256": attestation_result.get(
+        ],
+        "attestation_challenge_sha256": source_digests[
             "attestation_challenge_sha256"
-        ),
+        ],
         "attestation_certificate_chain_sha256": attestation_chain_sha256,
-        "offline_wallet_policy_sha256": offline_policy_sha256,
+        "offline_wallet_policy_sha256": source_digests[
+            "offline_wallet_policy_sha256"
+        ],
         "offline_wallet_apk_sha256": offline_wallet_apk_sha256,
         "d2d_payment_transcript_sha256": d2d_payment_transcript_sha256,
         "wallet_integrity_transcript_sha256": wallet_integrity_transcript_sha256,
@@ -791,9 +872,52 @@ def validate_slot_source_claims(
     *,
     attestation_result: dict[str, Any],
     attestation_report: dict[str, Any],
+    d2d_payment_transcript: dict[str, Any],
     wallet_integrity_transcript: dict[str, Any],
     errors: list[str],
 ) -> None:
+    for field in sorted(set(attestation_result) - device_lab.ATTESTATION_RESULT_FIELDS):
+        errors.append(
+            "attestation/result.json contains unexpected field "
+            f"{device_lab._display_path(field)}"
+        )
+    for field in sorted(set(attestation_report) - device_lab.ATTESTATION_REPORT_FIELDS):
+        errors.append(
+            "attestation/report.json contains unexpected field "
+            f"{device_lab._display_path(field)}"
+        )
+    report_schema = attestation_report.get("schema")
+    if report_schema != device_lab.ATTESTATION_REPORT_SCHEMA:
+        errors.append(
+            f"attestation/report.json schema must be {device_lab.ATTESTATION_REPORT_SCHEMA}"
+        )
+    _require_source_string(attestation_report, "verifier", "attestation/report.json", errors)
+    for field in sorted(
+        set(d2d_payment_transcript) - device_lab.D2D_PAYMENT_TRANSCRIPT_FIELDS
+    ):
+        errors.append(
+            "d2d payment transcript contains unexpected field "
+            f"{device_lab._display_path(field)}"
+        )
+    for field in sorted(
+        set(wallet_integrity_transcript) - device_lab.WALLET_INTEGRITY_TRANSCRIPT_FIELDS
+    ):
+        errors.append(
+            "wallet integrity transcript contains unexpected field "
+            f"{device_lab._display_path(field)}"
+        )
+    d2d_schema = d2d_payment_transcript.get("schema")
+    if d2d_schema != device_lab.D2D_PAYMENT_TRANSCRIPT_SCHEMA:
+        errors.append(
+            "d2d payment transcript schema must be "
+            f"{device_lab.D2D_PAYMENT_TRANSCRIPT_SCHEMA}"
+        )
+    wallet_schema = wallet_integrity_transcript.get("schema")
+    if wallet_schema != device_lab.WALLET_INTEGRITY_TRANSCRIPT_SCHEMA:
+        errors.append(
+            "wallet integrity transcript schema must be "
+            f"{device_lab.WALLET_INTEGRITY_TRANSCRIPT_SCHEMA}"
+        )
     _require_source_true(attestation_result, "strongbox_attestation", "attestation/result.json", errors)
     _require_source_true(
         attestation_result,
@@ -801,10 +925,96 @@ def validate_slot_source_claims(
         "attestation/result.json",
         errors,
     )
+    _require_source_sha256(
+        attestation_result,
+        "app_signing_certificate_sha256",
+        "attestation/result.json",
+        errors,
+    )
+    result_challenge = _require_source_sha256(
+        attestation_result,
+        "attestation_challenge_sha256",
+        "attestation/result.json",
+        errors,
+    )
+    _require_source_sha256(
+        attestation_result,
+        "offline_wallet_policy_sha256",
+        "attestation/result.json",
+        errors,
+    )
+    result_app_package = _require_source_string(
+        attestation_result,
+        "app_package_name",
+        "attestation/result.json",
+        errors,
+    )
+    report_app_package = _require_source_string(
+        attestation_report,
+        "app_package_name",
+        "attestation/report.json",
+        errors,
+    )
+    if (
+        result_app_package is not None
+        and report_app_package is not None
+        and result_app_package != report_app_package
+    ):
+        errors.append(
+            "attestation/report.json app_package_name must match "
+            "attestation/result.json app_package_name"
+        )
+    report_challenge = _require_source_sha256(
+        attestation_report,
+        "attestation_challenge_sha256",
+        "attestation/report.json",
+        errors,
+    )
+    if (
+        result_challenge is not None
+        and report_challenge is not None
+        and result_challenge != report_challenge
+    ):
+        errors.append(
+            "attestation/report.json attestation_challenge_sha256 must match "
+            "attestation/result.json attestation_challenge_sha256"
+        )
     verification = attestation_report.get("verification")
     if not isinstance(verification, dict):
         errors.append("attestation/report.json verification must be an object")
     else:
+        for field in sorted(
+            set(verification) - device_lab.ATTESTATION_REPORT_VERIFICATION_FIELDS
+        ):
+            errors.append(
+                "attestation/report.json verification contains unexpected field "
+                f"{device_lab._display_path(field)}"
+            )
+        result_status = _require_source_string(
+            attestation_result,
+            "status",
+            "attestation/result.json",
+            errors,
+        )
+        if result_status is not None and result_status not in {"ok", "passed"}:
+            errors.append("attestation/result.json status must be ok or passed")
+        report_status = _require_source_string(
+            verification,
+            "status",
+            "attestation/report.json verification",
+            errors,
+        )
+        if report_status is not None and report_status not in {"ok", "passed"}:
+            errors.append("attestation/report.json verification.status must be ok or passed")
+        if (
+            result_status is not None
+            and report_status is not None
+            and result_status != report_status
+        ):
+            errors.append(
+                "attestation/report.json verification.status must match "
+                "attestation/result.json status"
+            )
         _require_source_true(
             verification,
             "strongbox_attestation",
@@ -817,6 +1027,38 @@ def validate_slot_source_claims(
             "attestation/report.json verification",
             errors,
         )
+        for level_key in (
+            "keymint_security_level",
+            "attestation_security_level",
+            "keymaster_security_level",
+        ):
+            result_level = _require_source_string(
+                attestation_result,
+                level_key,
+                "attestation/result.json",
+                errors,
+            )
+            if result_level is not None and result_level not in device_lab.STRONGBOX_LEVELS:
+                errors.append(f"attestation/result.json {level_key} must be STRONGBOX")
+            report_level = _require_source_string(
+                verification,
+                level_key,
+                "attestation/report.json verification",
+                errors,
+            )
+            if report_level is not None and report_level not in device_lab.STRONGBOX_LEVELS:
+                errors.append(
+                    f"attestation/report.json verification.{level_key} must be STRONGBOX"
+                )
+            if (
+                result_level is not None
+                and report_level is not None
+                and result_level != report_level
+            ):
+                errors.append(
+                    f"attestation/report.json verification.{level_key} must match "
+                    f"attestation/result.json {level_key}"
+                )
     _require_source_true(
         wallet_integrity_transcript,
         "one_use_key_rotation_passed",
@@ -831,6 +1073,10 @@ def assemble_slot(args: argparse.Namespace) -> tuple[int, Path | None, list[str]
     """Assemble the requested slot and optionally sign it."""
 
     errors: list[str] = []
+    if any(character.isspace() for character in args.slot_id):
+        return 1, None, ["slot id must not contain whitespace"]
+    if device_lab._contains_control_character(args.slot_id):
+        return 1, None, ["slot id must not contain control characters"]
     slot_id = _single_safe_slot_id(args.slot_id)
     if slot_id is None:
         return 1, None, ["slot id must be a single safe directory name"]
@@ -838,6 +1084,8 @@ def assemble_slot(args: argparse.Namespace) -> tuple[int, Path | None, list[str]
     root = args.slot_root
     if device_lab.SECRET_RE.search(str(root)):
         return 1, None, ["device-lab root path must not contain secret-looking material"]
+    if device_lab._contains_control_character(str(root)):
+        return 1, None, ["device-lab root path must not contain control characters"]
     root_exists, root_errors = device_lab.classify_device_lab_root_path(root)
     if root_errors:
         return 1, None, root_errors
@@ -896,6 +1144,7 @@ def assemble_slot(args: argparse.Namespace) -> tuple[int, Path | None, list[str]
     validate_slot_source_claims(
         attestation_result=result,
         attestation_report=report,
+        d2d_payment_transcript=d2d,
         wallet_integrity_transcript=wallet,
         errors=errors,
     )
@@ -1030,6 +1279,9 @@ def assemble_slot(args: argparse.Namespace) -> tuple[int, Path | None, list[str]
                 "attestation verifier report",
             )
         )
+        device_lab.validate_required_kagemusha_slot_artifact_shapes(stage_slot, errors)
+        if errors:
+            return 1, None, errors
 
         metadata = build_slot_metadata(
             slot_id=slot_id,
@@ -1044,6 +1296,19 @@ def assemble_slot(args: argparse.Namespace) -> tuple[int, Path | None, list[str]
             wallet_integrity_transcript_sha256=wallet_digest,
             raw_test_commands=list(device_lab.KAGEMUSHA_ANDROID_PRODUCTION_RAW_TEST_COMMANDS),
         )
+        device_lab.validate_d2d_payment_transcript(
+            stage_slot,
+            stage_slot / DEFAULT_D2D_TRANSCRIPT_PATH,
+            metadata,
+            errors,
+        )
+        device_lab.validate_wallet_integrity_transcript(
+            stage_slot / DEFAULT_WALLET_TRANSCRIPT_PATH,
+            metadata,
+            errors,
+        )
+        if errors:
+            return 1, None, errors
         errors.extend(_write_json(stage_slot / "slot.json", metadata, "slot metadata"))
         if errors:
             return 1, None, errors

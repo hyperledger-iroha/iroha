@@ -352,6 +352,26 @@ def test_i105_roundtrip_uses_halfwidth_iroha_poem_alphabet() -> None:
 
 
 @pytest.mark.parametrize(
+    ("algorithm", "message"),
+    [
+        ("", "non-empty string"),
+        ("   ", "non-empty string"),
+        (" ed25519", "surrounding whitespace"),
+        ("ed25519 ", "surrounding whitespace"),
+    ],
+)
+def test_account_address_rejects_blank_or_padded_signing_algorithm_aliases(
+    algorithm: str, message: str
+) -> None:
+    with pytest.raises(AccountAddressError, match=message):
+        AccountAddress.from_account(
+            domain="wonderland",
+            public_key=bytes([0x11] * 32),
+            algorithm=algorithm,
+        )
+
+
+@pytest.mark.parametrize(
     "algorithm",
     [
         "future-curve",

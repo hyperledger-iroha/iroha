@@ -8901,6 +8901,14 @@ test("builds TON full light-client audit role proof requests", () => {
     () =>
       canonicalTonSccpSourceStateVerificationProofBytes({
         ...input.shardStateVerificationProof,
+        proofFamily: "debug-proof-family",
+      }),
+    /TON source-state stark-fri-v1 proof/u,
+  );
+  assert.throws(
+    () =>
+      canonicalTonSccpSourceStateVerificationProofBytes({
+        ...input.shardStateVerificationProof,
         proofBytes: new Uint8Array([0, 0, 0]),
       }),
     /proofBytes must not be all zero/,

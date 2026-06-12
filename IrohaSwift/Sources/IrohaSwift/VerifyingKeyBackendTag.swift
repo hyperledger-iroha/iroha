@@ -2,12 +2,15 @@ import Foundation
 
 public enum VerifyingKeyBackendTagValidationError: Error, Equatable, LocalizedError {
     case blankBackend(context: String)
+    case surroundingWhitespace(context: String)
     case unsupportedProductionBackend(context: String, backend: String)
 
     public var errorDescription: String? {
         switch self {
         case let .blankBackend(context):
             return "\(context) must not be blank."
+        case let .surroundingWhitespace(context):
+            return "\(context) must not contain surrounding whitespace."
         case let .unsupportedProductionBackend(context, backend):
             return "\(context) uses unsupported production verifier backend \(backend)."
         }
@@ -154,6 +157,9 @@ public enum VerifyingKeyBackendTag: UInt32, CaseIterable, Sendable, Equatable {
         let backend = raw
         guard !backend.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw VerifyingKeyBackendTagValidationError.blankBackend(context: context)
+        }
+        guard backend.trimmingCharacters(in: .whitespacesAndNewlines) == backend else {
+            throw VerifyingKeyBackendTagValidationError.surroundingWhitespace(context: context)
         }
         guard isProductionVerifyBackendLabel(backend) else {
             throw VerifyingKeyBackendTagValidationError.unsupportedProductionBackend(

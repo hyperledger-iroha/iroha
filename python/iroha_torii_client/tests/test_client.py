@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -28,9 +29,13 @@ from iroha_torii_client import (  # noqa: E402  (import depends on sys.path muta
     VpnQuoteCreateRequest,
     VpnReceiptSubmitRequest,
     VpnSessionCreateRequest,
+    build_canonical_request_headers,
     canonical_request_signature_message,
     decode_pdp_commitment_header,
+    encode_identifier_resolution_receipt_attestation,
+    encode_identifier_resolution_receipt_payload,
     inspect_i105_network_prefix,
+    verify_identifier_resolution_receipt,
 )
 from iroha_torii_client.client import _decode_i105_string  # noqa: E402
 from iroha_torii_client.mock import ToriiMockServer  # noqa: E402
@@ -471,6 +476,250 @@ def test_create_vpn_quote_signs_body_and_parses_open_lease_instruction() -> None
     assert quote.open_lease_instruction is not None
     assert quote.open_lease_instruction.wire_id == "OpenVpnLeaseEscrow"
     assert quote.tx_instructions[0].payload_hex == "ab" * 8
+
+
+def test_canonical_request_auth_rejects_padded_fields_before_send() -> None:
+    def signer(message: bytes) -> bytes:
+        return b"\x7a" * 64
+
+    with pytest.raises(ValueError, match="surrounding whitespace"):
+        canonical_request_signature_message(
+            "POST",
+            "/v1/vpn/quotes",
+            b"{}",
+            timestamp_ms=1,
+            nonce=" nonce",
+        )
+    with pytest.raises(ValueError, match="non-empty string"):
+        build_canonical_request_headers(
+            account_id=VPN_ACCOUNT,
+            signer=signer,
+            method="POST",
+            path="/v1/vpn/quotes",
+            body=b"{}",
+            timestamp_ms=1,
+            nonce="",
+        )
+    with pytest.raises(ValueError, match="surrounding whitespace"):
+        build_canonical_request_headers(
+            account_id=f"{VPN_ACCOUNT} ",
+            signer=signer,
+            method="POST",
+            path="/v1/vpn/quotes",
+            body=b"{}",
+            timestamp_ms=1,
+            nonce="nonce",
+        )
+
+    session = RecordingSession()
+    client = ToriiClient("http://node.test", session=session)
+    with pytest.raises(ValueError, match="surrounding whitespace"):
+        client.create_vpn_quote(
+            VpnQuoteCreateRequest(
+                metering_public_key_hex=bytes.fromhex(VPN_METERING_KEY),
+                exit_class="standard",
+            ),
+            canonical_auth=ToriiCanonicalRequestAuth(
+                account_id=VPN_ACCOUNT,
+                signer=signer,
+                timestamp_ms=1,
+                nonce="nonce ",
+            ),
+        )
+    assert session.calls == []
+
+
+def test_identifier_resolution_receipt_matches_shared_vectors() -> None:
+    pytest.importorskip("iroha_python.crypto")
+    fixture = json.loads(
+        (PACKAGE_ROOT.parent / "fixtures/soracloud/identifier_receipt_vectors_v1.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert fixture["vector_set"] == "identifier-receipt-attestation-v1"
+
+    payload_bytes = encode_identifier_resolution_receipt_payload(fixture["receipt"]["payload"])
+    assert hashlib.sha256(payload_bytes).hexdigest().upper() == fixture["canonical_payload_sha256"]
+    assert verify_identifier_resolution_receipt(fixture["receipt"], fixture["policy"]) is True
+
+    for kind in (" signed", "signed ", "Signed"):
+        non_exact_kind = json.loads(json.dumps(fixture["receipt"]["attestation"]))
+        non_exact_kind["kind"] = kind
+        with pytest.raises(ValueError, match="identifier receipt attestation.kind"):
+            encode_identifier_resolution_receipt_attestation(non_exact_kind)
+
+    padded_backend_payload = json.loads(json.dumps(fixture["receipt"]["payload"]))
+    padded_backend_payload["execution"]["backend"] = " hkdf-sha3-512-prf-v1"
+    with pytest.raises(ValueError, match="payload.execution.backend must not contain surrounding whitespace"):
+        encode_identifier_resolution_receipt_payload(padded_backend_payload)
+
+    padded_mode_payload = json.loads(json.dumps(fixture["receipt"]["payload"]))
+    padded_mode_payload["execution"]["verification_mode"] = "signed "
+    with pytest.raises(ValueError, match="payload.execution.verification_mode must not contain surrounding whitespace"):
+        encode_identifier_resolution_receipt_payload(padded_mode_payload)
+
+    for vector in fixture["attestation_vectors"]:
+        encoded = encode_identifier_resolution_receipt_attestation(vector["attestation"])
+        assert len(encoded) == vector["expected_attestation_bytes"], vector["name"]
+        assert hashlib.sha256(encoded).hexdigest().upper() == vector["expected_attestation_sha256"]
+        if vector["attestation"]["kind"] == "signed":
+            for signature in (f" {vector['attestation']['signature']}", f"{vector['attestation']['signature']} "):
+                padded_signature = json.loads(json.dumps(vector["attestation"]))
+                padded_signature["signature"] = signature
+                with pytest.raises(
+                    ValueError,
+                    match="identifier receipt attestation.signature must not contain surrounding whitespace",
+                ):
+                    encode_identifier_resolution_receipt_attestation(padded_signature)
+        if vector["attestation"]["kind"] == "proof":
+            padded_proof_backend = json.loads(json.dumps(vector["attestation"]))
+            padded_proof_backend["proof_backend"] = f"{padded_proof_backend['proof_backend']} "
+            with pytest.raises(ValueError, match="identifier receipt attestation.proof_backend must not contain surrounding whitespace"):
+                encode_identifier_resolution_receipt_attestation(padded_proof_backend)
+
+            malformed_proof_b64 = json.loads(json.dumps(vector["attestation"]))
+            malformed_proof_b64["proof_b64"] = "@@@"
+            with pytest.raises(ValueError, match="attestation.proof_b64 must be valid base64"):
+                encode_identifier_resolution_receipt_attestation(malformed_proof_b64)
+
+            for proof_b64 in (f" {vector['attestation']['proof_b64']}", f"{vector['attestation']['proof_b64']} "):
+                padded_proof_b64 = json.loads(json.dumps(vector["attestation"]))
+                padded_proof_b64["proof_b64"] = proof_b64
+                with pytest.raises(
+                    ValueError,
+                    match="identifier receipt attestation.proof_b64 must not contain surrounding whitespace",
+                ):
+                    encode_identifier_resolution_receipt_attestation(padded_proof_b64)
+
+            with pytest.raises(RuntimeError, match="proof attestations require an external verifier"):
+                verify_identifier_resolution_receipt(
+                    {
+                        "payload": fixture["receipt"]["payload"],
+                        "attestation": vector["attestation"],
+                    },
+                    fixture["policy"],
+                )
+
+    for opening_signature in (
+        f" {fixture['receipt']['payload']['opening']['signature']}",
+        f"{fixture['receipt']['payload']['opening']['signature']} ",
+    ):
+        padded_opening = json.loads(json.dumps(fixture["receipt"]))
+        padded_opening["payload"]["opening"]["signature"] = opening_signature
+        with pytest.raises(
+            ValueError,
+            match="payload.opening.signature must not contain surrounding whitespace",
+        ):
+            verify_identifier_resolution_receipt(padded_opening, fixture["policy"])
+
+    for policy_id in (" phone#retail", "phone#retail ", "phone #retail", "phone# retail"):
+        padded_policy_id = json.loads(json.dumps(fixture["receipt"]))
+        padded_policy_id["payload"]["policy_id"] = policy_id
+        with pytest.raises(ValueError, match="payload.policy_id"):
+            verify_identifier_resolution_receipt(padded_policy_id, fixture["policy"])
+
+    for program_id in (" identifier_lookup_retail", "identifier_lookup_retail "):
+        padded_execution_program = json.loads(json.dumps(fixture["receipt"]))
+        padded_execution_program["payload"]["execution"]["program_id"] = program_id
+        with pytest.raises(ValueError, match="payload.execution.program_id"):
+            verify_identifier_resolution_receipt(padded_execution_program, fixture["policy"])
+
+        padded_opening_program = json.loads(json.dumps(fixture["receipt"]))
+        padded_opening_program["payload"]["opening"]["payload"]["program_id"] = program_id
+        with pytest.raises(ValueError, match="payload.opening.payload.program_id"):
+            verify_identifier_resolution_receipt(padded_opening_program, fixture["policy"])
+
+    for account_id in (
+        f" {fixture['receipt']['payload']['account_id']}",
+        f"{fixture['receipt']['payload']['account_id']} ",
+    ):
+        padded_account_id = json.loads(json.dumps(fixture["receipt"]))
+        padded_account_id["payload"]["account_id"] = account_id
+        with pytest.raises(ValueError, match="payload.account_id"):
+            verify_identifier_resolution_receipt(padded_account_id, fixture["policy"])
+
+    hash_exactness_cases = (
+        ("payload.opaque_id", ("payload", "opaque_id"), fixture["receipt"]["payload"]["opaque_id"]),
+        ("payload.receipt_hash", ("payload", "receipt_hash"), fixture["receipt"]["payload"]["receipt_hash"]),
+        ("payload.uaid", ("payload", "uaid"), fixture["receipt"]["payload"]["uaid"]),
+        (
+            "payload.execution.program_digest",
+            ("payload", "execution", "program_digest"),
+            fixture["receipt"]["payload"]["execution"]["program_digest"],
+        ),
+        (
+            "payload.opening.payload.input_ciphertext_hash",
+            ("payload", "opening", "payload", "input_ciphertext_hash"),
+            fixture["receipt"]["payload"]["opening"]["payload"]["input_ciphertext_hash"],
+        ),
+    )
+    for context, path, value in hash_exactness_cases:
+        for padded_value in (f" {value}", f"{value} "):
+            padded_hash = json.loads(json.dumps(fixture["receipt"]))
+            target = padded_hash
+            for component in path[:-1]:
+                target = target[component]
+            target[path[-1]] = padded_value
+            with pytest.raises(ValueError, match=context.replace(".", r"\.")):
+                verify_identifier_resolution_receipt(padded_hash, fixture["policy"])
+
+    timestamp_exactness_cases = (
+        (
+            "payload.execution.executed_at_ms",
+            ("payload", "execution", "executed_at_ms"),
+            fixture["receipt"]["payload"]["execution"]["executed_at_ms"],
+        ),
+        (
+            "payload.execution.expires_at_ms",
+            ("payload", "execution", "expires_at_ms"),
+            fixture["receipt"]["payload"]["execution"]["expires_at_ms"],
+        ),
+        (
+            "payload.opening.payload.opened_at_ms",
+            ("payload", "opening", "payload", "opened_at_ms"),
+            fixture["receipt"]["payload"]["opening"]["payload"]["opened_at_ms"],
+        ),
+        (
+            "payload.opening.payload.expires_at_ms",
+            ("payload", "opening", "payload", "expires_at_ms"),
+            fixture["receipt"]["payload"]["opening"]["payload"]["expires_at_ms"],
+        ),
+    )
+    for context, path, value in timestamp_exactness_cases:
+        for padded_value in (f" {value}", f"{value} "):
+            padded_timestamp = json.loads(json.dumps(fixture["receipt"]))
+            target = padded_timestamp
+            for component in path[:-1]:
+                target = target[component]
+            target[path[-1]] = padded_value
+            with pytest.raises((TypeError, ValueError), match=context.replace(".", r"\.")):
+                verify_identifier_resolution_receipt(padded_timestamp, fixture["policy"])
+
+    for negative in fixture["negative_cases"]:
+        receipt = json.loads(json.dumps(fixture["receipt"]))
+        policy = json.loads(json.dumps(fixture["policy"]))
+        if negative["mutation"] == "receipt.payload.execution.output_ciphertext_hash":
+            receipt["payload"]["execution"]["output_ciphertext_hash"] = negative["value"]
+        elif negative["mutation"] == "policy.resolver_public_key":
+            policy["resolver_public_key"] = negative["value"]
+        elif negative["mutation"] == "policy.policy_id":
+            policy["policy_id"] = negative["value"]
+        elif negative["mutation"] == "receipt.attestation.signature":
+            receipt["attestation"]["signature"] = negative["value"]
+        elif negative["mutation"] == "receipt.attestation":
+            receipt["attestation"] = negative["value"]
+        else:
+            raise AssertionError(f"unhandled receipt vector mutation {negative['mutation']}")
+
+        expected_error = negative.get("expected_error_contains")
+        if expected_error:
+            with pytest.raises((RuntimeError, ValueError), match=expected_error):
+                verify_identifier_resolution_receipt(receipt, policy)
+        else:
+            assert (
+                verify_identifier_resolution_receipt(receipt, policy)
+                is negative["expected_result"]
+            ), negative["name"]
 
 
 def test_vpn_session_delete_and_receipt_listing_use_native_receipts() -> None:

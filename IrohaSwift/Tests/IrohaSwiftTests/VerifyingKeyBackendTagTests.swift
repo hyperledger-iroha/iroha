@@ -311,7 +311,16 @@ final class VerifyingKeyBackendTagTests: XCTestCase {
             XCTAssertThrowsError(
                 try VerifyingKeyBackendTag.requireProductionVerifyBackendLabel(backend),
                 "\(backend) should not pass production backend validation"
-            )
+            ) { error in
+                let trimmed = backend.trimmingCharacters(in: .whitespacesAndNewlines)
+                let expected = trimmed.isEmpty
+                    ? "must not be blank"
+                    : trimmed == backend
+                        ? "unsupported production verifier backend"
+                        : "surrounding whitespace"
+                let description = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+                XCTAssertTrue(description.contains(expected), description)
+            }
         }
     }
 }

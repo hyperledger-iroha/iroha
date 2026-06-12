@@ -322,54 +322,72 @@ const RUST_NATIVE_SUPPLEMENTAL_FAIL_CLOSED_REASONS = Object.freeze([
   "real protocol engine is not production-enabled",
   "Iroha production allowlist is not enabled for this audited row",
 ]);
+const PENDING_PRODUCTION_BACKEND_FAMILIES = new Set([
+  "anonymous-pgc",
+  "aztec-plonkish-private-kernel",
+  "fcmp-plus-plus-curve-tree",
+  "groth16-bls12-377",
+  "halo2-ipa-orchard",
+  "lattice-pcs-sis",
+  "miden-stark",
+  "pq-masp-stark-fri",
+  "recursive-anonymous-admission",
+  "silent-threshold-anoncred",
+  "sis-with-hints",
+  "vega-existing-credential-zk",
+  "verange",
+  "zk-x509",
+  "zkat",
+]);
 const REQUIRED_PRIVACY_PLAN_ROWS = Object.freeze([
-  Object.freeze(["anonymous-pgc-k-out-of-n-v1", "production-hardened", "anonymous-pgc"]),
+  Object.freeze(["zk-ace-pq-authorization-v0", "chain-executable", "stark-fri"]),
+  Object.freeze(["anonymous-pgc-k-out-of-n-v1", "sdk-builder", "anonymous-pgc"]),
   Object.freeze(["verange-transparent-range-v1", "component", "verange"]),
-  Object.freeze(["zkat-policy-private-auth-v1", "production-hardened", "zkat"]),
+  Object.freeze(["zkat-policy-private-auth-v1", "sdk-builder", "zkat"]),
   Object.freeze([
     "zk-ams-recursive-admission-v0",
-    "production-hardened",
+    "sdk-builder",
     "recursive-anonymous-admission",
   ]),
   Object.freeze([
     "vega-existing-credential-zk-v0",
-    "production-hardened",
+    "sdk-builder",
     "vega-existing-credential-zk",
   ]),
   Object.freeze([
     "silent-threshold-anoncred-v0",
-    "production-hardened",
+    "sdk-builder",
     "silent-threshold-anoncred",
   ]),
-  Object.freeze(["zk-x509-onchain-identity-v0", "production-hardened", "zk-x509"]),
-  Object.freeze(["jindo-lattice-pcs-zk-v0", "production-hardened", "lattice-pcs-sis"]),
-  Object.freeze(["sis-hints-anoncred-pq-v0", "production-hardened", "sis-with-hints"]),
+  Object.freeze(["zk-x509-onchain-identity-v0", "sdk-builder", "zk-x509"]),
+  Object.freeze(["jindo-lattice-pcs-zk-v0", "sdk-builder", "lattice-pcs-sis"]),
+  Object.freeze(["sis-hints-anoncred-pq-v0", "sdk-builder", "sis-with-hints"]),
   Object.freeze([
     "orchard-halo2-actions-v1",
-    "production-hardened",
+    "sdk-builder",
     "halo2-ipa-orchard",
   ]),
   Object.freeze([
     "penumbra-masp-v1",
-    "production-hardened",
+    "sdk-builder",
     "groth16-bls12-377",
   ]),
   Object.freeze([
     "monero-fcmp-plus-plus-v1",
-    "production-hardened",
+    "sdk-builder",
     "fcmp-plus-plus-curve-tree",
   ]),
   Object.freeze([
     "miden-stark-note-v1",
-    "production-hardened",
+    "sdk-builder",
     "miden-stark",
   ]),
   Object.freeze([
     "aztec-private-rollup-v1",
-    "production-hardened",
+    "sdk-builder",
     "aztec-plonkish-private-kernel",
   ]),
-  Object.freeze(["pq-masp-stark-v0", "production-hardened", "pq-masp-stark-fri"]),
+  Object.freeze(["pq-masp-stark-v0", "sdk-builder", "pq-masp-stark-fri"]),
 ]);
 const REQUIRED_PRIVACY_PLAN_DISPLAY_TEXT_BY_ALGORITHM_ID = Object.freeze({
   "anonymous-pgc-k-out-of-n-v1": Object.freeze(["Anonymous PGC k-out-of-n payments v1", "Anonymous PGC", "Account-based anonymous confidential payment target with hidden sender, hidden amount, receiver privacy, and k-out-of-n receiver-set proofs."]),
@@ -903,7 +921,7 @@ const REQUIRED_PRIVACY_PLAN_SOURCE_REFERENCES_BY_ALGORITHM_ID = Object.freeze({
 });
 const REQUIRED_PRIVACY_PLAN_SDK_ENTRYPOINTS_BY_ALGORITHM_ID = Object.freeze({
   "anonymous-pgc-k-out-of-n-v1": Object.freeze(["buildAnonymousPgcReceiverSet", "buildAnonymousPgcAccountCommitmentInstruction", "buildAnonymousPgcKOutOfNProofV1", "buildAnonymousPgcTransferInstruction"]),
-  "verange-transparent-range-v1": Object.freeze(["buildRangeCommitment", "buildVeRangeDevProofFixture", "buildVeRangeProofEnvelope", "verifyVeRangeProofLocally"]),
+  "verange-transparent-range-v1": Object.freeze(["buildRangeCommitment", "buildVeRangeDevProofFixture", "buildVeRangeProofEnvelope", "buildVeRangeProofV1", "verifyVeRangeProofLocally", "verifyVeRangeProofV1"]),
   "zkat-policy-private-auth-v1": Object.freeze(["buildZkAtPolicyCommitment", "buildZkAtAuthenticatorEnvelope", "buildZkAtPolicyProofV1", "verifyZkAtPolicyProofV1"]),
   "zk-ams-recursive-admission-v0": Object.freeze(["buildZkAmsAdmissionBatch", "buildZkAmsAdmissionProofEnvelope", "buildZkAmsAdmissionBatchProofV0", "verifyZkAmsAdmissionBatchProofV0"]),
   "vega-existing-credential-zk-v0": Object.freeze(["buildVegaCredentialPredicateCommitment", "buildVegaCredentialProofEnvelope", "buildVegaCredentialPredicateProofV0", "verifyVegaCredentialPredicateProofV0"]),
@@ -943,7 +961,7 @@ const REQUIRED_PRIVACY_PLAN_SDK_ENTRYPOINTS_BY_ALGORITHM_ID = Object.freeze({
 });
 const REQUIRED_PRIVACY_PLAN_PLANNED_SDK_ENTRYPOINTS_BY_ALGORITHM_ID = Object.freeze({
   "anonymous-pgc-k-out-of-n-v1": Object.freeze([]),
-  "verange-transparent-range-v1": Object.freeze(["buildVeRangeProofV1"]),
+  "verange-transparent-range-v1": Object.freeze([]),
   "zkat-policy-private-auth-v1": Object.freeze([]),
   "zk-ams-recursive-admission-v0": Object.freeze([]),
   "vega-existing-credential-zk-v0": Object.freeze([]),
@@ -1160,10 +1178,7 @@ const PUBLIC_PRIVACY_API_SOURCE_SCAN_SURFACES = Object.freeze([
     language: "csharp",
   }),
 ]);
-const DEFERRED_CSHARP_PLANNED_PRIVACY_ENTRYPOINTS = Object.freeze([
-  "buildVeRangeProofV1",
-  "verifyVeRangeProofV1",
-]);
+const DEFERRED_CSHARP_PLANNED_PRIVACY_ENTRYPOINTS = Object.freeze([]);
 function snakeEntrypointName(entrypoint) {
   return entrypoint.replace(/(?<!^)(?=[A-Z])/g, "_").toLowerCase();
 }
@@ -1184,16 +1199,7 @@ function publicApiNameVariants(entrypoint) {
 }
 
 function csharpPlannedEntrypointDeferred(entrypoint) {
-  if (!DEFERRED_CSHARP_PLANNED_PRIVACY_ENTRYPOINTS.includes(entrypoint)) {
-    return false;
-  }
-  const roadmap = fileText("roadmap.md");
-  return (
-    roadmap.includes("Windows-machine TODOs") &&
-    roadmap.includes("Privacy VeRange planned-helper quarantine") &&
-    roadmap.includes(entrypoint) &&
-    roadmap.includes("VerifyVeRangeProofV1")
-  );
+  return DEFERRED_CSHARP_PLANNED_PRIVACY_ENTRYPOINTS.includes(entrypoint);
 }
 
 function rawJsPrivacyDescriptor(patch = {}) {
@@ -1436,6 +1442,12 @@ function productionEvidenceManifest(
       productionEvidenceRow(descriptor, { chainId, localnetRunId })
     ),
   };
+}
+
+function descriptorUsesPendingProductionBackend(descriptor) {
+  return PENDING_PRODUCTION_BACKEND_FAMILIES.has(
+    descriptor.backendFamily ?? descriptor.backend_family,
+  );
 }
 
 function publicInputsSchemaHasChainDomainBinding(value) {
@@ -2076,8 +2088,8 @@ function assertZkAcePythonTransactionAmountCoverage() {
 function assertZkAceExecutableDescriptorShape(label, descriptor) {
   assert.equal(
     descriptor.implementationStage,
-    "production-hardened",
-    `${label} ZK-ACE descriptor must be production-hardened`,
+    "chain-executable",
+    `${label} ZK-ACE descriptor must remain chain-executable until production gates pass`,
   );
   assert.equal(
     descriptor.backendFamily,
@@ -2123,7 +2135,7 @@ function assertZkAceExecutableDescriptorShape(label, descriptor) {
       "STARK/FRI verifier parameter floors",
       "wallet identity witness and replay-secret store",
     ],
-    `${label} ZK-ACE descriptor must pin every production admission state gate`,
+    `${label} ZK-ACE descriptor must pin every chain admission state gate`,
   );
   assert.deepEqual(
     descriptor.pqLayers,
@@ -2178,6 +2190,7 @@ function assertZkAceExecutableDescriptorShape(label, descriptor) {
     descriptor.productionGate.missing,
     [
       ...PRODUCTION_GATE_REQUIRED_REASONS,
+      "implementation stage is not production-hardened",
       "Iroha production allowlist is not enabled for this audited row",
     ],
     `${label} ZK-ACE production gate must stay fail-closed despite the STARK/FRI verifier profile allowlist`,
@@ -2717,9 +2730,12 @@ function assertNoDuplicateEntrypoints(label, descriptor) {
     );
   }
   if (descriptor.sdk_entrypoints.some(entrypointIsExplicitDevFixture)) {
+    const hasExportedProductionProofBuilder =
+      descriptor.sdk_entrypoints.some(entrypointIsProductionProofBuilder);
     assert.ok(
-      descriptor.planned_sdk_entrypoints.some(entrypointIsProductionProofBuilder),
-      `${label} ${descriptor.id} DevFixture SDK entrypoints must retain a planned production proof builder`,
+      hasExportedProductionProofBuilder ||
+        descriptor.planned_sdk_entrypoints.some(entrypointIsProductionProofBuilder),
+      `${label} ${descriptor.id} DevFixture SDK entrypoints must retain or export a production proof builder`,
     );
   }
   if (descriptor.implementation_stage === "component") {
@@ -2937,10 +2953,10 @@ function assertNoDuplicateEntrypoints(label, descriptor) {
         `${label} ${descriptor.id} post_quantum row missing source ${requiredUrl}`,
       );
     }
-    const postQuantumEntrypoints =
-      descriptor.implementation_stage === "production-hardened"
-        ? descriptor.sdk_entrypoints
-        : descriptor.planned_sdk_entrypoints;
+    const postQuantumEntrypoints = [
+      ...descriptor.sdk_entrypoints,
+      ...descriptor.planned_sdk_entrypoints,
+    ];
     const plannedEntrypointNames = postQuantumEntrypoints.map((entrypoint) => {
       const segments = entrypoint.split(".");
       return segments[segments.length - 1];
@@ -3119,10 +3135,10 @@ function assertRequiredPrivacyPlanRows(label, descriptors) {
       REQUIRED_PRIVACY_PLAN_PLANNED_SDK_ENTRYPOINTS_BY_ALGORITHM_ID[algorithmId],
       `${label} ${algorithmId} required production privacy plan planned SDK entrypoints drifted`,
     );
-    const proofBuilderEntrypoints =
-      descriptor.implementation_stage === "production-hardened"
-        ? descriptor.sdk_entrypoints
-        : descriptor.planned_sdk_entrypoints;
+    const proofBuilderEntrypoints = [
+      ...descriptor.sdk_entrypoints,
+      ...descriptor.planned_sdk_entrypoints,
+    ];
     assert.ok(
       proofBuilderEntrypoints.some(entrypointIsProductionProofBuilder),
       `${label} ${algorithmId} required production privacy plan row must retain or export a production proof builder`,
@@ -3241,7 +3257,7 @@ test("privacy algorithm catalogs stay fail-closed and in parity across JS and Py
   assertRustNativeCatalogParity(pythonCatalog);
 });
 
-test("privacy algorithm JS catalogs accept complete internal review evidence", () => {
+test("privacy algorithm JS catalogs accept complete internal review evidence only for admitted backends", () => {
   const chainId = "boi-localnet-4p";
   for (const [label, getDescriptors, getDescriptor, getCapabilities] of [
     [
@@ -3263,13 +3279,43 @@ test("privacy algorithm JS catalogs accept complete internal review evidence", (
     const descriptors = getDescriptors(manifest, { chainId });
     assert.equal(descriptors.length, 21, `${label} must still expose all 21 rows`);
     assert.ok(
-      descriptors.every((descriptor) => descriptor.productionReady === true),
-      `${label} complete internal review evidence must promote every row`,
+      descriptors.some(
+        (descriptor) =>
+          descriptor.productionReady === true &&
+          !descriptorUsesPendingProductionBackend(descriptor),
+      ),
+      `${label} complete internal review evidence must promote admitted rows`,
+    );
+    assert.ok(
+      descriptors.some(
+        (descriptor) =>
+          descriptor.productionReady === false &&
+          descriptorUsesPendingProductionBackend(descriptor),
+      ),
+      `${label} complete internal review evidence must leave pending backend rows blocked`,
     );
     for (const descriptor of descriptors) {
       const sourceDescriptor = sourceById.get(descriptor.id);
       assert.ok(sourceDescriptor, `${label} source descriptor ${descriptor.id} must exist`);
       const expectedEntrypoints = productionEvidenceEntrypoints(sourceDescriptor);
+      if (descriptorUsesPendingProductionBackend(descriptor)) {
+        assert.equal(
+          descriptor.productionReady,
+          false,
+          `${label} ${descriptor.id} pending backend evidence must not promote production readiness`,
+        );
+        assert.equal(descriptor.implementationStage, sourceDescriptor.implementationStage);
+        assert.deepEqual(descriptor.plannedSdkEntrypoints, sourceDescriptor.plannedSdkEntrypoints);
+        assert.deepEqual(descriptor.sdkEntrypoints, sourceDescriptor.sdkEntrypoints);
+        assert.equal(descriptor.productionGate.ready, false);
+        assert.ok(
+          descriptor.productionGate.missing.includes(
+            "Iroha production allowlist is not enabled for this audited row",
+          ),
+          `${label} ${descriptor.id} pending backend gate must cite the production allowlist`,
+        );
+        continue;
+      }
       assert.equal(descriptor.implementationStage, "production-hardened");
       assert.deepEqual(descriptor.plannedSdkEntrypoints, []);
       assert.deepEqual(descriptor.sdkEntrypoints, expectedEntrypoints);
@@ -3324,8 +3370,11 @@ test("privacy algorithm JS catalogs accept complete internal review evidence", (
     assert.equal(zkAce.productionReady, true);
     const capabilities = getCapabilities(manifest, { chainId });
     assert.ok(
-      capabilities.privacyAlgorithms.every((descriptor) => descriptor.productionReady === true),
-      `${label} capabilities must consume the same internal review evidence`,
+      capabilities.privacyAlgorithms.every(
+        (descriptor) =>
+          descriptor.productionReady === !descriptorUsesPendingProductionBackend(descriptor),
+      ),
+      `${label} capabilities must consume the same internal review evidence and pending-backend blocklist`,
     );
   }
 });
@@ -4782,7 +4831,7 @@ test("privacy algorithm JS validators reject hostile catalog descriptor shapes",
         sdkEntrypoints: [],
         plannedSdkEntrypoints: [],
       },
-      /plannedSdkEntrypoints must be non-empty for pre-production source-referenced implementation stages/,
+      /plannedSdkEntrypoints must be non-empty or a production proof builder must be exported for pre-production source-referenced implementation stages/,
     ],
     [
       {
@@ -4843,10 +4892,10 @@ test("privacy algorithm JS validators reject hostile catalog descriptor shapes",
     [
       {
         implementationStage: "sdk-builder",
-        sdkEntrypoints: ["buildShapeProof"],
+        sdkEntrypoints: ["buildShapeNoProofBuilder"],
         plannedSdkEntrypoints: [],
       },
-      /plannedSdkEntrypoints must be non-empty for pre-production source-referenced implementation stages/,
+      /plannedSdkEntrypoints must be non-empty or a production proof builder must be exported for pre-production source-referenced implementation stages/,
     ],
     [
       {
@@ -4854,7 +4903,7 @@ test("privacy algorithm JS validators reject hostile catalog descriptor shapes",
         sdkEntrypoints: [],
         plannedSdkEntrypoints: [],
       },
-      /plannedSdkEntrypoints must be non-empty for pre-production source-referenced implementation stages/,
+      /plannedSdkEntrypoints must be non-empty or a production proof builder must be exported for pre-production source-referenced implementation stages/,
     ],
     [
       {
@@ -6817,6 +6866,13 @@ test("privacy algorithm JS validators reject hostile catalog descriptor shapes",
     ],
     [
       {
+        id: "zkat-policy-private-auth-v1",
+        implementationStage: "production-hardened",
+      },
+      /backend family zkat is still pending production chain admission/,
+    ],
+    [
+      {
         implementationStage: "production-hardened",
         sdkEntrypoints: ["buildShapeDevProofFixture"],
       },
@@ -7036,7 +7092,7 @@ test("privacy algorithm JS validators reject hostile catalog descriptor shapes",
         ],
         plannedSdkEntrypoints: [],
       },
-      /executable DevFixture SDK entrypoints must retain planned production SDK entrypoints until production gates pass/,
+      /executable DevFixture SDK entrypoints must retain planned production SDK entrypoints or export a production proof builder until production gates pass/,
     ],
     [
       {
@@ -7438,8 +7494,8 @@ test("planned privacy SDK entrypoints remain unexported until production gates p
 
   assert.deepEqual(
     [...plannedEntryPoints].sort(),
-    ["buildVeRangeProofV1"],
-    "privacy catalog must only retain the quarantined VeRange production builder",
+    [],
+    "privacy catalog must not retain planned privacy SDK entrypoints after VeRange V1 export",
   );
   for (const entrypoint of plannedEntryPoints) {
     assert.equal(

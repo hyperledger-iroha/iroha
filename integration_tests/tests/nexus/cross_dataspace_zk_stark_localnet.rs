@@ -805,9 +805,9 @@ fn sample_stark_vk_box(circuit_id: &str, n_log2: u8) -> VerifyingKeyBox {
         version: 1,
         circuit_id: circuit_id.to_owned(),
         n_log2,
-        blowup_log2: 2,
+        blowup_log2: iroha_core::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2,
         fold_arity: 2,
-        queries: 2,
+        queries: iroha_core::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES,
         merkle_arity: 2,
         hash_fn: iroha_core::zk_stark::STARK_HASH_SHA256_V1,
     };
@@ -1266,7 +1266,10 @@ async fn stark_cross_dataspace_verifyproof_validity_without_payload_leak() -> Re
     grant_manage_verifying_keys_permission(&alice).await?;
 
     let valid_vk_id = VerifyingKeyId::new(STARK_BACKEND, "cross_ds_stark_verifyproof_ok");
-    let valid_vk_box = sample_stark_vk_box(CIRCUIT_ID_VALID, 4);
+    let valid_vk_box = sample_stark_vk_box(
+        CIRCUIT_ID_VALID,
+        iroha_core::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2,
+    );
     register_stark_vk(
         &alice,
         valid_vk_id.clone(),
@@ -1400,7 +1403,10 @@ async fn stark_cross_dataspace_verifyproof_validity_ds2_submission_without_paylo
     grant_manage_verifying_keys_permission(&alice).await?;
 
     let valid_vk_id = VerifyingKeyId::new(STARK_BACKEND, "cross_ds_stark_verifyproof_ok");
-    let valid_vk_box = sample_stark_vk_box(CIRCUIT_ID_VALID, 4);
+    let valid_vk_box = sample_stark_vk_box(
+        CIRCUIT_ID_VALID,
+        iroha_core::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2,
+    );
     register_stark_vk(
         &alice,
         valid_vk_id.clone(),
@@ -1533,7 +1539,10 @@ async fn stark_cross_dataspace_verifyproof_rejection_without_payload_leak() -> R
     grant_manage_verifying_keys_permission(&alice).await?;
 
     let valid_vk_id = VerifyingKeyId::new(STARK_BACKEND, "cross_ds_stark_verifyproof_ok");
-    let valid_vk_box = sample_stark_vk_box(CIRCUIT_ID_VALID, 4);
+    let valid_vk_box = sample_stark_vk_box(
+        CIRCUIT_ID_VALID,
+        iroha_core::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2,
+    );
     register_stark_vk(
         &alice,
         valid_vk_id.clone(),
@@ -1544,7 +1553,10 @@ async fn stark_cross_dataspace_verifyproof_rejection_without_payload_leak() -> R
     .await?;
 
     let mismatch_vk_id = VerifyingKeyId::new(STARK_BACKEND, "cross_ds_stark_verifyproof_bad");
-    let mismatch_vk_box = sample_stark_vk_box(CIRCUIT_ID_MISMATCH, 5);
+    let mismatch_vk_box = sample_stark_vk_box(
+        CIRCUIT_ID_MISMATCH,
+        iroha_core::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2 + 1,
+    );
     register_stark_vk(
         &alice,
         mismatch_vk_id.clone(),
@@ -1692,7 +1704,10 @@ async fn stark_cross_dataspace_verifyproof_tampered_payload_rejected_without_pay
     grant_manage_verifying_keys_permission(&alice).await?;
 
     let valid_vk_id = VerifyingKeyId::new(STARK_BACKEND, "cross_ds_stark_verifyproof_ok");
-    let valid_vk_box = sample_stark_vk_box(CIRCUIT_ID_VALID, 4);
+    let valid_vk_box = sample_stark_vk_box(
+        CIRCUIT_ID_VALID,
+        iroha_core::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2,
+    );
     register_stark_vk(
         &alice,
         valid_vk_id.clone(),

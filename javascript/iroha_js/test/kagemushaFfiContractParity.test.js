@@ -791,6 +791,222 @@ test("Kagemusha mobile compact-token native output guards require Norito archive
   }
 });
 
+test("Kagemusha mobile offline-note proof metadata rejects padded selectors", () => {
+  for (const [relative, label] of [
+    [
+      "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNote.java",
+      "Android Java Offline Note proof metadata",
+    ],
+    [
+      "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteV2.java",
+      "Android Java Offline Note V2 proof metadata",
+    ],
+    [
+      "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNote.kt",
+      "Kotlin Offline Note proof metadata",
+    ],
+    [
+      "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteV2.kt",
+      "Kotlin Offline Note V2 proof metadata",
+    ],
+  ]) {
+    assertContainsAll(
+      source(relative),
+      [
+        "requireNonBlankUnpadded",
+        "verifying key backend",
+        "verifying key name",
+        "proof backend",
+        "must not contain surrounding whitespace",
+      ],
+      `${label} exactness`,
+    );
+  }
+
+  for (const [relative, label] of [
+    [
+      "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/VerifyingKeyBoxCodec.java",
+      "Android Java VerifyingKeyBox metadata",
+    ],
+    [
+      "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/VerifyingKeyBoxCodec.kt",
+      "Kotlin VerifyingKeyBox metadata",
+    ],
+  ]) {
+    assertContainsAll(
+      source(relative),
+      [
+        'requireNonBlankUnpadded(backend, "backend")',
+        "decodeNorito",
+        "Trailing bytes after VerifyingKeyBox field decode",
+        "must not contain surrounding whitespace",
+        "bytes must not be empty",
+      ],
+      `${label} exactness`,
+    );
+  }
+
+  assertContainsAll(
+    source("java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java"),
+    [
+      "recursiveProofMetadataRejectsPaddedAndMalformedVerifierKeys",
+      "padded verifier backend must be rejected",
+      "padded verifier name must be rejected",
+      "padded proof backend must be rejected",
+      'VerifyingKeyBoxCodec.encodeNorito(" halo2/ipa "',
+      "verifyingKeyBoxStandaloneCodecDecodesAndRejectsMalformedArchives",
+      "rawVerifyingKeyBoxNorito",
+      "Trailing bytes after VerifyingKeyBox field decode",
+      "padded verifying key backend should fail",
+    ],
+    "Android Java proof metadata exactness tests",
+  );
+  assertContainsAll(
+    source("java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteV2Test.java"),
+    [
+      "padded proof backend should throw",
+      'new OfflineNoteV2.VerifyingKeyIdReference(" halo2/ipa ", "vk")',
+      'new OfflineNoteV2.VerifyingKeyIdReference("halo2/ipa", " vk ")',
+      "padded verifier name should throw",
+    ],
+    "Android Java Offline Note V2 proof metadata exactness tests",
+  );
+  assertContainsAll(
+    source("kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt"),
+    [
+      "recursiveProofMetadataRejectsPaddedAndMalformedVerifierKeys",
+      "verifyingKeyBoxStandaloneCodecDecodesAndRejectsMalformedArchives",
+      "rawVerifyingKeyBoxNorito",
+      "Trailing bytes after VerifyingKeyBox field decode",
+      'OfflineNote.VerifyingKeyBox(" halo2/ipa ", byteArrayOf(1))',
+      '"  ${OfflineNote.RECURSIVE_BACKEND}  "',
+      '"  ${OfflineNote.RECURSIVE_VERIFIER_NAME}  "',
+    ],
+    "Kotlin proof metadata exactness tests",
+  );
+  assertContainsAll(
+    source("kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteV2Test.kt"),
+    [
+      'OfflineNoteV2.ProofBox("  ${OfflineNoteV2.RECURSIVE_BACKEND}  ", byteArrayOf(1))',
+      'OfflineNoteV2.VerifyingKeyIdReference(backend = " halo2/ipa ", name = "vk")',
+      'OfflineNoteV2.VerifyingKeyIdReference(backend = "halo2/ipa", name = " vk ")',
+    ],
+    "Kotlin Offline Note V2 proof metadata exactness tests",
+  );
+
+  assertContainsAll(
+    source("IrohaSwift/Sources/IrohaSwift/TxBuilder.swift"),
+    [
+      "case surroundingWhitespace",
+      "trimmingCharacters(in: .whitespacesAndNewlines) == backend",
+      "trimmingCharacters(in: .whitespacesAndNewlines) == name",
+      "Verifying key backend and name must not contain surrounding whitespace.",
+    ],
+    "Swift verifier-key id exactness",
+  );
+  for (const [relative, label] of [
+    ["IrohaSwift/Sources/IrohaSwift/OfflineNote.swift", "Swift Offline Note proof metadata"],
+    ["IrohaSwift/Sources/IrohaSwift/OfflineNoteV2.swift", "Swift Offline Note V2 proof metadata"],
+  ]) {
+    assertContainsAll(
+      source(relative),
+      [
+        "let trimmedBackend = backend.trimmingCharacters(in: .whitespacesAndNewlines)",
+        "guard trimmedBackend == backend else",
+        "unsupportedRecursiveProofBackend",
+        "self.backend = backend",
+      ],
+      `${label} exactness`,
+    );
+  }
+  assertContainsAll(
+    source("IrohaSwift/Tests/IrohaSwiftTests/TxBuilderTests.swift"),
+    [
+      "testVerifyingKeyIdReferenceValidation",
+      'VerifyingKeyIdReference(backend: " halo2/ipa ", name: "vk")',
+      'VerifyingKeyIdReference(backend: "halo2/ipa", name: " vk ")',
+      ".surroundingWhitespace",
+    ],
+    "Swift verifier-key id exactness tests",
+  );
+  assertContainsAll(
+    source("IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift"),
+    [
+      "testOfflineNoteProofAndHashValidationRejectsMalformedValues",
+      "testOfflineNoteRecursiveProofCoversCustomVerifierAndVerifierValidation",
+      'proofBackend: " custom_proof_backend "',
+      'verifierBackend: " custom_backend "',
+      'verifierName: " custom_vk "',
+      ".surroundingWhitespace",
+    ],
+    "Swift Offline Note proof metadata exactness tests",
+  );
+  assertContainsAll(
+    source("IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteV2Tests.swift"),
+    [
+      "testOfflineNoteV2ProofAndHashValidationRejectsMalformedValues",
+      "testOfflineNoteV2RecursiveProofCoversCustomVerifierAndVerifierValidation",
+      'proofBackend: " custom_proof_backend "',
+      'verifierBackend: " custom_backend "',
+      'verifierName: " custom_vk "',
+      ".surroundingWhitespace",
+    ],
+    "Swift Offline Note V2 proof metadata exactness tests",
+  );
+});
+
+test("Kagemusha mobile Offline Note V2 OpenVerifyEnvelope decoders stay wired", () => {
+  for (const [relative, label] of [
+    [
+      "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteV2Halo2Prover.java",
+      "Android Java Offline Note V2 Halo2 prover",
+    ],
+    [
+      "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteV2Halo2Prover.java",
+      "Kotlin Offline Note V2 Halo2 prover",
+    ],
+  ]) {
+    const text = source(relative);
+    assertContainsAll(
+      text,
+      [
+        "verifyOpenVerifyEnvelope",
+        "proofPayloadFromOpenVerifyEnvelope",
+        "readOpenVerifyEnvelopePayload",
+        "Trailing bytes after OpenVerifyEnvelope field decode",
+        "OpenVerifyEnvelope proof payload is empty",
+      ],
+      `${label} OpenVerifyEnvelope decode`,
+    );
+    assert.ok(
+      !text.includes("OpenVerifyEnvelope decoding is not supported"),
+      `${label} must not keep the OpenVerifyEnvelope decode stub`,
+    );
+  }
+
+  for (const [relative, label] of [
+    [
+      "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteV2Test.java",
+      "Android Java Offline Note V2 tests",
+    ],
+    [
+      "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteV2Test.kt",
+      "Kotlin Offline Note V2 tests",
+    ],
+  ]) {
+    assertContainsAll(
+      source(relative),
+      [
+        "openVerifyEnvelopeDecoderRejectsMalformedV2EnvelopeFields",
+        "rawOpenVerifyEnvelopeWithCircuitPayload",
+        "Trailing bytes after OpenVerifyEnvelope field decode",
+        "OpenVerifyEnvelope proof payload is empty",
+      ],
+      `${label} OpenVerifyEnvelope decode regressions`,
+    );
+  }
+});
+
 test("Kagemusha JavaScript and Python native output guards require Norito archives", () => {
   for (const relative of ["javascript/iroha_js/src/crypto.js", "javascript/iroha_js/dist/crypto.js"]) {
     assertContainsAll(
@@ -1503,10 +1719,15 @@ test("Kagemusha JavaScript instruction transaction builder stays wired", () => {
         "KagemushaInstructionArchive",
         "KagemushaTransfer",
         "RedeemKagemushaRecursive",
-        "instruction_type",
-        "kagemushaRecursiveSpendRedeem",
-        "kagemushaRecursiveRedeem.redeemRequestArchive",
-      ],
+      "instruction_type",
+      'typeof type !== "string"',
+      "normalizeExactMetadataString",
+      "verifyingKey.id.backend",
+      "verifyingKey.record.circuit_id",
+      "must not contain surrounding whitespace",
+      "kagemushaRecursiveSpendRedeem",
+      "kagemushaRecursiveRedeem.redeemRequestArchive",
+    ],
       `${relative} Kagemusha instruction transaction builder`,
     );
     assert.match(
@@ -1568,6 +1789,7 @@ test("Kagemusha JavaScript instruction transaction builder stays wired", () => {
     source("javascript/iroha_js/test/transactionBuilder.test.js"),
     [
       "buildKagemushaInstructionArchiveInstruction normalizes archive bytes",
+      "whitespaceInstructionType",
       "schema must match RedeemKagemushaRecursive",
       "checksum is invalid",
       "must not be compressed",
@@ -1579,6 +1801,10 @@ test("Kagemusha JavaScript instruction transaction builder stays wired", () => {
       "bytesBase64 must be canonical standard base64",
       "buildKagemushaInstructionTransaction wraps one archive instruction",
       "buildKagemushaRecursiveRedeemTransaction derives instruction before signing",
+      "proof builders reject padded inline verifier-key metadata",
+      "buildPrivateKaigiFeeSpend",
+      "privateKaigiFeeSpend\\.verifyingKey\\.id\\.backend must not contain surrounding whitespace",
+      "privateKaigiFeeSpend\\.verifyingKey\\.record\\.circuit_id must not contain surrounding whitespace",
       "instruction_type: \"KagemushaTransfer\"",
       "redeemRequestArchive must be a Buffer or ArrayBuffer view",
       "redeem native rejected",
@@ -1600,6 +1826,7 @@ test("Kagemusha Python instruction transaction builder stays wired", () => {
       "KAGEMUSHA_INSTRUCTION_ARCHIVE_WIRE_NAMES",
       "KagemushaInstructionArchiveType",
       "def _normalize_kagemusha_instruction_archive_type(",
+      "if instruction_type not in KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPES:",
       "def _assert_kagemusha_instruction_archive_schema(",
       "_norito_schema_hash(wire_name)",
       "def kagemusha_instruction_archive_instruction(",
@@ -1672,6 +1899,7 @@ test("Kagemusha Python instruction transaction builder stays wired", () => {
       "instruction_archive must be a valid Norito archive",
       "schema must match RedeemKagemushaRecursive",
       "KAGEMUSHA_INSTRUCTION_ARCHIVE_WIRE_NAMES",
+      "whitespace_instruction_type",
       "compressed[22] = 1",
       "unsupported_flags[39] = 0x08",
       "invalid_field_bitset[39] = 0x20",
@@ -4252,6 +4480,21 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-python-sdk-venv-activation-script",
     "--negative-control-python-sdk-bytecode-script",
     "--negative-control-python-sdk-test-filter-script",
+    "--negative-control-python-sdk-canonical-request-test-filter-script",
+    "--negative-control-python-sdk-identifier-receipt-test-filter-script",
+    "--negative-control-identifier-receipt-proof-base64-guard",
+    "--negative-control-identifier-receipt-kind-exactness-guard",
+    "--negative-control-identifier-receipt-proof-base64-exactness-guard",
+    "--negative-control-identifier-receipt-signature-exactness-guard",
+    "--negative-control-identifier-receipt-policy-id-exactness-guard",
+    "--negative-control-identifier-receipt-policy-summary-id-exactness-guard",
+    "--negative-control-identifier-receipt-program-id-exactness-guard",
+    "--negative-control-identifier-receipt-account-id-exactness-guard",
+    "--negative-control-identifier-receipt-hash-exactness-guard",
+    "--negative-control-identifier-receipt-timestamp-exactness-guard",
+    "--negative-control-identifier-receipt-timestamp-u64-guard",
+    "--negative-control-identifier-receipt-resolver-key-exactness-guard",
+    "--negative-control-python-sdk-event-filter-test-filter-script",
     "--negative-control-python-sdk-workflow-inventory",
     "--negative-control-python-lineage-frozen-copy",
     "--negative-control-python-sdk-test-workflow",
@@ -4264,6 +4507,10 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-jvm-sdk-java-version-workflow",
     "--negative-control-jvm-sdk-test-workflow",
     "--negative-control-jvm-sdk-test-filter-script",
+    "--negative-control-jvm-sdk-canonical-request-test-filter-script",
+    "--negative-control-jvm-sdk-signing-verifier-test-filter-script",
+    "--negative-control-jvm-sdk-torii-event-stream-verifier-filter-script",
+    "--negative-control-jvm-sdk-identifier-receipt-filter-script",
     "--negative-control-jvm-sdk-workflow-inventory",
     "--negative-control-jvm-sdk-android-workflow-inventory",
     "--negative-control-jvm-sdk-jdk21-script",
@@ -4286,6 +4533,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-swift-sdk-parse-workflow",
     "--negative-control-swift-sdk-parse-surface-script",
     "--negative-control-swift-sdk-privacy-parse-script",
+    "--negative-control-swift-sdk-torii-verifier-parse-script",
     "--negative-control-swift-sdk-workflow-inventory",
     "--negative-control-swift-sdk-source-workflow-inventory",
     "--negative-control-swift-sdk-uc4-skip",
@@ -4329,6 +4577,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-js-sdk-test-workflow",
     "--negative-control-js-sdk-transaction-builder-filter-script",
     "--negative-control-js-sdk-privacy-native-filter-script",
+    "--negative-control-js-sdk-offline-cash-filter-script",
+    "--negative-control-js-sdk-canonical-request-filter-script",
+    "--negative-control-js-sdk-event-filter-filter-script",
+    "--negative-control-js-sdk-verifier-key-filter-script",
+    "--negative-control-js-sdk-identifier-receipt-filter-script",
     "--negative-control-js-sdk-workflow-inventory",
     "--negative-control-sdk-privacy-workflow-inventory-matrix",
     "--negative-control-js-sdk-install-order-workflow",
@@ -5752,6 +6005,31 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "Kagemusha JVM SDK runner must exercise Kotlin and Android privacy native bridge tests",
   );
   assert.match(
+    jvmRunner,
+    /--tests org\.hyperledger\.iroha\.sdk\.address\.AccountIdLiteralTest[\s\S]*--tests org\.hyperledger\.iroha\.sdk\.offline\.OfflineCashLifecycleTest[\s\S]*ANDROID_HARNESS_MAINS=[^\n]*org\.hyperledger\.iroha\.android\.offline\.OfflineCashLifecycleTest[^\n]*org\.hyperledger\.iroha\.android\.address\.AccountIdLiteralTests/,
+    "Kagemusha JVM SDK runner must exercise Kotlin and Android account literal and offline cash issuer-key exactness tests",
+  );
+  assert.match(
+    jvmRunner,
+    /--tests org\.hyperledger\.iroha\.sdk\.client\.CanonicalRequestSignerTest[\s\S]*ANDROID_HARNESS_MAINS=[^\n]*org\.hyperledger\.iroha\.android\.client\.CanonicalRequestSignerTests/,
+    "Kagemusha JVM SDK runner must exercise Kotlin and Android canonical request auth exactness tests",
+  );
+  assert.match(
+    jvmRunner,
+    /--tests org\.hyperledger\.iroha\.sdk\.core\.model\.instructions\.VerifyingKeyInstructionBuildersTest[\s\S]*--tests org\.hyperledger\.iroha\.sdk\.core\.model\.zk\.VerifyingKeyBackendTagTest[\s\S]*--tests org\.hyperledger\.iroha\.sdk\.core\.model\.zk\.VerifyingKeyRecordDescriptionTest[\s\S]*--tests org\.hyperledger\.iroha\.sdk\.core\.model\.zk\.VerifyingKeyStatusTest[\s\S]*--tests org\.hyperledger\.iroha\.sdk\.crypto\.SigningAlgorithmTest[\s\S]*ANDROID_HARNESS_MAINS=[^\n]*org\.hyperledger\.iroha\.android\.model\.instructions\.VerifyingKeyInstructionUtilsTests[\s\S]*--tests org\.hyperledger\.iroha\.android\.crypto\.SigningAlgorithmTests/,
+    "Kagemusha JVM SDK runner must exercise Kotlin and Android signing/verifier-key exactness tests",
+  );
+  assert.match(
+    jvmRunner,
+    /--tests org\.hyperledger\.iroha\.sdk\.client\.stream\.ToriiEventStreamClientTest[\s\S]*ANDROID_HARNESS_MAINS=[^\n]*org\.hyperledger\.iroha\.android\.client\.stream\.ToriiEventStreamClientTests/,
+    "Kagemusha JVM SDK runner must exercise Kotlin and Android Torii event-stream verifier filter exactness tests",
+  );
+  assert.match(
+    jvmRunner,
+    /--tests org\.hyperledger\.iroha\.sdk\.core\.model\.instructions\.ClaimIdentifierWirePayloadEncoderParityTest[\s\S]*ANDROID_HARNESS_MAINS=[^\n]*org\.hyperledger\.iroha\.android\.model\.instructions\.ClaimIdentifierWirePayloadEncoderTests[^\n]*org\.hyperledger\.iroha\.android\.client\.IdentifierReceiptCanonicalEncoderTests/,
+    "Kagemusha JVM SDK runner must exercise Kotlin and Android identifier receipt exactness tests",
+  );
+  assert.match(
     swiftRunner,
     /SWIFTC_BIN="\$\{KAGEMUSHA_RECURSIVE_SPEND_SWIFTC_BIN:-swiftc\}"/,
     "Kagemusha Swift SDK runner must keep the documented swiftc override variable",
@@ -5761,6 +6039,28 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     /IrohaSwift\/Sources\/IrohaSwift\/PrivacyNativeBridge\.swift[\s\S]*IrohaSwift\/Tests\/IrohaSwiftTests\/PrivacyNativeBridgeTests\.swift/,
     "Kagemusha Swift SDK runner must parse the privacy native bridge source and tests",
   );
+  for (const swiftOfflinePath of [
+    "IrohaSwift/Sources/IrohaSwift/CanonicalRequest.swift",
+    "IrohaSwift/Sources/IrohaSwift/Crypto.swift",
+    "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift",
+    "IrohaSwift/Sources/IrohaSwift/ToriiCanonicalRequest.swift",
+    "IrohaSwift/Sources/IrohaSwift/VerifyingKeyBackendTag.swift",
+    "IrohaSwift/Sources/IrohaSwift/OfflineIssuerPublicKey.swift",
+    "IrohaSwift/Sources/IrohaSwift/OfflineNoteTextTransferContract.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/CanonicalRequestTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/IrohaSDKSigningAlgorithmTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/OfflineIssuerPublicKeyTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTextTransferContractTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/OfflineReceiptChallengeTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/ToriiCanonicalRequestTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/VerifyingKeyBackendTagTests.swift",
+  ]) {
+    assert.ok(
+      swiftRunner.includes(swiftOfflinePath),
+      `Kagemusha Swift SDK runner must parse ${swiftOfflinePath}`,
+    );
+  }
   assert.match(
     csharpRunner,
     /DOTNET_BIN="\$\{KAGEMUSHA_RECURSIVE_SPEND_DOTNET_BIN:-dotnet\}"/,
@@ -5783,8 +6083,23 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     pythonRunner,
-    /export VIRTUAL_ENV="\$\{VENV_DIR\}"[\s\S]*export PATH="\$\{VENV_DIR\}\/bin:\$\{PATH\}"[\s\S]*"\$\{VENV_DIR\}\/bin\/python" -m maturin develop --release/,
-    "Kagemusha Python SDK runner must activate the selected venv before maturin",
+    /export VIRTUAL_ENV="\$\{VENV_DIR\}"[\s\S]*export PATH="\$\{VENV_DIR\}\/bin:\$\{PATH\}"[\s\S]*"\$\{VENV_DIR\}\/bin\/python" -m maturin develop --release[\s\S]*tests\/offline_cash_test\.py[\s\S]*tests\/test_address_format\.py/,
+    "Kagemusha Python SDK runner must activate the selected venv before maturin and run offline cash issuer-key exactness tests",
+  );
+  assert.match(
+    pythonRunner,
+    /python\/iroha_torii_client\/tests\/test_client\.py::test_canonical_request_auth_rejects_padded_fields_before_send/,
+    "Kagemusha Python SDK runner must exercise Torii canonical request auth exactness tests",
+  );
+  assert.match(
+    pythonRunner,
+    /python\/iroha_torii_client\/tests\/test_client\.py::test_identifier_resolution_receipt_matches_shared_vectors/,
+    "Kagemusha Python SDK runner must exercise identifier receipt exactness tests",
+  );
+  assert.match(
+    pythonRunner,
+    /tests\/client_ledger_helpers_test\.py[\s\S]*zk_event_filters_reject_unsupported_backends_before_request[\s\S]*zk_verifying_key_event_filters_reject_malformed_names_before_request[\s\S]*zk_proof_event_filters_reject_malformed_hashes_before_request[\s\S]*zk_raw_event_filters_reject_malformed_privacy_matchers_before_request[\s\S]*zk_raw_event_filters_canonicalize_privacy_matchers_before_request/,
+    "Kagemusha Python SDK runner must exercise Torii event-filter verifier/proof exactness tests",
   );
   assert.match(
     jsRunner,
@@ -5803,7 +6118,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jsRunner,
-    /Kagemusha recursive spend\|Kagemusha record-backed\|Kagemusha \.\* SDK runner\|browser crypto exposes native-only helpers as safe stubs\|buildKagemusha\|privacy native availability probes build and verify with Norito request archives\|privacy native wrappers require binary Norito request archives[\s\S]*test\/crypto\.browser\.test\.js[\s\S]*test\/kagemushaFfiContractParity\.test\.js[\s\S]*test\/kagemushaRecursiveSpend\.test\.js[\s\S]*test\/package_dist\.test\.js[\s\S]*test\/privacyNative\.test\.js[\s\S]*test\/transactionBuilder\.test\.js/,
-    "Kagemusha JavaScript SDK runner must exercise recursive spend, privacy-native, package-dist, transaction-builder, and runtime-gate meta tests",
+    /Kagemusha recursive spend\|Kagemusha record-backed\|Kagemusha \.\* SDK runner\|browser crypto exposes native-only helpers as safe stubs\|buildKagemusha\|privacy native availability probes build and verify with Norito request archives\|privacy native wrappers require binary Norito request archives\|fromAccount rejects control and Unicode-confusable curve algorithm aliases\|offline cash configuration snapshot requires cached issuer key and ABI\|canonical request signing: rejects padded auth fields\|streamEvents rejects unsupported production backend event filters before fetch\|streamEvents rejects malformed verifying key event names before fetch\|streamEvents rejects malformed proof event hashes before fetch\|ZK-ACE verifier-key references reject padded selector metadata\|privacy proof envelopes preserve pending production backend tags\|verifyIdentifierResolutionReceipt rejects adversarial receipt mutations\|encodeIdentifierResolutionReceiptPayload rejects non-exact execution tags\|encodeIdentifierResolutionReceiptAttestation rejects padded proof backend\|verifyIdentifierResolutionReceipt matches shared receipt vectors[\s\S]*test\/address\.test\.js[\s\S]*test\/canonicalRequest\.test\.js[\s\S]*test\/crypto\.browser\.test\.js[\s\S]*test\/instructionBuilders\.test\.js[\s\S]*test\/kagemushaFfiContractParity\.test\.js[\s\S]*test\/kagemushaRecursiveSpend\.test\.js[\s\S]*test\/offlineCashLifecycle\.test\.js[\s\S]*test\/package_dist\.test\.js[\s\S]*test\/privacyNative\.test\.js[\s\S]*test\/toriiClient\.identifier\.test\.js[\s\S]*test\/toriiClient\.test\.js[\s\S]*test\/transactionBuilder\.test\.js/,
+    "Kagemusha JavaScript SDK runner must exercise recursive spend, address exactness, offline cash issuer-key exactness, canonical request auth exactness, Torii event-filter exactness, verifier-key exactness, identifier receipt exactness, privacy-native, package-dist, transaction-builder, and runtime-gate meta tests",
   );
 });

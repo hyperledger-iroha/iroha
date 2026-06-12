@@ -346,15 +346,13 @@ object OfflineNote {
         val name: String
 
         init {
-            val normalizedBackend = backend.trim()
-            val normalizedName = name.trim()
-            require(normalizedBackend.isNotEmpty()) { "verifying key backend must not be empty" }
-            require(normalizedName.isNotEmpty()) { "verifying key name must not be empty" }
-            require(!normalizedBackend.contains(':') && !normalizedName.contains(':')) {
+            val checkedBackend = requireNonBlankUnpadded(backend, "verifying key backend")
+            val checkedName = requireNonBlankUnpadded(name, "verifying key name")
+            require(!checkedBackend.contains(':') && !checkedName.contains(':')) {
                 "verifying key backend and name must not contain ':'"
             }
-            this.backend = normalizedBackend
-            this.name = normalizedName
+            this.backend = checkedBackend
+            this.name = checkedName
         }
     }
 
@@ -363,10 +361,9 @@ object OfflineNote {
         private val _bytes = bytes.copyOf()
 
         init {
-            val normalizedBackend = backend.trim()
-            require(normalizedBackend.isNotEmpty()) { "proof backend must not be empty" }
+            val checkedBackend = requireNonBlankUnpadded(backend, "proof backend")
             require(_bytes.isNotEmpty()) { "proof bytes must not be empty" }
-            this.backend = normalizedBackend
+            this.backend = checkedBackend
         }
 
         fun bytes(): ByteArray = _bytes.copyOf()
@@ -377,10 +374,9 @@ object OfflineNote {
         private val _bytes = bytes.copyOf()
 
         init {
-            val normalizedBackend = backend.trim()
-            require(normalizedBackend.isNotEmpty()) { "verifying key backend must not be empty" }
+            val checkedBackend = requireNonBlankUnpadded(backend, "verifying key backend")
             require(_bytes.isNotEmpty()) { "verifying key bytes must not be empty" }
-            this.backend = normalizedBackend
+            this.backend = checkedBackend
         }
 
         fun bytes(): ByteArray = _bytes.copyOf()
@@ -431,6 +427,9 @@ object OfflineNote {
         private val _assertionPublicKey = assertionPublicKey.copyOf()
 
         init {
+            require(domain == KEY_CERTIFICATE_PAYLOAD_DOMAIN) {
+                "unsupported key certificate payload domain"
+            }
             requireCertificateCore(version, accountId, _publicKey, assertionUsageCountLimit, oneUse)
         }
 
@@ -493,8 +492,8 @@ object OfflineNote {
             val localRevision: Long,
         ) : CommitmentOrigin() {
             init {
-                require(operationId.trim().isNotEmpty()) { "operation_id must not be empty" }
-                require(lineageId.trim().isNotEmpty()) { "lineage_id must not be empty" }
+                requireNonBlankUnpadded(operationId, "operation_id")
+                requireNonBlankUnpadded(lineageId, "lineage_id")
                 require(localRevision >= 0) { "local_revision must be non-negative" }
             }
         }
@@ -504,7 +503,7 @@ object OfflineNote {
             val outputIndex: Int,
         ) : CommitmentOrigin() {
             init {
-                require(paymentRequestId.trim().isNotEmpty()) { "payment_request_id must not be empty" }
+                requireNonBlankUnpadded(paymentRequestId, "payment_request_id")
                 require(outputIndex >= 0) { "output_index must be non-negative" }
             }
         }
@@ -525,7 +524,7 @@ object OfflineNote {
 
         init {
             require(domain == NOTE_COMMITMENT_DOMAIN) { "unsupported note commitment domain" }
-            require(chainId.trim().isNotEmpty()) { "chain_id must not be empty" }
+            requireNonBlankUnpadded(chainId, "chain_id")
             requireHash(_ownerKeyCertificatePayloadHash, "owner_key_certificate_payload_hash")
             parseAssetId(assetId)
             requireRandomBytes(_noteSecret, "note_secret")
@@ -550,7 +549,7 @@ object OfflineNote {
 
         init {
             require(domain == INPUT_NULLIFIER_DOMAIN) { "unsupported input nullifier domain" }
-            require(chainId.trim().isNotEmpty()) { "chain_id must not be empty" }
+            requireNonBlankUnpadded(chainId, "chain_id")
             requireHash(_sourceNoteCommitment, "source_note_commitment")
             requireHash(_ownerKeyCertificatePayloadHash, "owner_key_certificate_payload_hash")
             requireRandomBytes(_noteSecret, "note_secret")
@@ -580,8 +579,8 @@ object OfflineNote {
 
         init {
             require(domain == PAYMENT_TOKEN_ID_DOMAIN) { "unsupported payment token id domain" }
-            require(chainId.trim().isNotEmpty()) { "chain_id must not be empty" }
-            require(paymentRequestId.trim().isNotEmpty()) { "payment_request_id must not be empty" }
+            requireNonBlankUnpadded(chainId, "chain_id")
+            requireNonBlankUnpadded(paymentRequestId, "payment_request_id")
             requireRandomBytes(_tokenNonce, "token_nonce")
             requireHash(_senderKeyCertificatePayloadHash, "sender_key_certificate_payload_hash")
             requireHashes(_inputNullifiers, "input_nullifiers")
@@ -632,6 +631,7 @@ object OfflineNote {
         val canonicalAmount: String = parseNumeric(amount).canonicalString
 
         init {
+            require(domain == ISSUED_CLAIM_DOMAIN) { "unsupported issued claim domain" }
             requireHash(_noteCommitment, "note_commitment")
             requireHash(_keyCertificatePayloadHash, "key_certificate_payload_hash")
             parseAssetId(assetId)
@@ -681,6 +681,7 @@ object OfflineNote {
         val canonicalAmount: String = parseNumeric(amount).canonicalString
 
         init {
+            require(domain == REDEEM_PUBLIC_INPUTS_DOMAIN) { "unsupported redeem public inputs domain" }
             requireHash(_sourceNoteCommitment, "source_note_commitment")
             requireHashes(_inputNullifiers, "input_nullifiers")
             requireHash(_keyCertificatePayloadHash, "key_certificate_payload_hash")
@@ -761,6 +762,7 @@ object OfflineNote {
         private val _outputCommitments = outputCommitments.map { it.copyOf() }
 
         init {
+            require(domain == AUDIT_PUBLIC_INPUTS_DOMAIN) { "unsupported audit public inputs domain" }
             requireHash(_tokenId, "token_id")
             requireHash(_keyCertificatePayloadHash, "key_certificate_payload_hash")
             requireHashes(_inputNullifiers, "input_nullifiers")
@@ -1921,6 +1923,12 @@ object OfflineNote {
         for (i in values.indices) {
             requireHash(values[i], "$field[$i]")
         }
+    }
+
+    private fun requireNonBlankUnpadded(value: String, field: String): String {
+        require(value.trim().isNotEmpty()) { "$field must not be empty" }
+        require(value.trim() == value) { "$field must not contain surrounding whitespace" }
+        return value
     }
 
     private fun requireRandomBytes(value: ByteArray, field: String) {

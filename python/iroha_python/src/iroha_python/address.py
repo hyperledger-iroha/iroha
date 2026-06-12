@@ -193,7 +193,13 @@ class CurveId(IntEnum):
 
     @classmethod
     def from_algorithm(cls, algorithm: str) -> "CurveId":
-        normalized = algorithm.strip().lower()
+        if not isinstance(algorithm, str):
+            raise AccountAddressError("signing algorithm must be a string")
+        if not algorithm.strip():
+            raise AccountAddressError("signing algorithm must be a non-empty string")
+        if algorithm.strip() != algorithm:
+            raise AccountAddressError("signing algorithm must not contain surrounding whitespace")
+        normalized = algorithm.lower()
         if any(ord(ch) < 0x20 or ord(ch) > 0x7E for ch in normalized):
             raise AccountAddressError(f"unsupported signing algorithm: {algorithm}")
         mapping = {

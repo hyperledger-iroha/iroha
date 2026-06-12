@@ -16,9 +16,13 @@ public final class AccountIdLiteral {
    */
   public static String requireCanonicalI105Address(final String accountId, final String field) {
     Objects.requireNonNull(field, "field");
-    final String value = Objects.requireNonNull(accountId, field).trim();
-    if (value.isEmpty()) {
+    final String value = Objects.requireNonNull(accountId, field);
+    final String trimmed = value.trim();
+    if (trimmed.isEmpty()) {
       throw new IllegalArgumentException(field + " must not be blank");
+    }
+    if (!trimmed.equals(value)) {
+      throw new IllegalArgumentException(field + " must not contain surrounding whitespace");
     }
     if (value.indexOf('@') >= 0) {
       throw new IllegalArgumentException(

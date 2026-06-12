@@ -6604,6 +6604,16 @@ final class SccpSolanaProverTests: XCTestCase {
         ) { error in
             XCTAssertEqual(error as? TonSccpProverError, .invalidField("sourceStateVerificationProof"))
         }
+        XCTAssertThrowsError(
+            try canonicalTonSccpSourceStateVerificationProofBytes(
+                TonSccpSourceStateVerificationProof(
+                    proofFamily: "debug-proof-family",
+                    proofBytes: Data([1, 2, 3])
+                )
+            )
+        ) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("sourceStateVerificationProof"))
+        }
 
         XCTAssertEqual(requests.masterchainConfig.circuitId, sccpTonMasterchainConfigOpenVerifyCircuitIdV1)
         XCTAssertEqual(
@@ -12594,32 +12604,17 @@ final class SccpSolanaProverTests: XCTestCase {
             _ = try await EthereumMainnetSccp(executionProvider: nonMainnetProvider)
                 .collectInboundEvidenceFromReceipt(EthereumMainnetInboundEvidence(receipt: receipt))
         }
-        await assertEvmError(.invalidPublicInputs("eth_chainId")) {
-            let decimalProvider = EthereumMainnetExecutionProviderStub(
-                chainId: "1",
-                receipt: receipt,
-                block: block
-            )
-            _ = try await EthereumMainnetSccp(executionProvider: decimalProvider)
-                .collectInboundEvidenceFromReceipt(EthereumMainnetInboundEvidence(receipt: receipt))
-        }
-        await assertEvmError(.invalidPublicInputs("eth_chainId")) {
-            let leadingZeroProvider = EthereumMainnetExecutionProviderStub(
-                chainId: "0x01",
-                receipt: receipt,
-                block: block
-            )
-            _ = try await EthereumMainnetSccp(executionProvider: leadingZeroProvider)
-                .collectInboundEvidenceFromReceipt(EthereumMainnetInboundEvidence(receipt: receipt))
-        }
-        await assertEvmError(.invalidPublicInputs("eth_chainId")) {
-            let numericProvider = EthereumMainnetExecutionProviderStub(
-                chainId: 1,
-                receipt: receipt,
-                block: block
-            )
-            _ = try await EthereumMainnetSccp(executionProvider: numericProvider)
-                .collectInboundEvidenceFromReceipt(EthereumMainnetInboundEvidence(receipt: receipt))
+        let noncanonicalChainIds: [Any] = ["1", "0x01", "0X1", " 0x1", "0x1 ", 1]
+        for chainId in noncanonicalChainIds {
+            await assertEvmError(.invalidPublicInputs("eth_chainId")) {
+                let noncanonicalProvider = EthereumMainnetExecutionProviderStub(
+                    chainId: chainId,
+                    receipt: receipt,
+                    block: block
+                )
+                _ = try await EthereumMainnetSccp(executionProvider: noncanonicalProvider)
+                    .collectInboundEvidenceFromReceipt(EthereumMainnetInboundEvidence(receipt: receipt))
+            }
         }
 
         var failedReceipt = receipt

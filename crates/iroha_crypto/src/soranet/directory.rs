@@ -164,6 +164,7 @@ impl GuardDirectorySnapshotV2 {
                 mldsa65_public.len()
             )));
         }
+        validate_issuer_mldsa_public_key_not_all_zero(mldsa65_public)?;
         Ok(())
     }
 
@@ -288,6 +289,7 @@ fn compute_issuer_fingerprint_inner(
     ed25519: &[u8; 32],
     mldsa_public: &[u8],
 ) -> Result<[u8; 32], norito::Error> {
+    validate_issuer_mldsa_public_key_not_all_zero(mldsa_public)?;
     let mut hasher = Blake3Hasher::new();
     hasher.update(SRC_V2_ISSUER_FINGERPRINT_DOMAIN);
     hasher.update(ed25519);
@@ -303,6 +305,15 @@ fn issuer_fingerprint_len_bytes(len: usize) -> Result<[u8; 4], norito::Error> {
         ))
     })?;
     Ok(len.to_be_bytes())
+}
+
+fn validate_issuer_mldsa_public_key_not_all_zero(mldsa_public: &[u8]) -> Result<(), norito::Error> {
+    if !mldsa_public.is_empty() && mldsa_public.iter().all(|&byte| byte == 0) {
+        return Err(norito::Error::Message(
+            "guard directory issuer ML-DSA public key must not be all zero".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 /// Encode the validation phase to its wire representation.
@@ -554,6 +565,19 @@ mod tests {
     }
 
     #[test]
+    fn issuer_fingerprint_rejects_all_zero_mldsa_public_key() {
+        let ed25519 = [0x11; 32];
+        let mldsa_public = vec![0u8; MlDsaSuite::MlDsa65.public_key_len()];
+
+        let err = try_compute_issuer_fingerprint(&ed25519, &mldsa_public)
+            .expect_err("all-zero issuer ML-DSA public key must fail closed");
+        assert!(
+            err.to_string().contains("all zero"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn issuer_fingerprint_length_overflow_fails_closed() {
         let Some(too_long) = (u64::from(u32::MAX) + 1).try_into().ok() else {
             return;
@@ -680,6 +704,26 @@ mod tests {
         assert!(
             !message.contains("fingerprint"),
             "shape preflight should run before fingerprint comparison: {message}"
+        );
+    }
+
+    #[test]
+    fn snapshot_rejects_all_zero_mldsa65_public_key_before_fingerprint() {
+        let mut snapshot = sample_snapshot();
+        snapshot.issuers[0].mldsa65_public = vec![0u8; MlDsaSuite::MlDsa65.public_key_len()];
+        snapshot.issuers[0].fingerprint = [0xEE; 32];
+        let bytes = snapshot.to_bytes().expect("serialize");
+
+        let err = GuardDirectorySnapshotV2::from_bytes(&bytes)
+            .expect_err("all-zero issuer ML-DSA-65 key must fail before fingerprint");
+        let message = err.to_string();
+        assert!(
+            message.contains("all zero"),
+            "unexpected message: {message}"
+        );
+        assert!(
+            !message.contains("fingerprint"),
+            "inert key preflight should run before fingerprint comparison: {message}"
         );
     }
 

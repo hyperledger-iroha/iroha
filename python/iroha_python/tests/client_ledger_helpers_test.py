@@ -67,6 +67,14 @@ def response(
     return result
 
 
+def _expected_backend_rejection_message(backend: object) -> str:
+    if not isinstance(backend, str) or not backend.strip():
+        return "non-empty string"
+    if backend.strip() != backend:
+        return "surrounding whitespace"
+    return "unsupported production verifier backend"
+
+
 def test_privacy_backend_pending_classifier_rejects_adversarial_splices() -> None:
     for label in (
         "halo2/ipa/penumbra",
@@ -203,12 +211,7 @@ def test_privacy_backend_production_verify_classifier_parity() -> None:
     )
     for backend in unsupported:
         assert not _is_production_verify_backend_label(backend), backend
-        expected_error = (
-            "non-empty string"
-            if not isinstance(backend, str) or not backend.strip()
-            else "unsupported production verifier backend"
-        )
-        with pytest.raises(ValueError, match=expected_error):
+        with pytest.raises(ValueError, match=_expected_backend_rejection_message(backend)):
             _require_production_verify_backend_label(backend, "backend")
 
 
@@ -645,7 +648,7 @@ def test_zk_verifying_key_registration_rejects_unsupported_backends_before_reque
         "halo2/ipa:s-a-m-p-l-e",
         "mock/dev",
     ):
-        with pytest.raises(ValueError, match="unsupported production verifier backend"):
+        with pytest.raises(ValueError, match=_expected_backend_rejection_message(backend)):
             client.submit_zk_verifying_key_registration(
                 {"backend": backend, "name": "vk_transfer"}
             )
@@ -656,11 +659,43 @@ def test_zk_verifying_key_registration_rejects_bad_names_before_request() -> Non
     session = FakeSession([])
     client = ToriiClient("http://torii.example", session=session, max_retries=0)
 
-    for bad_name in ("", "   ", "\t", None, 7):
+    for bad_name in ("", "   ", "\t", " vk_transfer", "vk_transfer ", None, 7):
         with pytest.raises((TypeError, ValueError), match="register_zk_verifying_key.name"):
             client.submit_zk_verifying_key_registration(
                 {"backend": "halo2/ipa", "name": bad_name}
             )
+
+    assert session.calls == []
+
+
+def test_zk_verifying_key_registration_rejects_padded_selector_metadata_before_request() -> None:
+    session = FakeSession([])
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+    base = {
+        "authority": "alice",
+        "backend": "halo2/ipa",
+        "name": "vk_transfer",
+        "private_key": "ed25519:deadbeef",
+        "version": 1,
+        "circuit_id": "halo2/ipa::transfer_v1",
+        "public_inputs_schema_hash_hex": "aa" * 32,
+        "gas_schedule_id": "halo2_default",
+        "vk_bytes": "dms=",
+    }
+
+    for field, value in (
+        ("name", " vk_transfer"),
+        ("name", "vk_transfer "),
+        ("circuit_id", " halo2/ipa::transfer_v1"),
+        ("circuit_id", "halo2/ipa::transfer_v1 "),
+        ("gas_schedule_id", " halo2_default"),
+        ("gas_schedule_id", "halo2_default "),
+    ):
+        with pytest.raises(
+            ValueError,
+            match=rf"register_zk_verifying_key\.{field}.*surrounding whitespace",
+        ):
+            client.submit_zk_verifying_key_registration({**base, field: value})
 
     assert session.calls == []
 
@@ -846,9 +881,21 @@ def test_zk_verifying_key_update_rejects_bad_inputs_before_request() -> None:
         with pytest.raises(ValueError, match="update_zk_verifying_key.backend"):
             client.submit_zk_verifying_key_update(payload(backend=backend))
 
-    for bad_name in ("", "   ", "\t", None, 7):
+    for bad_name in ("", "   ", "\t", " vk_transfer", "vk_transfer ", None, 7):
         with pytest.raises((TypeError, ValueError), match="update_zk_verifying_key.name"):
             client.submit_zk_verifying_key_update(payload(name=bad_name))
+
+    for field, value in (
+        ("circuit_id", " halo2/ipa::transfer_v2"),
+        ("circuit_id", "halo2/ipa::transfer_v2 "),
+        ("gas_schedule_id", " halo2_default"),
+        ("gas_schedule_id", "halo2_default "),
+    ):
+        with pytest.raises(
+            ValueError,
+            match=rf"update_zk_verifying_key\.{field}.*surrounding whitespace",
+        ):
+            client.submit_zk_verifying_key_update(payload(**{field: value}))
 
     for authority in (None, "", "   ", 7):
         with pytest.raises((TypeError, ValueError), match="update_zk_verifying_key.authority"):
@@ -951,10 +998,23 @@ def test_zk_verifying_key_read_helpers_reject_unsupported_backends_before_reques
         "halo2/ipa:s-a-m-p-l-e",
         "mock/dev",
     ):
-        with pytest.raises(ValueError, match="unsupported production verifier backend"):
+        with pytest.raises(ValueError, match=_expected_backend_rejection_message(backend)):
             client.request_zk_verifying_key(backend, "vk_transfer")
-        with pytest.raises(ValueError, match="unsupported production verifier backend"):
+        with pytest.raises(ValueError, match=_expected_backend_rejection_message(backend)):
             client.zk_verifying_key_active(backend, "vk_transfer")
+    assert session.calls == []
+
+
+def test_zk_verifying_key_read_helpers_reject_padded_names_before_request() -> None:
+    session = FakeSession([])
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+
+    for name in (" vk_transfer", "vk_transfer "):
+        with pytest.raises(ValueError, match="name.*surrounding whitespace"):
+            client.request_zk_verifying_key("halo2/ipa", name)
+        with pytest.raises(ValueError, match="name.*surrounding whitespace"):
+            client.zk_verifying_key_active("halo2/ipa", name)
+
     assert session.calls == []
 
 
@@ -1028,13 +1088,13 @@ def test_zk_event_filters_reject_unsupported_backends_before_request() -> None:
         "halo2/ipa:s-a-m-p-l-e",
         "mock/dev",
     ):
-        with pytest.raises(ValueError, match="unsupported production verifier backend"):
+        with pytest.raises(ValueError, match=_expected_backend_rejection_message(backend)):
             DataEventFilter.verifying_key(backend=backend, name="vk_transfer")
-        with pytest.raises(ValueError, match="unsupported production verifier backend"):
+        with pytest.raises(ValueError, match=_expected_backend_rejection_message(backend)):
             DataEventFilter.proof(backend=backend, proof_hash_hex="a" * 64)
-        with pytest.raises(ValueError, match="unsupported production verifier backend"):
+        with pytest.raises(ValueError, match=_expected_backend_rejection_message(backend)):
             client.stream_verifying_key_events(backend=backend, name="vk_transfer")
-        with pytest.raises(ValueError, match="unsupported production verifier backend"):
+        with pytest.raises(ValueError, match=_expected_backend_rejection_message(backend)):
             client.stream_proof_events(backend=backend, proof_hash_hex="a" * 64)
     assert session.calls == []
 
@@ -1042,16 +1102,13 @@ def test_zk_event_filters_reject_unsupported_backends_before_request() -> None:
 def test_zk_verifying_key_event_filters_reject_malformed_names_before_request() -> None:
     session = FakeSession([])
     client = ToriiClient("http://torii.example", session=session, max_retries=0)
-    for name in ("", "   ", "\t", "\n", "vk:transfer", 42):
+    for name in ("", "   ", "\t", "\n", " vk_transfer", "vk_transfer ", "vk:transfer", 42):
         with pytest.raises((TypeError, ValueError), match="verifying_key_filter.name"):
             DataEventFilter.verifying_key(backend="halo2/ipa", name=name)
         with pytest.raises((TypeError, ValueError), match="verifying_key_filter.name"):
             client.stream_verifying_key_events(backend="halo2/ipa", name=name)
 
-    payload = DataEventFilter.verifying_key(
-        backend="halo2/ipa",
-        name=" vk_transfer ",
-    ).to_dict()
+    payload = DataEventFilter.verifying_key(backend="halo2/ipa", name="vk_transfer").to_dict()
     assert payload["VerifyingKey"]["id_matcher"]["name"] == "vk_transfer"
     assert session.calls == []
 
@@ -1092,6 +1149,12 @@ def test_zk_raw_event_filters_reject_malformed_privacy_matchers_before_request()
         {
             "VerifyingKey": {
                 "id_matcher": {"backend": "halo2/ipa", "name": "vk:transfer"},
+                "event_set": {"Registered": True},
+            }
+        },
+        {
+            "VerifyingKey": {
+                "id_matcher": {"backend": "halo2/ipa", "name": " vk_transfer"},
                 "event_set": {"Registered": True},
             }
         },
@@ -1153,7 +1216,7 @@ def test_zk_raw_event_filters_canonicalize_privacy_matchers_before_request() -> 
     client.stream_events(
         filter={
             "VerifyingKey": {
-                "id_matcher": {"backend": "halo2/ipa", "name": " vk_transfer "},
+                "id_matcher": {"backend": "halo2/ipa", "name": "vk_transfer"},
                 "event_set": {"Registered": True},
             }
         }

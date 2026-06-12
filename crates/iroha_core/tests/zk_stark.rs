@@ -880,6 +880,96 @@ fn stark_single_fold_roundtrip_ok_and_fail() {
 }
 
 #[test]
+fn stark_rejects_duplicate_auxiliary_composition_wires() {
+    let mut env = build_sample_air_composition_envelope();
+    let comp_values = env
+        .proof
+        .comp_values
+        .as_mut()
+        .expect("sample composition envelope has composition values");
+    let first_wire = comp_values[0].aux_terms[0].wire_index;
+    comp_values[0].aux_terms[1].wire_index = first_wire;
+
+    let bytes = norito::to_bytes(&env).expect("encode duplicate auxiliary wires");
+    assert!(
+        !verify_stark_fri_envelope(&bytes),
+        "duplicate auxiliary composition wires must be rejected"
+    );
+}
+
+#[test]
+fn stark_rejects_auxiliary_composition_wire_retarget_without_digest_match() {
+    let mut env = build_sample_air_composition_envelope();
+    let comp_values = env
+        .proof
+        .comp_values
+        .as_mut()
+        .expect("sample composition envelope has composition values");
+    comp_values[0].aux_terms[1].wire_index =
+        comp_values[0].aux_terms[1].wire_index.saturating_add(1);
+
+    let bytes = norito::to_bytes(&env).expect("encode retargeted auxiliary wire");
+    assert!(
+        !verify_stark_fri_envelope(&bytes),
+        "auxiliary wire-index retargeting must remain bound to the AIR public digest"
+    );
+}
+
+#[test]
+fn stark_composition_constructor_requires_strict_auxiliary_wire_order() {
+    let params = sample_air_params("fastpq:v1:fri".to_string(), STARK_HASH_SHA256_V1);
+    let duplicate_terms = vec![
+        StarkCompositionTermV1 {
+            wire_index: 1,
+            value: 11,
+            coeff: 3,
+        },
+        StarkCompositionTermV1 {
+            wire_index: 1,
+            value: 17,
+            coeff: 5,
+        },
+    ];
+    let duplicate_err = prove_stark_fri_composition_envelope_bytes(
+        params.clone(),
+        "TEST-STARK".to_string(),
+        7,
+        2,
+        duplicate_terms,
+    )
+    .expect_err("duplicate auxiliary wires must fail before proof construction");
+    assert!(
+        duplicate_err.contains("strictly ordered"),
+        "unexpected duplicate-wire error: {duplicate_err}"
+    );
+
+    let unsorted_terms = vec![
+        StarkCompositionTermV1 {
+            wire_index: 2,
+            value: 11,
+            coeff: 3,
+        },
+        StarkCompositionTermV1 {
+            wire_index: 1,
+            value: 17,
+            coeff: 5,
+        },
+    ];
+    let unsorted_err = prove_stark_fri_composition_envelope_bytes(
+        params,
+        "TEST-STARK".to_string(),
+        7,
+        2,
+        unsorted_terms,
+    )
+    .expect_err("unsorted auxiliary wires must fail before proof construction");
+    assert!(
+        unsorted_err.contains("strictly ordered"),
+        "unexpected unsorted-wire error: {unsorted_err}"
+    );
+}
+
+#[test]
 fn stark_low_level_envelope_requires_air_section() {
     let env = build_sample_envelope();
     let bytes = norito::to_bytes(&env).expect("encode");

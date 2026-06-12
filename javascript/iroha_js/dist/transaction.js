@@ -151,13 +151,12 @@ const NORITO_CRC64_TABLE = (() => {
 })();
 
 function normalizeKagemushaInstructionArchiveType(type, context) {
-  const normalized = String(type ?? "").trim();
-  if (!KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPES.has(normalized)) {
+  if (typeof type !== "string" || !KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPES.has(type)) {
     throw new TypeError(
       `${context}.type must be KagemushaTransfer or RedeemKagemushaRecursive`,
     );
   }
-  return normalized;
+  return type;
 }
 
 function kagemushaArchiveBuffer(source, context) {
@@ -500,6 +499,31 @@ export function buildTransaction(input) {
     signedTransaction: Buffer.from(signed),
     hash: Buffer.from(hashBytes),
   };
+}
+
+/**
+ * Build and sign an SNS name-registration consensus transaction.
+ * @param {{
+ *   chainId: string,
+ *   authority: string,
+ *   request: object,
+ *   metadata?: object | string | null,
+ *   creationTimeMs?: number,
+ *   ttlMs?: number,
+ *   nonce?: number,
+ *   privateKey: ArrayBufferView | ArrayBuffer | Buffer
+ * }} input
+ * @returns {{signedTransaction: Buffer, hash: Buffer}}
+ */
+export function buildRegisterSnsNameTransaction(input) {
+  const request = input?.request;
+  if (!request || typeof request !== "object" || Array.isArray(request)) {
+    throw new TypeError("request must be a non-null object");
+  }
+  return buildTransaction({
+    ...input,
+    instructions: [{ RegisterSnsName: request }],
+  });
 }
 
 /**
@@ -1949,14 +1973,33 @@ function normalizeInlineVerifyingKeyRecord(value, context) {
   if (!bytesBase64) {
     throw new TypeError(`${context}.verifyingKey.inline_key.bytes_b64 must be present`);
   }
+  const backend = normalizeExactMetadataString(
+    record.id?.backend ?? record.backend,
+    `${context}.verifyingKey.id.backend`,
+  );
+  const circuitId = normalizeExactMetadataString(
+    record.record?.circuit_id ?? record.circuit_id ?? record.circuitId,
+    `${context}.verifyingKey.record.circuit_id`,
+  );
   return {
     record,
-    backend: String(record.id?.backend ?? record.backend ?? "").trim(),
-    circuitId: String(
-      record.record?.circuit_id ?? record.circuit_id ?? record.circuitId ?? "",
-    ).trim(),
+    backend,
+    circuitId,
     bytes: Buffer.from(bytesBase64, "base64"),
   };
+}
+
+function normalizeExactMetadataString(value, context) {
+  if (typeof value !== "string") {
+    throw new TypeError(`${context} must be a string`);
+  }
+  if (!value.trim()) {
+    throw new TypeError(`${context} must be present`);
+  }
+  if (value.trim() !== value) {
+    throw new TypeError(`${context} must not contain surrounding whitespace`);
+  }
+  return value;
 }
 
 function normalizeWholeNumberLiteral(value, context) {
@@ -3029,7 +3072,82 @@ export async function submitSignedTransaction(
     await delay(pollIntervalMs);
   }
 
-  throw new Error("timed out waiting for transaction status");
+  const error = new Error("timed out waiting for transaction status");
+  error.hash = hashHex;
+  error.submission = submission;
+  error.status = status;
+  throw error;
+}
+
+/**
+ * Build, submit, and optionally wait for an SNS name-registration transaction.
+ * @param {{
+ *   client?: ToriiClient,
+ *   toriiUrl?: string,
+ *   chainId: string,
+ *   authority: string,
+ *   request: object,
+ *   metadata?: object | string | null,
+ *   creationTimeMs?: number,
+ *   ttlMs?: number,
+ *   nonce?: number,
+ *   privateKey: ArrayBufferView | ArrayBuffer | Buffer,
+ *   waitForCommit?: boolean,
+ *   pollIntervalMs?: number,
+ *   timeoutMs?: number,
+ *   scope?: "local" | "auto" | "global" | string | null
+ * }} input
+ * @returns {Promise<{hash: string, submittedHash: string | null, submission: any, status?: any}>}
+ */
+export async function registerSnsNameViaConsensus(input) {
+  if (!input || typeof input !== "object") {
+    throw new TypeError("input must be an object");
+  }
+  let client = input.client ?? null;
+  if (client === null) {
+    const toriiUrl = String(input.toriiUrl ?? "").trim();
+    if (!toriiUrl) {
+      throw new TypeError("client or toriiUrl is required");
+    }
+    client = new ToriiClient(toriiUrl);
+  }
+  if (!(client instanceof ToriiClient)) {
+    throw new TypeError("client must be an instance of ToriiClient");
+  }
+  const transaction = buildRegisterSnsNameTransaction(input);
+  try {
+    const result = await submitSignedTransaction(
+      client,
+      transaction.signedTransaction,
+      {
+        waitForCommit: input.waitForCommit ?? true,
+        pollIntervalMs: input.pollIntervalMs,
+        timeoutMs: input.timeoutMs,
+        scope: input.scope,
+      },
+    );
+    return {
+      hash: transaction.hash.toString("hex"),
+      submittedHash: result?.hash ?? null,
+      submission: result?.submission ?? null,
+      status: result?.status ?? null,
+    };
+  } catch (error) {
+    const message = String(error?.message ?? error);
+    if (!message.toLowerCase().includes("timed out waiting for transaction status")) {
+      throw error;
+    }
+    return {
+      hash: transaction.hash.toString("hex"),
+      submittedHash: error?.hash ?? null,
+      submission: error?.submission ?? null,
+      status: {
+        kind: "PendingTimeout",
+        error: message,
+        ...(error?.status !== undefined ? { lastStatus: error.status } : {}),
+      },
+    };
+  }
 }
 
 /**

@@ -23,6 +23,16 @@ function compareUtf8(left, right) {
   return a.length - b.length;
 }
 
+function requireExactNonBlankString(value, field, context) {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error(`${field} is required for ${context}`);
+  }
+  if (value.trim() !== value) {
+    throw new Error(`${field} must not contain surrounding whitespace for ${context}`);
+  }
+  return value;
+}
+
 /**
  * Canonicalise a raw query string by decoding, sorting, and re-encoding.
  * @param {string | URLSearchParams | undefined | null} raw
@@ -75,9 +85,14 @@ export function canonicalRequestSignatureMessage({
   timestampMs,
   nonce,
 }) {
+  const checkedNonce = requireExactNonBlankString(
+    nonce,
+    "nonce",
+    "canonical signatures",
+  );
   const base = canonicalRequestMessage({ method, path, query, body });
   return Buffer.from(
-    `${base.toString("utf8")}\n${String(timestampMs)}\n${String(nonce)}`,
+    `${base.toString("utf8")}\n${String(timestampMs)}\n${checkedNonce}`,
     "utf8",
   );
 }
@@ -97,18 +112,18 @@ export function buildCanonicalRequestHeaders({
   timestampMs = Date.now(),
   nonce = randomBytes(16).toString("hex"),
 }) {
-  if (!accountId) {
-    throw new Error("accountId is required for canonical headers");
-  }
+  const checkedAccountId = requireExactNonBlankString(
+    accountId,
+    "accountId",
+    "canonical headers",
+  );
   if (!privateKey) {
     throw new Error("privateKey is required for canonical headers");
   }
   if (!Number.isFinite(timestampMs)) {
     throw new Error("timestampMs must be a finite number");
   }
-  if (!nonce || typeof nonce !== "string") {
-    throw new Error("nonce is required for canonical headers");
-  }
+  const checkedNonce = requireExactNonBlankString(nonce, "nonce", "canonical headers");
   const normalizedTimestampMs = Math.trunc(timestampMs);
   const message = canonicalRequestSignatureMessage({
     method,
@@ -116,14 +131,14 @@ export function buildCanonicalRequestHeaders({
     query,
     body,
     timestampMs: normalizedTimestampMs,
-    nonce,
+    nonce: checkedNonce,
   });
   const signature = signEd25519(message, privateKey);
   return {
-    "X-Iroha-Account": String(accountId),
+    "X-Iroha-Account": checkedAccountId,
     "X-Iroha-Signature": Buffer.from(signature).toString("base64"),
     "X-Iroha-Timestamp-Ms": String(normalizedTimestampMs),
-    "X-Iroha-Nonce": nonce,
+    "X-Iroha-Nonce": checkedNonce,
   };
 }
 
@@ -238,18 +253,22 @@ export async function buildCanonicalJsonRequest({
   timestampMs = Date.now(),
   nonce = randomBytes(16).toString("hex"),
 }) {
-  if (!accountId) {
-    throw new Error("accountId is required for canonical JSON requests");
-  }
+  const checkedAccountId = requireExactNonBlankString(
+    accountId,
+    "accountId",
+    "canonical JSON requests",
+  );
   if (!path) {
     throw new Error("path is required for canonical JSON requests");
   }
   if (!Number.isFinite(timestampMs)) {
     throw new Error("timestampMs must be a finite number");
   }
-  if (!nonce || typeof nonce !== "string") {
-    throw new Error("nonce is required for canonical JSON requests");
-  }
+  const checkedNonce = requireExactNonBlankString(
+    nonce,
+    "nonce",
+    "canonical JSON requests",
+  );
   if (!privateKey && typeof sign !== "function") {
     throw new Error("privateKey or sign is required for canonical JSON requests");
   }
@@ -263,7 +282,7 @@ export async function buildCanonicalJsonRequest({
     query: canonicalTarget.query,
     body: bodyJson,
     timestampMs: normalizedTimestampMs,
-    nonce,
+    nonce: checkedNonce,
   });
   const signatureBase64 = privateKey
     ? Buffer.from(signEd25519(message, privateKey)).toString("base64")
@@ -276,7 +295,7 @@ export async function buildCanonicalJsonRequest({
           query: canonicalTarget.query,
           body: bodyJson,
           timestampMs: normalizedTimestampMs,
-          nonce,
+          nonce: checkedNonce,
         }),
       );
   return {
@@ -284,10 +303,10 @@ export async function buildCanonicalJsonRequest({
     headers: {
       ...DEFAULT_JSON_HEADERS,
       ...normalizeHeadersInit(headers),
-      "X-Iroha-Account": String(accountId),
+      "X-Iroha-Account": checkedAccountId,
       "X-Iroha-Signature": signatureBase64,
       "X-Iroha-Timestamp-Ms": String(normalizedTimestampMs),
-      "X-Iroha-Nonce": nonce,
+      "X-Iroha-Nonce": checkedNonce,
     },
     body: bodyJson,
   };

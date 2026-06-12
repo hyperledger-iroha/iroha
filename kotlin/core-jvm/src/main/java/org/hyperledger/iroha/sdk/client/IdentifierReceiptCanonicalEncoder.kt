@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.sdk.client
 
 import java.util.Base64
+import org.hyperledger.iroha.sdk.address.requireCanonicalI105Address
 import org.hyperledger.iroha.sdk.core.model.instructions.TransferWirePayloadEncoder
 import org.hyperledger.iroha.sdk.norito.NoritoAdapters
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
@@ -25,7 +26,13 @@ object IdentifierReceiptCanonicalEncoder {
         encodeSizedField(writer, PassthroughBytesAdapter, encodeOpaqueHash(payload.opaqueId, "opaque:", "payload.opaque_id"))
         encodeSizedField(writer, PassthroughBytesAdapter, decodeHash(payload.receiptHash, "payload.receipt_hash"))
         encodeSizedField(writer, PassthroughBytesAdapter, encodeOpaqueHash(payload.uaid, "uaid:", "payload.uaid"))
-        encodeSizedField(writer, PassthroughBytesAdapter, TransferWirePayloadEncoder.encodeAccountIdPayload(payload.accountId))
+        encodeSizedField(
+            writer,
+            PassthroughBytesAdapter,
+            TransferWirePayloadEncoder.encodeAccountIdPayload(
+                requireCanonicalI105Address(payload.accountId, "payload.account_id"),
+            ),
+        )
         return writer.toByteArray()
     }
 
@@ -58,7 +65,7 @@ object IdentifierReceiptCanonicalEncoder {
     @JvmStatic
     fun encodeAttestation(attestation: IdentifierReceiptAttestation): ByteArray {
         val writer = NoritoEncoder(NoritoCodec.DEFAULT_FLAGS)
-        when (attestation.kind.lowercase()) {
+        when (requireExactNonBlankString(attestation.kind, "attestation.kind")) {
             "signed" -> {
                 writer.writeUInt(0, 32)
                 encodeSizedField(writer, SIGNATURE_ADAPTER, decodeHex(requireNotNull(attestation.signature) {
@@ -71,14 +78,22 @@ object IdentifierReceiptCanonicalEncoder {
                     writer,
                     ProofBoxAdapter,
                     ProofBoxPayload(
-                        requireNotNull(attestation.proofBackend) { "proof attestation requires proofBackend" },
+                        requireExactNonBlankString(
+                            requireNotNull(attestation.proofBackend) {
+                                "proof attestation requires proofBackend"
+                            },
+                            "attestation.proof_backend",
+                        ),
                         java.util.Base64.getDecoder().decode(
-                            requireNotNull(attestation.proofB64) { "proof attestation requires proofB64" }
+                            requireExactNonBlankString(
+                                requireNotNull(attestation.proofB64) { "proof attestation requires proofB64" },
+                                "attestation.proof_b64",
+                            )
                         )
                     )
                 )
             }
-            else -> error("attestation.kind must be signed or proof")
+            else -> throw IllegalArgumentException("attestation.kind must be signed or proof")
         }
         return writer.toByteArray()
     }
@@ -97,7 +112,7 @@ object IdentifierReceiptCanonicalEncoder {
                 IdentifierReceiptAttestation(
                     "proof",
                     null,
-                    proof.backend,
+                    requireExactNonBlankString(proof.backend, "attestation.proof_backend"),
                     Base64.getEncoder().encodeToString(proof.bytes),
                 )
             }
@@ -108,13 +123,16 @@ object IdentifierReceiptCanonicalEncoder {
     }
 
     private fun encodePolicyId(raw: String): ByteArray {
-        val parts = raw.trim().split("#", limit = 2)
-        require(parts.size == 2 && parts[0].isNotBlank() && parts[1].isNotBlank()) {
+        val value = requireExactNonBlankString(raw, "payload.policy_id")
+        val parts = value.split("#", limit = 2)
+        require(parts.size == 2 && parts[0].isNotEmpty() && parts[1].isNotEmpty()) {
             "payload.policy_id must use kind#rule"
         }
+        val kind = requireExactNonBlankString(parts[0], "payload.policy_id.kind")
+        val rule = requireExactNonBlankString(parts[1], "payload.policy_id.rule")
         val writer = NoritoEncoder(NoritoCodec.DEFAULT_FLAGS)
-        encodeSizedField(writer, STRING_ADAPTER, parts[0].trim())
-        encodeSizedField(writer, STRING_ADAPTER, parts[1].trim())
+        encodeSizedField(writer, STRING_ADAPTER, kind)
+        encodeSizedField(writer, STRING_ADAPTER, rule)
         return writer.toByteArray()
     }
 
@@ -128,7 +146,11 @@ object IdentifierReceiptCanonicalEncoder {
 
     private fun encodeExecution(execution: IdentifierResolutionExecutionPayload): ByteArray {
         val writer = NoritoEncoder(NoritoCodec.DEFAULT_FLAGS)
-        encodeSizedField(writer, PassthroughBytesAdapter, encodeProgramId(execution.programId))
+        encodeSizedField(
+            writer,
+            PassthroughBytesAdapter,
+            encodeProgramId(execution.programId, "payload.execution.program_id"),
+        )
         encodeSizedField(writer, PassthroughBytesAdapter, decodeHash(execution.programDigest, "payload.execution.program_digest"))
         encodeSizedField(writer, U32Adapter, backendTag(execution.backend).toLong())
         encodeSizedField(writer, U32Adapter, verificationModeTag(execution.verificationMode).toLong())
@@ -138,8 +160,12 @@ object IdentifierReceiptCanonicalEncoder {
         encodeSizedField(writer, PassthroughBytesAdapter, decodeHash(execution.evaluationKeyDigest, "payload.execution.evaluation_key_digest"))
         encodeSizedField(writer, PassthroughBytesAdapter, decodeHash(execution.outputHash, "payload.execution.output_hash"))
         encodeSizedField(writer, PassthroughBytesAdapter, decodeHash(execution.associatedDataHash, "payload.execution.associated_data_hash"))
-        encodeSizedField(writer, U64_ADAPTER, execution.executedAtMs)
-        encodeSizedField(writer, OptionalU64Adapter, execution.expiresAtMs)
+        encodeSizedField(writer, U64_ADAPTER, requireU64(execution.executedAtMs, "payload.execution.executed_at_ms"))
+        encodeSizedField(
+            writer,
+            OptionalU64Adapter,
+            execution.expiresAtMs?.let { requireU64(it, "payload.execution.expires_at_ms") },
+        )
         return writer.toByteArray()
     }
 
@@ -213,14 +239,22 @@ object IdentifierReceiptCanonicalEncoder {
 
     private fun encodeOutputOpeningPayload(payload: RamLfeOutputOpeningPayload): ByteArray {
         val writer = NoritoEncoder(NoritoCodec.DEFAULT_FLAGS)
-        encodeSizedField(writer, PassthroughBytesAdapter, encodeProgramId(payload.programId))
+        encodeSizedField(
+            writer,
+            PassthroughBytesAdapter,
+            encodeProgramId(payload.programId, "payload.opening.payload.program_id"),
+        )
         encodeSizedField(writer, PassthroughBytesAdapter, decodeHash(payload.inputCiphertextHash, "payload.opening.payload.input_ciphertext_hash"))
         encodeSizedField(writer, PassthroughBytesAdapter, decodeHash(payload.outputCiphertextHash, "payload.opening.payload.output_ciphertext_hash"))
         encodeSizedField(writer, PassthroughBytesAdapter, decodeHash(payload.parameterDigest, "payload.opening.payload.parameter_digest"))
         encodeSizedField(writer, PassthroughBytesAdapter, decodeHash(payload.evaluationKeyDigest, "payload.opening.payload.evaluation_key_digest"))
         encodeSizedField(writer, PassthroughBytesAdapter, decodeHash(payload.openedOutputHash, "payload.opening.payload.opened_output_hash"))
-        encodeSizedField(writer, U64_ADAPTER, payload.openedAtMs)
-        encodeSizedField(writer, OptionalU64Adapter, payload.expiresAtMs)
+        encodeSizedField(writer, U64_ADAPTER, requireU64(payload.openedAtMs, "payload.opening.payload.opened_at_ms"))
+        encodeSizedField(
+            writer,
+            OptionalU64Adapter,
+            payload.expiresAtMs?.let { requireU64(it, "payload.opening.payload.expires_at_ms") },
+        )
         return writer.toByteArray()
     }
 
@@ -259,9 +293,9 @@ object IdentifierReceiptCanonicalEncoder {
         )
     }
 
-    private fun encodeProgramId(raw: String): ByteArray {
+    private fun encodeProgramId(raw: String, field: String): ByteArray {
         val writer = NoritoEncoder(NoritoCodec.DEFAULT_FLAGS)
-        encodeSizedField(writer, STRING_ADAPTER, requireNonBlank(raw, "payload.execution.program_id"))
+        encodeSizedField(writer, STRING_ADAPTER, requireExactNonBlankString(raw, field))
         return writer.toByteArray()
     }
 
@@ -272,17 +306,21 @@ object IdentifierReceiptCanonicalEncoder {
         return programId
     }
 
-    private fun backendTag(raw: String): Int = when (raw.trim().lowercase()) {
+    private fun backendTag(raw: String): Int = when (
+        requireExactNonBlankString(raw, "payload.execution.backend")
+    ) {
         "hkdf-sha3-512-prf-v1" -> 0
         "bfv-affine-sha3-256-v1" -> 1
         "bfv-programmed-sha3-256-v1" -> 2
-        else -> error("unsupported RAM-LFE backend: $raw")
+        else -> throw IllegalArgumentException("unsupported RAM-LFE backend: $raw")
     }
 
-    private fun verificationModeTag(raw: String): Int = when (raw.trim().lowercase()) {
+    private fun verificationModeTag(raw: String): Int = when (
+        requireExactNonBlankString(raw, "payload.execution.verification_mode")
+    ) {
         "signed" -> 0
         "proof" -> 1
-        else -> error("unsupported RAM-LFE verification mode: $raw")
+        else -> throw IllegalArgumentException("unsupported RAM-LFE verification mode: $raw")
     }
 
     private fun backendName(tag: Int): String = when (tag) {
@@ -299,7 +337,7 @@ object IdentifierReceiptCanonicalEncoder {
     }
 
     private fun encodePrefixedHash(raw: String, prefix: String, field: String): ByteArray {
-        val normalized = raw.trim().lowercase()
+        val normalized = requireExactNonBlankString(raw, field).lowercase()
         val body = if (normalized.startsWith(prefix)) normalized.substring(prefix.length) else normalized
         return decodeHash(body, field)
     }
@@ -323,7 +361,7 @@ object IdentifierReceiptCanonicalEncoder {
     }
 
     private fun decodeHash(raw: String, field: String): ByteArray {
-        var body = requireNonBlank(raw, field)
+        var body = requireExactNonBlankString(raw, field)
         if (body.lowercase().startsWith("hash:")) {
             body = body.substring("hash:".length)
         }
@@ -338,6 +376,7 @@ object IdentifierReceiptCanonicalEncoder {
 
     private fun decodeHex(raw: String, field: String): ByteArray {
         var trimmed = requireNonBlank(raw, field)
+        require(trimmed == raw) { "$field must not contain surrounding whitespace" }
         if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) trimmed = trimmed.substring(2)
         require(trimmed.length % 2 == 0) { "$field must contain an even number of hex characters" }
         val out = ByteArray(trimmed.length / 2)
@@ -354,6 +393,13 @@ object IdentifierReceiptCanonicalEncoder {
         val trimmed = value.trim()
         require(trimmed.isNotEmpty()) { "$field must not be blank" }
         return trimmed
+    }
+
+    private fun requireExactNonBlankString(value: String, field: String): String {
+        val trimmed = value.trim()
+        require(trimmed.isNotEmpty()) { "$field must not be blank" }
+        require(trimmed == value) { "$field must not contain surrounding whitespace" }
+        return value
     }
 
     private fun <T> encodeSizedField(encoder: NoritoEncoder, adapter: TypeAdapter<T>, value: T) {
@@ -386,6 +432,11 @@ object IdentifierReceiptCanonicalEncoder {
         }
     }
 
+    private fun requireU64(value: Long, field: String): Long {
+        require(value >= 0L) { "$field must be a non-negative u64" }
+        return value
+    }
+
     private object U32Adapter : TypeAdapter<Long> {
         override fun encode(encoder: NoritoEncoder, value: Long) {
             encoder.writeUInt(value, 32)
@@ -399,7 +450,7 @@ object IdentifierReceiptCanonicalEncoder {
                 encoder.writeByte(0)
             } else {
                 encoder.writeByte(1)
-                encodeSizedField(encoder, U64_ADAPTER, value)
+                encodeSizedField(encoder, U64_ADAPTER, requireU64(value, "optional u64"))
             }
         }
         override fun decode(decoder: NoritoDecoder): Long? {

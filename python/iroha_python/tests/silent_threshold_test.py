@@ -164,6 +164,79 @@ def test_silent_threshold_package_root_exports_catalog_entrypoint_aliases() -> N
     ].hex()
 
 
+def test_silent_threshold_public_helpers_reject_non_plain_mapping_inputs() -> None:
+    class SilentThresholdDict(dict):
+        pass
+
+    base = _base()
+    proof_options = {
+        **base,
+        "vkHash": bytes([0x88]) * 32,
+        "proofBytes": b"production-silent-threshold-showing-proof",
+    }
+
+    for helper in (
+        build_silent_threshold_credential_commitments,
+        buildSilentThresholdCredentialCommitments,
+    ):
+        with pytest.raises(TypeError, match="silentThresholdCredentialCommitments"):
+            helper(SilentThresholdDict(base))
+
+    for helper in (
+        build_silent_threshold_credential_envelope,
+        buildSilentThresholdCredentialEnvelope,
+    ):
+        with pytest.raises(TypeError, match="silentThresholdCredentialEnvelope"):
+            helper(SilentThresholdDict(proof_options))
+
+    for helper in (
+        build_silent_threshold_credential_showing_proof_v0,
+        buildSilentThresholdCredentialShowingProofV0,
+    ):
+        with pytest.raises(TypeError, match="silentThresholdCredentialShowingProofV0"):
+            helper(SilentThresholdDict(proof_options))
+
+    for helper in (
+        build_silent_threshold_credential_dev_proof_fixture,
+        buildSilentThresholdCredentialDevProofFixture,
+    ):
+        with pytest.raises(TypeError, match="silentThresholdCredentialDevProofFixture"):
+            helper(SilentThresholdDict({**base, "vkHash": bytes([0x88]) * 32}))
+
+    production_proof = build_silent_threshold_credential_showing_proof_v0(
+        proof_options
+    )
+    raw_verified = verify_silent_threshold_credential_showing_proof_v0(
+        production_proof
+    )
+    assert raw_verified["ok"] is True
+    verify_options = {"envelope": production_proof, **base}
+    for helper in (
+        verify_silent_threshold_credential_showing_proof_v0,
+        verifySilentThresholdCredentialShowingProofV0,
+    ):
+        with pytest.raises(TypeError, match="silentThresholdCredentialShowingProofV0"):
+            helper(SilentThresholdDict(verify_options))
+
+    fixture = build_silent_threshold_credential_dev_proof_fixture(
+        {**base, "vkHash": bytes([0x88]) * 32}
+    )
+    local_verified = verify_silent_threshold_credential_proof_locally(
+        fixture["envelope"]
+    )
+    assert local_verified["ok"] is True
+    local_options = {
+        **verify_options,
+        "envelope": fixture["envelope"],
+    }
+    for helper in (
+        verify_silent_threshold_credential_proof_locally,
+        verifySilentThresholdCredentialProofLocally,
+    ):
+        with pytest.raises(TypeError, match="silentThresholdCredentialLocalVerification"):
+            helper(SilentThresholdDict(local_options))
+
+
 def test_silent_threshold_production_builder_and_verifier_reject_dev_fixtures() -> None:
     base = _base()
     proof = build_silent_threshold_credential_showing_proof_v0(

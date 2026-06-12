@@ -3,6 +3,7 @@ package org.hyperledger.iroha.android.client;
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -23,11 +24,11 @@ public final class IdentifierJsonParser {
           expectObject(itemValues.get(i), "identifier policy list.items[" + i + "]");
       items.add(
           new IdentifierPolicySummary(
-              requiredString(item.get("policy_id"), "identifier policy list.items[" + i + "].policy_id"),
+              requiredExactString(item.get("policy_id"), "identifier policy list.items[" + i + "].policy_id"),
               optionalString(item.get("program_id")) == null
-                  ? requiredString(item.get("policy_id"), "identifier policy list.items[" + i + "].policy_id")
+                  ? requiredExactString(item.get("policy_id"), "identifier policy list.items[" + i + "].policy_id")
                       .replace('#', '_')
-                  : requiredString(
+                  : requiredExactString(
                       item.get("program_id"),
                       "identifier policy list.items[" + i + "].program_id"),
               requiredString(item.get("owner"), "identifier policy list.items[" + i + "].owner"),
@@ -36,14 +37,14 @@ public final class IdentifierJsonParser {
                   requiredString(
                       item.get("normalization"),
                       "identifier policy list.items[" + i + "].normalization")),
-              requiredString(
+              requiredExactString(
                   item.get("resolver_public_key"),
                   "identifier policy list.items[" + i + "].resolver_public_key"),
               optionalString(item.get("output_opening_public_key")) == null
-                  ? requiredString(
+                  ? requiredExactString(
                       item.get("resolver_public_key"),
                       "identifier policy list.items[" + i + "].resolver_public_key")
-                  : requiredString(
+                  : requiredExactString(
                       item.get("output_opening_public_key"),
                       "identifier policy list.items[" + i + "].output_opening_public_key"),
               requiredString(item.get("backend"), "identifier policy list.items[" + i + "].backend"),
@@ -147,6 +148,25 @@ public final class IdentifierJsonParser {
     return string.trim();
   }
 
+  private static String requiredExactString(final Object value, final String path) {
+    final String string = optionalString(value);
+    if (string == null || string.isBlank()) {
+      throw new IllegalStateException(path + " must be a non-empty string");
+    }
+    if (!string.trim().equals(string)) {
+      throw new IllegalStateException(path + " must not contain surrounding whitespace");
+    }
+    return string;
+  }
+
+  private static String requiredExactLowercaseString(final Object value, final String path) {
+    final String string = requiredExactString(value, path);
+    if (!string.toLowerCase(Locale.ROOT).equals(string)) {
+      throw new IllegalStateException(path + " must be an exact lowercase RAM-LFE tag");
+    }
+    return string;
+  }
+
   private static String optionalString(final Object value) {
     if (value == null) {
       return null;
@@ -156,13 +176,24 @@ public final class IdentifierJsonParser {
 
   private static long asLong(final Object value, final String path) {
     if (value instanceof String string) {
-      return new BigInteger(string).longValue();
+      try {
+        return new BigInteger(string).longValueExact();
+      } catch (final ArithmeticException ex) {
+        throw new IllegalStateException(path + " must fit in signed 64-bit range", ex);
+      }
     }
     if (!(value instanceof Number number)) {
       throw new IllegalStateException(path + " must be a number");
     }
     if (number instanceof Float || number instanceof Double) {
       throw new IllegalStateException(path + " must be an integer");
+    }
+    if (number instanceof BigInteger bigInteger) {
+      try {
+        return bigInteger.longValueExact();
+      } catch (final ArithmeticException ex) {
+        throw new IllegalStateException(path + " must fit in signed 64-bit range", ex);
+      }
     }
     return number.longValue();
   }
@@ -174,42 +205,56 @@ public final class IdentifierJsonParser {
     return asLong(value, path);
   }
 
+  private static long asUnsignedLong(final Object value, final String path) {
+    final long parsed = asLong(value, path);
+    if (parsed < 0L) {
+      throw new IllegalStateException(path + " must be a non-negative u64");
+    }
+    return parsed;
+  }
+
+  private static Long asOptionalUnsignedLong(final Object value, final String path) {
+    if (value == null) {
+      return null;
+    }
+    return asUnsignedLong(value, path);
+  }
+
   private static String canonicalizeOpaque(final String value, final String context) {
     Objects.requireNonNull(context, "context");
-    final String literal = Objects.requireNonNull(value, context + " must not be null").trim();
+    final String literal = Objects.requireNonNull(value, context + " must not be null");
     if (literal.isEmpty()) {
       throw new IllegalArgumentException(context + " must not be blank");
     }
     final String lower = literal.toLowerCase(Locale.ROOT);
     final String hexPortion =
         lower.startsWith("opaque:") ? literal.substring("opaque:".length()) : literal;
-    final String trimmedHex = hexPortion.trim();
-    if (trimmedHex.length() != 64 || !trimmedHex.matches("(?i)[0-9a-f]{64}")) {
+    if (hexPortion.length() != 64 || !hexPortion.matches("(?i)[0-9a-f]{64}")) {
       throw new IllegalArgumentException(context + " must contain 64 hex characters");
     }
-    return "opaque:" + trimmedHex.toLowerCase(Locale.ROOT);
+    return "opaque:" + hexPortion.toLowerCase(Locale.ROOT);
   }
 
   private static String canonicalizeHex32(final String value, final String context) {
     Objects.requireNonNull(context, "context");
-    String trimmed = Objects.requireNonNull(value, context + " must not be null").trim();
-    if (trimmed.isEmpty()) {
+    String body = Objects.requireNonNull(value, context + " must not be null");
+    if (body.isEmpty()) {
       throw new IllegalArgumentException(context + " must not be blank");
     }
-    if (trimmed.toLowerCase(Locale.ROOT).startsWith("hash:")) {
-      trimmed = trimmed.substring("hash:".length());
+    if (body.toLowerCase(Locale.ROOT).startsWith("hash:")) {
+      body = body.substring("hash:".length());
     }
-    final int suffixIndex = trimmed.indexOf('#');
+    final int suffixIndex = body.indexOf('#');
     if (suffixIndex >= 0) {
-      trimmed = trimmed.substring(0, suffixIndex);
+      body = body.substring(0, suffixIndex);
     }
-    if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) {
-      trimmed = trimmed.substring(2);
+    if (body.startsWith("0x") || body.startsWith("0X")) {
+      body = body.substring(2);
     }
-    if (trimmed.length() != 64 || !trimmed.matches("(?i)[0-9a-f]{64}")) {
+    if (body.length() != 64 || !body.matches("(?i)[0-9a-f]{64}")) {
       throw new IllegalArgumentException(context + " must contain 64 hex characters");
     }
-    return trimmed.toLowerCase(Locale.ROOT);
+    return body.toLowerCase(Locale.ROOT);
   }
 
   private static String canonicalizeHex(final String value, final String context) {
@@ -267,7 +312,7 @@ public final class IdentifierJsonParser {
   private static IdentifierResolutionPayload parseResolutionPayload(
       final Map<String, Object> root, final String context) {
     return new IdentifierResolutionPayload(
-        requiredString(root.get("policy_id"), context + ".policy_id"),
+        requiredExactString(root.get("policy_id"), context + ".policy_id"),
         parseResolutionExecutionPayload(
             expectObject(root.get("execution"), context + ".execution"),
             context + ".execution"),
@@ -275,47 +320,46 @@ public final class IdentifierJsonParser {
             expectObject(root.get("opening"), context + ".opening"),
             context + ".opening"),
         canonicalizeOpaque(
-            requiredString(root.get("opaque_id"), context + ".opaque_id"),
+            requiredExactString(root.get("opaque_id"), context + ".opaque_id"),
             context + ".opaque_id"),
         canonicalizeHex32(
-            requiredString(root.get("receipt_hash"), context + ".receipt_hash"),
+            requiredExactString(root.get("receipt_hash"), context + ".receipt_hash"),
             context + ".receipt_hash"),
         UaidLiteral.canonicalize(
-            requiredString(root.get("uaid"), context + ".uaid"), context + ".uaid"),
-        requiredString(root.get("account_id"), context + ".account_id"));
+            requiredExactString(root.get("uaid"), context + ".uaid"), context + ".uaid"),
+        requiredExactString(root.get("account_id"), context + ".account_id"));
   }
 
   private static IdentifierResolutionExecutionPayload parseResolutionExecutionPayload(
       final Map<String, Object> root, final String context) {
     return new IdentifierResolutionExecutionPayload(
-        requiredString(root.get("program_id"), context + ".program_id"),
+        requiredExactString(root.get("program_id"), context + ".program_id"),
         canonicalizeHex32(
-            requiredString(root.get("program_digest"), context + ".program_digest"),
+            requiredExactString(root.get("program_digest"), context + ".program_digest"),
             context + ".program_digest"),
-        requiredString(root.get("backend"), context + ".backend").toLowerCase(Locale.ROOT),
-        requiredString(root.get("verification_mode"), context + ".verification_mode")
-            .toLowerCase(Locale.ROOT),
+        requiredExactLowercaseString(root.get("backend"), context + ".backend"),
+        requiredExactLowercaseString(root.get("verification_mode"), context + ".verification_mode"),
         canonicalizeHex32(
-            requiredString(root.get("input_ciphertext_hash"), context + ".input_ciphertext_hash"),
+            requiredExactString(root.get("input_ciphertext_hash"), context + ".input_ciphertext_hash"),
             context + ".input_ciphertext_hash"),
         canonicalizeHex32(
-            requiredString(root.get("output_ciphertext_hash"), context + ".output_ciphertext_hash"),
+            requiredExactString(root.get("output_ciphertext_hash"), context + ".output_ciphertext_hash"),
             context + ".output_ciphertext_hash"),
         canonicalizeHex32(
-            requiredString(root.get("parameter_digest"), context + ".parameter_digest"),
+            requiredExactString(root.get("parameter_digest"), context + ".parameter_digest"),
             context + ".parameter_digest"),
         canonicalizeHex32(
-            requiredString(root.get("evaluation_key_digest"), context + ".evaluation_key_digest"),
+            requiredExactString(root.get("evaluation_key_digest"), context + ".evaluation_key_digest"),
             context + ".evaluation_key_digest"),
         canonicalizeHex32(
-            requiredString(root.get("output_hash"), context + ".output_hash"),
+            requiredExactString(root.get("output_hash"), context + ".output_hash"),
             context + ".output_hash"),
         canonicalizeHex32(
-            requiredString(root.get("associated_data_hash"), context + ".associated_data_hash"),
+            requiredExactString(root.get("associated_data_hash"), context + ".associated_data_hash"),
             context + ".associated_data_hash"),
-        asLong(root.get("executed_at_ms"), context + ".executed_at_ms"),
+        asUnsignedLong(root.get("executed_at_ms"), context + ".executed_at_ms"),
         root.containsKey("expires_at_ms")
-            ? asOptionalLong(root.get("expires_at_ms"), context + ".expires_at_ms")
+            ? asOptionalUnsignedLong(root.get("expires_at_ms"), context + ".expires_at_ms")
             : null);
   }
 
@@ -324,42 +368,42 @@ public final class IdentifierJsonParser {
     final Map<String, Object> payload = expectObject(root.get("payload"), context + ".payload");
     return new RamLfeOutputOpening(
         new RamLfeOutputOpeningPayload(
-            requiredString(payload.get("program_id"), context + ".payload.program_id"),
+            requiredExactString(payload.get("program_id"), context + ".payload.program_id"),
             canonicalizeHex32(
-                requiredString(
+                requiredExactString(
                     payload.get("input_ciphertext_hash"),
                     context + ".payload.input_ciphertext_hash"),
                 context + ".payload.input_ciphertext_hash"),
             canonicalizeHex32(
-                requiredString(
+                requiredExactString(
                     payload.get("output_ciphertext_hash"),
                     context + ".payload.output_ciphertext_hash"),
                 context + ".payload.output_ciphertext_hash"),
             canonicalizeHex32(
-                requiredString(payload.get("parameter_digest"), context + ".payload.parameter_digest"),
+                requiredExactString(payload.get("parameter_digest"), context + ".payload.parameter_digest"),
                 context + ".payload.parameter_digest"),
             canonicalizeHex32(
-                requiredString(
+                requiredExactString(
                     payload.get("evaluation_key_digest"),
                     context + ".payload.evaluation_key_digest"),
                 context + ".payload.evaluation_key_digest"),
             canonicalizeHex32(
-                requiredString(
+                requiredExactString(
                     payload.get("opened_output_hash"),
                     context + ".payload.opened_output_hash"),
                 context + ".payload.opened_output_hash"),
-            asLong(payload.get("opened_at_ms"), context + ".payload.opened_at_ms"),
+            asUnsignedLong(payload.get("opened_at_ms"), context + ".payload.opened_at_ms"),
             payload.containsKey("expires_at_ms")
-                ? asOptionalLong(payload.get("expires_at_ms"), context + ".payload.expires_at_ms")
+                ? asOptionalUnsignedLong(payload.get("expires_at_ms"), context + ".payload.expires_at_ms")
                 : null),
         canonicalizeHex(
-            requiredString(root.get("signature"), context + ".signature"),
+            requiredExactString(root.get("signature"), context + ".signature"),
             context + ".signature"));
   }
 
   private static IdentifierReceiptAttestation parseReceiptAttestation(
       final Map<String, Object> root, final String context) {
-    final String kind = requiredString(root.get("kind"), context + ".kind").toLowerCase(Locale.ROOT);
+    final String kind = requiredExactString(root.get("kind"), context + ".kind");
     switch (kind) {
       case "signed":
         if (root.get("proof_backend") != null || root.get("proof_b64") != null) {
@@ -368,7 +412,7 @@ public final class IdentifierJsonParser {
         return new IdentifierReceiptAttestation(
             kind,
             canonicalizeHex(
-                requiredString(root.get("signature"), context + ".signature"),
+                requiredExactString(root.get("signature"), context + ".signature"),
                 context + ".signature"),
             null,
             null);
@@ -376,11 +420,17 @@ public final class IdentifierJsonParser {
         if (root.get("signature") != null) {
           throw new IllegalStateException(context + " proof attestation must not include signature");
         }
+        final String proofB64 = requiredExactString(root.get("proof_b64"), context + ".proof_b64");
+        try {
+          Base64.getDecoder().decode(proofB64);
+        } catch (final IllegalArgumentException ex) {
+          throw new IllegalStateException(context + ".proof_b64 must be valid base64", ex);
+        }
         return new IdentifierReceiptAttestation(
             kind,
             null,
-            requiredString(root.get("proof_backend"), context + ".proof_backend"),
-            requiredString(root.get("proof_b64"), context + ".proof_b64"));
+            requiredExactString(root.get("proof_backend"), context + ".proof_backend"),
+            proofB64);
       default:
         throw new IllegalStateException(context + ".kind must be signed or proof");
     }

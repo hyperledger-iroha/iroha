@@ -3672,11 +3672,18 @@ mod network_relay_tests {
 }
 
 fn snapshot_read_error_is_recoverable(error: &TryReadSnapshotError) -> bool {
+    snapshot_read_error_is_recoverable_for_bootstrap(error, hard_fork_snapshot_bootstrap_enabled())
+}
+
+fn snapshot_read_error_is_recoverable_for_bootstrap(
+    error: &TryReadSnapshotError,
+    hard_fork_snapshot_bootstrap: bool,
+) -> bool {
     match error {
         TryReadSnapshotError::NotFound => true,
         TryReadSnapshotError::IO(_, _) => false,
         TryReadSnapshotError::ChainIdMismatch { .. } => false,
-        TryReadSnapshotError::MismatchedHeight { .. } => false,
+        TryReadSnapshotError::MismatchedHeight { .. } => hard_fork_snapshot_bootstrap,
         _ => true,
     }
 }
@@ -3799,6 +3806,18 @@ mod snapshot_read_error_tests {
             }
         ));
 
+        let mismatched_height = TryReadSnapshotError::MismatchedHeight {
+            snapshot_height: 2,
+            kura_height: 1,
+        };
+        assert!(!snapshot_read_error_is_recoverable_for_bootstrap(
+            &mismatched_height,
+            false,
+        ));
+        assert!(snapshot_read_error_is_recoverable_for_bootstrap(
+            &mismatched_height,
+            true,
+        ));
         assert!(!snapshot_read_error_is_recoverable(
             &TryReadSnapshotError::MismatchedHeight {
                 snapshot_height: 2,

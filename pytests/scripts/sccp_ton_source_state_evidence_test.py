@@ -54,6 +54,44 @@ def ton_args(module):
     )
 
 
+def test_ton_source_cli_redacts_top_level_exception_details(monkeypatch, capsys):
+    module = load_evidence_module()
+
+    def fail_validate(_args):
+        raise SystemExit("secret-token /tmp/operator/private-path")
+
+    monkeypatch.setattr(module, "_validate_ton_source_evidence_args", fail_validate)
+
+    try:
+        module.main(
+            [
+                "--source-trust-anchor-hash",
+                "0x" + "44" * 32,
+                "--consensus-verifier-hash",
+                "0x" + "55" * 32,
+                "--message-inclusion-verifier-hash",
+                "0x" + "66" * 32,
+                "--source-state-verifier-hash",
+                "0x" + "77" * 32,
+                "--finality-policy-hash",
+                "0x" + "88" * 32,
+                "--adapter-verifier-vk-hash",
+                "0x" + TON_SOURCE_ADAPTER_VERIFIER_VK_HASH_VECTOR,
+                "--deployment-receipt-hash",
+                "0x" + "aa" * 32,
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("TON source CLI accepted top-level render failure")
+
+    captured = capsys.readouterr()
+    assert "SCCP TON source-state evidence rendering failed" in captured.err
+    assert "secret-token" not in captured.err
+    assert "private-path" not in captured.err
+
+
 def test_ton_hex_parser_rejects_zero_and_wrong_width():
     module = load_evidence_module()
 

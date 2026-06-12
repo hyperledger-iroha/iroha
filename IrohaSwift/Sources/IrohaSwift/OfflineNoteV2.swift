@@ -31,6 +31,8 @@ public enum OfflineNoteV2Error: Error, LocalizedError, Equatable {
     case auditInputCountMismatch(nullifiers: Int, claims: Int)
     case auditOutputClaimNotCommitted(String)
     case proofPublicInputsHashMismatch(expected: String, actual: String)
+    case unsupportedRecursiveProofBackend(expected: String, actual: String)
+    case unsupportedDomain(field: String, expected: String, actual: String)
 
     public var errorDescription: String? {
         switch self {
@@ -64,6 +66,10 @@ public enum OfflineNoteV2Error: Error, LocalizedError, Equatable {
             return "Offline V2 audit output claim \(commitment) is not listed in output commitments."
         case let .proofPublicInputsHashMismatch(expected, actual):
             return "Offline V2 recursive proof public input hash mismatch: expected \(expected), got \(actual)."
+        case let .unsupportedRecursiveProofBackend(expected, actual):
+            return "Offline V2 recursive proof backend must be \(expected), got \(actual)."
+        case let .unsupportedDomain(field, expected, actual):
+            return "\(field) must be \(expected), got \(actual)."
         }
     }
 }
@@ -77,10 +83,16 @@ public struct OfflineNoteProofBoxV2: Equatable, Sendable {
         guard !trimmedBackend.isEmpty else {
             throw OfflineNoteV2Error.emptyProofBackend
         }
+        guard trimmedBackend == backend else {
+            throw OfflineNoteV2Error.unsupportedRecursiveProofBackend(
+                expected: OfflineNoteV2Constants.recursiveBackend,
+                actual: backend
+            )
+        }
         guard !bytes.isEmpty else {
             throw OfflineNoteV2Error.emptyProofBytes
         }
-        self.backend = trimmedBackend
+        self.backend = backend
         self.bytes = bytes
     }
 }
@@ -143,6 +155,11 @@ public struct OfflineNoteKeyCertificatePayloadV2: Equatable, Sendable {
                 assertionPublicKey: Data,
                 assertionUsageCountLimit: UInt32?,
                 oneUse: Bool) throws {
+        try OfflineNoteV2Validation.validateDomain(
+            domain,
+            expected: OfflineNoteV2Constants.keyCertificatePayloadDomain,
+            field: "domain"
+        )
         try OfflineNoteV2Validation.validateCertificateCore(
             version: version,
             accountId: accountId,
@@ -293,6 +310,11 @@ public struct OfflineNoteIssuedClaimV2: Equatable, Sendable {
                 keyCertificatePayloadHash: Data,
                 assetId: String,
                 amount: String) throws {
+        try OfflineNoteV2Validation.validateDomain(
+            domain,
+            expected: OfflineNoteV2Constants.issuedClaimDomain,
+            field: "domain"
+        )
         try OfflineNoteV2Validation.validateHash(noteCommitment, field: "note_commitment")
         try OfflineNoteV2Validation.validateHash(
             keyCertificatePayloadHash,
@@ -385,6 +407,11 @@ public struct OfflineNoteRedeemPublicInputsV2: Equatable, Sendable {
                 recipient: String,
                 assetId: String,
                 amount: String) throws {
+        try OfflineNoteV2Validation.validateDomain(
+            domain,
+            expected: OfflineNoteV2Constants.redeemPublicInputsDomain,
+            field: "domain"
+        )
         try OfflineNoteV2Validation.validateHash(sourceNoteCommitment, field: "source_note_commitment")
         try OfflineNoteV2Validation.validateHashes(inputNullifiers, field: "input_nullifiers")
         try OfflineNoteV2Validation.validateHash(
@@ -510,6 +537,11 @@ public struct OfflineNoteAuditPublicInputsV2: Equatable, Sendable {
                 inputClaims: [OfflineNoteIssuedClaimV2],
                 outputCommitments: [Data],
                 outputClaims: [OfflineNoteIssuedClaimV2]) throws {
+        try OfflineNoteV2Validation.validateDomain(
+            domain,
+            expected: OfflineNoteV2Constants.auditPublicInputsDomain,
+            field: "domain"
+        )
         try OfflineNoteV2Validation.validateHash(tokenId, field: "token_id")
         try OfflineNoteV2Validation.validateHash(
             keyCertificatePayloadHash,
@@ -746,6 +778,16 @@ enum OfflineNoteV2TypeNames {
 }
 
 enum OfflineNoteV2Validation {
+    static func validateDomain(_ value: String, expected: String, field: String) throws {
+        guard value == expected else {
+            throw OfflineNoteV2Error.unsupportedDomain(
+                field: field,
+                expected: expected,
+                actual: value
+            )
+        }
+    }
+
     static func validateHash(_ value: Data, field: String) throws {
         guard value.count == 32 else {
             throw OfflineNoteV2Error.invalidHashLength(field: field, expected: 32, actual: value.count)

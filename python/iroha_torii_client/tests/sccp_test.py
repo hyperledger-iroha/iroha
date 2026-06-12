@@ -430,9 +430,19 @@ def test_package_root_ton_source_state_cap_uses_public_exports() -> None:
     shard_request = iroha_torii_client_package.build_ton_shard_state_proof_request(
         input_value
     )
+    package_root_ton_debug_proof_family = "debug-proof-family"
     oversized_package_root_ton_source_state_proof = b"\x01" * (
         iroha_torii_client_package.SCCP_SOURCE_STATE_MAX_PROOF_BYTES + 1
     )
+
+    with pytest.raises(TypeError, match="TON source-state stark-fri-v1 proof"):
+        iroha_torii_client_package.canonical_ton_sccp_source_state_verification_proof_bytes(
+            {
+                "circuit_id": iroha_torii_client_package.SCCP_TON_SHARD_STATE_OPEN_VERIFY_CIRCUIT_ID_V1,
+                "proof_family": package_root_ton_debug_proof_family,
+                "proof_bytes": b"\x01\x02\x03",
+            }
+        )
 
     with pytest.raises(TypeError, match="proofBytes must be at most"):
         iroha_torii_client_package.wrap_ton_sccp_source_state_verification_proof(
@@ -1265,6 +1275,15 @@ def test_solana_route_canary_evidence_binds_programdata_snapshot() -> None:
             solana_sccp_route_canary_evidence_hash(
                 sample_solana_route_canary_evidence(**override)
             )
+    package_root_solana_route_canary_governed_hash_reuse = {
+        "route_allowlist_hash": evidence["source_verifier_material_hash"],
+    }
+    with pytest.raises(TypeError, match="Solana route canary governed hashes"):
+        iroha_torii_client_package.solana_sccp_route_canary_evidence_hash(
+            sample_solana_route_canary_evidence(
+                **package_root_solana_route_canary_governed_hash_reuse
+            )
+        )
 
 
 def test_ton_route_canary_evidence_binds_live_account_snapshot() -> None:
@@ -1322,6 +1341,15 @@ def test_ton_route_canary_evidence_binds_live_account_snapshot() -> None:
             ton_sccp_route_canary_evidence_hash(
                 sample_ton_route_canary_evidence(**override)
             )
+    package_root_ton_route_canary_governed_hash_reuse = {
+        "route_allowlist_hash": evidence["source_verifier_material_hash"],
+    }
+    with pytest.raises(TypeError, match="TON route canary governed hashes"):
+        iroha_torii_client_package.ton_sccp_route_canary_evidence_hash(
+            sample_ton_route_canary_evidence(
+                **package_root_ton_route_canary_governed_hash_reuse
+            )
+        )
 
 
 def test_tron_route_canary_evidence_binds_transaction_transcript() -> None:
@@ -1397,6 +1425,15 @@ def test_tron_route_canary_evidence_binds_transaction_transcript() -> None:
             tron_sccp_route_canary_evidence_hash(
                 sample_tron_route_canary_evidence(**override)
             )
+    package_root_tron_route_canary_governed_hash_reuse = {
+        "route_allowlist_hash": evidence["source_verifier_material_hash"],
+    }
+    with pytest.raises(TypeError, match="TRON route canary governed hashes"):
+        iroha_torii_client_package.tron_sccp_route_canary_evidence_hash(
+            sample_tron_route_canary_evidence(
+                **package_root_tron_route_canary_governed_hash_reuse
+            )
+        )
 
 
 def sample_solana_accounts_lt_hash_proof_input(**overrides: Any) -> Dict[str, Any]:
@@ -8568,6 +8605,13 @@ def test_builds_ton_full_light_client_audit_role_proof_requests() -> None:
             {
                 **input_value["shard_state_verification_proof"],
                 "circuit_id": SCCP_SOLANA_ACCOUNTS_LT_HASH_OPEN_VERIFY_CIRCUIT_ID_V1,
+            }
+        )
+    with pytest.raises(TypeError, match="TON source-state stark-fri-v1 proof"):
+        canonical_ton_sccp_source_state_verification_proof_bytes(
+            {
+                **input_value["shard_state_verification_proof"],
+                "proof_family": "debug-proof-family",
             }
         )
     with pytest.raises(TypeError, match="proofBytes must not be all zero"):

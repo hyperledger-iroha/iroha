@@ -74,10 +74,40 @@ class OversizedErrorBody:
     def read(self, size=-1):
         if size is None or size < 0:
             size = 4097
-        return b"evm-source-error" * size
+        return b"secret-token-evm-source-error" * size
 
     def close(self):
         return None
+
+
+def test_evm_source_live_cli_redacts_top_level_exception_details(monkeypatch, capsys):
+    module = load_live_module()
+
+    def fail_collect(_args):
+        raise RuntimeError("secret-token /tmp/operator/private-path")
+
+    monkeypatch.setattr(module, "collect_live_evidence", fail_collect)
+
+    try:
+        module.main(
+            [
+                "--rpc-url",
+                "https://evm.example.invalid",
+                "--domain",
+                "eth",
+                "--bridge-address",
+                "0x" + "11" * 20,
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("EVM source live CLI accepted top-level collection failure")
+
+    captured = capsys.readouterr()
+    assert "SCCP EVM source live evidence collection failed" in captured.err
+    assert "secret-token" not in captured.err
+    assert "private-path" not in captured.err
 
 
 def fake_opener_for(
@@ -294,16 +324,20 @@ def test_evm_source_json_rpc_http_error_detail_is_bounded():
         )
     except RuntimeError as exc:
         message = str(exc)
-        assert "HTTP 502" in message
-        assert "...<truncated>" in message
-        assert len(message) < 4300
+        assert message == "JSON-RPC eth_chainId failed with HTTP 502"
+        assert "secret-token" not in message
+        assert len(message) < 100
     else:
         raise AssertionError("oversized EVM source JSON-RPC error body was accepted")
 
 
 def test_evm_source_json_rpc_rejects_duplicate_json_keys():
     module = load_live_module()
-    duplicate_payload = b'{"jsonrpc":"2.0","id":1,"result":"0x1","result":"0x2"}'
+    duplicate_payload = (
+        b'{"jsonrpc":"2.0","id":1,'
+        b'"secret-token-result":"0x1","secret-token-result":"0x2",'
+        b'"result":"0x3"}'
+    )
 
     def duplicate_json_opener(_request, timeout):
         del timeout
@@ -318,9 +352,68 @@ def test_evm_source_json_rpc_rejects_duplicate_json_keys():
             timeout=3.0,
         )
     except RuntimeError as exc:
-        assert "duplicate JSON key" in str(exc)
+        message = str(exc)
+        assert message == "JSON-RPC eth_chainId returned duplicate JSON keys"
+        assert "secret-token" not in message
+        assert "duplicate JSON key " not in message
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
     else:
         raise AssertionError("duplicate-key EVM source JSON-RPC response was accepted")
+
+
+def test_evm_source_json_rpc_redacts_transport_and_error_response_details():
+    module = load_live_module()
+
+    def secret_url_error_opener(_request, timeout):
+        del timeout
+        raise module.urllib.error.URLError(
+            "secret-token provider URL leaked from transport"
+        )
+
+    def secret_error_object_opener(_request, timeout):
+        del timeout
+        return FakeResponse(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "error": {
+                    "code": -32000,
+                    "message": "secret-token source provider error object",
+                },
+            }
+        )
+
+    try:
+        module._json_rpc(
+            "https://bsc.example",
+            "eth_chainId",
+            [],
+            opener=secret_url_error_opener,
+            timeout=3.0,
+        )
+    except RuntimeError as exc:
+        message = str(exc)
+        assert message == "JSON-RPC eth_chainId request failed"
+        assert "secret-token" not in message
+    else:
+        raise AssertionError("secret-bearing EVM source transport error was accepted")
+
+    try:
+        module._json_rpc(
+            "https://bsc.example",
+            "eth_chainId",
+            [],
+            opener=secret_error_object_opener,
+            timeout=3.0,
+        )
+    except RuntimeError as exc:
+        message = str(exc)
+        assert message == "JSON-RPC eth_chainId returned error response"
+        assert "secret-token" not in message
+        assert "provider error object" not in message
+    else:
+        raise AssertionError("secret-bearing EVM source JSON-RPC error was accepted")
 
 
 def test_evm_source_json_rpc_rejects_envelope_drift():
@@ -715,7 +808,7 @@ def test_evm_source_live_eth_toml_requires_finalized_block_tag():
         raise AssertionError("Ethereum source TOML rendered from non-finalized block tag")
 
 
-def test_evm_source_live_toml_revalidates_imported_summary_metadata():
+def test_evm_source_live_toml_revalidates_imported_summary_metadata(monkeypatch):
     module = load_live_module()
     fake = fake_opener_for(module)
     args, material_hash, deployment_hash = source_args(module, fake)
@@ -811,6 +904,45 @@ def test_evm_source_live_toml_revalidates_imported_summary_metadata():
             assert expected_message in str(exc)
         else:
             raise AssertionError("forged EVM source live summary rendered TOML")
+
+    forged = copy.deepcopy(summary)
+    forged["source_bridge"]["bridge_runtime_bytecode_hex"] = (
+        "0xsecret-token-source-bridge-runtime"
+    )
+    try:
+        module.render_offline_toml(forged)
+    except ValueError as exc:
+        rendered = str(exc)
+        assert rendered == "EVM source bridge runtime bytecode metadata is invalid"
+        assert "secret-token" not in rendered
+        assert "must be hex" not in rendered
+        assert exc.__cause__ is None
+    else:
+        raise AssertionError("invalid EVM source live runtime metadata rendered TOML")
+
+    original_parse_hex_bytes = module._parse_hex_bytes
+    with monkeypatch.context() as patch:
+        def fail_bridge_address_parse(value, *, label, byte_length):
+            if label == "source bridge address":
+                raise module.argparse.ArgumentTypeError(
+                    "secret-token source bridge address parser detail"
+                )
+            return original_parse_hex_bytes(value, label=label, byte_length=byte_length)
+
+        patch.setattr(module, "_parse_hex_bytes", fail_bridge_address_parse)
+        try:
+            module.render_offline_toml(summary)
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == "source bridge address metadata is invalid"
+            assert "secret-token" not in rendered
+            assert "parser detail" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError(
+                "EVM source live TOML leaked parser detail for bridge address"
+            )
 
 
 def test_bsc_source_live_evidence_uses_canonical_bsc_profile():

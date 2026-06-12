@@ -66,7 +66,7 @@ public sealed record class OfflineCashConfigurationSnapshot(
                 "Offline cash is disabled in the cached configuration snapshot.");
         }
 
-        if (string.IsNullOrWhiteSpace(IssuerPublicKeyBase64))
+        if (!IsCanonicalSnapshotText(IssuerPublicKeyBase64))
         {
             throw new OfflineCashConfigurationSnapshotException(
                 "missing_issuer_public_key",
@@ -87,6 +87,24 @@ public sealed record class OfflineCashConfigurationSnapshot(
                 "unsupported_native_bridge_abi",
                 $"Offline cash requires native bridge ABI {required}.");
         }
+    }
+
+    private static bool IsCanonicalSnapshotText(string? value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return false;
+        }
+
+        foreach (var ch in value)
+        {
+            if (ch <= 0x20 || ch > 0x7E)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 }
 

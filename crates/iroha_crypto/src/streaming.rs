@@ -253,6 +253,7 @@ fn key_material_error_from_mlkem(err: &MlKemError) -> KeyMaterialError {
             KeyMaterialError::KyberKeyPairMismatch
         }
         MlKemError::BadEncoding { .. }
+        | MlKemError::InertKeyMaterial { .. }
         | MlKemError::NonCanonicalEncoding { .. }
         | MlKemError::BackendFailure { .. }
         | MlKemError::Rng(_) => KeyMaterialError::InvalidKyberSecretKey,
@@ -265,6 +266,7 @@ fn handshake_error_from_mlkem(err: &MlKemError) -> HandshakeError {
             HandshakeError::KyberKeyPairMismatch
         }
         MlKemError::BadEncoding { .. }
+        | MlKemError::InertKeyMaterial { .. }
         | MlKemError::NonCanonicalEncoding { .. }
         | MlKemError::BackendFailure { .. }
         | MlKemError::Rng(_) => HandshakeError::InvalidKyberSecretKey,
@@ -329,6 +331,8 @@ impl StreamingKeyMaterial {
         self.kem_suite
             .validate_public_key(public_key)
             .map_err(|_| KeyMaterialError::InvalidKyberPublicKey)?;
+        validate_kyber_public_not_all_zero(public_key)
+            .map_err(|()| KeyMaterialError::InvalidKyberPublicKey)?;
 
         let expected_secret = self.kem_suite.secret_key_len();
         if secret_key.len() != expected_secret {
@@ -340,6 +344,8 @@ impl StreamingKeyMaterial {
         self.kem_suite
             .validate_secret_key(secret_key)
             .map_err(|_| KeyMaterialError::InvalidKyberSecretKey)?;
+        validate_kyber_secret_not_all_zero(secret_key)
+            .map_err(|()| KeyMaterialError::InvalidKyberSecretKey)?;
         validate_mlkem_key_pair(self.kem_suite, public_key, secret_key)
             .map_err(|err| key_material_error_from_mlkem(&err))?;
 
@@ -476,6 +482,8 @@ pub fn kyber_public_fingerprint_with_suite(
     suite
         .validate_public_key(public_key)
         .map_err(|_| KeyMaterialError::InvalidKyberPublicKey)?;
+    validate_kyber_public_not_all_zero(public_key)
+        .map_err(|()| KeyMaterialError::InvalidKyberPublicKey)?;
     Ok(fingerprint_kyber_public(public_key, suite))
 }
 
@@ -487,6 +495,20 @@ fn fingerprint_kyber_public(bytes: &[u8], _suite: MlKemSuite) -> Hash {
     let mut out = [0u8; 32];
     out.copy_from_slice(&digest);
     out
+}
+
+fn validate_kyber_public_not_all_zero(public_key: &[u8]) -> Result<(), ()> {
+    if public_key.iter().all(|&byte| byte == 0) {
+        return Err(());
+    }
+    Ok(())
+}
+
+fn validate_kyber_secret_not_all_zero(secret_key: &[u8]) -> Result<(), ()> {
+    if secret_key.iter().all(|&byte| byte == 0) {
+        return Err(());
+    }
+    Ok(())
 }
 
 #[derive(Clone)]
@@ -1364,6 +1386,8 @@ impl StreamingSession {
                 kem_suite
                     .validate_public_key(public_key.as_slice())
                     .map_err(|_| HandshakeError::InvalidKyberPublicKey)?;
+                validate_kyber_public_not_all_zero(public_key.as_slice())
+                    .map_err(|()| HandshakeError::InvalidKyberPublicKey)?;
                 let fingerprint = fingerprint_kyber_public(public_key.as_slice(), kem_suite);
                 if fingerprint != expected_fingerprint {
                     return Err(HandshakeError::KyberFingerprintMismatch {
@@ -1492,6 +1516,8 @@ impl StreamingSession {
         self.kem_suite
             .validate_public_key(public_key)
             .map_err(|_| HandshakeError::InvalidKyberPublicKey)?;
+        validate_kyber_public_not_all_zero(public_key)
+            .map_err(|()| HandshakeError::InvalidKyberPublicKey)?;
         let fingerprint = fingerprint_kyber_public(public_key, self.kem_suite);
         if fingerprint != expected_fingerprint {
             return Err(HandshakeError::KyberFingerprintMismatch {
@@ -1521,6 +1547,8 @@ impl StreamingSession {
         self.kem_suite
             .validate_secret_key(secret_key)
             .map_err(|_| HandshakeError::InvalidKyberSecretKey)?;
+        validate_kyber_secret_not_all_zero(secret_key)
+            .map_err(|()| HandshakeError::InvalidKyberSecretKey)?;
         self.kyber_local_public = None;
         self.kyber_local_fingerprint = None;
         self.kyber_local_secret = Some(Zeroizing::new(secret_key.to_vec()));
@@ -1548,6 +1576,8 @@ impl StreamingSession {
         self.kem_suite
             .validate_public_key(public_key)
             .map_err(|_| HandshakeError::InvalidKyberPublicKey)?;
+        validate_kyber_public_not_all_zero(public_key)
+            .map_err(|()| HandshakeError::InvalidKyberPublicKey)?;
         let fingerprint = fingerprint_kyber_public(public_key, self.kem_suite);
 
         let expected_secret_len = self.kem_suite.secret_key_len();
@@ -1560,6 +1590,8 @@ impl StreamingSession {
         self.kem_suite
             .validate_secret_key(secret_key)
             .map_err(|_| HandshakeError::InvalidKyberSecretKey)?;
+        validate_kyber_secret_not_all_zero(secret_key)
+            .map_err(|()| HandshakeError::InvalidKyberSecretKey)?;
         validate_mlkem_key_pair(self.kem_suite, public_key, secret_key)
             .map_err(|err| handshake_error_from_mlkem(&err))?;
 
@@ -1899,6 +1931,8 @@ impl StreamingSession {
         self.kem_suite
             .validate_public_key(public_bytes.as_slice())
             .map_err(|_| HandshakeError::InvalidKyberPublicKey)?;
+        validate_kyber_public_not_all_zero(public_bytes.as_slice())
+            .map_err(|()| HandshakeError::InvalidKyberPublicKey)?;
         let (shared_secret, ciphertext) =
             encapsulate_mlkem_from_os(self.kem_suite, public_bytes.as_slice())
                 .map_err(|_| HandshakeError::InvalidKyberPublicKey)?;
@@ -1940,6 +1974,8 @@ impl StreamingSession {
         self.kem_suite
             .validate_secret_key(secret_bytes.as_ref())
             .map_err(|_| HandshakeError::InvalidKyberSecretKey)?;
+        validate_kyber_secret_not_all_zero(secret_bytes.as_ref())
+            .map_err(|()| HandshakeError::InvalidKyberSecretKey)?;
         self.kem_suite
             .validate_ciphertext(ciphertext)
             .map_err(|_| HandshakeError::InvalidKyberCiphertext)?;
@@ -2061,6 +2097,39 @@ mod key_update_tests {
 
     use super::*;
 
+    fn mlkem_secret_embedded_public_range(suite: MlKemSuite) -> core::ops::Range<usize> {
+        const PUBLIC_HASH_AND_REJECTION_SEED_BYTES: usize = 64;
+
+        let start =
+            suite.secret_key_len() - suite.public_key_len() - PUBLIC_HASH_AND_REJECTION_SEED_BYTES;
+        start..start + suite.public_key_len()
+    }
+
+    fn mlkem_secret_embedded_public_hash_range(suite: MlKemSuite) -> core::ops::Range<usize> {
+        const PUBLIC_KEY_HASH_BYTES: usize = 32;
+        const PUBLIC_HASH_AND_REJECTION_SEED_BYTES: usize = 64;
+
+        let start = suite.secret_key_len() - PUBLIC_HASH_AND_REJECTION_SEED_BYTES;
+        start..start + PUBLIC_KEY_HASH_BYTES
+    }
+
+    fn mlkem_public_key_hash(public_key: &[u8]) -> [u8; 32] {
+        let digest = Sha3_256::digest(public_key);
+        let mut out = [0u8; 32];
+        out.copy_from_slice(&digest);
+        out
+    }
+
+    fn mlkem_secret_with_zero_embedded_public_key(secret_key: &[u8]) -> Vec<u8> {
+        let suite = STREAMING_DEFAULT_KEM_SUITE;
+        let mut mutated = secret_key.to_vec();
+        let public_range = mlkem_secret_embedded_public_range(suite);
+        mutated[public_range.clone()].fill(0);
+        let public_hash = mlkem_public_key_hash(&mutated[public_range]);
+        mutated[mlkem_secret_embedded_public_hash_range(suite)].copy_from_slice(&public_hash);
+        mutated
+    }
+
     #[test]
     fn x25519_ephemeral_new_random_derives_nonzero_public_key() {
         let ephemeral = X25519Ephemeral::new_random().expect("random x25519 ephemeral");
@@ -2176,6 +2245,103 @@ mod key_update_tests {
             Some(gck_plaintext.as_slice())
         );
         assert_eq!(viewer_session.latest_gck(), Some(gck_plaintext.as_slice()));
+    }
+
+    #[test]
+    fn kyber_public_fingerprint_rejects_all_zero_public_key() {
+        let all_zero_public = vec![0_u8; STREAMING_DEFAULT_KEM_SUITE.public_key_len()];
+
+        let err = kyber_public_fingerprint(&all_zero_public)
+            .expect_err("all-zero Kyber public key must not get a fingerprint");
+
+        assert!(matches!(err, KeyMaterialError::InvalidKyberPublicKey));
+    }
+
+    #[test]
+    fn streaming_key_material_rejects_all_zero_kyber_material() {
+        let identity = KeyPair::try_from_seed(vec![0x92; 32], Algorithm::Ed25519)
+            .expect("seeded streaming identity");
+        let kyber_pair = generate_mlkem_keypair_from_os(STREAMING_DEFAULT_KEM_SUITE)
+            .expect("streaming ML-KEM keypair");
+        let all_zero_public = vec![0_u8; STREAMING_DEFAULT_KEM_SUITE.public_key_len()];
+        let all_zero_secret = vec![0_u8; STREAMING_DEFAULT_KEM_SUITE.secret_key_len()];
+        let embedded_public_zero_secret =
+            mlkem_secret_with_zero_embedded_public_key(kyber_pair.secret_key.as_slice());
+
+        let mut material =
+            StreamingKeyMaterial::new(identity.clone()).expect("streaming key material");
+        let err = material
+            .set_kyber_keys(&all_zero_public, kyber_pair.secret_key.as_ref())
+            .expect_err("all-zero Kyber public key must be rejected");
+        assert!(matches!(err, KeyMaterialError::InvalidKyberPublicKey));
+
+        let mut material =
+            StreamingKeyMaterial::new(identity.clone()).expect("streaming key material");
+        let err = material
+            .set_kyber_keys(&kyber_pair.public_key, &all_zero_secret)
+            .expect_err("all-zero Kyber secret key must be rejected");
+        assert!(matches!(err, KeyMaterialError::InvalidKyberSecretKey));
+
+        let mut material = StreamingKeyMaterial::new(identity).expect("streaming key material");
+        let err = material
+            .set_kyber_keys(&kyber_pair.public_key, &embedded_public_zero_secret)
+            .expect_err("all-zero embedded Kyber public key must be rejected");
+        assert!(matches!(err, KeyMaterialError::InvalidKyberSecretKey));
+    }
+
+    #[test]
+    fn streaming_session_rejects_all_zero_kyber_material() {
+        let kyber_pair = generate_mlkem_keypair_from_os(STREAMING_DEFAULT_KEM_SUITE)
+            .expect("streaming ML-KEM keypair");
+        let all_zero_public = vec![0_u8; STREAMING_DEFAULT_KEM_SUITE.public_key_len()];
+        let all_zero_secret = vec![0_u8; STREAMING_DEFAULT_KEM_SUITE.secret_key_len()];
+        let embedded_public_zero_secret =
+            mlkem_secret_with_zero_embedded_public_key(kyber_pair.secret_key.as_slice());
+        let fingerprint = fingerprint_kyber_public(&all_zero_public, STREAMING_DEFAULT_KEM_SUITE);
+
+        let mut session = StreamingSession::new(CapabilityRole::Viewer);
+        let err = session
+            .set_kyber_remote_public(fingerprint, &all_zero_public)
+            .expect_err("all-zero remote Kyber public key must be rejected");
+        assert!(matches!(err, HandshakeError::InvalidKyberPublicKey));
+
+        let mut session = StreamingSession::new(CapabilityRole::Viewer);
+        let err = session
+            .set_kyber_local_secret(&all_zero_secret)
+            .expect_err("all-zero local Kyber secret key must be rejected");
+        assert!(matches!(err, HandshakeError::InvalidKyberSecretKey));
+
+        let mut session = StreamingSession::new(CapabilityRole::Viewer);
+        let err = session
+            .set_kyber_local_secret(&embedded_public_zero_secret)
+            .expect_err("all-zero embedded Kyber public key must be rejected");
+        assert!(matches!(err, HandshakeError::InvalidKyberSecretKey));
+
+        let mut session = StreamingSession::new(CapabilityRole::Viewer);
+        let err = session
+            .set_kyber_local_key_pair(&all_zero_public, kyber_pair.secret_key.as_ref())
+            .expect_err("all-zero local Kyber public key must be rejected");
+        assert!(matches!(err, HandshakeError::InvalidKyberPublicKey));
+
+        let mut session = StreamingSession::new(CapabilityRole::Viewer);
+        let err = session
+            .set_kyber_local_key_pair(&kyber_pair.public_key, &all_zero_secret)
+            .expect_err("all-zero local Kyber secret key must be rejected");
+        assert!(matches!(err, HandshakeError::InvalidKyberSecretKey));
+
+        let mut session = StreamingSession::new(CapabilityRole::Viewer);
+        let err = session
+            .set_kyber_local_key_pair(&kyber_pair.public_key, &embedded_public_zero_secret)
+            .expect_err("all-zero embedded Kyber public key must be rejected");
+        assert!(matches!(err, HandshakeError::InvalidKyberSecretKey));
+    }
+
+    #[test]
+    fn kyber_inert_material_validators_reject_all_zero_keys() {
+        assert!(validate_kyber_public_not_all_zero(&[0_u8; 32]).is_err());
+        assert!(validate_kyber_secret_not_all_zero(&[0_u8; 32]).is_err());
+        assert!(validate_kyber_public_not_all_zero(&[0_u8, 1]).is_ok());
+        assert!(validate_kyber_secret_not_all_zero(&[0_u8, 1]).is_ok());
     }
 
     #[test]

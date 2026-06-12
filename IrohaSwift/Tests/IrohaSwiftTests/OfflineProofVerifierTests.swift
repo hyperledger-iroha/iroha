@@ -44,6 +44,45 @@ final class OfflineProofVerifierTests: XCTestCase {
         }
     }
 
+    func testCounterpartyVerifierRejectsPaddedPlatformBeforeDispatch() {
+        let binding = ToriiOfflineDeviceBinding(
+            platform: " ios",
+            attestationKeyId: "",
+            deviceId: "ios-device",
+            offlinePublicKey: "",
+            attestationReportBase64: ""
+        )
+
+        XCTAssertThrowsError(
+            try CounterpartyOfflineProofVerifier().verifyDeviceBinding(
+                accountId: "account",
+                binding: binding,
+                expectedChallengeHashHex: nil
+            )
+        ) { error in
+            XCTAssertEqual(
+                (error as? OfflineProofVerifierError)?.errorDescription,
+                "Unsupported offline device binding platform."
+            )
+        }
+
+        let proof = ToriiOfflineDeviceProof(
+            platform: "ios",
+            attestationKeyId: "",
+            challengeHashHex: "",
+            assertionBase64: "",
+            counter: nil
+        )
+        XCTAssertThrowsError(
+            try CounterpartyOfflineProofVerifier().verifyDeviceProof(binding: binding, proof: proof)
+        ) { error in
+            XCTAssertEqual(
+                (error as? OfflineProofVerifierError)?.errorDescription,
+                "Unsupported offline device proof platform."
+            )
+        }
+    }
+
     func testAndroidVerifierRejectsIncompleteBinding() {
         let binding = ToriiOfflineDeviceBinding(
             platform: "android",

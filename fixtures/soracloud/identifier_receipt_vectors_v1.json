@@ -89,16 +89,52 @@
       "expected_result": false
     },
     {
+      "name": "padded-leading-resolver-key",
+      "mutation": "policy.resolver_public_key",
+      "value": " ed25519:ed012043046BFE4092B3E94994EADA15DCC20D8AAA07B658FD3954EB8E0EFB8BDCA5DE",
+      "expected_error_contains": "surrounding whitespace"
+    },
+    {
+      "name": "padded-trailing-resolver-key",
+      "mutation": "policy.resolver_public_key",
+      "value": "ed25519:ed012043046BFE4092B3E94994EADA15DCC20D8AAA07B658FD3954EB8E0EFB8BDCA5DE ",
+      "expected_error_contains": "surrounding whitespace"
+    },
+    {
       "name": "wrong-policy-id",
       "mutation": "policy.policy_id",
       "value": "email#retail",
       "expected_error_contains": "policy"
     },
     {
+      "name": "padded-leading-policy-id",
+      "mutation": "policy.policy_id",
+      "value": " phone#retail",
+      "expected_error_contains": "surrounding whitespace"
+    },
+    {
+      "name": "padded-trailing-policy-id",
+      "mutation": "policy.policy_id",
+      "value": "phone#retail ",
+      "expected_error_contains": "surrounding whitespace"
+    },
+    {
       "name": "malformed-signature-hex",
       "mutation": "receipt.attestation.signature",
       "value": "abc",
       "expected_error_contains": "hex"
+    },
+    {
+      "name": "padded-leading-attestation-signature",
+      "mutation": "receipt.attestation.signature",
+      "value": " 69CD4F6F5E1C0D80A6C4C40E9579D30320E5F1370B91A15292DF62E361EE820A2FEE189B63EA4E3CA827B900EE03B62673E27E10A4EF4BE82998042D54233600",
+      "expected_error_contains": "surrounding whitespace"
+    },
+    {
+      "name": "padded-trailing-attestation-signature",
+      "mutation": "receipt.attestation.signature",
+      "value": "69CD4F6F5E1C0D80A6C4C40E9579D30320E5F1370B91A15292DF62E361EE820A2FEE189B63EA4E3CA827B900EE03B62673E27E10A4EF4BE82998042D54233600 ",
+      "expected_error_contains": "surrounding whitespace"
     },
     {
       "name": "proof-attestation-no-signature-verifier",

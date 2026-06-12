@@ -397,6 +397,15 @@ def test_kagemusha_instruction_archive_transaction_helpers_reject_adversarial_in
     with pytest.raises(ValueError, match="instruction_type must be KagemushaTransfer"):
         kagemusha.kagemusha_instruction_archive_instruction("RedeemRecursive", archive)
 
+    whitespace_instruction_type = (
+        f" {kagemusha.KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_REDEEM_RECURSIVE} "
+    )
+    with pytest.raises(ValueError, match="instruction_type must be KagemushaTransfer"):
+        kagemusha.kagemusha_instruction_archive_instruction(
+            whitespace_instruction_type,
+            archive,
+        )
+
     with pytest.raises(ValueError, match="instruction_archive must not be empty"):
         kagemusha.kagemusha_instruction_archive_instruction(
             kagemusha.KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_REDEEM_RECURSIVE,
@@ -449,6 +458,15 @@ def test_kagemusha_instruction_archive_transaction_helpers_reject_adversarial_in
 
     keypair = _kagemusha_test_keypair()
     authority = keypair.default_account_id("wonderland")
+    with pytest.raises(ValueError, match="instruction_type must be KagemushaTransfer"):
+        kagemusha.build_kagemusha_instruction_transaction(
+            "chain",
+            authority,
+            keypair.private_key,
+            whitespace_instruction_type,
+            archive,
+        )
+
     with pytest.raises(ValueError, match="redeem_request_archive must be a valid Norito archive"):
         kagemusha.build_kagemusha_recursive_redeem_transaction(
             "chain",
@@ -2319,15 +2337,18 @@ def test_recursive_kagemusha_lineage_key_artifacts_validate_inputs() -> None:
             ),
             "verifier_opening_len",
         ),
-        (
-            kagemusha.KagemushaRecursiveSpendLineageKeyArtifacts(
-                kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
-                128,
-                "halo2/kzg",
-                b"vk",
-                b"pk",
-            ),
-            "lineage_verifier_key",
+        *(
+            (
+                kagemusha.KagemushaRecursiveSpendLineageKeyArtifacts(
+                    kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+                    128,
+                    backend,
+                    b"vk",
+                    b"pk",
+                ),
+                "lineage_verifier_key",
+            )
+            for backend in ("halo2/kzg", " halo2/ipa", "halo2/ipa ", "HALO2/IPA")
         ),
         (
             kagemusha.KagemushaRecursiveSpendLineageKeyArtifacts(
@@ -2383,7 +2404,10 @@ def test_recursive_kagemusha_lineage_key_artifacts_validate_inputs() -> None:
             ),
             "verifier_opening_len",
         ),
-        ((128, "halo2/kzg", b"vk", b"pk"), "lineage_verifier_key"),
+        *(
+            ((128, backend, b"vk", b"pk"), "lineage_verifier_key")
+            for backend in ("halo2/kzg", " halo2/ipa", "halo2/ipa ", "HALO2/IPA")
+        ),
         (
             (
                 128,
@@ -2506,6 +2530,15 @@ def test_recursive_kagemusha_exports_stable_circuit_ids() -> None:
         )
         == "unknown-kagemusha-recursive-spend-circuit"
     )
+    whitespace_lineage_output_circuit_id = (
+        f" {kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1} "
+    )
+    assert (
+        kagemusha.normalize_kagemusha_recursive_spend_append_output_proof_circuit_id(
+            whitespace_lineage_output_circuit_id,
+        )
+        == whitespace_lineage_output_circuit_id
+    )
     for circuit_id in (
         None,
         "",
@@ -2526,6 +2559,11 @@ def test_recursive_kagemusha_exports_stable_circuit_ids() -> None:
     assert not (
         kagemusha.is_supported_kagemusha_recursive_spend_append_output_proof_circuit_id(
             "unknown-kagemusha-recursive-spend-circuit",
+        )
+    )
+    assert not (
+        kagemusha.is_supported_kagemusha_recursive_spend_append_output_proof_circuit_id(
+            whitespace_lineage_output_circuit_id,
         )
     )
     for lineage_circuit_id in (
@@ -2579,6 +2617,7 @@ def test_recursive_kagemusha_exports_stable_circuit_ids() -> None:
     )
     for previous_circuit_id in (
         "unknown-kagemusha-recursive-spend-circuit",
+        whitespace_lineage_output_circuit_id,
         None,
         True,
     ):
@@ -2772,6 +2811,7 @@ def test_recursive_kagemusha_exports_stable_circuit_ids() -> None:
         ),
         (kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, 64),
         ("unknown-kagemusha-recursive-spend-circuit", 1),
+        (whitespace_lineage_output_circuit_id, 1),
         (kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1, 1.5),
         (kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1, float("nan")),
         (kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1, float("inf")),
@@ -2826,6 +2866,16 @@ def test_recursive_kagemusha_exports_stable_circuit_ids() -> None:
         (
             kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
             "unknown-kagemusha-recursive-spend-circuit",
+            1,
+        ),
+        (
+            kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+            whitespace_lineage_output_circuit_id,
+            1,
+        ),
+        (
+            whitespace_lineage_output_circuit_id,
+            kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
             1,
         ),
         (

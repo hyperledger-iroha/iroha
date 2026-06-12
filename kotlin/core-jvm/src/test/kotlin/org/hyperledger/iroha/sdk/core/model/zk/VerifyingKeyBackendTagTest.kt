@@ -14,14 +14,19 @@ class VerifyingKeyBackendTagTest {
     }
 
     @Test
-    fun `parse resolves with leading and trailing whitespace`() {
-        assertEquals(VerifyingKeyBackendTag.HALO2_BN254, VerifyingKeyBackendTag.parse("  halo2-bn254  "))
+    fun `parse rejects leading and trailing whitespace`() {
+        assertFailsWith<IllegalArgumentException> {
+            VerifyingKeyBackendTag.parse("  halo2-bn254  ")
+        }
     }
 
     @Test
-    fun `parse is case insensitive`() {
-        assertEquals(VerifyingKeyBackendTag.STARK, VerifyingKeyBackendTag.parse("STARK"))
-        assertEquals(VerifyingKeyBackendTag.HALO2_IPA_PASTA, VerifyingKeyBackendTag.parse("Halo2-Ipa-Pasta"))
+    fun `parse rejects case mutated norito values`() {
+        for (value in listOf("STARK", "Halo2-Ipa-Pasta")) {
+            assertFailsWith<IllegalArgumentException>(value) {
+                VerifyingKeyBackendTag.parse(value)
+            }
+        }
     }
 
     @Test
@@ -281,9 +286,15 @@ class VerifyingKeyBackendTagTest {
 
         for (backend in unsafe) {
             assertFalse(VerifyingKeyBackendTag.isProductionVerifyBackendLabel(backend))
-            assertFailsWith<IllegalArgumentException>(backend) {
+            val error = assertFailsWith<IllegalArgumentException>(backend) {
                 VerifyingKeyBackendTag.requireProductionVerifyBackendLabel(backend)
             }
+            val expected = when {
+                backend.isBlank() -> "must not be blank"
+                backend.trim() != backend -> "surrounding whitespace"
+                else -> "unsupported production verifier backend"
+            }
+            assertTrue(error.message?.contains(expected) == true, error.message ?: "")
         }
     }
 

@@ -185,6 +185,26 @@ def _require_non_empty_string(value: Any, context: str) -> str:
     return trimmed
 
 
+def _require_exact_non_empty_string(value: Any, context: str) -> str:
+    trimmed = _require_non_empty_string(value, context)
+    if trimmed != value:
+        raise ValueError(f"{context} must not contain surrounding whitespace")
+    return value
+
+
+def _normalize_optional_exact_string(value: Any, context: str) -> Optional[str]:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise TypeError(f"{context} must be a string")
+    trimmed = value.strip()
+    if not trimmed:
+        return None
+    if trimmed != value:
+        raise ValueError(f"{context} must not contain surrounding whitespace")
+    return value
+
+
 def _normalize_zk_verifying_key_registration_payload(payload: Mapping[str, Any]) -> Dict[str, Any]:
     if not isinstance(payload, Mapping):
         raise TypeError("ZK verifying-key registration payload must be a mapping")
@@ -219,7 +239,7 @@ def _normalize_zk_verifying_key_submission_payload(
         body.get("backend"),
         f"{context}.backend",
     )
-    body["name"] = _require_non_empty_string(body.get("name"), f"{context}.name")
+    body["name"] = _require_exact_non_empty_string(body.get("name"), f"{context}.name")
     if ":" in body["name"]:
         raise ValueError(f"{context}.name must not contain ':'")
     body["authority"] = _require_non_empty_string(
@@ -236,18 +256,21 @@ def _normalize_zk_verifying_key_submission_payload(
     if version > 0xFFFF_FFFF:
         raise ValueError(f"{context}.version must fit in a u32")
     body["version"] = version
-    body["circuit_id"] = _require_non_empty_string(body.get("circuit_id"), f"{context}.circuit_id")
+    body["circuit_id"] = _require_exact_non_empty_string(
+        body.get("circuit_id"),
+        f"{context}.circuit_id",
+    )
     body["public_inputs_schema_hash_hex"] = _normalize_32_byte_hex(
         body.get("public_inputs_schema_hash_hex"),
         f"{context}.public_inputs_schema_hash_hex",
     )
     if require_gas_schedule:
-        body["gas_schedule_id"] = _require_non_empty_string(
+        body["gas_schedule_id"] = _require_exact_non_empty_string(
             body.get("gas_schedule_id"),
             f"{context}.gas_schedule_id",
         )
     elif "gas_schedule_id" in body:
-        gas_schedule_id = _normalize_optional_string(
+        gas_schedule_id = _normalize_optional_exact_string(
             body.get("gas_schedule_id"),
             f"{context}.gas_schedule_id",
         )
@@ -12531,7 +12554,7 @@ class ToriiClient(_BaseToriiClient):
             "GET",
             "/v1/zk/vk/"
             f"{quote(_require_production_verify_backend_label(backend, 'backend'), safe='')}/"
-            f"{quote(_require_non_empty_string(name, 'name'), safe='')}",
+            f"{quote(_require_exact_non_empty_string(name, 'name'), safe='')}",
         )
 
     def get_zk_verifying_key(self, backend: str, name: str) -> Optional[Mapping[str, Any]]:

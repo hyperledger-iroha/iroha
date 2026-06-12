@@ -83,6 +83,11 @@ const EXPECTED_PRIVACY_C_FFI_SYMBOLS = Object.freeze([
 ]);
 const EXPECTED_NATIVE_PRIVACY_REQUIRED_PRODUCTION_PLAN_ROWS = Object.freeze([
   Object.freeze([
+    "zk-ace-pq-authorization-v0",
+    "stark/fri/sha256-goldilocks",
+    "stark-fri",
+  ]),
+  Object.freeze([
     "anonymous-pgc-k-out-of-n-v1",
     "anonymous-pgc-k-out-of-n",
     "anonymous-pgc",
@@ -250,9 +255,15 @@ const EXPECTED_PENDING_PRIVACY_BACKEND_LABELS = Object.freeze([
   "zk-x509",
   "sis-with-hints",
 ]);
-const EXPECTED_REQUIRED_PRIVACY_PRODUCTION_ALLOWLIST_BACKEND_LABELS = Object.freeze([]);
-const EXPECTED_REQUIRED_PRIVACY_PRODUCTION_ALLOWLIST_ROWS = Object.freeze([]);
-const EXPECTED_REQUIRED_PRIVACY_PRODUCTION_ALLOWLIST_RUST_BACKEND_LABELS = Object.freeze([]);
+const EXPECTED_REQUIRED_PRIVACY_PRODUCTION_ALLOWLIST_BACKEND_LABELS = Object.freeze([
+  "stark-fri",
+]);
+const EXPECTED_REQUIRED_PRIVACY_PRODUCTION_ALLOWLIST_ROWS = Object.freeze([
+  Object.freeze(["zk-ace-pq-authorization-v0", "stark-fri"]),
+]);
+const EXPECTED_REQUIRED_PRIVACY_PRODUCTION_ALLOWLIST_RUST_BACKEND_LABELS = Object.freeze([
+  Object.freeze(["stark-fri", "stark/fri/sha256-goldilocks"]),
+]);
 const EXPECTED_ADVERSARIAL_PENDING_PRIVACY_BACKEND_LABELS = Object.freeze([
   "halo2/ipa/orchard/dev-fixture",
   "stark/fri/miden/claimed-production",
@@ -1993,7 +2004,7 @@ test("native privacy FFI catalogs keep dev fixtures explicit and non-production"
     );
     assert.match(
       text,
-      /fn\s+privacy_algorithm_entry_invariants_hold\([^)]*\)\s*->\s*bool\s*\{[\s\S]*has_local_verifier[\s\S]*has_explicit_dev_fixture[\s\S]*!privacy_entrypoint_is_dev_fixture[\s\S]*privacy_entrypoint_is_explicit_dev_fixture[\s\S]*privacy_entrypoints_include_production_proof_builder\(entry\.planned_entrypoints\)[\s\S]*\}/,
+      /fn\s+privacy_algorithm_entry_invariants_hold\([^)]*\)\s*->\s*bool\s*\{[\s\S]*has_local_verifier[\s\S]*has_explicit_dev_fixture[\s\S]*let\s+has_production_proof_builder\s*=[\s\S]*privacy_entrypoints_include_production_proof_builder\(entry\.sdk_entrypoints\)[\s\S]*privacy_entrypoints_include_production_proof_builder\(entry\.planned_entrypoints\)[\s\S]*!privacy_entrypoint_is_dev_fixture[\s\S]*privacy_entrypoint_is_explicit_dev_fixture[\s\S]*!has_local_verifier\s*\|\|\s*has_explicit_dev_fixture[\s\S]*!has_explicit_dev_fixture\s*\|\|\s*has_local_verifier[\s\S]*!has_explicit_dev_fixture\s*\|\|\s*has_production_proof_builder[\s\S]*\}/,
       `${label} must make fixture/local-verifier rules part of catalog invariants`,
     );
     assert.match(
@@ -3738,6 +3749,10 @@ test("native chain proof admission uses explicit production verifier backend all
       /function assertProductionVerifyBackendLabel\([^)]*\)[\s\S]*unsupported production verifier backend/,
       `${label} must throw before unsupported verifier-key ids are built`,
     );
+    assert.ok(
+      text.includes("must not contain surrounding whitespace"),
+      `${label} must reject padded verifier backend labels before unsupported-backend classification`,
+    );
     assert.match(
       text,
       /function normalizePrivacyVerifierKeyIdFromOptions\([^)]*\)[\s\S]*assertProductionVerifyBackendLabel\(id\.backend/,
@@ -3777,6 +3792,10 @@ test("native chain proof admission uses explicit production verifier backend all
       /function assertProductionVerifyBackendLabel\([^)]*\)[\s\S]*unsupported production verifier backend/,
       `${label} must throw before unsupported verifier-key requests are sent`,
     );
+    assert.ok(
+      text.includes("must not contain surrounding whitespace"),
+      `${label} must reject padded verifier backend labels before unsupported-backend classification`,
+    );
     assert.match(
       text,
       /function normalizeVerifyingKeyRegisterPayload\([^)]*\)[\s\S]*assertProductionVerifyBackendLabel\(record\.backend, "registerVerifyingKey\.backend"\)/,
@@ -3801,6 +3820,10 @@ test("native chain proof admission uses explicit production verifier backend all
   assert.ok(
     pythonPrivacyBackends.includes("backend.strip() != backend"),
     "Python shared privacy backend helpers must reject non-canonical whitespace-mutated verifier backend labels",
+  );
+  assert.ok(
+    pythonPrivacyBackends.includes("must not contain surrounding whitespace"),
+    "Python shared privacy backend helpers must emit an explicit padded verifier backend error",
   );
   assert.match(
     pythonClient,
@@ -3836,6 +3859,10 @@ test("native chain proof admission uses explicit production verifier backend all
     kotlinBackendTag.includes("backend.trim() != backend"),
     "Kotlin backend tags must reject non-canonical whitespace-mutated verifier backend labels",
   );
+  assert.ok(
+    kotlinBackendTag.includes("must not contain surrounding whitespace"),
+    "Kotlin backend tags must emit an explicit padded verifier backend error",
+  );
   assert.match(
     kotlinInstructionUtils,
     /fun Map<String, String>\.productionBackend\([^)]*\)[\s\S]*requireProductionVerifyBackendLabel/,
@@ -3855,6 +3882,10 @@ test("native chain proof admission uses explicit production verifier backend all
     kotlinVkTests.includes("register and update reject unsupported production verifier backends"),
     "Kotlin tests must cover unsupported verifier-key instruction backends",
   );
+  assert.ok(
+    kotlinBackendTagTests.includes("surrounding whitespace"),
+    "Kotlin backend tag tests must cover padded verifier backend errors",
+  );
   assert.match(
     javaBackendTag,
     /static boolean isProductionVerifyBackendLabel\([^)]*\)[\s\S]*isPendingProductionBackendLabel[\s\S]*isProductionClaimBackendLabel[\s\S]*isTrustedSetupBackendLabel[\s\S]*isDeveloperOnlyBackendLabel/,
@@ -3868,6 +3899,10 @@ test("native chain proof admission uses explicit production verifier backend all
   assert.ok(
     javaBackendTag.includes("!trimWhitespace(backend).equals(backend)"),
     "Android Java backend tags must reject non-canonical whitespace-mutated verifier backend labels",
+  );
+  assert.ok(
+    javaBackendTag.includes("must not contain surrounding whitespace"),
+    "Android Java backend tags must emit an explicit padded verifier backend error",
   );
   assert.match(
     javaInstructionUtils,
@@ -3892,6 +3927,10 @@ test("native chain proof admission uses explicit production verifier backend all
     javaBackendTag.includes("trimWhitespace") && javaInstructionUtils.includes("trimWhitespace"),
     "Android Java verifier-key backend validation must not use String.trim() for control-byte suffixes",
   );
+  assert.ok(
+    javaVkTests.includes("surrounding whitespace"),
+    "Android Java backend tag tests must cover padded verifier backend errors",
+  );
   assert.match(
     csharpBackendTag,
     /static bool IsProductionVerifyBackendLabel\([^)]*\)[\s\S]*IsPendingProductionBackendLabel[\s\S]*IsProductionClaimBackendLabel[\s\S]*IsTrustedSetupBackendLabel[\s\S]*IsDeveloperOnlyBackendLabel/,
@@ -3908,8 +3947,16 @@ test("native chain proof admission uses explicit production verifier backend all
     "C# production verifier backend labels must preserve raw whitespace for fail-closed validation",
   );
   assert.ok(
+    csharpBackendTag.includes("must not contain surrounding whitespace"),
+    "C# backend tags must emit an explicit padded verifier backend error",
+  );
+  assert.ok(
     csharpVkTests.includes("ProductionVerifierBackendClassifierRejectsUnsafeLabels"),
     "C# tests must cover unsupported production verifier backends",
+  );
+  assert.ok(
+    csharpVkTests.includes("surrounding whitespace"),
+    "C# backend tag tests must cover padded verifier backend errors",
   );
   assert.match(
     swiftBackendTag,
@@ -3924,6 +3971,10 @@ test("native chain proof admission uses explicit production verifier backend all
     swiftBackendTag.includes("trimmingCharacters(in: .whitespacesAndNewlines) != backend"),
     "Swift backend tags must reject non-canonical whitespace-mutated verifier backend labels",
   );
+  assert.ok(
+    swiftBackendTag.includes("surroundingWhitespace"),
+    "Swift backend tags must emit an explicit padded verifier backend error",
+  );
   assert.match(
     swiftToriiClient,
     /enum ToriiVerifyingKeyRequestValidation[\s\S]*static func normalizedBackend\([^)]*\)[\s\S]*VerifyingKeyBackendTag\.isProductionVerifyBackendLabel/,
@@ -3932,6 +3983,10 @@ test("native chain proof admission uses explicit production verifier backend all
   assert.ok(
     swiftVkTests.includes("testProductionVerifierBackendClassifierRejectsUnsafeLabels"),
     "Swift tests must cover unsupported production verifier backends",
+  );
+  assert.ok(
+    swiftVkTests.includes("surrounding whitespace"),
+    "Swift backend tag tests must cover padded verifier backend errors",
   );
   assert.ok(
     swiftToriiTests.includes("testVerifyingKeyRequestsRejectUnsupportedProductionBackendsBeforeEncoding"),
@@ -5519,6 +5574,10 @@ test("mobile and C# privacy native tests reject adversarial malformed request ar
         "PrivacyNoritoFrame(0x52)",
         "non-empty privacy request payload",
         "InvalidPrivacyRequestArchives()",
+        "buildVeRangeProofV1(bytes)",
+        "BuildVeRangeProofV1(bytes)",
+        "verifyVeRangeProofV1(bytes)",
+        "VerifyVeRangeProofV1(bytes)",
       ],
     ],
   ];

@@ -12,14 +12,19 @@ class VerifyingKeyStatusTest {
     }
 
     @Test
-    fun `parse resolves with leading and trailing whitespace`() {
-        assertEquals(VerifyingKeyStatus.PROPOSED, VerifyingKeyStatus.parse("  Proposed  "))
+    fun `parse rejects leading and trailing whitespace`() {
+        assertFailsWith<IllegalArgumentException> {
+            VerifyingKeyStatus.parse("  Proposed  ")
+        }
     }
 
     @Test
-    fun `parse is case insensitive`() {
-        assertEquals(VerifyingKeyStatus.WITHDRAWN, VerifyingKeyStatus.parse("withdrawn"))
-        assertEquals(VerifyingKeyStatus.ACTIVE, VerifyingKeyStatus.parse("ACTIVE"))
+    fun `parse rejects case mutated wire names`() {
+        for (value in listOf("withdrawn", "ACTIVE")) {
+            assertFailsWith<IllegalArgumentException>(value) {
+                VerifyingKeyStatus.parse(value)
+            }
+        }
     }
 
     @Test
