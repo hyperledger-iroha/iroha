@@ -55,21 +55,34 @@ def _reject_whitespace(value: str, label: str, errors: list[str]) -> bool:
     return False
 
 
+def _reject_control(value: str, label: str, errors: list[str]) -> bool:
+    if device_lab._contains_control_character(value):
+        errors.append(f"{label} must not contain control characters")
+        return True
+    return False
+
+
 def _safe_single_name(value: str, label: str, errors: list[str]) -> str | None:
     if not isinstance(value, str) or not value.strip():
         errors.append(f"{label} must be a non-empty string")
         return None
     if _reject_whitespace(value, label, errors):
         return None
+    if _reject_control(value, label, errors):
+        return None
     candidate = PurePosixPath(value)
     if (
         device_lab.SECRET_RE.search(value)
         or candidate.is_absolute()
+        or "\\" in value
         or len(candidate.parts) != 1
         or candidate.name in {"", ".", ".."}
         or ".." in candidate.parts
     ):
         errors.append(f"{label} must be a single safe directory name")
+        return None
+    if candidate.as_posix() != value:
+        errors.append(f"{label} must be a canonical single directory name")
         return None
     return candidate.name
 
@@ -79,6 +92,8 @@ def _string_value(value: str | None, label: str, errors: list[str]) -> str | Non
         errors.append(f"{label} must be a non-empty string")
         return None
     if _reject_whitespace(value, label, errors):
+        return None
+    if _reject_control(value, label, errors):
         return None
     if device_lab.SECRET_RE.search(value):
         errors.append(f"{label} must not contain secret-looking material")
@@ -97,6 +112,8 @@ def _normalise_strongbox_level(
         return None
     if _reject_whitespace(value, label, errors):
         return None
+    if _reject_control(value, label, errors):
+        return None
     if value not in device_lab.STRONGBOX_LEVELS:
         errors.append(strongbox_error or f"{label} must be STRONGBOX")
         return None
@@ -113,6 +130,9 @@ def _decode_challenge_hex(
         return None
     if value != value.strip() or any(ch.isspace() for ch in value):
         errors.append(f"{label} must be lowercase hexadecimal without whitespace")
+        return None
+    if device_lab._contains_control_character(value):
+        errors.append(f"{label} must not contain control characters")
         return None
     if any(ch not in "0123456789abcdef" for ch in value):
         errors.append(f"{label} must be lowercase hexadecimal without whitespace")
@@ -146,6 +166,12 @@ def _slot_relative_chain_path(
     elif raw != raw.strip() or any(ch.isspace() for ch in raw):
         errors.append("attestation certificate chain path must not contain whitespace")
         return None
+    if device_lab._contains_control_character(raw):
+        errors.append("attestation certificate chain path must not contain control characters")
+        return None
+    if "\\" in raw:
+        errors.append("attestation certificate chain path must not contain backslashes")
+        return None
     if device_lab.SECRET_RE.search(raw):
         errors.append("attestation certificate chain path must not contain secret-looking material")
         return None
@@ -159,6 +185,9 @@ def _slot_relative_chain_path(
     ):
         errors.append("attestation certificate chain path must stay under attestation/")
         return None
+    if candidate.as_posix() != raw:
+        errors.append("attestation certificate chain path must be canonical")
+        return None
     if Path(candidate.name).suffix.lower() not in device_lab.ATTESTATION_CERTIFICATE_CHAIN_SUFFIXES:
         errors.append("attestation certificate chain path must end in .pem or .der")
         return None
@@ -169,6 +198,9 @@ def _read_validated_chain(path: Path, errors: list[str]) -> tuple[bytes | None, 
     label = "attestation certificate chain"
     if device_lab.SECRET_RE.search(str(path)):
         errors.append(f"{label} path must not contain secret-looking material")
+        return None, None
+    if device_lab._contains_control_character(str(path)):
+        errors.append(f"{label} path must not contain control characters")
         return None, None
     ancestor_errors = device_lab.validate_no_symlink_ancestors(
         path,
@@ -255,7 +287,10 @@ def _load_harness_result(path: Path, errors: list[str]) -> dict[str, Any] | None
     if result is None:
         return None
     for field in sorted(set(result) - HARNESS_RESULT_FIELDS):
-        errors.append(f"attestation harness result contains unexpected field {field}")
+        errors.append(
+            "attestation harness result contains unexpected field "
+            f"{device_lab._display_path(field)}"
+        )
     return result
 
 
@@ -281,6 +316,7 @@ def build_report(args: argparse.Namespace) -> tuple[dict[str, Any] | None, list[
     if result is None or chain_relative is None or chain_data is None or chain_digest is None:
         return None, errors
 
+    _string_value(result.get("alias"), "attestation harness result alias", errors)
     attestation_level = _normalise_strongbox_level(
         result.get("attestation_security_level"),
         "attestation harness result attestation_security_level",

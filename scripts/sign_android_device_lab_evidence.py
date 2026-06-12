@@ -25,8 +25,15 @@ DEFAULT_SIGNED_EVIDENCE_PATH = device_lab.KAGEMUSHA_SIGNED_EVIDENCE_ARTIFACT_PAT
 
 
 def _secret_key_path_error(path: Path, label: str) -> str | None:
-    if device_lab.SECRET_RE.search(str(path)):
+    path_text = str(path)
+    if device_lab.SECRET_RE.search(path_text):
         return f"{label} path must not contain secret-looking material"
+    if device_lab._contains_control_character(path_text):
+        return f"{label} path must not contain control characters"
+    if "\\" in path_text:
+        return f"{label} path must not contain backslashes"
+    if ".." in path.parts:
+        return f"{label} path must be canonical"
     return None
 
 
@@ -35,6 +42,8 @@ def _validate_json_output_path(path: Path, label: str) -> list[str]:
 
     if device_lab.SECRET_RE.search(str(path)):
         return [f"{label} must not contain secret-looking material"]
+    if device_lab._contains_control_character(str(path)):
+        return [f"{label} must not contain control characters"]
     errors: list[str] = []
     parent = path.parent
     parent_exists, parent_errors = _validate_json_output_parent(path, label)
@@ -163,6 +172,8 @@ def _validate_existing_json_output_path(path: Path, label: str) -> list[str]:
 
     if device_lab.SECRET_RE.search(str(path)):
         return [f"{label} must not contain secret-looking material"]
+    if device_lab._contains_control_character(str(path)):
+        return [f"{label} must not contain control characters"]
     _, parent_errors = _validate_json_output_parent(
         path,
         label,
@@ -486,6 +497,8 @@ def _validate_slot_path_boundary(slot_path: Path) -> list[str]:
 
     if device_lab.SECRET_RE.search(str(slot_path)):
         return ["slot path must not contain secret-looking material"]
+    if device_lab._contains_control_character(str(slot_path)):
+        return ["slot path must not contain control characters"]
     try:
         slot_mode = slot_path.lstat().st_mode
     except FileNotFoundError:
@@ -528,13 +541,19 @@ def _require_slot_metadata(slot_path: Path) -> tuple[dict[str, Any] | None, list
 
 def _slot_string(metadata: dict[str, Any], key: str, errors: list[str]) -> str | None:
     value = metadata.get(key)
-    if not isinstance(value, str) or not value.strip():
+    if not isinstance(value, str) or not value:
         errors.append(f"slot.json {key} must be a non-empty string")
+        return None
+    if value != value.strip():
+        errors.append(f"slot.json {key} must not contain surrounding whitespace")
+        return None
+    if device_lab._contains_control_character(value):
+        errors.append(f"slot.json {key} must not contain control characters")
         return None
     if device_lab.SECRET_RE.search(value):
         errors.append(f"slot.json {key} must not contain secret-looking material")
         return None
-    return value.strip()
+    return value
 
 
 def _slot_sha256(metadata: dict[str, Any], key: str, errors: list[str]) -> str | None:
@@ -573,6 +592,16 @@ def _slot_raw_test_commands(metadata: dict[str, Any], errors: list[str]) -> list
         if not isinstance(command, str) or not command.strip():
             errors.append(f"slot.json raw_test_commands[{index}] must be a non-empty string")
             continue
+        if command != command.strip():
+            errors.append(
+                f"slot.json raw_test_commands[{index}] must not contain surrounding whitespace"
+            )
+            continue
+        if device_lab._contains_control_character(command):
+            errors.append(
+                f"slot.json raw_test_commands[{index}] must not contain control characters"
+            )
+            continue
         if device_lab.SECRET_RE.search(command):
             errors.append(
                 f"slot.json raw_test_commands[{index}] must not contain secret-looking material"
@@ -586,6 +615,27 @@ def _slot_raw_test_commands(metadata: dict[str, Any], errors: list[str]) -> list
             errors=errors,
         )
     return accepted if len(accepted) == len(commands) else None
+
+
+def _validate_metadata_exactness_for_signing(
+    metadata: dict[str, Any],
+    errors: list[str],
+) -> None:
+    """Reject metadata that would require normalization before evidence signing."""
+
+    for key in device_lab.SIGNED_EVIDENCE_SLOT_STRING_FIELDS:
+        _slot_string(metadata, key, errors)
+    _slot_raw_test_commands(metadata, errors)
+    chain_relative = metadata.get("attestation_certificate_chain_path")
+    if isinstance(chain_relative, str) and chain_relative:
+        if chain_relative != chain_relative.strip():
+            errors.append(
+                "slot.json attestation_certificate_chain_path must not contain surrounding whitespace"
+            )
+        elif device_lab._contains_control_character(chain_relative):
+            errors.append(
+                "slot.json attestation_certificate_chain_path must not contain control characters"
+            )
 
 
 def _signer_public_key_sha256(public_key_path: Path, errors: list[str]) -> str | None:
@@ -782,17 +832,55 @@ def _normalise_output_path(
     raw_output = output
     if raw_output is None:
         metadata_output = metadata.get("signed_evidence_artifact_path")
-        raw_output = (
-            metadata_output.strip()
-            if isinstance(metadata_output, str) and metadata_output.strip()
-            else DEFAULT_SIGNED_EVIDENCE_PATH
-        )
+        if isinstance(metadata_output, str) and metadata_output:
+            if metadata_output != metadata_output.strip():
+                errors.append(
+                    "slot.json signed_evidence_artifact_path must not contain surrounding whitespace"
+                )
+                return None
+            if device_lab._contains_control_character(metadata_output):
+                errors.append(
+                    "slot.json signed_evidence_artifact_path must not contain control characters"
+                )
+                return None
+            raw_output = metadata_output
+        else:
+            raw_output = DEFAULT_SIGNED_EVIDENCE_PATH
+    if raw_output != raw_output.strip():
+        errors.append("signed evidence output path must not contain surrounding whitespace")
+        return None
+    if device_lab._contains_control_character(raw_output):
+        errors.append("signed evidence output path must not contain control characters")
+        return None
     if device_lab.SECRET_RE.search(raw_output):
         errors.append("signed evidence output path must not contain secret-looking material")
+        return None
+    if "\\" in raw_output:
+        errors.append("signed evidence output path must not contain backslashes")
         return None
 
     candidate = Path(raw_output)
     if candidate.is_absolute():
+        if ".." in candidate.parts:
+            errors.append("signed evidence output path must be canonical")
+            return None
+        ancestor_errors = device_lab.validate_no_symlink_ancestors(
+            candidate,
+            "signed evidence output path ancestor directory",
+        )
+        if ancestor_errors:
+            errors.extend(ancestor_errors)
+            return None
+        try:
+            candidate_mode = candidate.lstat().st_mode
+        except FileNotFoundError:
+            candidate_mode = None
+        except OSError:
+            errors.append("signed evidence output path file metadata could not be read")
+            return None
+        if candidate_mode is not None and stat.S_ISLNK(candidate_mode):
+            errors.append("signed evidence output path must not be a symlink")
+            return None
         try:
             candidate_resolved = candidate.resolve()
             slot_resolved = slot_path.resolve()
@@ -829,10 +917,20 @@ def _attestation_certificate_chain_bytes_for_harness(
     errors: list[str],
 ) -> bytes | None:
     chain_relative = metadata.get("attestation_certificate_chain_path")
-    if not isinstance(chain_relative, str) or not chain_relative.strip():
+    if not isinstance(chain_relative, str) or not chain_relative:
+        return None
+    if chain_relative != chain_relative.strip():
+        errors.append(
+            "slot.json attestation_certificate_chain_path must not contain surrounding whitespace"
+        )
+        return None
+    if device_lab._contains_control_character(chain_relative):
+        errors.append(
+            "slot.json attestation_certificate_chain_path must not contain control characters"
+        )
         return None
     relative = device_lab._normalise_safe_relative_path(
-        chain_relative.strip(),
+        chain_relative,
         errors,
         "slot.json attestation_certificate_chain_path",
     )
@@ -925,6 +1023,12 @@ def build_signed_evidence(
     if not signer_key_id.strip() or device_lab.SECRET_RE.search(signer_key_id):
         errors.append("signer key id must be non-empty and must not contain secret-looking material")
         return None
+    if signer_key_id != signer_key_id.strip():
+        errors.append("signer key id must not contain surrounding whitespace")
+        return None
+    if device_lab._contains_control_character(signer_key_id):
+        errors.append("signer key id must not contain control characters")
+        return None
     signed_at_errors: list[str] = []
     device_lab._validate_signed_at_utc(signed_at_utc, signed_at_errors)
     if signed_at_errors:
@@ -953,7 +1057,7 @@ def build_signed_evidence(
     if commands is not None:
         evidence["raw_test_commands"] = commands
     evidence["signed_at_utc"] = signed_at_utc
-    evidence["signer_key_id"] = signer_key_id.strip()
+    evidence["signer_key_id"] = signer_key_id
     signer_public_key_sha256 = _signer_public_key_sha256(public_key_path, errors)
     if signer_public_key_sha256 is not None:
         evidence["signer_public_key_sha256"] = signer_public_key_sha256
@@ -1012,6 +1116,8 @@ def _validate_slot_artifact_for_digest(
 
     if device_lab.SECRET_RE.search(str(slot_path)):
         return None, None, ["slot path must not contain secret-looking material"]
+    if device_lab._contains_control_character(str(slot_path)):
+        return None, None, ["slot path must not contain control characters"]
     if device_lab.SECRET_RE.search(relative):
         return None, None, ["slot artifacts must not contain secret-looking material"]
     normalise_errors: list[str] = []
@@ -1176,6 +1282,11 @@ def sign_slot_evidence(
                 if device_lab.SECRET_RE.search(str(slot_path))
                 else None
             ),
+            (
+                "slot path must not contain control characters"
+                if device_lab._contains_control_character(str(slot_path))
+                else None
+            ),
             _secret_key_path_error(private_key_path, "private key"),
             _secret_key_path_error(public_key_path, "signer public key"),
             (
@@ -1184,8 +1295,23 @@ def sign_slot_evidence(
                 else None
             ),
             (
+                "signed evidence output path must not contain control characters"
+                if output is not None and device_lab._contains_control_character(output)
+                else None
+            ),
+            (
                 "signer key id must be non-empty and must not contain secret-looking material"
                 if not signer_key_id.strip() or device_lab.SECRET_RE.search(signer_key_id)
+                else None
+            ),
+            (
+                "signer key id must not contain surrounding whitespace"
+                if signer_key_id and signer_key_id != signer_key_id.strip()
+                else None
+            ),
+            (
+                "signer key id must not contain control characters"
+                if device_lab._contains_control_character(signer_key_id)
                 else None
             ),
         )
@@ -1201,6 +1327,9 @@ def sign_slot_evidence(
     if output_pair is None:
         return 1, None, errors
     output_path, output_relative = output_pair
+    _validate_metadata_exactness_for_signing(metadata, errors)
+    if errors:
+        return 1, None, errors
     device_lab.validate_no_slot_symlink_artifacts(slot_path, errors)
     device_lab.validate_slot_regular_file_artifacts(slot_path, errors)
     device_lab.validate_no_slot_hardlink_artifacts(slot_path, errors)

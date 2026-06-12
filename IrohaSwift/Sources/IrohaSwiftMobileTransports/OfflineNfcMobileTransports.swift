@@ -1,6 +1,10 @@
 import Foundation
 import IrohaSwift
 
+#if canImport(Network)
+@preconcurrency import Network
+#endif
+
 #if os(iOS) && canImport(CoreNFC)
 @preconcurrency import CoreNFC
 #endif
@@ -16,6 +20,112 @@ public struct IrohaOfflineDeviceTransferSendResult: Equatable, Sendable {
     public init(paymentToken: String, receiptAck: String) {
         self.paymentToken = paymentToken
         self.receiptAck = receiptAck
+    }
+}
+
+public final class IrohaOfflineDeviceTransferDeliveryTracker: @unchecked Sendable {
+    private let lock = NSLock()
+    private var potentiallyDelivered = false
+
+    public init() {}
+
+    public func markPotentiallyDelivered() {
+        lock.lock()
+        potentiallyDelivered = true
+        lock.unlock()
+    }
+
+    public var mayHaveReachedReceiver: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return potentiallyDelivered
+    }
+}
+
+public enum IrohaOfflineNfcDeliveryProgressPolicy {
+    public static func mayHaveReachedReceiver(progress: String) -> Bool {
+        matches(progress, event: "write_payload_commit_begin")
+            || matches(progress, event: "write_payload_committed")
+            || matches(progress, event: "receipt_ack_wait_begin")
+            || matches(progress, event: "receipt_ack_received")
+            || matches(progress, event: "receipt_ack_already_available")
+    }
+
+    private static func matches(_ progress: String, event: String) -> Bool {
+        guard progress.hasPrefix(event) else { return false }
+        guard progress.count > event.count else { return true }
+        let nextIndex = progress.index(progress.startIndex, offsetBy: event.count)
+        return progress[nextIndex].isWhitespace
+    }
+}
+
+public enum IrohaOfflineNfcCardSessionRuntimePolicy {
+    public static let cardSessionEnabledInfoKey = "OfflineNfcCardSessionEnabled"
+    public static let readerSelectIdentifiersInfoKey = "com.apple.developer.nfc.readersession.iso7816.select-identifiers"
+
+    public static func isRuntimeEnabled(
+        infoDictionaryValue: Any?,
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        hasCompiledCardSessionSupport: Bool,
+        allowsDebugEnvironmentOptIn: Bool
+    ) -> Bool {
+        guard hasCompiledCardSessionSupport else { return false }
+        if isExplicitRuntimeOptInValueEnabled(infoDictionaryValue) {
+            return true
+        }
+        if allowsDebugEnvironmentOptIn {
+            return environment["OFFLINE_NFC_CARDSESSION_RUNTIME_OPT_IN"] == "1"
+        }
+        return false
+    }
+
+    public static func isExplicitRuntimeOptInValueEnabled(_ value: Any?) -> Bool {
+        guard let value else { return false }
+        if let enabled = value as? Bool {
+            return enabled
+        }
+        if let enabled = value as? String,
+           ["1", "true", "yes"].contains(enabled.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()) {
+            return true
+        }
+        return false
+    }
+
+    public static func hasRequiredReaderSelectIdentifier(
+        infoDictionary: [String: Any],
+        expectedApplicationIdentifierHex: String
+    ) -> Bool {
+        guard let expectedAid = try? OfflineNoteNfcApduProtocol.normalizedAidHex(expectedApplicationIdentifierHex) else {
+            return false
+        }
+        guard let configuredIdentifiers = infoDictionary[readerSelectIdentifiersInfoKey] as? [String] else {
+            return false
+        }
+        return configuredIdentifiers.contains { configuredAid in
+            (try? OfflineNoteNfcApduProtocol.normalizedAidHex(configuredAid)) == expectedAid
+        }
+    }
+
+    public static func hasRequiredInfoDictionaryRuntimeConfiguration(
+        infoDictionary: [String: Any],
+        expectedApplicationIdentifierHex: String
+    ) -> Bool {
+        isExplicitRuntimeOptInValueEnabled(infoDictionary[cardSessionEnabledInfoKey])
+            && hasRequiredReaderSelectIdentifier(
+                infoDictionary: infoDictionary,
+                expectedApplicationIdentifierHex: expectedApplicationIdentifierHex
+            )
+    }
+}
+
+public enum IrohaOfflineDeviceTransferPayloadRuntime {
+    public static var acceptsCurrentDeviceTransferPayloads: Bool {
+        acceptsCurrentDeviceTransferPayloads(environment: ProcessInfo.processInfo.environment)
+    }
+
+    public static func acceptsCurrentDeviceTransferPayloads(environment: [String: String]) -> Bool {
+        _ = environment
+        return true
     }
 }
 
@@ -177,6 +287,409 @@ public enum IrohaOfflineNfcExchangeError: LocalizedError, Equatable, Sendable {
     }
 }
 
+public enum IrohaOfflineNfcReceiveCompletionPolicy {
+    public static func shouldPublishReceiveSuccessOnAckReady(hasAcceptedPayment: Bool) -> Bool {
+        !hasAcceptedPayment
+    }
+
+    public static func shouldPublishReceiveSuccessOnAckRead(hasAcceptedPayment: Bool) -> Bool {
+        !hasAcceptedPayment
+    }
+
+    public static func shouldFailSessionInvalidation(hasAcceptedPayment: Bool) -> Bool {
+        !hasAcceptedPayment
+    }
+}
+
+public enum IrohaOfflineNearbyExchangeError: LocalizedError, Equatable, Sendable {
+    case unavailable
+    case busy
+    case timedOut
+    case connectionFailed
+    case invalidMessage
+    case peerRejected
+    case cancelled
+    case pairingMismatch
+    case localNetworkPermissionDenied
+
+    public var errorDescription: String? {
+        switch self {
+        case .unavailable:
+            return "Nearby transfer is unavailable on this device."
+        case .busy:
+            return "A nearby transfer is already in progress."
+        case .timedOut:
+            return "Nearby transfer timed out."
+        case .connectionFailed:
+            return "Nearby transfer could not connect."
+        case .invalidMessage:
+            return "The nearby peer sent an invalid offline transfer message."
+        case .peerRejected:
+            return "The nearby peer rejected the transfer."
+        case .cancelled:
+            return "Nearby transfer was cancelled."
+        case .pairingMismatch:
+            return "Nearby pairing verification failed."
+        case .localNetworkPermissionDenied:
+            return "Nearby transfer requires Local Network permission."
+        }
+    }
+
+    public var technicalCode: String {
+        switch self {
+        case .unavailable:
+            return "IrohaOfflineNearbyExchangeError.unavailable"
+        case .busy:
+            return "IrohaOfflineNearbyExchangeError.busy"
+        case .timedOut:
+            return "IrohaOfflineNearbyExchangeError.timedOut"
+        case .connectionFailed:
+            return "IrohaOfflineNearbyExchangeError.connectionFailed"
+        case .invalidMessage:
+            return "IrohaOfflineNearbyExchangeError.invalidMessage"
+        case .peerRejected:
+            return "IrohaOfflineNearbyExchangeError.peerRejected"
+        case .cancelled:
+            return "IrohaOfflineNearbyExchangeError.cancelled"
+        case .pairingMismatch:
+            return "IrohaOfflineNearbyExchangeError.pairingMismatch"
+        case .localNetworkPermissionDenied:
+            return "IrohaOfflineNearbyExchangeError.localNetworkPermissionDenied"
+        }
+    }
+
+    public static func normalized(_ error: Error) -> Error {
+        if let nearbyError = error as? IrohaOfflineNearbyExchangeError {
+            return nearbyError
+        }
+        if error is CancellationError {
+            return IrohaOfflineNearbyExchangeError.cancelled
+        }
+        if isLocalNetworkPermissionError(error) {
+            return IrohaOfflineNearbyExchangeError.localNetworkPermissionDenied
+        }
+        return error
+    }
+
+    public static func isLocalNetworkPermissionError(_ error: Error, maxDepth: Int = 4) -> Bool {
+        guard maxDepth > 0 else { return false }
+#if canImport(Network)
+        if isLocalNetworkPolicyDenied(error) {
+            return true
+        }
+#endif
+        let nsError = error as NSError
+        if nsError.domain == NetService.errorDomain, nsError.code == -72008 {
+            return true
+        }
+
+        let descriptionParts = [
+            nsError.localizedDescription,
+            nsError.localizedFailureReason,
+            nsError.localizedRecoverySuggestion,
+            nsError.userInfo[NSLocalizedDescriptionKey] as? String,
+            nsError.userInfo[NSLocalizedFailureReasonErrorKey] as? String,
+            nsError.userInfo[NSLocalizedRecoverySuggestionErrorKey] as? String,
+        ].compactMap { $0?.lowercased() }
+        let description = descriptionParts.joined(separator: " ")
+        if description.contains("local network"),
+           description.contains("denied") || description.contains("permission") || description.contains("privacy") {
+            return true
+        }
+
+        if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? Error {
+            return isLocalNetworkPermissionError(underlying, maxDepth: maxDepth - 1)
+        }
+        return false
+    }
+
+#if canImport(Network)
+    private static func isLocalNetworkPolicyDenied(_ error: Error) -> Bool {
+        guard let networkError = error as? NWError,
+              case .dns(let dnsError) = networkError else {
+            return false
+        }
+        return dnsError == DNSServiceErrorType(kDNSServiceErr_PolicyDenied)
+    }
+#endif
+}
+
+public enum IrohaOfflineNearbyPairingDecision: Equatable, Sendable {
+    case accepted
+    case mismatch
+    case cancelled
+}
+
+public enum IrohaOfflineNearbyTextEnvelopeCodec {
+    public struct DecodedEnvelope: Equatable, Sendable {
+        public let messageKind: OfflineNoteNearbyMessageKind
+        public let textKind: OfflineNoteTextPayloadKind?
+        public let payload: String
+        public let pairingChallenge: OfflineNoteNearbyPairingChallenge?
+
+        public init(
+            messageKind: OfflineNoteNearbyMessageKind,
+            textKind: OfflineNoteTextPayloadKind?,
+            payload: String,
+            pairingChallenge: OfflineNoteNearbyPairingChallenge?
+        ) {
+            self.messageKind = messageKind
+            self.textKind = textKind
+            self.payload = payload
+            self.pairingChallenge = pairingChallenge
+        }
+    }
+
+    public static func encode(
+        payload: String,
+        kind: OfflineNoteTextPayloadKind,
+        pairingChallenge: OfflineNoteNearbyPairingChallenge? = nil
+    ) throws -> Data {
+        switch kind {
+        case .receiveRequest:
+            guard pairingChallenge != nil else {
+                throw IrohaOfflineNearbyExchangeError.invalidMessage
+            }
+        case .paymentToken, .receiptAck:
+            guard pairingChallenge == nil else {
+                throw IrohaOfflineNearbyExchangeError.invalidMessage
+            }
+        }
+        let normalized = try normalize(payload, expectedKind: kind)
+        do {
+            return try OfflineNoteTransferHandoff.nearbyTextEnvelopeBytes(
+                payload: normalized,
+                kind: kind,
+                pairingChallenge: pairingChallenge
+            )
+        } catch {
+            throw IrohaOfflineNearbyExchangeError.invalidMessage
+        }
+    }
+
+    public static func encodeRejected() throws -> Data {
+        do {
+            return try OfflineNoteTransferHandoff.nearbyRejectedEnvelopeBytes()
+        } catch {
+            throw IrohaOfflineNearbyExchangeError.invalidMessage
+        }
+    }
+
+    public static func decode(_ data: Data) throws -> DecodedEnvelope {
+        let envelope: OfflineNoteNearbyEnvelope
+        do {
+            envelope = try OfflineNoteNearbyEnvelope.decode(data)
+        } catch {
+            throw IrohaOfflineNearbyExchangeError.invalidMessage
+        }
+        if envelope.kind == .rejected {
+            guard (try? OfflineNoteTransferHandoff.decodeNearbyRejectedEnvelope(from: data)) != nil else {
+                throw IrohaOfflineNearbyExchangeError.invalidMessage
+            }
+            return DecodedEnvelope(
+                messageKind: .rejected,
+                textKind: nil,
+                payload: OfflineNoteTransferHandoff.nearbyRejectedPayload,
+                pairingChallenge: nil
+            )
+        }
+        let decoded: (
+            kind: OfflineNoteTextPayloadKind,
+            payload: String,
+            pairingChallenge: OfflineNoteNearbyPairingChallenge?
+        )
+        do {
+            decoded = try OfflineNoteTransferHandoff.decodeNearbyTextPayload(from: data)
+        } catch {
+            throw IrohaOfflineNearbyExchangeError.invalidMessage
+        }
+        return DecodedEnvelope(
+            messageKind: decoded.kind.nearbyMessageKind,
+            textKind: decoded.kind,
+            payload: try normalize(decoded.payload, expectedKind: decoded.kind),
+            pairingChallenge: decoded.pairingChallenge
+        )
+    }
+
+    private static func normalize(
+        _ payload: String,
+        expectedKind: OfflineNoteTextPayloadKind
+    ) throws -> String {
+        do {
+            return try OfflineNoteTransferHandoff.normalizeDeviceToDeviceTextPayload(
+                payload,
+                expectedKind: expectedKind
+            )
+        } catch {
+            throw IrohaOfflineNearbyExchangeError.invalidMessage
+        }
+    }
+}
+
+public enum IrohaOfflineDeviceToDeviceTextPayload {
+    public static func trimmingBoundaryWhitespace(_ payload: String) -> String {
+        OfflineNoteTextTransferContract.trimmingBoundaryWhitespace(payload)
+    }
+
+    public static func hasOnlyTextTransportCharacters(_ payload: String) -> Bool {
+        OfflineNoteTextTransferContract.hasOnlyTextTransportCharacters(payload)
+    }
+
+    public static func hasBase64URLTextBody(_ payload: String, prefixes: [String]) -> Bool {
+        OfflineNoteTextTransferContract.hasBase64URLTextBody(payload, prefixes: prefixes)
+    }
+
+    public static func normalize(
+        _ payload: String,
+        expectedKind: OfflineNoteTextPayloadKind
+    ) throws -> String {
+        try OfflineNoteTransferHandoff.normalizeDeviceToDeviceTextPayload(payload, expectedKind: expectedKind)
+    }
+
+    public static func isValid(
+        _ payload: String,
+        expectedKind: OfflineNoteTextPayloadKind
+    ) -> Bool {
+        guard let normalized = try? normalize(payload, expectedKind: expectedKind) else {
+            return false
+        }
+        return payload.utf8.elementsEqual(normalized.utf8)
+    }
+
+    public static func kind(for nfcKind: OfflineNoteNfcPayloadKind) -> OfflineNoteTextPayloadKind {
+        OfflineNoteTransferHandoff.textPayloadKind(for: nfcKind)
+    }
+}
+
+#if canImport(Network)
+@MainActor
+public enum IrohaOfflineNearbyLocalNetworkAuthorization {
+    private static var grantedForSession = false
+
+    public static var isGrantedForSession: Bool {
+        grantedForSession
+    }
+
+    public static func markGrantedForSession() {
+        grantedForSession = true
+    }
+
+    public static func resetSessionGrantForTesting() {
+        grantedForSession = false
+    }
+}
+
+public final class IrohaOfflineNearbyLocalNetworkPreflight {
+    private let serviceType: String
+    private let timeoutSeconds: TimeInterval
+    private let queue = DispatchQueue(label: "iroha.offline.nearby-local-network-preflight")
+    private let lock = NSLock()
+    private var browser: NWBrowser?
+    private var continuation: CheckedContinuation<Void, Error>?
+    private var terminalResult: Result<Void, Error>?
+    private var didStart = false
+
+    public init(serviceType: String, timeoutSeconds: TimeInterval = 12) {
+        self.serviceType = serviceType
+        self.timeoutSeconds = timeoutSeconds
+    }
+
+    public func run() async throws {
+        try Task.checkCancellation()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                lock.lock()
+                if let terminalResult {
+                    lock.unlock()
+                    resume(continuation, with: terminalResult)
+                    return
+                }
+                guard !didStart else {
+                    lock.unlock()
+                    continuation.resume(throwing: IrohaOfflineNearbyExchangeError.busy)
+                    return
+                }
+                self.continuation = continuation
+                didStart = true
+                lock.unlock()
+                startBrowser()
+            }
+        } onCancel: {
+            finish(.failure(IrohaOfflineNearbyExchangeError.cancelled))
+        }
+    }
+
+    public func cancel() {
+        finish(.failure(IrohaOfflineNearbyExchangeError.cancelled))
+    }
+
+    private func startBrowser() {
+        let parameters = NWParameters.tcp
+        parameters.includePeerToPeer = true
+        let browser = NWBrowser(for: .bonjour(type: serviceType, domain: nil), using: parameters)
+        browser.stateUpdateHandler = { [weak self] state in
+            self?.handle(state)
+        }
+
+        lock.lock()
+        self.browser = browser
+        lock.unlock()
+
+        browser.start(queue: queue)
+        queue.asyncAfter(deadline: .now() + timeoutSeconds) { [weak self] in
+            self?.finish(.failure(IrohaOfflineNearbyExchangeError.localNetworkPermissionDenied))
+        }
+    }
+
+    private func handle(_ state: NWBrowser.State) {
+        switch state {
+        case .ready:
+            finish(.success(()))
+        case .waiting(let error), .failed(let error):
+            if IrohaOfflineNearbyExchangeError.isLocalNetworkPermissionError(error) {
+                finish(.failure(IrohaOfflineNearbyExchangeError.localNetworkPermissionDenied))
+            }
+        case .cancelled:
+            finish(.failure(IrohaOfflineNearbyExchangeError.cancelled))
+        case .setup:
+            break
+        @unknown default:
+            break
+        }
+    }
+
+    private func finish(_ result: Result<Void, Error>) {
+        lock.lock()
+        guard terminalResult == nil else {
+            lock.unlock()
+            return
+        }
+        terminalResult = result
+        let continuation = self.continuation
+        let browser = self.browser
+        self.continuation = nil
+        self.browser = nil
+        lock.unlock()
+
+        browser?.stateUpdateHandler = nil
+        browser?.cancel()
+
+        if let continuation {
+            resume(continuation, with: result)
+        }
+    }
+
+    private func resume(_ continuation: CheckedContinuation<Void, Error>, with result: Result<Void, Error>) {
+        switch result {
+        case .success:
+            continuation.resume()
+        case .failure(let error):
+            continuation.resume(throwing: error)
+        }
+    }
+}
+#endif
+
 public struct IrohaOfflineNfcConfiguration: Equatable, Sendable {
     public let applicationIdentifier: Data
     public let cardSessionRuntimeEnabled: Bool
@@ -232,28 +745,32 @@ public struct IrohaOfflineNfcConfiguration: Equatable, Sendable {
         OfflineNoteNfcApduProtocol.aidHex(for: applicationIdentifier)
     }
 
+    public var hasValidApplicationIdentifier: Bool {
+        OfflineNoteNfcApduProtocol.isValidAid(applicationIdentifier)
+    }
+
+    public func validatedApplicationIdentifier() throws -> Data {
+        try OfflineNoteNfcApduProtocol.validateAid(applicationIdentifier)
+    }
+
     public func selectAidAPDUData() -> Data {
         OfflineNoteNfcApduProtocol.selectAidAPDUData(aid: applicationIdentifier)
     }
 }
 
 private enum IrohaOfflineDeviceTransferTextPayload {
-    private static let boundaryWhitespace = CharacterSet(charactersIn: " \t\r\n")
     private static let legacyTextNfcPayloadMaxBytes = 12 * 1024
 
     static func normalize(
         _ payload: String,
         expectedKind: OfflineNoteTextPayloadKind
     ) throws -> String {
-        let trimmedPayload = payload.trimmingCharacters(in: boundaryWhitespace)
-        guard !trimmedPayload.isEmpty else {
-            throw IrohaOfflineNfcExchangeError.invalidPayload
-        }
+        let trimmedPayload = try OfflineNoteTextTransferContract.normalizeTextTransportEnvelope(payload)
         switch expectedKind {
         case .receiveRequest:
             _ = try OfflineNoteTransferTextPayloadCodec.decodeReceiveRequestPayload(trimmedPayload)
         case .paymentToken:
-            if (try? OfflineNoteTransferTextPayloadCodec.decodeNativePaymentToken(trimmedPayload)) == nil {
+            if (try? OfflineNativePaymentTextPayloadCodec.decodePaymentToken(trimmedPayload)) == nil {
                 _ = try OfflineNoteTransferTextPayloadCodec.decodePaymentToken(trimmedPayload)
             }
         case .receiptAck:
@@ -268,7 +785,19 @@ private enum IrohaOfflineDeviceTransferTextPayload {
     ) throws -> Data {
         let normalized = try normalize(payload, expectedKind: expectedKind)
         let textBytes = Data(normalized.utf8)
+        guard textBytes.count <= OfflineNoteNfcApduProtocol.maxIncomingPayloadBytes else {
+            throw IrohaOfflineNfcExchangeError.invalidPayload
+        }
         guard textBytes.count > legacyTextNfcPayloadMaxBytes else {
+            return textBytes
+        }
+        if expectedKind == .paymentToken,
+           OfflineNativePaymentTextPayloadCodec.isCompactPaymentToken(normalized) {
+            let token = try OfflineNativePaymentTextPayloadCodec.decodePaymentToken(normalized)
+            let rawBytes = try OfflineNoteTransferHandoff.rawPaymentTokenBytes(for: token)
+            if rawBytes.count <= OfflineNoteNfcApduProtocol.maxIncomingPayloadBytes {
+                return rawBytes
+            }
             return textBytes
         }
         return try OfflineNoteTransferTextPayloadCodec.decode(
@@ -403,6 +932,9 @@ public final class IrohaOfflineNfcCardSessionController {
     public static func isCardEmulationAvailable(
         configuration: IrohaOfflineNfcConfiguration = IrohaOfflineNfcConfiguration()
     ) -> Bool {
+        guard configuration.hasValidApplicationIdentifier else {
+            return false
+        }
 #if DEBUG
         if configuration.allowsDebugForcedCardSessionAvailability,
            ProcessInfo.processInfo.environment["UITEST_FORCE_HCE_CARDSESSION_AVAILABLE"] == "1" {
@@ -421,6 +953,9 @@ public final class IrohaOfflineNfcCardSessionController {
     public static func cardSessionAvailability(
         configuration: IrohaOfflineNfcConfiguration = IrohaOfflineNfcConfiguration()
     ) async -> IrohaOfflineNfcCardSessionAvailability {
+        guard configuration.hasValidApplicationIdentifier else {
+            return .unavailable(.invalidPayload)
+        }
 #if DEBUG
         if configuration.allowsDebugForcedCardSessionAvailability,
            ProcessInfo.processInfo.environment["UITEST_FORCE_HCE_CARDSESSION_AVAILABLE"] == "1" {
@@ -454,6 +989,9 @@ public final class IrohaOfflineNfcCardSessionController {
         onDiagnostic: ((IrohaOfflineReceiveDiagnosticReason) -> Void)? = nil,
         onIncomingPaymentToken: @escaping (String) async throws -> String
     ) async throws {
+        guard configuration.hasValidApplicationIdentifier else {
+            throw IrohaOfflineNfcExchangeError.invalidPayload
+        }
         guard #available(iOS 17.4, *) else {
             throw IrohaOfflineNfcExchangeError.cardEmulationUnavailable
         }
@@ -484,23 +1022,13 @@ public final class IrohaOfflineNfcCardSessionController {
 
 @available(iOS 17.4, *)
 private final class IrohaOfflineNfcCardSessionRuntime {
-    private struct HandleResult {
-        let response: Data
-        let receiptAckRead: Bool
-    }
-
     private let configuration: IrohaOfflineNfcConfiguration
     private let lock = NSLock()
     private var cardSession: CardSession?
     private var presentmentIntent: NFCPresentmentIntentAssertion?
     private var eventTask: Task<Void, Never>?
     private let passPresentationSuppression: IrohaOfflineWalletPassPresentationSuppression
-    private var currentKind: OfflineNoteNfcPayloadKind = .receiveRequest
-    private var currentPayload: String
-    private var currentPayloadBytes: Data
-    private var currentPayloadInfo: Data
-    private var readable = true
-    private var pendingWrite: OfflineNoteNfcPayloadAssembler?
+    private let stateMachine: OfflineNoteNfcCardSessionStateMachine
     private var didComplete = false
     private var didNotifyEmulationStarted = false
     private let onIncomingPaymentToken: (String) async throws -> String
@@ -520,6 +1048,7 @@ private final class IrohaOfflineNfcCardSessionRuntime {
         onReceiptAckReady: (() -> Void)?,
         onReceiptAckRead: (() -> Void)?
     ) throws {
+        _ = try configuration.validatedApplicationIdentifier()
         let trimmedPayload = try IrohaOfflineDeviceTransferTextPayload.normalize(
             receiveRequestPayload,
             expectedKind: .receiveRequest
@@ -532,11 +1061,17 @@ private final class IrohaOfflineNfcCardSessionRuntime {
         self.passPresentationSuppression = IrohaOfflineWalletPassPresentationSuppression(
             enabled: configuration.walletPassSuppressionEnabled
         )
-        self.currentPayload = trimmedPayload
-        self.currentPayloadBytes = payloadBytes
-        self.currentPayloadInfo = try OfflineNoteNfcApduProtocol.encodeInfo(
-            kind: .receiveRequest,
-            payloadBytes: payloadBytes
+        self.stateMachine = try OfflineNoteNfcCardSessionStateMachine(
+            applicationIdentifier: configuration.applicationIdentifier,
+            initialKind: .receiveRequest,
+            initialPayloadBytes: payloadBytes,
+            committedPayloadValidator: { kind, payloadBytes in
+                let textKind = IrohaOfflineDeviceTransferTextPayload.kind(for: kind)
+                return (try? IrohaOfflineDeviceTransferTextPayload.normalizePayloadBytes(
+                    payloadBytes,
+                    expectedKind: textKind
+                )) != nil
+            }
         )
         self.onIncomingPaymentToken = onIncomingPaymentToken
         self.onEmulationStarted = onEmulationStarted
@@ -620,8 +1155,18 @@ private final class IrohaOfflineNfcCardSessionRuntime {
                 case .received(let apdu):
                     let result = handle(apdu.payload)
                     try await apdu.respond(response: result.response)
-                    if result.receiptAckRead {
-                        markComplete()
+                    if result.rejectionReason == .checksumMismatch {
+                        onDiagnostic?(.checksumMismatch)
+                    }
+                    if let committedPayload = result.committedPayload {
+                        Task { [weak self] in
+                            await self?.publishReceiptAck(for: committedPayload)
+                        }
+                    }
+                    let receiptAckRangeComplete = result.receiptAckReadRange.map {
+                        markReceiptAckBytesRead($0)
+                    } ?? false
+                    if receiptAckRangeComplete, markComplete() {
                         onReceiptAckRead?()
                         await session.stopEmulation(status: .success)
                     }
@@ -687,37 +1232,63 @@ private final class IrohaOfflineNfcCardSessionRuntime {
         onEmulationStarted?()
     }
 
-    private func markComplete() {
+    @discardableResult
+    private func markComplete() -> Bool {
         lock.lock()
-        didComplete = true
+        let shouldComplete = !didComplete
+        if shouldComplete {
+            didComplete = true
+        }
         lock.unlock()
+        return shouldComplete
     }
 
-    private func handle(_ commandAPDU: Data) -> HandleResult {
+    private func markReceiptAckBytesRead(_ range: Range<Int>) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        let isComplete = stateMachine.markReceiptAckBytesRead(range)
+        guard let progress = stateMachine.receiptAckReadProgress else { return false }
+        NSLog(
+            "iroha_offline_nfc_ios_card receipt_ack_read_progress read=%ld expected=%ld complete=%@",
+            progress.readByteCount,
+            progress.expectedLength,
+            progress.isComplete ? "yes" : "no"
+        )
+        return isComplete
+    }
+
+    private func handle(_ commandAPDU: Data) -> OfflineNoteNfcCardSessionHandleResult {
         lock.lock()
         defer { lock.unlock() }
 
-        switch OfflineNoteNfcApduProtocol.parseCommand(commandAPDU, aid: configuration.applicationIdentifier) {
+        let command = OfflineNoteNfcApduProtocol.parseCommand(
+            commandAPDU,
+            aid: configuration.applicationIdentifier
+        )
+        logCommand(command, commandLength: commandAPDU.count)
+        let result = stateMachine.handle(commandAPDU)
+        logRejectedCommandIfNeeded(command, result: result)
+        return result
+    }
+
+    private func logCommand(_ command: OfflineNoteNfcCommand, commandLength: Int) {
+        switch command {
         case .select:
             NSLog("iroha_offline_nfc_ios_card apdu_select")
-            pendingWrite = nil
-            return HandleResult(response: OfflineNoteNfcApduProtocol.response(), receiptAckRead: false)
         case .getInfo:
             NSLog(
                 "iroha_offline_nfc_ios_card apdu_get_info kind=%@ length=%ld readable=%@",
-                String(describing: currentKind),
-                currentPayloadBytes.count,
-                readable ? "yes" : "no"
-            )
-            guard readable else {
-                return HandleResult(response: OfflineNoteNfcApduProtocol.statusConditionsNotSatisfied, receiptAckRead: false)
-            }
-            return HandleResult(
-                response: OfflineNoteNfcApduProtocol.response(currentPayloadInfo),
-                receiptAckRead: false
+                String(describing: stateMachine.currentPayloadKind),
+                stateMachine.currentPayloadLength,
+                stateMachine.isReadable ? "yes" : "no"
             )
         case .readChunk(let offset, let requestedLength):
-            return readChunk(offset: offset, requestedLength: requestedLength)
+            NSLog(
+                "iroha_offline_nfc_ios_card apdu_read_chunk offset=%ld requested_length=%ld kind=%@",
+                offset,
+                requestedLength,
+                String(describing: stateMachine.currentPayloadKind)
+            )
         case .writeMeta(let kind, let payloadLength, let sha256):
             NSLog(
                 "iroha_offline_nfc_ios_card apdu_write_meta kind=%@ length=%ld checksum_len=%ld",
@@ -725,136 +1296,68 @@ private final class IrohaOfflineNfcCardSessionRuntime {
                 payloadLength,
                 sha256.count
             )
-            return beginWrite(kind: kind, payloadLength: payloadLength, sha256: sha256)
         case .writeChunk(let offset, let bytes):
-            return writeChunk(offset: offset, bytes: bytes)
-        case .commit:
-            NSLog("iroha_offline_nfc_ios_card apdu_commit")
-            return commitWrite()
-        case .unsupported:
-            NSLog("iroha_offline_nfc_ios_card apdu_unsupported length=%ld", commandAPDU.count)
-            return HandleResult(response: OfflineNoteNfcApduProtocol.statusUnsupported, receiptAckRead: false)
-        case .invalid:
-            NSLog("iroha_offline_nfc_ios_card apdu_invalid length=%ld", commandAPDU.count)
-            return HandleResult(response: OfflineNoteNfcApduProtocol.statusWrongData, receiptAckRead: false)
-        }
-    }
-
-    private func readChunk(offset: Int, requestedLength: Int) -> HandleResult {
-        guard readable else {
-            return HandleResult(response: OfflineNoteNfcApduProtocol.statusConditionsNotSatisfied, receiptAckRead: false)
-        }
-        guard offset >= 0, offset < currentPayloadBytes.count else {
-            return HandleResult(response: OfflineNoteNfcApduProtocol.statusWrongData, receiptAckRead: false)
-        }
-        let chunkLength = min(max(requestedLength, 1), OfflineNoteNfcApduProtocol.maxExtendedReadChunkBytes)
-        let end = min(offset + chunkLength, currentPayloadBytes.count)
-        let receiptAckRead = end == currentPayloadBytes.count && currentKind == .receiptAck
-        return HandleResult(
-            response: OfflineNoteNfcApduProtocol.response(currentPayloadBytes.subdata(in: offset..<end)),
-            receiptAckRead: receiptAckRead
-        )
-    }
-
-    private func beginWrite(kind: OfflineNoteNfcPayloadKind, payloadLength: Int, sha256: Data) -> HandleResult {
-        guard payloadLength <= OfflineNoteNfcApduProtocol.maxIncomingPayloadBytes else {
-            return HandleResult(response: OfflineNoteNfcApduProtocol.statusWrongData, receiptAckRead: false)
-        }
-        do {
-            pendingWrite = try OfflineNoteNfcPayloadAssembler(
-                kind: kind,
-                expectedLength: payloadLength,
-                expectedSha256: sha256
-            )
-            return HandleResult(response: OfflineNoteNfcApduProtocol.response(), receiptAckRead: false)
-        } catch {
-            return HandleResult(response: OfflineNoteNfcApduProtocol.statusWrongData, receiptAckRead: false)
-        }
-    }
-
-    private func writeChunk(offset: Int, bytes: Data) -> HandleResult {
-        guard let pendingWrite else {
             NSLog(
-                "iroha_offline_nfc_ios_card apdu_write_chunk_rejected reason=no_pending_write offset=%ld length=%ld",
+                "iroha_offline_nfc_ios_card apdu_write_chunk offset=%ld length=%ld",
                 offset,
                 bytes.count
             )
-            return HandleResult(response: OfflineNoteNfcApduProtocol.statusConditionsNotSatisfied, receiptAckRead: false)
+        case .commit:
+            NSLog("iroha_offline_nfc_ios_card apdu_commit")
+        case .unsupported:
+            NSLog("iroha_offline_nfc_ios_card apdu_unsupported length=%ld", commandLength)
+        case .invalid:
+            NSLog("iroha_offline_nfc_ios_card apdu_invalid length=%ld", commandLength)
         }
-        guard pendingWrite.write(offset: offset, chunk: bytes) else {
+    }
+
+    private func logRejectedCommandIfNeeded(
+        _ command: OfflineNoteNfcCommand,
+        result: OfflineNoteNfcCardSessionHandleResult
+    ) {
+        guard let rejectionReason = result.rejectionReason else { return }
+        switch command {
+        case .writeMeta(let kind, _, _):
             NSLog(
-                "iroha_offline_nfc_ios_card apdu_write_chunk_rejected reason=invalid_chunk offset=%ld length=%ld expected_length=%ld written=%ld",
+                "iroha_offline_nfc_ios_card apdu_write_meta_rejected reason=%@ current_kind=%@ incoming_kind=%@ pending_write=%@ readable=%@ complete=%@",
+                String(describing: rejectionReason),
+                String(describing: stateMachine.currentPayloadKind),
+                String(describing: kind),
+                stateMachine.hasPendingWrite ? "yes" : "no",
+                stateMachine.isReadable ? "yes" : "no",
+                didComplete || stateMachine.hasCompleted ? "yes" : "no"
+            )
+        case .writeChunk(let offset, let bytes):
+            NSLog(
+                "iroha_offline_nfc_ios_card apdu_write_chunk_rejected reason=%@ offset=%ld length=%ld",
+                String(describing: rejectionReason),
                 offset,
-                bytes.count,
-                pendingWrite.expectedLength,
-                pendingWrite.writtenByteCount
+                bytes.count
             )
-            return HandleResult(response: OfflineNoteNfcApduProtocol.statusWrongData, receiptAckRead: false)
+        case .commit:
+            NSLog(
+                "iroha_offline_nfc_ios_card apdu_commit_rejected reason=%@",
+                String(describing: rejectionReason)
+            )
+        case .readChunk(let offset, let requestedLength):
+            NSLog(
+                "iroha_offline_nfc_ios_card apdu_read_chunk_rejected reason=%@ offset=%ld requested_length=%ld",
+                String(describing: rejectionReason),
+                offset,
+                requestedLength
+            )
+        default:
+            break
         }
-        NSLog(
-            "iroha_offline_nfc_ios_card apdu_write_chunk offset=%ld length=%ld written=%ld expected_length=%ld",
-            offset,
-            bytes.count,
-            pendingWrite.writtenByteCount,
-            pendingWrite.expectedLength
-        )
-        return HandleResult(response: OfflineNoteNfcApduProtocol.response(), receiptAckRead: false)
     }
 
-    private func commitWrite() -> HandleResult {
-        guard let pendingWrite else {
-            NSLog("iroha_offline_nfc_ios_card apdu_commit_rejected reason=no_pending_write")
-            return HandleResult(response: OfflineNoteNfcApduProtocol.statusConditionsNotSatisfied, receiptAckRead: false)
-        }
-        let payloadBytes: Data
+    private func publishReceiptAck(for committedPayload: OfflineNoteNfcCardSessionCommittedPayload) async {
         do {
-            payloadBytes = try pendingWrite.commit()
-        } catch OfflineNoteNfcApduError.checksumMismatch {
-            NSLog(
-                "iroha_offline_nfc_ios_card apdu_commit_rejected reason=checksum_mismatch written=%ld expected_length=%ld",
-                pendingWrite.writtenByteCount,
-                pendingWrite.expectedLength
+            let textKind = IrohaOfflineDeviceTransferTextPayload.kind(for: committedPayload.kind)
+            let payload = try IrohaOfflineDeviceTransferTextPayload.normalizePayloadBytes(
+                committedPayload.payloadBytes,
+                expectedKind: textKind
             )
-            onDiagnostic?(.checksumMismatch)
-            return HandleResult(response: OfflineNoteNfcApduProtocol.statusWrongData, receiptAckRead: false)
-        } catch OfflineNoteNfcApduError.incompletePayload {
-            NSLog(
-                "iroha_offline_nfc_ios_card apdu_commit_rejected reason=incomplete_payload written=%ld expected_length=%ld",
-                pendingWrite.writtenByteCount,
-                pendingWrite.expectedLength
-            )
-            return HandleResult(response: OfflineNoteNfcApduProtocol.statusWrongData, receiptAckRead: false)
-        } catch {
-            NSLog(
-                "iroha_offline_nfc_ios_card apdu_commit_rejected reason=commit_error error_type=%@ written=%ld expected_length=%ld",
-                Self.safeErrorType(error),
-                pendingWrite.writtenByteCount,
-                pendingWrite.expectedLength
-            )
-            return HandleResult(response: OfflineNoteNfcApduProtocol.statusWrongData, receiptAckRead: false)
-        }
-        let textKind = IrohaOfflineDeviceTransferTextPayload.kind(for: pendingWrite.kind)
-        guard let payload = try? IrohaOfflineDeviceTransferTextPayload.normalizePayloadBytes(
-            payloadBytes,
-            expectedKind: textKind
-        ) else {
-            NSLog(
-                "iroha_offline_nfc_ios_card apdu_commit_rejected reason=normalize_failed kind=%@ length=%ld",
-                String(describing: pendingWrite.kind),
-                payloadBytes.count
-            )
-            return HandleResult(response: OfflineNoteNfcApduProtocol.statusWrongData, receiptAckRead: false)
-        }
-        self.pendingWrite = nil
-        readable = false
-        Task { [weak self] in
-            await self?.publishReceiptAck(for: payload)
-        }
-        return HandleResult(response: OfflineNoteNfcApduProtocol.response(), receiptAckRead: false)
-    }
-
-    private func publishReceiptAck(for payload: String) async {
-        do {
             NSLog(
                 "iroha_offline_nfc_ios_card receipt_ack_processing_begin payment_bytes=%ld",
                 payload.utf8.count
@@ -904,19 +1407,14 @@ private final class IrohaOfflineNfcCardSessionRuntime {
             trimmedPayload,
             expectedKind: textKind
         )
-        let payloadInfo = try OfflineNoteNfcApduProtocol.encodeInfo(kind: kind, payloadBytes: payloadBytes)
         lock.lock()
-        currentKind = kind
-        currentPayload = trimmedPayload
-        currentPayloadBytes = payloadBytes
-        currentPayloadInfo = payloadInfo
-        readable = true
-        lock.unlock()
+        defer { lock.unlock() }
+        try stateMachine.publishPayload(kind: kind, payloadBytes: payloadBytes)
     }
 
     private func markPayloadProcessing() {
         lock.lock()
-        readable = false
+        stateMachine.markPayloadProcessing()
         lock.unlock()
     }
 }
@@ -976,6 +1474,9 @@ public final class IrohaOfflineNfcReaderService: NSObject, @unchecked Sendable, 
         onProgress: ((String) -> Void)? = nil,
         createPaymentToken: @escaping (String) async throws -> String
     ) async throws -> IrohaOfflineDeviceTransferSendResult {
+        guard configuration.hasValidApplicationIdentifier else {
+            throw IrohaOfflineNfcExchangeError.invalidPayload
+        }
         progressHandler = onProgress
         let result = try await begin(mode: .sendPayment(createPaymentToken), alert: configuration.readerSendAlertMessage)
         guard case .sentPayment(let sendResult) = result else {
@@ -985,6 +1486,9 @@ public final class IrohaOfflineNfcReaderService: NSObject, @unchecked Sendable, 
     }
 
     public func readPaymentToken(onProgress: ((String) -> Void)? = nil) async throws -> String {
+        guard configuration.hasValidApplicationIdentifier else {
+            throw IrohaOfflineNfcExchangeError.invalidPayload
+        }
         progressHandler = onProgress
         let result = try await begin(mode: .readPaymentToken, alert: configuration.readerReceiveAlertMessage)
         guard case .readPaymentToken(let payload) = result else {
@@ -1356,11 +1860,16 @@ public final class IrohaOfflineNfcReaderService: NSObject, @unchecked Sendable, 
         var offset = 0
         let chunkLength = min(info.maxChunkLength, OfflineNoteNfcApduProtocol.maxExtendedReadChunkBytes)
         while offset < info.payloadLength {
+            let requestedLength = min(chunkLength, info.payloadLength - offset)
             let chunk = try await transceive(
-                try OfflineNoteNfcApduProtocol.readChunkAPDUData(offset: offset, length: chunkLength),
+                try OfflineNoteNfcApduProtocol.readChunkAPDUData(offset: offset, length: requestedLength),
                 tag: tag
             )
-            guard !chunk.isEmpty, payloadData.count + chunk.count <= info.payloadLength else {
+            guard OfflineNoteNfcReaderPayloadReadPolicy.acceptsChunkResponse(
+                responseLength: chunk.count,
+                requestedLength: requestedLength,
+                remainingLength: info.payloadLength - offset
+            ) else {
                 throw IrohaOfflineNfcExchangeError.invalidPayload
             }
             payloadData.append(chunk)
@@ -1546,7 +2055,13 @@ public final class IrohaOfflineNfcReaderService: NSObject, @unchecked Sendable, 
     private func beginTagExchange(for session: NFCTagReaderSession) -> Bool {
         readerStateLock.lock()
         defer { readerStateLock.unlock() }
-        guard self.session === session, !didComplete else { return false }
+        guard OfflineNoteNfcReaderExchangePolicy.shouldBeginTagExchange(
+            hasActiveSession: self.session === session,
+            didComplete: didComplete,
+            isExchangeInFlight: isTagExchangeInFlight
+        ) else {
+            return false
+        }
         isTagExchangeInFlight = true
         return true
     }
@@ -1615,7 +2130,9 @@ public final class IrohaOfflineNfcCardSessionController {
     public static func cardSessionAvailability(
         configuration: IrohaOfflineNfcConfiguration = IrohaOfflineNfcConfiguration()
     ) async -> IrohaOfflineNfcCardSessionAvailability {
-        _ = configuration
+        guard configuration.hasValidApplicationIdentifier else {
+            return .unavailable(.invalidPayload)
+        }
         return .unavailable(.unavailable)
     }
 
@@ -1628,7 +2145,9 @@ public final class IrohaOfflineNfcCardSessionController {
         onDiagnostic: ((IrohaOfflineReceiveDiagnosticReason) -> Void)? = nil,
         onIncomingPaymentToken: @escaping (String) async throws -> String
     ) async throws {
-        _ = configuration
+        guard configuration.hasValidApplicationIdentifier else {
+            throw IrohaOfflineNfcExchangeError.invalidPayload
+        }
         _ = payload
         _ = onEmulationStarted
         _ = onReceiptAckReady

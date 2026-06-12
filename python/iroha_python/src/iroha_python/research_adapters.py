@@ -13,7 +13,7 @@ from .verange import (
     _bounded_bytes,
     _read_single_alias,
     _reject_unknown_fields,
-    _require_mapping,
+    _require_plain_mapping,
     build_privacy_proof_envelope,
 )
 
@@ -58,7 +58,7 @@ _SPECS: dict[str, dict[str, str]] = {
     },
     "pq_masp": {
         "algorithm_id": "pq-masp-stark-v0",
-        "backend": "stark-fri",
+        "backend": "pq-masp-stark-fri",
         "circuit_id": "pq_masp_stark_v0",
         "instruction": "zk::SubmitPqMaspStarkTransfer",
     },
@@ -105,9 +105,16 @@ def _public_inputs(source: Mapping[str, Any], context: str) -> bytes:
     )
 
 
+def _metadata(source: Mapping[str, Any], context: str) -> dict[str, Any]:
+    value = source.get("metadata")
+    if value is None:
+        return {}
+    return dict(_require_plain_mapping(value, f"{context}.metadata"))
+
+
 def _build_research_proof(options: Mapping[str, Any], spec_name: str) -> bytes:
     spec = _SPECS[spec_name]
-    source = _require_mapping(options, spec_name)
+    source = _require_plain_mapping(options, spec_name)
     _reject_unknown_fields(
         source,
         {
@@ -156,7 +163,7 @@ def _build_research_proof(options: Mapping[str, Any], spec_name: str) -> bytes:
 
 def _build_research_instruction(options: Mapping[str, Any], spec_name: str) -> dict[str, Any]:
     spec = _SPECS[spec_name]
-    source = _require_mapping(options, spec_name)
+    source = _require_plain_mapping(options, spec_name)
     _reject_unknown_fields(
         source,
         {
@@ -187,7 +194,8 @@ def _build_research_instruction(options: Mapping[str, Any], spec_name: str) -> d
         "proof envelope",
     )
     if envelope_key is None:
-        envelope = _build_research_proof(source, spec_name)
+        proof_source = {key: value for key, value in source.items() if key != "metadata"}
+        envelope = _build_research_proof(proof_source, spec_name)
     else:
         envelope = _bounded_bytes(
             envelope_value,
@@ -201,7 +209,7 @@ def _build_research_instruction(options: Mapping[str, Any], spec_name: str) -> d
         "instruction": spec["instruction"],
         "proof_envelope": envelope,
         "proof_envelope_sha256": hashlib.sha256(envelope).hexdigest(),
-        "metadata": dict(source.get("metadata") or {}),
+        "metadata": _metadata(source, spec_name),
     }
 
 
@@ -289,4 +297,3 @@ buildPqMaspStarkRegisterPoolInstruction = (
 buildPqMaspStarkTransferInstruction = build_pq_masp_stark_transfer_instruction
 generateMlDsaKeyPair = generate_ml_dsa_key_pair
 encapsulateMlKem = encapsulate_ml_kem
-

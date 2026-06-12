@@ -9,8 +9,10 @@ package org.hyperledger.iroha.sdk.address
  */
 fun requireCanonicalI105Address(accountId: String, field: String): String {
     require(field.isNotBlank()) { "field must not be blank" }
-    val value = accountId.trim()
-    require(value.isNotEmpty()) { "$field must not be blank" }
+    val trimmed = accountId.trim()
+    require(trimmed.isNotEmpty()) { "$field must not be blank" }
+    require(trimmed == accountId) { "$field must not contain surrounding whitespace" }
+    val value = accountId
     require(value.indexOf('@') < 0) {
         "$field must use canonical I105 encoded account without @domain"
     }

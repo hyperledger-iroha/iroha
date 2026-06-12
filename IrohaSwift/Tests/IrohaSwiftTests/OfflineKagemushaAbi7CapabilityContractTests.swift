@@ -113,6 +113,41 @@ final class OfflineKagemushaAbi7CapabilityContractTests: XCTestCase {
                 .missingArtifactSetId
             ),
             (
+                "leading-whitespace artifact set",
+                {
+                    try Self.validate(artifactSetId: " production-abi7-2026-06")
+                },
+                .missingArtifactSetId
+            ),
+            (
+                "trailing-whitespace artifact set",
+                {
+                    try Self.validate(artifactSetId: "production-abi7-2026-06 ")
+                },
+                .missingArtifactSetId
+            ),
+            (
+                "embedded-whitespace artifact set",
+                {
+                    try Self.validate(artifactSetId: "production abi7")
+                },
+                .missingArtifactSetId
+            ),
+            (
+                "control-character artifact set",
+                {
+                    try Self.validate(artifactSetId: "production-abi7\n")
+                },
+                .missingArtifactSetId
+            ),
+            (
+                "unicode artifact set",
+                {
+                    try Self.validate(artifactSetId: "production-abi7-\u{2603}")
+                },
+                .missingArtifactSetId
+            ),
+            (
                 "artifacts unavailable",
                 {
                     try Self.validate(artifactsAvailable: false)

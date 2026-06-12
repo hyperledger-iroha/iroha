@@ -55,9 +55,8 @@ enum class VerifyingKeyBackendTag(@JvmField val noritoValue: String) {
         /** Parses a Norito backend string into the corresponding enum value. */
         @JvmStatic
         fun parse(value: String): VerifyingKeyBackendTag {
-            val normalized = value.trim().lowercase()
             for (tag in entries) {
-                if (tag.noritoValue == normalized) {
+                if (tag.noritoValue == value) {
                     return tag
                 }
             }
@@ -104,6 +103,9 @@ enum class VerifyingKeyBackendTag(@JvmField val noritoValue: String) {
         fun requireProductionVerifyBackendLabel(raw: String, context: String = "backend"): String {
             val backend = raw
             require(backend.isNotBlank()) { "$context must not be blank" }
+            require(backend.trim() == backend) {
+                "$context must not contain surrounding whitespace"
+            }
             require(isProductionVerifyBackendLabel(backend)) {
                 "$context uses unsupported production verifier backend $backend"
             }

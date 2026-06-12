@@ -11412,6 +11412,7 @@ fn openapi_schemas() -> Map {
                         "signature_b64": { "type": "string" },
                         "creation_time_ms": { "type": "integer", "format": "uint64" },
                         "fee_sponsor": { "type": "string" },
+                        "memo": { "type": "string" },
                         "instructions": {
                             "type": "array",
                             "items": { "$ref": "#/components/schemas/MultisigProposeInstructionInput" }

@@ -314,7 +314,11 @@ public final class ToriiEventStreamClientTests {
       try {
         client.openSseStream("/v1/events/sse", eventFilterOptions(filter), event -> {});
       } catch (final IllegalArgumentException expected) {
-        if (!expected.getMessage().contains("unsupported production verifier backend")) {
+        final String expectedMessage =
+            filter.contains("\"backend\":\" ")
+                ? "surrounding whitespace"
+                : "unsupported production verifier backend";
+        if (!expected.getMessage().contains(expectedMessage)) {
           throw new AssertionError("unexpected backend rejection message: " + expected.getMessage());
         }
         assertEquals(false, requestSent.get(), "request must not be sent for rejected filters");

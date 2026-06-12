@@ -33,7 +33,7 @@ export function assertOfflineCashConfigurationSnapshotUsable(
   }
   if (
     typeof snapshot.issuerPublicKeyBase64 !== "string" ||
-    snapshot.issuerPublicKeyBase64.trim().length === 0
+    !isCanonicalOfflineCashSnapshotText(snapshot.issuerPublicKeyBase64)
   ) {
     throw new OfflineCashConfigurationSnapshotError(
       "missing_issuer_public_key",
@@ -70,6 +70,10 @@ export function assertOfflineCashConfigurationSnapshotUsable(
     );
   }
   return true;
+}
+
+function isCanonicalOfflineCashSnapshotText(value) {
+  return /^[\x21-\x7E]+$/.test(value);
 }
 
 function finiteOfflineCashSnapshotNumber(value, fieldName) {

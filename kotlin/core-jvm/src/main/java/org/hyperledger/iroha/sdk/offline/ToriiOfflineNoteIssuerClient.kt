@@ -177,7 +177,7 @@ class ToriiOfflineNoteIssuerClient @JvmOverloads constructor(
             "attestation_key_id" to binding.attestationKeyId(),
             "asset_definition_id" to assetDefinitionId,
             "local_revision" to (existing?.revision ?: 0L),
-            "local_state_hash" to ((existing?.lineageState?.get("server_state_hash") as? String)?.trim() ?: ""),
+            "local_state_hash" to ((existing?.lineageState?.get("server_state_hash") as? String) ?: ""),
             "device_binding" to binding.deviceBinding(),
         )
         if (existing != null) {

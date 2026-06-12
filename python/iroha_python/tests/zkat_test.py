@@ -181,6 +181,63 @@ def test_zkat_package_root_exports_catalog_entrypoint_aliases() -> None:
     assert production_verified["production"] is True
 
 
+def test_zkat_public_helpers_reject_non_plain_mapping_inputs() -> None:
+    class ZkAtDict(dict):
+        pass
+
+    commitment_options: dict[str, object] = {
+        "policyJson": _policy(),
+        "policyEpoch": 7,
+        "domainSeparator": "boi:zkat:v1",
+        "policySchema": "boi-hidden-threshold-v1",
+    }
+    proof_options = {**_base_fixture(), "proofBytes": b"production-zkat-policy-proof"}
+
+    for helper in (build_zkat_policy_commitment, buildZkAtPolicyCommitment):
+        with pytest.raises(TypeError, match="zkAtPolicyCommitment"):
+            helper(ZkAtDict(commitment_options))
+
+    for helper in (build_zkat_authenticator_envelope, buildZkAtAuthenticatorEnvelope):
+        with pytest.raises(TypeError, match="zkAtAuthenticatorEnvelope"):
+            helper(ZkAtDict(proof_options))
+
+    for helper in (build_zkat_policy_proof_v1, buildZkAtPolicyProofV1):
+        with pytest.raises(TypeError, match="zkAtPolicyProofV1"):
+            helper(ZkAtDict(proof_options))
+
+    for helper in (build_zkat_dev_proof_fixture, buildZkAtDevProofFixture):
+        with pytest.raises(TypeError, match="zkAtDevProofFixture"):
+            helper(ZkAtDict(_base_fixture()))
+
+    production_envelope = build_zkat_policy_proof_v1(proof_options)
+    raw_verified = verify_zkat_policy_proof_v1(production_envelope)
+    assert raw_verified["ok"] is True
+    verify_options: dict[str, object] = {
+        "envelope": production_envelope,
+        "policyJson": _policy(),
+        "policySchema": "boi-hidden-threshold-v1",
+        "payload": _payload(),
+        "accountId": _account_id(),
+        "actionClass": "transparent_transfer",
+        "domainSeparator": "boi:zkat:v1",
+        "policyEpoch": 7,
+    }
+    for helper in (verify_zkat_policy_proof_v1, verifyZkAtPolicyProofV1):
+        with pytest.raises(TypeError, match="zkAtPolicyProofV1Verification"):
+            helper(ZkAtDict(verify_options))
+
+    fixture = build_zkat_dev_proof_fixture(_base_fixture())
+    local_verified = verify_zkat_authenticator_locally(fixture["envelope"])
+    assert local_verified["ok"] is True
+    local_options = {
+        **verify_options,
+        "envelope": fixture["envelope"],
+    }
+    for helper in (verify_zkat_authenticator_locally, verifyZkAtAuthenticatorLocally):
+        with pytest.raises(TypeError, match="zkAtAuthenticatorLocalVerification"):
+            helper(ZkAtDict(local_options))
+
+
 @pytest.mark.parametrize(
     "input_value",
     [

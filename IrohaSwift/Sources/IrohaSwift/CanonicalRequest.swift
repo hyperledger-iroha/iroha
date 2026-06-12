@@ -2,10 +2,12 @@ import Foundation
 import CryptoKit
 
 @available(macOS 10.15, iOS 13.0, *)
-public enum CanonicalRequestError: Error {
+public enum CanonicalRequestError: Error, Equatable {
     case missingAccountId
     case missingSigningKey
     case missingNonce
+    case invalidAccountId
+    case invalidNonce
 }
 
 @available(macOS 10.15, iOS 13.0, *)
@@ -56,8 +58,11 @@ public struct CanonicalRequest {
                                         body: Data = Data(),
                                         timestampMs: UInt64,
                                         nonce: String) throws -> Data {
-        guard !nonce.isEmpty else {
+        guard !nonce.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw CanonicalRequestError.missingNonce
+        }
+        guard nonce.trimmingCharacters(in: .whitespacesAndNewlines) == nonce else {
+            throw CanonicalRequestError.invalidNonce
         }
         let base = canonicalMessage(method: method, path: path, query: query, body: body)
         let rendered = "\(String(decoding: base, as: UTF8.self))\n\(timestampMs)\n\(nonce)"
@@ -72,8 +77,11 @@ public struct CanonicalRequest {
                                       signer: SigningKey?,
                                       timestampMs: UInt64 = UInt64(Date().timeIntervalSince1970 * 1000),
                                       nonce: String = UUID().uuidString.replacingOccurrences(of: "-", with: "")) throws -> [String: String] {
-        guard !accountId.isEmpty else {
+        guard !accountId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw CanonicalRequestError.missingAccountId
+        }
+        guard accountId.trimmingCharacters(in: .whitespacesAndNewlines) == accountId else {
+            throw CanonicalRequestError.invalidAccountId
         }
         guard let signer = signer else {
             throw CanonicalRequestError.missingSigningKey

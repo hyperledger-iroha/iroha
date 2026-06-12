@@ -1,3 +1,9 @@
+import {
+  noritoEncodeMultisigContractCallApproveRequest,
+  noritoEncodeMultisigContractCallProposeRequest,
+  noritoEncodeMultisigProposeRequest,
+} from "./norito.js";
+
 const DEFAULT_SUCCESS_STATUSES = [200];
 
 function normalizeBaseUrl(baseUrl) {
@@ -105,20 +111,43 @@ function normalizeTransactionQuerySort(sort) {
       .map((token) => token.trim())
       .filter(Boolean)
       .map((token) => {
-        const [key, order = "asc"] = token.split(":");
-        return { key: requireNonEmptyString(key, "sort key"), order };
+        const parts = token.split(":");
+        if (parts.length > 2) {
+          throw new TypeError("sort entries must use key or key:asc/key:desc form");
+        }
+        const [key, order = "asc"] = parts;
+        return {
+          key: normalizeQueryFieldName(requireNonEmptyString(key, "sort key"), "sort key"),
+          order: normalizeSortOrder(order, "sort order"),
+        };
       });
   }
   if (Array.isArray(sort)) {
     return sort.map((entry, index) => {
       const item = requireObject(entry, `sort[${index}]`);
       return {
-        key: requireNonEmptyString(item.key, `sort[${index}].key`),
-        order: item.order ?? "asc",
+        key: normalizeQueryFieldName(requireNonEmptyString(item.key, `sort[${index}].key`), `sort[${index}].key`),
+        order: normalizeSortOrder(item.order ?? "asc", `sort[${index}].order`),
       };
     });
   }
   throw new TypeError("sort must be a string or array");
+}
+
+function normalizeQueryFieldName(value, context) {
+  const field = requireNonEmptyString(value, context);
+  if (!/^[A-Za-z_][A-Za-z0-9_.-]*$/.test(field)) {
+    throw new TypeError(`${context} must be an ASCII field name`);
+  }
+  return field;
+}
+
+function normalizeSortOrder(value, context) {
+  const order = requireNonEmptyString(String(value ?? ""), context).toLowerCase();
+  if (order !== "asc" && order !== "desc") {
+    throw new TypeError(`${context} must be asc or desc`);
+  }
+  return order;
 }
 
 function transactionFilter(op, field, value) {
@@ -254,7 +283,13 @@ export class ToriiBrowserClient {
       headers,
       signal,
     };
-    if (normalizedOptions.body !== undefined) {
+    if (normalizedOptions.rawBody !== undefined) {
+      init.body = normalizedOptions.rawBody;
+      init.headers = {
+        ...headers,
+        ...(normalizedOptions.contentType ? { "Content-Type": normalizedOptions.contentType } : {}),
+      };
+    } else if (normalizedOptions.body !== undefined) {
       init.body = JSON.stringify(normalizedOptions.body);
       init.headers = {
         ...headers,
@@ -407,6 +442,30 @@ export class ToriiBrowserClient {
   getAssetDefinition(assetDefinitionId, options = {}) {
     const opts = requireObject(options, "getAssetDefinition options");
     return this._json("GET", `/v1/assets/definitions/${encodeURIComponent(requireNonEmptyString(assetDefinitionId, "assetDefinitionId"))}`, {
+      signal: signalFrom(opts),
+    });
+  }
+
+  resolveAlias(aliasOrRequest, options = {}) {
+    const opts = requireObject(options, "resolveAlias options");
+    const body =
+      typeof aliasOrRequest === "string"
+        ? { alias: requireNonEmptyString(aliasOrRequest, "alias") }
+        : requireObject(aliasOrRequest, "resolveAlias request");
+    return this._json("POST", "/v1/aliases/resolve", {
+      body,
+      signal: signalFrom(opts),
+    });
+  }
+
+  resolveAssetAlias(aliasOrRequest, options = {}) {
+    const opts = requireObject(options, "resolveAssetAlias options");
+    const body =
+      typeof aliasOrRequest === "string"
+        ? { alias: requireNonEmptyString(aliasOrRequest, "alias") }
+        : requireObject(aliasOrRequest, "resolveAssetAlias request");
+    return this._json("POST", "/v1/assets/aliases/resolve", {
+      body,
       signal: signalFrom(opts),
     });
   }
@@ -586,6 +645,90 @@ export class ToriiBrowserClient {
     const opts = requireObject(options, "getExplorerInstructionContractView options");
     return this._json("GET", `/v1/explorer/instructions/${encodeURIComponent(requireNonEmptyString(transactionHash, "transactionHash"))}/${encodeURIComponent(String(index))}/contract-view`, {
       signal: signalFrom(opts),
+    });
+  }
+
+  getMultisigSpec(selector, options = {}) {
+    const opts = requireObject(options, "getMultisigSpec options");
+    return this._json("POST", "/v1/multisig/spec", {
+      body: requireObject(selector, "getMultisigSpec selector"),
+      signal: signalFrom(opts),
+    });
+  }
+
+  listMultisigProposals(selector, options = {}) {
+    const opts = requireObject(options, "listMultisigProposals options");
+    return this._json("POST", "/v1/multisig/proposals", {
+      body: requireObject(selector, "listMultisigProposals selector"),
+      signal: signalFrom(opts),
+    });
+  }
+
+  getMultisigProposal(accountId, proposalId, options = {}) {
+    const opts = requireObject(options, "getMultisigProposal options");
+    return this._json(
+      "GET",
+      `/v1/multisig/${encodeURIComponent(requireNonEmptyString(accountId, "accountId"))}/proposals/${encodeURIComponent(requireNonEmptyString(proposalId, "proposalId"))}`,
+      { signal: signalFrom(opts) },
+    );
+  }
+
+  listPendingMultisigApprovals(options = {}) {
+    const opts = requireObject(options, "listPendingMultisigApprovals options");
+    return this._json("GET", "/v1/multisig/approvals/pending", {
+      params: {
+        status: opts.status,
+        operation_type: opts.operationType ?? opts.operation_type,
+        cursor: opts.cursor,
+        limit: opts.limit,
+      },
+      signal: signalFrom(opts),
+    });
+  }
+
+  getPendingMultisigApproval(operationId, options = {}) {
+    const opts = requireObject(options, "getPendingMultisigApproval options");
+    return this._json(
+      "GET",
+      `/v1/multisig/approvals/pending/${encodeURIComponent(requireNonEmptyString(operationId, "operationId"))}`,
+      { signal: signalFrom(opts) },
+    );
+  }
+
+  submitMultisigPropose(request, options = {}) {
+    const opts = requireObject(options, "submitMultisigPropose options");
+    return this._json("POST", "/v1/multisig/propose", {
+      rawBody: noritoEncodeMultisigProposeRequest(requireObject(request, "submitMultisigPropose request")),
+      contentType: "application/x-norito",
+      headers: { Accept: "application/json", ...(opts.headers ?? {}) },
+      signal: signalFrom(opts),
+      successStatuses: opts.successStatuses ?? [200, 202],
+    });
+  }
+
+  submitMultisigContractCallPropose(request, options = {}) {
+    const opts = requireObject(options, "submitMultisigContractCallPropose options");
+    return this._json("POST", "/v1/multisig/contract-call/propose", {
+      rawBody: noritoEncodeMultisigContractCallProposeRequest(
+        requireObject(request, "submitMultisigContractCallPropose request"),
+      ),
+      contentType: "application/x-norito",
+      headers: { Accept: "application/json", ...(opts.headers ?? {}) },
+      signal: signalFrom(opts),
+      successStatuses: opts.successStatuses ?? [200, 202],
+    });
+  }
+
+  submitMultisigContractCallApprove(request, options = {}) {
+    const opts = requireObject(options, "submitMultisigContractCallApprove options");
+    return this._json("POST", "/v1/multisig/contract-call/approve", {
+      rawBody: noritoEncodeMultisigContractCallApproveRequest(
+        requireObject(request, "submitMultisigContractCallApprove request"),
+      ),
+      contentType: "application/x-norito",
+      headers: { Accept: "application/json", ...(opts.headers ?? {}) },
+      signal: signalFrom(opts),
+      successStatuses: opts.successStatuses ?? [200, 202],
     });
   }
 

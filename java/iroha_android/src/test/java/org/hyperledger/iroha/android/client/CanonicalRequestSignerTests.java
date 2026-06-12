@@ -17,6 +17,7 @@ public final class CanonicalRequestSignerTests {
     callbackHeadersReceiveCanonicalMessage();
     unsignedBodyAuthJsonRemovesOnlyTopLevelProofFields();
     callbackBodySignatureReceivesCanonicalMessage();
+    canonicalAuthRejectsPaddedFreshnessAndAccountFields();
     System.out.println("[IrohaAndroid] Canonical request signer tests passed.");
   }
 
@@ -120,6 +121,74 @@ public final class CanonicalRequestSignerTests {
         : "callback body signature mismatch";
     assert !signed.containsKey(CanonicalRequestSigner.BODY_WITNESS_BASE64)
         : "callback body auth must not include witness";
+  }
+
+  private static void canonicalAuthRejectsPaddedFreshnessAndAccountFields() throws Exception {
+    final URI uri = new URI("https://torii.example/v1/offline/keys/refill");
+    final byte[] bodyBytes = "{\"operation_id\":\"operation-1\"}".getBytes(StandardCharsets.UTF_8);
+    final long timestampMs = 1_717_171_717_003L;
+    final Map<String, Object> body = new LinkedHashMap<>();
+    body.put("operation_id", "operation-1");
+
+    assertIllegalArgument(
+        () ->
+            CanonicalRequestSigner.canonicalRequestSignatureMessage(
+                "post", uri, bodyBytes, timestampMs, " nonce"),
+        "padded signature nonce");
+    assertIllegalArgument(
+        () ->
+            CanonicalRequestSigner.buildHeaders(
+                "post",
+                uri,
+                bodyBytes,
+                new ToriiCanonicalRequestAuth("alice ", CanonicalRequestSignerTests::fakeSignature),
+                timestampMs,
+                "nonce"),
+        "padded header account");
+    assertIllegalArgument(
+        () ->
+            CanonicalRequestSigner.buildHeaders(
+                "post",
+                uri,
+                bodyBytes,
+                new ToriiCanonicalRequestAuth("alice", CanonicalRequestSignerTests::fakeSignature),
+                timestampMs,
+                "\nnonce"),
+        "padded header nonce");
+    assertIllegalArgument(
+        () ->
+            CanonicalRequestSigner.withBodySignature(
+                "post",
+                uri,
+                body,
+                new ToriiCanonicalRequestAuth(" alice", CanonicalRequestSignerTests::fakeSignature),
+                timestampMs,
+                "nonce"),
+        "padded body account");
+    assertIllegalArgument(
+        () ->
+            CanonicalRequestSigner.withBodySignature(
+                "post",
+                uri,
+                body,
+                new ToriiCanonicalRequestAuth("alice", CanonicalRequestSignerTests::fakeSignature),
+                timestampMs,
+                "nonce "),
+        "padded body nonce");
+    assertIllegalArgument(
+        () ->
+            CanonicalRequestSigner.withBodyWitness(
+                body, "alice", timestampMs, "nonce", " witness"),
+        "padded witness");
+  }
+
+  private static void assertIllegalArgument(final Runnable body, final String label) {
+    try {
+      body.run();
+    } catch (IllegalArgumentException expected) {
+      return;
+    }
+    throw new AssertionError(label + " should reject");
   }
 
   private static byte[] fakeSignature(final byte[] message) {

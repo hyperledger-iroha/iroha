@@ -3,6 +3,7 @@ package org.hyperledger.iroha.android.client;
 import java.util.Base64;
 import java.util.Locale;
 import java.util.Objects;
+import org.hyperledger.iroha.android.address.AccountIdLiteral;
 import org.hyperledger.iroha.android.model.instructions.TransferWirePayloadEncoder;
 import org.hyperledger.iroha.norito.NoritoAdapters;
 import org.hyperledger.iroha.norito.NoritoCodec;
@@ -40,7 +41,8 @@ public final class IdentifierReceiptCanonicalEncoder {
     encodeSizedField(
         writer,
         PassthroughBytesAdapter.INSTANCE,
-        TransferWirePayloadEncoder.encodeAccountIdPayload(payload.accountId()));
+        TransferWirePayloadEncoder.encodeAccountIdPayload(
+            AccountIdLiteral.requireCanonicalI105Address(payload.accountId(), "payload.account_id")));
     return writer.toByteArray();
   }
 
@@ -81,7 +83,7 @@ public final class IdentifierReceiptCanonicalEncoder {
 
   public static byte[] encodeAttestation(final IdentifierReceiptAttestation attestation) {
     final NoritoEncoder writer = new NoritoEncoder(NoritoCodec.DEFAULT_FLAGS);
-    switch (attestation.kind().toLowerCase(Locale.ROOT)) {
+    switch (requireExactNonBlank(attestation.kind(), "attestation.kind")) {
       case "signed":
         writer.writeUInt(0, 32);
         encodeSizedField(
@@ -99,7 +101,9 @@ public final class IdentifierReceiptCanonicalEncoder {
             new ProofBoxPayload(
                 Objects.requireNonNull(attestation.proofBackend(), "proof attestation requires proofBackend"),
                 Base64.getDecoder().decode(
-                    Objects.requireNonNull(attestation.proofB64(), "proof attestation requires proofB64"))));
+                    requireExactNonBlank(
+                        Objects.requireNonNull(attestation.proofB64(), "proof attestation requires proofB64"),
+                        "attestation.proof_b64"))));
         return writer.toByteArray();
       default:
         throw new IllegalArgumentException("attestation.kind must be signed or proof");
@@ -130,13 +134,16 @@ public final class IdentifierReceiptCanonicalEncoder {
   }
 
   private static byte[] encodePolicyId(final String raw) {
-    final String[] parts = raw.trim().split("#", 2);
-    if (parts.length != 2 || parts[0].trim().isEmpty() || parts[1].trim().isEmpty()) {
+    final String value = requireExactNonBlank(raw, "payload.policy_id");
+    final String[] parts = value.split("#", 2);
+    if (parts.length != 2 || parts[0].isEmpty() || parts[1].isEmpty()) {
       throw new IllegalArgumentException("payload.policy_id must use kind#rule");
     }
+    final String kind = requireExactNonBlank(parts[0], "payload.policy_id.kind");
+    final String rule = requireExactNonBlank(parts[1], "payload.policy_id.rule");
     final NoritoEncoder writer = new NoritoEncoder(NoritoCodec.DEFAULT_FLAGS);
-    encodeSizedField(writer, STRING_ADAPTER, parts[0].trim());
-    encodeSizedField(writer, STRING_ADAPTER, parts[1].trim());
+    encodeSizedField(writer, STRING_ADAPTER, kind);
+    encodeSizedField(writer, STRING_ADAPTER, rule);
     return writer.toByteArray();
   }
 
@@ -153,7 +160,10 @@ public final class IdentifierReceiptCanonicalEncoder {
 
   private static byte[] encodeExecution(final IdentifierResolutionExecutionPayload execution) {
     final NoritoEncoder writer = new NoritoEncoder(NoritoCodec.DEFAULT_FLAGS);
-    encodeSizedField(writer, PassthroughBytesAdapter.INSTANCE, encodeProgramId(execution.programId()));
+    encodeSizedField(
+        writer,
+        PassthroughBytesAdapter.INSTANCE,
+        encodeProgramId(execution.programId(), "payload.execution.program_id"));
     encodeSizedField(
         writer,
         PassthroughBytesAdapter.INSTANCE,
@@ -184,8 +194,16 @@ public final class IdentifierReceiptCanonicalEncoder {
         writer,
         PassthroughBytesAdapter.INSTANCE,
         decodeHash(execution.associatedDataHash(), "payload.execution.associated_data_hash"));
-    encodeSizedField(writer, U64_ADAPTER, execution.executedAtMs());
-    encodeSizedField(writer, OptionalU64Adapter.INSTANCE, execution.expiresAtMs());
+    encodeSizedField(
+        writer,
+        U64_ADAPTER,
+        requireU64(execution.executedAtMs(), "payload.execution.executed_at_ms"));
+    encodeSizedField(
+        writer,
+        OptionalU64Adapter.INSTANCE,
+        execution.expiresAtMs() == null
+            ? null
+            : requireU64(execution.expiresAtMs(), "payload.execution.expires_at_ms"));
     return writer.toByteArray();
   }
 
@@ -291,7 +309,10 @@ public final class IdentifierReceiptCanonicalEncoder {
 
   private static byte[] encodeOutputOpeningPayload(final RamLfeOutputOpeningPayload payload) {
     final NoritoEncoder writer = new NoritoEncoder(NoritoCodec.DEFAULT_FLAGS);
-    encodeSizedField(writer, PassthroughBytesAdapter.INSTANCE, encodeProgramId(payload.programId()));
+    encodeSizedField(
+        writer,
+        PassthroughBytesAdapter.INSTANCE,
+        encodeProgramId(payload.programId(), "payload.opening.payload.program_id"));
     encodeSizedField(
         writer,
         PassthroughBytesAdapter.INSTANCE,
@@ -312,8 +333,16 @@ public final class IdentifierReceiptCanonicalEncoder {
         writer,
         PassthroughBytesAdapter.INSTANCE,
         decodeHash(payload.openedOutputHash(), "payload.opening.payload.opened_output_hash"));
-    encodeSizedField(writer, U64_ADAPTER, payload.openedAtMs());
-    encodeSizedField(writer, OptionalU64Adapter.INSTANCE, payload.expiresAtMs());
+    encodeSizedField(
+        writer,
+        U64_ADAPTER,
+        requireU64(payload.openedAtMs(), "payload.opening.payload.opened_at_ms"));
+    encodeSizedField(
+        writer,
+        OptionalU64Adapter.INSTANCE,
+        payload.expiresAtMs() == null
+            ? null
+            : requireU64(payload.expiresAtMs(), "payload.opening.payload.expires_at_ms"));
     return writer.toByteArray();
   }
 
@@ -372,9 +401,9 @@ public final class IdentifierReceiptCanonicalEncoder {
         expiresAtMs);
   }
 
-  private static byte[] encodeProgramId(final String raw) {
+  private static byte[] encodeProgramId(final String raw, final String field) {
     final NoritoEncoder writer = new NoritoEncoder(NoritoCodec.DEFAULT_FLAGS);
-    encodeSizedField(writer, STRING_ADAPTER, requireNonBlank(raw, "payload.execution.program_id"));
+    encodeSizedField(writer, STRING_ADAPTER, requireExactNonBlank(raw, field));
     return writer.toByteArray();
   }
 
@@ -389,7 +418,8 @@ public final class IdentifierReceiptCanonicalEncoder {
   }
 
   private static int backendTag(final String raw) {
-    switch (raw.trim().toLowerCase(Locale.ROOT)) {
+    final String backend = requireExactNonBlank(raw, "payload.execution.backend");
+    switch (backend) {
       case "hkdf-sha3-512-prf-v1":
         return 0;
       case "bfv-affine-sha3-256-v1":
@@ -402,7 +432,8 @@ public final class IdentifierReceiptCanonicalEncoder {
   }
 
   private static int verificationModeTag(final String raw) {
-    switch (raw.trim().toLowerCase(Locale.ROOT)) {
+    final String mode = requireExactNonBlank(raw, "payload.execution.verification_mode");
+    switch (mode) {
       case "signed":
         return 0;
       case "proof":
@@ -438,7 +469,7 @@ public final class IdentifierReceiptCanonicalEncoder {
 
   private static byte[] encodePrefixedHash(
       final String raw, final String prefix, final String field) {
-    final String normalized = raw.trim().toLowerCase(Locale.ROOT);
+    final String normalized = requireExactNonBlank(raw, field).toLowerCase(Locale.ROOT);
     return decodeHash(
         normalized.startsWith(prefix) ? normalized.substring(prefix.length()) : normalized, field);
   }
@@ -469,7 +500,7 @@ public final class IdentifierReceiptCanonicalEncoder {
   }
 
   private static byte[] decodeHash(final String raw, final String field) {
-    String body = requireNonBlank(raw, field);
+    String body = requireExactNonBlank(raw, field);
     if (body.toLowerCase(Locale.ROOT).startsWith("hash:")) {
       body = body.substring("hash:".length());
     }
@@ -484,8 +515,18 @@ public final class IdentifierReceiptCanonicalEncoder {
     return bytes;
   }
 
+  private static long requireU64(final long value, final String field) {
+    if (value < 0L) {
+      throw new IllegalArgumentException(field + " must be a non-negative u64");
+    }
+    return value;
+  }
+
   private static byte[] decodeHex(final String raw, final String field) {
     String trimmed = requireNonBlank(raw, field);
+    if (!trimmed.equals(raw)) {
+      throw new IllegalArgumentException(field + " must not contain surrounding whitespace");
+    }
     if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) {
       trimmed = trimmed.substring(2);
     }
@@ -510,6 +551,20 @@ public final class IdentifierReceiptCanonicalEncoder {
       throw new IllegalArgumentException(field + " must not be blank");
     }
     return trimmed;
+  }
+
+  private static String requireExactNonBlank(final String value, final String field) {
+    if (value == null) {
+      throw new IllegalArgumentException(field + " must not be null");
+    }
+    final String trimmed = value.trim();
+    if (trimmed.isEmpty()) {
+      throw new IllegalArgumentException(field + " must not be blank");
+    }
+    if (!trimmed.equals(value)) {
+      throw new IllegalArgumentException(field + " must not contain surrounding whitespace");
+    }
+    return value;
   }
 
   private static <T> void encodeSizedField(
@@ -575,7 +630,7 @@ public final class IdentifierReceiptCanonicalEncoder {
         encoder.writeByte(0);
       } else {
         encoder.writeByte(1);
-        encodeSizedField(encoder, U64_ADAPTER, value);
+        encodeSizedField(encoder, U64_ADAPTER, requireU64(value, "optional u64"));
       }
     }
 
@@ -611,7 +666,7 @@ public final class IdentifierReceiptCanonicalEncoder {
     private final byte[] bytes;
 
     private ProofBoxPayload(final String backend, final byte[] bytes) {
-      this.backend = backend;
+      this.backend = requireExactNonBlank(backend, "attestation.proof_backend");
       this.bytes = bytes.clone();
     }
   }

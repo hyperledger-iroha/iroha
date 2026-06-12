@@ -11,7 +11,9 @@ import java.util.Arrays;
 /** Native recursive Kagemusha spend ABI-6 bridge. */
 public final class KagemushaRecursiveSpendProver {
   public static final int REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 6;
-  public static final int RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 7;
+  public static final int RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION = 7;
+  public static final int RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION =
+      RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION;
   public static final String RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 =
       "kagemusha-recursive-aggregation-v1";
   public static final String RECURSIVE_COMPACT_CIRCUIT_ID_V1 =

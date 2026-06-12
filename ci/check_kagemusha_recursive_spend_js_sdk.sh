@@ -63,10 +63,16 @@ case "${NODE_VERSION}" in
     ;;
 esac
 
-"${NODE_BIN}" --test --test-name-pattern "Kagemusha recursive spend|Kagemusha record-backed|Kagemusha .* SDK runner|browser crypto exposes native-only helpers as safe stubs|buildKagemusha|privacy native availability probes build and verify with Norito request archives|privacy native wrappers require binary Norito request archives" \
+"${NODE_BIN}" --test --test-name-pattern "Kagemusha recursive spend|Kagemusha record-backed|Kagemusha .* SDK runner|browser crypto exposes native-only helpers as safe stubs|buildKagemusha|privacy native availability probes build and verify with Norito request archives|privacy native wrappers require binary Norito request archives|fromAccount rejects control and Unicode-confusable curve algorithm aliases|offline cash configuration snapshot requires cached issuer key and ABI|canonical request signing: rejects padded auth fields|streamEvents rejects unsupported production backend event filters before fetch|streamEvents rejects malformed verifying key event names before fetch|streamEvents rejects malformed proof event hashes before fetch|ZK-ACE verifier-key references reject padded selector metadata|privacy proof envelopes preserve pending production backend tags|verifyIdentifierResolutionReceipt rejects adversarial receipt mutations|encodeIdentifierResolutionReceiptPayload rejects non-exact execution tags|encodeIdentifierResolutionReceiptAttestation rejects padded proof backend|verifyIdentifierResolutionReceipt matches shared receipt vectors" \
+  test/address.test.js \
+  test/canonicalRequest.test.js \
   test/crypto.browser.test.js \
+  test/instructionBuilders.test.js \
   test/kagemushaFfiContractParity.test.js \
   test/kagemushaRecursiveSpend.test.js \
+  test/offlineCashLifecycle.test.js \
   test/package_dist.test.js \
   test/privacyNative.test.js \
+  test/toriiClient.identifier.test.js \
+  test/toriiClient.test.js \
   test/transactionBuilder.test.js

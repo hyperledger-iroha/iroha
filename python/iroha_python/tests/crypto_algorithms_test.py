@@ -29,6 +29,7 @@ from iroha_python.crypto import (
     SUPPORTED_CRYPTO_ALGORITHMS,
     CryptoKeyPair,
     derive_keypair_from_seed,
+    generate_keypair,
     load_keypair,
     load_keypair_from_multihash,
     normalize_crypto_algorithm,
@@ -67,6 +68,43 @@ def _signed_byte_array(data: bytes) -> array[int]:
     return array("b", (byte if byte < 128 else byte - 256 for byte in data))
 
 
+def test_lane_privacy_attachment_rejects_padded_verifier_selectors() -> None:
+    base = {
+        "commitment_id": 7,
+        "leaf": b"l" * 32,
+        "leaf_index": 0,
+        "audit_path": [None, b"a" * 32],
+        "proof_backend": "halo2/ipa",
+        "proof_bytes": b"proof",
+        "verifying_key_name": "vk_lane_privacy",
+    }
+
+    normalized = crypto_module._normalize_lane_privacy_attachment(base)
+    assert normalized["proof_backend"] == "halo2/ipa"
+    assert normalized["verifying_key_name"] == "vk_lane_privacy"
+
+    for override, message in [
+        (
+            {"proof_backend": " halo2/ipa"},
+            r"proof_backend must not contain surrounding whitespace",
+        ),
+        (
+            {"proof_backend": "halo2/ipa "},
+            r"proof_backend must not contain surrounding whitespace",
+        ),
+        (
+            {"verifying_key_name": " vk_lane_privacy"},
+            r"verifying_key_name must not contain surrounding whitespace",
+        ),
+        (
+            {"verifying_key_name": "vk_lane_privacy "},
+            r"verifying_key_name must not contain surrounding whitespace",
+        ),
+    ]:
+        with pytest.raises(ValueError, match=message):
+            crypto_module._normalize_lane_privacy_attachment({**base, **override})
+
+
 def test_supported_crypto_algorithms_include_all_rust_signature_suites() -> None:
     assert supported_crypto_algorithms() == SUPPORTED_CRYPTO_ALGORITHMS
     assert tuple(SUPPORTED_CRYPTO_ALGORITHMS) == EXPECTED_ALGORITHMS
@@ -100,6 +138,44 @@ def test_algorithm_aliases_normalize_to_canonical_labels() -> None:
 
     for alias, canonical in aliases.items():
         assert normalize_crypto_algorithm(alias) == canonical
+
+
+def test_algorithm_labels_reject_empty_strings_before_native_normalization() -> None:
+    with pytest.raises(ValueError, match="algorithm must be a non-empty string"):
+        normalize_crypto_algorithm("")
+
+
+def test_algorithm_labels_reject_surrounding_whitespace_across_public_api() -> None:
+    keypair = derive_keypair_from_seed(b"strict algorithm label boundary", ED25519_ALGORITHM)
+    message = b"strict algorithm label boundary message"
+    signature = sign(ED25519_ALGORITHM, keypair.private_key, message)
+
+    labels = (
+        " ed25519",
+        "ed25519 ",
+        "\ted25519",
+        "ed25519\n",
+        " eD-25519 ",
+    )
+
+    for label in labels:
+        calls = (
+            lambda: normalize_crypto_algorithm(label),
+            lambda: generate_keypair(label),
+            lambda: derive_keypair_from_seed(b"strict algorithm label boundary", label),
+            lambda: load_keypair(keypair.private_key, label),
+            lambda: public_key_multihash(label, keypair.public_key),
+            lambda: private_key_multihash(label, keypair.private_key),
+            lambda: sign(label, keypair.private_key, message),
+            lambda: verify(label, keypair.public_key, message, signature),
+            lambda: CryptoKeyPair(label, keypair.private_key, keypair.public_key),
+        )
+        for call in calls:
+            with pytest.raises(
+                ValueError,
+                match="algorithm must not contain surrounding whitespace",
+            ):
+                call()
 
 
 def test_asset_definition_id_builds_canonical_address_from_domain_and_name() -> None:

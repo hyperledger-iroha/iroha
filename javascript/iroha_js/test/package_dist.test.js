@@ -237,13 +237,18 @@ import {
   buildZkX509IdentityDevProofFixture,
   buildZkX509IdentityProofV0,
   verifyZkX509IdentityProofV0,
+  buildJindoLatticePublicInputs,
+  buildJindoLatticeProofEnvelope,
   buildJindoLatticeProofV0,
   buildJindoLatticeDevProofFixture,
   verifyJindoPolynomialCommitmentV0,
   verifyJindoLatticeProofLocally,
+  buildSisHintsCredentialCommitments,
+  buildSisHintsCredentialEnvelope,
   buildSisHintsAnonymousCredentialProofV0,
   buildSisHintsCredentialDevProofFixture,
   verifySisHintsAnonymousCredentialProofV0,
+  verifySisHintsCredentialProofLocally,
   buildAnonymousPgcReceiverSet,
   buildAnonymousPgcAccountCommitmentInstruction,
   buildAnonymousPgcKOutOfNProofV1,
@@ -251,6 +256,20 @@ import {
   buildAnonymousPgcTransferInstruction,
   buildAnonymousPgcDevProofFixture,
   buildVeRangeDevProofFixture,
+  buildOrchardActionBundleProofV1,
+  buildOrchardActionBundleInstruction,
+  buildPenumbraSpendProofV1,
+  buildPenumbraOutputProofV1,
+  buildPenumbraShieldedPoolTransaction,
+  buildFcmpPlusPlusMembershipProofV1,
+  buildFcmpPlusPlusTransferInstruction,
+  buildMidenStarkTransactionProofV1,
+  buildMidenNoteTransactionInstruction,
+  buildAztecPrivateKernelProofV1,
+  buildAztecPrivateRollupTransactionInstruction,
+  buildPqMaspStarkTransferProofV0,
+  buildPqMaspStarkRegisterPoolInstruction,
+  buildPqMaspStarkTransferInstruction,
   noritoDecodePrivacyProofEnvelope,
   canonicalBscCommitMessageBytes,
   canonicalBscCommitSealBytes,
@@ -1499,6 +1518,9 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     [{ ...initArtifacts, verifierOpeningLen: 3 }, /verifier_opening_len/],
     [{ ...initArtifacts, verifierOpeningLen: true }, /verifier_opening_len/],
     [{ ...initArtifacts, lineageVerifierKeyBackend: "halo2/kzg" }, /lineage_verifier_key/],
+    [{ ...initArtifacts, lineageVerifierKeyBackend: " halo2/ipa" }, /lineage_verifier_key/],
+    [{ ...initArtifacts, lineageVerifierKeyBackend: "halo2/ipa " }, /lineage_verifier_key/],
+    [{ ...initArtifacts, lineageVerifierKeyBackend: "HALO2/IPA" }, /lineage_verifier_key/],
     [{ ...initArtifacts, lineageVerifierKey: Buffer.alloc(0) }, /lineage_verifier_key/],
     [{ ...initArtifacts, lineageProvingKeyArchive: Buffer.alloc(0) }, /lineage_proving_key_archive/],
     [{ ...initArtifacts, lineageVerifierKey: "not-bytes" }, /lineage_verifier_key/],
@@ -2363,6 +2385,7 @@ test("package dist privacy proof envelopes preserve pending production backend t
   const cases = [
     ["halo2-ipa-orchard", "Halo2IpaOrchard"],
     ["halo2/ipa/orchard", "Halo2IpaOrchard"],
+    ["halo2-pasta-action-bundle", "Halo2IpaOrchard"],
     ["orchard", "Halo2IpaOrchard"],
     ["zcash-orchard", "Halo2IpaOrchard"],
     ["groth16-bls12-377", "Groth16Bls12377"],
@@ -2374,6 +2397,7 @@ test("package dist privacy proof envelopes preserve pending production backend t
     ["halo2/ipa/penumbra", "Groth16Bls12377"],
     ["halo2/ipa/masp", "Groth16Bls12377"],
     ["fcmp-plus-plus-curve-tree", "FcmpPlusPlusCurveTree"],
+    ["fcmp-plus-plus-curve-trees-bulletproofs", "FcmpPlusPlusCurveTree"],
     ["fcmp++", "FcmpPlusPlusCurveTree"],
     ["monero-fcmp++", "FcmpPlusPlusCurveTree"],
     ["halo2/ipa/monero", "FcmpPlusPlusCurveTree"],
@@ -2393,8 +2417,10 @@ test("package dist privacy proof envelopes preserve pending production backend t
     ["stark/fri/sha256_goldilocks.v1", "Stark"],
     ["miden-stark", "MidenStark"],
     ["stark/fri/miden", "MidenStark"],
+    ["stark-vm-note-transaction", "MidenStark"],
     ["aztec-plonkish-private-kernel", "AztecPlonkishPrivateKernel"],
     ["aztec/private-kernel", "AztecPlonkishPrivateKernel"],
+    ["plonkish-private-kernel-rollup", "AztecPlonkishPrivateKernel"],
     ["pq-masp-stark-fri", "PqMaspStarkFri"],
     ["stark/fri/pq-masp-stark-fri", "PqMaspStarkFri"],
     ["post-quantum-masp", "PqMaspStarkFri"],
@@ -2436,6 +2462,66 @@ test("package dist privacy proof envelopes preserve pending production backend t
     const decoded = noritoDecodePrivacyProofEnvelope(encoded);
     assert.equal(decoded.backend, expected);
   }
+});
+
+test("package dist research privacy adapters build envelopes and reject class options", () => {
+  class PrivacyOptions {
+    constructor(values) {
+      Object.assign(this, values);
+    }
+  }
+
+  const options = {
+    vkHash: Buffer.alloc(32, 0x42),
+    publicInputs: Buffer.from("production-research-public-inputs"),
+    proofBytes: Buffer.from("production-research-proof"),
+  };
+  const proofHelpers = [
+    [buildOrchardActionBundleProofV1, "Halo2IpaOrchard"],
+    [buildPenumbraSpendProofV1, "Groth16Bls12377"],
+    [buildPenumbraOutputProofV1, "Groth16Bls12377"],
+    [buildFcmpPlusPlusMembershipProofV1, "FcmpPlusPlusCurveTree"],
+    [buildMidenStarkTransactionProofV1, "MidenStark"],
+    [buildAztecPrivateKernelProofV1, "AztecPlonkishPrivateKernel"],
+    [buildPqMaspStarkTransferProofV0, "PqMaspStarkFri"],
+  ];
+  for (const [helper, expectedBackend] of proofHelpers) {
+    const envelope = helper(options);
+    const decoded = noritoDecodePrivacyProofEnvelope(envelope);
+    assert.equal(decoded.backend, expectedBackend);
+    assert.deepEqual(decoded.proof_bytes, Array.from(options.proofBytes));
+    assert.throws(() => helper(new PrivacyOptions(options)), /plain object/);
+  }
+
+  const instructionHelpers = [
+    [buildOrchardActionBundleInstruction, "zk::SubmitOrchardActionBundle"],
+    [buildPenumbraShieldedPoolTransaction, "zk::SubmitPenumbraShieldedPoolTransaction"],
+    [buildFcmpPlusPlusTransferInstruction, "zk::SubmitFcmpPlusPlusTransfer"],
+    [buildMidenNoteTransactionInstruction, "zk::SubmitMidenNoteTransaction"],
+    [buildAztecPrivateRollupTransactionInstruction, "zk::SubmitAztecPrivateRollupTransaction"],
+    [buildPqMaspStarkRegisterPoolInstruction, "zk::SubmitPqMaspStarkTransfer"],
+    [buildPqMaspStarkTransferInstruction, "zk::SubmitPqMaspStarkTransfer"],
+  ];
+  for (const [helper, instructionKind] of instructionHelpers) {
+    const instruction = helper(options);
+    assert.equal(instruction.instruction, instructionKind);
+    assert.ok(instruction.proof_envelope_sha256);
+    assert.throws(() => helper(new PrivacyOptions(options)), /plain object/);
+  }
+
+  const instruction = buildOrchardActionBundleInstruction({
+    ...options,
+    metadata: { purpose: "boundary-test" },
+  });
+  assert.deepEqual(instruction.metadata, { purpose: "boundary-test" });
+  assert.throws(
+    () =>
+      buildOrchardActionBundleInstruction({
+        ...options,
+        metadata: new PrivacyOptions({ purpose: "test" }),
+      }),
+    /plain object/,
+  );
 });
 
 test("package dist Jindo production helpers reject dev fixture bytes", () => {
@@ -2506,6 +2592,110 @@ test("package dist Jindo production helpers reject dev fixture bytes", () => {
       /backend/,
     );
   }
+});
+
+test("package dist Jindo and SIS public helpers reject class-instance options", () => {
+  class PrivacyOptions {
+    constructor(values) {
+      Object.assign(this, values);
+    }
+  }
+
+  const jindoBase = {
+    polynomialJson: { ring: "Rq", degree: 1024, digest: "poly" },
+    openingClaimJson: { point: "x=42", value_digest: "value" },
+    querySetJson: { queries: [0, 7, 42] },
+    parametersJson: { scheme: "jindo-pcs-v0", q_bits: 64 },
+    domainSeparator: "boi:jindo:pcs:pilot:v0",
+  };
+  const jindoProofOptions = {
+    ...jindoBase,
+    vkHash: Buffer.alloc(32, 0xaa),
+    proofBytes: Buffer.from("production-jindo-lattice-proof"),
+  };
+
+  for (const [helper, options] of [
+    [buildJindoLatticePublicInputs, jindoBase],
+    [buildJindoLatticeProofEnvelope, jindoProofOptions],
+    [buildJindoLatticeProofV0, jindoProofOptions],
+    [buildJindoLatticeDevProofFixture, {
+      ...jindoBase,
+      vkHash: Buffer.alloc(32, 0xaa),
+    }],
+  ]) {
+    assert.throws(() => helper(new PrivacyOptions(options)), /plain object/);
+  }
+
+  const jindoProof = buildJindoLatticeProofV0(jindoProofOptions);
+  assert.equal(verifyJindoPolynomialCommitmentV0(jindoProof).ok, true);
+  assert.throws(
+    () =>
+      verifyJindoPolynomialCommitmentV0(
+        new PrivacyOptions({ envelope: jindoProof, ...jindoBase }),
+      ),
+    /plain object/,
+  );
+
+  const jindoFixture = buildJindoLatticeDevProofFixture({
+    ...jindoBase,
+    vkHash: Buffer.alloc(32, 0xaa),
+  });
+  assert.equal(verifyJindoLatticeProofLocally(jindoFixture.envelope).ok, true);
+  assert.throws(
+    () =>
+      verifyJindoLatticeProofLocally(
+        new PrivacyOptions({ envelope: jindoFixture.envelope, ...jindoBase }),
+      ),
+    /plain object/,
+  );
+
+  const sisBase = {
+    issuerJson: { issuer: "boi", scheme: "sis-hints-v0" },
+    credentialJson: { credential_type: "wallet", nonce: "n-1" },
+    showingPolicyJson: { verifier: "boi", purpose: "wallet" },
+    parametersJson: { scheme: "sis-hints-anoncred-v0", q_bits: 64 },
+    domainSeparator: "boi:sis-hints:pilot:v0",
+  };
+  const sisProofOptions = {
+    ...sisBase,
+    vkHash: Buffer.alloc(32, 0xbb),
+    proofBytes: Buffer.from("production-sis-hints-proof"),
+  };
+
+  for (const [helper, options] of [
+    [buildSisHintsCredentialCommitments, sisBase],
+    [buildSisHintsCredentialEnvelope, sisProofOptions],
+    [buildSisHintsAnonymousCredentialProofV0, sisProofOptions],
+    [buildSisHintsCredentialDevProofFixture, {
+      ...sisBase,
+      vkHash: Buffer.alloc(32, 0xbb),
+    }],
+  ]) {
+    assert.throws(() => helper(new PrivacyOptions(options)), /plain object/);
+  }
+
+  const sisProof = buildSisHintsAnonymousCredentialProofV0(sisProofOptions);
+  assert.equal(verifySisHintsAnonymousCredentialProofV0(sisProof).ok, true);
+  assert.throws(
+    () =>
+      verifySisHintsAnonymousCredentialProofV0(
+        new PrivacyOptions({ envelope: sisProof, ...sisBase }),
+      ),
+    /plain object/,
+  );
+
+  const sisFixture = buildSisHintsCredentialDevProofFixture({
+    ...sisBase,
+    vkHash: Buffer.alloc(32, 0xbb),
+  });
+  assert.equal(verifySisHintsCredentialProofLocally(sisFixture.envelope).ok, true);
+  assert.throws(
+    () =>
+      verifySisHintsCredentialProofLocally(
+        new PrivacyOptions({ envelope: sisFixture.envelope, ...sisBase }),
+      ),
+    /plain object/,
+  );
 });
 
 test("package dist SIS-with-hints production helpers reject dev fixture bytes", () => {

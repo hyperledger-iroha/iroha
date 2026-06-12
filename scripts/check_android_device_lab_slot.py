@@ -6,6 +6,7 @@ import argparse
 import datetime as dt
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 from pathlib import PurePosixPath
@@ -36,6 +37,7 @@ MAX_ANDROID_DEVICE_LAB_JSON_BYTES = 16 * 1024 * 1024
 KAGEMUSHA_OFFLINE_WALLET_APK_PATH = "evidence/offline-wallet-release.apk"
 MAX_ANDROID_DEVICE_LAB_SHA256_MANIFEST_BYTES = 1024 * 1024
 KAGEMUSHA_RUNTIME_LOG_COMPLETE_MARKER = "kagemusha device-lab run complete"
+KAGEMUSHA_TELEMETRY_SUITE = "kagemusha-device-lab"
 KAGEMUSHA_RUNTIME_LOG_FAILURE_MARKERS: tuple[str, ...] = (
     "BUILD FAILED",
     "TEST FAILED",
@@ -59,6 +61,17 @@ def _slot_artifact_max_bytes(relative: str) -> int:
         return MAX_KAGEMUSHA_OFFLINE_WALLET_APK_BYTES
     return MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES
 DEVICE_LAB_ROOT_SUMMARY_LABEL = "<local-device-lab-root>"
+SUMMARY_REDACTION_KEY_COLLISION_FIELD = "summary_redaction_key_collision"
+SUMMARY_NON_STRING_KEY_NORMALIZED_FIELD = "summary_non_string_key_normalized"
+SUMMARY_NON_STRING_KEY_REDACTION = "<non-string-summary-key>"
+SUMMARY_NONFINITE_NUMBER_NORMALIZED_FIELD = "summary_nonfinite_number_normalized"
+SUMMARY_NONFINITE_NUMBER_REDACTION = "<non-finite-summary-number>"
+SUMMARY_UNSUPPORTED_VALUE_NORMALIZED_FIELD = "summary_unsupported_value_normalized"
+SUMMARY_UNSUPPORTED_VALUE_REDACTION = "<unsupported-summary-value>"
+SUMMARY_KAGEMUSHA_SHAPE_NORMALIZED_FIELD = "summary_kagemusha_shape_normalized"
+SUMMARY_STATUS_NORMALIZED_FIELD = "summary_status_normalized"
+SUMMARY_ERRORS_NORMALIZED_FIELD = "summary_errors_normalized"
+SUMMARY_ERROR_REDACTION = "<malformed-summary-error>"
 SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 SIGNED_AT_UTC_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 SECRET_RE = re.compile(
@@ -173,6 +186,22 @@ SIGNED_EVIDENCE_SLOT_TRUE_FIELDS: tuple[str, ...] = (
     "physical_device_attestation",
     "one_use_key_rotation_passed",
     "rollback_rejection_passed",
+)
+PENDING_QUEUE_FIELDS: frozenset[str] = frozenset(
+    {
+        "slot_id",
+        "pending_transactions",
+    }
+)
+TELEMETRY_FIELDS: frozenset[str] = frozenset(
+    {
+        "schema_version",
+        "slot_id",
+        "suite",
+        "device_model",
+        "device_codename",
+        "app_package_name",
+    }
 )
 SLOT_METADATA_FIELDS: frozenset[str] = frozenset(
     {
@@ -374,11 +403,12 @@ WALLET_INTEGRITY_TRANSCRIPT_FIELDS: frozenset[str] = frozenset(
 )
 STRONGBOX_LEVELS = {"STRONGBOX", "STRONG_BOX"}
 SECRET_PATH_REDACTION = "<redacted-secret-path>"
+CONTROL_PATH_REDACTION = "<unsafe-path>"
 
 
 def _slot_root_entries(slot_path: Path, errors: list[str]) -> list[Path] | None:
     try:
-        return list(slot_path.iterdir())
+        return sorted(slot_path.iterdir(), key=lambda entry: entry.name)
     except OSError:
         _append_error_once(errors, "slot directory could not be listed")
         return None
@@ -415,6 +445,8 @@ def _slot_files(slot_path: Path, errors: list[str] | None = None) -> set[str]:
     if stat.S_ISLNK(slot_mode) or not stat.S_ISDIR(slot_mode):
         return set()
     if SECRET_RE.search(str(slot_path)):
+        return set()
+    if _contains_control_character(str(slot_path)):
         return set()
     if validate_no_symlink_ancestors(slot_path, "slot ancestor directory"):
         return set()
@@ -672,15 +704,19 @@ def _normalise_safe_relative_path(
     *,
     allow_sha_manifest: bool = False,
 ) -> str | None:
-    path_text = path_text.strip()
-    if path_text.startswith("*"):
-        path_text = path_text[1:]
+    if _contains_control_character(path_text):
+        errors.append(f"{label}: unsafe path contains control characters")
+        return None
+    if path_text != path_text.strip():
+        errors.append(f"{label}: unsafe path contains surrounding whitespace")
+        return None
     if SECRET_RE.search(path_text):
         errors.append(f"{label}: unsafe path contains secret-looking material")
         return None
     candidate = PurePosixPath(path_text)
     if (
         not path_text
+        or path_text.startswith("*")
         or path_text.startswith("/")
         or "\\" in path_text
         or candidate.is_absolute()
@@ -690,11 +726,18 @@ def _normalise_safe_relative_path(
     ):
         errors.append(f"{label}: unsafe path {_display_path(path_text)!r}")
         return None
+    if candidate.as_posix() != path_text:
+        errors.append(f"{label}: unsafe path is not canonical")
+        return None
     return candidate.as_posix()
 
 
 def _display_path(path_text: str) -> str:
-    return SECRET_PATH_REDACTION if SECRET_RE.search(path_text) else path_text
+    if SECRET_RE.search(path_text):
+        return SECRET_PATH_REDACTION
+    if _contains_control_character(path_text):
+        return CONTROL_PATH_REDACTION
+    return path_text
 
 
 def _contains_control_character(value: str) -> bool:
@@ -713,6 +756,177 @@ def _display_slot_name(slot_name: str) -> str:
     return slot_name
 
 
+def _summary_safe_string(value: str) -> str:
+    """Render scanner summary strings without echoing secrets or controls."""
+
+    if SECRET_RE.search(value):
+        return SECRET_PATH_REDACTION
+    if _contains_control_character(value):
+        return CONTROL_PATH_REDACTION
+    return value
+
+
+def _summary_safe_value(value: Any) -> tuple[Any, bool, bool, bool, bool]:
+    """Return a JSON-summary-safe copy plus collision/normalization flags."""
+
+    if isinstance(value, str):
+        return _summary_safe_string(value), False, False, False, False
+    if value is None or isinstance(value, (bool, int)):
+        return value, False, False, False, False
+    if isinstance(value, float) and not math.isfinite(value):
+        return SUMMARY_NONFINITE_NUMBER_REDACTION, False, False, True, False
+    if isinstance(value, float):
+        return SUMMARY_UNSUPPORTED_VALUE_REDACTION, False, False, False, True
+    if isinstance(value, list):
+        items = []
+        collision = False
+        key_normalized = False
+        value_normalized = False
+        unsupported_normalized = False
+        for item in value:
+            (
+                safe_item,
+                item_collision,
+                item_key_normalized,
+                item_value_normalized,
+                item_unsupported_normalized,
+            ) = _summary_safe_value(item)
+            items.append(safe_item)
+            collision = collision or item_collision
+            key_normalized = key_normalized or item_key_normalized
+            value_normalized = value_normalized or item_value_normalized
+            unsupported_normalized = (
+                unsupported_normalized or item_unsupported_normalized
+            )
+        return items, collision, key_normalized, value_normalized, unsupported_normalized
+    if isinstance(value, tuple):
+        items = []
+        collision = False
+        key_normalized = False
+        value_normalized = False
+        unsupported_normalized = False
+        for item in value:
+            (
+                safe_item,
+                item_collision,
+                item_key_normalized,
+                item_value_normalized,
+                item_unsupported_normalized,
+            ) = _summary_safe_value(item)
+            items.append(safe_item)
+            collision = collision or item_collision
+            key_normalized = key_normalized or item_key_normalized
+            value_normalized = value_normalized or item_value_normalized
+            unsupported_normalized = (
+                unsupported_normalized or item_unsupported_normalized
+            )
+        return items, collision, key_normalized, value_normalized, unsupported_normalized
+    if isinstance(value, dict):
+        safe: dict[Any, Any] = {}
+        collision = False
+        key_normalized = False
+        value_normalized = False
+        unsupported_normalized = False
+        for key, item in value.items():
+            if isinstance(key, str):
+                safe_key = _summary_safe_string(key)
+            else:
+                safe_key = SUMMARY_NON_STRING_KEY_REDACTION
+                key_normalized = True
+            (
+                safe_item,
+                item_collision,
+                item_key_normalized,
+                item_value_normalized,
+                item_unsupported_normalized,
+            ) = _summary_safe_value(item)
+            if safe_key in safe:
+                collision = True
+                continue
+            safe[safe_key] = safe_item
+            collision = collision or item_collision
+            key_normalized = key_normalized or item_key_normalized
+            value_normalized = value_normalized or item_value_normalized
+            unsupported_normalized = (
+                unsupported_normalized or item_unsupported_normalized
+            )
+        return safe, collision, key_normalized, value_normalized, unsupported_normalized
+    return SUMMARY_UNSUPPORTED_VALUE_REDACTION, False, False, False, True
+
+
+def _summary_safe_report(report: dict) -> dict:
+    """Return a summary-facing copy of a slot report."""
+
+    (
+        summary_report,
+        key_collision,
+        key_normalized,
+        value_normalized,
+        unsupported_normalized,
+    ) = (
+        _summary_safe_value(report)
+    )
+    if not isinstance(summary_report, dict):
+        return {"status": "error", SUMMARY_STATUS_NORMALIZED_FIELD: True}
+    slot = report.get("slot")
+    if isinstance(slot, str):
+        summary_report["slot"] = _display_slot_name(slot)
+    if summary_report.get("status") not in {"ok", "error"}:
+        summary_report["status"] = "error"
+        summary_report[SUMMARY_STATUS_NORMALIZED_FIELD] = True
+    if "kagemusha" in summary_report and not isinstance(
+        summary_report["kagemusha"], dict
+    ):
+        summary_report["kagemusha"] = {}
+        summary_report[SUMMARY_KAGEMUSHA_SHAPE_NORMALIZED_FIELD] = True
+    if "errors" in summary_report:
+        errors, errors_normalized = _summary_safe_errors(summary_report["errors"])
+        summary_report["errors"] = errors
+        if errors_normalized:
+            summary_report[SUMMARY_ERRORS_NORMALIZED_FIELD] = True
+    if key_collision:
+        summary_report[SUMMARY_REDACTION_KEY_COLLISION_FIELD] = True
+    if key_normalized:
+        summary_report[SUMMARY_NON_STRING_KEY_NORMALIZED_FIELD] = True
+    if value_normalized:
+        summary_report[SUMMARY_NONFINITE_NUMBER_NORMALIZED_FIELD] = True
+    if unsupported_normalized:
+        summary_report[SUMMARY_UNSUPPORTED_VALUE_NORMALIZED_FIELD] = True
+    return summary_report
+
+
+def _summary_safe_errors(value: Any) -> tuple[list[str], bool]:
+    """Return a scanner-summary-safe list of error strings."""
+
+    if not isinstance(value, list):
+        return [SUMMARY_ERROR_REDACTION], True
+    errors: list[str] = []
+    normalized = False
+    for item in value:
+        if isinstance(item, str):
+            errors.append(_summary_safe_string(item))
+        else:
+            errors.append(SUMMARY_ERROR_REDACTION)
+            normalized = True
+    return errors, normalized
+
+
+def _summary_kagemusha(report: dict) -> dict[str, Any]:
+    """Return summary-facing Kagemusha details only when they are shaped as an object."""
+
+    kagemusha = report.get("kagemusha")
+    return kagemusha if isinstance(kagemusha, dict) else {}
+
+
+def _summary_device_family(report: dict) -> str | None:
+    """Return a canonical Kagemusha device family from a summary report."""
+
+    family = _summary_kagemusha(report).get("device_family")
+    if isinstance(family, str) and family in KAGEMUSHA_STANDARD_DEVICE_FAMILIES:
+        return family
+    return None
+
+
 def _normalise_manifest_path(path_text: str, errors: list[str], line_no: int) -> str | None:
     return _normalise_safe_relative_path(
         path_text,
@@ -728,6 +942,7 @@ def validate_slot_ids(slot_ids: Iterable[str] | None) -> tuple[list[str] | None,
         return None, []
     errors: list[str] = []
     normalised: list[str] = []
+    seen: dict[str, int] = {}
     for index, raw_slot_id in enumerate(slot_ids):
         slot_id = raw_slot_id
         if not slot_id:
@@ -755,7 +970,20 @@ def validate_slot_ids(slot_ids: Iterable[str] | None) -> tuple[list[str] | None,
                 f"slot id {_display_path(slot_id)!r} must be a single safe directory name"
             )
             continue
-        normalised.append(candidate.name)
+        normalised_slot_id = candidate.name
+        if candidate.as_posix() != slot_id:
+            errors.append(
+                f"slot id {_display_path(slot_id)!r} must be a canonical single directory name"
+            )
+            continue
+        prior_index = seen.get(normalised_slot_id)
+        if prior_index is not None:
+            errors.append(
+                f"slot id {index} must not duplicate slot id {prior_index}"
+            )
+            continue
+        seen[normalised_slot_id] = index
+        normalised.append(normalised_slot_id)
     return normalised, errors
 
 
@@ -771,6 +999,8 @@ def classify_device_lab_root_path(root: Path) -> tuple[bool, list[str]]:
 
     if SECRET_RE.search(str(root)):
         return False, ["device-lab root path must not contain secret-looking material"]
+    if _contains_control_character(str(root)):
+        return False, ["device-lab root path must not contain control characters"]
     try:
         root_mode = root.lstat().st_mode
     except FileNotFoundError:
@@ -795,6 +1025,9 @@ def _reject_secret_slot_path(slot_path: Path, errors: list[str]) -> bool:
 
     if SECRET_RE.search(str(slot_path)):
         errors.append("slot path must not contain secret-looking material")
+        return True
+    if _contains_control_character(str(slot_path)):
+        errors.append("slot path must not contain control characters")
         return True
     return False
 
@@ -857,6 +1090,8 @@ def validate_no_symlink_ancestors(path: Path, label: str) -> list[str]:
 def _validate_manifest_slot_path(slot_path: Path) -> list[str]:
     if SECRET_RE.search(str(slot_path)):
         return ["slot path must not contain secret-looking material"]
+    if _contains_control_character(str(slot_path)):
+        return ["slot path must not contain control characters"]
     try:
         slot_mode = slot_path.lstat().st_mode
     except FileNotFoundError:
@@ -933,7 +1168,14 @@ def parse_sha256_manifest(slot_path: Path) -> tuple[dict[str, str], list[str]]:
         return entries, ["sha256sum.txt could not be read"]
     for line_no, raw in enumerate(lines, start=1):
         line = raw.strip()
-        if not line or line.startswith("#"):
+        if not line:
+            continue
+        if raw != line:
+            errors.append(
+                f"sha256sum.txt line {line_no}: must not contain surrounding whitespace"
+            )
+            continue
+        if line.startswith("#"):
             continue
         parts = line.split(None, 1)
         if len(parts) != 2:
@@ -992,6 +1234,8 @@ def _validate_manifest_artifact_for_digest(
 
     if SECRET_RE.search(str(slot_path)):
         return None, None, ["slot path must not contain secret-looking material"]
+    if _contains_control_character(str(slot_path)):
+        return None, None, ["slot path must not contain control characters"]
     if SECRET_RE.search(relative):
         return None, None, ["slot artifacts must not contain secret-looking material"]
     normalise_errors: list[str] = []
@@ -1129,6 +1373,8 @@ def _validate_signed_evidence_artifact_for_digest(
 
     if SECRET_RE.search(str(slot_path)):
         return None, None, ["slot path must not contain secret-looking material"]
+    if _contains_control_character(str(slot_path)):
+        return None, None, ["slot path must not contain control characters"]
     if SECRET_RE.search(relative):
         return None, None, [
             "signed evidence artifact digest path must not contain secret-looking material"
@@ -1282,6 +1528,8 @@ def _validate_metadata_artifact_for_read(
 
     if SECRET_RE.search(str(slot_path)):
         return None, None, ["slot path must not contain secret-looking material"]
+    if _contains_control_character(str(slot_path)):
+        return None, None, ["slot path must not contain control characters"]
     if SECRET_RE.search(relative):
         return None, None, [f"{label} must not contain secret-looking material"]
     normalise_errors: list[str] = []
@@ -1524,6 +1772,9 @@ def _load_json(path: Path, label: str, errors: list[str]) -> dict[str, Any] | No
     if SECRET_RE.search(str(path)):
         errors.append(f"{label} path must not contain secret-looking material")
         return None
+    if _contains_control_character(str(path)):
+        errors.append(f"{label} path must not contain control characters")
+        return None
     json_ancestor_errors = validate_no_symlink_ancestors(
         path,
         f"{label} ancestor directory",
@@ -1683,7 +1934,19 @@ def _require_evidence_int(
 
 def _require_status(data: dict[str, Any], key: str, accepted: set[str], errors: list[str]) -> None:
     value = data.get(key)
-    if not isinstance(value, str) or value.strip().lower() not in accepted:
+    if not isinstance(value, str) or not value:
+        errors.append(f"slot.json {key} must be a non-empty string")
+        return
+    if value != value.strip():
+        errors.append(f"slot.json {key} must not contain surrounding whitespace")
+        return
+    if _contains_control_character(value):
+        errors.append(f"slot.json {key} must not contain control characters")
+        return
+    if value != value.lower():
+        errors.append(f"slot.json {key} must be lowercase")
+        return
+    if value not in accepted:
         errors.append(f"slot.json {key} must be one of {sorted(accepted)}")
 
 
@@ -1792,14 +2055,14 @@ def validate_attestation_result(
     slot_path: Path,
     metadata: dict[str, Any],
     errors: list[str],
-) -> None:
+) -> dict[str, Any] | None:
     """Validate production StrongBox/KeyMint attestation summary bindings."""
 
     if _reject_secret_slot_path(slot_path, errors):
-        return
+        return None
     result = _load_json(slot_path / "attestation" / "result.json", "attestation/result.json", errors)
     if result is None:
-        return
+        return None
 
     for field in sorted(set(result) - ATTESTATION_RESULT_FIELDS):
         errors.append(
@@ -1862,11 +2125,22 @@ def validate_attestation_result(
             strongbox_seen = True
         else:
             errors.append(f"attestation/result.json {level_key} must be STRONGBOX")
+        expected_level = metadata.get(level_key)
+        if (
+            level_key == "keymint_security_level"
+            and isinstance(expected_level, str)
+            and level != expected_level
+        ):
+            errors.append(
+                "attestation/result.json keymint_security_level must match "
+                "slot.json keymint_security_level"
+            )
     if not strongbox_seen:
         errors.append("attestation/result.json must report STRONGBOX security level")
 
     for key in ATTESTATION_RESULT_SLOT_BINDING_FIELDS:
         _attestation_result_matches_slot_metadata(result, metadata, key, errors)
+    return result
 
 
 def _attestation_report_string(
@@ -1937,18 +2211,18 @@ def validate_attestation_report(
     slot_path: Path,
     metadata: dict[str, Any],
     errors: list[str],
-) -> None:
+) -> dict[str, Any] | None:
     """Validate the production StrongBox/KeyMint verifier report."""
 
     if _reject_secret_slot_path(slot_path, errors):
-        return
+        return None
     report = _load_json(
         slot_path / "attestation" / "report.json",
         "attestation/report.json",
         errors,
     )
     if report is None:
-        return
+        return None
 
     for field in sorted(set(report) - ATTESTATION_REPORT_FIELDS):
         errors.append(
@@ -1965,7 +2239,7 @@ def validate_attestation_report(
     verification = report.get("verification")
     if not isinstance(verification, dict):
         errors.append("attestation/report.json verification must be an object")
-        return
+        return None
     for field in sorted(set(verification) - ATTESTATION_REPORT_VERIFICATION_FIELDS):
         errors.append(
             "attestation/report.json verification contains unexpected field "
@@ -1981,22 +2255,57 @@ def validate_attestation_report(
             "attestation/report.json verification.physical_device_attestation must be true"
         )
 
-    keymint_security_level = _attestation_report_verification_string(
-        verification,
+    for level_key in (
         "keymint_security_level",
-        errors,
-    )
-    if keymint_security_level is not None and keymint_security_level not in STRONGBOX_LEVELS:
-        errors.append(
-            "attestation/report.json verification.keymint_security_level must be STRONGBOX"
-        )
-    for optional_level in ("attestation_security_level", "keymaster_security_level"):
-        if optional_level not in verification:
-            continue
-        value = _attestation_report_verification_string(verification, optional_level, errors)
+        "attestation_security_level",
+        "keymaster_security_level",
+    ):
+        value = _attestation_report_verification_string(verification, level_key, errors)
         if value is not None and value not in STRONGBOX_LEVELS:
             errors.append(
-                f"attestation/report.json verification.{optional_level} must be STRONGBOX"
+                f"attestation/report.json verification.{level_key} must be STRONGBOX"
+            )
+    return report
+
+
+def validate_attestation_report_result_level_binding(
+    attestation_result: dict[str, Any] | None,
+    attestation_report: dict[str, Any] | None,
+    errors: list[str],
+) -> None:
+    """Require verifier report status and levels to match the raw attestation result."""
+
+    if attestation_result is None or attestation_report is None:
+        return
+    verification = attestation_report.get("verification")
+    if not isinstance(verification, dict):
+        return
+    result_status = attestation_result.get("status")
+    report_status = verification.get("status")
+    if (
+        isinstance(result_status, str)
+        and isinstance(report_status, str)
+        and result_status != report_status
+    ):
+        errors.append(
+            "attestation/report.json verification.status must match "
+            "attestation/result.json status"
+        )
+    for level_key in (
+        "keymint_security_level",
+        "attestation_security_level",
+        "keymaster_security_level",
+    ):
+        result_level = attestation_result.get(level_key)
+        report_level = verification.get(level_key)
+        if (
+            isinstance(result_level, str)
+            and isinstance(report_level, str)
+            and result_level != report_level
+        ):
+            errors.append(
+                f"attestation/report.json verification.{level_key} must match "
+                f"attestation/result.json {level_key}"
             )
 
 
@@ -2112,13 +2421,19 @@ def _d2d_transcript_string(
     errors: list[str],
 ) -> str | None:
     value = transcript.get(key)
-    if not isinstance(value, str) or not value.strip():
+    if not isinstance(value, str) or not value:
         errors.append(f"d2d payment transcript {key} must be a non-empty string")
+        return None
+    if value != value.strip():
+        errors.append(f"d2d payment transcript {key} must not contain surrounding whitespace")
+        return None
+    if _contains_control_character(value):
+        errors.append(f"d2d payment transcript {key} must not contain control characters")
         return None
     if SECRET_RE.search(value):
         errors.append(f"d2d payment transcript {key} must not contain secret-looking material")
         return None
-    return value.strip()
+    return value
 
 
 def _d2d_transcript_sha256(
@@ -2148,15 +2463,25 @@ def _wallet_transcript_string(
     errors: list[str],
 ) -> str | None:
     value = transcript.get(key)
-    if not isinstance(value, str) or not value.strip():
+    if not isinstance(value, str) or not value:
         errors.append(f"wallet integrity transcript {key} must be a non-empty string")
+        return None
+    if value != value.strip():
+        errors.append(
+            f"wallet integrity transcript {key} must not contain surrounding whitespace"
+        )
+        return None
+    if _contains_control_character(value):
+        errors.append(
+            f"wallet integrity transcript {key} must not contain control characters"
+        )
         return None
     if SECRET_RE.search(value):
         errors.append(
             f"wallet integrity transcript {key} must not contain secret-looking material"
         )
         return None
-    return value.strip()
+    return value
 
 
 def _wallet_transcript_sha256(
@@ -2242,7 +2567,7 @@ def validate_d2d_payment_transcript(
     for key in D2D_PAYMENT_TRANSCRIPT_SLOT_STRING_BINDINGS:
         actual = _d2d_transcript_string(transcript, key, errors)
         expected = metadata.get(key)
-        if isinstance(expected, str) and actual is not None and actual != expected.strip():
+        if isinstance(expected, str) and actual is not None and actual != expected:
             errors.append(f"d2d payment transcript {key} must match slot.json {key}")
 
     for key in D2D_PAYMENT_TRANSCRIPT_SLOT_SHA256_BINDINGS:
@@ -2421,7 +2746,7 @@ def validate_wallet_integrity_transcript(
     for key in WALLET_INTEGRITY_TRANSCRIPT_SLOT_STRING_BINDINGS:
         actual = _wallet_transcript_string(transcript, key, errors)
         expected = metadata.get(key)
-        if isinstance(expected, str) and actual is not None and actual != expected.strip():
+        if isinstance(expected, str) and actual is not None and actual != expected:
             errors.append(f"wallet integrity transcript {key} must match slot.json {key}")
 
     for key in WALLET_INTEGRITY_TRANSCRIPT_SLOT_SHA256_BINDINGS:
@@ -2639,6 +2964,15 @@ def _validate_public_key_path_shape(
     if SECRET_RE.search(str(public_key_path)):
         errors.append(f"{label} path must not contain secret-looking material")
         return False
+    if _contains_control_character(str(public_key_path)):
+        errors.append(f"{label} path must not contain control characters")
+        return False
+    if "\\" in str(public_key_path):
+        errors.append(f"{label} path must not contain backslashes")
+        return False
+    if ".." in public_key_path.parts:
+        errors.append(f"{label} path must be canonical")
+        return False
     try:
         public_key_mode = public_key_path.lstat().st_mode
     except FileNotFoundError:
@@ -2695,6 +3029,32 @@ def load_trusted_signer_public_keys(
             continue
         trusted[digest] = path
     return trusted, errors
+
+
+def validate_trusted_signer_public_key_map(
+    trusted_signer_public_keys: dict[str, Path] | None,
+) -> list[str]:
+    """Reject direct trusted-signer maps with unsafe public-key path strings."""
+
+    errors: list[str] = []
+    for digest, public_key_path in sorted((trusted_signer_public_keys or {}).items()):
+        if not isinstance(digest, str) or SHA256_HEX_RE.fullmatch(digest) is None:
+            errors.append("trusted signer public key digest must be lowercase sha256 hex")
+            continue
+        path_text = str(public_key_path)
+        if SECRET_RE.search(path_text):
+            errors.append("trusted signer public key path must not contain secret-looking material")
+            continue
+        if _contains_control_character(path_text):
+            errors.append("trusted signer public key path must not contain control characters")
+            continue
+        if "\\" in path_text:
+            errors.append("trusted signer public key path must not contain backslashes")
+            continue
+        if ".." in public_key_path.parts:
+            errors.append("trusted signer public key path must be canonical")
+            continue
+    return errors
 
 
 def _write_staged_bytes(
@@ -2910,9 +3270,40 @@ def validate_required_kagemusha_slot_artifact_shapes(
                 f"{MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES} bytes"
             )
 
+    _validate_required_pending_queue_artifact(slot_path, errors)
     _validate_required_telemetry_artifact(slot_path, errors)
     _validate_required_status_artifact(slot_path, errors)
     _validate_required_runtime_log_artifact(slot_path, errors)
+
+
+def _validate_required_pending_queue_artifact(slot_path: Path, errors: list[str]) -> None:
+    queue = _load_json(
+        slot_path / "queue" / "pending_queue.json",
+        "queue/pending_queue.json",
+        errors,
+    )
+    if queue is None:
+        return
+    for field in sorted(set(queue) - PENDING_QUEUE_FIELDS):
+        errors.append(
+            f"queue/pending_queue.json contains unexpected field {_display_path(field)}"
+        )
+    slot_id = queue.get("slot_id")
+    if not isinstance(slot_id, str) or not slot_id:
+        errors.append("queue/pending_queue.json slot_id must be a non-empty string")
+    elif slot_id != slot_id.strip():
+        errors.append("queue/pending_queue.json slot_id must not contain surrounding whitespace")
+    elif _contains_control_character(slot_id):
+        errors.append("queue/pending_queue.json slot_id must not contain control characters")
+    elif slot_id != slot_path.name:
+        errors.append("queue/pending_queue.json slot_id must match slot id")
+    pending_transactions = queue.get("pending_transactions")
+    if not isinstance(pending_transactions, list):
+        errors.append("queue/pending_queue.json pending_transactions must be an array")
+    elif pending_transactions:
+        errors.append(
+            "queue/pending_queue.json pending_transactions must be empty after D2D handoff"
+        )
 
 
 def _validate_required_telemetry_artifact(slot_path: Path, errors: list[str]) -> None:
@@ -2923,15 +3314,29 @@ def _validate_required_telemetry_artifact(slot_path: Path, errors: list[str]) ->
     )
     if telemetry is None:
         return
+    for field in sorted(set(telemetry) - TELEMETRY_FIELDS):
+        errors.append(
+            f"telemetry/telemetry.json contains unexpected field {_display_path(field)}"
+        )
     if telemetry.get("schema_version") != 1:
         errors.append("telemetry/telemetry.json schema_version must be 1")
     slot_id = telemetry.get("slot_id")
-    if not isinstance(slot_id, str) or slot_id != slot_path.name:
+    if not isinstance(slot_id, str) or not slot_id:
+        errors.append("telemetry/telemetry.json slot_id must be a non-empty string")
+    elif slot_id != slot_id.strip():
+        errors.append("telemetry/telemetry.json slot_id must not contain surrounding whitespace")
+    elif _contains_control_character(slot_id):
+        errors.append("telemetry/telemetry.json slot_id must not contain control characters")
+    elif slot_id != slot_path.name:
         errors.append("telemetry/telemetry.json slot_id must match the slot directory name")
     suite = telemetry.get("suite")
-    if not isinstance(suite, str) or not suite.strip():
+    if not isinstance(suite, str) or not suite:
         errors.append("telemetry/telemetry.json suite must be a non-empty string")
-    elif "kagemusha" not in suite.lower():
+    elif suite != suite.strip():
+        errors.append("telemetry/telemetry.json suite must not contain surrounding whitespace")
+    elif _contains_control_character(suite):
+        errors.append("telemetry/telemetry.json suite must not contain control characters")
+    elif suite != KAGEMUSHA_TELEMETRY_SUITE:
         errors.append("telemetry/telemetry.json suite must identify a Kagemusha device-lab run")
 
 
@@ -2954,6 +3359,10 @@ def _validate_required_status_artifact(slot_path: Path, errors: list[str]) -> No
         errors.extend(read_errors)
         return
     assert text is not None
+    if "\r" in text:
+        errors.append("telemetry/status.ndjson must use LF line endings")
+    if text and not text.endswith("\n"):
+        errors.append("telemetry/status.ndjson must end with a trailing newline")
     lines = text.splitlines()
 
     saw_record = False
@@ -2963,6 +3372,11 @@ def _validate_required_status_artifact(slot_path: Path, errors: list[str]) -> No
         if not line:
             continue
         saw_record = True
+        if raw_line != line:
+            errors.append(
+                f"telemetry/status.ndjson line {line_no} must not contain surrounding whitespace"
+            )
+            continue
         try:
             status_entry = _loads_json_without_duplicate_keys(line)
         except json.JSONDecodeError as exc:
@@ -2978,13 +3392,30 @@ def _validate_required_status_artifact(slot_path: Path, errors: list[str]) -> No
             errors.append(f"telemetry/status.ndjson line {line_no} must be a JSON object")
             continue
         status = status_entry.get("status")
-        if not isinstance(status, str) or not status.strip():
+        if not isinstance(status, str) or not status:
             errors.append(f"telemetry/status.ndjson line {line_no} status must be a non-empty string")
             continue
-        normalized = status.strip().lower()
-        if normalized == "ok":
+        if status != status.strip():
+            errors.append(f"telemetry/status.ndjson line {line_no} status must not contain surrounding whitespace")
+            continue
+        if _contains_control_character(status):
+            errors.append(f"telemetry/status.ndjson line {line_no} status must not contain control characters")
+            continue
+        if status != status.lower():
+            errors.append(f"telemetry/status.ndjson line {line_no} status must be lowercase")
+            continue
+        slot_value = status_entry.get("slot_id")
+        if slot_value is not None and not isinstance(slot_value, str):
+            errors.append(f"telemetry/status.ndjson line {line_no} slot_id must be a string")
+        elif isinstance(slot_value, str) and slot_value != slot_value.strip():
+            errors.append(f"telemetry/status.ndjson line {line_no} slot_id must not contain surrounding whitespace")
+        elif isinstance(slot_value, str) and _contains_control_character(slot_value):
+            errors.append(f"telemetry/status.ndjson line {line_no} slot_id must not contain control characters")
+        if slot_value is not None and slot_value != slot_path.name:
+            errors.append(f"telemetry/status.ndjson line {line_no} slot_id must match slot id")
+        if status == "ok":
             saw_ok = True
-        elif normalized in KAGEMUSHA_STATUS_FAILURE_VALUES:
+        elif status in KAGEMUSHA_STATUS_FAILURE_VALUES:
             errors.append(
                 f"telemetry/status.ndjson line {line_no} status must not be {status!r}"
             )
@@ -3083,10 +3514,21 @@ def validate_signed_evidence_artifact(
                     f"signed evidence artifact raw_test_commands[{index}] must be a non-empty string"
                 )
                 continue
+            if command != command.strip():
+                errors.append(
+                    f"signed evidence artifact raw_test_commands[{index}] must not contain surrounding whitespace"
+                )
+                continue
+            if _contains_control_character(command):
+                errors.append(
+                    f"signed evidence artifact raw_test_commands[{index}] must not contain control characters"
+                )
+                continue
             if SECRET_RE.search(command):
                 errors.append(
                     f"signed evidence artifact raw_test_commands[{index}] must not contain secret-looking material"
                 )
+                continue
         _validate_raw_test_command_markers(
             evidence_commands,
             label="signed evidence artifact raw_test_commands",
@@ -3219,6 +3661,11 @@ def validate_kagemusha_production_metadata(
     trusted_signer_public_keys = trusted_signer_public_keys or {}
     errors: list[str] = []
     details: dict[str, Any] = {}
+    signer_map_errors = validate_trusted_signer_public_key_map(
+        trusted_signer_public_keys
+    )
+    if signer_map_errors:
+        return signer_map_errors, details
     if _reject_secret_slot_path(slot_path, errors):
         return errors, details
     metadata = _load_json(slot_path / "slot.json", "slot.json", errors)
@@ -3403,10 +3850,15 @@ def validate_kagemusha_production_metadata(
             )
 
     security_level = _require_non_empty_string(metadata, "keymint_security_level", errors)
-    if security_level is not None and security_level.upper() not in STRONGBOX_LEVELS:
+    if security_level is not None and security_level not in STRONGBOX_LEVELS:
         errors.append("slot.json keymint_security_level must be STRONGBOX")
-    validate_attestation_result(slot_path, metadata, errors)
-    validate_attestation_report(slot_path, metadata, errors)
+    attestation_result = validate_attestation_result(slot_path, metadata, errors)
+    attestation_report = validate_attestation_report(slot_path, metadata, errors)
+    validate_attestation_report_result_level_binding(
+        attestation_result,
+        attestation_report,
+        errors,
+    )
     validate_attestation_harness_result(
         slot_path,
         metadata,
@@ -3490,10 +3942,21 @@ def validate_kagemusha_production_metadata(
             if not isinstance(command, str) or not command.strip():
                 errors.append(f"slot.json raw_test_commands[{index}] must be a non-empty string")
                 continue
+            if command != command.strip():
+                errors.append(
+                    f"slot.json raw_test_commands[{index}] must not contain surrounding whitespace"
+                )
+                continue
+            if _contains_control_character(command):
+                errors.append(
+                    f"slot.json raw_test_commands[{index}] must not contain control characters"
+                )
+                continue
             if SECRET_RE.search(command):
                 errors.append(
                     f"slot.json raw_test_commands[{index}] must not contain secret-looking material"
                 )
+                continue
         _validate_raw_test_command_markers(
             commands,
             label="slot.json raw_test_commands",
@@ -3537,6 +4000,15 @@ def scan_slot(
             "slot": slot_label,
             "status": "error",
             "errors": ["slot directory name must not contain control characters"],
+            "present": present,
+            "file_counts": file_counts,
+            "kagemusha": {"required": require_kagemusha_production_evidence},
+        }
+    if "\\" in slot_path.name:
+        return {
+            "slot": slot_label,
+            "status": "error",
+            "errors": ["slot directory name must not contain backslashes"],
             "present": present,
             "file_counts": file_counts,
             "kagemusha": {"required": require_kagemusha_production_evidence},
@@ -3726,9 +4198,13 @@ def discover_slots(
 ) -> tuple[list[Path], list[str]]:
     """List slot directories under the given root."""
     if slot_ids is not None:
-        return [root / slot for slot in slot_ids], []
+        validated_slot_ids, slot_id_errors = validate_slot_ids(slot_ids)
+        if slot_id_errors:
+            return [], slot_id_errors
+        assert validated_slot_ids is not None
+        return [root / slot for slot in validated_slot_ids], []
     try:
-        entries = list(root.iterdir())
+        entries = sorted(root.iterdir(), key=lambda entry: entry.name)
     except OSError:
         return [], ["device-lab root could not be listed"]
     slots: list[Path] = []
@@ -3756,21 +4232,23 @@ def build_summary(
     trusted_signer_public_keys: dict[str, Path] | None = None,
 ) -> dict:
     now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+    summary_reports = [_summary_safe_report(report) for report in reports]
     summary = {
         "schema_version": 1,
         "generated_at": now.isoformat().replace("+00:00", "Z"),
         "root": DEVICE_LAB_ROOT_SUMMARY_LABEL,
-        "slots": reports,
-        "ok": sum(1 for r in reports if r["status"] == "ok"),
-        "failed": sum(1 for r in reports if r["status"] != "ok"),
+        "slots": summary_reports,
+        "ok": sum(1 for r in summary_reports if r["status"] == "ok"),
+        "failed": sum(1 for r in summary_reports if r["status"] != "ok"),
     }
     if require_kagemusha_production_evidence or require_kagemusha_standard_matrix:
         covered = sorted(
             {
-                report.get("kagemusha", {}).get("device_family")
-                for report in reports
+                family
+                for report in summary_reports
+                for family in [_summary_device_family(report)]
                 if report.get("status") == "ok"
-                and report.get("kagemusha", {}).get("device_family") is not None
+                and family is not None
             }
         )
         missing = [
@@ -3784,9 +4262,13 @@ def build_summary(
             "required_device_families": list(KAGEMUSHA_STANDARD_DEVICE_FAMILIES),
             "covered_device_families": covered,
             "missing_device_families": missing,
-            "duplicate_bindings": kagemusha_duplicate_matrix_bindings(reports),
+            "duplicate_bindings": kagemusha_duplicate_matrix_bindings(
+                summary_reports
+            ),
             "trusted_signer_public_key_sha256": sorted(
-                (trusted_signer_public_keys or {}).keys()
+                digest
+                for digest in (trusted_signer_public_keys or {})
+                if isinstance(digest, str) and SHA256_HEX_RE.fullmatch(digest)
             ),
         }
     return summary
@@ -3802,10 +4284,14 @@ def kagemusha_duplicate_matrix_bindings(reports: list[dict]) -> dict[str, list[d
             if report.get("status") != "ok":
                 continue
             slot = report.get("slot")
-            value = report.get("kagemusha", {}).get(field)
-            if not isinstance(slot, str) or not isinstance(value, str) or not value:
+            value = _summary_kagemusha(report).get(field)
+            if (
+                not isinstance(slot, str)
+                or not isinstance(value, str)
+                or not SHA256_HEX_RE.fullmatch(value)
+            ):
                 continue
-            seen.setdefault(value, []).append(slot)
+            seen.setdefault(value, []).append(_display_slot_name(slot))
         for value, slots in sorted(seen.items()):
             if len(slots) <= 1:
                 continue
@@ -3823,6 +4309,8 @@ def validate_summary_output_path(path: Path, label: str) -> list[str]:
 
     if SECRET_RE.search(str(path)):
         return [f"{label} must not contain secret-looking material"]
+    if _contains_control_character(str(path)):
+        return [f"{label} must not contain control characters"]
     parent = path.parent
     parent_exists, parent_errors = _validate_summary_output_parent(path, label)
     if parent_errors:
@@ -4162,10 +4650,26 @@ def main(argv: list[str] | None = None) -> int:
     path_arg_errors = []
     if SECRET_RE.search(args.root):
         path_arg_errors.append("--root must not contain secret-looking material")
+    if _contains_control_character(args.root):
+        path_arg_errors.append("--root must not contain control characters")
     if args.json_out is not None and SECRET_RE.search(args.json_out):
         path_arg_errors.append("--json-out must not contain secret-looking material")
+    if args.json_out is not None and _contains_control_character(args.json_out):
+        path_arg_errors.append("--json-out must not contain control characters")
+    for index, key_path in enumerate(args.trusted_signer_public_keys or []):
+        label = f"--trusted-signer-public-key[{index}]"
+        if SECRET_RE.search(key_path):
+            path_arg_errors.append(f"{label} must not contain secret-looking material")
+        if _contains_control_character(key_path):
+            path_arg_errors.append(f"{label} must not contain control characters")
     if path_arg_errors:
         for error in path_arg_errors:
+            print(f"[device-lab] {error}", file=sys.stderr)
+        return 1
+
+    slot_ids, slot_id_errors = validate_slot_ids(args.slots)
+    if slot_id_errors:
+        for error in slot_id_errors:
             print(f"[device-lab] {error}", file=sys.stderr)
         return 1
 
@@ -4180,12 +4684,6 @@ def main(argv: list[str] | None = None) -> int:
             print("[device-lab] root missing; skipping")
             return 0
         print("[device-lab] root does not exist", file=sys.stderr)
-        return 1
-
-    slot_ids, slot_id_errors = validate_slot_ids(args.slots)
-    if slot_id_errors:
-        for error in slot_id_errors:
-            print(f"[device-lab] {error}", file=sys.stderr)
         return 1
 
     slot_paths, discovery_errors = discover_slots(root, slot_ids)
@@ -4229,9 +4727,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.require_kagemusha_standard_matrix:
         covered = {
-            report.get("kagemusha", {}).get("device_family")
+            family
             for report in reports
+            for family in [_summary_device_family(report)]
             if report.get("status") == "ok"
+            and family is not None
         }
         missing = [
             family

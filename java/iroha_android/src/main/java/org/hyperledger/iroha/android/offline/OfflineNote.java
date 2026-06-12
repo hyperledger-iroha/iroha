@@ -355,9 +355,9 @@ public final class OfflineNote {
     }
 
     public VerifyingKeyIdReference(final String backend, final String name) {
-      this.backend = requireNoColon(requireNonBlankTrimmed(backend, "verifying key backend"),
+      this.backend = requireNoColon(requireNonBlankUnpadded(backend, "verifying key backend"),
           "verifying key backend");
-      this.name = requireNoColon(requireNonBlankTrimmed(name, "verifying key name"),
+      this.name = requireNoColon(requireNonBlankUnpadded(name, "verifying key name"),
           "verifying key name");
     }
 
@@ -375,7 +375,7 @@ public final class OfflineNote {
     private final byte[] bytes;
 
     public ProofBox(final String backend, final byte[] bytes) {
-      this.backend = requireNonBlankTrimmed(backend, "proof backend");
+      this.backend = requireNonBlankUnpadded(backend, "proof backend");
       this.bytes = copy(bytes, "proof bytes");
       if (this.bytes.length == 0) {
         throw new IllegalArgumentException("proof bytes must not be empty");
@@ -492,7 +492,7 @@ public final class OfflineNote {
         final byte[] assertionPublicKey,
         final Integer assertionUsageCountLimit,
         final boolean oneUse) {
-      this.domain = requireNonBlank(domain, "domain");
+      this.domain = requireDomain(domain, KEY_CERTIFICATE_PAYLOAD_DOMAIN, "domain");
       this.version = version;
       this.platform = Objects.requireNonNull(platform, "platform");
       this.keyId = Objects.requireNonNull(keyId, "keyId");
@@ -697,8 +697,8 @@ public final class OfflineNote {
 
       public IssuerLoad(
           final String operationId, final String lineageId, final long localRevision) {
-        this.operationId = requireNonBlank(operationId, "operation_id");
-        this.lineageId = requireNonBlank(lineageId, "lineage_id");
+        this.operationId = requireNonBlankUnpadded(operationId, "operation_id");
+        this.lineageId = requireNonBlankUnpadded(lineageId, "lineage_id");
         if (localRevision < 0) {
           throw new IllegalArgumentException("local_revision must be non-negative");
         }
@@ -723,7 +723,7 @@ public final class OfflineNote {
       private final int outputIndex;
 
       public P2pOutput(final String paymentRequestId, final int outputIndex) {
-        this.paymentRequestId = requireNonBlank(paymentRequestId, "payment_request_id");
+        this.paymentRequestId = requireNonBlankUnpadded(paymentRequestId, "payment_request_id");
         if (outputIndex < 0) {
           throw new IllegalArgumentException("output_index must be non-negative");
         }
@@ -779,7 +779,7 @@ public final class OfflineNote {
         throw new IllegalArgumentException("unsupported note commitment domain");
       }
       this.domain = domain;
-      this.chainId = requireNonBlank(chainId, "chain_id");
+      this.chainId = requireNonBlankUnpadded(chainId, "chain_id");
       this.ownerKeyCertificatePayloadHash =
           copy(ownerKeyCertificatePayloadHash, "ownerKeyCertificatePayloadHash");
       requireHash(this.ownerKeyCertificatePayloadHash, "owner_key_certificate_payload_hash");
@@ -864,7 +864,7 @@ public final class OfflineNote {
         throw new IllegalArgumentException("unsupported input nullifier domain");
       }
       this.domain = domain;
-      this.chainId = requireNonBlank(chainId, "chain_id");
+      this.chainId = requireNonBlankUnpadded(chainId, "chain_id");
       this.sourceNoteCommitment = copy(sourceNoteCommitment, "sourceNoteCommitment");
       this.ownerKeyCertificatePayloadHash =
           copy(ownerKeyCertificatePayloadHash, "ownerKeyCertificatePayloadHash");
@@ -946,8 +946,8 @@ public final class OfflineNote {
         throw new IllegalArgumentException("unsupported payment token id domain");
       }
       this.domain = domain;
-      this.chainId = requireNonBlank(chainId, "chain_id");
-      this.paymentRequestId = requireNonBlank(paymentRequestId, "payment_request_id");
+      this.chainId = requireNonBlankUnpadded(chainId, "chain_id");
+      this.paymentRequestId = requireNonBlankUnpadded(paymentRequestId, "payment_request_id");
       this.createdAtMs = createdAtMs;
       this.tokenNonce = copy(tokenNonce, "tokenNonce");
       this.senderKeyCertificatePayloadHash =
@@ -1075,7 +1075,7 @@ public final class OfflineNote {
         final byte[] keyCertificatePayloadHash,
         final String assetId,
         final String amount) {
-      this.domain = requireNonBlank(domain, "domain");
+      this.domain = requireDomain(domain, ISSUED_CLAIM_DOMAIN, "domain");
       this.noteCommitment = copy(noteCommitment, "noteCommitment");
       this.keyCertificatePayloadHash =
           copy(keyCertificatePayloadHash, "keyCertificatePayloadHash");
@@ -1202,7 +1202,7 @@ public final class OfflineNote {
         final String recipient,
         final String assetId,
         final String amount) {
-      this.domain = requireNonBlank(domain, "domain");
+      this.domain = requireDomain(domain, REDEEM_PUBLIC_INPUTS_DOMAIN, "domain");
       this.sourceNoteCommitment = copy(sourceNoteCommitment, "sourceNoteCommitment");
       this.inputNullifiers = copyByteList(inputNullifiers, "inputNullifiers");
       this.keyCertificatePayloadHash =
@@ -1395,7 +1395,7 @@ public final class OfflineNote {
         final List<IssuedClaim> inputClaims,
         final List<byte[]> outputCommitments,
         final List<IssuedClaim> outputClaims) {
-      this.domain = requireNonBlank(domain, "domain");
+      this.domain = requireDomain(domain, AUDIT_PUBLIC_INPUTS_DOMAIN, "domain");
       this.tokenId = copy(tokenId, "tokenId");
       this.keyCertificatePayloadHash =
           copy(keyCertificatePayloadHash, "keyCertificatePayloadHash");
@@ -2927,8 +2927,21 @@ public final class OfflineNote {
     return checked;
   }
 
-  private static String requireNonBlankTrimmed(final String value, final String field) {
-    return requireNonBlank(value, field).trim();
+  private static String requireNonBlankUnpadded(final String value, final String field) {
+    final String checked = requireNonBlank(value, field);
+    if (!checked.trim().equals(checked)) {
+      throw new IllegalArgumentException(field + " must not contain surrounding whitespace");
+    }
+    return checked;
+  }
+
+  private static String requireDomain(
+      final String value, final String expected, final String field) {
+    final String checked = Objects.requireNonNull(value, field);
+    if (!expected.equals(checked)) {
+      throw new IllegalArgumentException(field + " must be " + expected);
+    }
+    return checked;
   }
 
   private static String requireNoColon(final String value, final String field) {

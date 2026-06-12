@@ -131,6 +131,166 @@ class HttpClientTransportTest {
     }
 
     @Test
+    fun identifierResolutionReceiptParserRejectsNonExactReceiptTags() {
+        val payload = sampleIdentifierResolutionPayload()
+        val fixture = signedIdentifierReceiptFixture(payload)
+
+        fun jsonString(value: String): String =
+            "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+
+        fun openingJson(
+            opening: RamLfeOutputOpening,
+            signature: String = opening.signature,
+            inputCiphertextHash: String = opening.payload.inputCiphertextHash,
+            openedAtMsJson: String = opening.payload.openedAtMs.toString(),
+            expiresAtMsJson: String? = opening.payload.expiresAtMs?.toString(),
+        ): String {
+            val opened = opening.payload
+            val expires = expiresAtMsJson?.let { ",\"expires_at_ms\":$it" } ?: ""
+            return ("{"
+                + "\"payload\":{"
+                + "\"program_id\":" + jsonString(opened.programId)
+                + ",\"input_ciphertext_hash\":" + jsonString(inputCiphertextHash)
+                + ",\"output_ciphertext_hash\":" + jsonString(opened.outputCiphertextHash)
+                + ",\"parameter_digest\":" + jsonString(opened.parameterDigest)
+                + ",\"evaluation_key_digest\":" + jsonString(opened.evaluationKeyDigest)
+                + ",\"opened_output_hash\":" + jsonString(opened.openedOutputHash)
+                + ",\"opened_at_ms\":" + openedAtMsJson
+                + expires
+                + "},\"signature\":" + jsonString(signature)
+                + "}")
+        }
+
+        fun receiptJson(
+            backend: String = payload.execution.backend,
+            verificationMode: String = payload.execution.verificationMode,
+            programDigest: String = payload.execution.programDigest,
+            opaqueId: String = payload.opaqueId,
+            receiptHash: String = payload.receiptHash,
+            uaid: String = payload.uaid,
+            openingInputCiphertextHash: String = payload.opening.payload.inputCiphertextHash,
+            executedAtMsJson: String = payload.execution.executedAtMs.toString(),
+            executionExpiresAtMsJson: String? = payload.execution.expiresAtMs?.toString(),
+            openingOpenedAtMsJson: String = payload.opening.payload.openedAtMs.toString(),
+            openingExpiresAtMsJson: String? = payload.opening.payload.expiresAtMs?.toString(),
+            openingSignature: String = payload.opening.signature,
+            attestationJson: String = "{"
+                + "\"kind\":\"signed\","
+                + "\"signature\":" + jsonString(fixture.signatureHex)
+                + "}",
+        ): String {
+            val execution = payload.execution
+            val expires = executionExpiresAtMsJson?.let { ",\"expires_at_ms\":$it" } ?: ""
+            return ("{"
+                + "\"payload\":{"
+                + "\"policy_id\":" + jsonString(payload.policyId)
+                + ",\"execution\":{"
+                + "\"program_id\":" + jsonString(execution.programId)
+                + ",\"program_digest\":" + jsonString(programDigest)
+                + ",\"backend\":" + jsonString(backend)
+                + ",\"verification_mode\":" + jsonString(verificationMode)
+                + ",\"input_ciphertext_hash\":" + jsonString(execution.inputCiphertextHash)
+                + ",\"output_ciphertext_hash\":" + jsonString(execution.outputCiphertextHash)
+                + ",\"parameter_digest\":" + jsonString(execution.parameterDigest)
+                + ",\"evaluation_key_digest\":" + jsonString(execution.evaluationKeyDigest)
+                + ",\"output_hash\":" + jsonString(execution.outputHash)
+                + ",\"associated_data_hash\":" + jsonString(execution.associatedDataHash)
+                + ",\"executed_at_ms\":" + executedAtMsJson
+                + expires
+                + "},\"opening\":" + openingJson(
+                    payload.opening,
+                    openingSignature,
+                    openingInputCiphertextHash,
+                    openingOpenedAtMsJson,
+                    openingExpiresAtMsJson,
+                )
+                + ",\"opaque_id\":" + jsonString(opaqueId)
+                + ",\"receipt_hash\":" + jsonString(receiptHash)
+                + ",\"uaid\":" + jsonString(uaid)
+                + ",\"account_id\":" + jsonString(payload.accountId)
+                + "},\"attestation\":" + attestationJson
+                + "}")
+        }
+
+        fun assertRejects(
+            json: String,
+            message: String = "identifier receipt parser must reject malformed input",
+        ) {
+            assertFailsWith<IllegalStateException>(message) {
+                IdentifierJsonParser.parseResolutionReceipt(json.toByteArray(StandardCharsets.UTF_8))
+            }
+        }
+
+        for (backend in listOf(" bfv-affine-sha3-256-v1", "bfv-affine-sha3-256-v1 ", "BFV-AFFINE-SHA3-256-V1")) {
+            assertRejects(receiptJson(backend = backend))
+        }
+        for (mode in listOf(" signed", "signed ", "Signed")) {
+            assertRejects(receiptJson(verificationMode = mode))
+        }
+        for (kind in listOf(" signed", "signed ", "Signed")) {
+            val attestationJson = ("{"
+                + "\"kind\":" + jsonString(kind)
+                + ",\"signature\":\"" + fixture.signatureHex + "\""
+                + "}")
+            assertRejects(receiptJson(attestationJson = attestationJson))
+        }
+        for (signature in listOf(" ${fixture.signatureHex}", "${fixture.signatureHex} ")) {
+            val attestationJson = ("{"
+                + "\"kind\":\"signed\","
+                + "\"signature\":" + jsonString(signature)
+                + "}")
+            assertRejects(receiptJson(attestationJson = attestationJson), "attestation signature $signature")
+        }
+        for (signature in listOf(" ${payload.opening.signature}", "${payload.opening.signature} ")) {
+            assertRejects(receiptJson(openingSignature = signature), "opening signature $signature")
+        }
+        for ((label, json) in listOf(
+            "opaque_id" to receiptJson(opaqueId = " ${payload.opaqueId}"),
+            "receipt_hash" to receiptJson(receiptHash = "${payload.receiptHash} "),
+            "uaid" to receiptJson(uaid = " ${payload.uaid}"),
+            "program_digest" to receiptJson(programDigest = " ${payload.execution.programDigest}"),
+            "opening input_ciphertext_hash" to receiptJson(
+                openingInputCiphertextHash = "${payload.opening.payload.inputCiphertextHash} ",
+            ),
+        )) {
+            assertRejects(json, "hash exactness $label")
+        }
+        for ((label, json) in listOf(
+            "executed_at_ms" to receiptJson(executedAtMsJson = "-1"),
+            "execution expires_at_ms" to receiptJson(executionExpiresAtMsJson = "-1"),
+            "opened_at_ms" to receiptJson(openingOpenedAtMsJson = "-1"),
+            "opening expires_at_ms" to receiptJson(openingExpiresAtMsJson = "-1"),
+        )) {
+            assertRejects(json, "timestamp u64 $label")
+        }
+        for (proofBackend in listOf(" halo2/ipa", "halo2/ipa ")) {
+            val attestationJson = ("{"
+                + "\"kind\":\"proof\","
+                + "\"proof_backend\":" + jsonString(proofBackend)
+                + ",\"proof_b64\":\"AQID\""
+                + "}")
+            assertRejects(receiptJson(attestationJson = attestationJson))
+        }
+        for (proofB64 in listOf(" AQID", "AQID ")) {
+            val attestationJson = ("{"
+                + "\"kind\":\"proof\","
+                + "\"proof_backend\":\"halo2/ipa\""
+                + ",\"proof_b64\":" + jsonString(proofB64)
+                + "}")
+            assertRejects(receiptJson(attestationJson = attestationJson))
+        }
+        assertRejects(
+            receiptJson(
+                attestationJson = ("{"
+                    + "\"kind\":\"proof\","
+                    + "\"proof_backend\":\"halo2/ipa\","
+                    + "\"proof_b64\":\"@@@\""
+                    + "}"),
+            ),
+        )
+    }
+
+    @Test
     fun identifierReceiptVerifierMatchesSharedReceiptVectors() {
         val fixture = loadSharedReceiptFixture()
         assertEquals("identifier-receipt-attestation-v1", fixture["vector_set"])
@@ -142,6 +302,45 @@ class HttpClientTransportTest {
             sha256Hex(IdentifierReceiptCanonicalEncoder.encodePayload(receipt.payload)),
         )
         assertTrue(receipt.verifyAttestation(policy))
+
+        for (policyId in listOf(" phone#retail", "phone#retail ", "phone #retail", "phone# retail")) {
+            val mutatedReceipt = identifierReceiptFromFixture(
+                obj(fixture, "receipt"),
+                policyIdOverride = policyId,
+            )
+            assertFailsWith<IllegalArgumentException>("policy_id exactness $policyId") {
+                mutatedReceipt.verifyAttestation(policy)
+            }
+        }
+
+        for (programId in listOf(" identifier_lookup_retail", "identifier_lookup_retail ")) {
+            val mutatedExecutionProgram = identifierReceiptFromFixture(
+                obj(fixture, "receipt"),
+                executionProgramIdOverride = programId,
+            )
+            assertFailsWith<IllegalArgumentException>("execution program_id exactness $programId") {
+                mutatedExecutionProgram.verifyAttestation(policy)
+            }
+
+            val mutatedOpeningProgram = identifierReceiptFromFixture(
+                obj(fixture, "receipt"),
+                openingProgramIdOverride = programId,
+            )
+            assertFailsWith<IllegalArgumentException>("opening program_id exactness $programId") {
+                mutatedOpeningProgram.verifyAttestation(policy)
+            }
+        }
+
+        val accountId = string(obj(fixture, "receipt").let { obj(it, "payload") }, "account_id")
+        for (paddedAccountId in listOf(" $accountId", "$accountId ")) {
+            val mutatedAccount = identifierReceiptFromFixture(
+                obj(fixture, "receipt"),
+                accountIdOverride = paddedAccountId,
+            )
+            assertFailsWith<IllegalArgumentException>("account_id exactness $paddedAccountId") {
+                mutatedAccount.verifyAttestation(policy)
+            }
+        }
 
         for (vector in listOfMaps(fixture, "attestation_vectors")) {
             val name = string(vector, "name")
@@ -604,6 +803,7 @@ class HttpClientTransportTest {
                 instructions = listOf(instructionBytes),
                 creationTimeMs = 123,
                 feeSponsor = "fee-sponsor",
+                memo = "QR invoice 42",
             )
         ).join()
 
@@ -622,6 +822,7 @@ class HttpClientTransportTest {
         assertEquals("cbdc@banka", payload["multisig_account_alias"])
         assertEquals("alice", payload["signer_account_id"])
         assertEquals("fee-sponsor", payload["fee_sponsor"])
+        assertEquals("QR invoice 42", payload["memo"])
         assertEquals(123L, (payload["creation_time_ms"] as Number).toLong())
         @Suppress("UNCHECKED_CAST")
         val instructions = payload["instructions"] as List<String>
@@ -2777,9 +2978,20 @@ class HttpClientTransportTest {
         outputCiphertextHashOverride: String? = null,
         signatureOverride: String? = null,
         attestationOverride: Map<String, Any?>? = null,
+        policyIdOverride: String? = null,
+        executionProgramIdOverride: String? = null,
+        openingProgramIdOverride: String? = null,
+        accountIdOverride: String? = null,
     ): IdentifierResolutionReceipt =
         IdentifierResolutionReceipt(
-            identifierPayloadFromFixture(obj(receipt, "payload"), outputCiphertextHashOverride),
+            identifierPayloadFromFixture(
+                obj(receipt, "payload"),
+                outputCiphertextHashOverride,
+                policyIdOverride,
+                executionProgramIdOverride,
+                openingProgramIdOverride,
+                accountIdOverride,
+            ),
             identifierAttestationFromFixture(
                 attestationOverride ?: obj(receipt, "attestation"),
                 signatureOverride,
@@ -2789,23 +3001,32 @@ class HttpClientTransportTest {
     private fun identifierPayloadFromFixture(
         payload: Map<String, Any?>,
         outputCiphertextHashOverride: String? = null,
+        policyIdOverride: String? = null,
+        executionProgramIdOverride: String? = null,
+        openingProgramIdOverride: String? = null,
+        accountIdOverride: String? = null,
     ): IdentifierResolutionPayload =
         IdentifierResolutionPayload(
-            policyId = string(payload, "policy_id"),
-            execution = identifierExecutionFromFixture(obj(payload, "execution"), outputCiphertextHashOverride),
-            opening = outputOpeningFromFixture(obj(payload, "opening")),
+            policyId = policyIdOverride ?: string(payload, "policy_id"),
+            execution = identifierExecutionFromFixture(
+                obj(payload, "execution"),
+                outputCiphertextHashOverride,
+                executionProgramIdOverride,
+            ),
+            opening = outputOpeningFromFixture(obj(payload, "opening"), openingProgramIdOverride),
             opaqueId = string(payload, "opaque_id"),
             receiptHash = string(payload, "receipt_hash"),
             uaid = string(payload, "uaid"),
-            accountId = string(payload, "account_id"),
+            accountId = accountIdOverride ?: string(payload, "account_id"),
         )
 
     private fun identifierExecutionFromFixture(
         execution: Map<String, Any?>,
         outputCiphertextHashOverride: String? = null,
+        programIdOverride: String? = null,
     ): IdentifierResolutionExecutionPayload =
         IdentifierResolutionExecutionPayload(
-            programId = string(execution, "program_id"),
+            programId = programIdOverride ?: string(execution, "program_id"),
             programDigest = string(execution, "program_digest"),
             backend = string(execution, "backend"),
             verificationMode = string(execution, "verification_mode"),
@@ -2819,11 +3040,14 @@ class HttpClientTransportTest {
             expiresAtMs = optionalLong(execution, "expires_at_ms"),
         )
 
-    private fun outputOpeningFromFixture(opening: Map<String, Any?>): RamLfeOutputOpening {
+    private fun outputOpeningFromFixture(
+        opening: Map<String, Any?>,
+        programIdOverride: String? = null,
+    ): RamLfeOutputOpening {
         val payload = obj(opening, "payload")
         return RamLfeOutputOpening(
             RamLfeOutputOpeningPayload(
-                programId = string(payload, "program_id"),
+                programId = programIdOverride ?: string(payload, "program_id"),
                 inputCiphertextHash = string(payload, "input_ciphertext_hash"),
                 outputCiphertextHash = string(payload, "output_ciphertext_hash"),
                 parameterDigest = string(payload, "parameter_digest"),

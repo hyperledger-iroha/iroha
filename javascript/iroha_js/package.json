@@ -14,6 +14,21 @@
       "import": "./dist/address.js",
       "types": "./index.d.ts"
     },
+    "./browser": {
+      "browser": "./dist/browser.js",
+      "import": "./dist/browser.js",
+      "types": "./index.d.ts"
+    },
+    "./normalizers": {
+      "browser": "./dist/normalizers.js",
+      "import": "./dist/normalizers.js",
+      "types": "./index.d.ts"
+    },
+    "./blake2b": {
+      "browser": "./dist/blake2b.js",
+      "import": "./dist/blake2b.js",
+      "types": "./index.d.ts"
+    },
     "./instruction-builders": {
       "import": "./dist/instructionBuilders.js",
       "types": "./index.d.ts"
@@ -63,6 +78,15 @@
   "typesVersions": {
     "*": {
       "address": [
+        "./index.d.ts"
+      ],
+      "browser": [
+        "./index.d.ts"
+      ],
+      "normalizers": [
+        "./index.d.ts"
+      ],
+      "blake2b": [
         "./index.d.ts"
       ],
       "instruction-builders": [
@@ -153,7 +177,8 @@
     "src"
   ],
   "browser": {
-    "./dist/crypto.js": "./dist/crypto.browser.js"
+    "./dist/crypto.js": "./dist/crypto.browser.js",
+    "./dist/native.js": "./dist/native.browser.js"
   },
   "publishConfig": {
     "access": "public",

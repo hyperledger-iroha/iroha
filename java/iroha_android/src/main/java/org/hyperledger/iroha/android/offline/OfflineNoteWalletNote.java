@@ -94,8 +94,8 @@ public final class OfflineNoteWalletNote {
       final long createdAtMs,
       final long updatedAtMs,
       final String spentPaymentRequestId) {
-    this.chainId = Objects.requireNonNull(chainId, "chainId");
-    this.accountId = Objects.requireNonNull(accountId, "accountId");
+    this.chainId = requireExactNonBlank(chainId, "chainId");
+    this.accountId = requireExactNonBlank(accountId, "accountId");
     this.assetId = Objects.requireNonNull(assetId, "assetId");
     this.amount = Objects.requireNonNull(amount, "amount");
     this.keyCertificate = Objects.requireNonNull(keyCertificate, "keyCertificate");
@@ -109,7 +109,7 @@ public final class OfflineNoteWalletNote {
     this.state = Objects.requireNonNull(state, "state");
     this.createdAtMs = createdAtMs;
     this.updatedAtMs = updatedAtMs;
-    this.spentPaymentRequestId = normalizeOptionalString(spentPaymentRequestId);
+    this.spentPaymentRequestId = requireOptionalExactNonBlank(spentPaymentRequestId);
     this.canonicalAmount =
         new OfflineNote.IssuedClaim(
                 this.noteCommitment, keyCertificate.payloadHash(), assetId, amount)
@@ -235,11 +235,32 @@ public final class OfflineNoteWalletNote {
         spentPaymentRequestId);
   }
 
-  private static String normalizeOptionalString(final String value) {
+  private static String requireOptionalExactNonBlank(final String value) {
     if (value == null) {
       return null;
     }
-    final String trimmed = value.trim();
-    return trimmed.isEmpty() ? null : trimmed;
+    return requireExactNonBlank(value, "spentPaymentRequestId");
+  }
+
+  private static String requireExactNonBlank(final String value, final String field) {
+    if (value == null || trimWhitespace(value).isEmpty()) {
+      throw new IllegalArgumentException(field + " must not be blank");
+    }
+    if (!trimWhitespace(value).equals(value)) {
+      throw new IllegalArgumentException(field + " must not contain surrounding whitespace");
+    }
+    return value;
+  }
+
+  private static String trimWhitespace(final String value) {
+    int start = 0;
+    int end = value.length();
+    while (start < end && Character.isWhitespace(value.charAt(start))) {
+      start++;
+    }
+    while (end > start && Character.isWhitespace(value.charAt(end - 1))) {
+      end--;
+    }
+    return value.substring(start, end);
   }
 }

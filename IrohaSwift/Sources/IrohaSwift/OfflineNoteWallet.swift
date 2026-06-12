@@ -28,6 +28,7 @@ public enum OfflineNoteWalletError: Error, LocalizedError, Equatable {
     case certificateVerificationFailed
     case missingBearerAuditTrail
     case missingOwnerCertificateSigner
+    case invalidField(String)
 
     public var errorDescription: String? {
         switch self {
@@ -59,6 +60,8 @@ public enum OfflineNoteWalletError: Error, LocalizedError, Equatable {
             return "Offline Note bearer note is missing the audit trail required for defunding."
         case .missingOwnerCertificateSigner:
             return "Offline Note owner certificate signer is required for P2P outputs."
+        case let .invalidField(field):
+            return "Offline Note wallet field \(field) is invalid."
         }
     }
 }
@@ -91,9 +94,11 @@ public struct OfflineNoteWalletNote: Equatable, Sendable {
                 state: OfflineNoteWalletNoteState,
                 createdAtMs: UInt64,
                 updatedAtMs: UInt64) throws {
+        let checkedChainId = try Self.exactNonEmptyField(chainId, field: "chain_id")
+        let checkedAccountId = try Self.exactNonEmptyField(accountId, field: "account_id")
         try OfflineNoteValidation.validateRandomBytes(noteSecret, field: "note_secret")
-        self.chainId = chainId
-        self.accountId = accountId
+        self.chainId = checkedChainId
+        self.accountId = checkedAccountId
         self.assetId = try OfflineNorito.canonicalAssetIdLiteral(assetId)
         self.amount = try OfflineNorito.parseCanonicalNumeric(amount).canonicalString
         self.keyCertificate = keyCertificate
@@ -101,7 +106,7 @@ public struct OfflineNoteWalletNote: Equatable, Sendable {
         self.noteSecret = noteSecret
         self.origin = origin
         self.bearerAuditTrail = Self.normalizedBearerAuditTrail(bearerAuditTrail)
-        self.spentPaymentRequestId = Self.normalizedSpentPaymentRequestId(spentPaymentRequestId)
+        self.spentPaymentRequestId = try Self.normalizedSpentPaymentRequestId(spentPaymentRequestId)
         self.state = state
         self.createdAtMs = createdAtMs
         self.updatedAtMs = updatedAtMs
@@ -190,10 +195,17 @@ public struct OfflineNoteWalletNote: Equatable, Sendable {
         return result
     }
 
-    private static func normalizedSpentPaymentRequestId(_ paymentRequestId: String?) -> String? {
+    private static func normalizedSpentPaymentRequestId(_ paymentRequestId: String?) throws -> String? {
         guard let paymentRequestId else { return nil }
-        let trimmed = paymentRequestId.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
+        return try exactNonEmptyField(paymentRequestId, field: "spent_payment_request_id")
+    }
+
+    private static func exactNonEmptyField(_ value: String, field: String) throws -> String {
+        guard !value.isEmpty,
+              value.trimmingCharacters(in: .whitespacesAndNewlines) == value else {
+            throw OfflineNoteWalletError.invalidField(field)
+        }
+        return value
     }
 }
 
@@ -987,15 +999,18 @@ public struct OfflineNoteReceiptAck: Equatable, Sendable {
                 tokenId: Data,
                 recipientAccountId: String,
                 acceptedAtMs: UInt64) throws {
-        guard !chainId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        guard isExactNonEmptyReceiptAckField(chainId) else {
             throw OfflineNoteReceiptAckCodecError.invalidField("chain_id")
         }
-        guard !paymentRequestId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        guard isExactNonEmptyReceiptAckField(paymentRequestId) else {
             throw OfflineNoteReceiptAckCodecError.invalidField("payment_request_id")
         }
         try OfflineNoteValidation.validateHash(tokenId, field: "token_id")
-        guard !recipientAccountId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        guard isExactNonEmptyReceiptAckField(recipientAccountId) else {
             throw OfflineNoteReceiptAckCodecError.invalidField("recipient_account_id")
+        }
+        guard acceptedAtMs > 0 else {
+            throw OfflineNoteReceiptAckCodecError.invalidField("accepted_at_ms")
         }
         self.chainId = chainId
         self.paymentRequestId = paymentRequestId
@@ -1013,18 +1028,17 @@ public struct OfflineNoteReceiptAck: Equatable, Sendable {
         recipientAccountId: String,
         acceptedAtMs: UInt64
     ) throws -> OfflineNoteReceiptAck {
-        let checkedRecipient = recipientAccountId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !checkedRecipient.isEmpty else {
+        guard isExactNonEmptyReceiptAckField(recipientAccountId) else {
             throw OfflineNoteReceiptAckCodecError.invalidField("recipient_account_id")
         }
-        guard tokenHasRecipientOutput(token, recipientAccountId: checkedRecipient) else {
+        guard tokenHasRecipientOutput(token, recipientAccountId: recipientAccountId) else {
             throw OfflineNoteReceiptAckCodecError.tokenMismatch
         }
         return try OfflineNoteReceiptAck(
             chainId: token.chainId,
             paymentRequestId: token.paymentRequestId,
             tokenId: token.tokenId,
-            recipientAccountId: checkedRecipient,
+            recipientAccountId: recipientAccountId,
             acceptedAtMs: acceptedAtMs
         )
     }
@@ -1050,6 +1064,10 @@ public struct OfflineNoteReceiptAck: Equatable, Sendable {
             claim.keyCertificate.accountId == recipientAccountId
         }
     }
+}
+
+private func isExactNonEmptyReceiptAckField(_ value: String) -> Bool {
+    !value.isEmpty && value.trimmingCharacters(in: .whitespacesAndNewlines) == value
 }
 
 public enum OfflineNoteReceiptAckCodecError: Error, LocalizedError, Equatable {

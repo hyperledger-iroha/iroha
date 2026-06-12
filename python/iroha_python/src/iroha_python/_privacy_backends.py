@@ -315,6 +315,8 @@ def _require_production_verify_backend_label(value: Any, context: str) -> str:
     backend = value
     if not backend.strip():
         raise ValueError(f"{context} must be a non-empty string")
+    if backend.strip() != backend:
+        raise ValueError(f"{context} must not contain surrounding whitespace")
     if not _is_production_verify_backend_label(backend):
         raise ValueError(f"{context} uses unsupported production verifier backend {backend}")
     return backend

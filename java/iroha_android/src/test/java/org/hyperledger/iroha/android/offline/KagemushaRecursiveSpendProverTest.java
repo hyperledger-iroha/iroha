@@ -140,6 +140,13 @@ public final class KagemushaRecursiveSpendProverTest {
         .equals(
             KagemushaRecursiveSpendProver.normalizeAppendOutputCircuitId(
                 "unknown-kagemusha-recursive-spend-circuit"));
+    final String whitespaceLineageOutputCircuitId =
+        " "
+            + KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
+            + " ";
+    assert whitespaceLineageOutputCircuitId.equals(
+        KagemushaRecursiveSpendProver.normalizeAppendOutputCircuitId(
+            whitespaceLineageOutputCircuitId));
     assert KagemushaRecursiveSpendProver.isSupportedAppendOutputCircuitId(null);
     assert KagemushaRecursiveSpendProver.isSupportedAppendOutputCircuitId("");
     assert KagemushaRecursiveSpendProver.isSupportedAppendOutputCircuitId(
@@ -152,6 +159,8 @@ public final class KagemushaRecursiveSpendProverTest {
         KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1);
     assert !KagemushaRecursiveSpendProver.isSupportedAppendOutputCircuitId(
         "unknown-kagemusha-recursive-spend-circuit");
+    assert !KagemushaRecursiveSpendProver.isSupportedAppendOutputCircuitId(
+        whitespaceLineageOutputCircuitId);
     assert KagemushaRecursiveSpendProver.isLineageProofCircuitId(
         KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1);
     assert KagemushaRecursiveSpendProver.isLineageProofCircuitId(
@@ -185,6 +194,8 @@ public final class KagemushaRecursiveSpendProverTest {
         KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1);
     assert !KagemushaRecursiveSpendProver.isSupportedPreviousProofCircuitId(
         "unknown-kagemusha-recursive-spend-circuit");
+    assert !KagemushaRecursiveSpendProver.isSupportedPreviousProofCircuitId(
+        whitespaceLineageOutputCircuitId);
     assert !KagemushaRecursiveSpendProver.requiresPreviousLineageVerifierRecordForAppend(
         KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1);
     assert KagemushaRecursiveSpendProver.requiresPreviousLineageVerifierRecordForAppend(
@@ -247,6 +258,8 @@ public final class KagemushaRecursiveSpendProverTest {
         KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, 64);
     assert !KagemushaRecursiveSpendProver.canProveAppendOutputCircuitId(
         "unknown-kagemusha-recursive-spend-circuit", 1);
+    assert !KagemushaRecursiveSpendProver.canProveAppendOutputCircuitId(
+        whitespaceLineageOutputCircuitId, 1);
     assert KagemushaRecursiveSpendProver.canSelectAppendOutputCircuitId(
         KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
         KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
@@ -274,6 +287,14 @@ public final class KagemushaRecursiveSpendProverTest {
     assert !KagemushaRecursiveSpendProver.canSelectAppendOutputCircuitId(
         KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
         "unknown-kagemusha-recursive-spend-circuit",
+        1);
+    assert !KagemushaRecursiveSpendProver.canSelectAppendOutputCircuitId(
+        KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+        whitespaceLineageOutputCircuitId,
+        1);
+    assert !KagemushaRecursiveSpendProver.canSelectAppendOutputCircuitId(
+        whitespaceLineageOutputCircuitId,
+        KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
         1);
     assert !KagemushaRecursiveSpendProver.canSelectAppendOutputCircuitId(
         KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
@@ -1015,11 +1036,13 @@ public final class KagemushaRecursiveSpendProverTest {
                 KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND,
                 repeat((byte) 0xE7, 64),
                 repeat((byte) 0xE8, 64)));
-    assertThrows(
-        "lineage_verifier_key",
-        () ->
-            KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
-                2, "halo2/kzg", repeat((byte) 0xE7, 64), repeat((byte) 0xE8, 64)));
+    for (final String backend : new String[] {"halo2/kzg", " halo2/ipa", "halo2/ipa ", "HALO2/IPA"}) {
+      assertThrows(
+          "lineage_verifier_key",
+          () ->
+              KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
+                  2, backend, repeat((byte) 0xE7, 64), repeat((byte) 0xE8, 64)));
+    }
     assertThrows(
         "lineage_verifier_key",
         () ->

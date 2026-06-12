@@ -1020,6 +1020,7 @@ test("BscMainnetSccp keeps the easy outbound path BSC-only", () => {
 });
 
 test("BSC testnet destination helpers bind outbound proofs to chain id 97", () => {
+  const sdk = new BscTestnetSccp();
   const testnetBinding = bscTestnetSccpDestinationBinding(sampleDestinationBindingInput());
   assert.equal(SCCP_BSC_TESTNET_EVM_CHAIN_ID, 97);
   assert.equal(testnetBinding.sourceDomain, SCCP_DOMAIN_SORA);

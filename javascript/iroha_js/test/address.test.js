@@ -422,6 +422,10 @@ test("fromAccount rejects control and Unicode-confusable curve algorithm aliases
     },
   ];
   const algorithms = [
+    "",
+    "   ",
+    " ed25519",
+    "ed25519 ",
     "future-curve",
     "ed\t25519",
     "ed\u200B25519",

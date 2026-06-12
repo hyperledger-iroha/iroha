@@ -5,15 +5,17 @@ import test from "node:test";
 
 import {
   AccountAddress,
+} from "../src/address.js";
+import {
   ToriiClient,
   buildIdentifierRequestForPolicy,
   encodeIdentifierResolutionReceiptAttestation,
   encodeIdentifierResolutionReceiptPayload,
   encryptIdentifierInputForPolicy,
   getIdentifierBfvPublicParameters,
-  normalizeIdentifierInput,
   verifyIdentifierResolutionReceipt,
-} from "../src/index.js";
+} from "../src/toriiClient.js";
+import { normalizeIdentifierInput } from "../src/normalizers.js";
 import { blake2b256 } from "../src/blake2b.js";
 import { ValidationError } from "../src/validationError.js";
 
@@ -655,6 +657,30 @@ test("verifyIdentifierResolutionReceipt rejects adversarial receipt mutations", 
     /attestation\.signature/,
   );
 
+  for (const signature of [
+    ` ${signedReceipt.attestation.signature}`,
+    `${signedReceipt.attestation.signature} `,
+  ]) {
+    const paddedSignature = JSON.parse(JSON.stringify(signedReceipt));
+    paddedSignature.attestation.signature = signature;
+    assert.throws(
+      () => verifyIdentifierResolutionReceipt(paddedSignature, policy),
+      /attestation\.signature must not contain surrounding whitespace/,
+    );
+  }
+
+  for (const signature of [
+    ` ${signedReceipt.payload.opening.signature}`,
+    `${signedReceipt.payload.opening.signature} `,
+  ]) {
+    const paddedOpeningSignature = JSON.parse(JSON.stringify(signedReceipt));
+    paddedOpeningSignature.payload.opening.signature = signature;
+    assert.throws(
+      () => verifyIdentifierResolutionReceipt(paddedOpeningSignature, policy),
+      /payload\.opening\.signature must not contain surrounding whitespace/,
+    );
+  }
+
   const signedWithProofFields = JSON.parse(JSON.stringify(signedReceipt));
   signedWithProofFields.attestation.proof_backend = "halo2/ipa";
   signedWithProofFields.attestation.proof_b64 = "AQID";
@@ -683,6 +709,72 @@ test("verifyIdentifierResolutionReceipt rejects adversarial receipt mutations", 
         policy_id: "email#retail",
       }),
     /does not match policy/,
+  );
+});
+
+test("encodeIdentifierResolutionReceiptPayload rejects non-exact execution tags", () => {
+  const basePayload = signedReceiptFixture().payload;
+  for (const [field, value, pattern] of [
+    ["backend", " bfv-programmed-sha3-256-v1", /payload\.execution\.backend must not contain surrounding whitespace/],
+    ["backend", "BFV-PROGRAMMED-SHA3-256-V1", /payload\.execution\.backend must be an exact lowercase/],
+    ["verification_mode", "signed ", /payload\.execution\.verification_mode must not contain surrounding whitespace/],
+    ["verification_mode", "Signed", /payload\.execution\.verification_mode must be an exact lowercase/],
+  ]) {
+    const payload = clone(basePayload);
+    payload.execution[field] = value;
+    assert.throws(
+      () => encodeIdentifierResolutionReceiptPayload(payload),
+      pattern,
+      `${field}=${value}`,
+    );
+  }
+});
+
+test("encodeIdentifierResolutionReceiptAttestation rejects padded proof backend", () => {
+  for (const kind of [" signed", "signed ", "Signed"]) {
+    assert.throws(
+      () =>
+        encodeIdentifierResolutionReceiptAttestation({
+          kind,
+          signature: IDENTIFIER_RECEIPT_VECTOR_FIXTURE.receipt.attestation.signature,
+        }),
+      /identifier receipt attestation\.kind/,
+      `attestation kind ${JSON.stringify(kind)}`,
+    );
+  }
+
+  for (const proofBackend of [" halo2/ipa", "halo2/ipa "]) {
+    assert.throws(
+      () =>
+        encodeIdentifierResolutionReceiptAttestation({
+          kind: "proof",
+          proof_backend: proofBackend,
+          proof_b64: "AQID",
+        }),
+      /identifier receipt attestation\.proof_backend must not contain surrounding whitespace/,
+    );
+  }
+
+  for (const proofB64 of [" AQID", "AQID "]) {
+    assert.throws(
+      () =>
+        encodeIdentifierResolutionReceiptAttestation({
+          kind: "proof",
+          proof_backend: "halo2/ipa",
+          proof_b64: proofB64,
+        }),
+      /identifier receipt attestation\.proof_b64 must not contain surrounding whitespace/,
+    );
+  }
+
+  assert.throws(
+    () =>
+      encodeIdentifierResolutionReceiptAttestation({
+        kind: "proof",
+        proof_backend: "halo2/ipa",
+        proof_b64: "@@@",
+      }),
+    /attestation\.proof_b64 must be a valid base64 string/,
   );
 });
 
@@ -732,6 +824,140 @@ test("verifyIdentifierResolutionReceipt matches shared receipt vectors", () => {
           ),
         /proof attestations require an external verifier/,
         `${vector.name}: proof verifier gate`,
+      );
+    }
+  }
+
+  for (const policyId of [" phone#retail", "phone#retail ", "phone #retail", "phone# retail"]) {
+    const paddedPolicyId = JSON.parse(JSON.stringify(IDENTIFIER_RECEIPT_VECTOR_FIXTURE.receipt));
+    paddedPolicyId.payload.policy_id = policyId;
+    assert.throws(
+      () =>
+        verifyIdentifierResolutionReceipt(
+          paddedPolicyId,
+          IDENTIFIER_RECEIPT_VECTOR_FIXTURE.policy,
+        ),
+      /payload\.policy_id/,
+      `policy_id exactness ${policyId}`,
+    );
+  }
+
+  for (const programId of [" identifier_lookup_retail", "identifier_lookup_retail "]) {
+    const paddedExecutionProgram = JSON.parse(JSON.stringify(IDENTIFIER_RECEIPT_VECTOR_FIXTURE.receipt));
+    paddedExecutionProgram.payload.execution.program_id = programId;
+    assert.throws(
+      () =>
+        verifyIdentifierResolutionReceipt(
+          paddedExecutionProgram,
+          IDENTIFIER_RECEIPT_VECTOR_FIXTURE.policy,
+        ),
+      /payload\.execution\.program_id/,
+      `execution program_id exactness ${programId}`,
+    );
+
+    const paddedOpeningProgram = JSON.parse(JSON.stringify(IDENTIFIER_RECEIPT_VECTOR_FIXTURE.receipt));
+    paddedOpeningProgram.payload.opening.payload.program_id = programId;
+    assert.throws(
+      () =>
+        verifyIdentifierResolutionReceipt(
+          paddedOpeningProgram,
+          IDENTIFIER_RECEIPT_VECTOR_FIXTURE.policy,
+        ),
+      /payload\.opening\.payload\.program_id/,
+      `opening program_id exactness ${programId}`,
+    );
+  }
+
+  for (const accountId of [
+    ` ${IDENTIFIER_RECEIPT_VECTOR_FIXTURE.receipt.payload.account_id}`,
+    `${IDENTIFIER_RECEIPT_VECTOR_FIXTURE.receipt.payload.account_id} `,
+  ]) {
+    const paddedAccountId = JSON.parse(JSON.stringify(IDENTIFIER_RECEIPT_VECTOR_FIXTURE.receipt));
+    paddedAccountId.payload.account_id = accountId;
+    assert.throws(
+      () =>
+        verifyIdentifierResolutionReceipt(
+          paddedAccountId,
+          IDENTIFIER_RECEIPT_VECTOR_FIXTURE.policy,
+        ),
+      /payload\.account_id/,
+      "account_id exactness",
+    );
+  }
+
+  const hashExactnessCases = [
+    ["payload.opaque_id", ["payload", "opaque_id"], IDENTIFIER_RECEIPT_VECTOR_FIXTURE.receipt.payload.opaque_id],
+    ["payload.receipt_hash", ["payload", "receipt_hash"], IDENTIFIER_RECEIPT_VECTOR_FIXTURE.receipt.payload.receipt_hash],
+    ["payload.uaid", ["payload", "uaid"], IDENTIFIER_RECEIPT_VECTOR_FIXTURE.receipt.payload.uaid],
+    [
+      "payload.execution.program_digest",
+      ["payload", "execution", "program_digest"],
+      IDENTIFIER_RECEIPT_VECTOR_FIXTURE.receipt.payload.execution.program_digest,
+    ],
+    [
+      "payload.opening.payload.input_ciphertext_hash",
+      ["payload", "opening", "payload", "input_ciphertext_hash"],
+      IDENTIFIER_RECEIPT_VECTOR_FIXTURE.receipt.payload.opening.payload.input_ciphertext_hash,
+    ],
+  ];
+  for (const [context, path, value] of hashExactnessCases) {
+    for (const paddedValue of [` ${value}`, `${value} `]) {
+      const paddedHash = JSON.parse(JSON.stringify(IDENTIFIER_RECEIPT_VECTOR_FIXTURE.receipt));
+      let target = paddedHash;
+      for (const component of path.slice(0, -1)) {
+        target = target[component];
+      }
+      target[path.at(-1)] = paddedValue;
+      assert.throws(
+        () =>
+          verifyIdentifierResolutionReceipt(
+            paddedHash,
+            IDENTIFIER_RECEIPT_VECTOR_FIXTURE.policy,
+          ),
+        new RegExp(context.replaceAll(".", "\\.")),
+        `hash exactness ${context}`,
+      );
+    }
+  }
+
+  const timestampExactnessCases = [
+    [
+      "payload.execution.executed_at_ms",
+      ["payload", "execution", "executed_at_ms"],
+      IDENTIFIER_RECEIPT_VECTOR_FIXTURE.receipt.payload.execution.executed_at_ms,
+    ],
+    [
+      "payload.execution.expires_at_ms",
+      ["payload", "execution", "expires_at_ms"],
+      IDENTIFIER_RECEIPT_VECTOR_FIXTURE.receipt.payload.execution.expires_at_ms,
+    ],
+    [
+      "payload.opening.payload.opened_at_ms",
+      ["payload", "opening", "payload", "opened_at_ms"],
+      IDENTIFIER_RECEIPT_VECTOR_FIXTURE.receipt.payload.opening.payload.opened_at_ms,
+    ],
+    [
+      "payload.opening.payload.expires_at_ms",
+      ["payload", "opening", "payload", "expires_at_ms"],
+      IDENTIFIER_RECEIPT_VECTOR_FIXTURE.receipt.payload.opening.payload.expires_at_ms,
+    ],
+  ];
+  for (const [context, path, value] of timestampExactnessCases) {
+    for (const paddedValue of [` ${value}`, `${value} `]) {
+      const paddedTimestamp = JSON.parse(JSON.stringify(IDENTIFIER_RECEIPT_VECTOR_FIXTURE.receipt));
+      let target = paddedTimestamp;
+      for (const component of path.slice(0, -1)) {
+        target = target[component];
+      }
+      target[path.at(-1)] = paddedValue;
+      assert.throws(
+        () =>
+          verifyIdentifierResolutionReceipt(
+            paddedTimestamp,
+            IDENTIFIER_RECEIPT_VECTOR_FIXTURE.policy,
+          ),
+        new RegExp(context.replaceAll(".", "\\.")),
+        `timestamp exactness ${context}`,
       );
     }
   }
@@ -1352,7 +1578,7 @@ test("getIdentifierClaimByReceiptHash returns null on 404", async () => {
   assert.equal(result, null);
 });
 
-test("normalizeIdentifierInput remains available from the public SDK entrypoint", () => {
+test("normalizeIdentifierInput normalizes supported identifier forms", () => {
   assert.equal(
     normalizeIdentifierInput(" Alice.Example@Example.COM ", "email_address", "email"),
     "alice.example@example.com",

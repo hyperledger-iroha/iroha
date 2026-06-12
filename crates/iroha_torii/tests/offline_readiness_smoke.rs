@@ -122,6 +122,13 @@ async fn offline_readiness_is_mounted_and_legacy_routes_are_absent() {
     let body = readiness.into_body().collect().await.unwrap().to_bytes();
     let body = String::from_utf8(body.to_vec()).unwrap();
     assert!(body.contains("\"offline_telemetry\":true"));
+    assert!(body.contains("\"offline_kagemusha_abi7\":true"));
+    assert!(body.contains("\"offline_kagemusha_abi7_mode\":\"recursive_compact_v1\""));
+    assert!(body.contains("\"offline_kagemusha_abi7_bridge_abi_version\":7"));
+    assert!(
+        body.contains("\"offline_kagemusha_abi7_circuit_id\":\"kagemusha-recursive-compact-v1\"")
+    );
+    assert!(body.contains("\"offline_kagemusha_abi7_artifacts\":true"));
     assert!(body.contains("\"offline_kagemusha_recursive_compact_available\":true"));
     assert!(body.contains("\"offline_kagemusha_recursive_compact_mode\":\"recursive_compact_v1\""));
     assert!(
@@ -147,11 +154,6 @@ async fn offline_readiness_is_mounted_and_legacy_routes_are_absent() {
         "offline_sync_optional",
         "offline_kagemusha_enabled",
         "offline_kagemusha_force_legacy",
-        "offline_kagemusha_abi7",
-        "offline_kagemusha_abi7_mode",
-        "offline_kagemusha_abi7_bridge_abi_version",
-        "offline_kagemusha_abi7_circuit_id",
-        "offline_kagemusha_abi7_artifacts",
     ] {
         assert!(
             !body.contains(&format!("\"{field}\"")),

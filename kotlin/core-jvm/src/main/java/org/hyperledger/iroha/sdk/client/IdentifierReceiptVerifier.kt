@@ -11,6 +11,7 @@ import org.hyperledger.iroha.sdk.crypto.SigningAlgorithm
 object IdentifierReceiptVerifier {
     @JvmStatic
     fun verify(receipt: IdentifierResolutionReceipt, policy: IdentifierPolicySummary): Boolean {
+        requireExactPolicyId(policy.policyId)
         require(receipt.policyId == policy.policyId) {
             "receipt policyId does not match the supplied policy"
         }
@@ -22,14 +23,27 @@ object IdentifierReceiptVerifier {
         val signatureBytes = hexToBytes(
             requireNotNull(receipt.attestation.signature) {
                 "signed attestation is missing signature"
-            }
+            },
+            "attestation.signature",
         )
-        val keyPayload = decodePublicKeyLiteral(policy.resolverPublicKey)
+        val keyPayload = decodePublicKeyLiteral(requireExactResolverPublicKey(policy.resolverPublicKey))
             ?: throw IllegalArgumentException("resolverPublicKey is not a valid multihash literal")
         return when (keyPayload.curveId) {
             0x01 -> verifyEd25519(keyPayload.keyBytes, message, signatureBytes)
             else -> verifyNativeBacked(keyPayload.curveId, keyPayload.keyBytes, message, signatureBytes)
         }
+    }
+
+    private fun requireExactResolverPublicKey(literal: String): String {
+        require(literal.isNotBlank()) { "resolverPublicKey must not be empty" }
+        require(literal.trim() == literal) { "resolverPublicKey must not contain surrounding whitespace" }
+        return literal
+    }
+
+    private fun requireExactPolicyId(literal: String): String {
+        require(literal.isNotBlank()) { "policy.policy_id must not be empty" }
+        require(literal.trim() == literal) { "policy.policy_id must not contain surrounding whitespace" }
+        return literal
     }
 
     private fun verifyEd25519(publicKey: ByteArray, message: ByteArray, signature: ByteArray): Boolean {
@@ -72,17 +86,19 @@ object IdentifierReceiptVerifier {
         else -> null
     }
 
-    private fun hexToBytes(hex: String): ByteArray {
+    private fun hexToBytes(hex: String, field: String): ByteArray {
         var trimmed = hex.trim()
+        require(trimmed.isNotEmpty()) { "$field must not be blank" }
+        require(trimmed == hex) { "$field must not contain surrounding whitespace" }
         if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) {
             trimmed = trimmed.substring(2)
         }
-        require(trimmed.length % 2 == 0) { "hex value must contain an even number of characters" }
+        require(trimmed.length % 2 == 0) { "$field must contain an even number of characters" }
         val out = ByteArray(trimmed.length / 2)
         for (i in trimmed.indices step 2) {
             val high = Character.digit(trimmed[i], 16)
             val low = Character.digit(trimmed[i + 1], 16)
-            require(high >= 0 && low >= 0) { "hex value contains non-hex characters" }
+            require(high >= 0 && low >= 0) { "$field contains non-hex characters" }
             out[i / 2] = ((high shl 4) or low).toByte()
         }
         return out

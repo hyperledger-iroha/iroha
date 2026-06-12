@@ -964,6 +964,9 @@ pub struct MultisigProposeRequest {
     /// Optional fee sponsor account literal forwarded to transaction metadata.
     #[norito(default)]
     pub fee_sponsor: Option<String>,
+    /// Optional user-facing transfer memo forwarded to transaction metadata.
+    #[norito(default)]
+    pub memo: Option<String>,
     /// Instruction batch to wrap inside the multisig proposal.
     pub instructions: Vec<iroha_data_model::isi::InstructionBox>,
 }
@@ -5843,6 +5846,7 @@ mod evidence_http_tests {
             signature_b64: None,
             creation_time_ms: Some(123),
             fee_sponsor: None,
+            memo: Some("invoice 42".to_owned()),
             instructions: vec![instruction.clone()],
         };
 
@@ -5865,6 +5869,7 @@ mod evidence_http_tests {
             "http://mock.local/v1/multisig/propose"
         );
         let body: Value = norito::json::from_slice(&snapshot.body).expect("decode request body");
+        assert_eq!(body["memo"].as_str(), Some("invoice 42"));
         let encoded_instruction = body["instructions"][0]
             .as_str()
             .expect("native instruction base64");
@@ -5909,6 +5914,7 @@ mod evidence_http_tests {
             signature_b64: None,
             creation_time_ms: Some(123),
             fee_sponsor: None,
+            memo: None,
             instructions: vec![dm::Log::new(dm::Level::INFO, "reject me".to_owned()).into()],
         };
         let response = json_response(
@@ -5947,6 +5953,7 @@ mod evidence_http_tests {
             signature_b64: None,
             creation_time_ms: Some(123),
             fee_sponsor: None,
+            memo: None,
             instructions: vec![dm::Log::new(dm::Level::INFO, "bad response".to_owned()).into()],
         };
         let response = json_response(StatusCode::OK, "{\"ok\":true}");
@@ -5982,6 +5989,7 @@ mod evidence_http_tests {
             signature_b64: None,
             creation_time_ms: Some(123),
             fee_sponsor: None,
+            memo: None,
             instructions: vec![dm::Log::new(dm::Level::INFO, "bad metadata".to_owned()).into()],
         };
         let bad_hash_response = json_response(

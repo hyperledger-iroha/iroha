@@ -113,6 +113,8 @@ def _sha256_file_with_size(
 def _secret_path_error(path: str | None, label: str) -> str | None:
     if path is not None and device_lab.SECRET_RE.search(path):
         return f"{label} must not contain secret-looking material"
+    if path is not None and device_lab._contains_control_character(path):
+        return f"{label} must not contain control characters"
     return None
 
 
@@ -383,6 +385,12 @@ def _same_resolved_parent(child: Path, parent: Path) -> tuple[bool | None, list[
 def validate_output_corridor(out_path: Path, artifact_dir: Path) -> list[str]:
     """Validate that --out resolves directly under --artifact-dir."""
 
+    out_secret_error = _secret_path_error(str(out_path), "--out")
+    if out_secret_error is not None:
+        return [out_secret_error]
+    artifact_dir_secret_error = _secret_path_error(str(artifact_dir), "--artifact-dir")
+    if artifact_dir_secret_error is not None:
+        return [artifact_dir_secret_error]
     output_parent, output_parent_errors = _resolve_corridor_path(
         out_path.parent,
         "--out parent",
@@ -405,10 +413,10 @@ def validate_output_corridor(out_path: Path, artifact_dir: Path) -> list[str]:
 def validate_lineage_input_paths(artifact_dir: Path, proof_log: Path) -> list[str]:
     """Reject detached or aliased lineage proof inputs before reading bytes."""
 
-    errors = validate_artifact_dir_path(artifact_dir)
     proof_log_secret_error = _secret_path_error(str(proof_log), "--proof-log")
     if proof_log_secret_error is not None:
-        errors.append(proof_log_secret_error)
+        return [proof_log_secret_error]
+    errors = validate_artifact_dir_path(artifact_dir)
     if errors:
         return errors
     proof_log_ancestor_errors = device_lab.validate_no_symlink_ancestors(

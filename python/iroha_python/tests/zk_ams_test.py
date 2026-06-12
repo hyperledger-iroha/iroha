@@ -133,6 +133,69 @@ def test_zk_ams_package_root_exports_catalog_entrypoint_aliases() -> None:
     assert verified["admission_batch_root"] == batch["admission_batch_root"].hex()
 
 
+def test_zk_ams_public_helpers_reject_non_plain_mapping_inputs() -> None:
+    class ZkAmsDict(dict):
+        pass
+
+    base = _base()
+    proof_options = {
+        **base,
+        "vkHash": bytes([0x66]) * 32,
+        "proofBytes": b"production-zk-ams-admission-proof",
+    }
+
+    for helper in (build_zk_ams_admission_batch, buildZkAmsAdmissionBatch):
+        with pytest.raises(TypeError, match="zkAmsAdmissionBatch"):
+            helper(ZkAmsDict(base))
+
+    for helper in (
+        build_zk_ams_admission_proof_envelope,
+        buildZkAmsAdmissionProofEnvelope,
+    ):
+        with pytest.raises(TypeError, match="zkAmsAdmissionProofEnvelope"):
+            helper(ZkAmsDict(proof_options))
+
+    for helper in (
+        build_zk_ams_admission_batch_proof_v0,
+        buildZkAmsAdmissionBatchProofV0,
+    ):
+        with pytest.raises(TypeError, match="zkAmsAdmissionBatchProofV0"):
+            helper(ZkAmsDict(proof_options))
+
+    for helper in (
+        build_zk_ams_admission_dev_proof_fixture,
+        buildZkAmsAdmissionDevProofFixture,
+    ):
+        with pytest.raises(TypeError, match="zkAmsAdmissionDevProofFixture"):
+            helper(ZkAmsDict({**base, "vkHash": bytes([0x66]) * 32}))
+
+    production_proof = build_zk_ams_admission_batch_proof_v0(proof_options)
+    raw_verified = verify_zk_ams_admission_batch_proof_v0(production_proof)
+    assert raw_verified["ok"] is True
+
+    verify_options = {"envelope": production_proof, **base}
+    for helper in (
+        verify_zk_ams_admission_batch_proof_v0,
+        verifyZkAmsAdmissionBatchProofV0,
+    ):
+        with pytest.raises(TypeError, match="zkAmsAdmissionBatchProofV0"):
+            helper(ZkAmsDict(verify_options))
+
+    fixture = build_zk_ams_admission_dev_proof_fixture(
+        {**base, "vkHash": bytes([0x66]) * 32}
+    )
+    local_verified = verify_zk_ams_admission_proof_locally(fixture["envelope"])
+    assert local_verified["ok"] is True
+
+    local_options = {**verify_options, "envelope": fixture["envelope"]}
+    for helper in (
+        verify_zk_ams_admission_proof_locally,
+        verifyZkAmsAdmissionProofLocally,
+    ):
+        with pytest.raises(TypeError, match="zkAmsAdmissionLocalVerification"):
+            helper(ZkAmsDict(local_options))
+
+
 @pytest.mark.parametrize(
     "patch",
     [

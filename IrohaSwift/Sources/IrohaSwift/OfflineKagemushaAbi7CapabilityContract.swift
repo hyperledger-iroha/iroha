@@ -22,7 +22,7 @@ public enum OfflineKagemushaAbi7CapabilityError: Error, Equatable, LocalizedErro
         case let .unsupportedCircuitId(expected, actual):
             return "Kagemusha ABI-7 circuit id must be \(expected), got \(actual ?? "missing")."
         case .missingArtifactSetId:
-            return "Kagemusha ABI-7 artifact set id is missing."
+            return "Kagemusha ABI-7 artifact set id is missing or noncanonical."
         case .artifactsUnavailable:
             return "Kagemusha ABI-7 artifacts are unavailable."
         }
@@ -103,7 +103,12 @@ public enum OfflineKagemushaAbi7CapabilityContract {
         guard circuitId == Self.circuitId else {
             throw OfflineKagemushaAbi7CapabilityError.unsupportedCircuitId(expected: Self.circuitId, actual: circuitId)
         }
-        guard artifactSetId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+        guard let artifactSetId,
+              !artifactSetId.isEmpty,
+              artifactSetId.unicodeScalars.allSatisfy({ scalar in
+                  scalar.value > 0x20 && scalar.value <= 0x7E
+              })
+        else {
             throw OfflineKagemushaAbi7CapabilityError.missingArtifactSetId
         }
     }

@@ -40,6 +40,8 @@ EXIT_MARKER_MAX_BYTES = 32
 RUN_REPORT_FILENAME = "recursive-compact-key-staged-run.json"
 STAGED_RUN_REPORT_SCHEMA = "iroha.kagemusha.recursive_compact_key_staged_run.v1"
 MAX_STAGED_RUN_REPORT_BYTES = 16 * 1024
+CONTROL_EXIT_MARKER_REDACTION = "<unsafe-exit-marker>"
+SECRET_EXIT_MARKER_REDACTION = "<redacted-secret-marker>"
 
 
 def _default_generated_at_utc() -> str:
@@ -54,7 +56,41 @@ def _default_generated_at_utc() -> str:
 def _secret_path_error(path: Path, label: str) -> str | None:
     if device_lab.SECRET_RE.search(str(path)):
         return f"{label} must not contain secret-looking material"
+    if device_lab._contains_control_character(str(path)):
+        return f"{label} must not contain control characters"
     return None
+
+
+def _display_exit_marker(marker: str) -> str:
+    if not marker:
+        return "<empty>"
+    if device_lab.SECRET_RE.search(marker):
+        return SECRET_EXIT_MARKER_REDACTION
+    if device_lab._contains_control_character(marker):
+        return CONTROL_EXIT_MARKER_REDACTION
+    return marker
+
+
+def _validate_report_command(
+    value: object,
+    label: str,
+    expected: str,
+    description: str,
+) -> list[str]:
+    """Validate a staged report command without echoing unsafe bytes."""
+
+    if not isinstance(value, str) or not value:
+        return [f"{label} command must be a non-empty string"]
+    errors: list[str] = []
+    if value != value.strip():
+        errors.append(f"{label} command must not contain surrounding whitespace")
+    if device_lab._contains_control_character(value):
+        errors.append(f"{label} command must not contain control characters")
+    if device_lab.SECRET_RE.search(value):
+        errors.append(f"{label} command must not contain secret-looking material")
+    if value != expected:
+        errors.append(f"{label} command must match the canonical {description}")
+    return errors
 
 
 def validate_directory_path(path: Path, label: str, *, must_exist: bool) -> list[str]:
@@ -300,7 +336,7 @@ def _read_small_text_file(
 
 
 def read_exit_marker(path: Path) -> tuple[str | None, list[str]]:
-    """Read and normalize the staged keygen exit marker."""
+    """Read the staged keygen exit marker."""
 
     text, errors = _read_small_text_file(
         path,
@@ -310,7 +346,10 @@ def read_exit_marker(path: Path) -> tuple[str | None, list[str]]:
     if errors:
         return None, errors
     assert text is not None
-    return text.strip(), []
+    marker = text.strip()
+    if text != "0\n" and marker == "0":
+        return marker, ["staged keygen exit marker must be exactly 0 followed by newline"]
+    return marker, []
 
 
 def validate_exit_marker(path: Path) -> tuple[str | None, list[str]]:
@@ -321,7 +360,9 @@ def validate_exit_marker(path: Path) -> tuple[str | None, list[str]]:
         return None, errors
     assert stripped is not None
     if stripped != "0":
-        return stripped, [f"staged keygen exit code must be 0, got {stripped or '<empty>'}"]
+        return stripped, [
+            f"staged keygen exit code must be 0, got {_display_exit_marker(stripped)}"
+        ]
     return stripped, []
 
 
@@ -336,11 +377,7 @@ def _strict_json_loads(text: str, label: str) -> tuple[object | None, list[str]]
             [],
         )
     except device_lab.DuplicateJsonKeyError as exc:
-        key = (
-            device_lab.SECRET_PATH_REDACTION
-            if device_lab.SECRET_RE.search(exc.key)
-            else exc.key
-        )
+        key = device_lab._display_path(exc.key)
         return None, [f"{label} contains duplicate JSON object key {key}"]
     except device_lab.NonFiniteJsonConstantError as exc:
         return None, [f"{label} is not strict JSON: non-finite constant {exc.constant} is not allowed"]
@@ -377,14 +414,22 @@ def validate_staged_run_report(
     }
     extra_keys = sorted(set(document) - allowed_keys)
     if extra_keys:
-        return [f"{label} contains unexpected field {extra_keys[0]}"]
+        return [
+            f"{label} contains unexpected field {device_lab._display_path(extra_keys[0])}"
+        ]
     missing_keys = sorted(allowed_keys - set(document))
     if missing_keys:
         return [f"{label} is missing {missing_keys[0]}"]
     if document["schema"] != STAGED_RUN_REPORT_SCHEMA:
         return [f"{label} schema must be {STAGED_RUN_REPORT_SCHEMA}"]
-    if document["command"] != expected_command:
-        return [f"{label} command must match the canonical ABI-7 compact key command"]
+    command_errors = _validate_report_command(
+        document["command"],
+        label,
+        expected_command,
+        "ABI-7 compact key command",
+    )
+    if command_errors:
+        return command_errors
     exit_code = document["exit_code"]
     if isinstance(exit_code, bool) or not isinstance(exit_code, int):
         return [f"{label} exit_code must be an integer"]

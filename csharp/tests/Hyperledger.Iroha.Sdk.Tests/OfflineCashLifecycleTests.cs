@@ -76,6 +76,24 @@ public sealed class OfflineCashLifecycleTests
             () => missingKey.RequireUsableForOfflineExchange(nowMs: 200));
         Assert.Equal("missing_issuer_public_key", error.Code);
 
+        foreach (var issuerKey in new[]
+        {
+            "",
+            " issuer-key",
+            "issuer-key ",
+            "issuer key",
+            "issuer-key\n",
+            "issuer-key\u2603",
+        })
+        {
+            var noncanonical = snapshot with { IssuerPublicKeyBase64 = issuerKey };
+            error = Assert.Throws<OfflineCashConfigurationSnapshotException>(
+                () => noncanonical.RequireUsableForOfflineExchange(
+                    nowMs: 200,
+                    requiredNativeBridgeAbiVersion: 7));
+            Assert.Equal("missing_issuer_public_key", error.Code);
+        }
+
         var disabled = snapshot with { OfflinePaymentsEnabled = false };
         error = Assert.Throws<OfflineCashConfigurationSnapshotException>(
             () => disabled.RequireUsableForOfflineExchange(nowMs: 200, requiredNativeBridgeAbiVersion: 7));

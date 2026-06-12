@@ -22,6 +22,7 @@ from .verange import (
     _reject_unknown_fields,
     _require_mapping,
     _require_non_blank_string,
+    _require_plain_mapping,
     build_privacy_proof_envelope,
     decode_privacy_proof_envelope,
 )
@@ -155,6 +156,8 @@ def _normalize_commitment_list(
     for index, entry in enumerate(value):
         raw = entry
         if isinstance(entry, Mapping):
+            if type(entry) is not dict:
+                raise TypeError(f"{context}[{index}] must be a plain dict")
             _commitment_key, raw = _read_single_alias(
                 entry,
                 (
@@ -177,7 +180,7 @@ def _normalize_commitment_list(
 
 
 def _normalize_receiver_entry(value: Any, context: str) -> dict[str, bytes]:
-    source = _require_mapping(value, context)
+    source = _require_plain_mapping(value, context)
     _reject_unknown_fields(
         source,
         {
@@ -322,7 +325,7 @@ def build_anonymous_pgc_receiver_set(
     wallet/prover.
     """
 
-    source = _require_mapping(options, context)
+    source = _require_plain_mapping(options, context)
     _reject_unknown_fields(source, {"version", "threshold", "k", "receivers"}, context)
     _threshold_key, threshold_value = _read_single_alias(
         source,
@@ -383,7 +386,7 @@ def build_anonymous_pgc_receiver_set(
 
 
 def _normalize_receiver_set(value: Any, context: str) -> dict[str, Any]:
-    source = _require_mapping(value, context)
+    source = _require_plain_mapping(value, context)
     rebuilt = build_anonymous_pgc_receiver_set(
         {
             key: source[key]
@@ -829,7 +832,7 @@ def _anonymous_pgc_proof_allowed_fields() -> set[str]:
 def build_anonymous_pgc_k_out_of_n_proof_v1(options: Mapping[str, Any]) -> bytes:
     """Build a production Anonymous PGC proof envelope from prover output."""
 
-    source = _require_mapping(options, "anonymousPgcKOutOfNProofV1")
+    source = _require_plain_mapping(options, "anonymousPgcKOutOfNProofV1")
     _reject_unknown_fields(
         source,
         _anonymous_pgc_proof_allowed_fields(),
@@ -872,7 +875,7 @@ def build_anonymous_pgc_dev_proof_fixture(options: Mapping[str, Any]) -> dict[st
     production Anonymous PGC proof.
     """
 
-    source = _require_mapping(options, "anonymousPgcDevProofFixture")
+    source = _require_plain_mapping(options, "anonymousPgcDevProofFixture")
     _reject_unknown_fields(
         source,
         {
@@ -970,7 +973,7 @@ def build_anonymous_pgc_account_commitment_instruction(
 ) -> dict[str, Any]:
     """Build a typed Anonymous PGC account-commitment instruction model."""
 
-    source = _require_mapping(options, "anonymousPgcAccountCommitmentInstruction")
+    source = _require_plain_mapping(options, "anonymousPgcAccountCommitmentInstruction")
     _reject_unknown_fields(
         source,
         {
@@ -1176,7 +1179,10 @@ def verify_anonymous_pgc_k_out_of_n_proof_v1(options: Any) -> dict[str, Any]:
     """Validate a production Anonymous PGC proof envelope binding."""
 
     if isinstance(options, Mapping):
-        source = options
+        source = _require_plain_mapping(
+            options,
+            "anonymousPgcKOutOfNProofV1Verification",
+        )
     else:
         source = {"envelope": options}
     _reject_unknown_fields(
@@ -1272,7 +1278,10 @@ def verify_anonymous_pgc_dev_proof_locally(options: Any) -> dict[str, Any]:
     """Verify a deterministic Anonymous PGC dev fixture envelope locally."""
 
     if isinstance(options, Mapping):
-        source = options
+        source = _require_plain_mapping(
+            options,
+            "anonymousPgcDevProofLocalVerification",
+        )
     else:
         source = {"envelope": options}
     _reject_unknown_fields(
@@ -1372,7 +1381,7 @@ def verify_anonymous_pgc_dev_proof_locally(options: Any) -> dict[str, Any]:
 def build_anonymous_pgc_transfer_instruction(options: Mapping[str, Any]) -> dict[str, Any]:
     """Build a typed Anonymous PGC transfer instruction model."""
 
-    source = _require_mapping(options, "anonymousPgcTransferInstruction")
+    source = _require_plain_mapping(options, "anonymousPgcTransferInstruction")
     _reject_unknown_fields(
         source,
         {

@@ -20,6 +20,7 @@ from .verange import (
     _reject_unknown_fields,
     _require_mapping,
     _require_non_blank_string,
+    _require_plain_mapping,
     build_privacy_proof_envelope,
     decode_privacy_proof_envelope,
 )
@@ -619,7 +620,7 @@ def build_vega_credential_predicate_commitment(
 ) -> dict[str, Any]:
     """Normalize or derive a Vega credential predicate commitment."""
 
-    source = _require_mapping(options, context)
+    source = _require_plain_mapping(options, context)
     _reject_unknown_fields(source, _PREDICATE_FIELDS, context)
     return _normalize_predicate_commitment_from_source(source, context)
 
@@ -684,7 +685,7 @@ _PROOF_FIELDS = {
 def build_vega_credential_proof_envelope(options: Mapping[str, Any]) -> bytes:
     """Build canonical OpenVerifyEnvelope bytes for a prepared Vega proof."""
 
-    source = _require_mapping(options, "vegaCredentialProofEnvelope")
+    source = _require_plain_mapping(options, "vegaCredentialProofEnvelope")
     _reject_unknown_fields(source, _PROOF_FIELDS, "vegaCredentialProofEnvelope")
     parts = _normalize_proof_parts(
         source,
@@ -710,7 +711,7 @@ def build_vega_credential_predicate_proof_v0(
 ) -> bytes:
     """Build canonical production Vega credential predicate proof bytes."""
 
-    source = _require_mapping(options, "vegaCredentialPredicateProofV0")
+    source = _require_plain_mapping(options, "vegaCredentialPredicateProofV0")
     _reject_unknown_fields(source, _PROOF_FIELDS, "vegaCredentialPredicateProofV0")
     parts = _normalize_proof_parts(
         source,
@@ -755,7 +756,7 @@ def _dev_proof_bytes(
 def build_vega_credential_dev_proof_fixture(options: Mapping[str, Any]) -> dict[str, Any]:
     """Build a deterministic Vega credential dev proof fixture."""
 
-    source = _require_mapping(options, "vegaCredentialDevProofFixture")
+    source = _require_plain_mapping(options, "vegaCredentialDevProofFixture")
     _reject_unknown_fields(
         source,
         _PROOF_FIELDS - {"proofBytes", "proof_bytes", "proof"},
@@ -923,7 +924,7 @@ def verify_vega_credential_proof_locally(options: Any) -> dict[str, Any]:
     """Verify a deterministic Vega dev fixture through an OpenVerify envelope."""
 
     if isinstance(options, Mapping):
-        source = options
+        source = _require_plain_mapping(options, "vegaCredentialLocalVerification")
     else:
         source = {"envelope": options}
     _reject_unknown_fields(
@@ -1011,7 +1012,7 @@ def verify_vega_credential_predicate_proof_v0(options: Any) -> dict[str, Any]:
     """Validate a production Vega credential predicate proof envelope."""
 
     if isinstance(options, Mapping):
-        source = options
+        source = _require_plain_mapping(options, "vegaCredentialPredicateProofV0")
     else:
         source = {"envelope": options}
     _reject_unknown_fields(

@@ -389,11 +389,24 @@ final class OfflineNoteV2Tests: XCTestCase {
         let fixture = try Self.loadFixture()
         let publicInputsHash = try Self.hex(fixture.chainVectors.audit.publicInputsHash)
 
-        let trimmedProof = try OfflineNoteProofBoxV2(
-            backend: "  \(OfflineNoteV2Constants.recursiveBackend)  ",
+        let proof = try OfflineNoteProofBoxV2(
+            backend: OfflineNoteV2Constants.recursiveBackend,
             bytes: Data([0x01])
         )
-        XCTAssertEqual(trimmedProof.backend, OfflineNoteV2Constants.recursiveBackend)
+        XCTAssertEqual(proof.backend, OfflineNoteV2Constants.recursiveBackend)
+
+        XCTAssertThrowsError(try OfflineNoteProofBoxV2(
+            backend: "  \(OfflineNoteV2Constants.recursiveBackend)  ",
+            bytes: Data([0x01])
+        )) { error in
+            XCTAssertEqual(
+                error as? OfflineNoteV2Error,
+                .unsupportedRecursiveProofBackend(
+                    expected: OfflineNoteV2Constants.recursiveBackend,
+                    actual: "  \(OfflineNoteV2Constants.recursiveBackend)  "
+                )
+            )
+        }
 
         XCTAssertThrowsError(try OfflineNoteProofBoxV2(backend: " \n ", bytes: Data([0x01]))) { error in
             XCTAssertEqual(error as? OfflineNoteV2Error, .emptyProofBackend)
@@ -726,8 +739,8 @@ final class OfflineNoteV2Tests: XCTestCase {
         )
         let nonceEnvelope = try SwiftTransactionEncoder.encodeIssueOfflineNoteV2(
             request: IssueOfflineNoteV2Request(
-                chainId: "  \(chainId)  ",
-                authority: "  \(authority)  ",
+                chainId: chainId,
+                authority: authority,
                 issue: issue,
                 ttlMs: nil,
                 nonce: 42
@@ -739,6 +752,23 @@ final class OfflineNoteV2Tests: XCTestCase {
         XCTAssertNotEqual(defaultEnvelope.signedTransaction, nonceEnvelope.signedTransaction)
         XCTAssertNotEqual(defaultEnvelope.transactionHash, nonceEnvelope.transactionHash)
 
+        XCTAssertThrowsError(try SwiftTransactionEncoder.encodeIssueOfflineNoteV2(
+            request: IssueOfflineNoteV2Request(chainId: "  \(chainId)  ", authority: authority, issue: issue),
+            keypair: keypair,
+            creationTimeMs: 1
+        )) { error in
+            XCTAssertEqual(error as? TransactionInputError, .invalidChainId("  \(chainId)  "))
+        }
+        XCTAssertThrowsError(try SwiftTransactionEncoder.encodeIssueOfflineNoteV2(
+            request: IssueOfflineNoteV2Request(chainId: chainId, authority: "  \(authority)  ", issue: issue),
+            keypair: keypair,
+            creationTimeMs: 1
+        )) { error in
+            XCTAssertEqual(
+                error as? TransactionInputError,
+                .malformedAccountId(field: "authority", value: "  \(authority)  ")
+            )
+        }
         XCTAssertThrowsError(try SwiftTransactionEncoder.encodeIssueOfflineNoteV2(
             request: IssueOfflineNoteV2Request(chainId: " \n ", authority: authority, issue: issue),
             keypair: keypair,
@@ -765,13 +795,29 @@ final class OfflineNoteV2Tests: XCTestCase {
             verifierName: "custom_vk",
             publicInputsHash: publicInputsHash,
             proofBytes: Data([0x01, 0x02, 0x03]),
-            proofBackend: " custom_proof_backend "
+            proofBackend: "custom_proof_backend"
         )
 
         XCTAssertEqual(proof.verifierKeyId.backend, "custom_backend")
         XCTAssertEqual(proof.verifierKeyId.name, "custom_vk")
         XCTAssertEqual(proof.proof.backend, "custom_proof_backend")
         XCTAssertEqual(proof.proof.bytes, Data([0x01, 0x02, 0x03]))
+
+        XCTAssertThrowsError(try OfflineNoteRecursiveProofV2(
+            verifierBackend: "custom_backend",
+            verifierName: "custom_vk",
+            publicInputsHash: publicInputsHash,
+            proofBytes: Data([0x01]),
+            proofBackend: " custom_proof_backend "
+        )) { error in
+            XCTAssertEqual(
+                error as? OfflineNoteV2Error,
+                .unsupportedRecursiveProofBackend(
+                    expected: OfflineNoteV2Constants.recursiveBackend,
+                    actual: " custom_proof_backend "
+                )
+            )
+        }
 
         XCTAssertThrowsError(try OfflineNoteRecursiveProofV2(
             verifierBackend: "",
@@ -796,6 +842,22 @@ final class OfflineNoteV2Tests: XCTestCase {
             proofBytes: Data([0x01])
         )) { error in
             XCTAssertEqual(error as? VerifyingKeyIdError, .invalidSeparator)
+        }
+        XCTAssertThrowsError(try OfflineNoteRecursiveProofV2(
+            verifierBackend: " custom_backend ",
+            verifierName: "custom_vk",
+            publicInputsHash: publicInputsHash,
+            proofBytes: Data([0x01])
+        )) { error in
+            XCTAssertEqual(error as? VerifyingKeyIdError, .surroundingWhitespace)
+        }
+        XCTAssertThrowsError(try OfflineNoteRecursiveProofV2(
+            verifierBackend: "custom_backend",
+            verifierName: " custom_vk ",
+            publicInputsHash: publicInputsHash,
+            proofBytes: Data([0x01])
+        )) { error in
+            XCTAssertEqual(error as? VerifyingKeyIdError, .surroundingWhitespace)
         }
     }
 
@@ -935,6 +997,92 @@ final class OfflineNoteV2Tests: XCTestCase {
             outputClaims: []
         )) { error in
             XCTAssertEqual(error as? OfflineNoteV2Error, .emptyOutputClaims)
+        }
+    }
+
+    func testOfflineNoteV2DomainsRejectSubstitutionAndPadding() throws {
+        let fixture = try Self.loadFixture()
+        let certificate = try Self.certificate(fixture.paymentToken.senderKeyCertificate)
+        let audit = try Self.audit(fixture)
+        let redeem = try Self.redeem(fixture)
+        let claim = audit.inputClaims[0]
+        let auditPublic = try audit.publicInputs()
+        let redeemPublic = try redeem.publicInputs()
+
+        XCTAssertThrowsError(try OfflineNoteKeyCertificatePayloadV2(
+            domain: "\(OfflineNoteV2Constants.keyCertificatePayloadDomain) ",
+            version: certificate.version,
+            platform: certificate.platform,
+            keyId: certificate.keyId,
+            deviceId: certificate.deviceId,
+            accountId: certificate.accountId,
+            publicKey: certificate.publicKey,
+            assertionScheme: certificate.assertionScheme,
+            assertionKeyAlgorithm: certificate.assertionKeyAlgorithm,
+            assertionPublicKey: certificate.assertionPublicKey,
+            assertionUsageCountLimit: certificate.assertionUsageCountLimit,
+            oneUse: certificate.oneUse
+        )) { error in
+            XCTAssertEqual(
+                error as? OfflineNoteV2Error,
+                .unsupportedDomain(
+                    field: "domain",
+                    expected: OfflineNoteV2Constants.keyCertificatePayloadDomain,
+                    actual: "\(OfflineNoteV2Constants.keyCertificatePayloadDomain) "
+                )
+            )
+        }
+        XCTAssertThrowsError(try OfflineNoteIssuedClaimV2(
+            domain: "\(OfflineNoteV2Constants.issuedClaimDomain)\n",
+            noteCommitment: claim.noteCommitment,
+            keyCertificatePayloadHash: claim.keyCertificatePayloadHash,
+            assetId: claim.assetId,
+            amount: claim.amount
+        )) { error in
+            XCTAssertEqual(
+                error as? OfflineNoteV2Error,
+                .unsupportedDomain(
+                    field: "domain",
+                    expected: OfflineNoteV2Constants.issuedClaimDomain,
+                    actual: "\(OfflineNoteV2Constants.issuedClaimDomain)\n"
+                )
+            )
+        }
+        XCTAssertThrowsError(try OfflineNoteRedeemPublicInputsV2(
+            domain: "forged:\(OfflineNoteV2Constants.redeemPublicInputsDomain)",
+            sourceNoteCommitment: redeemPublic.sourceNoteCommitment,
+            inputNullifiers: redeemPublic.inputNullifiers,
+            keyCertificatePayloadHash: redeemPublic.keyCertificatePayloadHash,
+            recipient: redeemPublic.recipient,
+            assetId: redeemPublic.assetId,
+            amount: redeemPublic.amount
+        )) { error in
+            XCTAssertEqual(
+                error as? OfflineNoteV2Error,
+                .unsupportedDomain(
+                    field: "domain",
+                    expected: OfflineNoteV2Constants.redeemPublicInputsDomain,
+                    actual: "forged:\(OfflineNoteV2Constants.redeemPublicInputsDomain)"
+                )
+            )
+        }
+        XCTAssertThrowsError(try OfflineNoteAuditPublicInputsV2(
+            domain: " \(OfflineNoteV2Constants.auditPublicInputsDomain)",
+            tokenId: auditPublic.tokenId,
+            keyCertificatePayloadHash: auditPublic.keyCertificatePayloadHash,
+            inputNullifiers: auditPublic.inputNullifiers,
+            inputClaims: auditPublic.inputClaims,
+            outputCommitments: auditPublic.outputCommitments,
+            outputClaims: auditPublic.outputClaims
+        )) { error in
+            XCTAssertEqual(
+                error as? OfflineNoteV2Error,
+                .unsupportedDomain(
+                    field: "domain",
+                    expected: OfflineNoteV2Constants.auditPublicInputsDomain,
+                    actual: " \(OfflineNoteV2Constants.auditPublicInputsDomain)"
+                )
+            )
         }
     }
 

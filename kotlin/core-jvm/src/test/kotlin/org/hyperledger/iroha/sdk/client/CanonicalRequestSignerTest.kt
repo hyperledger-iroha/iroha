@@ -7,6 +7,7 @@ import java.security.Signature
 import java.util.Base64
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -67,5 +68,77 @@ class CanonicalRequestSignerTest {
         verifier.initVerify(keyPair.public)
         verifier.update(message)
         assertTrue(verifier.verify(signatureBytes))
+    }
+
+    @Test
+    fun canonicalAuthRejectsPaddedFreshnessAndAccountFields() {
+        val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
+        val uri = URI.create("https://torii.example/v1/offline/keys/refill")
+        val bodyBytes = """{"operation_id":"operation-1"}""".toByteArray(StandardCharsets.UTF_8)
+        val body = linkedMapOf<String, Any?>("operation_id" to "operation-1")
+        val timestampMs = 1_717_171_717_003L
+
+        assertFailsWith<IllegalArgumentException> {
+            CanonicalRequestSigner.canonicalRequestSignatureMessage(
+                "post",
+                uri,
+                bodyBytes,
+                timestampMs,
+                " nonce",
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            CanonicalRequestSigner.buildHeaders(
+                "post",
+                uri,
+                bodyBytes,
+                "alice ",
+                keyPair.private,
+                timestampMs,
+                "nonce",
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            CanonicalRequestSigner.buildHeaders(
+                "post",
+                uri,
+                bodyBytes,
+                "alice",
+                keyPair.private,
+                timestampMs,
+                "\nnonce",
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            CanonicalRequestSigner.withBodySignature(
+                "post",
+                uri,
+                body,
+                " alice",
+                keyPair.private,
+                timestampMs,
+                "nonce",
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            CanonicalRequestSigner.withBodySignature(
+                "post",
+                uri,
+                body,
+                "alice",
+                keyPair.private,
+                timestampMs,
+                "nonce ",
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            CanonicalRequestSigner.withBodyWitness(
+                body,
+                "alice",
+                timestampMs,
+                "nonce",
+                " witness",
+            )
+        }
     }
 }

@@ -102,13 +102,15 @@ public enum SigningAlgorithm {
   }
 
   private static String normalize(final String name) {
-    final String trimmed = name == null ? "" : name.trim();
-    if (trimmed.isEmpty()) {
-      return ED25519.wireName;
+    if (name == null || name.trim().isEmpty()) {
+      throw new IllegalArgumentException("signing algorithm must be a non-empty string");
     }
-    final StringBuilder builder = new StringBuilder(trimmed.length());
-    for (int i = 0; i < trimmed.length(); i++) {
-      final char ch = Character.toLowerCase(trimmed.charAt(i));
+    if (!name.trim().equals(name)) {
+      throw new IllegalArgumentException("signing algorithm must not contain surrounding whitespace");
+    }
+    final StringBuilder builder = new StringBuilder(name.length());
+    for (int i = 0; i < name.length(); i++) {
+      final char ch = Character.toLowerCase(name.charAt(i));
       if (ch < 0x20 || ch == 0x7F || ch > 0x7F) {
         throw new IllegalArgumentException("Unsupported signing algorithm: " + name);
       }

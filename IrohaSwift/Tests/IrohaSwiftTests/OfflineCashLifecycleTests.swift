@@ -120,6 +120,28 @@ final class OfflineCashLifecycleTests: XCTestCase {
             XCTAssertEqual(error as? OfflineCashConfigurationSnapshotError, .missingIssuerPublicKey)
         }
 
+        for issuerPublicKeyBase64 in [
+            "",
+            " issuer-public-key",
+            "issuer-public-key ",
+            "issuer public key",
+            "issuer-public-key\n",
+            "issuer-public-key\u{2603}"
+        ] {
+            XCTAssertThrowsError(
+                try OfflineCashConfigurationSnapshot(
+                    chainId: "00000042",
+                    assetDefinitionId: "pkr#sbp",
+                    offlinePaymentsEnabled: true,
+                    issuerPublicKeyBase64: issuerPublicKeyBase64,
+                    nativeBridgeAbiVersion: 7,
+                    createdAtMs: 100
+                ).requireUsableForOfflineExchange(nowMs: 200, requiredNativeBridgeAbiVersion: 7)
+            ) { error in
+                XCTAssertEqual(error as? OfflineCashConfigurationSnapshotError, .missingIssuerPublicKey)
+            }
+        }
+
         XCTAssertThrowsError(
             try snapshot.requireUsableForOfflineExchange(nowMs: 1_000, requiredNativeBridgeAbiVersion: 7)
         ) { error in

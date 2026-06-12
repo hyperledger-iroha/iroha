@@ -104,6 +104,9 @@ public struct ConnectKeyStore {
         guard !trimmed.isEmpty else {
             throw ConnectKeyStoreError.invalidLabel(label)
         }
+        guard trimmed == label else {
+            throw ConnectKeyStoreError.invalidLabel(label)
+        }
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_."))
         guard trimmed.rangeOfCharacter(from: allowed.inverted) == nil else {
             throw ConnectKeyStoreError.invalidLabel(label)

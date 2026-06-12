@@ -65,8 +65,18 @@ java -version
 
 cd "${ROOT_DIR}/kotlin"
 ./gradlew --no-daemon -q :core-jvm:test \
+  --tests org.hyperledger.iroha.sdk.address.AccountIdLiteralTest \
+  --tests org.hyperledger.iroha.sdk.client.CanonicalRequestSignerTest \
+  --tests org.hyperledger.iroha.sdk.client.stream.ToriiEventStreamClientTest \
+  --tests org.hyperledger.iroha.sdk.core.model.instructions.ClaimIdentifierWirePayloadEncoderParityTest \
+  --tests org.hyperledger.iroha.sdk.core.model.instructions.VerifyingKeyInstructionBuildersTest \
+  --tests org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyBackendTagTest \
+  --tests org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyRecordDescriptionTest \
+  --tests org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyStatusTest \
+  --tests org.hyperledger.iroha.sdk.crypto.SigningAlgorithmTest \
   --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendProverTest \
   --tests org.hyperledger.iroha.sdk.offline.KagemushaInstructionArchivesTest \
+  --tests org.hyperledger.iroha.sdk.offline.OfflineCashLifecycleTest \
   --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest \
   --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test \
   --tests org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridgeTest
@@ -82,6 +92,7 @@ java -ea -cp "${JAVA_OUT}" \
   org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest
 
 cd "${ROOT_DIR}/java/iroha_android"
-ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest,org.hyperledger.iroha.android.offline.OfflineNoteV2Test,org.hyperledger.iroha.android.offline.OfflineNoteTest,org.hyperledger.iroha.android.privacy.PrivacyNativeBridgeTest,org.hyperledger.iroha.android.tx.TransactionBuilderTests \
+ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest,org.hyperledger.iroha.android.offline.OfflineCashLifecycleTest,org.hyperledger.iroha.android.offline.OfflineNoteV2Test,org.hyperledger.iroha.android.offline.OfflineNoteTest,org.hyperledger.iroha.android.privacy.PrivacyNativeBridgeTest,org.hyperledger.iroha.android.tx.TransactionBuilderTests,org.hyperledger.iroha.android.address.AccountIdLiteralTests,org.hyperledger.iroha.android.client.CanonicalRequestSignerTests,org.hyperledger.iroha.android.client.stream.ToriiEventStreamClientTests,org.hyperledger.iroha.android.model.instructions.ClaimIdentifierWirePayloadEncoderTests,org.hyperledger.iroha.android.client.IdentifierReceiptCanonicalEncoderTests,org.hyperledger.iroha.android.model.instructions.VerifyingKeyInstructionUtilsTests \
   ./gradlew --no-daemon -q :core:test \
-  --tests org.hyperledger.iroha.android.GradleHarnessTests
+  --tests org.hyperledger.iroha.android.GradleHarnessTests \
+  --tests org.hyperledger.iroha.android.crypto.SigningAlgorithmTests

@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-06-11
+Last updated: 2026-06-12
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 The detailed engineering backlog lives in
@@ -67,33 +67,188 @@ and completed history lives in [`status.md`](./status.md).
     the lineage verifier key rejects as `lineage_verifier_key` before native
     bridge dispatch, even when the proving-key archive commits to that padded
     verifier key.
-  - Privacy VeRange planned-helper quarantine: remove or hide the C# public
+  - Confirm whether the C# SDK has or adds an Offline Note V1/V2 canonical
+    model/decoder surface; if so, mirror the Swift/Kotlin/Android exact-domain
+    negatives for key-certificate payload, issued-claim, redeem-public-inputs,
+    and audit-public-inputs domains, including padded-domain rejection.
+  - Confirm whether the C# SDK has or adds an Offline Note receipt ACK
+    model/codec surface; if so, mirror the Swift/Kotlin/Android exactness
+    negatives for `chain_id`, `payment_request_id`, `recipient_account_id`,
+    and positive `accepted_at_ms` validation at construction and decode
+    boundaries.
+  - Confirm whether the C# SDK has or adds an Offline Note wallet-note
+    persistence surface; if so, mirror the Swift/Kotlin/Android exactness
+    negatives for persisted `chain_id`, `account_id`, and optional
+    `spent_payment_request_id`, rejecting padded or blank values instead of
+    normalizing them across account-scope or replay-prevention boundaries.
+  - Mirror the non-C# identifier receipt hardening on Windows so C# canonical
+    attestation builders and Torii JSON receipt parsing reject padded or
+    mixed-case attestation `kind` tags before selecting signed/proof behavior.
+  - Mirror the non-C# identifier receipt proof-attestation hardening on Windows
+    so C# canonical attestation builders and Torii JSON receipt parsing reject
+    padded `proof_b64` before base64 decoding or selecting proof behavior.
+  - Mirror the non-C# identifier receipt signature hardening on Windows so C#
+    canonical payload/attestation builders, Torii JSON receipt parsing, and
+    verifier inputs reject padded `payload.opening.signature` and signed
+    attestation `signature` before hex decoding or receipt verification.
+  - Mirror the non-C# identifier receipt policy-id hardening on Windows so C#
+    canonical payload builders and Torii JSON receipt parsing reject padded
+    `payload.policy_id` text and padded `kind`/`rule` components before
+    canonical receipt bytes are encoded or verified.
+  - Mirror the non-C# identifier receipt program-id hardening on Windows so C#
+    canonical payload builders and Torii JSON receipt parsing reject padded
+    `payload.execution.program_id` and `payload.opening.payload.program_id`
+    before canonical receipt bytes are encoded or verified.
+  - Mirror the non-C# identifier receipt account-id hardening on Windows so C#
+    canonical payload builders and Torii JSON receipt parsing reject padded
+    `payload.account_id` before canonical receipt bytes are encoded or verified.
+  - Mirror the non-C# identifier receipt hash-field hardening on Windows so C#
+    canonical payload builders and Torii JSON receipt parsing reject padded
+    `payload.opaque_id`, `payload.receipt_hash`, `payload.uaid`, execution
+    digest fields, and opening payload digest fields before canonical receipt
+    bytes are encoded or verified.
+  - Mirror the non-C# identifier receipt timestamp hardening on Windows so C#
+    canonical payload builders and Torii JSON receipt parsing reject padded
+    numeric-string receipt times for `payload.execution.executed_at_ms`,
+    `payload.execution.expires_at_ms`, `payload.opening.payload.opened_at_ms`,
+    and `payload.opening.payload.expires_at_ms`, and reject negative receipt
+    times before canonical u64 receipt bytes are encoded or verified.
+  - Tighten the C# `TransactionBuilder`/`TransactionEncodingContext` Windows
+    pass so chain ids, authority/account ids, asset/domain ids, metadata keys,
+    optional memo/fee-sponsor strings, and label-like fields reject surrounding
+    whitespace before Norito transaction bytes are encoded or signed, instead
+    of normalizing with `Trim()`. Add focused `TransactionBuilderTests`
+    negatives for padded constructor, instruction, metadata, and encoding
+    fields after selecting the Windows .NET SDK.
+  - Tighten the C# canonical request auth Windows pass so
+    `CanonicalRequestCredentials`, `CanonicalRequest.BuildHeaders`, and
+    `CanonicalRequestHeaders` reject padded or explicitly blank account ids,
+    nonces, and signature/header fields before signing or header emission,
+    instead of accepting `ArgumentException.ThrowIfNullOrWhiteSpace` or
+    generating a fresh nonce for caller-supplied blank values. Add focused
+    `CanonicalRequestTests` and `ToriiClientTests` negatives for padded account
+    ids/nonces after selecting the Windows .NET SDK.
+  - Confirm the Windows C# SDK lane includes `PrivacyNativeTests`, whose
+    cross-platform .NET 8 pass now covers the public VeRange V1 aliases
     `BuildVeRangeProofV1`, `buildVeRangeProofV1`, `VerifyVeRangeProofV1`, and
-    `verifyVeRangeProofV1` aliases once the Windows C# SDK test lane can verify
-    the generic `BuildProofV1` and `VerifyProofV1` archive paths cover the same
-    native bridge behavior.
+    `verifyVeRangeProofV1` alongside the generic `BuildProofV1` and
+    `VerifyProofV1` archive paths.
   - Re-run `ci/check_kagemusha_recursive_spend_sdk_parity.sh` after recording
     the Windows evidence so C# SDK parity status can be cleared explicitly.
 - Kagemusha JVM SDK validation must keep the focused runner aligned with the
-  parity inventory: Kotlin/JVM runs recursive spend, instruction archive,
-  Offline Note, Offline Note V2, and privacy native bridge tests, while the
-  Android Java harness runs recursive spend, Offline Note V2, Offline Note,
-  privacy native bridge, and transaction-builder archive tests.
+  parity inventory: Kotlin/JVM runs recursive spend, canonical request auth,
+  instruction archive, Offline Cash lifecycle, Offline Note, Offline Note V2,
+  and privacy native bridge tests, while the Android Java harness runs
+  recursive spend, canonical request auth, Offline Cash lifecycle, Offline Note
+  V2, Offline Note, privacy native bridge, and transaction-builder archive
+  tests. The focused runner now also executes the Kotlin/JVM and Android Java
+  account-literal, canonical request auth, and Offline Cash issuer-key
+  exactness tests, plus Torii event-stream verifier-filter, signing-algorithm,
+  verifier-key backend/instruction, and verifier record-description/status
+  exactness tests, so padded I105 account IDs, padded request auth fields,
+  malformed cached issuer keys, padded Torii event verifier filters, padded
+  signing algorithm labels, padded verifier record fields, and padded verifier
+  backend/status labels stay covered by the same mobile SDK gate.
 - Kagemusha JavaScript SDK validation must keep the focused Node 20 runner
   aligned with the parity inventory by executing the Kagemusha recursive spend,
-  package/browser, privacy native bridge, and transaction-builder archive test
-  names together.
+  account-address exactness, Offline Cash issuer-key configuration snapshot,
+  canonical request auth exactness, Torii event-filter verifier/proof
+  exactness, verifier-key selector exactness, identifier-receipt adversarial
+  and shared-vector exactness, package/browser, privacy native bridge, and
+  transaction-builder archive test names together.
 - Kagemusha Swift SDK validation must keep the macOS parse runner aligned with
   the parity inventory by parsing every Kagemusha/Offline Note source and test
-  file tracked for Swift, including recursive compact, instruction transaction
-  encoder, and privacy native bridge coverage.
+  file tracked for Swift, including canonical request auth helpers, recursive
+  compact, instruction transaction encoder, privacy native bridge coverage,
+  Offline Note issuer-key parsing, text-transfer contracts, receipt challenges,
+  wallet/redeem/QR helpers, signing-algorithm discriminants,
+  verifier-backend labels, Torii verifier-key request/event validation, and
+  Offline Cash/Kagemusha ABI-7 support files. The
+  payload-bench workflow path inventory and JavaScript parity meta-test must
+  stay in lockstep with that expanded Swift parse surface.
 - Kagemusha Python SDK validation must keep the focused Python 3.11 runner on
-  the Kagemusha, privacy catalog, and crypto algorithm pytest files because
-  those files cover the Python transaction helpers, native archive guards, and
-  package export surfaces used by the SDK parity inventory. The workflow path
-  inventory must also watch the Python privacy catalog and crypto helper source
-  files so changes to those runner-covered surfaces trigger the focused SDK
-  pass.
+  the Kagemusha, privacy catalog, crypto algorithm, Offline Cash, and
+  address-format pytest files because those files cover the Python transaction
+  helpers, native archive guards, Offline Cash issuer-key exactness,
+  account-address exactness, Torii canonical request auth exactness, Torii
+  identifier-receipt payload/attestation exactness, and package export surfaces
+  used by the SDK parity inventory. The workflow path inventory must also
+  watch the Python privacy catalog, Offline Cash, address, crypto helper, Torii
+  canonical request, and Torii identifier-receipt source/test files so changes
+  to those runner-covered surfaces trigger the focused SDK pass. Python Torii
+  identifier receipt helpers must keep
+  `encode_identifier_resolution_receipt_payload`,
+  `encode_identifier_resolution_receipt_attestation`, and
+  `verify_identifier_resolution_receipt` aligned with the shared fixture; proof
+  attestations remain external-verifier-only and signed receipts use Iroha
+  Blake2b prehash plus Ed25519 verification through `iroha_python.crypto`.
+  Python receipt tests must keep adversarial coverage for padded RAM-LFE
+  backend/mode tags, padded opening signatures, non-exact attestation kind tags,
+  padded signed-attestation signatures, padded receipt `policy_id` text and
+  `kind`/`rule` components, padded execution/opening `program_id` values,
+  padded `account_id` values, padded receipt hash-like fields
+  (`payload.opaque_id`, `payload.receipt_hash`, `payload.uaid`, execution
+  digests, and opening payload digests), padded numeric-string receipt times,
+  negative receipt times for u64 fields, padded proof-backend tags, padded
+  proof-base64 text, malformed proof base64, and signed-vs-proof attestation
+  confusion.
+  JavaScript, Swift, Kotlin/JVM, and Android Java must keep matching
+  non-exact-kind, non-exact-signature, non-exact-policy-id,
+  non-exact-program-id, non-exact-account-id, non-exact-hash-field,
+  non-exact-timestamp, non-exact-proof-base64, and malformed-proof-base64
+  receipt coverage so receipt attestations cannot be accepted from Torii JSON or
+  canonical builders after whitespace/case normalization or with
+  padded/non-base64 proof bytes.
+  The SDK parity guard must keep the
+  `--negative-control-identifier-receipt-proof-base64-guard`,
+  `--negative-control-identifier-receipt-proof-base64-exactness-guard`, and
+  `--negative-control-identifier-receipt-kind-exactness-guard`, and
+  `--negative-control-identifier-receipt-signature-exactness-guard`, and
+  `--negative-control-identifier-receipt-policy-id-exactness-guard`, and
+  `--negative-control-identifier-receipt-policy-summary-id-exactness-guard`, and
+  `--negative-control-identifier-receipt-program-id-exactness-guard`, and
+  `--negative-control-identifier-receipt-account-id-exactness-guard`, and
+  `--negative-control-identifier-receipt-hash-exactness-guard`, and
+  `--negative-control-identifier-receipt-timestamp-exactness-guard`, and
+  `--negative-control-identifier-receipt-timestamp-u64-guard`, and
+  `--negative-control-identifier-receipt-resolver-key-exactness-guard` drift checks wired
+  into the workflow and JavaScript meta-test so that validation cannot be
+  removed silently.
+  C# Windows TODO: mirror resolver public-key exactness for identifier receipt
+  policy summaries and verifier inputs, including padded-key negative vectors.
+  C# Windows TODO: mirror policy-summary `policy_id` exactness for identifier
+  receipt verification, including padded policy-id negative vectors.
+  C# Windows TODO: mirror signed-attestation `signature` verifier-input
+  exactness for identifier receipt verification, including padded signature
+  negative vectors.
+  Python crypto algorithm labels must remain exact at the public SDK
+  boundary: aliases can normalize, but empty or padded labels must fail before
+  key generation, key loading, multihash, sign, verify, or key-pair construction
+  reaches native code. Production verifier backend labels must keep the same
+  exactness across Python, JavaScript, Kotlin/JVM, Android Java, Swift, and C#
+  Torii/instruction-builder surfaces: padded labels fail with a
+  surrounding-whitespace error before unsupported backend classification,
+  verifier-key id construction, event-filter dispatch, or request dispatch.
+  JavaScript, Python, Kotlin/JVM, and Android Java Kagemusha validation must
+  also keep identifier-receipt canonical payload tests in the focused runners,
+  and Kotlin/JVM plus Android Java must keep the claim-identifier wire encoder
+  tests there too, so RAM-LFE identifier receipts used by SDK instruction
+  builders keep exact backend, verification-mode, proof-backend, receipt
+  payload, attestation framing, signature, and shared-vector semantics.
+  Account-address/signing algorithm selectors must also stay exact across Python, JavaScript,
+  Kotlin/JVM, Android Java, Swift, and C#: omitted default parameters can still
+  select Ed25519, but explicit blank or padded labels must fail before alias
+  normalization, public-key address construction, key-generation selection, or
+  native bridge dispatch. Offline-cash configuration snapshots must keep issuer
+  public keys exact across SDKs as non-empty printable ASCII with no whitespace
+  or non-ASCII normalization before offline exchange, and Swift's standalone
+  issuer-key parser must reject padded base64/base64url text before decoding.
+  Swift counterparty offline proof verification must also dispatch only exact
+  `ios`/`android` platform labels so padded values cannot enter challenge or
+  binding verification paths. Kotlin/JVM and Android Java canonical I105
+  account-id literal helpers now reject surrounding whitespace before
+  transaction, Connect, and instruction-builder boundaries so padded account
+  strings cannot be normalized into signed payloads.
 - Kagemusha Android production readiness now has host-side verifier-report
   rendering, a signed-slot assembler, a physical-device raw artifact exporter,
   a strict host puller for those raw slots, and a dedicated
@@ -121,23 +276,45 @@ and completed history lives in [`status.md`](./status.md).
   as structured blockers instead of tracebacks, moves top-level raw artifacts
   through opened stage/final directory descriptors, and revalidates the
   captured temporary extraction directory identity before cleanup while
-  reporting removal failures before latest-slot or summary publication. It also rejects unreviewed
-  extra files or directories under the raw slot, requires both `slot` and
+  reporting removal failures before latest-slot or summary publication. It
+  accepts only the uncompressed `tar -cf -` stream emitted by the Android
+  exporter, so compressed archive streams fail before extraction, and rejects
+  noncanonical tar member spellings such as `./` or repeated separators before
+  they can normalize into accepted evidence paths. It also rejects
+  control-character output-root, summary-output, raw-slot, and raw artifact
+  path strings before ADB access, metadata reads, directory creation, or
+  raw-byte error reporting; rejects unreviewed extra files or directories under
+  the raw slot; redacts control-character or secret-looking unexpected
+  top-level install-source names before reporting install failures; requires both `slot` and
   `slot_id` in raw `attestation/result.json` to match the selected slot id, and
   requires canonical lowercase SHA-256 chain/challenge digests matching the
   pulled StrongBox certificate-chain and challenge bytes. Raw
   `attestation/result.json` is closed-schema, and
   `attestation/challenge.hex` must be lowercase hexadecimal with exactly one
   trailing newline so challenge bytes are never accepted through whitespace or
-  case normalization. Raw identity strings must be trim-stable, SDK/policy
-  digests must be canonical lowercase SHA-256 hex, and raw security levels must
-  remain exact `STRONGBOX`. Queue, telemetry, D2D handoff, and wallet integrity
+  case normalization. Raw identity strings and raw tar-member paths must be
+  trim-stable and free of control characters before evidence assembly or tar
+  path normalization, SDK/policy digests must be canonical lowercase SHA-256
+  hex, and raw security levels must remain exact `STRONGBOX`. Raw harness StrongBox levels now explicitly reject
+  surrounding whitespace, control characters, and secret-looking material before
+  exact label membership is checked. Queue, telemetry, D2D handoff, and wallet integrity
   JSON artifacts are now parsed as slot-bound strict JSON with exact slot-id
-  bindings before assembly; D2D must remain offline-offline and wallet
-  integrity must prove key rotation plus rollback rejection. Raw status NDJSON
-  must not contain failure statuses or
-  mismatched slot bindings, and runtime logs must contain the completion marker
-  without build/test/panic/traceback/fatal failure markers. Raw pull summaries
+  bindings and exact `kagemusha-device-lab` telemetry suite identity before
+  assembly; D2D must remain offline-offline and wallet
+  integrity must prove key rotation plus rollback rejection, with transcript
+  string bindings matched without whitespace or control-character
+  normalization. Raw status NDJSON
+  must use LF line endings with a trailing newline, reject nonblank lines with
+  surrounding whitespace, use exact lowercase status strings without surrounding
+  whitespace or control characters, must not contain failure statuses, and must
+  reject non-string, whitespace-normalized, control-character, or mismatched
+  slot bindings. Slot metadata ABI probe states must also be exact lowercase strings
+  without surrounding whitespace or control characters, while runtime logs must
+  contain the completion marker
+  without build/test/panic/traceback/fatal failure markers. Raw puller ADB
+  executable, serial, run-as package, and device-root inputs must be exact
+  non-empty strings with no surrounding whitespace, control characters, or
+  secret-looking material before any device command is built. Raw pull summaries
   now reject non-finite or oversized JSON before temp-file creation and fsync
   summary bytes before atomic replacement, then verify summary readback through
   opened-file identity checks that reject symlinks, hardlinks, and path swaps
@@ -166,7 +343,36 @@ and completed history lives in [`status.md`](./status.md).
   `artifact_digests`, reject legacy signed evidence that drops the raw
   StrongBox harness output, and require preserved harness aliases, StrongBox
   levels, and challenge hex to be exact canonical strings during both assembly
-  and scan. The standalone Android scanner also rejects copied
+  and scan. Signed slot metadata `keymint_security_level` must also remain an
+  exact accepted StrongBox label instead of passing through case normalization.
+  The verifier `attestation/report.json` must include all three StrongBox level
+  bindings (`keymint_security_level`, `attestation_security_level`, and
+  `keymaster_security_level`) during both scan and signing-helper validation, so
+  incomplete verifier reports cannot pass by omitting downgraded levels. The
+  scanner and signed-slot assembler now also require verifier report
+  app-package, status, and level bindings to match `attestation/result.json`
+  exactly before acceptance, and scanner validation binds `attestation/result.json`
+  `keymint_security_level` back to `slot.json` exactly, preventing accepted
+  app-package substitutions, `ok`/`passed` status aliases, or StrongBox alias
+  spellings from hiding a cross-artifact splice. The signed-slot assembler also
+  rejects unexpected attestation result, report, verifier, D2D transcript, or
+  wallet-integrity transcript fields, report schema/verifier drift, plus D2D
+  and wallet transcript schema-id drift, before publishing source artifacts. It
+  now also runs the scanner D2D and wallet transcript semantic validators on
+  staged copies before publish, so queue splices, wallet state non-rotation,
+  and other scanner-only transcript failures cannot be staged into unsigned
+  production slots. Required telemetry, status NDJSON, queue, attestation, and
+  runtime-log artifact shape checks now also run on staged assembler output
+  before publish, so failed status records, missing runtime completion markers,
+  malformed telemetry, unexpected telemetry or pending queue fields, non-empty
+  post-handoff pending transactions, or malformed pending queue JSON cannot be
+  installed as unsigned production slots. The raw Android puller applies the
+  same telemetry and pending queue field allowlists plus the queue
+  empty-after-handoff check before raw artifacts can be promoted into a signed
+  slot.
+  The slot assembler also requires attached-device ADB `getprop`
+  identity reads to be exact one-LF values whose contents do not need trimming
+  before metadata binding. The standalone Android scanner also rejects copied
   Kagemusha matrix rows by reporting hash-only duplicate device fingerprints or
   attestation challenges across otherwise-valid slots, and the production
   readiness rollup mirrors that non-secret duplicate inventory with
@@ -174,10 +380,13 @@ and completed history lives in [`status.md`](./status.md).
   matrix and signer-pin manifest checks, drift checks, and an identity-bound
   scanner JSON summary parent sync. The Android attestation report writer now
   rejects whitespace-normalized or uppercase attestation challenge hex, including
-  noncanonical `--expected-challenge-hex`, and whitespace-normalized
-  slot id, device fingerprint, OS build, app package, verifier,
-  StrongBox/KeyMint level labels, PEM chain-length mismatches, and
-  `--attestation-certificate-chain-path` values before writing
+  noncanonical `--expected-challenge-hex`, control-character-bearing harness
+  aliases, levels, challenges, expected challenge hex, slot id, device
+  fingerprint, OS build, app package, verifier, and
+  `--attestation-certificate-chain-path` values, rejects control-character
+  local certificate-chain source paths before ancestor validation or metadata
+  reads, plus whitespace-normalized identity fields, StrongBox/KeyMint level
+  labels, PEM chain-length mismatches, and unsafe chain paths before writing
   `attestation/report.json`. The report writer and signed-evidence helper also
   identity-bind their
   post-replace output-parent syncs before accepting local JSON or manifest
@@ -186,7 +395,21 @@ and completed history lives in [`status.md`](./status.md).
   compact-key staged runners apply the same gate to their child-log installs,
   marker, and metadata outputs before readback. Those staged runners also
   identity-bind resume/replace cleanup and temporary log/output cleanup before
-  unlinking stale staged paths. The lineage and compact-key evidence helpers
+  unlinking stale staged paths. Lineage and compact-key finalizers now require
+  successful staged exit markers to be the exact `0\n` line, and compact-key
+  `--resume-keygen` reruns instead of reusing a padded zero marker; finalizer
+  and resume diagnostics redact control-character or secret-looking marker
+  values, and staged run-report JSON duplicate or unexpected field diagnostics
+  redact unsafe keys, including nested lineage key-log profile and entry-field
+  names. Readiness evidence unexpected-field diagnostics now redact both
+  control-character and secret-looking field names before blocker serialization.
+  Release-bundle summary and manifest verification now rejects control-character
+  strings anywhere inside those JSON roots, matching the existing global
+  secret-material gate.
+  The lineage finalizer also requires the staged
+  elapsed-seconds sidecar to be the runner's exact six-fractional-digit
+  positive decimal line before it can bind the run report. The lineage and
+  compact-key evidence helpers
   now identity-bind validation scratch-file cleanup under `--artifact-dir`
   before unlinking those temp files. The staged finalizers also
   identity-bind the published artifact directory before their final fsync and
@@ -217,6 +440,207 @@ and completed history lives in [`status.md`](./status.md).
   `lineage-proof-staged-run.json` so the finalizer can bind the canonical
   command, exit code, elapsed seconds, proof-log filename, proof-log byte
   count, and init/append lineage-key-artifact log byte counts before publishing.
+  The readiness rollup now also rejects lineage and compact-key evidence
+  `generated_at_utc` values with surrounding whitespace or control characters
+  before timestamp parsing or freshness-window checks, and rejects canonical
+  evidence command strings that contain surrounding whitespace, control
+  characters, or secret-looking material before accepting proof or keygen
+  evidence. The readiness CLI and local trust-root/evidence file validators now
+  reject control-character paths before repo-root resolution, summary-output
+  parent creation, signer/evidence loading, JSON parsing, or artifact hashing,
+  and reject parent-segment or backslash-bearing `--repo-root` aliases before
+  repo-root metadata reads, resolver normalization, or trust-root section reads.
+  The same parent-segment and backslash alias gate now covers
+  `--device-lab-root`, `--lineage-proof-evidence`, and
+  `--compact-key-evidence` before Android root classification, readiness rollup
+  construction, or evidence JSON reads. Trusted signer public-key paths reject
+  those aliases before key loading, OpenSSL lookup, Android slot metadata reads,
+  or summary rendering.
+  Existing Kagemusha readiness summaries and release-bundle manifests must keep
+  top-level timestamps, lineage/compact evidence-section `generated_at_utc`
+  values, and Android readiness timestamp bounds canonical and within the
+  release validator clock-skew window where they represent generated or maximum
+  accepted evidence times;
+  `--verify-existing` still allows ordinary top-level release-manifest timestamp
+  refresh, but future-dated summary/manifest timestamps fail closed before
+  stable manifest drift comparison. The release bundle gate now also requires
+  Android readiness `slots` entries to be accepted, safe, unique, sorted, and
+  inventory-matched to the signed-evidence map before any Android release
+  artifacts are copied into the bundle. Slot-level Kagemusha details must carry
+  canonical timestamps, non-zero lowercase SHA-256 digests, safe artifact paths,
+  the required native ABI, a standard device family, and fields bound to the
+  signed-evidence summary, and the slot family inventory must exactly match
+  `covered_device_families`; both the slot entries and Kagemusha detail objects
+  are closed schemas. Accepted slots must carry no errors, must mark every
+  release-critical artifact group present, and must publish positive file counts
+  for each release-critical artifact group, with accepted slot metadata bound to
+  the freshly scanned device-lab evidence. Signed Android evidence must also name
+  a signer digest present in the trusted signer digest list. The gate also
+  rejects missing readiness-summary top-level fields, non-object required
+  sections, and missing section fields with explicit missing-field/shape
+  blockers before deeper per-section validation; existing release manifests also
+  reject missing top-level fields, `ready=false`, and non-empty blocker lists
+  with explicit blockers during verification, and saved Android signed-evidence
+  and slot-artifact map keys must be safe slot ids before evidence binding
+  proceeds. Fixed release-manifest evidence inventories also reject unexpected
+  artifact/log item keys with a dedicated redacted inventory-item blocker.
+  Direct lineage and compact-key evidence helper path preflights now also reject
+  control-character paths before resolving corridors, creating output parents,
+  or traversing release artifacts. The lineage helper now rejects unsafe
+  `--proof-log` strings before artifact-directory metadata reads, and the
+  compact-key helper rejects secret-looking, control-character, missing,
+  symlinked, hardlinked, non-regular, or unreadable `--generator-log` paths
+  before reading artifacts.
+  Its generator-log validator also rejects unsafe `--artifact-dir` strings
+  before resolving and resolves only the generator log parent before local file
+  shape validation. Direct compact-key evidence builder calls reject explicitly
+  unsafe `generator_log_path` strings before artifact-directory metadata reads.
+  Staged lineage and compact-key runner/finalizer path validators also reject
+  control-character staging, exit-marker, elapsed-seconds, artifact, and output
+  paths before ancestor validation, metadata reads, or staged cleanup.
+  The Kagemusha release-bundle CLI and writer now also reject control-character
+  paths before bundle-root resolution, readiness or manifest JSON loading,
+  trusted-signer key loading, output parent creation, or manifest writes. The
+  release-bundle relative-path helper rejects secret-looking or
+  control-character evidence and bundle-root strings before resolving release
+  inventory paths, rejects parent-segment aliases and backslash-bearing evidence
+  paths before resolver normalization, rejects parent-segment and
+  backslash-bearing `--bundle-root` aliases before bundle-root metadata reads or
+  shared bundle-relative path resolution, applies the same alias gate to `--out`
+  before manifest writes and to `--verify-existing` before manifest loading, and
+  release evidence entries run that containment check before hashing evidence
+  bytes.
+  Direct Android device-lab scanner path preflights now reject
+  control-character roots, slot paths, JSON artifact paths, trusted signer
+  public keys, and JSON summary outputs before metadata reads, JSON parsing,
+  signer loading, slot discovery, or output parent creation. Explicit scanner
+  slot ids are now validated and deduplicated before root classification.
+  The direct discovery helper repeats that validation before joining explicit
+  ids to the root. Direct trusted-signer maps now reject unsafe public-key path
+  strings before slot metadata reads. The production readiness rollup applies
+  the same explicit slot-id validation before root classification.
+  Root-discovered scanner slots and top-level slot artifact entries are sorted
+  by directory name before scanning so JSON summaries, release inputs, and slot
+  diagnostics stay deterministic across filesystems.
+  Android device-lab and readiness-rollup summary construction now copy direct
+  report dictionaries through a secret/control-string/non-finite-number
+  sanitizer before release-facing JSON rendering, preserve the first value and
+  emit explicit diagnostics for redacted report-key collisions, normalize
+  malformed direct report statuses to failed rows, normalize non-string direct report keys
+  before JSON rendering, redact non-finite direct report numbers, normalize unsupported direct report values,
+  normalize malformed direct report error lists to explicit safe placeholders,
+  normalize malformed direct Kagemusha report sections, render duplicate-binding
+  slot lists through safe slot labels, redact unsafe direct binding slot labels in duplicate and
+  malformed-digest blockers, reject
+  malformed direct binding digests before duplicate checks, require canonical device-family strings before matrix
+  coverage, and only reflect
+  duplicate-binding values and trusted-signer summary keys that are canonical
+  lowercase SHA-256 hex digests. Direct signed-evidence summary fields are also revalidated before
+  reflection: timestamps must be canonical UTC, digest fields must be non-zero
+  lowercase SHA-256, artifact paths must be canonical safe relative paths, and
+  multiple validated reports must not collapse to the same redacted signed-evidence
+  summary slot label.
+  The readiness rollup also validates direct trusted-signer maps before Android
+  root classification and only renders canonical signer-key SHA-256 ids. Direct
+  release-bundle builders mirror that map preflight before bundle-root metadata
+  reads, the verify-existing path mirrors it before manifest loading, and
+  blocked manifests only render canonical signer-key digests. Release-bundle
+  verification now also requires lineage and compact section digest/size maps to
+  exactly match the canonical artifact and proof-log inventories, and requires
+  `checked_files` to exactly match the lineage key release-tooling inventory.
+  ABI-6 section constants, projected ABI-6 limits/modes, and the ABI-7
+  recursive compact circuit id now fail as field-specific section-value
+  blockers before generic manifest drift. Direct release-bundle build and
+  verify calls now validate unsafe `repo_root` values, including parent-segment
+  and backslash-bearing aliases, before bundle-root metadata checks or
+  readiness/release manifest loading. Android signed-evidence
+  release entries are now bound back to the signed-evidence summary path and
+  digest plus freshly computed release-evidence size before generic manifest
+  drift, and Android slot artifact release entries now have the same
+  path/digest/size binding.
+  Android summary fields, including `duplicate_bindings`, the per-slot `signed_evidence` map,
+  device-family lists, and trusted signer digest fields, are also bound to freshly computed device-lab evidence during both
+  readiness-summary comparison and existing-manifest verification before
+  generic summary or manifest drift.
+  Android covered-family summary drift now fails with an Android-specific
+  blocker before generic summary drift.
+  Release-bundle readiness-summary shape checks now also reject malformed
+  readiness-summary Android matrix lists and trusted-signer digest lists before
+  drift comparison.
+  Release-bundle readiness-summary shape checks also require the top-level
+  `generated_at` timestamp to use canonical UTC `YYYY-MM-DDTHH:MM:SSZ` form
+  and stay within the allowed future-skew window before release evidence is
+  packaged.
+  Android signed-evidence slot inventory and per-slot field drift are also
+  rejected with Android-specific blockers before generic summary drift during
+  build-time readiness-summary comparison.
+  Lineage and compact readiness-summary evidence digest/size maps now fail with
+  section-evidence drift blockers before generic summary drift.
+  ABI-6, ABI-7, lineage release-tooling, lineage metadata including the
+  required test inventory, and compact metadata including record
+  namespace/version fields now fail with section-value drift blockers before
+  generic summary drift.
+  Existing release-bundle manifests also bind ABI-6, ABI-7, lineage tooling,
+  lineage proof evidence, and compact-key evidence section values back to
+  freshly computed release evidence before generic manifest drift.
+  Lineage and compact release artifact entries, proof-log entries, and the
+  compact generator-log entry now bind to expected bundle-relative paths plus
+  release-section digest and size fields before generic manifest drift.
+  Compact generator-log artifact digest and size maps are also bound to
+  freshly computed compact evidence before generic manifest drift.
+  Top-level readiness-summary, lineage evidence, compact evidence JSON, and
+  compact generator-log entries are now pinned to the canonical release-packet
+  filenames, digest, and size fields from freshly computed release evidence
+  before generic manifest drift.
+  Release-bundle build validation now compares per-slot Android signed-evidence
+  summary fields against freshly validated device-lab evidence before generic
+  summary drift, so safe but forged slot artifact paths fail with a
+  signed-evidence drift blocker.
+  Slot-relative artifact path
+  normalizers now also reject control-character or surrounding-whitespace
+  relative paths before stripping, manifest, metadata, signed-evidence, or
+  signer digest reads.
+  Signed-evidence helper path preflights now also reject control-character
+  slot, private-key, public-key, and output paths before metadata reads,
+  OpenSSL lookup, JSON parsing, or output parent creation. Absolute
+  signed-evidence output paths also reject symlinked ancestors and symlinked
+  leaves, and output paths reject backslashes plus absolute parent-segment
+  aliases before resolver normalization can map them onto the canonical slot
+  evidence output.
+  Device-lab scanner summary construction now normalizes finite float values in
+  direct report inputs as unsupported summary values and redacts non-finite
+  numbers, keeping release-facing summaries free of injected floating-point
+  scalars outside the scanner-produced schema.
+  The attestation report helper now rejects noncanonical slot IDs and
+  slot-relative certificate-chain path spellings before writing
+  `attestation/report.json`, so `./slot`, trailing slash slot aliases,
+  `attestation/./...`, repeated separators, and trailing slash chain-path forms
+  cannot be normalized into release metadata.
+  It also rejects backslash-bearing certificate-chain paths before
+  `PurePosixPath` handling, matching the shared slot-relative metadata path
+  policy.
+  The signed-slot assembler now applies the same canonical single-name rule to
+  `--slot-id` before joining or creating slot paths, so `./slot`, `slot/`, and
+  `slot/.` aliases fail before publish staging starts.
+  Shared Android device-lab slot-id validation now applies that exact spelling
+  rule to raw-puller `--slot-id` and scanner `--slot` inputs as well, so
+  explicit slot aliases fail before ADB, slot discovery, or path joins.
+  The signed-slot assembler and attestation report helper also reject
+  backslash-bearing `--slot-id` values through the same safe-name gate, matching
+  the shared scanner/raw-puller validator.
+  Filesystem-discovered scanner slot directories now reject backslash-bearing
+  names before metadata reads, keeping implicit discovery aligned with explicit
+  slot-id validation.
+  Shared slot-relative artifact path validation now also rejects dot-segment,
+  repeated-separator, and trailing-slash aliases before `sha256sum.txt`,
+  `slot.json`, signed-evidence, or release-bundle paths can normalize into
+  digest-bound evidence.
+  Signed-slot assembler source-copy preflights now reject control-character
+  artifact source paths before ancestor validation, metadata reads, or
+  destination directory creation, and signed-slot assembler root preflights
+  reject control-character device-lab roots before root classification or
+  directory creation. Signed-slot assembler source metadata strings also reject
+  control characters before metadata binding. Signed-slot assembler source digest preflights now reject blank or noncanonical attestation challenge, app-signing, and offline-policy SHA-256 fields before unsigned staging output or signed evidence can be published.
   It also emits per-phase closed-schema execution reports for init, append, and
   proof attempts so signal-style failures are diagnosable without becoming
   publishable evidence; each execution report now includes an execution-report
@@ -274,7 +698,9 @@ and completed history lives in [`status.md`](./status.md).
   `--resume-keygen` now reuses only a complete zero-exit compact keygen whose
   artifacts, generator log, execution report, run report, marker, canonical
   command, generator-log byte count, and execution-report SHA-256 validate;
-  failed or malformed regular
+  staged execution-report and run-report command fields now reject surrounding
+  whitespace, control characters, and secret-looking material before canonical
+  command matching. Failed or malformed regular
   staged outputs are replaced and rerun, while unsafe aliases still fail closed.
   `--resume-keygen` is mutually exclusive with `--replace`, so operators must
   choose validated resume or full staged-output replacement before cleanup.
@@ -1304,6 +1730,15 @@ and completed history lives in [`status.md`](./status.md).
   route Java-null inputs through the same named local archive validators, so
   null arrays fail with stable `... must not be empty` input errors before
   native availability or generated parameter checks can affect diagnostics.
+  Kotlin/JVM and Java Android standalone `VerifyingKeyBoxCodec` helpers also
+  decode chain-supplied Norito verifier-key boxes with exact backend
+  validation, non-empty key bytes, defensive copies, and trailing child-field
+  rejection, and the JavaScript SDK parity guard pins that decode surface.
+  Kotlin/JVM and Java Android Offline Note V2 Halo2 helpers now decode and
+  verify `OpenVerifyEnvelope` wrappers with exact backend tag, circuit id,
+  verifier-key hash, public-input schema, non-empty proof payload, and
+  trailing-field checks, with lightweight fake-ZK1 regressions and parity
+  guards pinning the non-prover decoder path.
   Kotlin/JVM and Java Android recursive
   compact-token and record-backed recursive aggregation wrappers now also
   validate local ABI-7 inputs as non-empty Norito archives before native
@@ -1438,8 +1873,9 @@ and completed history lives in [`status.md`](./status.md).
 	  Trusted-signer public-key pinning with symlink-free key-path ancestors,
 	  regular non-symlink/non-hardlink key file validation, unreadable key leaf
 	  metadata rejection, and Ed25519 signature
-		  verification, plus private/public key path validation before OpenSSL lookup
-		  and pre-OpenSSL rejection of secret-looking key path strings while
+		  verification, plus private/public key path validation before OpenSSL lookup,
+		  pre-metadata rejection of textual private/public key path aliases, and
+		  pre-OpenSSL rejection of secret-looking key path strings while
 		  preserving key-path failures separately from private/public key mismatches
 		  and treating temporary OpenSSL staging/write/read failures as structured
 		  signer/verifier errors after fsynced staged-byte writes and opened-file
@@ -1470,7 +1906,12 @@ and completed history lives in [`status.md`](./status.md).
 	  rejected by the production readiness rollup,
 	  signer-helper rejection
 	  of secret-looking `--slot`, `--output`, and `--signer-key-id` runtime
-	  arguments before metadata reads, standard device-family coverage,
+	  arguments plus padded/control-character signer key ids before metadata
+	  reads, signer-side exactness checks for slot metadata strings,
+	  signed-evidence artifact paths, attestation-chain paths, and raw test
+	  commands before evidence emission, signed-slot assembler rejection of
+	  padded/control-character slot ids, requested device families, and device
+	  identity overrides before path construction or ADB fallback, standard device-family coverage,
 		  cross-slot duplicate device-fingerprint and attestation-challenge rejection,
 		  explicit slot-id path-safety checks, and a signer helper that emits the
 			  canonical signed artifact from completed slots without persisting private key
@@ -1517,7 +1958,9 @@ and completed history lives in [`status.md`](./status.md).
 		  manifest parser/verifier reads, rejects unreadable-metadata
 		  and hardlinked `sha256sum.txt` manifests before direct manifest parsing
 		  or discovery, binds `sha256sum.txt` parser bytes to the opened file
-		  identity so post-preflight swaps fail closed,
+		  identity so post-preflight swaps fail closed, rejects nonblank manifest
+		  lines with leading/trailing whitespace or leading `*` path normalization
+		  before digest/path parsing,
 		  makes scanner and rollup missing-root decisions consume
 		  `lstat()`-classified root presence instead of `Path.exists()`,
 		  makes scanner slot inventory classify expected top-level directories,
@@ -1545,7 +1988,14 @@ and completed history lives in [`status.md`](./status.md).
 				  wallet-integrity, and `queue/pending_queue.json` transcript
 				  digest checks now use the same pre-read path revalidation and
 				  opened-file binding. Shared Android slot JSON loads bind parsed bytes
-				  to the preflight `lstat()` identity. Required status/runtime marker text reads now also revalidate the slot-relative
+				  to the preflight `lstat()` identity. Android scanner raw-test-command
+				  validation now rejects padded or control-character command entries
+				  before exact production-command matching. Android scanner, raw-puller,
+				  attestation-report, readiness, and release-bundle diagnostics now redact
+				  control-character-bearing JSON keys, summary fields, and artifact
+				  labels instead of echoing unsafe terminal strings, and raw ADB
+				  stderr details with control characters are redacted before CLI
+				  display. Required status/runtime marker text reads now also revalidate the slot-relative
 				  artifacts immediately before decoding and marker checks.
 			  Direct slot-file discovery reports unreadable slot-root and
 		  artifact-directory metadata through caller error lists, returns no
@@ -3908,7 +4358,12 @@ and completed history lives in [`status.md`](./status.md).
   behaviorally, with Kagemusha using a dedicated runner instead of an inline
   workflow test command. The focused Kagemusha and SoraFS JS runner patterns
   must include their runtime-gate meta tests so those lane checks prove the
-  runtime preflights directly.
+	  runtime preflights directly. The JavaScript privacy helper lane must keep
+	  Jindo, SIS-with-hints, and the research adapter source/package-dist exports
+	  covered against class-instance option objects while retaining raw envelope
+	  bytes verifier shortcuts for canonical proof bytes. It must also keep
+	  research catalog labels for Orchard, FCMP++, Miden, Aztec, and PQ MASP
+	  pinned to their dedicated OpenVerify backend tags.
 - Keep privacy, Kagemusha, and SoraFS Python workflow lanes on the Python 3.11
   contract; their guards now reject Python-version drift and Python SDK test
   commands that run before setup-python, and the standalone Python SDK scripts
@@ -3929,7 +4384,13 @@ and completed history lives in [`status.md`](./status.md).
   also suppress bytecode writes during validation so generated cache files do
   not dirty tracked artifacts, and CI must reject ignored Python bytecode files
   if they are tracked. The Python native loader must keep stale macOS extension
-  artifacts fail-closed instead of aborting package imports.
+	  artifacts fail-closed instead of aborting package imports. The Python privacy
+	  lane must also keep VeRange, Anonymous PGC, zkAt, ZK-AMS, Vega, Silent
+	  Threshold, ZK-X.509, Jindo, SIS-with-hints, and the Orchard/Penumbra/FCMP++/
+	  Miden/Aztec/PQ MASP research adapters on the plain-dict contract, including
+	  nested commitment descriptors and adapter metadata, while retaining the raw
+	  envelope bytes verifier shortcut for callers that already hold canonical
+	  proof bytes.
 - Keep public SCCP release evidence tied to every UI-side full-light-client
   role helper, not only aggregate request builders; Solana and TON readiness
   rows now require the per-role audit proof request symbols across web, Python,
@@ -10965,7 +11426,7 @@ or ABI behavior.
   canonical payload bytes, Iroha prehash, resolver signature, signed/proof
   attestation bytes, and adversarial receipt/policy mutations across
   the Rust data model, Torii runtime claim-receipt signing path, JavaScript,
-  Swift, Kotlin/JVM, and Java Android.
+  Python, Swift, Kotlin/JVM, and Java Android.
 - Keep proof-carrying RAM-LFE policy metadata canonical and bounded. The crypto
   public-parameter parser now rejects noncanonical verifier backend/circuit ids,
   zero hidden-program digests, zero public-input schema hashes,

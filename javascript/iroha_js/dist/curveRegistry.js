@@ -155,10 +155,13 @@ export function getCurveEntryById(curveId) {
 }
 
 export function getCurveEntryByAlgorithm(algorithm) {
-  if (algorithm === undefined || algorithm === null) {
+  if (typeof algorithm !== "string") {
     return null;
   }
-  const normalized = String(algorithm).trim().toLowerCase();
+  if (algorithm.trim() === "" || algorithm.trim() !== algorithm) {
+    return null;
+  }
+  const normalized = algorithm.toLowerCase();
   if (!/^[\x20-\x7e]+$/.test(normalized)) {
     return null;
   }

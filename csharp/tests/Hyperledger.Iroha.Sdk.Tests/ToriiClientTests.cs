@@ -2336,7 +2336,10 @@ public sealed class ToriiClientTests
         {
             var error = await Assert.ThrowsAsync<ArgumentException>(
                 () => client.OpenEventSseAsync(EventFilterQuery(filterJson)));
-            Assert.Contains("unsupported production verifier backend", error.Message);
+            var expected = filterJson.Contains("\"backend\":\" ")
+                ? "surrounding whitespace"
+                : "unsupported production verifier backend";
+            Assert.Contains(expected, error.Message);
             Assert.Null(handler.LastRequest);
         }
     }

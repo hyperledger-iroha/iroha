@@ -20,6 +20,7 @@ from .verange import (
     _reject_unknown_fields,
     _require_mapping,
     _require_non_blank_string,
+    _require_plain_mapping,
     build_privacy_proof_envelope,
     decode_privacy_proof_envelope,
 )
@@ -528,7 +529,7 @@ _COMMON_FIELDS = {
 def build_zk_x509_identity_commitments(options: Mapping[str, Any]) -> dict[str, Any]:
     """Normalize ZK-X.509 identity proof public-input commitments."""
 
-    source = _require_mapping(options, "zkX509IdentityCommitments")
+    source = _require_plain_mapping(options, "zkX509IdentityCommitments")
     _reject_unknown_fields(source, _COMMON_FIELDS, "zkX509IdentityCommitments")
     parts = _commitment_parts(source, "zkX509IdentityCommitments")
     return {
@@ -750,7 +751,7 @@ _ENVELOPE_FIELDS = {
 def build_zk_x509_identity_envelope(options: Mapping[str, Any]) -> bytes:
     """Build canonical OpenVerifyEnvelope bytes for a prepared ZK-X.509 proof."""
 
-    source = _require_mapping(options, "zkX509IdentityEnvelope")
+    source = _require_plain_mapping(options, "zkX509IdentityEnvelope")
     _reject_unknown_fields(source, _ENVELOPE_FIELDS, "zkX509IdentityEnvelope")
     parts = _proof_parts(source, "zkX509IdentityEnvelope", require_proof_bytes=True)
     return build_privacy_proof_envelope(
@@ -770,7 +771,7 @@ def build_zk_x509_identity_envelope(options: Mapping[str, Any]) -> bytes:
 def build_zk_x509_identity_proof_v0(options: Mapping[str, Any]) -> bytes:
     """Build canonical production ZK-X.509 identity proof envelope bytes."""
 
-    source = _require_mapping(options, "zkX509IdentityProofV0")
+    source = _require_plain_mapping(options, "zkX509IdentityProofV0")
     _reject_unknown_fields(source, _ENVELOPE_FIELDS, "zkX509IdentityProofV0")
     parts = _proof_parts(source, "zkX509IdentityProofV0", require_proof_bytes=True)
     if parts["proof_bytes"].startswith(ZK_X509_DEV_PROOF_PREFIX):
@@ -811,7 +812,7 @@ def _dev_proof_bytes(
 def build_zk_x509_identity_dev_proof_fixture(options: Mapping[str, Any]) -> dict[str, Any]:
     """Build a deterministic ZK-X.509 identity dev proof fixture."""
 
-    source = _require_mapping(options, "zkX509IdentityDevProofFixture")
+    source = _require_plain_mapping(options, "zkX509IdentityDevProofFixture")
     _reject_unknown_fields(
         source,
         _ENVELOPE_FIELDS - {"proofBytes", "proof_bytes", "proof"},
@@ -1005,7 +1006,7 @@ def verify_zk_x509_identity_proof_locally(options: Any) -> dict[str, Any]:
     """Verify a deterministic ZK-X.509 identity dev fixture."""
 
     if isinstance(options, Mapping):
-        source = options
+        source = _require_plain_mapping(options, "zkX509IdentityLocalVerification")
     else:
         source = {"envelope": options}
     _reject_unknown_fields(
@@ -1065,7 +1066,7 @@ def verify_zk_x509_identity_proof_v0(options: Any) -> dict[str, Any]:
     """Validate a production ZK-X.509 identity proof envelope binding."""
 
     if isinstance(options, Mapping):
-        source = options
+        source = _require_plain_mapping(options, "zkX509IdentityProofV0")
     else:
         source = {"envelope": options}
     _reject_unknown_fields(

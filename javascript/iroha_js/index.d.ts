@@ -213,6 +213,7 @@ export const ValidationErrorCode: {
   readonly INVALID_MULTIHASH: "ERR_INVALID_MULTIHASH";
   readonly INVALID_ACCOUNT_ID: "ERR_INVALID_ACCOUNT_ID";
   readonly INVALID_ASSET_ID: "ERR_INVALID_ASSET_ID";
+  readonly INVALID_ASSET_DEFINITION_ID: "ERR_INVALID_ASSET_DEFINITION_ID";
   readonly INVALID_IBAN: "ERR_INVALID_IBAN";
   readonly INVALID_OBJECT: "ERR_INVALID_OBJECT";
   readonly INVALID_METADATA: "ERR_INVALID_METADATA";
@@ -9476,23 +9477,50 @@ export interface RetirePrivacyVerifierKeyInstructionInput
  * Domain-suffixed literals (`<id>@domain`) and canonical-hex account literals are rejected.
  */
 export function normalizeAccountId(value: string, name?: string): string;
+export function ensureCanonicalAccountId(value: string, name?: string): string;
+export function normalizeI105AccountId(value: string, name?: string): string;
+export function tryNormalizeI105AccountId(value: unknown, name?: string): string | null;
+export function normalizeToriiAccountReference(value: unknown, name?: string): string;
+export function normalizeAccountAliasFqn(value: string, name?: string): string;
+export function tryNormalizeAccountAliasFqn(value: unknown, name?: string): string | null;
 
 /**
  * Canonicalise a public asset identifier to bare Base58 form.
  * Asset aliases (`name#dataspace` / `name#domain.dataspace`) must be resolved first.
  */
 export function normalizeAssetId(value: string, name?: string): string;
+export function normalizeAssetDefinitionId(value: string, name?: string): string;
+export function tryNormalizeAssetDefinitionId(value: unknown, name?: string): string | null;
+export function normalizeAssetAliasFqn(value: string, name?: string): string;
+export function tryNormalizeAssetAliasFqn(value: unknown, name?: string): string | null;
 
 /**
  * Canonicalise an internal asset-holding identifier in
  * `<base58-asset-definition-id>#<i105-account-id>` form.
  */
 export function normalizeAssetHoldingId(value: string, name?: string): string;
+export function composeAssetHoldingId(
+  assetId: string,
+  accountId: string,
+  dataspaceId?: string | number | null,
+  name?: string,
+): string;
+export function extractAssetDefinitionId(value: string, name?: string): string;
+export function tryExtractAssetDefinitionId(value: unknown, name?: string): string | null;
+export function assetReferencesMatch(left: unknown, right: unknown): boolean;
 
 /**
  * Canonicalise an RWA identifier in `<64-hex-hash>$<domain>` form.
  */
 export function normalizeRwaId(value: string, name?: string): string;
+
+export function blake2b256(
+  data: Buffer | Uint8Array | ArrayBuffer | ArrayBufferView,
+  options?: {
+    personalization?: Buffer | Uint8Array | ArrayBuffer | ArrayBufferView;
+    includeZeroKeyBlock?: boolean;
+  },
+): Uint8Array;
 
 export interface ConfidentialGasSchedule {
   proofBase: number;
@@ -13878,6 +13906,34 @@ export interface TransactionAssemblyInput {
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
 }
 
+export interface RegisterSnsNameTransactionInput {
+  chainId: string;
+  authority: string;
+  request: object;
+  metadata?: MetadataLike;
+  creationTimeMs?: number | null;
+  ttlMs?: number | null;
+  nonce?: number | null;
+  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
+}
+
+export interface RegisterSnsNameViaConsensusInput
+  extends RegisterSnsNameTransactionInput {
+  client?: ToriiClient;
+  toriiUrl?: string;
+  waitForCommit?: boolean;
+  pollIntervalMs?: number;
+  timeoutMs?: number;
+  scope?: "local" | "auto" | "global" | string | null;
+}
+
+export interface RegisterSnsNameViaConsensusResult {
+  hash: string;
+  submittedHash: string | null;
+  submission: unknown;
+  status?: unknown;
+}
+
 export type KagemushaInstructionArchiveType =
   | "KagemushaTransfer"
   | "RedeemKagemushaRecursive";
@@ -16405,6 +16461,14 @@ export declare class ToriiBrowserClient {
     assetDefinitionId: string,
     options?: Record<string, unknown>,
   ): Promise<unknown>;
+  resolveAlias(
+    aliasOrRequest: string | Record<string, unknown>,
+    options?: Record<string, unknown>,
+  ): Promise<unknown>;
+  resolveAssetAlias(
+    aliasOrRequest: string | Record<string, unknown>,
+    options?: Record<string, unknown>,
+  ): Promise<unknown>;
   listExplorerAssetDefinitions(
     options?: Record<string, unknown>,
   ): Promise<unknown>;
@@ -16453,6 +16517,36 @@ export declare class ToriiBrowserClient {
   getExplorerInstructionContractView(
     transactionHash: string,
     index: number,
+    options?: Record<string, unknown>,
+  ): Promise<unknown>;
+  getMultisigSpec(
+    selector: Record<string, unknown>,
+    options?: Record<string, unknown>,
+  ): Promise<unknown>;
+  listMultisigProposals(
+    selector: Record<string, unknown>,
+    options?: Record<string, unknown>,
+  ): Promise<unknown>;
+  getMultisigProposal(
+    accountId: string,
+    proposalId: string,
+    options?: Record<string, unknown>,
+  ): Promise<unknown>;
+  listPendingMultisigApprovals(options?: Record<string, unknown>): Promise<unknown>;
+  getPendingMultisigApproval(
+    operationId: string,
+    options?: Record<string, unknown>,
+  ): Promise<unknown>;
+  submitMultisigPropose(
+    request: Record<string, unknown>,
+    options?: Record<string, unknown>,
+  ): Promise<unknown>;
+  submitMultisigContractCallPropose(
+    request: Record<string, unknown>,
+    options?: Record<string, unknown>,
+  ): Promise<unknown>;
+  submitMultisigContractCallApprove(
+    request: Record<string, unknown>,
     options?: Record<string, unknown>,
   ): Promise<unknown>;
   getSumeragiStatus(options?: Record<string, unknown>): Promise<unknown>;
@@ -18718,6 +18812,9 @@ export function buildSubmitBallotTransaction(
 export function buildFinalizeElectionTransaction(
   input: FinalizeElectionTransactionInput,
 ): SignedTransactionResult;
+export function buildRegisterSnsNameTransaction(
+  input: RegisterSnsNameTransactionInput,
+): SignedTransactionResult;
 
 export function submitSignedTransaction(
   client: ToriiClient,
@@ -18727,8 +18824,13 @@ export function submitSignedTransaction(
     pollIntervalMs?: number;
     timeoutMs?: number;
     privateKey?: ArrayBufferView | ArrayBuffer | Buffer;
+    scope?: "local" | "auto" | "global" | string | null;
   },
 ): Promise<{ hash: string; submission: unknown; status?: unknown }>;
+
+export function registerSnsNameViaConsensus(
+  input: RegisterSnsNameViaConsensusInput,
+): Promise<RegisterSnsNameViaConsensusResult>;
 
 export function submitTransactionEntrypoint(
   client: ToriiClient,
@@ -19484,9 +19586,17 @@ export function buildVeRangeProofEnvelope(
   input: VeRangeProofEnvelopeInput,
 ): Buffer;
 
+export function buildVeRangeProofV1(
+  input: VeRangeProofV1Input,
+): Buffer;
+
 export function verifyVeRangeProofLocally(
   input: VeRangeLocalVerificationInput | BinaryLike,
 ): VeRangeLocalVerificationResult;
+
+export function verifyVeRangeProofV1(
+  input: VeRangeProofV1VerificationInput | BinaryLike,
+): VeRangeProofV1VerificationResult;
 
 export function buildPrivacyProofEnvelope(
   input: PrivacyProofEnvelopeInput,

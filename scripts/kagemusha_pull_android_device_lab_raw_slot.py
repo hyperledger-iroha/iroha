@@ -56,6 +56,22 @@ RAW_SLOT_ALLOWED_DIRECTORIES: frozenset[str] = frozenset(
         "logs",
     }
 )
+PENDING_QUEUE_FIELDS: frozenset[str] = frozenset(
+    {
+        "slot_id",
+        "pending_transactions",
+    }
+)
+TELEMETRY_FIELDS: frozenset[str] = frozenset(
+    {
+        "schema_version",
+        "slot_id",
+        "suite",
+        "device_model",
+        "device_codename",
+        "app_package_name",
+    }
+)
 HARNESS_RESULT_ALLOWED_FIELDS: frozenset[str] = frozenset(
     {
         "alias",
@@ -122,10 +138,15 @@ def _json_dumps(payload: dict[str, Any]) -> str:
     return json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n"
 
 
+CONTROL_OUTPUT_REDACTION = "<unsafe-adb-output>"
+
+
 def _safe_detail(text: str, limit: int = 512) -> str:
     text = text.replace("\r", "\n").strip()
     if device_lab.SECRET_RE.search(text):
         return "<redacted-secret-output>"
+    if device_lab._contains_control_character(text):
+        return CONTROL_OUTPUT_REDACTION
     if len(text) > limit:
         return text[:limit] + "...<truncated>"
     return text
@@ -141,10 +162,23 @@ def _single_safe_slot_id(raw_slot_id: str) -> tuple[str | None, list[str]]:
 
 
 def _validate_non_secret_adb_string(value: str, label: str) -> list[str]:
-    if not value.strip():
+    if not isinstance(value, str) or not value:
         return [f"{label} must be a non-empty string"]
+    if value != value.strip():
+        return [f"{label} must not contain surrounding whitespace"]
+    if device_lab._contains_control_character(value):
+        return [f"{label} must not contain control characters"]
     if device_lab.SECRET_RE.search(value):
         return [f"{label} must not contain secret-looking material"]
+    return []
+
+
+def _path_shape_errors(path: Path, label: str) -> list[str]:
+    text = str(path)
+    if device_lab.SECRET_RE.search(text):
+        return [f"{label} must not contain secret-looking material"]
+    if device_lab._contains_control_character(text):
+        return [f"{label} must not contain control characters"]
     return []
 
 
@@ -176,6 +210,9 @@ def _validate_raw_result_string(
     if value != value.strip():
         errors.append(f"{label} must not have surrounding whitespace")
         return None
+    if device_lab._contains_control_character(value):
+        errors.append(f"{label} must not contain control characters")
+        return None
     if device_lab.SECRET_RE.search(value):
         errors.append(f"{label} must not contain secret-looking material")
         return None
@@ -188,7 +225,17 @@ def _validate_raw_json_slot_id(
     slot_id: str,
     errors: list[str],
 ) -> None:
-    if payload.get("slot_id") != slot_id:
+    slot_value = payload.get("slot_id")
+    if not isinstance(slot_value, str) or not slot_value:
+        errors.append(f"{label} slot_id must be a non-empty string")
+        return
+    if slot_value != slot_value.strip():
+        errors.append(f"{label} slot_id must not contain surrounding whitespace")
+        return
+    if device_lab._contains_control_character(slot_value):
+        errors.append(f"{label} slot_id must not contain control characters")
+        return
+    if slot_value != slot_id:
         errors.append(f"{label} slot_id must match slot id")
 
 
@@ -219,9 +266,19 @@ def _validate_raw_json_artifacts(slot_path: Path, slot_id: str, errors: list[str
         errors,
     )
     if queue is not None:
+        for field in sorted(set(queue) - PENDING_QUEUE_FIELDS):
+            errors.append(
+                "queue/pending_queue.json contains unexpected field "
+                f"{device_lab._display_path(field)}"
+            )
         _validate_raw_json_slot_id(queue, "queue/pending_queue.json", slot_id, errors)
-        if not isinstance(queue.get("pending_transactions"), list):
+        pending_transactions = queue.get("pending_transactions")
+        if not isinstance(pending_transactions, list):
             errors.append("queue/pending_queue.json pending_transactions must be an array")
+        elif pending_transactions:
+            errors.append(
+                "queue/pending_queue.json pending_transactions must be empty after D2D handoff"
+            )
 
     telemetry = device_lab._load_json(
         slot_path / "telemetry" / "telemetry.json",
@@ -229,11 +286,22 @@ def _validate_raw_json_artifacts(slot_path: Path, slot_id: str, errors: list[str
         errors,
     )
     if telemetry is not None:
+        for field in sorted(set(telemetry) - TELEMETRY_FIELDS):
+            errors.append(
+                "telemetry/telemetry.json contains unexpected field "
+                f"{device_lab._display_path(field)}"
+            )
         if telemetry.get("schema_version") != 1:
             errors.append("telemetry/telemetry.json schema_version must be 1")
         _validate_raw_json_slot_id(telemetry, "telemetry/telemetry.json", slot_id, errors)
         suite = telemetry.get("suite")
-        if not isinstance(suite, str) or "kagemusha" not in suite.lower():
+        if not isinstance(suite, str) or not suite:
+            errors.append("telemetry/telemetry.json suite must be a non-empty string")
+        elif suite != suite.strip():
+            errors.append("telemetry/telemetry.json suite must not contain surrounding whitespace")
+        elif device_lab._contains_control_character(suite):
+            errors.append("telemetry/telemetry.json suite must not contain control characters")
+        elif suite != device_lab.KAGEMUSHA_TELEMETRY_SUITE:
             errors.append("telemetry/telemetry.json suite must identify a Kagemusha device-lab run")
 
     d2d = device_lab._load_json(
@@ -293,14 +361,24 @@ def _validate_raw_json_artifacts(slot_path: Path, slot_id: str, errors: list[str
 
 
 def _validate_raw_status_ndjson(status_text: str, slot_id: str, errors: list[str]) -> None:
+    if "\r" in status_text:
+        errors.append("telemetry/status.ndjson must use LF line endings")
+    if status_text and not status_text.endswith("\n"):
+        errors.append("telemetry/status.ndjson must end with a trailing newline")
     saw_record = False
     saw_ok = False
     for line_no, raw_line in enumerate(status_text.splitlines(), start=1):
-        if not raw_line.strip():
+        line = raw_line.strip()
+        if not line:
             continue
         saw_record = True
+        if raw_line != line:
+            errors.append(
+                f"telemetry/status.ndjson line {line_no} must not contain surrounding whitespace"
+            )
+            continue
         try:
-            status_event = device_lab._loads_json_without_duplicate_keys(raw_line)
+            status_event = device_lab._loads_json_without_duplicate_keys(line)
         except json.JSONDecodeError:
             errors.append(f"telemetry/status.ndjson line {line_no} must be JSON")
             continue
@@ -319,16 +397,30 @@ def _validate_raw_status_ndjson(status_text: str, slot_id: str, errors: list[str
             errors.append(f"telemetry/status.ndjson line {line_no} must be a JSON object")
             continue
         status = status_event.get("status")
-        if not isinstance(status, str) or not status.strip():
+        if not isinstance(status, str) or not status:
             errors.append(f"telemetry/status.ndjson line {line_no} status must be a non-empty string")
             continue
+        if status != status.strip():
+            errors.append(f"telemetry/status.ndjson line {line_no} status must not contain surrounding whitespace")
+            continue
+        if device_lab._contains_control_character(status):
+            errors.append(f"telemetry/status.ndjson line {line_no} status must not contain control characters")
+            continue
+        if status != status.lower():
+            errors.append(f"telemetry/status.ndjson line {line_no} status must be lowercase")
+            continue
         slot_value = status_event.get("slot_id")
+        if slot_value is not None and not isinstance(slot_value, str):
+            errors.append(f"telemetry/status.ndjson line {line_no} slot_id must be a string")
+        elif isinstance(slot_value, str) and slot_value != slot_value.strip():
+            errors.append(f"telemetry/status.ndjson line {line_no} slot_id must not contain surrounding whitespace")
+        elif isinstance(slot_value, str) and device_lab._contains_control_character(slot_value):
+            errors.append(f"telemetry/status.ndjson line {line_no} slot_id must not contain control characters")
         if slot_value is not None and slot_value != slot_id:
             errors.append(f"telemetry/status.ndjson line {line_no} slot_id must match slot id")
-        normalized = status.strip().lower()
-        if normalized == "ok":
+        if status == "ok":
             saw_ok = True
-        elif normalized in device_lab.KAGEMUSHA_STATUS_FAILURE_VALUES:
+        elif status in device_lab.KAGEMUSHA_STATUS_FAILURE_VALUES:
             errors.append(f"telemetry/status.ndjson line {line_no} status must not be {status!r}")
     if not saw_record:
         errors.append("telemetry/status.ndjson must contain at least one JSON status record")
@@ -381,9 +473,17 @@ def _validate_harness_result(
         errors.append("attestation/harness-result.json alias must not contain secret-looking material")
     for key in ("attestation_security_level", "keymaster_security_level"):
         level = harness.get(key)
-        if isinstance(level, str) and device_lab._contains_control_character(level):
+        if not isinstance(level, str) or not level:
+            errors.append(f"attestation/harness-result.json {key} must be a non-empty string")
+        elif level != level.strip():
+            errors.append(f"attestation/harness-result.json {key} must not have surrounding whitespace")
+        elif device_lab._contains_control_character(level):
             errors.append(f"attestation/harness-result.json {key} must not contain control characters")
-        elif not isinstance(level, str) or level not in device_lab.STRONGBOX_LEVELS:
+        elif device_lab.SECRET_RE.search(level):
+            errors.append(
+                f"attestation/harness-result.json {key} must not contain secret-looking material"
+            )
+        elif level not in device_lab.STRONGBOX_LEVELS:
             errors.append(f"attestation/harness-result.json {key} must be STRONGBOX")
     if harness.get("strongbox_attestation") is not True:
         errors.append("attestation/harness-result.json strongbox_attestation must be true")
@@ -523,12 +623,24 @@ def _run_raw_slot_tar_pull(
     return data, []
 
 
-def _normalise_tar_member_name(name: str, errors: list[str]) -> str | None:
+def _normalise_tar_member_name(
+    name: str,
+    errors: list[str],
+    *,
+    allow_trailing_slash: bool = False,
+) -> str | None:
     if device_lab.SECRET_RE.search(name):
         errors.append("raw slot tar member path must not contain secret-looking material")
         return None
+    if device_lab._contains_control_character(name):
+        errors.append("raw slot tar member path must not contain control characters")
+        return None
     candidate = PurePosixPath(name)
     normalised = candidate.as_posix()
+    has_single_directory_slash = name.endswith("/") and not name.endswith("//")
+    is_trailing_slash_form = (
+        allow_trailing_slash and has_single_directory_slash and normalised == name[:-1]
+    )
     if (
         not name.strip()
         or name.startswith("/")
@@ -538,6 +650,11 @@ def _normalise_tar_member_name(name: str, errors: list[str]) -> str | None:
         or ".." in candidate.parts
     ):
         errors.append(f"raw slot tar member has unsafe path {device_lab._display_path(name)!r}")
+        return None
+    if normalised != name and not is_trailing_slash_form:
+        errors.append(
+            f"raw slot tar member has noncanonical path {device_lab._display_path(name)!r}"
+        )
         return None
     return normalised
 
@@ -608,12 +725,16 @@ def extract_raw_slot_tar(
     file_count = 0
     total_bytes = 0
     try:
-        tar = tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r:*")
+        tar = tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r:")
     except tarfile.TarError:
         return ["raw slot tar stream could not be parsed"]
     with tar:
         for member in tar:
-            relative = _normalise_tar_member_name(member.name, errors)
+            relative = _normalise_tar_member_name(
+                member.name,
+                errors,
+                allow_trailing_slash=member.isdir(),
+            )
             if relative is None:
                 continue
             if not _member_allowed_for_slot(relative, slot_id):
@@ -695,8 +816,9 @@ def _read_text_file(path: Path, label: str, errors: list[str], max_bytes: int = 
 
 def _validate_raw_slot_files(slot_path: Path, slot_id: str, root_latest: Path) -> list[str]:
     errors: list[str] = []
-    if device_lab.SECRET_RE.search(str(slot_path)):
-        return ["raw slot path must not contain secret-looking material"]
+    path_errors = _path_shape_errors(slot_path, "raw slot path")
+    if path_errors:
+        return path_errors
     try:
         slot_mode = slot_path.lstat().st_mode
     except FileNotFoundError:
@@ -718,6 +840,9 @@ def _validate_raw_slot_files(slot_path: Path, slot_id: str, root_latest: Path) -
         relative = path.relative_to(slot_path).as_posix()
         if device_lab.SECRET_RE.search(relative):
             errors.append("raw slot artifact paths must not contain secret-looking material")
+            continue
+        if device_lab._contains_control_character(relative):
+            errors.append("raw slot artifact paths must not contain control characters")
             continue
         try:
             mode = path.lstat().st_mode
@@ -867,8 +992,9 @@ def _validate_raw_slot_files(slot_path: Path, slot_id: str, root_latest: Path) -
 
 
 def _validate_output_root(root: Path) -> list[str]:
-    if device_lab.SECRET_RE.search(str(root)):
-        return ["raw output root path must not contain secret-looking material"]
+    path_errors = _path_shape_errors(root, "raw output root path")
+    if path_errors:
+        return path_errors
     root_exists, errors = device_lab.classify_device_lab_root_path(root)
     if errors:
         return errors
@@ -1432,9 +1558,10 @@ def _install_validated_slot(
                     return ["raw slot directory could not be installed"]
                 seen_top_level.add(child_name)
                 if child_name not in RAW_SLOT_ALLOWED_DIRECTORIES:
+                    display_child_name = device_lab._display_path(child_name)
                     return [
                         "raw slot install source contains unexpected top-level entry "
-                        f"{child_name}"
+                        f"{display_child_name}"
                     ]
                 try:
                     child_mode = os.stat(
@@ -1445,9 +1572,10 @@ def _install_validated_slot(
                 except OSError:
                     return ["raw slot directory could not be installed"]
                 if stat.S_ISLNK(child_mode) or not stat.S_ISDIR(child_mode):
+                    display_child_name = device_lab._display_path(child_name)
                     return [
                         "raw slot install source contains unexpected top-level entry "
-                        f"{child_name}"
+                        f"{display_child_name}"
                     ]
 
             if seen_top_level != set(RAW_SLOT_ALLOWED_DIRECTORIES):
@@ -1548,6 +1676,9 @@ def pull_raw_slot(
         errors.extend(_validate_non_secret_adb_string(value, label))
     if args.serial:
         errors.extend(_validate_non_secret_adb_string(args.serial, "ADB serial"))
+    errors.extend(_path_shape_errors(args.out_root, "raw output root path"))
+    if args.summary_out is not None:
+        errors.extend(_path_shape_errors(args.summary_out, "raw pull summary output"))
     if args.adb_timeout_seconds <= 0:
         errors.append("--adb-timeout-seconds must be positive")
     if errors:

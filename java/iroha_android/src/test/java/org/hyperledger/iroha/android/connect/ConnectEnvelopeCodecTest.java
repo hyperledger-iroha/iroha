@@ -63,6 +63,11 @@ public final class ConnectEnvelopeCodecTest {
   private static void encodeSignResultOkRejectsConfusableAlgorithms() throws Exception {
     final byte[] signature = new byte[64];
     final String[] algorithms = {
+      "",
+      " ",
+      "ED25519",
+      " Ed25519 ",
+      "ed25519 ",
       "secp256k1",
       "ed\t25519",
       "ed\u200B25519",

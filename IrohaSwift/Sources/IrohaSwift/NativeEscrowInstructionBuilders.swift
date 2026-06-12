@@ -46,6 +46,14 @@ private enum NativeEscrowInstructionPayloadBuilder {
         }
     }
 
+    static func exactSelector(_ value: String, field: String) throws -> String {
+        guard !value.isEmpty,
+              value.trimmingCharacters(in: .whitespacesAndNewlines) == value else {
+            throw NativeEscrowInstructionBuilderError.invalidValue(field: field)
+        }
+        return value
+    }
+
     static func putOptional(_ payload: inout [String: Any], key: String, value: String?, field: String) throws {
         guard let value else {
             return
@@ -87,18 +95,19 @@ private enum NativeEscrowInstructionPayloadBuilder {
         guard let vkBackend = vkRef["backend"] as? String else {
             throw NativeEscrowInstructionBuilderError.invalidValue(field: "proof.vk_ref.backend")
         }
-        let normalizedVkBackend = vkBackend.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !normalizedVkBackend.isEmpty else {
-            throw NativeEscrowInstructionBuilderError.invalidValue(field: "proof.vk_ref.backend")
-        }
-        guard let vkName = vkRef["name"] as? String,
-              !vkName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        let exactVkBackend = try exactSelector(vkBackend, field: "proof.vk_ref.backend")
+        guard let vkName = vkRef["name"] as? String else {
             throw NativeEscrowInstructionBuilderError.invalidValue(field: "proof.vk_ref.name")
         }
-        if let backend = proof["backend"] as? String,
-           backend.trimmingCharacters(in: .whitespacesAndNewlines)
-             != normalizedVkBackend {
-            throw NativeEscrowInstructionBuilderError.invalidValue(field: "proof.vk_ref.backend")
+        _ = try exactSelector(vkName, field: "proof.vk_ref.name")
+        if let backendValue = proof["backend"] {
+            guard let backend = backendValue as? String else {
+                throw NativeEscrowInstructionBuilderError.invalidValue(field: "proof.backend")
+            }
+            let exactProofBackend = try exactSelector(backend, field: "proof.backend")
+            guard exactProofBackend == exactVkBackend else {
+                throw NativeEscrowInstructionBuilderError.invalidValue(field: "proof.vk_ref.backend")
+            }
         }
         payload["proof"] = proof
     }

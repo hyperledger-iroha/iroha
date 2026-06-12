@@ -98,10 +98,16 @@ public struct OfflineNoteProofBox: Equatable, Sendable {
         guard !trimmedBackend.isEmpty else {
             throw OfflineNoteError.emptyProofBackend
         }
+        guard trimmedBackend == backend else {
+            throw OfflineNoteError.unsupportedRecursiveProofBackend(
+                expected: OfflineNoteConstants.recursiveBackend,
+                actual: backend
+            )
+        }
         guard !bytes.isEmpty else {
             throw OfflineNoteError.emptyProofBytes
         }
-        self.backend = trimmedBackend
+        self.backend = backend
         self.bytes = bytes
     }
 }
@@ -175,6 +181,11 @@ public struct OfflineNoteKeyCertificatePayload: Equatable, Sendable {
                 assertionPublicKey: Data,
                 assertionUsageCountLimit: UInt32?,
                 oneUse: Bool) throws {
+        try OfflineNoteValidation.validateDomain(
+            domain,
+            expected: OfflineNoteConstants.keyCertificatePayloadDomain,
+            field: "domain"
+        )
         try OfflineNoteValidation.validateCertificateCore(
             version: version,
             accountId: accountId,
@@ -292,10 +303,10 @@ public struct OfflineNoteIssuerLoadOrigin: Equatable, Sendable {
     public let localRevision: UInt64
 
     public init(operationId: String, lineageId: String, localRevision: UInt64) throws {
-        guard !operationId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        guard isExactNonEmptyOfflineNoteMetadata(operationId) else {
             throw OfflineNoritoError.invalidMetadata("operation_id")
         }
-        guard !lineageId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        guard isExactNonEmptyOfflineNoteMetadata(lineageId) else {
             throw OfflineNoritoError.invalidMetadata("lineage_id")
         }
         self.operationId = operationId
@@ -309,12 +320,16 @@ public struct OfflineNoteP2pOutputOrigin: Equatable, Sendable {
     public let outputIndex: UInt32
 
     public init(paymentRequestId: String, outputIndex: UInt32) throws {
-        guard !paymentRequestId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        guard isExactNonEmptyOfflineNoteMetadata(paymentRequestId) else {
             throw OfflineNoritoError.invalidMetadata("payment_request_id")
         }
         self.paymentRequestId = paymentRequestId
         self.outputIndex = outputIndex
     }
+}
+
+private func isExactNonEmptyOfflineNoteMetadata(_ value: String) -> Bool {
+    !value.isEmpty && value.trimmingCharacters(in: .whitespacesAndNewlines) == value
 }
 
 public enum OfflineNoteCommitmentOrigin: Equatable, Sendable {
@@ -345,7 +360,7 @@ public struct OfflineNoteCommitmentPreimage: Equatable, Sendable {
                 actual: domain
             )
         }
-        guard !chainId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        guard isExactNonEmptyOfflineNoteMetadata(chainId) else {
             throw OfflineNoritoError.invalidMetadata("chain_id")
         }
         try OfflineNoteValidation.validateHash(
@@ -393,7 +408,7 @@ public struct OfflineNoteInputNullifierPreimage: Equatable, Sendable {
                 actual: domain
             )
         }
-        guard !chainId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        guard isExactNonEmptyOfflineNoteMetadata(chainId) else {
             throw OfflineNoritoError.invalidMetadata("chain_id")
         }
         try OfflineNoteValidation.validateHash(sourceNoteCommitment, field: "source_note_commitment")
@@ -446,10 +461,10 @@ public struct OfflineNotePaymentTokenIdPreimage: Equatable, Sendable {
                 actual: domain
             )
         }
-        guard !chainId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        guard isExactNonEmptyOfflineNoteMetadata(chainId) else {
             throw OfflineNoritoError.invalidMetadata("chain_id")
         }
-        guard !paymentRequestId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        guard isExactNonEmptyOfflineNoteMetadata(paymentRequestId) else {
             throw OfflineNoritoError.invalidMetadata("payment_request_id")
         }
         try OfflineNoteValidation.validateRandomBytes(tokenNonce, field: "token_nonce")
@@ -526,6 +541,11 @@ public struct OfflineNoteIssuedClaim: Equatable, Sendable {
                 keyCertificatePayloadHash: Data,
                 assetId: String,
                 amount: String) throws {
+        try OfflineNoteValidation.validateDomain(
+            domain,
+            expected: OfflineNoteConstants.issuedClaimDomain,
+            field: "domain"
+        )
         try OfflineNoteValidation.validateHash(noteCommitment, field: "note_commitment")
         try OfflineNoteValidation.validateHash(
             keyCertificatePayloadHash,
@@ -611,6 +631,11 @@ public struct OfflineNoteRedeemPublicInputs: Equatable, Sendable {
                 recipient: String,
                 assetId: String,
                 amount: String) throws {
+        try OfflineNoteValidation.validateDomain(
+            domain,
+            expected: OfflineNoteConstants.redeemPublicInputsDomain,
+            field: "domain"
+        )
         try OfflineNoteValidation.validateHash(sourceNoteCommitment, field: "source_note_commitment")
         try OfflineNoteValidation.validateHashes(inputNullifiers, field: "input_nullifiers")
         try OfflineNoteValidation.validateHash(
@@ -737,6 +762,11 @@ public struct OfflineNoteAuditPublicInputs: Equatable, Sendable {
                 inputClaims: [OfflineNoteIssuedClaim],
                 outputCommitments: [Data],
                 outputClaims: [OfflineNoteIssuedClaim]) throws {
+        try OfflineNoteValidation.validateDomain(
+            domain,
+            expected: OfflineNoteConstants.auditPublicInputsDomain,
+            field: "domain"
+        )
         try OfflineNoteValidation.validateHash(tokenId, field: "token_id")
         try OfflineNoteValidation.validateHash(
             keyCertificatePayloadHash,
@@ -1059,6 +1089,16 @@ enum OfflineNoteTypeNames {
 }
 
 enum OfflineNoteValidation {
+    static func validateDomain(_ value: String, expected: String, field: String) throws {
+        guard value == expected else {
+            throw OfflineNoteError.unsupportedDerivationDomain(
+                field: field,
+                expected: expected,
+                actual: value
+            )
+        }
+    }
+
     static func validateHash(_ value: Data, field: String) throws {
         guard value.count == 32 else {
             throw OfflineNoteError.invalidHashLength(field: field, expected: 32, actual: value.count)
