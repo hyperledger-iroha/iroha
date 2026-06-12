@@ -3554,7 +3554,7 @@ mod tests {
             .expect_err("ML-DSA signing RNG failure must fail closed");
 
         assert!(
-            matches!(err, Error::Signing(message) if message.contains("hedged RNG seed draw failed")),
+            matches!(err, Error::Signing(ref message) if message.contains("hedged RNG seed draw failed")),
             "unexpected error: {err:?}"
         );
     }
@@ -3569,7 +3569,7 @@ mod tests {
             .expect_err("all-zero ML-DSA signing seed material must fail closed");
 
         assert!(
-            matches!(err, Error::Signing(message) if message.contains("all-zero material")),
+            matches!(err, Error::Signing(ref message) if message.contains("all-zero material")),
             "unexpected error: {err:?}"
         );
     }

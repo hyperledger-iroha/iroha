@@ -356,7 +356,7 @@ impl LaneState {
             !(expired || too_far)
         });
 
-        self.entries.is_empty()
+        self.entries.is_empty() && self.stale_floor.is_none()
     }
 
     fn enforce_capacity(&mut self, config: &ReplayCacheConfig) {
@@ -625,6 +625,37 @@ mod tests {
                 assert_eq!(highest_observed, 50);
             }
             other => panic!("expected stale sequence due to primed floor, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn prime_floor_survives_ttl_pruning() {
+        let config = ReplayCacheConfig::new()
+            .with_ttl(Duration::from_millis(10))
+            .with_max_sequence_lag(4096);
+        let cache = ReplayCache::new(config);
+        let lane_epoch = LaneEpoch::new(LaneId::SINGLE, 8);
+        let base = Instant::now();
+        cache.prime_lane_epoch(lane_epoch, 50);
+
+        assert!(matches!(
+            cache.insert(
+                ReplayKey::new(lane_epoch, 51, fingerprint(51)),
+                base + Duration::from_millis(1),
+            ),
+            ReplayInsertOutcome::Fresh { .. }
+        ));
+
+        let outcome = cache.insert(
+            ReplayKey::new(lane_epoch, 50, fingerprint(50)),
+            base + Duration::from_millis(20),
+        );
+
+        match outcome {
+            ReplayInsertOutcome::StaleSequence { highest_observed } => {
+                assert_eq!(highest_observed, 51);
+            }
+            other => panic!("expected primed floor to survive TTL pruning, got {other:?}"),
         }
     }
 }

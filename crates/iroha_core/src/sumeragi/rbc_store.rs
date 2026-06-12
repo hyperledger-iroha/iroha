@@ -1104,13 +1104,7 @@ impl PersistedSession {
     }
 
     fn key_mismatch_with_path(&self, path: &Path) -> bool {
-        // Try to ensure filenames roughly align with key. Mismatch is non-fatal but aids debugging.
-        path.file_stem()
-            .and_then(|s| s.to_str())
-            .is_some_and(|stem| {
-                let expected_hex = hex::encode(self.block_hash.as_ref().as_ref());
-                !stem.starts_with(&expected_hex)
-            })
+        parse_session_key_from_path(path).is_none_or(|key| key != self.key())
     }
 
     /// Wall-clock `SystemTime` when the session was last updated, if representable.
@@ -1122,6 +1116,24 @@ impl PersistedSession {
     pub fn payload_bytes_len(&self) -> usize {
         self.chunks.iter().map(|chunk| chunk.bytes.len()).sum()
     }
+}
+
+fn parse_session_key_from_path(path: &Path) -> Option<SessionKey> {
+    let name = path.file_name()?.to_str()?;
+    let stem = name
+        .strip_suffix(".norito")
+        .or_else(|| name.strip_suffix(".norito.tmp"))?;
+    let mut fields = stem.split('_');
+    let hash_hex = fields.next()?;
+    let height = fields.next()?.parse::<u64>().ok()?;
+    let view = fields.next()?.parse::<u64>().ok()?;
+    if fields.next().is_some() || hash_hex.len() != Hash::LENGTH * 2 {
+        return None;
+    }
+    let mut hash_bytes = [0; Hash::LENGTH];
+    hex::decode_to_slice(hash_hex, &mut hash_bytes).ok()?;
+    let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(hash_bytes));
+    Some((block_hash, height, view))
 }
 
 /// Persisted RBC chunk representation (index + bytes).
@@ -2160,21 +2172,25 @@ mod tests {
     }
 
     #[test]
-    fn persisted_invalid_session_roundtrips_as_invalid() {
+    fn persisted_invalid_session_is_rejected() {
         let key = session_key(9);
         let chain_hash = test_chain_hash();
         let manifest = test_manifest();
         let roster = vec![test_peer_id(1)];
 
         let mut session = RbcSession::test_new(1, None, None, 0);
-        session.record_ready(1, vec![0xAA]);
-        session.record_ready(1, vec![0xBB]);
-        assert!(session.is_invalid());
+        session.test_note_chunk(0, vec![0xAA; 8], 0);
 
-        let persisted = session.to_persisted(key, chain_hash, &manifest, &roster);
-        let rebuilt = RbcSession::from_persisted_unchecked(&persisted).expect("rebuild session");
-        assert!(rebuilt.is_invalid());
-        assert!(rebuilt.recovered_from_disk());
+        let mut persisted = session.to_persisted(key, chain_hash, &manifest, &roster);
+        persisted.invalid = true;
+
+        let err = RbcSession::from_persisted_unchecked(&persisted);
+        assert!(matches!(
+            err,
+            Err(
+                crate::sumeragi::main_loop::PersistedLoadError::InvalidMetadata("invalid flag set")
+            )
+        ));
     }
 
     #[test]
@@ -2289,6 +2305,38 @@ mod tests {
             "path/key mismatch",
             wrong_path_key,
             mismatched_key,
+            chain_hash,
+            manifest.clone(),
+        );
+
+        let same_hash_key = session_key(23);
+        let same_hash_path_key = (
+            same_hash_key.0.clone(),
+            same_hash_key.1 + 1,
+            same_hash_key.2,
+        );
+        let same_hash_mismatched_height =
+            sample_persisted_session(same_hash_key, chain_hash, manifest.clone());
+        assert_persisted_session_rejected_and_deleted(
+            "same-hash path/height mismatch",
+            same_hash_path_key,
+            same_hash_mismatched_height,
+            chain_hash,
+            manifest.clone(),
+        );
+
+        let same_hash_key = session_key(24);
+        let same_hash_path_key = (
+            same_hash_key.0.clone(),
+            same_hash_key.1,
+            same_hash_key.2 + 1,
+        );
+        let same_hash_mismatched_view =
+            sample_persisted_session(same_hash_key, chain_hash, manifest.clone());
+        assert_persisted_session_rejected_and_deleted(
+            "same-hash path/view mismatch",
+            same_hash_path_key,
+            same_hash_mismatched_view,
             chain_hash,
             manifest.clone(),
         );
@@ -2816,7 +2864,6 @@ mod tests {
     fn from_persisted_rejects_zero_total_chunks() {
         let mut session = RbcSession::test_new(1, None, None, 0);
         session.test_note_chunk(0, vec![1, 2, 3], 0);
-        session.test_set_delivered(true);
         let chain_hash = test_chain_hash();
         let manifest = test_manifest();
         let key = session_key(14);
@@ -2848,16 +2895,38 @@ mod tests {
     }
 
     #[test]
+    fn from_persisted_rejects_ready_metadata_without_roster() {
+        let mut session = RbcSession::test_new(1, None, None, 0);
+        session.test_note_chunk(0, vec![4, 5, 6], 0);
+        session.record_ready(0, vec![0xAA]);
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let key = session_key(19);
+        let persisted = session.to_persisted(key, chain_hash, &manifest, &[]);
+
+        let err = RbcSession::from_persisted_unchecked(&persisted);
+        assert!(matches!(
+            err,
+            Err(
+                crate::sumeragi::main_loop::PersistedLoadError::InvalidMetadata(
+                    "READY metadata without session roster"
+                )
+            )
+        ));
+    }
+
+    #[test]
     fn from_persisted_demotes_delivered_without_chunk_bytes_for_repair() {
         let mut session = RbcSession::test_new(2, None, None, 0);
         session.test_note_chunk(0, vec![5, 5, 5], 0);
         session.test_note_chunk(1, vec![6, 6, 6], 0);
-        session.test_set_delivered(true);
         session.test_set_sent_ready(true);
+        session.record_deliver(0, vec![0xDA; 64]);
         let chain_hash = test_chain_hash();
         let manifest = test_manifest();
         let key = session_key(8);
-        let mut persisted = session.to_persisted(key, chain_hash, &manifest, &[]);
+        let roster = vec![test_peer_id(1)];
+        let mut persisted = session.to_persisted(key, chain_hash, &manifest, &roster);
         persisted.chunks.clear();
         persisted.delivered = true;
         let mut rebuilt =
@@ -2881,22 +2950,27 @@ mod tests {
     }
 
     #[test]
-    fn from_persisted_clears_deliver_metadata_when_not_delivered() {
+    fn from_persisted_rejects_deliver_metadata_when_not_delivered() {
         let mut session = RbcSession::test_new(1, None, None, 0);
         session.test_note_chunk(0, vec![1, 2, 3], 0);
         let chain_hash = test_chain_hash();
         let manifest = test_manifest();
         let key = session_key(17);
-        let mut persisted = session.to_persisted(key, chain_hash, &manifest, &[]);
+        let roster = vec![test_peer_id(1)];
+        let mut persisted = session.to_persisted(key, chain_hash, &manifest, &roster);
         persisted.delivered = false;
         persisted.deliver_sender = Some(0);
         persisted.deliver_signature = Some(vec![0xAA]);
 
-        let rebuilt = RbcSession::from_persisted_unchecked(&persisted).expect("rebuild session");
-        let roundtrip = rebuilt.to_persisted(key, chain_hash, &manifest, &[]);
-        assert!(!roundtrip.delivered);
-        assert_eq!(roundtrip.deliver_sender, None);
-        assert_eq!(roundtrip.deliver_signature, None);
+        let err = RbcSession::from_persisted_unchecked(&persisted);
+        assert!(matches!(
+            err,
+            Err(
+                crate::sumeragi::main_loop::PersistedLoadError::InvalidMetadata(
+                    "deliver metadata without delivered flag"
+                )
+            )
+        ));
     }
 
     #[test]
@@ -2904,12 +2978,13 @@ mod tests {
         let mut session = RbcSession::test_new(2, None, None, 0);
         session.test_note_chunk(0, vec![5, 5, 5], 0);
         session.test_note_chunk(1, vec![6, 6, 6], 0);
-        session.test_set_delivered(true);
         session.test_set_sent_ready(true);
+        session.record_deliver(0, vec![0xDB; 64]);
         let chain_hash = test_chain_hash();
         let manifest = test_manifest();
         let key = session_key(16);
-        let persisted = session.to_persisted(key, chain_hash, &manifest, &[]);
+        let roster = vec![test_peer_id(1)];
+        let persisted = session.to_persisted(key, chain_hash, &manifest, &roster);
         let mut rebuilt =
             RbcSession::from_persisted_unchecked(&persisted).expect("rebuild session");
         assert_eq!(rebuilt.total_chunks(), 2);
@@ -2937,12 +3012,13 @@ mod tests {
         let payload_hash = Hash::new(&payload);
         let mut session = RbcSession::test_new(1, Some(payload_hash), None, 0);
         session.test_note_chunk(0, payload.clone(), 0);
-        session.test_set_delivered(true);
         session.test_set_sent_ready(true);
+        session.record_deliver(0, vec![0xDC; 64]);
         let chain_hash = test_chain_hash();
         let manifest = test_manifest();
         let key = session_key(18);
-        let persisted = session.to_persisted(key, chain_hash, &manifest, &[]);
+        let roster = vec![test_peer_id(1)];
+        let persisted = session.to_persisted(key, chain_hash, &manifest, &roster);
 
         let mut rebuilt =
             RbcSession::from_persisted_unchecked(&persisted).expect("rebuild session");
@@ -2996,6 +3072,53 @@ mod tests {
         assert_eq!(metadata.persisted_chunk_count, 2);
         assert!(!metadata.delivered);
         assert!(!metadata.invalid);
+    }
+
+    #[test]
+    fn load_session_from_dir_rejects_same_hash_height_view_rebound() {
+        let dir = tempdir().unwrap();
+        let body_key = session_key(50);
+        let path_key = (body_key.0.clone(), body_key.1 + 1, body_key.2 + 1);
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let persisted = persisted_single_chunk_session(body_key, chain_hash, &manifest, 0xD0, 8);
+        let path = write_persisted_session_at(dir.path(), &path_key, &persisted);
+
+        let loaded =
+            ChunkStore::load_session_from_dir(dir.path(), &path_key, &chain_hash, &manifest)
+                .expect("load session from dir");
+
+        assert!(
+            loaded.is_none(),
+            "direct restart recovery must reject same-hash height/view rebinding"
+        );
+        assert!(
+            !path.exists(),
+            "strict restart recovery must delete same-hash rebound snapshots"
+        );
+    }
+
+    #[test]
+    fn inspect_session_metadata_from_dir_rejects_same_hash_height_view_rebound() {
+        let dir = tempdir().unwrap();
+        let body_key = session_key(51);
+        let path_key = (body_key.0.clone(), body_key.1 + 1, body_key.2 + 1);
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let persisted = persisted_single_chunk_session(body_key, chain_hash, &manifest, 0xD2, 8);
+        let path = write_persisted_session_at(dir.path(), &path_key, &persisted);
+
+        let metadata = inspect_session_metadata_from_dir(dir.path(), &path_key, &chain_hash)
+            .expect("inspect metadata");
+
+        assert!(
+            metadata.is_none(),
+            "non-destructive inspection must reject same-hash height/view rebinding"
+        );
+        assert!(
+            path.exists(),
+            "non-destructive inspection must not delete peer-owned snapshots"
+        );
     }
 
     #[test]

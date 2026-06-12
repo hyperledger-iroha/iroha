@@ -45535,6 +45535,83 @@ impl RbcSession {
         }
     }
 
+    fn validate_persisted_rebuild_metadata(
+        persisted: &super::rbc_store::PersistedSession,
+    ) -> Result<(), PersistedLoadError> {
+        if persisted.invalid {
+            return Err(PersistedLoadError::InvalidMetadata("invalid flag set"));
+        }
+
+        let mut roster_seen = BTreeSet::new();
+        for peer in &persisted.session_roster {
+            if !roster_seen.insert(peer) {
+                return Err(PersistedLoadError::InvalidMetadata(
+                    "duplicate session roster peer",
+                ));
+            }
+        }
+
+        let roster_len = persisted.session_roster.len();
+        if !persisted.ready_signatures.is_empty() && roster_len == 0 {
+            return Err(PersistedLoadError::InvalidMetadata(
+                "READY metadata without session roster",
+            ));
+        }
+        if (persisted.delivered
+            || persisted.deliver_sender.is_some()
+            || persisted.deliver_signature.is_some())
+            && roster_len == 0
+        {
+            return Err(PersistedLoadError::InvalidMetadata(
+                "DELIVER metadata without session roster",
+            ));
+        }
+
+        let mut ready_seen = BTreeSet::new();
+        for ready in &persisted.ready_signatures {
+            if ready.signature.is_empty() {
+                return Err(PersistedLoadError::InvalidMetadata("empty READY signature"));
+            }
+            if !ready_seen.insert(ready.sender) {
+                return Err(PersistedLoadError::InvalidMetadata(
+                    "duplicate READY sender",
+                ));
+            }
+            if ready.sender as usize >= roster_len {
+                return Err(PersistedLoadError::InvalidMetadata(
+                    "READY sender exceeds roster length",
+                ));
+            }
+        }
+
+        if let Some(sender) = persisted.deliver_sender {
+            if sender as usize >= roster_len {
+                return Err(PersistedLoadError::InvalidMetadata(
+                    "DELIVER sender exceeds roster length",
+                ));
+            }
+        }
+        if persisted.delivered {
+            match (
+                persisted.deliver_sender,
+                persisted.deliver_signature.as_deref(),
+            ) {
+                (Some(_), Some(signature)) if !signature.is_empty() => {}
+                _ => {
+                    return Err(PersistedLoadError::InvalidMetadata(
+                        "delivered flag set without deliver sender/signature",
+                    ));
+                }
+            }
+        } else if persisted.deliver_sender.is_some() || persisted.deliver_signature.is_some() {
+            return Err(PersistedLoadError::InvalidMetadata(
+                "deliver metadata without delivered flag",
+            ));
+        }
+
+        Ok(())
+    }
+
     #[allow(clippy::too_many_lines)]
     pub(super) fn from_persisted_unchecked(
         persisted: &super::rbc_store::PersistedSession,
@@ -45551,6 +45628,7 @@ impl RbcSession {
 
         super::rbc_store::validate_allocations(persisted)
             .map_err(PersistedLoadError::InvalidAllocation)?;
+        Self::validate_persisted_rebuild_metadata(persisted)?;
 
         let PersistedSession {
             total_chunks,
@@ -46143,6 +46221,9 @@ pub enum PersistedLoadError {
     /// Persisted lane/dataspace allocation metadata was internally inconsistent.
     #[error("invalid persisted RBC allocation metadata: {0}")]
     InvalidAllocation(&'static str),
+    /// Persisted consensus metadata was malformed.
+    #[error("invalid persisted RBC metadata: {0}")]
+    InvalidMetadata(&'static str),
     /// Persisted snapshot advertises more chunks than supported.
     #[error("persisted RBC session exceeds chunk cap: {total_chunks} (cap {max_chunks})")]
     TooManyChunks {

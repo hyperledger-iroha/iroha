@@ -2,6 +2,132 @@
 
 Last updated: 2026-06-12
 
+## 2026-06-12 Torii DA Replay and Receipt Persistence Hardening
+
+- Fixed DA replay-cache pruning so a restart-primed lane/epoch floor survives
+  TTL eviction of cached fingerprints. Replayed sequences at or below the
+  persisted cursor now remain stale after the live cache window expires.
+- Hardened Torii DA ingest responses so durable receipt-log stale-sequence,
+  manifest-conflict, missing-outcome, and spool-write failures fail closed
+  instead of returning `202 Accepted` after artifact spool execution.
+- Removed the pre-validation `receipt_file` spool action from DA ingest; the
+  receipt log now remains the single path that writes `da-receipt-*` artifacts
+  after signature and ordering validation.
+- Hardened both the core DA receipt spool loader and Torii receipt-log
+  rehydration so `da-receipt-*` files must use the production
+  lane/epoch/sequence/ticket/fingerprint filename shape, and the decoded
+  Norito wrapper/body lane, epoch, sequence, and storage ticket must match
+  before receipts can advance local proposal or replay-cursor state.
+- Hardened stale DA receipt spool pruning to reuse the same validated receipt
+  decode path before trusting a file's lane and sequence, so mismatched
+  filename/body records are skipped rather than acted on during cleanup.
+- Hardened receipt-to-commitment alignment so duplicate commitment
+  lane/epoch/sequence keys in the candidate bundle fail closed instead of
+  silently selecting the first record during proposal filtering.
+- Hardened core DA commitment and pin-intent spool loaders so
+  `da-commitment-*` and `da-pin-intent-*` files must carry the production
+  lane/epoch/sequence/ticket/fingerprint filename shape, and the body-owned
+  lane, epoch, sequence, and storage ticket must match before they can enter a
+  proposal bundle or pin registry state.
+- Hardened Torii DA manifest and PDP commitment readback by storage ticket so
+  only production-shaped `manifest-*` and `pdp-commitment-*` filenames match,
+  malformed ticket-containing names are ignored, and duplicate strict matches
+  fail closed with `InvalidData` instead of returning an arbitrary directory
+  entry.
+- Hardened Torii DA manifest readback further by decoding the matched Norito
+  manifest body and verifying the filename lane, epoch, storage ticket, and
+  zero-ticket replay fingerprint against the body before returning bytes to
+  SoraFS clients.
+- Hardened Torii DA spool artifact writers so idempotent target-file collisions
+  are accepted only when the existing bytes exactly match the expected
+  manifest, PDP commitment, DA commitment, schedule entry, pin intent, or
+  receipt payload. Mismatched pre-existing files now return `InvalidData`.
+- Hardened Taikai DA anchor collection so pending `taikai-envelope-*` sidecars
+  must use the fixed production lane/epoch/sequence/ticket/fingerprint base id
+  before an anchor request body is assembled.
+- Hardened Taikai DA artifact persistence so envelope/index/SSM/TRM target-file
+  collisions are idempotent only when existing bytes match exactly; mismatched
+  pre-existing Taikai artifacts now return `InvalidData`.
+- Bound Torii DA operator receipt signatures to the durable sequence wrapper by
+  signing a versioned `(sequence, receipt-with-placeholder-signature)` payload.
+  Live append and restart rehydration now reject sequence-rebound receipts even
+  when the filename and wrapper are rewritten together.
+- Added adversarial coverage for primed-floor TTL pruning, stale/conflicting
+  receipt-log outcomes, missing receipt-log output, spool action errors,
+  filename/body tuple and ticket smuggling across receipt, commitment, and
+  pin-intent loaders, malformed receipt/commitment/pin-intent and Torii
+  readback filenames, duplicate manifest/PDP ticket readback matches,
+  malformed Taikai anchor base ids, sequence-rebound receipt signatures, and
+  rejected receipts not leaving extra durable receipt files.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib replay_cache -- --nocapture`
+  - `cargo test -p iroha_core --lib align_commitments -- --nocapture`
+  - `cargo test -p iroha_core --lib commitment_bundle -- --nocapture`
+  - `cargo test -p iroha_core --lib load_pin_intents -- --nocapture`
+  - `cargo test -p iroha_core --lib load_receipt_entries -- --nocapture`
+  - `cargo test -p iroha_core --lib prune_spool -- --nocapture`
+  - `cargo test -p iroha_core --lib receipts -- --nocapture`
+  - `cargo test -p iroha_torii load_manifest_from_spool --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii load_pdp_commitment_from_spool --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii persist_spool_artifacts_reject_existing_mismatched_targets --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii persist_ --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii taikai_anchor_collection_skips_malformed_base_id --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii taikai_artifacts_persist_idempotent --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii build_receipt_signs_with_operator_key --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii da_receipt_log --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii load_da_receipts --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii da_receipt_log_skips_filename_body_mismatch_on_open --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii da_receipt_log_skips_filename --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii da_receipt_log_skips --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii da_spool_rejection_response --features app_api -- --nocapture`
+
+## 2026-06-12 RBC persisted rehydration metadata guard
+
+- Hardened `RbcSession` rehydration so direct persisted-session rebuilds reject
+  invalid snapshots, duplicate persisted rosters, READY metadata without a
+  roster, malformed READY signatures, out-of-roster READY/DELIVER senders, and
+  stale DELIVER metadata instead of normalizing those shapes into live runtime
+  state.
+- Tightened persisted RBC session filename validation from hash-prefix matching
+  to exact `{block_hash}_{height}_{view}` key parsing for both `.norito` and
+  `.norito.tmp` files. Restart recovery now deletes same-hash height/view
+  rebound snapshots, while non-destructive metadata inspection rejects them
+  without removing peer-owned files.
+- Kept valid recovered DELIVER hints as restart-only hints: snapshots with
+  proper roster and signature metadata are still demoted on rebuild and must be
+  re-derived from fresh network evidence before entering terminal delivery.
+- Added direct rehydration regressions for invalid snapshots, READY metadata
+  without a roster, stale DELIVER metadata, and same-hash filename/key
+  rebinding, while refreshing the recovered delivery fixtures to carry
+  production-like roster/signature metadata.
+- Testing:
+  - `cargo test -p iroha_core --lib rbc_store -- --nocapture`
+
+## 2026-06-12 RBC INIT authoritative chunk-root merge
+
+- Hardened RBC INIT merge behavior so a chunk root inferred from pre-INIT peer
+  READY/DELIVER evidence is replaced by the verified leader INIT chunk root
+  once INIT arrives. Roots backed by existing payload hashes or digest metadata
+  still reject mismatches.
+- Applied the same advisory-root distinction to local RBC seed-result merges so
+  locally reconstructed payload metadata can replace a wrong inferred peer root
+  without marking the session invalid.
+- Applied the same rule to direct local payload hydration, keeping
+  payload-backed root mismatches terminal while allowing local authoritative
+  hydration to replace an otherwise unbacked inferred root.
+- Refreshed the cached-chunk cleanup fixture so it seeds the session cache
+  directly and remains focused on INIT digest cleanup rather than current chunk
+  ingress policy.
+- Added a feature-gated regression where a session starts with an advisory
+  wrong root and a valid INIT replaces it without invalidating the session, plus
+  the analogous local seed-result regression.
+- Testing:
+  - `cargo test -p iroha_core --lib handle_rbc_init_replaces_preinit_inferred_chunk_root --features sumeragi-main-loop-tests -- --nocapture`
+  - `cargo test -p iroha_core --lib handle_rbc_init_ --features sumeragi-main-loop-tests -- --nocapture`
+  - `cargo test -p iroha_core --lib rbc_seed_result_replaces_preseed_inferred_chunk_root --features sumeragi-main-loop-tests -- --nocapture`
+  - `cargo test -p iroha_core --lib rbc_seed_result_ --features sumeragi-main-loop-tests -- --nocapture`
+  - `cargo test -p iroha_core --lib hydrated_payload_ --features sumeragi-main-loop-tests -- --nocapture`
+
 ## 2026-06-12 DA committed-duplicate rejection
 
 - Hardened state-backed DA commitment validation so inbound blocks cannot reuse
@@ -136,6 +262,50 @@ Last updated: 2026-06-12
   - `cargo fmt --all -- --check`
   - `git diff --check`
   - `git diff --quiet -- Cargo.lock`
+
+## 2026-06-12 user config test seed regression
+
+- Replaced the user config test fixture's all-zero deterministic Ed25519 seed
+  with named nonzero seed material so the fixture remains deterministic while
+  respecting the crypto layer's all-zero seed rejection.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha config::user::tests -- --nocapture` (`12` passed)
+
+## 2026-06-12 SCCP BSC verifier G2 curve validation
+
+- Hardened `scripts/sccp_bsc_taira_xor_deploy.mjs` so BSC Groth16 verifier
+  material validates `beta2`, `gamma2`, and `delta2` as BN254 G2 twist-curve
+  points instead of only checking that their coordinates fit field ranges.
+- Updated the deploy-helper verifier fixtures to use valid G2 material and added
+  adversarial coverage for scalar-field-valid but off-curve G2 vectors and
+  out-of-field G2 coordinates before deployment evidence can be accepted.
+- Validation:
+  - `node --check scripts/sccp_bsc_taira_xor_deploy.mjs`
+  - `node --check scripts/sccp_bsc_taira_xor_deploy.test.mjs`
+  - `node --test scripts/sccp_bsc_taira_xor_deploy.test.mjs` (`32 passed`)
+
+## 2026-06-12 native gas sponsor allowlist regression
+
+- Fixed direct executor fee sponsorship so the DPN sponsored-contract
+  allowlist is enforced only when Nexus fees are enabled, non-exempt, and
+  nonzero. Native ISI transactions can still use an authorized `fee_sponsor`
+  for pipeline gas settlement when Nexus fees are not active, while active
+  Nexus-sponsored native batches remain rejected.
+- Replaced the default in-memory state streaming key material's all-zero
+  deterministic Ed25519 seed with a named nonzero deterministic seed, matching
+  the crypto layer's inert-seed rejection.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --test iroha_core_group_03 isi_gas_fees::non_vm_instructions_can_charge_gas_to_fee_sponsor -- --exact --nocapture`
+    (`1` passed)
+  - `cargo test -p iroha_core --test iroha_core_group_03 isi_gas_fees::non_vm_instructions_can_charge_gas_to_fee_sponsor -- --nocapture`
+    (`2` passed)
+  - `cargo test -p iroha_core --lib native_batch -- --nocapture`
+    (`4` passed)
+  - `cargo test -p iroha_core --test iroha_core_group_03`
+    (`126` passed, `2` ignored)
+  - `git diff --check`
 
 ## 2026-06-12 Rustfmt edition default
 
@@ -98899,6 +99069,30 @@ Last updated: 2026-06-12
   - `node --check javascript/iroha_js/test/instructionBuilders.test.js`
 - Hygiene checks passed with no lockfile drift. The long-running Rust
   `connect_norito_bridge` proof test was still active and was not interrupted.
+
+## 2026-06-12 RBC/DA Pin Intent Proposal Identity Dedupe
+
+- Hardened DA pin-intent proposal work detection and bundle sealing so spool
+  records that collide with already committed `(lane, epoch, sequence)`,
+  manifest, or storage-ticket identities do not keep DA proposal work alive and
+  are not resealed under fresh lane tuples.
+- Added `DaPinStore::contains_intent_identity` with explicit alias-reassignment
+  semantics: aliases remain mutable shortcuts, while canonical pin identities
+  stay first-wins.
+- Hardened inbound block validation so DA pin-intent bundles fail closed when
+  they reuse an already committed lane tuple, manifest, or storage ticket from
+  the WSV pin-intent indexes instead of being silently dropped during apply.
+- Removed the stale, unreferenced `da/shard_cursors.rs` duplicate so shard
+  cursor maintenance targets the compiled `da/shard_cursor.rs` module.
+- Added adversarial coverage for committed pin-intent ticket/manifest
+  collisions in both proposal-work detection and block validation, while
+  preserving the positive fresh pin-intent proposal-work path.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib pin_store -- --nocapture`
+  - `cargo test -p iroha_core --lib internal_proposal_work_ --features sumeragi-main-loop-tests -- --nocapture`
+  - `cargo test -p iroha_core --lib da_pin_intent -- --nocapture`
+  - `cargo test -p iroha_core --lib shard_cursor -- --nocapture`
+  - `cargo fmt --all -- --check`
 
 ## 2026-06-03 - Reserved-lineage Malformed-Pallas Fixture Alignment
 

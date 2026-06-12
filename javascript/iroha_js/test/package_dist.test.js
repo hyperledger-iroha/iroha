@@ -717,6 +717,7 @@ const DIST_INDEX_TEXT = readFileSync(new URL("../dist/index.js", import.meta.url
 const PACKAGE_JSON_TEXT = readFileSync(new URL("../package.json", import.meta.url), "utf8");
 const sha256Hex = (bytes) =>
   `0x${createHash("sha256").update(Buffer.from(bytes)).digest("hex")}`;
+const fixtureHash = (label) => sha256Hex(Buffer.from(label, "utf8"));
 
 function publicSccpSourceExports() {
   return [...SCCP_SOURCE_TEXT.matchAll(/export\s+(?:const|function|class)\s+([A-Za-z0-9_]+)/gu)]
@@ -5978,12 +5979,16 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
         : `0x${(index + 1).toString(16).padStart(2, "0").repeat(32)}`,
     })),
     audit_hashes: {
-      circuit_security_audit: `0x${"a1".repeat(32)}`,
-      native_implementation_audit: `0x${"a2".repeat(32)}`,
-      reproducible_build_attestation: `0x${"a3".repeat(32)}`,
-      cross_sdk_fixture_parity: `0x${"a4".repeat(32)}`,
-      native_prover_self_test: `0x${"a5".repeat(32)}`,
-      no_wasm_no_remote_scan: `0x${"a6".repeat(32)}`,
+      circuit_security_audit: fixtureHash("dist eth circuit security audit"),
+      native_implementation_audit: fixtureHash(
+        "dist eth native implementation audit",
+      ),
+      reproducible_build_attestation: fixtureHash(
+        "dist eth reproducible build attestation",
+      ),
+      cross_sdk_fixture_parity: fixtureHash("dist eth cross-SDK parity audit"),
+      native_prover_self_test: fixtureHash("dist eth native self-test audit"),
+      no_wasm_no_remote_scan: fixtureHash("dist eth no-wasm no-remote scan"),
     },
   };
   const publicSignalWords = Array.from(

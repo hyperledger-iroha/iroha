@@ -519,6 +519,9 @@ pub(super) fn apply_hydrated_payload(
     chunk_max_bytes: usize,
 ) -> HydrationOutcome {
     let mut outcome = HydrationOutcome::default();
+    let existing_chunk_root_was_inferred = session.expected_chunk_root.is_some()
+        && session.expected_chunk_digests.is_none()
+        && session.payload_hash().is_none();
     if payload_bytes.is_empty() {
         session.invalid = true;
         outcome.updated = true;
@@ -643,8 +646,13 @@ pub(super) fn apply_hydrated_payload(
         if let Some(observed_root) = observed_root {
             if let Some(expected_root) = session.expected_chunk_root {
                 if expected_root != observed_root {
-                    session.invalid = true;
-                    outcome.chunk_root_mismatch = true;
+                    if existing_chunk_root_was_inferred {
+                        session.expected_chunk_root = Some(observed_root);
+                        outcome.updated = true;
+                    } else {
+                        session.invalid = true;
+                        outcome.chunk_root_mismatch = true;
+                    }
                 }
             } else {
                 session.expected_chunk_root = Some(observed_root);
@@ -4248,6 +4256,9 @@ impl Actor {
         let near_frontier = key.1 <= frontier_height.saturating_add(1);
         let needs_missing_roster_recovery = near_frontier && !roster_source.is_authoritative();
         if let Some(mut session) = self.subsystems.da_rbc.rbc.sessions.remove(&key) {
+            let existing_chunk_root_was_inferred = session.expected_chunk_root.is_some()
+                && session.expected_chunk_digests.is_none()
+                && session.payload_hash().is_none();
             if session.layout().payload_size_known() && init_layout.payload_size_known() {
                 if session.layout() != init_layout {
                     warn!(
@@ -4301,7 +4312,19 @@ impl Actor {
                     "dropping cached RBC chunks that mismatch INIT digests"
                 );
             }
-            if session.expected_chunk_root.is_none() {
+            if existing_chunk_root_was_inferred {
+                if session.expected_chunk_root != Some(init.chunk_root) {
+                    debug!(
+                        height = init.height,
+                        view = init.view,
+                        block = %init.block_hash,
+                        inferred = ?session.expected_chunk_root,
+                        authoritative = ?init.chunk_root,
+                        "replacing pre-INIT inferred RBC chunk root with verified INIT root"
+                    );
+                }
+                session.expected_chunk_root = Some(init.chunk_root);
+            } else if session.expected_chunk_root.is_none() {
                 session.expected_chunk_root = Some(init.chunk_root);
             }
             let complete_chunk_set =
@@ -7422,6 +7445,10 @@ impl Actor {
                     let mut session = if let Some(existing) =
                         self.subsystems.da_rbc.rbc.sessions.remove(&key)
                     {
+                        let existing_chunk_root_was_inferred =
+                            existing.expected_chunk_root.is_some()
+                                && existing.expected_chunk_digests.is_none()
+                                && existing.payload_hash().is_none();
                         let mut mismatch = existing.total_chunks != seeded.total_chunks;
                         if existing.epoch != seeded.epoch {
                             mismatch = true;
@@ -7442,7 +7469,7 @@ impl Actor {
                         if let (Some(expected), Some(seed_root)) =
                             (existing.expected_chunk_root, seeded.expected_chunk_root)
                         {
-                            if expected != seed_root {
+                            if expected != seed_root && !existing_chunk_root_was_inferred {
                                 mismatch = true;
                             }
                         }
@@ -7464,7 +7491,9 @@ impl Actor {
                             if existing.expected_chunk_digests.is_none() {
                                 existing.expected_chunk_digests = seeded.expected_chunk_digests;
                             }
-                            if existing.expected_chunk_root.is_none() {
+                            if existing_chunk_root_was_inferred {
+                                existing.expected_chunk_root = seeded.expected_chunk_root;
+                            } else if existing.expected_chunk_root.is_none() {
                                 existing.expected_chunk_root = seeded.expected_chunk_root;
                             }
                             if existing.received_chunks < existing.total_chunks {
