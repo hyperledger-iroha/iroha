@@ -14,7 +14,7 @@ public final class ConfidentialNoteTests {
     constructorsAndAccessorsAreDefensive();
     rejectsMalformedAndAmbiguousInputs();
     derivationsAreDomainSeparated();
-    decryptionFailsClosedUntilPlaintextContractExists();
+    encryptsAndDecryptsPlaintextContract();
     System.out.println("[IrohaAndroid] ConfidentialNoteTests passed.");
   }
 
@@ -106,15 +106,75 @@ public final class ConfidentialNoteTests {
         : "nullifier must change with chain/rho";
   }
 
-  private static void decryptionFailsClosedUntilPlaintextContractExists() {
+  private static void encryptsAndDecryptsPlaintextContract() {
+    final byte[] spendKey = repeated(0x11, 32);
+    final ConfidentialNoteOpening opening =
+        ConfidentialNoteOpening.fromSpendKey(
+            repeated(0x22, 32), spendKey, "rose#wonderland", "confidential-sdk-chain", "7");
+    final byte[] recipientPrivateKey = repeated(0x55, 32);
+    final byte[] recipientPublicKey =
+        ConfidentialNoteEncryption.publicKeyFromPrivateKey(recipientPrivateKey);
+    final byte[] ephemeralPrivateKey = repeated(0x66, 32);
+    final byte[] nonce = repeated(0x77, 24);
+
     final ConfidentialEncryptedPayload payload =
-        new ConfidentialEncryptedPayload(repeated(0x11, 32), repeated(0x22, 24), new byte[] {0x33});
-    try {
-      ConfidentialNoteDecryption.decryptNote(payload, repeated(0x44, 32));
-      throw new AssertionError("expected fail-closed decryption");
-    } catch (final UnsupportedOperationException expected) {
-      assert expected.getMessage().contains("plaintext layout") : "wrong message";
-    }
+        ConfidentialNoteEncryption.encryptNote(
+            opening, recipientPublicKey, ephemeralPrivateKey, nonce);
+    final ConfidentialNoteOpening decrypted =
+        ConfidentialNoteDecryption.decryptNote(
+            payload, recipientPrivateKey, spendKey, "confidential-sdk-chain");
+
+    assert payload.version() == ConfidentialEncryptedPayload.VERSION_V1 : "wrong payload version";
+    assertBytes("recipient public key",
+        "38ab664bd86f77d7e66bdd9ae0792913a94fd8b33a1260027e4b46c1f4884c67",
+        recipientPublicKey);
+    assert Arrays.equals(
+            ConfidentialNoteEncryption.publicKeyFromPrivateKey(ephemeralPrivateKey),
+            payload.ephemeralPublicKey())
+        : "wrong ephemeral public key";
+    assertBytes("ephemeral public key",
+        "219e4d800da968d2a5fcb009c784f4746c7138edb9ee4844b739e830b05cf424",
+        payload.ephemeralPublicKey());
+    assert Arrays.equals(nonce, payload.nonce()) : "wrong nonce";
+    assertBytes("ciphertext",
+        "86c7d4b51314553a9f72fa2207969a7bec6626e3c75943c5c7794a660ed54e76"
+            + "371555e888bde13b513f434beef43f5558f1d8fdcd63ac6f40a42c6c90bf26e07d0"
+            + "26dd8a3c632afae83d0aea120fa2886dc97f1dc8a91c6b78de3a57e22da75d217e"
+            + "4924da954b2b2a758df8cacb2ea153d70a756b7f1b8921e",
+        payload.ciphertext());
+    assertOpeningEquals(opening, decrypted);
+    assert Arrays.equals(
+            ConfidentialNoteCommitment.deriveFromOpening(opening),
+            ConfidentialNoteCommitment.deriveFromOpening(decrypted))
+        : "commitment changed after decrypt";
+    assert Arrays.equals(
+            ConfidentialNoteNullifier.deriveFromOpening(opening),
+            ConfidentialNoteNullifier.deriveFromOpening(decrypted))
+        : "nullifier changed after decrypt";
+
+    final byte[] tamperedCiphertext = payload.ciphertext();
+    tamperedCiphertext[tamperedCiphertext.length - 1] =
+        (byte) (tamperedCiphertext[tamperedCiphertext.length - 1] ^ 0x01);
+    final ConfidentialEncryptedPayload tamperedPayload =
+        new ConfidentialEncryptedPayload(
+            payload.ephemeralPublicKey(), payload.nonce(), tamperedCiphertext);
+    expectSecurityException(
+        () -> ConfidentialNoteDecryption.decryptNote(tamperedPayload, recipientPrivateKey, spendKey));
+    expectSecurityException(
+        () -> ConfidentialNoteDecryption.decryptNote(payload, repeated(0x56, 32), spendKey));
+    expectThrows(
+        () -> ConfidentialNoteDecryption.decryptNote(
+            payload, recipientPrivateKey, spendKey, "other-chain"));
+  }
+
+  private static void assertOpeningEquals(
+      final ConfidentialNoteOpening expected, final ConfidentialNoteOpening actual) {
+    assert Arrays.equals(expected.rho(), actual.rho()) : "rho changed";
+    assert Arrays.equals(expected.spendKey(), actual.spendKey()) : "spendKey changed";
+    assert Arrays.equals(expected.ownerTag(), actual.ownerTag()) : "ownerTag changed";
+    assert expected.asset().equals(actual.asset()) : "asset changed";
+    assert expected.chainId().equals(actual.chainId()) : "chainId changed";
+    assert expected.amount().equals(actual.amount()) : "amount changed";
   }
 
   private static void assertBytes(final String label, final String expectedHex, final byte[] actual) {
@@ -154,6 +214,15 @@ public final class ConfidentialNoteTests {
       runnable.run();
       throw new AssertionError("expected IllegalArgumentException");
     } catch (final IllegalArgumentException expected) {
+      // Expected path.
+    }
+  }
+
+  private static void expectSecurityException(final Runnable runnable) {
+    try {
+      runnable.run();
+      throw new AssertionError("expected SecurityException");
+    } catch (final SecurityException expected) {
       // Expected path.
     }
   }

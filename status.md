@@ -2,6 +2,25 @@
 
 Last updated: 2026-06-13
 
+## 2026-06-13 Confidential note payload encryption SDK contract
+
+- Defined the mobile SDK confidential-v2 note plaintext contract behind the
+  existing `ConfidentialEncryptedPayload` envelope: plaintext version `1`
+  contains `rho`, `owner_tag`, `asset`, `chain_id`, and canonical decimal
+  `amount` so decrypted notes are self-contained and can derive commitments and
+  nullifiers without caller-supplied hidden fields.
+- Added Kotlin/JVM and Android Java X25519/HKDF-SHA256/XChaCha20-Poly1305 note
+  encryption and authenticated decryption helpers, including optional
+  expected-chain validation, defensive key/plaintext wiping, deterministic
+  payload vectors shared by both SDKs, canonical varint checks, and strict UTF-8
+  plaintext decoding.
+- Added adversarial coverage for ciphertext tampering, wrong-recipient keys,
+  and wrong-chain use so wallet callers cannot accidentally treat unauthenticated
+  or cross-chain payloads as spendable notes.
+- Validation passed:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.privacy.ConfidentialNoteTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.privacy.ConfidentialNoteTests ./gradlew :jvm:test --rerun-tasks --console=plain`
+
 ## 2026-06-13 Confidential note derivation SDK primitives
 
 - Added Kotlin/JVM and Android Java confidential-v2 note opening models plus

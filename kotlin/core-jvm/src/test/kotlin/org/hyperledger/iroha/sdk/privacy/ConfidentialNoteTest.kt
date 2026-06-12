@@ -2,6 +2,7 @@ package org.hyperledger.iroha.sdk.privacy
 
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
+import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
 import org.hyperledger.iroha.sdk.core.model.instructions.ConfidentialEncryptedPayload
@@ -124,16 +125,93 @@ class ConfidentialNoteTest {
     }
 
     @Test
-    fun decryptionFailsClosedUntilPlaintextContractExists() {
-        val payload = ConfidentialEncryptedPayload(
-            ephemeralPublicKey = repeated(0x11, 32),
-            nonce = repeated(0x22, 24),
-            ciphertext = byteArrayOf(0x33),
+    fun encryptsAndDecryptsPlaintextContract() {
+        val spendKey = repeated(0x11, 32)
+        val opening = ConfidentialNoteOpening.fromSpendKey(
+            repeated(0x22, 32),
+            spendKey,
+            "rose#wonderland",
+            "confidential-sdk-chain",
+            "7",
+        )
+        val recipientPrivateKey = repeated(0x55, 32)
+        val recipientPublicKey =
+            ConfidentialNoteEncryption.publicKeyFromPrivateKey(recipientPrivateKey)
+        val ephemeralPrivateKey = repeated(0x66, 32)
+        val nonce = repeated(0x77, 24)
+
+        val payload = ConfidentialNoteEncryption.encryptNote(
+            opening,
+            recipientPublicKey,
+            ephemeralPrivateKey,
+            nonce,
+        )
+        val decrypted = ConfidentialNoteDecryption.decryptNote(
+            payload,
+            recipientPrivateKey,
+            spendKey,
+            "confidential-sdk-chain",
         )
 
-        assertFailsWith<UnsupportedOperationException> {
-            ConfidentialNoteDecryption.decryptNote(payload, repeated(0x44, 32))
+        assertEquals(ConfidentialEncryptedPayload.VERSION_V1, payload.version)
+        assertContentEquals(
+            hex("38ab664bd86f77d7e66bdd9ae0792913a94fd8b33a1260027e4b46c1f4884c67"),
+            recipientPublicKey,
+        )
+        assertContentEquals(
+            ConfidentialNoteEncryption.publicKeyFromPrivateKey(ephemeralPrivateKey),
+            payload.ephemeralPublicKey,
+        )
+        assertContentEquals(
+            hex("219e4d800da968d2a5fcb009c784f4746c7138edb9ee4844b739e830b05cf424"),
+            payload.ephemeralPublicKey,
+        )
+        assertContentEquals(nonce, payload.nonce)
+        assertContentEquals(
+            hex(
+                "86c7d4b51314553a9f72fa2207969a7bec6626e3c75943c5c7794a660ed54e76" +
+                    "371555e888bde13b513f434beef43f5558f1d8fdcd63ac6f40a42c6c90bf26e07d0" +
+                    "26dd8a3c632afae83d0aea120fa2886dc97f1dc8a91c6b78de3a57e22da75d217e" +
+                    "4924da954b2b2a758df8cacb2ea153d70a756b7f1b8921e",
+            ),
+            payload.ciphertext,
+        )
+        assertOpeningEquals(opening, decrypted)
+        assertContentEquals(
+            ConfidentialNoteCommitment.deriveFromOpening(opening),
+            ConfidentialNoteCommitment.deriveFromOpening(decrypted),
+        )
+        assertContentEquals(
+            ConfidentialNoteNullifier.deriveFromOpening(opening),
+            ConfidentialNoteNullifier.deriveFromOpening(decrypted),
+        )
+
+        val tamperedCiphertext = payload.ciphertext
+        tamperedCiphertext[tamperedCiphertext.lastIndex] =
+            (tamperedCiphertext.last().toInt() xor 0x01).toByte()
+        val tamperedPayload = ConfidentialEncryptedPayload(
+            ephemeralPublicKey = payload.ephemeralPublicKey,
+            nonce = payload.nonce,
+            ciphertext = tamperedCiphertext,
+        )
+        assertFailsWith<SecurityException> {
+            ConfidentialNoteDecryption.decryptNote(tamperedPayload, recipientPrivateKey, spendKey)
         }
+        assertFailsWith<SecurityException> {
+            ConfidentialNoteDecryption.decryptNote(payload, repeated(0x56, 32), spendKey)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            ConfidentialNoteDecryption.decryptNote(payload, recipientPrivateKey, spendKey, "other-chain")
+        }
+    }
+
+    private fun assertOpeningEquals(expected: ConfidentialNoteOpening, actual: ConfidentialNoteOpening) {
+        assertContentEquals(expected.rho, actual.rho)
+        assertContentEquals(expected.spendKey, actual.spendKey)
+        assertContentEquals(expected.ownerTag, actual.ownerTag)
+        assertEquals(expected.asset, actual.asset)
+        assertEquals(expected.chainId, actual.chainId)
+        assertEquals(expected.amount, actual.amount)
     }
 
     private fun repeated(value: Int, len: Int): ByteArray = ByteArray(len) { value.toByte() }

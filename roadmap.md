@@ -17,11 +17,12 @@ and completed history lives in [`status.md`](./status.md).
   endpoint for current confidential-v2 commitment inclusion paths, and the
   Kotlin/JVM plus Android Java Torii Merkle providers call it directly. Keep
   local providers limited to audited caller-supplied frontier material.
-- Confidential-v2 SDK note derivation now exists for Kotlin/JVM and Android
-  Java, with Rust-vector parity for owner tags, note commitments, nullifiers,
-  asset tags, and chain tags. The remaining wallet interop item is to define
-  the encrypted note plaintext layout in the node or bridge before enabling
-  `ConfidentialNoteDecryption`.
+- Confidential-v2 SDK note derivation and encrypted note payload handling now
+  exist for Kotlin/JVM and Android Java, with Rust-vector parity for owner tags,
+  note commitments, nullifiers, asset tags, and chain tags plus a shared
+  deterministic X25519/HKDF-SHA256/XChaCha20-Poly1305 plaintext vector. Keep
+  the higher-level wallet flows pinned to this contract when wiring shield-note
+  recovery into production clients.
 - Kagemusha SDK parity must keep ABI-7 compact projection verifier surfaces
   aligned across package roots and native hosts. Python now exposes both the
   optional-height verifier and the explicit
