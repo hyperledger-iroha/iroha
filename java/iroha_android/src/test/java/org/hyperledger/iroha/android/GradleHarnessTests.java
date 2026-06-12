@@ -89,6 +89,7 @@ public final class GradleHarnessTests {
         "org.hyperledger.iroha.android.offline.OfflineNoteV2Test",
         "org.hyperledger.iroha.android.offline.OfflineNoteTest",
         "org.hyperledger.iroha.android.offline.OfflineQrStreamTest",
+        "org.hyperledger.iroha.android.privacy.ConfidentialNoteTests",
         "org.hyperledger.iroha.android.privacy.PrivacyNativeBridgeTest",
         "org.hyperledger.iroha.android.privacy.ZkAssetMerklePathTests",
         "org.hyperledger.iroha.android.runtime.RuntimeUpgradeInstructionTests",

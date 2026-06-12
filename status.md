@@ -2,6 +2,23 @@
 
 Last updated: 2026-06-13
 
+## 2026-06-13 Confidential note derivation SDK primitives
+
+- Added Kotlin/JVM and Android Java confidential-v2 note opening models plus
+  owner-tag, asset-tag, chain-tag, note-commitment, and nullifier derivation
+  helpers that byte-match the Rust `confidential_v2` derivation path.
+- The SDK helpers defensively copy secret material, reject malformed fixed-size
+  fields, non-canonical Pasta scalars, ambiguous asset/chain text, noncanonical
+  `u128` amounts, and empty spend keys before deriving proof inputs.
+- Added fail-closed `ConfidentialNoteDecryption` entry points until the node or
+  bridge defines the encrypted note plaintext layout; callers cannot silently
+  parse opaque ciphertext as a wallet note.
+- Validation passed:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.privacy.ConfidentialNoteTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.privacy.ConfidentialNoteTests ./gradlew :jvm:test --rerun-tasks --console=plain`
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.privacy.ConfidentialNoteTest --tests org.hyperledger.iroha.sdk.privacy.ZkAssetMerklePathTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.privacy.ConfidentialNoteTests,org.hyperledger.iroha.android.privacy.ZkAssetMerklePathTests ./gradlew :jvm:test --rerun-tasks --console=plain`
+
 ## 2026-06-13 ZK asset Merkle-path Torii endpoint
 
 - Added `POST /v1/zk/merkle-path` for current confidential-v2 `zk_assets`
