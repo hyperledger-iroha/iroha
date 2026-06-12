@@ -2,6 +2,15 @@
 
 Last updated: 2026-06-12
 
+## 2026-06-12 user config test seed regression
+
+- Replaced the user config test fixture's all-zero deterministic Ed25519 seed
+  with named nonzero seed material so the fixture remains deterministic while
+  respecting the crypto layer's all-zero seed rejection.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha config::user::tests -- --nocapture` (`12` passed)
+
 ## 2026-06-12 SCCP BSC verifier G2 curve validation
 
 - Hardened `scripts/sccp_bsc_taira_xor_deploy.mjs` so BSC Groth16 verifier
