@@ -46,6 +46,51 @@ class ConfidentialAssetToriiClientTest {
     }
 
     @Test
+    fun merklePathsUsesCanonicalPostPathAndParsesBody() {
+        val commitment = "02".repeat(32)
+        val sibling = "00".repeat(32)
+        val root = "03".repeat(32)
+        val executor = CapturingExecutor(
+            """
+            {
+              "root": "$root",
+              "frontier_len": 3,
+              "tree_depth": 1,
+              "paths": [{
+                "commitment": "$commitment",
+                "leaf_index": 2,
+                "siblings": ["$sibling"],
+                "directions": [0],
+                "witness_nodes": ["$root"],
+                "root": "$root"
+              }]
+            }
+            """.trimIndent(),
+        )
+        val client = ConfidentialAssetToriiClient.builder()
+            .executor(executor)
+            .baseUri(URI.create("https://example.com"))
+            .build()
+
+        val response = client.getZkAssetMerklePaths(
+            ZkMerklePathRequest("usd#bank", listOf(ByteArray(32) { 2 })),
+        ).join()
+
+        assertEquals("POST", executor.lastRequest.method)
+        assertEquals("/v1/zk/merkle-path", executor.lastRequest.uri.path)
+        assertEquals("application/json", firstHeader(executor.lastRequest, "Accept"))
+        assertEquals("application/json", firstHeader(executor.lastRequest, "Content-Type"))
+        assertEquals("""{"asset_id":"usd#bank","commitments":["$commitment"]}""", executor.lastBody)
+        assertEquals(root, response.root)
+        assertEquals(3, response.frontierLen)
+        assertEquals(1, response.treeDepth)
+        assertEquals(1, response.paths.size)
+        assertEquals(2, response.paths[0].leafIndex)
+        assertEquals(listOf(sibling), response.paths[0].siblings)
+        assertContentEquals(byteArrayOf(0), response.paths[0].directions)
+    }
+
+    @Test
     fun emptyLatestRootIsNotNullableOnWireButNullInByteHelper() {
         val response = ZkRootsResponse.parse(
             """

@@ -2,6 +2,8 @@ package org.hyperledger.iroha.sdk.privacy
 
 import java.math.BigInteger
 import java.util.concurrent.CompletableFuture
+import org.hyperledger.iroha.sdk.client.ConfidentialAssetToriiClient
+import org.hyperledger.iroha.sdk.client.ZkMerklePathRequest
 
 /** Pair-compression function used by the zk_assets commitment tree. */
 fun interface ZkAssetMerkleHasher {
@@ -99,23 +101,49 @@ interface ZkAssetMerklePathProvider {
     fun getMerklePaths(asset: String, commitments: List<ByteArray>): CompletableFuture<List<ZkAssetMerklePath>>
 }
 
-/** Fails closed until Torii exposes a commitment-inclusion endpoint. */
-class ToriiZkAssetMerklePathProvider : ZkAssetMerklePathProvider {
+/** Fetches current confidential-v2 commitment inclusion paths from Torii. */
+class ToriiZkAssetMerklePathProvider(
+    private val client: ConfidentialAssetToriiClient = ConfidentialAssetToriiClient.builder().build(),
+) : ZkAssetMerklePathProvider {
     override fun getMerklePathForCommitment(asset: String, commitment: ByteArray): CompletableFuture<ZkAssetMerklePath> {
-        validateAssetAndCommitment(asset, commitment)
-        return failedFuture(unsupported())
+        return getMerklePaths(asset, listOf(commitment)).thenApply { paths -> paths.single() }
     }
 
     override fun getMerklePaths(asset: String, commitments: List<ByteArray>): CompletableFuture<List<ZkAssetMerklePath>> {
-        require(asset.trim().isNotEmpty()) { "asset must not be blank" }
-        commitments.forEachIndexed { index, commitment ->
-            require(commitment.size == 32) { "commitments[$index] must be 32 bytes" }
+        return try {
+            require(asset.trim().isNotEmpty()) { "asset must not be blank" }
+            val copied = commitments.mapIndexed { index, commitment ->
+                require(commitment.size == 32) { "commitments[$index] must be 32 bytes" }
+                commitment.copyOf()
+            }
+            if (copied.isEmpty()) {
+                CompletableFuture.completedFuture(emptyList())
+            } else {
+                client.getZkAssetMerklePaths(ZkMerklePathRequest(asset, copied)).thenApply { response ->
+                    require(response.paths.size == copied.size) {
+                        "Torii returned ${response.paths.size} Merkle paths for ${copied.size} commitments"
+                    }
+                    response.paths.mapIndexed { index, entry ->
+                        require(entry.commitmentBytes().contentEquals(copied[index])) {
+                            "Torii Merkle path commitment mismatch at index $index"
+                        }
+                        require(entry.siblings.size == response.treeDepth) {
+                            "Torii Merkle path sibling depth mismatch at index $index"
+                        }
+                        ZkAssetMerklePath(
+                            entry.leafIndex.toLong(),
+                            entry.siblingBytes(),
+                            entry.directions,
+                            response.rootBytes(),
+                            response.frontierLen.toLong(),
+                        )
+                    }
+                }
+            }
+        } catch (ex: RuntimeException) {
+            failedFuture(ex)
         }
-        return if (commitments.isEmpty()) CompletableFuture.completedFuture(emptyList()) else failedFuture(unsupported())
     }
-
-    private fun unsupported(): UnsupportedOperationException =
-        UnsupportedOperationException("Torii does not expose a zk_assets Merkle-path endpoint yet; use LocalZkAssetMerklePathProvider with audited frontier material")
 }
 
 /** Computes inclusion paths from a caller-supplied zk_assets commitment frontier. */

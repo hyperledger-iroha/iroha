@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-06-12
+Last updated: 2026-06-13
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 The detailed engineering backlog lives in
@@ -13,6 +13,10 @@ and completed history lives in [`status.md`](./status.md).
 
 - Move the shared Iroha 2 / Iroha 3 codebase toward a broadly consumable
   release with clear release notes, SDK parity, and operator documentation.
+- ZK asset light-client readiness now has a Torii `POST /v1/zk/merkle-path`
+  endpoint for current confidential-v2 commitment inclusion paths, and the
+  Kotlin/JVM plus Android Java Torii Merkle providers call it directly. Keep
+  local providers limited to audited caller-supplied frontier material.
 - Kagemusha SDK parity must keep ABI-7 compact projection verifier surfaces
   aligned across package roots and native hosts. Python now exposes both the
   optional-height verifier and the explicit

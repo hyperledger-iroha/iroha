@@ -21,6 +21,9 @@ class ConfidentialAssetToriiClient private constructor(builder: Builder) {
     fun getZkAssetRoots(request: ZkRootsRequest): CompletableFuture<ZkRootsResponse> =
         executePost(ZK_ROOTS_PATH, request.toJsonBytes(), ZkRootsResponse::parse)
 
+    fun getZkAssetMerklePaths(request: ZkMerklePathRequest): CompletableFuture<ZkMerklePathResponse> =
+        executePost(ZK_MERKLE_PATH_PATH, request.toJsonBytes(), ZkMerklePathResponse::parse)
+
     fun getLatestZkAssetRoot(assetId: String): CompletableFuture<ByteArray?> =
         getZkAssetRoots(ZkRootsRequest(assetId, 1)).thenApply { it.getLatestRootBytes() }
 
@@ -120,6 +123,7 @@ class ConfidentialAssetToriiClient private constructor(builder: Builder) {
 
     companion object {
         private const val ZK_ROOTS_PATH = "/v1/zk/roots"
+        private const val ZK_MERKLE_PATH_PATH = "/v1/zk/merkle-path"
 
         @JvmStatic fun builder(): Builder = Builder()
         private fun ensureHeader(headers: MutableMap<String, String>, name: String, value: String) {

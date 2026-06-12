@@ -16,6 +16,7 @@ public final class ConfidentialAssetToriiClientTests {
 
   public static void main(final String[] args) {
     rootsUsesCanonicalPostPathAndParsesBody();
+    merklePathsUsesCanonicalPostPathAndParsesBody();
     emptyLatestRootIsNotNullableOnWireButNullInByteHelper();
     rootsRejectNonCanonicalHexAndNullLatest();
     nonSuccessResponsesSurfaceOfflineToriiException();
@@ -59,6 +60,59 @@ public final class ConfidentialAssetToriiClientTests {
         : "latest bytes mismatch";
     assert java.util.Arrays.equals(filled((byte) 1), response.rootBytes(0))
         : "root bytes mismatch";
+  }
+
+  private static void merklePathsUsesCanonicalPostPathAndParsesBody() {
+    final String commitment = "02".repeat(32);
+    final String sibling = "00".repeat(32);
+    final String root = "03".repeat(32);
+    final StubExecutor executor =
+        new StubExecutor(
+            200,
+            """
+            {
+              "root": "%s",
+              "frontier_len": 3,
+              "tree_depth": 1,
+              "paths": [{
+                "commitment": "%s",
+                "leaf_index": 2,
+                "siblings": ["%s"],
+                "directions": [0],
+                "witness_nodes": ["%s"],
+                "root": "%s"
+              }]
+            }
+            """
+                .formatted(root, commitment, sibling, root, root));
+    final ConfidentialAssetToriiClient client =
+        ConfidentialAssetToriiClient.builder()
+            .executor(executor)
+            .baseUri(URI.create("https://example.com"))
+            .timeout(Duration.ofSeconds(5))
+            .build();
+
+    final ZkMerklePathResponse response =
+        client.getZkAssetMerklePaths(new ZkMerklePathRequest("usd#bank", List.of(filled((byte) 2)))).join();
+
+    assert "POST".equals(executor.lastRequest.method()) : "merkle path must use POST";
+    assert "/v1/zk/merkle-path".equals(executor.lastRequest.uri().getPath())
+        : "merkle path mismatch";
+    assert "application/json".equals(firstHeader(executor.lastRequest, "Accept"))
+        : "accept header mismatch";
+    assert "application/json".equals(firstHeader(executor.lastRequest, "Content-Type"))
+        : "content-type header mismatch";
+    assert ("{\"asset_id\":\"usd#bank\",\"commitments\":[\"" + commitment + "\"]}")
+            .equals(executor.lastBody)
+        : "request body mismatch: " + executor.lastBody;
+    assert root.equals(response.root()) : "root mismatch";
+    assert response.frontierLen() == 3 : "frontier length mismatch";
+    assert response.treeDepth() == 1 : "tree depth mismatch";
+    assert response.paths().size() == 1 : "path count mismatch";
+    assert response.paths().get(0).leafIndex() == 2 : "leaf index mismatch";
+    assert response.paths().get(0).siblings().equals(List.of(sibling)) : "siblings mismatch";
+    assert java.util.Arrays.equals(new byte[] {0}, response.paths().get(0).directions())
+        : "directions mismatch";
   }
 
   private static void emptyLatestRootIsNotNullableOnWireButNullInByteHelper() {

@@ -15,6 +15,7 @@ import org.hyperledger.iroha.android.offline.OfflineToriiException;
 /** Lightweight Torii client for confidential-asset query endpoints. */
 public final class ConfidentialAssetToriiClient {
   private static final String ZK_ROOTS_PATH = "/v1/zk/roots";
+  private static final String ZK_MERKLE_PATH_PATH = "/v1/zk/merkle-path";
 
   private final HttpTransportExecutor executor;
   private final URI baseUri;
@@ -37,6 +38,14 @@ public final class ConfidentialAssetToriiClient {
 
   public CompletableFuture<ZkRootsResponse> getZkAssetRoots(final ZkRootsRequest request) {
     return executePost(ZK_ROOTS_PATH, Objects.requireNonNull(request, "request").toJsonBytes(), ZkRootsResponse::parse);
+  }
+
+  public CompletableFuture<ZkMerklePathResponse> getZkAssetMerklePaths(
+      final ZkMerklePathRequest request) {
+    return executePost(
+        ZK_MERKLE_PATH_PATH,
+        Objects.requireNonNull(request, "request").toJsonBytes(),
+        ZkMerklePathResponse::parse);
   }
 
   public CompletableFuture<byte[]> getLatestZkAssetRoot(final String assetId) {

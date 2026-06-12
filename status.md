@@ -2,6 +2,26 @@
 
 Last updated: 2026-06-13
 
+## 2026-06-13 ZK asset Merkle-path Torii endpoint
+
+- Added `POST /v1/zk/merkle-path` for current confidential-v2 `zk_assets`
+  commitment inclusion paths, with JSON/Norito response negotiation, OpenAPI
+  discovery, API-token route wiring, batch request ordering, and fail-closed
+  validation for non-confidential-v2 assets, duplicate/ambiguous commitments,
+  malformed commitment hex, oversized batches, missing commitments, missing ZK
+  state, and root-history/frontier mismatches.
+- Wired the Kotlin/JVM and Android Java confidential-asset Torii clients and
+  Merkle-path providers to call the endpoint, parse typed path responses, and
+  reject node responses whose path count, commitment order, or sibling depth do
+  not match the request.
+- Validation passed:
+  - `cargo test -p iroha_torii handle_v1_zk_merkle_path --lib` (`11` tests)
+  - `cargo test -p iroha_torii zk_roots_selector_tests --lib` (`51` tests)
+  - `cargo test -p iroha_torii openapi --lib` (`30` tests)
+  - `cargo check -p iroha_torii`
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.client.ConfidentialAssetToriiClientTest --tests org.hyperledger.iroha.sdk.privacy.ZkAssetMerklePathTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.ConfidentialAssetToriiClientTests,org.hyperledger.iroha.android.privacy.ZkAssetMerklePathTests ./gradlew :jvm:test --rerun-tasks --console=plain`
+
 ## 2026-06-13 - ZK Roots JVM Client and Merkle Providers
 
 - Added Kotlin/JVM and Java Android `ConfidentialAssetToriiClient` wrappers for
