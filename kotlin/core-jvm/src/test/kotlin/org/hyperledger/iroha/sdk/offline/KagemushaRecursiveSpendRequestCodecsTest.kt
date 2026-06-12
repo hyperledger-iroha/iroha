@@ -295,6 +295,80 @@ class KagemushaRecursiveSpendRequestCodecsTest {
     }
 
     @Test
+    fun `recursive spend request helpers assemble explicit hop evidence`() {
+        val rootBefore = fixedBytes(0x51)
+        val rootAfter = fixedBytes(0x52)
+        val fixture = proofFixture(
+            circuitId = KagemushaRecursiveSpendRequestCodecs.CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
+            schema = CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA,
+            algorithmId = "confidential-transfer-v2",
+            entrypoint = "buildConfidentialTransferProofV2",
+            proofBytes = zk1Proof(
+                listOf(
+                    fixedBytes(0x61),
+                    fixedBytes(0x62),
+                    fixedBytes(0x63),
+                    ByteArray(32),
+                    fixedBytes(0x64),
+                    ByteArray(32),
+                    rootBefore,
+                    fixedBytes(0x65),
+                    fixedBytes(0x66),
+                ),
+            ),
+        )
+        val evidence = VerifiedFoldHopEvidence(
+            proofOutputArchive = fixture.proofOutputArchive,
+            verifierRecord = fixture.verifierRecordRef,
+            chainId = "kagemusha-test-chain",
+            asset = sampleAssetDefinition(),
+            rootAfter = rootAfter,
+        )
+        val expectedRecordBundle = KagemushaRecursiveSpendRequestCodecs.buildVerifiedFoldRecordBundle(listOf(evidence))
+        val pallasOpenEnvelopes = syntheticArchive("test.PallasOpenEnvelopes")
+
+        val init = KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendInitRequest(
+            hop = evidence,
+            pallasOpenEnvelopes = pallasOpenEnvelopes,
+            spendableNote = sampleNote(),
+            lineageVerifierKey = ByteArray(64) { 0x5a.toByte() },
+            lineageProvingKeyArchive = syntheticArchive("test.LineageProvingKeyArchive"),
+            blockHeight = 11L,
+        )
+        assertArchiveSchema(init, KagemushaRecursiveSpendRequestCodecs.SCHEMA_INIT_REQUEST)
+        val initFields = requestFields(init, KagemushaRecursiveSpendRequestCodecs.SCHEMA_INIT_REQUEST)
+        assertContentEquals(
+            compactPayload(expectedRecordBundle, KagemushaRecursiveSpendRequestCodecs.SCHEMA_RECORD_BUNDLE),
+            initFields[0],
+        )
+        assertContentEquals(pallasOpenEnvelopes, readBytesVecPayload(initFields[1]))
+
+        val append = KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendAppendRequest(
+            previousBundle = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+            hop = evidence,
+            pallasOpenEnvelopes = pallasOpenEnvelopes,
+            spendableNote = sampleNote(seed = 0x71),
+            outputCircuitId = KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+            previousLineageVerifierRecord = sampleVerifierRecord(),
+            blockHeight = 12L,
+        )
+        assertArchiveSchema(append, KagemushaRecursiveSpendRequestCodecs.SCHEMA_APPEND_REQUEST)
+        val appendFields = requestFields(append, KagemushaRecursiveSpendRequestCodecs.SCHEMA_APPEND_REQUEST)
+        assertContentEquals(
+            compactPayload(
+                sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
+            ),
+            appendFields[0],
+        )
+        assertContentEquals(
+            compactPayload(expectedRecordBundle, KagemushaRecursiveSpendRequestCodecs.SCHEMA_RECORD_BUNDLE),
+            appendFields[1],
+        )
+        assertContentEquals(pallasOpenEnvelopes, readBytesVecPayload(appendFields[2]))
+    }
+
+    @Test
     fun `proof output only evidence builders fail closed`() {
         val verifierRecord = sampleVerifierRecord()
 
@@ -310,6 +384,29 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             )
         }
         assertTrue(bundleError.message.orEmpty().contains("chainId, asset, and rootAfter"))
+
+        val initError = assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendInitRequest(
+                proofOutputArchive = byteArrayOf(1),
+                verifierRecord = verifierRecord,
+                spendableNote = sampleNote(),
+                lineageVerifierKey = ByteArray(64) { 0x5a.toByte() },
+                lineageProvingKeyArchive = syntheticArchive("test.LineageProvingKeyArchive"),
+            )
+        }
+        assertTrue(initError.message.orEmpty().contains("VerifiedFoldHopEvidence"))
+
+        val appendError = assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendAppendRequest(
+                previousBundle = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                proofOutputArchive = byteArrayOf(1),
+                verifierRecord = verifierRecord,
+                spendableNote = sampleNote(),
+                outputCircuitId = KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+                previousLineageVerifierRecord = verifierRecord,
+            )
+        }
+        assertTrue(appendError.message.orEmpty().contains("Pallas open-envelopes archive"))
     }
 
     @Test

@@ -474,6 +474,106 @@ object KagemushaRecursiveSpendRequestCodecs {
     }
 
     @JvmStatic
+    @JvmOverloads
+    fun buildRecursiveSpendInitRequest(
+        hop: VerifiedFoldHopEvidence?,
+        pallasOpenEnvelopes: ByteArray?,
+        spendableNote: SpendableNoteDescriptor?,
+        lineageVerifierKey: ByteArray? = null,
+        lineageProvingKeyArchive: ByteArray? = null,
+        blockHeight: Long? = null,
+    ): ByteArray {
+        require(hop != null) { "hop is required" }
+        require(pallasOpenEnvelopes != null) { "pallasOpenEnvelopes is required" }
+        require(spendableNote != null) { "spendableNote is required" }
+        return encodeInitRequest(
+            InitSpendRequest(
+                recordBundle = buildVerifiedFoldRecordBundle(listOf(hop)),
+                pallasOpenEnvelopes = pallasOpenEnvelopes,
+                currentNote = spendableNote,
+                lineageVerifierKey = lineageVerifierKey,
+                lineageProvingKeyArchive = lineageProvingKeyArchive,
+                blockHeight = blockHeight,
+            ),
+        )
+    }
+
+    @JvmStatic
+    @JvmOverloads
+    fun buildRecursiveSpendInitRequest(
+        proofOutputArchive: ByteArray?,
+        verifierRecord: VerifierRecordRef?,
+        spendableNote: SpendableNoteDescriptor?,
+        lineageVerifierKey: ByteArray? = null,
+        lineageProvingKeyArchive: ByteArray? = null,
+        blockHeight: Long? = null,
+    ): ByteArray {
+        require(proofOutputArchive != null && proofOutputArchive.isNotEmpty()) {
+            "proofOutputArchive must not be empty"
+        }
+        require(verifierRecord != null) { "verifierRecord is required" }
+        require(spendableNote != null) { "spendableNote is required" }
+        failClosedProofOnlyRecursiveSpendRequest()
+    }
+
+    @JvmStatic
+    @JvmOverloads
+    fun buildRecursiveSpendAppendRequest(
+        previousBundle: ByteArray?,
+        hop: VerifiedFoldHopEvidence?,
+        pallasOpenEnvelopes: ByteArray?,
+        spendableNote: SpendableNoteDescriptor?,
+        outputCircuitId: String? = null,
+        previousLineageVerifierRecord: VerifierRecordRef? = null,
+        previousProofOpenEnvelopes: ByteArray? = null,
+        lineageVerifierKey: ByteArray? = null,
+        lineageProvingKeyArchive: ByteArray? = null,
+        blockHeight: Long? = null,
+    ): ByteArray {
+        require(previousBundle != null) { "previousBundle is required" }
+        require(hop != null) { "hop is required" }
+        require(pallasOpenEnvelopes != null) { "pallasOpenEnvelopes is required" }
+        require(spendableNote != null) { "spendableNote is required" }
+        return encodeAppendRequest(
+            AppendSpendRequest(
+                previousBundle = previousBundle,
+                recordBundle = buildVerifiedFoldRecordBundle(listOf(hop)),
+                pallasOpenEnvelopes = pallasOpenEnvelopes,
+                currentNote = spendableNote,
+                outputProofCircuitId = outputCircuitId,
+                previousLineageVerifierRecord = previousLineageVerifierRecord,
+                previousProofOpenEnvelopes = previousProofOpenEnvelopes,
+                lineageVerifierKey = lineageVerifierKey,
+                lineageProvingKeyArchive = lineageProvingKeyArchive,
+                blockHeight = blockHeight,
+            ),
+        )
+    }
+
+    @JvmStatic
+    @JvmOverloads
+    fun buildRecursiveSpendAppendRequest(
+        previousBundle: ByteArray?,
+        proofOutputArchive: ByteArray?,
+        verifierRecord: VerifierRecordRef?,
+        spendableNote: SpendableNoteDescriptor?,
+        outputCircuitId: String? = null,
+        previousLineageVerifierRecord: VerifierRecordRef? = null,
+        previousProofOpenEnvelopes: ByteArray? = null,
+        lineageVerifierKey: ByteArray? = null,
+        lineageProvingKeyArchive: ByteArray? = null,
+        blockHeight: Long? = null,
+    ): ByteArray {
+        require(previousBundle != null) { "previousBundle is required" }
+        require(proofOutputArchive != null && proofOutputArchive.isNotEmpty()) {
+            "proofOutputArchive must not be empty"
+        }
+        require(verifierRecord != null) { "verifierRecord is required" }
+        require(spendableNote != null) { "spendableNote is required" }
+        failClosedProofOnlyRecursiveSpendRequest()
+    }
+
+    @JvmStatic
     fun decodeVerifyResult(archive: ByteArray): VerifySpendResult {
         val payload = requirePayloadArchive(archive, SCHEMA_VERIFY_RESULT, "verifyResult")
         require(payload.flags == REQUEST_FLAGS) {
@@ -559,6 +659,14 @@ object KagemushaRecursiveSpendRequestCodecs {
             "$field must use compact Norito layout"
         }
         return payload.payload
+    }
+
+    private fun failClosedProofOnlyRecursiveSpendRequest(): Nothing {
+        throw IllegalArgumentException(
+            "recursive spend requests require explicit VerifiedFoldHopEvidence and a prover-emitted " +
+                "Pallas open-envelopes archive; privacy proof outputs alone do not carry " +
+                "Pallas IPA opening envelopes, chainId, asset, or rootAfter",
+        )
     }
 
     internal class ArchivePayload(

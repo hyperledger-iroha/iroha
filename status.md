@@ -173281,6 +173281,11 @@ Last updated: 2026-06-12
   proof attachments before emitting `KagemushaVerifiedFoldRecordBundle` or
   redeem `ProofAttachment` archives. The proof-output-only Pallas/open-envelope
   and record-bundle builders now fail closed.
+- Added explicit recursive-spend init/append request helper overloads that pair
+  checked `VerifiedFoldHopEvidence` with caller-supplied Pallas open-envelopes
+  archives before encoding request archives. The proof-output-only init/append
+  helpers fail closed for the same missing-context reason, so app code cannot
+  accidentally serialize under-specified production requests.
 - Focused validation passed:
   - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest --console=plain`
   - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest ./gradlew :jvm:test --rerun-tasks --console=plain`

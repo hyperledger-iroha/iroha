@@ -7093,8 +7093,11 @@ and completed history lives in [`status.md`](./status.md).
   ZK1 public-instance columns, and root continuity before emitting checked
   fold-record bundles or redeem proof attachments. Proof-output-only helpers
   must remain fail-closed because privacy proof outputs do not carry Pallas IPA
-  opening envelopes or enough chain context to derive a production-safe record bundle
-  instead of constructing preverified folded public inputs themselves. The same
+  opening envelopes or enough chain context to derive a production-safe record
+  bundle; init/append request helpers must likewise require explicit checked
+  hop evidence plus caller-supplied Pallas open-envelopes archives before
+  serializing recursive-spend request archives instead of constructing
+  preverified folded public inputs themselves. The same
   SDK surfaces now expose the ABI-6 recursive aggregation proof-bundle prover,
   which accepts record-backed bundle bytes plus proof-derived Pallas
   open-envelope archive bytes and returns an admission-neutral

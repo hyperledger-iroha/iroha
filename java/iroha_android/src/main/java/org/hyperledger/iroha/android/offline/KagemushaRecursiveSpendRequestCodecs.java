@@ -176,6 +176,88 @@ public final class KagemushaRecursiveSpendRequestCodecs {
         REQUEST_FLAGS);
   }
 
+  public static byte[] buildRecursiveSpendInitRequest(
+      final VerifiedFoldHopEvidence hop,
+      final byte[] pallasOpenEnvelopes,
+      final SpendableNoteDescriptor spendableNote,
+      final byte[] lineageVerifierKey,
+      final byte[] lineageProvingKeyArchive,
+      final Long blockHeight) {
+    require(hop != null, "hop is required");
+    require(pallasOpenEnvelopes != null, "pallasOpenEnvelopes is required");
+    require(spendableNote != null, "spendableNote is required");
+    return encodeInitRequest(
+        new InitSpendRequest(
+            buildVerifiedFoldRecordBundle(Arrays.asList(hop)),
+            pallasOpenEnvelopes,
+            spendableNote,
+            lineageVerifierKey,
+            lineageProvingKeyArchive,
+            blockHeight));
+  }
+
+  public static byte[] buildRecursiveSpendInitRequest(
+      final byte[] proofOutputArchive,
+      final VerifierRecordRef verifierRecord,
+      final SpendableNoteDescriptor spendableNote,
+      final byte[] lineageVerifierKey,
+      final byte[] lineageProvingKeyArchive,
+      final Long blockHeight) {
+    require(proofOutputArchive != null && proofOutputArchive.length > 0,
+        "proofOutputArchive must not be empty");
+    require(verifierRecord != null, "verifierRecord is required");
+    require(spendableNote != null, "spendableNote is required");
+    return failClosedProofOnlyRecursiveSpendRequest();
+  }
+
+  public static byte[] buildRecursiveSpendAppendRequest(
+      final byte[] previousBundle,
+      final VerifiedFoldHopEvidence hop,
+      final byte[] pallasOpenEnvelopes,
+      final SpendableNoteDescriptor spendableNote,
+      final String outputCircuitId,
+      final VerifierRecordRef previousLineageVerifierRecord,
+      final byte[] previousProofOpenEnvelopes,
+      final byte[] lineageVerifierKey,
+      final byte[] lineageProvingKeyArchive,
+      final Long blockHeight) {
+    require(previousBundle != null, "previousBundle is required");
+    require(hop != null, "hop is required");
+    require(pallasOpenEnvelopes != null, "pallasOpenEnvelopes is required");
+    require(spendableNote != null, "spendableNote is required");
+    return encodeAppendRequest(
+        new AppendSpendRequest(
+            previousBundle,
+            buildVerifiedFoldRecordBundle(Arrays.asList(hop)),
+            pallasOpenEnvelopes,
+            spendableNote,
+            outputCircuitId,
+            previousLineageVerifierRecord,
+            previousProofOpenEnvelopes,
+            lineageVerifierKey,
+            lineageProvingKeyArchive,
+            blockHeight));
+  }
+
+  public static byte[] buildRecursiveSpendAppendRequest(
+      final byte[] previousBundle,
+      final byte[] proofOutputArchive,
+      final VerifierRecordRef verifierRecord,
+      final SpendableNoteDescriptor spendableNote,
+      final String outputCircuitId,
+      final VerifierRecordRef previousLineageVerifierRecord,
+      final byte[] previousProofOpenEnvelopes,
+      final byte[] lineageVerifierKey,
+      final byte[] lineageProvingKeyArchive,
+      final Long blockHeight) {
+    require(previousBundle != null, "previousBundle is required");
+    require(proofOutputArchive != null && proofOutputArchive.length > 0,
+        "proofOutputArchive must not be empty");
+    require(verifierRecord != null, "verifierRecord is required");
+    require(spendableNote != null, "spendableNote is required");
+    return failClosedProofOnlyRecursiveSpendRequest();
+  }
+
   public static VerifySpendResult decodeVerifyResult(final byte[] archive) {
     final ArchivePayload payload = requirePayloadArchive(archive, SCHEMA_VERIFY_RESULT, "verifyResult");
     require(payload.flags == REQUEST_FLAGS, "verifyResult must use compact Norito layout");
@@ -253,6 +335,13 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     final ArchivePayload payload = requirePayloadArchive(archive, schema, field);
     require(payload.flags == REQUEST_FLAGS, field + " must use compact Norito layout");
     return payload.payload;
+  }
+
+  private static byte[] failClosedProofOnlyRecursiveSpendRequest() {
+    throw new IllegalArgumentException(
+        "recursive spend requests require explicit VerifiedFoldHopEvidence and a prover-emitted "
+            + "Pallas open-envelopes archive; privacy proof outputs alone do not carry "
+            + "Pallas IPA opening envelopes, chainId, asset, or rootAfter");
   }
 
   static final class ArchivePayload {

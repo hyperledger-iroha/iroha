@@ -1418,16 +1418,17 @@ public final class KagemushaRecursiveSpendProverTest {
                     repeat((byte) 0x45, 32),
                     repeat((byte) 0x46, 32))));
     final String asset = sampleAssetDefinition();
+    final KagemushaRecursiveSpendRequestCodecs.VerifiedFoldHopEvidence evidence =
+        new KagemushaRecursiveSpendRequestCodecs.VerifiedFoldHopEvidence(
+            transferFixture.proofOutputArchive,
+            transferFixture.verifierRecordRef,
+            "kagemusha-test-chain",
+            asset,
+            rootAfter);
 
     final byte[] recordBundle =
         KagemushaRecursiveSpendRequestCodecs.buildVerifiedFoldRecordBundle(
-            Arrays.asList(
-                new KagemushaRecursiveSpendRequestCodecs.VerifiedFoldHopEvidence(
-                    transferFixture.proofOutputArchive,
-                    transferFixture.verifierRecordRef,
-                    "kagemusha-test-chain",
-                    asset,
-                    rootAfter)));
+            Arrays.asList(evidence));
 
     assertArchiveSchema(recordBundle, KagemushaRecursiveSpendRequestCodecs.SCHEMA_RECORD_BUNDLE);
     final List<byte[]> fields =
@@ -1458,6 +1459,47 @@ public final class KagemushaRecursiveSpendProverTest {
             transferFixture.verifierRecordRef.recordBytes(),
             KagemushaRecursiveSpendRequestCodecs.SCHEMA_VERIFYING_KEY_RECORD),
         recordFields.get(1));
+
+    final byte[] pallasOpenEnvelopes = syntheticArchive("test.PallasOpenEnvelopes");
+    final byte[] initRequest =
+        KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendInitRequest(
+            evidence,
+            pallasOpenEnvelopes,
+            sampleNote(),
+            repeat((byte) 0x5a, 64),
+            syntheticArchive("test.LineageProvingKeyArchive"),
+            11L);
+    assertArchiveSchema(initRequest, KagemushaRecursiveSpendRequestCodecs.SCHEMA_INIT_REQUEST);
+    final List<byte[]> initFields =
+        requestFields(initRequest, KagemushaRecursiveSpendRequestCodecs.SCHEMA_INIT_REQUEST);
+    assert Arrays.equals(
+        compactPayload(recordBundle, KagemushaRecursiveSpendRequestCodecs.SCHEMA_RECORD_BUNDLE),
+        initFields.get(0));
+    assert Arrays.equals(pallasOpenEnvelopes, readBytesVecPayload(initFields.get(1)));
+
+    final byte[] previousBundle = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle");
+    final byte[] appendRequest =
+        KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendAppendRequest(
+            previousBundle,
+            evidence,
+            pallasOpenEnvelopes,
+            sampleNote((byte) 0x71),
+            KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+            sampleVerifierRecord(),
+            null,
+            null,
+            null,
+            12L);
+    assertArchiveSchema(appendRequest, KagemushaRecursiveSpendRequestCodecs.SCHEMA_APPEND_REQUEST);
+    final List<byte[]> appendFields =
+        requestFields(appendRequest, KagemushaRecursiveSpendRequestCodecs.SCHEMA_APPEND_REQUEST);
+    assert Arrays.equals(
+        compactPayload(previousBundle, KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE),
+        appendFields.get(0));
+    assert Arrays.equals(
+        compactPayload(recordBundle, KagemushaRecursiveSpendRequestCodecs.SCHEMA_RECORD_BUNDLE),
+        appendFields.get(1));
+    assert Arrays.equals(pallasOpenEnvelopes, readBytesVecPayload(appendFields.get(2)));
   }
 
   private static void typedEvidenceHelpersRejectUnsafeProofOnlyInputs() {
@@ -1472,6 +1514,32 @@ public final class KagemushaRecursiveSpendProverTest {
             () -> KagemushaRecursiveSpendRequestCodecs.buildVerifiedFoldRecordBundle(
                 Arrays.asList(new byte[] {1}), Arrays.asList(sampleVerifierRecord())));
     assert bundleError.getMessage().contains("chainId, asset, and rootAfter");
+
+    final IllegalArgumentException initError =
+        captureIllegalArgument(
+            () -> KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendInitRequest(
+                new byte[] {1},
+                sampleVerifierRecord(),
+                sampleNote(),
+                repeat((byte) 0x5a, 64),
+                syntheticArchive("test.LineageProvingKeyArchive"),
+                null));
+    assert initError.getMessage().contains("VerifiedFoldHopEvidence");
+
+    final IllegalArgumentException appendError =
+        captureIllegalArgument(
+            () -> KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendAppendRequest(
+                sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                new byte[] {1},
+                sampleVerifierRecord(),
+                sampleNote(),
+                KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+                sampleVerifierRecord(),
+                null,
+                null,
+                null,
+                null));
+    assert appendError.getMessage().contains("Pallas open-envelopes archive");
 
     final ProofFixture fixture =
         proofFixture(
