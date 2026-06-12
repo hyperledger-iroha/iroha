@@ -900,6 +900,67 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 )
                 self.assertNotIn("\x1b", rendered)
 
+    def test_staged_path_validators_reject_alias_directory_paths_before_metadata(
+        self,
+    ) -> None:
+        helper_cases = (
+            (
+                lineage_staged_runner,
+                "lineage staged runner",
+                "--staged-artifact-dir",
+            ),
+            (
+                compact_key_staged_runner,
+                "compact key staged runner",
+                "--staged-artifact-dir",
+            ),
+            (
+                lineage_finalizer,
+                "lineage staged finalizer",
+                "--staged-artifact-dir",
+            ),
+            (
+                compact_key_finalizer,
+                "compact key staged finalizer",
+                "--staged-artifact-dir",
+            ),
+        )
+        path_cases = (
+            (
+                Path("/tmp") / "kagemusha" / ".." / "artifacts" / "kagemusha",
+                "must be canonical",
+            ),
+            (
+                Path("/tmp/kagemusha\\artifacts"),
+                "must not contain backslashes",
+            ),
+        )
+        for module, helper_name, label in helper_cases:
+            for path, error_suffix in path_cases:
+                with self.subTest(helper=helper_name, path=path):
+                    with mock.patch.object(
+                        module.device_lab,
+                        "validate_no_symlink_ancestors",
+                        side_effect=AssertionError(
+                            "alias path should fail before ancestor validation"
+                        ),
+                    ), mock.patch.object(
+                        _PATH_TYPE,
+                        "lstat",
+                        side_effect=AssertionError(
+                            "alias path should fail before metadata reads"
+                        ),
+                    ):
+                        errors = module.validate_directory_path(
+                            path,
+                            label,
+                            must_exist=True,
+                        )
+
+                    rendered = "\n".join(errors)
+                    self.assertEqual(errors, [f"{label} {error_suffix}"])
+                    self.assertNotIn(str(path), rendered)
+
     def test_complete_signed_android_matrix_passes_rollup(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / "slots"

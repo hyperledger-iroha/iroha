@@ -2389,7 +2389,9 @@ layout can be produced directly with
 dist/sccp-production-corridor`; this runs every selected phase as its own
 corridor invocation and writes strict `<phase>.log` artifacts containing the
 phase marker, completion sentinel, command fragments, and success markers
-expected by the release report and bundle verifier. The Java Android phase runs
+expected by the release report and bundle verifier. Empty `--log-dir` values
+are rejected instead of falling back to a no-log run, so local release
+rehearsals cannot silently skip transcript collection. The Java Android phase runs
 the main-method SCCP classes through
 `GradleHarnessTests` and runs
 `SolanaSccpProverTests` directly through Gradle's JUnit selector, because the
@@ -2419,7 +2421,15 @@ each passed phase has a hashed corridor evidence artifact. The readiness
 report accepts the local `--log-dir dist/sccp-production-corridor` layout,
 downloaded CI artifact folders named `sccp-production-corridor-<phase>`, and
 explicit repeated `--phase-result <phase>=passed --phase-evidence
-<phase>=<log>` arguments when phases are run separately. Attach the generated
+<phase>=<log>` arguments when phases are run separately. Use phase names
+exactly as listed by the corridor runner and unpadded phase-result statuses;
+padded, whitespace, Markdown-unsafe, or malformed phase names are rejected
+instead of being trimmed into canonical phase names, padded or whitespace
+statuses are rejected instead of being trimmed into canonical statuses, and
+unknown phase names or statuses use category-only errors rather than echoing
+operator-supplied text. Duplicate phase-evidence diagnostics redact local paths
+as `<path>`, and missing `--phase-evidence-dir` logs report standard checked
+layouts without echoing the operator-supplied directory. Attach the generated
 Markdown or JSON report to release notes so governance reviewers can inspect
 the exact SCCP evidence, structured release checklist, validation state, and
 production-corridor transcripts. The report includes each input evidence
@@ -2526,7 +2536,10 @@ governed source/deployment/destination hashes, route allowlist binding, and
 route-canary transaction evidence, so hand-edited truthy or malformed values
 cannot satisfy manifest-vs-summary readiness comparisons. Release-readiness and
 bundle verification pin that active checklist schema as source inventory before
-production evidence can pass. The
+production evidence can pass. Required-record summary unknown keys are classified
+before checklist text is rendered, so padded, control-character, whitespace,
+Markdown-unsafe, or Unicode-confusable local record names become category-only
+blockers instead of raw public diagnostics. The
 verifier recomputes the all-lanes
 summary by loading the all-lanes evidence validator directly against the copied
 TOML evidence files before comparing it with the standalone summary and
@@ -2761,6 +2774,10 @@ a release-notes attachment that is not the verifier-owned canonical
 manifest/report artifact table, manifest artifact-order drift from the bundle builder's public
 attachment order, and missing, malformed, unbound, lane-mismatched, or extra-field
 per-lane cryptographic evidence rows.
+The release-bundle builder applies the same malformed-name classification to
+copied report-artifact rows, release-checklist root/item fields, and corridor
+root fields before Markdown rendering, so hostile local labels become
+category-only blockers instead of raw diagnostics.
 Release-readiness and bundle verification pin the copied input-provenance schema
 as required source inventory, so canonical copied input paths, unique
 input/input-artifact provenance, `evidence/NN-*.toml` layout, and recomputation
@@ -2770,6 +2787,19 @@ as required source inventory, so canonical manifest/readiness/all-lanes JSON
 serialization, duplicate-key rejection with malformed-key classification,
 non-UTF-8 diagnostics, and malformed manifest/readiness root-field
 classification cannot be dropped before public bundle readiness passes.
+Copied readiness-report root unknown field names are classified before bundle
+rendering, so padded, control-character, whitespace, Markdown-unsafe, or
+Unicode-confusable local root claims become category-only blockers instead of
+raw public diagnostics. Copied source-inventory row unknown fields use the same
+classifier before source-inventory blocker rendering, preserving readable
+operator notes while suppressing hostile row names. The
+strict verifier also reports duplicate integer entries in copied all-lanes
+domain lists directly, so duplicated `supported_launch_domains` or
+`unsupported_launch_domains` fail before relying only on later launch-scope set
+checks. Copied all-lanes summary, lane, and record unknown field names are
+classified before bundle rendering, so padded, control-character, whitespace,
+Markdown-unsafe, or Unicode-confusable names become category-only blockers
+instead of raw public diagnostics.
 The manifest artifact-set/order inventory also pins malformed public artifact
 field-name classification before release-note artifact tables can pass.
 Release-readiness and bundle verification pin the public Markdown text schema
@@ -2780,6 +2810,10 @@ The cryptographic-evidence source inventory also pins row-key and audit-key
 classification, including safe diagnostics for readable operator fields,
 category-only diagnostics for malformed or Unicode-confusable row names, and
 Markdown suppression for malformed row domains or source-adapter audit keys.
+The release-bundle builder applies the same row-key classifier to copied
+cryptographic-evidence rows before Markdown rendering, so padded,
+control-character, whitespace, Markdown-unsafe, or Unicode-confusable local
+row claims become category-only blockers instead of raw diagnostics.
 Release-readiness and bundle verification also pin public cryptographic-evidence
 binding as required source inventory, so production-domain row inventory,
 lane-field binding, active-row audit-key classification, canonical row
@@ -2790,6 +2824,28 @@ Release-readiness and bundle verification also pin public submission-surface
 binding as required source inventory, so lane/backend inventory, per-SDK helper
 inventory, verifier-owned surface recomputation, and corridor-phase binding
 cannot be dropped before public bundle readiness passes.
+Unknown submission-surface row fields use the same structured field-name
+classification in the verifier and the release-bundle builder before Markdown
+rendering, so safe operator notes remain readable while padded,
+control-character, whitespace, Markdown-unsafe, or Unicode-confusable row
+claims become category-only blockers.
+Submission-surface lane labels are schema-classified before lane inventory,
+backend matching, helper inventory, or Markdown-presence diagnostics run, so
+padded, control-character, whitespace, Markdown-unsafe, malformed, or
+Unicode-confusable lane labels become category-only blockers instead of raw
+public diagnostics. Submission-surface `proof_backend` values use the same
+classification before backend mismatch or Markdown-presence checks, so hostile
+backend ids cannot leak through secondary verifier messages while safe unknown
+backend ids remain readable operator diagnostics. Submission-surface
+`on_chain_submission` text is likewise checked against the verifier-owned
+expected text for the row's lane before Markdown-presence checks, so copied
+operator text or hostile submission labels cannot leak through public
+diagnostics. Default and per-SDK helper symbols are also classified before
+helper-string derivation, helper inventory, UI-hook matching, or
+Markdown-presence checks, so table-breaking or confusable helper names become
+category-only blockers. If a copied report corrupts the per-SDK helper map or
+any helper entry, the readiness Markdown renderer emits an invalid-marker cell
+instead of falling back to raw `sdk_helpers` text or rendering the raw helper.
 That final check recomputes the public cryptographic table from the embedded
 all-lanes lane evidence, requires one row for every required production domain
 with no duplicate or unknown domains, requires exact JSON domain/chain types

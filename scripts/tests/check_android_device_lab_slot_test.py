@@ -914,7 +914,14 @@ def create_slot(
     raw_test_commands = list(KAGEMUSHA_ANDROID_RAW_TEST_COMMANDS)
     write_json(
         slot / "telemetry" / "telemetry.json",
-        {"schema_version": 1, "slot_id": name, "suite": "kagemusha-device-lab"},
+        {
+            "schema_version": 1,
+            "slot_id": name,
+            "suite": "kagemusha-device-lab",
+            "device_model": "Pixel 8",
+            "device_codename": "husky",
+            "app_package_name": app_package_name,
+        },
     )
     write_text(slot / "telemetry" / "status.ndjson", '{"status":"ok"}\n')
     write_json(
@@ -5938,6 +5945,60 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             "telemetry/telemetry.json contains unexpected field debug_note",
             errors,
         )
+
+    def test_kagemusha_android_raw_puller_rejects_noncanonical_telemetry_identity_strings(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "device_model",
+                " Pixel 6 ",
+                "telemetry/telemetry.json device_model must not contain surrounding whitespace",
+            ),
+            (
+                "device_codename",
+                "oriole\u0000",
+                "telemetry/telemetry.json device_codename must not contain control characters",
+            ),
+            (
+                "app_package_name",
+                "",
+                "telemetry/telemetry.json app_package_name must be a non-empty string",
+            ),
+            (
+                "app_package_name",
+                "client_secret=not-for-telemetry",
+                "telemetry/telemetry.json app_package_name must not contain secret-looking material",
+            ),
+        )
+        for field, value, expected_error in cases:
+            with self.subTest(field=field, expected_error=expected_error):
+                telemetry = json.loads(
+                    raw_slot_artifacts("pixel6")["telemetry/telemetry.json"]
+                )
+                telemetry[field] = value
+                with tempfile.TemporaryDirectory() as temp:
+                    out_root = Path(temp) / "raw"
+                    tar_bytes = raw_slot_tar_bytes(
+                        "pixel6",
+                        omit_files={"telemetry/telemetry.json"},
+                        extra_files={
+                            "pixel6/telemetry/telemetry.json": json.dumps(
+                                telemetry,
+                                sort_keys=True,
+                            ).encode("utf-8")
+                            + b"\n",
+                        },
+                    )
+
+                    status, slot_path, errors = raw_puller.pull_raw_slot(
+                        raw_pull_args(out_root),
+                        runner=fake_raw_pull_runner(tar_bytes, "pixel6"),
+                    )
+
+                self.assertEqual(status, 1)
+                self.assertIsNone(slot_path)
+                self.assertIn(expected_error, errors)
 
     def test_kagemusha_android_raw_puller_rejects_noncanonical_json_slot_bindings(
         self,
@@ -13909,6 +13970,57 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             "telemetry/telemetry.json contains unexpected field debug_note",
             report["errors"],
         )
+
+    def test_production_metadata_rejects_noncanonical_telemetry_identity_strings(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "device_model",
+                " Pixel 8 ",
+                "telemetry/telemetry.json device_model must not contain surrounding whitespace",
+            ),
+            (
+                "device_codename",
+                "husky\u0000",
+                "telemetry/telemetry.json device_codename must not contain control characters",
+            ),
+            (
+                "app_package_name",
+                "",
+                "telemetry/telemetry.json app_package_name must be a non-empty string",
+            ),
+            (
+                "app_package_name",
+                "client_secret=not-for-telemetry",
+                "telemetry/telemetry.json app_package_name must not contain secret-looking material",
+            ),
+        )
+        for field, value, expected_error in cases:
+            with self.subTest(field=field, expected_error=expected_error):
+                with tempfile.TemporaryDirectory() as temp:
+                    signer = create_test_signer(Path(temp))
+                    trusted = trusted_signers_for(signer)
+                    slot = create_slot(
+                        Path(temp),
+                        "pixel8",
+                        device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                        signer,
+                    )
+                    telemetry_path = slot / "telemetry" / "telemetry.json"
+                    telemetry = json.loads(telemetry_path.read_text(encoding="utf-8"))
+                    telemetry[field] = value
+                    write_json(telemetry_path, telemetry)
+                    rewrite_sha256sum(slot)
+
+                    report = device_lab.scan_slot(
+                        slot,
+                        require_kagemusha_production_evidence=True,
+                        trusted_signer_public_keys=trusted,
+                    )
+
+                self.assertEqual(report["status"], "error")
+                self.assertIn(expected_error, report["errors"])
 
     def test_production_metadata_rejects_noncanonical_telemetry_slot_binding(
         self,

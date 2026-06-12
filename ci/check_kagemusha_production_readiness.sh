@@ -2380,7 +2380,9 @@ TEXT_REQUIREMENTS = {
         "CONTROL_EXIT_MARKER_REDACTION",
         "SECRET_EXIT_MARKER_REDACTION",
         "def _secret_path_error",
-        'if device_lab._contains_control_character(str(path)):\n        return f"{label} must not contain control characters"',
+        'if device_lab._contains_control_character(path_text):\n        return f"{label} must not contain control characters"',
+        'if "\\\\" in path_text:\n        return f"{label} must not contain backslashes"',
+        'if ".." in path.parts:\n        return f"{label} must be canonical"',
         "def _display_exit_marker",
         "device_lab._contains_control_character(marker)",
         "device_lab._display_path(exc.key)",
@@ -2442,7 +2444,9 @@ TEXT_REQUIREMENTS = {
         "SECRET_EXIT_MARKER_REDACTION",
         "CANONICAL_ELAPSED_SECONDS_RE",
         "def _secret_path_error",
-        'if device_lab._contains_control_character(str(path)):\n        return f"{label} must not contain control characters"',
+        'if device_lab._contains_control_character(path_text):\n        return f"{label} must not contain control characters"',
+        'if "\\\\" in path_text:\n        return f"{label} must not contain backslashes"',
+        'if ".." in path.parts:\n        return f"{label} must be canonical"',
         "def _display_exit_marker",
         "def _parse_canonical_elapsed_seconds_file_text",
         "device_lab._contains_control_character(marker)",
@@ -2525,7 +2529,9 @@ TEXT_REQUIREMENTS = {
         "LINEAGE_KEY_ARTIFACTS_BY_PROFILE",
         "MAX_EXECUTION_REPORT_BYTES",
         "def _secret_path_error",
-        'if device_lab._contains_control_character(str(path)):\n        return f"{label} must not contain control characters"',
+        'if device_lab._contains_control_character(path_text):\n        return f"{label} must not contain control characters"',
+        'if "\\\\" in path_text:\n        return f"{label} must not contain backslashes"',
+        'if ".." in path.parts:\n        return f"{label} must be canonical"',
         "device_lab._display_path(exc.key)",
         "device_lab._display_path(extra_keys[0])",
         "def _validate_report_command",
@@ -2602,7 +2608,9 @@ TEXT_REQUIREMENTS = {
         "CONTROL_EXIT_MARKER_REDACTION",
         "SECRET_EXIT_MARKER_REDACTION",
         "def _secret_path_error",
-        'if device_lab._contains_control_character(str(path)):\n        return f"{label} must not contain control characters"',
+        'if device_lab._contains_control_character(path_text):\n        return f"{label} must not contain control characters"',
+        'if "\\\\" in path_text:\n        return f"{label} must not contain backslashes"',
+        'if ".." in path.parts:\n        return f"{label} must be canonical"',
         "def _display_exit_marker",
         "device_lab._contains_control_character(marker)",
         "device_lab._display_path(exc.key)",
@@ -3640,6 +3648,7 @@ TEXT_REQUIREMENTS = {
     "scripts/tests/kagemusha_production_readiness_test.py": (
         "test_complete_signed_android_matrix_passes_rollup",
         "test_staged_path_validators_reject_control_directory_paths_before_metadata",
+        "test_staged_path_validators_reject_alias_directory_paths_before_metadata",
         "summary[\"lineage_proof_evidence\"][\"generated_at_utc\"]",
         "test_missing_android_root_blocks_rollup",
         "test_missing_android_root_uses_lstat_before_exists_preflight",
@@ -5073,6 +5082,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-direct-hash-shape",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-direct-hash-read-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-generator-log-strict-read",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-staged-path-aliases",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-exit-marker",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-exit-marker",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-readback",
@@ -10693,6 +10703,40 @@ if mode == "--negative-control-compact-key-helper-generator-log-strict-read":
             "scripts/kagemusha_recursive_compact_key_evidence.py",
             'except UnicodeDecodeError:\n        return None, None, None, [f"{label} could not be read"]',
             'except UnicodeDecodeError:\n        raise',
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-staged-path-aliases":
+    staged_alias_checks = (
+        '    if "\\\\" in path_text:\n'
+        '        return f"{label} must not contain backslashes"\n'
+        '    if ".." in path.parts:\n'
+        '        return f"{label} must be canonical"\n'
+    )
+    run_negative_control(
+        "Kagemusha staged path alias gate",
+        lambda: (
+            override_text_all(
+                "scripts/kagemusha_run_lineage_proof_staged.py",
+                staged_alias_checks,
+                "",
+            ),
+            override_text_all(
+                "scripts/kagemusha_run_recursive_compact_keygen_staged.py",
+                staged_alias_checks,
+                "",
+            ),
+            override_text_all(
+                "scripts/kagemusha_finalize_lineage_proof_staged_run.py",
+                staged_alias_checks,
+                "",
+            ),
+            override_text_all(
+                "scripts/kagemusha_finalize_recursive_compact_key_staged_run.py",
+                staged_alias_checks,
+                "",
+            ),
         ),
     )
     raise SystemExit(0)

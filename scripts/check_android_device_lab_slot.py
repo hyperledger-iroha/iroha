@@ -203,6 +203,11 @@ TELEMETRY_FIELDS: frozenset[str] = frozenset(
         "app_package_name",
     }
 )
+TELEMETRY_STRING_FIELDS: tuple[str, ...] = (
+    "device_model",
+    "device_codename",
+    "app_package_name",
+)
 SLOT_METADATA_FIELDS: frozenset[str] = frozenset(
     {
         "schema",
@@ -3306,6 +3311,28 @@ def _validate_required_pending_queue_artifact(slot_path: Path, errors: list[str]
         )
 
 
+def _validate_telemetry_string(
+    telemetry: dict[str, Any],
+    key: str,
+    errors: list[str],
+) -> str | None:
+    value = telemetry.get(key)
+    label = f"telemetry/telemetry.json {key}"
+    if not isinstance(value, str) or not value:
+        errors.append(f"{label} must be a non-empty string")
+        return None
+    if value != value.strip():
+        errors.append(f"{label} must not contain surrounding whitespace")
+        return None
+    if _contains_control_character(value):
+        errors.append(f"{label} must not contain control characters")
+        return None
+    if SECRET_RE.search(value):
+        errors.append(f"{label} must not contain secret-looking material")
+        return None
+    return value
+
+
 def _validate_required_telemetry_artifact(slot_path: Path, errors: list[str]) -> None:
     telemetry = _load_json(
         slot_path / "telemetry" / "telemetry.json",
@@ -3338,6 +3365,8 @@ def _validate_required_telemetry_artifact(slot_path: Path, errors: list[str]) ->
         errors.append("telemetry/telemetry.json suite must not contain control characters")
     elif suite != KAGEMUSHA_TELEMETRY_SUITE:
         errors.append("telemetry/telemetry.json suite must identify a Kagemusha device-lab run")
+    for key in TELEMETRY_STRING_FIELDS:
+        _validate_telemetry_string(telemetry, key, errors)
 
 
 def _validate_required_status_artifact(slot_path: Path, errors: list[str]) -> None:

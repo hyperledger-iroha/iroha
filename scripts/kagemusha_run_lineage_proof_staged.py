@@ -77,10 +77,15 @@ LINEAGE_KEY_ARTIFACTS_BY_PROFILE = {
 
 
 def _secret_path_error(path: Path, label: str) -> str | None:
-    if device_lab.SECRET_RE.search(str(path)):
+    path_text = str(path)
+    if device_lab.SECRET_RE.search(path_text):
         return f"{label} must not contain secret-looking material"
-    if device_lab._contains_control_character(str(path)):
+    if device_lab._contains_control_character(path_text):
         return f"{label} must not contain control characters"
+    if "\\" in path_text:
+        return f"{label} must not contain backslashes"
+    if ".." in path.parts:
+        return f"{label} must be canonical"
     return None
 
 

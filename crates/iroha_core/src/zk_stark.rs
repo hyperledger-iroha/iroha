@@ -62,29 +62,73 @@ const MAX_TRANSCRIPT_LABEL_LEN: usize = 128;
 const MAX_ENVELOPE_BYTES: usize = 1 << 20; // 1 MiB guard for decoded envelopes
 
 pub(crate) const STARK_FRI_QUERY_INDEX_REPEATED_ERROR: &str = "FRI query index repeated";
+const STARK_FRI_BOUNDED_QUERY_REJECTION_ATTEMPTS: usize = 8;
+
+fn validate_stark_transcript_label(label: &str, max_len: usize) -> Result<(), &'static str> {
+    if label.is_empty() {
+        return Err("transcript label must not be empty");
+    }
+    if label.len() > max_len {
+        return Err("transcript label exceeds maximum length");
+    }
+    if !label.bytes().all(|byte| byte.is_ascii_graphic()) {
+        return Err("transcript label must contain only printable ASCII bytes without whitespace");
+    }
+    Ok(())
+}
+
+fn validate_stark_circuit_id(circuit_id: &str) -> Result<(), &'static str> {
+    if circuit_id.is_empty() {
+        return Err("circuit id must not be empty");
+    }
+    if circuit_id.len() > MAX_TRANSCRIPT_LABEL_LEN {
+        return Err("circuit id exceeds maximum length");
+    }
+    if !circuit_id.bytes().all(|byte| byte.is_ascii_graphic()) {
+        return Err("circuit id must contain only printable ASCII bytes without whitespace");
+    }
+    Ok(())
+}
+
+fn validate_stark_domain_tag(domain_tag: &str, max_len: usize) -> Result<(), &'static str> {
+    if domain_tag.is_empty() {
+        return Err("domain tag must not be empty");
+    }
+    if domain_tag.len() > max_len {
+        return Err("domain tag exceeds maximum length");
+    }
+    if !domain_tag.bytes().all(|byte| byte.is_ascii_graphic()) {
+        return Err("domain tag must contain only printable ASCII bytes without whitespace");
+    }
+    Ok(())
+}
 
 /// Tunable limits applied during STARK envelope verification to prevent denial-of-service inputs.
+///
+/// These values can tighten the built-in protocol caps for a caller, but they
+/// cannot relax canonical verifier structure limits. Values above the native
+/// caps are clamped internally.
 #[derive(Clone, Copy, Debug)]
 pub struct StarkVerifierLimits {
-    /// Maximum supported domain log2.
+    /// Caller cap for domain log2, clamped to the native protocol maximum.
     pub max_domain_log2: u8,
-    /// Maximum supported blowup log2.
+    /// Caller cap for blowup log2, clamped to the native protocol maximum.
     pub max_blowup_log2: u8,
-    /// Maximum fold arity.
+    /// Caller cap for fold arity, clamped to the native verifier maximum.
     pub max_fold_arity: u8,
-    /// Maximum number of queries.
+    /// Caller cap for query count, clamped to the native protocol maximum.
     pub max_queries: usize,
-    /// Maximum Merkle depth.
+    /// Caller cap for Merkle depth, clamped to the native verifier maximum.
     pub max_merkle_depth: usize,
-    /// Maximum auxiliary terms in composition leaf.
+    /// Caller cap for auxiliary terms in a composition leaf, clamped natively.
     pub max_aux_terms: usize,
-    /// Maximum values in a sampled AIR trace row.
+    /// Caller cap for values in a sampled AIR trace row, clamped natively.
     pub max_air_width: usize,
-    /// Maximum domain tag length.
+    /// Caller cap for domain tag length, clamped to the canonical maximum.
     pub max_domain_tag_len: usize,
-    /// Maximum transcript label length.
+    /// Caller cap for transcript label length, clamped to the canonical maximum.
     pub max_transcript_label_len: usize,
-    /// Maximum encoded envelope size in bytes (decoded input slice length).
+    /// Caller cap for encoded envelope size, clamped to the native byte budget.
     pub max_envelope_bytes: usize,
 }
 
@@ -103,6 +147,48 @@ impl Default for StarkVerifierLimits {
             max_envelope_bytes: MAX_ENVELOPE_BYTES,
         }
     }
+}
+
+fn effective_max_domain_log2(limits: &StarkVerifierLimits) -> u8 {
+    limits.max_domain_log2.min(MAX_DOMAIN_LOG2)
+}
+
+fn effective_max_blowup_log2(limits: &StarkVerifierLimits) -> u8 {
+    limits.max_blowup_log2.min(MAX_DOMAIN_LOG2)
+}
+
+fn effective_max_fold_arity(limits: &StarkVerifierLimits) -> u8 {
+    limits.max_fold_arity.min(1 << 5)
+}
+
+fn effective_max_queries(limits: &StarkVerifierLimits) -> usize {
+    limits.max_queries.min(MAX_FRI_QUERIES)
+}
+
+fn effective_max_merkle_depth(limits: &StarkVerifierLimits) -> usize {
+    limits.max_merkle_depth.min(MAX_MERKLE_DEPTH)
+}
+
+fn effective_max_aux_terms(limits: &StarkVerifierLimits) -> usize {
+    limits.max_aux_terms.min(MAX_AUX_TERMS)
+}
+
+fn effective_max_air_width(limits: &StarkVerifierLimits) -> usize {
+    limits.max_air_width.min(MAX_AIR_WIDTH)
+}
+
+fn effective_max_domain_tag_len(limits: &StarkVerifierLimits) -> usize {
+    limits.max_domain_tag_len.min(MAX_DOMAIN_TAG_LEN)
+}
+
+fn effective_max_transcript_label_len(limits: &StarkVerifierLimits) -> usize {
+    limits
+        .max_transcript_label_len
+        .min(MAX_TRANSCRIPT_LABEL_LEN)
+}
+
+fn effective_max_envelope_bytes(limits: &StarkVerifierLimits) -> usize {
+    limits.max_envelope_bytes.min(MAX_ENVELOPE_BYTES)
 }
 
 /// Goldilocks field element with canonical modular reduction.
@@ -360,7 +446,8 @@ fn merkle_path_depth_ok(
     expected_depth: usize,
     limits: &StarkVerifierLimits,
 ) -> bool {
-    if expected_depth > limits.max_merkle_depth || path.siblings.len() != expected_depth {
+    if expected_depth > effective_max_merkle_depth(limits) || path.siblings.len() != expected_depth
+    {
         return false;
     }
     let required_dir_bytes = (expected_depth + 7) / 8;
@@ -422,15 +509,21 @@ fn validate_params(
     query_count: usize,
     limits: &StarkVerifierLimits,
 ) -> Option<usize> {
-    if params.version != 1 || params.n_log2 == 0 || params.n_log2 > limits.max_domain_log2 {
+    if params.version != 1
+        || params.n_log2 == 0
+        || params.n_log2 > effective_max_domain_log2(limits)
+    {
         return None;
     }
-    if params.blowup_log2 == 0 || params.blowup_log2 > limits.max_blowup_log2 {
+    if params.blowup_log2 == 0
+        || params.blowup_log2 > effective_max_blowup_log2(limits)
+        || params.blowup_log2 > params.n_log2
+    {
         return None;
     }
     // The current wire format (`FoldDecommitV1`) carries a binary fold (y0,y1),
     // so only `fold_arity = 2` is supported by the native verifier.
-    if params.fold_arity != 2 || params.fold_arity > limits.max_fold_arity {
+    if params.fold_arity != 2 || params.fold_arity > effective_max_fold_arity(limits) {
         return None;
     }
     if params.merkle_arity != 2 {
@@ -439,11 +532,12 @@ fn validate_params(
     if params.hash_fn != STARK_HASH_SHA256_V1 && params.hash_fn != STARK_HASH_POSEIDON2_V1 {
         return None;
     }
-    if params.domain_tag.is_empty() || params.domain_tag.len() > limits.max_domain_tag_len {
+    if validate_stark_domain_tag(&params.domain_tag, effective_max_domain_tag_len(limits)).is_err()
+    {
         return None;
     }
     if params.queries == 0
-        || params.queries as usize > limits.max_queries
+        || params.queries as usize > effective_max_queries(limits)
         || params.queries as usize != query_count
     {
         return None;
@@ -452,7 +546,7 @@ fn validate_params(
     if query_count > domain {
         return None;
     }
-    if roots_len == 0 || roots_len > limits.max_merkle_depth + 1 {
+    if roots_len == 0 || roots_len > effective_max_merkle_depth(limits) + 1 {
         return None;
     }
     let required_layers = layers_required(params)?;
@@ -462,9 +556,58 @@ fn validate_params(
     Some(required_layers)
 }
 
+fn validate_stark_opening_commitment_params_v1(
+    params: &StarkFriParamsV1,
+) -> Result<(), &'static str> {
+    let roots_len = layers_required(params)
+        .and_then(|layers| layers.checked_add(1))
+        .ok_or("STARK opening commitment parameters invalid")?;
+    if validate_params(
+        params,
+        roots_len,
+        usize::from(params.queries),
+        &StarkVerifierLimits::default(),
+    )
+    .is_none()
+    {
+        return Err("STARK opening commitment parameters invalid");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn attach_valid_auxiliary_composition_values(envelope: &mut StarkVerifyEnvelopeV1) {
+        let query_count = envelope.proof.queries.len();
+        let leaf = 30_u64;
+        let (comp_root, path) =
+            stark_merkle_root_and_path_from_field_values_v1(&envelope.params, &[leaf], 0)
+                .expect("derive auxiliary composition root");
+        let comp_values = (0..query_count)
+            .map(|_| StarkCompositionValueV1 {
+                leaf,
+                constant: 7,
+                z_coeff: 0,
+                aux_terms: vec![
+                    StarkCompositionTermV1 {
+                        wire_index: 1,
+                        value: 5,
+                        coeff: 3,
+                    },
+                    StarkCompositionTermV1 {
+                        wire_index: 3,
+                        value: 2,
+                        coeff: 4,
+                    },
+                ],
+                path: path.clone(),
+            })
+            .collect();
+        envelope.proof.commits.comp_root = Some(comp_root);
+        envelope.proof.comp_values = Some(comp_values);
+    }
 
     #[test]
     fn fq_addition_wraps_correctly() {
@@ -525,7 +668,7 @@ mod tests {
         validate_zk_ace_stark_fri_verifying_key_payload(&valid)
             .expect("canonical ZK-ACE STARK/FRI payload is accepted");
 
-        let mutations: [(&str, fn(&mut StarkFriVerifyingKeyV1)); 10] = [
+        let mutations: [(&str, fn(&mut StarkFriVerifyingKeyV1)); 11] = [
             ("version", |payload: &mut StarkFriVerifyingKeyV1| {
                 payload.version = 2
             }),
@@ -546,6 +689,9 @@ mod tests {
             }),
             ("blowup_floor", |payload: &mut StarkFriVerifyingKeyV1| {
                 payload.blowup_log2 = ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2 - 1;
+            }),
+            ("blowup_domain", |payload: &mut StarkFriVerifyingKeyV1| {
+                payload.blowup_log2 = payload.n_log2 + 1;
             }),
             ("queries_floor", |payload: &mut StarkFriVerifyingKeyV1| {
                 payload.queries = ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES - 1;
@@ -588,7 +734,7 @@ mod tests {
         validate_stark_fri_production_verifying_key_payload(&poseidon, CIRCUIT_ID, "test")
             .expect("Poseidon2 STARK/FRI payload is accepted");
 
-        let mutations: [(&str, fn(&mut StarkFriVerifyingKeyV1)); 10] = [
+        let mutations: [(&str, fn(&mut StarkFriVerifyingKeyV1)); 11] = [
             ("version", |payload: &mut StarkFriVerifyingKeyV1| {
                 payload.version = 2
             }),
@@ -610,6 +756,9 @@ mod tests {
             ("blowup_floor", |payload: &mut StarkFriVerifyingKeyV1| {
                 payload.blowup_log2 = ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2 - 1;
             }),
+            ("blowup_domain", |payload: &mut StarkFriVerifyingKeyV1| {
+                payload.blowup_log2 = payload.n_log2 + 1;
+            }),
             ("queries_floor", |payload: &mut StarkFriVerifyingKeyV1| {
                 payload.queries = ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES - 1;
             }),
@@ -629,6 +778,116 @@ mod tests {
                 "{label} mutation must fail closed"
             );
         }
+
+        let overlong_circuit_id = "soracloud:".to_owned() + &"x".repeat(MAX_TRANSCRIPT_LABEL_LEN);
+        for circuit_id in [
+            "",
+            " ",
+            "soracloud:test production-circuit",
+            "soracloud:test\tproduction-circuit",
+            overlong_circuit_id.as_str(),
+        ] {
+            let mut invalid = valid.clone();
+            invalid.circuit_id = circuit_id.to_owned();
+            assert!(
+                validate_stark_fri_production_verifying_key_payload(&invalid, circuit_id, "test")
+                    .is_err(),
+                "matching noncanonical circuit id {circuit_id:?} must fail closed"
+            );
+        }
+    }
+
+    #[test]
+    fn stark_verifier_limits_cannot_relax_canonical_structure_caps() {
+        let valid = StarkFriParamsV1 {
+            version: 1,
+            n_log2: 4,
+            blowup_log2: 2,
+            fold_arity: 2,
+            queries: 2,
+            merkle_arity: 2,
+            hash_fn: STARK_HASH_SHA256_V1,
+            domain_tag: "iroha:test:canonical-limit-cap".to_owned(),
+        };
+        assert_eq!(
+            validate_params(&valid, 5, 2, &StarkVerifierLimits::default()),
+            Some(4)
+        );
+
+        let mut relaxed = StarkVerifierLimits::default();
+        relaxed.max_domain_log2 = MAX_DOMAIN_LOG2 + 1;
+        relaxed.max_blowup_log2 = MAX_DOMAIN_LOG2 + 1;
+        relaxed.max_queries = MAX_FRI_QUERIES + 1;
+        relaxed.max_merkle_depth = MAX_MERKLE_DEPTH + 1;
+        relaxed.max_aux_terms = MAX_AUX_TERMS + 1;
+        relaxed.max_air_width = MAX_AIR_WIDTH + 1;
+        relaxed.max_domain_tag_len = MAX_DOMAIN_TAG_LEN + 1;
+        relaxed.max_transcript_label_len = MAX_TRANSCRIPT_LABEL_LEN + 1;
+        relaxed.max_envelope_bytes = MAX_ENVELOPE_BYTES + 1;
+
+        let mut oversized_domain = valid.clone();
+        oversized_domain.n_log2 = MAX_DOMAIN_LOG2 + 1;
+        oversized_domain.queries = 1;
+        assert!(
+            validate_params(
+                &oversized_domain,
+                usize::from(MAX_DOMAIN_LOG2) + 2,
+                1,
+                &relaxed
+            )
+            .is_none(),
+            "caller limits must not relax canonical domain depth"
+        );
+
+        let mut oversized_blowup = valid.clone();
+        oversized_blowup.blowup_log2 = MAX_DOMAIN_LOG2 + 1;
+        assert!(
+            validate_params(&oversized_blowup, 5, 2, &relaxed).is_none(),
+            "caller limits must not relax canonical blowup depth"
+        );
+        let mut impossible_blowup = valid.clone();
+        impossible_blowup.blowup_log2 = valid.n_log2 + 1;
+        assert!(
+            validate_params(&impossible_blowup, 5, 2, &relaxed).is_none(),
+            "verifier must reject blowup depth greater than the evaluation domain"
+        );
+
+        let mut too_many_queries = valid.clone();
+        too_many_queries.n_log2 = 6;
+        too_many_queries.queries = (MAX_FRI_QUERIES + 1) as u16;
+        assert!(
+            validate_params(&too_many_queries, 7, MAX_FRI_QUERIES + 1, &relaxed).is_none(),
+            "caller limits must not relax canonical query count"
+        );
+
+        let mut overlong_domain_tag = valid.clone();
+        overlong_domain_tag.domain_tag = "d".repeat(MAX_DOMAIN_TAG_LEN + 1);
+        assert!(
+            validate_params(&overlong_domain_tag, 5, 2, &relaxed).is_none(),
+            "caller limits must not relax canonical domain-tag length"
+        );
+
+        let too_deep_path = MerklePath {
+            dirs: vec![0; (MAX_MERKLE_DEPTH + 8) / 8],
+            siblings: vec![[0; 32]; MAX_MERKLE_DEPTH + 1],
+        };
+        assert!(
+            !merkle_path_depth_ok(&too_deep_path, MAX_MERKLE_DEPTH + 1, &relaxed),
+            "caller limits must not relax canonical Merkle depth"
+        );
+
+        let overlong_transcript_label = "T".repeat(MAX_TRANSCRIPT_LABEL_LEN + 1);
+        assert!(
+            validate_stark_transcript_label(
+                &overlong_transcript_label,
+                effective_max_transcript_label_len(&relaxed),
+            )
+            .is_err(),
+            "caller limits must not relax canonical transcript-label length"
+        );
+        assert_eq!(effective_max_aux_terms(&relaxed), MAX_AUX_TERMS);
+        assert_eq!(effective_max_air_width(&relaxed), MAX_AIR_WIDTH);
+        assert_eq!(effective_max_envelope_bytes(&relaxed), MAX_ENVELOPE_BYTES);
     }
 
     #[test]
@@ -755,6 +1014,84 @@ mod tests {
     }
 
     #[test]
+    fn without_replacement_query_schedule_uses_bound_specific_offsets() {
+        assert_without_replacement_query_schedule_uses_bound_specific_offsets(
+            STARK_HASH_SHA256_V1,
+            "sha256",
+        );
+        assert_without_replacement_query_schedule_uses_bound_specific_offsets(
+            STARK_HASH_POSEIDON2_V1,
+            "poseidon2",
+        );
+    }
+
+    fn assert_without_replacement_query_schedule_uses_bound_specific_offsets(
+        hash_fn: u8,
+        hash_label: &str,
+    ) {
+        let mut params = StarkFriParamsV1 {
+            version: 1,
+            n_log2: 3,
+            blowup_log2: 1,
+            fold_arity: 2,
+            queries: 4,
+            merkle_arity: 2,
+            hash_fn,
+            domain_tag: String::new(),
+        };
+        let label = "IROHA-TEST-BOUNDED-STARK-QUERY-OFFSET";
+        let roots = [[0x42; 32], [0x24; 32]];
+        let domain = 1_usize << usize::from(params.n_log2);
+        let query_number = 1;
+        let remaining = domain - query_number;
+
+        for nonce in 0_u32..4096 {
+            params.domain_tag = format!("iroha:test:{hash_label}:bounded-query-offset:{nonce}");
+            let domain_remodulo = derive_query_index(label, &params, &roots, query_number)
+                .expect("query index")
+                % remaining;
+            let bounded =
+                derive_bounded_query_offset(label, &params, &roots, query_number, remaining)
+                    .expect("bounded query offset");
+            if domain_remodulo == bounded {
+                continue;
+            }
+
+            let first_draw =
+                derive_bounded_query_offset(label, &params, &roots, 0, domain).expect("first draw");
+            let mut swaps = BTreeMap::new();
+            let first_selected = first_draw;
+            swaps.insert(first_draw, 0);
+            let bounded_selected = swaps
+                .get(&(query_number + bounded))
+                .copied()
+                .unwrap_or(query_number + bounded);
+            let remodulo_selected = swaps
+                .get(&(query_number + domain_remodulo))
+                .copied()
+                .unwrap_or(query_number + domain_remodulo);
+            if bounded_selected == remodulo_selected {
+                continue;
+            }
+
+            let indices =
+                derive_query_indices_without_replacement(label, &params, &roots, 2, domain)
+                    .expect("without-replacement schedule");
+            assert_eq!(indices[0], first_selected);
+            assert_eq!(indices[1], bounded_selected);
+            assert_ne!(
+                indices[1], remodulo_selected,
+                "query schedule must use a bound-specific draw, not domain sample modulo remaining"
+            );
+            return;
+        }
+
+        panic!(
+            "failed to find {hash_label} bounded-offset fixture that differs from domain remodulo"
+        );
+    }
+
+    #[test]
     fn air_opening_first_fri_value_binding_uses_sampled_parity() {
         let empty_path = || MerklePath {
             dirs: Vec::new(),
@@ -781,11 +1118,19 @@ mod tests {
         validate_stark_air_opening_first_fri_value_v1(&opening, 0, &decommit)
             .expect("even sampled index binds y0");
         let mut odd_opening = opening.clone();
+        odd_opening.index = 1;
         odd_opening.composition_value = 17;
         validate_stark_air_opening_first_fri_value_v1(&odd_opening, 1, &decommit)
             .expect("odd sampled index binds y1");
         assert_eq!(
             validate_stark_air_opening_first_fri_value_v1(&opening, 1, &decommit)
+                .expect_err("mismatched sampled index must fail"),
+            "AIR/FRI opening index mismatch"
+        );
+        let mut wrong_side_opening = odd_opening;
+        wrong_side_opening.composition_value = 11;
+        assert_eq!(
+            validate_stark_air_opening_first_fri_value_v1(&wrong_side_opening, 1, &decommit)
                 .expect_err("wrong FRI side must fail"),
             "AIR/FRI composition value mismatch"
         );
@@ -811,6 +1156,252 @@ mod tests {
         )
         .expect("ok");
         assert!(verify_stark_fri_envelope(&bytes));
+    }
+
+    #[test]
+    fn stark_fri_rejects_noncanonical_transcript_labels() {
+        for (hash_fn, hash_label, domain_tag, circuit_id, digest_byte) in [
+            (
+                STARK_HASH_SHA256_V1,
+                "sha256",
+                "iroha:test:canonical-transcript-label:sha256",
+                "stark/fri/sha256-goldilocks:canonical-transcript-label",
+                0x51_u8,
+            ),
+            (
+                STARK_HASH_POSEIDON2_V1,
+                "poseidon2",
+                "iroha:test:canonical-transcript-label:poseidon2",
+                "stark/fri/poseidon2-goldilocks:canonical-transcript-label",
+                0x52_u8,
+            ),
+        ] {
+            let params = StarkFriParamsV1 {
+                version: 1,
+                n_log2: 4,
+                blowup_log2: 2,
+                fold_arity: 2,
+                queries: 2,
+                merkle_arity: 2,
+                hash_fn,
+                domain_tag: domain_tag.to_owned(),
+            };
+            let bytes = prove_stark_fri_air_envelope_bytes(
+                params.clone(),
+                format!("IROHA-TEST-STARK-CANONICAL-LABEL-{hash_label}"),
+                circuit_id.to_owned(),
+                [digest_byte; 32],
+            )
+            .expect("valid labeled STARK envelope");
+            assert!(verify_stark_fri_envelope(&bytes));
+
+            let mut envelope: StarkVerifyEnvelopeV1 =
+                norito::decode_from_bytes(&bytes).expect("decode labeled STARK envelope");
+            let air = envelope.proof.air.as_ref().expect("AIR section");
+            let extra_query_roots = [air.trace_root, air.composition_root, air.public_digest];
+            let invalid_labels = [
+                ("empty", String::new()),
+                ("leading whitespace", " IROHA-TEST-STARK".to_owned()),
+                ("embedded whitespace", "IROHA TEST STARK".to_owned()),
+                ("control byte", "IROHA-TEST\nSTARK".to_owned()),
+                ("non-ASCII", "IROHA-TEST-STARK-π".to_owned()),
+                ("overlong", "A".repeat(MAX_TRANSCRIPT_LABEL_LEN + 1)),
+            ];
+            for (label_case, invalid_label) in invalid_labels {
+                let err = prove_stark_fri_air_envelope_bytes(
+                    params.clone(),
+                    invalid_label.clone(),
+                    circuit_id.to_owned(),
+                    [digest_byte; 32],
+                )
+                .expect_err(
+                    "noncanonical STARK transcript labels must be rejected by proof construction",
+                );
+                assert!(
+                    err.contains("transcript label"),
+                    "{hash_label} {label_case} error should mention transcript labels, got: {err}"
+                );
+
+                assert_eq!(
+                    validate_stark_fri_query_shape_and_indices_v1(
+                        &params,
+                        &invalid_label,
+                        &envelope.proof.commits.roots,
+                        &extra_query_roots,
+                        &envelope.proof.queries,
+                    )
+                    .expect_err("query replay must reject noncanonical transcript labels"),
+                    "FRI transcript label invalid"
+                );
+
+                envelope.transcript_label = invalid_label;
+                let tampered =
+                    norito::to_bytes(&envelope).expect("encode noncanonical-label STARK envelope");
+                assert!(
+                    !verify_stark_fri_envelope(&tampered),
+                    "{hash_label} verifier must reject {label_case} transcript labels"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn stark_fri_rejects_noncanonical_circuit_ids() {
+        for (hash_fn, hash_label, domain_tag, circuit_id, digest_byte) in [
+            (
+                STARK_HASH_SHA256_V1,
+                "sha256",
+                "iroha:test:canonical-circuit-id:sha256",
+                "stark/fri/sha256-goldilocks:canonical-circuit-id",
+                0x61_u8,
+            ),
+            (
+                STARK_HASH_POSEIDON2_V1,
+                "poseidon2",
+                "iroha:test:canonical-circuit-id:poseidon2",
+                "stark/fri/poseidon2-goldilocks:canonical-circuit-id",
+                0x62_u8,
+            ),
+        ] {
+            let params = StarkFriParamsV1 {
+                version: 1,
+                n_log2: 4,
+                blowup_log2: 2,
+                fold_arity: 2,
+                queries: 2,
+                merkle_arity: 2,
+                hash_fn,
+                domain_tag: domain_tag.to_owned(),
+            };
+            let transcript_label = format!("IROHA-TEST-STARK-CANONICAL-CIRCUIT-{hash_label}");
+            let bytes = prove_stark_fri_air_envelope_bytes(
+                params.clone(),
+                transcript_label.clone(),
+                circuit_id.to_owned(),
+                [digest_byte; 32],
+            )
+            .expect("valid circuit-id STARK envelope");
+            assert!(verify_stark_fri_envelope(&bytes));
+
+            let mut envelope: StarkVerifyEnvelopeV1 =
+                norito::decode_from_bytes(&bytes).expect("decode circuit-id STARK envelope");
+            let invalid_circuit_ids = [
+                ("empty", String::new()),
+                (
+                    "leading whitespace",
+                    " stark/fri/sha256-goldilocks:test".to_owned(),
+                ),
+                (
+                    "embedded whitespace",
+                    "stark/fri/sha256 goldilocks:test".to_owned(),
+                ),
+                (
+                    "control byte",
+                    "stark/fri/sha256-goldilocks:\ntest".to_owned(),
+                ),
+                ("non-ASCII", "stark/fri/sha256-goldilocks:π".to_owned()),
+                ("overlong", "c".repeat(MAX_TRANSCRIPT_LABEL_LEN + 1)),
+            ];
+            for (id_case, invalid_circuit_id) in invalid_circuit_ids {
+                let err = prove_stark_fri_air_envelope_bytes(
+                    params.clone(),
+                    transcript_label.clone(),
+                    invalid_circuit_id.clone(),
+                    [digest_byte; 32],
+                )
+                .expect_err(
+                    "noncanonical STARK circuit ids must be rejected by proof construction",
+                );
+                assert!(
+                    err.contains("circuit_id"),
+                    "{hash_label} {id_case} error should mention circuit_id, got: {err}"
+                );
+
+                envelope.proof.air.as_mut().expect("AIR section").circuit_id = invalid_circuit_id;
+                let tampered = norito::to_bytes(&envelope)
+                    .expect("encode noncanonical-circuit STARK envelope");
+                assert!(
+                    !verify_stark_fri_envelope(&tampered),
+                    "{hash_label} verifier must reject {id_case} circuit ids"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn stark_fri_rejects_noncanonical_domain_tags() {
+        for (hash_fn, hash_label, domain_tag, circuit_id, digest_byte) in [
+            (
+                STARK_HASH_SHA256_V1,
+                "sha256",
+                "iroha:test:canonical-domain-tag:sha256",
+                "stark/fri/sha256-goldilocks:canonical-domain-tag",
+                0x71_u8,
+            ),
+            (
+                STARK_HASH_POSEIDON2_V1,
+                "poseidon2",
+                "iroha:test:canonical-domain-tag:poseidon2",
+                "stark/fri/poseidon2-goldilocks:canonical-domain-tag",
+                0x72_u8,
+            ),
+        ] {
+            let params = StarkFriParamsV1 {
+                version: 1,
+                n_log2: 4,
+                blowup_log2: 2,
+                fold_arity: 2,
+                queries: 2,
+                merkle_arity: 2,
+                hash_fn,
+                domain_tag: domain_tag.to_owned(),
+            };
+            let transcript_label = format!("IROHA-TEST-STARK-CANONICAL-DOMAIN-{hash_label}");
+            let bytes = prove_stark_fri_air_envelope_bytes(
+                params.clone(),
+                transcript_label.clone(),
+                circuit_id.to_owned(),
+                [digest_byte; 32],
+            )
+            .expect("valid domain-tag STARK envelope");
+            assert!(verify_stark_fri_envelope(&bytes));
+
+            let mut envelope: StarkVerifyEnvelopeV1 =
+                norito::decode_from_bytes(&bytes).expect("decode domain-tag STARK envelope");
+            let invalid_domain_tags = [
+                ("empty", String::new()),
+                ("leading whitespace", " iroha:test:domain".to_owned()),
+                ("embedded whitespace", "iroha:test domain".to_owned()),
+                ("control byte", "iroha:test:\ndomain".to_owned()),
+                ("non-ASCII", "iroha:test:π".to_owned()),
+                ("overlong", "d".repeat(MAX_DOMAIN_TAG_LEN + 1)),
+            ];
+            for (tag_case, invalid_domain_tag) in invalid_domain_tags {
+                let mut invalid_params = params.clone();
+                invalid_params.domain_tag = invalid_domain_tag.clone();
+                let err = prove_stark_fri_air_envelope_bytes(
+                    invalid_params,
+                    transcript_label.clone(),
+                    circuit_id.to_owned(),
+                    [digest_byte; 32],
+                )
+                .expect_err(
+                    "noncanonical STARK domain tags must be rejected by proof construction",
+                );
+                assert!(
+                    err.contains("domain tag"),
+                    "{hash_label} {tag_case} error should mention domain tag, got: {err}"
+                );
+
+                envelope.params.domain_tag = invalid_domain_tag;
+                let tampered =
+                    norito::to_bytes(&envelope).expect("encode noncanonical-domain STARK envelope");
+                assert!(
+                    !verify_stark_fri_envelope(&tampered),
+                    "{hash_label} verifier must reject {tag_case} domain tags"
+                );
+            }
+        }
     }
 
     #[test]
@@ -904,6 +1495,22 @@ mod tests {
         );
         assert!(!verify_stark_fri_envelope(&bytes));
 
+        let mut auxiliary_envelope: StarkVerifyEnvelopeV1 =
+            norito::decode_from_bytes(&bytes).expect("decode zero-composition AIR envelope");
+        attach_valid_auxiliary_composition_values(&mut auxiliary_envelope);
+        let auxiliary_bytes =
+            norito::to_bytes(&auxiliary_envelope).expect("encode auxiliary AIR envelope");
+        assert!(
+            !verify_stark_fri_air_envelope_from_rows_and_composition_values(
+                &auxiliary_bytes,
+                circuit_id,
+                &public_digest,
+                &rows,
+                &composition_values,
+            ),
+            "caller-owned explicit AIR must reject auxiliary generic composition commitments"
+        );
+
         let mut drifted_rows = rows.clone();
         drifted_rows[0][0] ^= 1;
         assert!(
@@ -955,6 +1562,28 @@ mod tests {
         assert_eq!(
             envelope.proof.commits.roots.first(),
             Some(&air.composition_root)
+        );
+        let mut malformed_opening_params = envelope.params.clone();
+        malformed_opening_params.domain_tag = "iroha:test:bad domain tag".to_owned();
+        assert_eq!(
+            validate_stark_air_opening_commitment_roots_v1(
+                &malformed_opening_params,
+                air,
+                air.openings.first().expect("AIR opening")
+            )
+            .expect_err("opening root replay must reject malformed STARK params"),
+            "STARK opening commitment parameters invalid"
+        );
+        let mut impossible_opening_params = envelope.params.clone();
+        impossible_opening_params.blowup_log2 = impossible_opening_params.n_log2 + 1;
+        assert_eq!(
+            validate_stark_air_opening_commitment_roots_v1(
+                &impossible_opening_params,
+                air,
+                air.openings.first().expect("AIR opening")
+            )
+            .expect_err("opening root replay must reject impossible FRI geometry"),
+            "STARK opening commitment parameters invalid"
         );
         let extra_query_roots = [air.trace_root, air.composition_root, air.public_digest];
         let indices = validate_stark_fri_query_shape_and_indices_v1(
@@ -1277,7 +1906,7 @@ mod tests {
             &StarkVerifierLimits::default(),
             &public_inputs,
         ));
-        let envelope: StarkVerifyEnvelopeV1 =
+        let mut envelope: StarkVerifyEnvelopeV1 =
             norito::decode_from_bytes(&bytes).expect("decode ZK-ACE AIR envelope");
         let air = envelope.proof.air.as_ref().expect("AIR section");
         let extra_query_roots = [air.trace_root, air.composition_root, air.public_digest];
@@ -1295,6 +1924,45 @@ mod tests {
                 .iter()
                 .all(|&index| zk_ace_air_opening_is_safe(index, domain)),
             "ZK-ACE prover must not open private witness rows"
+        );
+        let mut auxiliary_envelope = envelope.clone();
+        attach_valid_auxiliary_composition_values(&mut auxiliary_envelope);
+        let auxiliary_bytes =
+            norito::to_bytes(&auxiliary_envelope).expect("encode auxiliary ZK-ACE AIR envelope");
+        assert!(
+            !verify_stark_fri_zk_ace_envelope_with_limits(
+                &auxiliary_bytes,
+                &StarkVerifierLimits::default(),
+                &public_inputs,
+            ),
+            "ZK-ACE AIR must reject auxiliary generic composition commitments"
+        );
+
+        envelope.proof.air.as_mut().expect("AIR section").circuit_id =
+            "stark/fri/zk-ace-pq-authorization-v0:wrong".to_owned();
+        let wrong_circuit =
+            norito::to_bytes(&envelope).expect("encode wrong-circuit ZK-ACE AIR envelope");
+        assert!(
+            !verify_stark_fri_zk_ace_envelope_with_limits(
+                &wrong_circuit,
+                &StarkVerifierLimits::default(),
+                &public_inputs,
+            ),
+            "ZK-ACE AIR verification must bind the canonical circuit id"
+        );
+
+        let err = prove_stark_fri_zk_ace_air_envelope_bytes(
+            params,
+            "IROHA-TEST-ZK-ACE-AIR-WRONG-CIRCUIT".to_owned(),
+            "stark/fri/zk-ace-pq-authorization-v0:wrong".to_owned(),
+            public_digest,
+            &public_inputs,
+            &witness,
+        )
+        .expect_err("ZK-ACE AIR prover must reject wrong circuit ids");
+        assert!(
+            err.contains("circuit_id"),
+            "wrong-circuit ZK-ACE AIR error should mention circuit_id, got: {err}"
         );
     }
 
@@ -1349,6 +2017,26 @@ mod tests {
     }
 
     #[test]
+    fn synthesized_envelope_rejects_blowup_larger_than_domain() {
+        let params = StarkFriParamsV1 {
+            version: 1,
+            n_log2: 4,
+            blowup_log2: 5,
+            fold_arity: 2,
+            queries: 2,
+            merkle_arity: 2,
+            hash_fn: STARK_HASH_SHA256_V1,
+            domain_tag: "iroha:test:invalid-blowup-domain".to_owned(),
+        };
+        let err = synthesize_stark_fri_envelope_bytes(params, "IROHA-TEST-STARK".to_owned())
+            .expect_err("blowup_log2 larger than n_log2 must fail");
+        assert!(
+            err.contains("blowup factor"),
+            "error should mention blowup factor, got: {err}"
+        );
+    }
+
+    #[test]
     fn synthesized_envelope_rejects_tampered_domain_tag() {
         let params = StarkFriParamsV1 {
             version: 1,
@@ -1393,6 +2081,7 @@ mod tests {
     }
 }
 
+#[cfg(test)]
 fn derive_query_index(
     label: &str,
     params: &StarkFriParamsV1,
@@ -1406,60 +2095,113 @@ fn derive_query_index(
     if domain == 0 {
         return None;
     }
+    let (word, _) = derive_query_challenge_word(label, params, roots, query_idx, 0)?;
+    Some((u128::from(word) % (domain as u128)) as usize)
+}
+
+fn extend_query_challenge_preimage(
+    preimage: &mut Vec<u8>,
+    label: &str,
+    params: &StarkFriParamsV1,
+    roots: &[[u8; 32]],
+    query_idx: usize,
+    rejection_attempt: usize,
+) -> Option<()> {
+    preimage.extend_from_slice(b"STARK:query-index");
+    preimage.extend_from_slice(label.as_bytes());
+    preimage.extend_from_slice(&params.version.to_le_bytes());
+    preimage.extend_from_slice(&[
+        params.n_log2,
+        params.blowup_log2,
+        params.fold_arity,
+        params.merkle_arity,
+        params.hash_fn,
+    ]);
+    preimage.extend_from_slice(&params.queries.to_le_bytes());
+    preimage.extend_from_slice(&(params.domain_tag.len() as u32).to_le_bytes());
+    preimage.extend_from_slice(params.domain_tag.as_bytes());
+    preimage.extend_from_slice(&u64::try_from(query_idx).ok()?.to_le_bytes());
+    if rejection_attempt != 0 {
+        preimage.extend_from_slice(b"STARK:query-index:bounded-retry");
+        preimage.extend_from_slice(&u64::try_from(rejection_attempt).ok()?.to_le_bytes());
+    }
+    for root in roots {
+        preimage.extend_from_slice(root);
+    }
+    Some(())
+}
+
+fn derive_query_challenge_word(
+    label: &str,
+    params: &StarkFriParamsV1,
+    roots: &[[u8; 32]],
+    query_idx: usize,
+    rejection_attempt: usize,
+) -> Option<(u64, u128)> {
     match params.hash_fn {
         STARK_HASH_SHA256_V1 => {
+            let mut preimage = Vec::new();
+            extend_query_challenge_preimage(
+                &mut preimage,
+                label,
+                params,
+                roots,
+                query_idx,
+                rejection_attempt,
+            )?;
             let mut h = Sha256::new();
-            h.update(b"STARK:query-index");
-            h.update(label.as_bytes());
-            h.update(&params.version.to_le_bytes());
-            h.update(&[
-                params.n_log2,
-                params.blowup_log2,
-                params.fold_arity,
-                params.merkle_arity,
-                params.hash_fn,
-            ]);
-            h.update(&params.queries.to_le_bytes());
-            h.update(&(params.domain_tag.len() as u32).to_le_bytes());
-            h.update(params.domain_tag.as_bytes());
-            h.update(&(query_idx as u64).to_le_bytes());
-            for root in roots {
-                h.update(root);
-            }
+            h.update(&preimage);
             let digest = h.finalize();
             let mut w = [0u8; 8];
             w.copy_from_slice(&digest[..8]);
-            Some((u64::from_le_bytes(w) % (domain as u64)) as usize)
+            Some((u64::from_le_bytes(w), 1_u128 << 64))
         }
         STARK_HASH_POSEIDON2_V1 => {
             let mut preimage = Vec::new();
-            preimage.extend_from_slice(b"STARK:query-index");
-            preimage.extend_from_slice(label.as_bytes());
-            preimage.extend_from_slice(&params.version.to_le_bytes());
-            preimage.extend_from_slice(&[
-                params.n_log2,
-                params.blowup_log2,
-                params.fold_arity,
-                params.merkle_arity,
-                params.hash_fn,
-            ]);
-            preimage.extend_from_slice(&params.queries.to_le_bytes());
-            preimage.extend_from_slice(&(params.domain_tag.len() as u32).to_le_bytes());
-            preimage.extend_from_slice(params.domain_tag.as_bytes());
-            preimage.extend_from_slice(&(query_idx as u64).to_le_bytes());
-            for root in roots {
-                preimage.extend_from_slice(root);
-            }
+            extend_query_challenge_preimage(
+                &mut preimage,
+                label,
+                params,
+                roots,
+                query_idx,
+                rejection_attempt,
+            )?;
             let packed = pack_bytes(&preimage);
             let len_field = u64::try_from(packed.length).ok()?;
             let mut limbs = Vec::with_capacity(packed.limbs.len() + 1);
             limbs.push(len_field);
             limbs.extend_from_slice(&packed.limbs);
             let v = hash_field_elements(&limbs);
-            Some((v % (domain as u64)) as usize)
+            Some((v, MOD_P))
         }
         _ => None,
     }
+}
+
+fn derive_bounded_query_offset(
+    label: &str,
+    params: &StarkFriParamsV1,
+    roots: &[[u8; 32]],
+    query_idx: usize,
+    bound: usize,
+) -> Result<usize, &'static str> {
+    if bound == 0 {
+        return Err("FRI query index derivation failed");
+    }
+    let bound = bound as u128;
+    for rejection_attempt in 0..STARK_FRI_BOUNDED_QUERY_REJECTION_ATTEMPTS {
+        let (word, source_space) =
+            derive_query_challenge_word(label, params, roots, query_idx, rejection_attempt)
+                .ok_or("FRI query index derivation failed")?;
+        let limit = source_space
+            .checked_sub(source_space % bound)
+            .ok_or("FRI query index derivation failed")?;
+        let word = u128::from(word);
+        if word < limit {
+            return usize::try_from(word % bound).map_err(|_| "FRI query index derivation failed");
+        }
+    }
+    Err("FRI query index derivation failed")
 }
 
 fn derive_query_indices_without_replacement(
@@ -1482,9 +2224,7 @@ fn derive_query_indices_without_replacement(
         let remaining = domain
             .checked_sub(query_number)
             .ok_or("FRI query index derivation failed")?;
-        let offset = derive_query_index(label, params, roots, query_number)
-            .ok_or("FRI query index derivation failed")?
-            % remaining;
+        let offset = derive_bounded_query_offset(label, params, roots, query_number, remaining)?;
         let draw = query_number
             .checked_add(offset)
             .ok_or("FRI query index derivation failed")?;
@@ -1572,14 +2312,14 @@ pub fn validate_stark_fri_production_verifying_key_payload(
     circuit_id: &str,
     label: &str,
 ) -> Result<(), String> {
-    if circuit_id.trim().is_empty() {
-        return Err(format!(
-            "{label} STARK/FRI verifier key expected circuit id must not be empty"
-        ));
-    }
+    validate_stark_circuit_id(circuit_id).map_err(|err| {
+        format!("{label} STARK/FRI verifier key expected circuit id invalid: {err}")
+    })?;
     if payload.version != 1 {
         return Err(format!("{label} STARK/FRI verifier key must use version 1"));
     }
+    validate_stark_circuit_id(&payload.circuit_id)
+        .map_err(|err| format!("{label} STARK/FRI verifier key circuit id invalid: {err}"))?;
     if payload.circuit_id != circuit_id {
         return Err(format!(
             "{label} STARK/FRI verifier key circuit id mismatch"
@@ -1610,6 +2350,12 @@ pub fn validate_stark_fri_production_verifying_key_payload(
         return Err(format!(
             "{label} STARK/FRI blowup_log2 {} is below production floor {}",
             payload.blowup_log2, ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2
+        ));
+    }
+    if payload.blowup_log2 > payload.n_log2 {
+        return Err(format!(
+            "{label} STARK/FRI blowup_log2 {} exceeds n_log2 {}",
+            payload.blowup_log2, payload.n_log2
         ));
     }
     if payload.queries < ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES {
@@ -2013,6 +2759,7 @@ pub(crate) fn validate_stark_air_opening_commitment_roots_v1(
     air: &StarkAirProofV1,
     opening: &StarkAirOpeningV1,
 ) -> Result<(), &'static str> {
+    validate_stark_opening_commitment_params_v1(params)?;
     let row_leaf = stark_air_trace_leaf_hash(params, &opening.row).ok_or("row leaf hash failed")?;
     if !merkle_verify_hash(params, &air.trace_root, &row_leaf, &opening.row_path) {
         return Err("row Merkle root mismatch");
@@ -2048,6 +2795,8 @@ pub(crate) fn validate_stark_fri_query_shape_and_indices_v1(
     extra_query_roots: &[[u8; 32]],
     queries: &[Vec<FoldDecommitV1>],
 ) -> Result<Vec<usize>, &'static str> {
+    validate_stark_transcript_label(transcript_label, MAX_TRANSCRIPT_LABEL_LEN)
+        .map_err(|_| "FRI transcript label invalid")?;
     let limits = StarkVerifierLimits::default();
     let expected_chain_len = validate_params(params, roots.len(), queries.len(), &limits)
         .ok_or("FRI parameter/root/query shape mismatch")?;
@@ -2144,6 +2893,9 @@ pub(crate) fn validate_stark_air_opening_first_fri_value_v1(
     base_index: usize,
     first_decommit: &FoldDecommitV1,
 ) -> Result<(), &'static str> {
+    if usize::try_from(opening.index).ok() != Some(base_index) {
+        return Err("AIR/FRI opening index mismatch");
+    }
     let opened_fri_value = if base_index.is_multiple_of(2) {
         first_decommit.y0
     } else {
@@ -2190,6 +2942,10 @@ enum StarkAirVerificationContext<'a> {
 }
 
 impl StarkAirVerificationContext<'_> {
+    fn allows_auxiliary_composition(self) -> bool {
+        matches!(self, Self::Binding)
+    }
+
     fn trace_width(self) -> usize {
         match self {
             Self::Binding => stark_air_trace_width(),
@@ -2540,7 +3296,10 @@ fn stark_air_context_matches_statement(
     context: StarkAirVerificationContext<'_>,
 ) -> bool {
     match context {
-        StarkAirVerificationContext::Binding | StarkAirVerificationContext::ZkAce { .. } => true,
+        StarkAirVerificationContext::Binding => true,
+        StarkAirVerificationContext::ZkAce { .. } => {
+            air.circuit_id == iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID
+        }
         StarkAirVerificationContext::Explicit(explicit) => {
             if air.circuit_id != explicit.circuit_id
                 || air.public_digest != *explicit.public_digest
@@ -2606,7 +3365,10 @@ fn validate_stark_prover_params(
     if params.n_log2 == 0 || params.n_log2 > MAX_DOMAIN_LOG2 {
         return Err("unsupported STARK domain size".to_owned());
     }
-    if params.blowup_log2 == 0 || params.blowup_log2 > MAX_DOMAIN_LOG2 {
+    if params.blowup_log2 == 0
+        || params.blowup_log2 > MAX_DOMAIN_LOG2
+        || params.blowup_log2 > params.n_log2
+    {
         return Err("unsupported STARK blowup factor".to_owned());
     }
     if params.fold_arity != 2 {
@@ -2618,16 +3380,14 @@ fn validate_stark_prover_params(
     if params.hash_fn != STARK_HASH_SHA256_V1 && params.hash_fn != STARK_HASH_POSEIDON2_V1 {
         return Err("unsupported STARK hash_fn".to_owned());
     }
-    if params.domain_tag.is_empty() || params.domain_tag.len() > MAX_DOMAIN_TAG_LEN {
-        return Err("invalid STARK domain tag".to_owned());
-    }
+    validate_stark_domain_tag(&params.domain_tag, MAX_DOMAIN_TAG_LEN)
+        .map_err(|err| format!("invalid STARK domain tag: {err}"))?;
     let query_count = params.queries as usize;
     if query_count == 0 || query_count > MAX_FRI_QUERIES {
         return Err("invalid STARK query count".to_owned());
     }
-    if transcript_label.len() > MAX_TRANSCRIPT_LABEL_LEN {
-        return Err("transcript label exceeds maximum length".to_owned());
-    }
+    validate_stark_transcript_label(transcript_label, MAX_TRANSCRIPT_LABEL_LEN)
+        .map_err(str::to_owned)?;
     let n_log2 = params.n_log2 as usize;
     if n_log2 > MAX_MERKLE_DEPTH {
         return Err("STARK domain depth exceeds verifier limits".to_owned());
@@ -2880,6 +3640,8 @@ pub(crate) fn prove_stark_fri_air_envelope_from_rows_and_composition_values_byte
     rows: Vec<Vec<u64>>,
     composition_values: Vec<u64>,
 ) -> Result<Vec<u8>, String> {
+    validate_stark_circuit_id(&circuit_id)
+        .map_err(|err| format!("invalid STARK AIR circuit_id: {err}"))?;
     let composition_values = composition_values
         .into_iter()
         .map(|value| {
@@ -2906,9 +3668,8 @@ fn prove_stark_fri_air_envelope_from_rows_and_composition_values_fq_bytes(
     rows: Vec<Vec<u64>>,
     composition_values: Vec<Fq>,
 ) -> Result<Vec<u8>, String> {
-    if circuit_id.is_empty() || circuit_id.len() > MAX_TRANSCRIPT_LABEL_LEN {
-        return Err("invalid STARK AIR circuit_id".to_owned());
-    }
+    validate_stark_circuit_id(&circuit_id)
+        .map_err(|err| format!("invalid STARK AIR circuit_id: {err}"))?;
     validate_stark_prover_params(&params, &transcript_label)?;
     let domain = 1usize
         .checked_shl(u32::from(params.n_log2))
@@ -3038,6 +3799,8 @@ pub fn prove_stark_fri_air_envelope_bytes(
     circuit_id: String,
     public_digest: [u8; 32],
 ) -> Result<Vec<u8>, String> {
+    validate_stark_circuit_id(&circuit_id)
+        .map_err(|err| format!("invalid STARK AIR circuit_id: {err}"))?;
     validate_stark_prover_params(&params, &transcript_label)?;
     let domain = 1usize
         .checked_shl(u32::from(params.n_log2))
@@ -3086,6 +3849,8 @@ pub fn prove_stark_fri_zero_composition_air_envelope_bytes(
     public_digest: [u8; 32],
     rows: Vec<Vec<u64>>,
 ) -> Result<Vec<u8>, String> {
+    validate_stark_circuit_id(&circuit_id)
+        .map_err(|err| format!("invalid STARK AIR circuit_id: {err}"))?;
     let domain = 1usize
         .checked_shl(u32::from(params.n_log2))
         .ok_or_else(|| "STARK domain size overflow".to_owned())?;
@@ -3109,8 +3874,10 @@ pub fn prove_stark_fri_zk_ace_air_envelope_bytes(
     public_inputs: &iroha_data_model::zk::ZkAcePublicInputsV1,
     witness: &iroha_data_model::zk::ZkAceWitnessV1,
 ) -> Result<Vec<u8>, String> {
-    if circuit_id.is_empty() || circuit_id.len() > MAX_TRANSCRIPT_LABEL_LEN {
-        return Err("invalid STARK AIR circuit_id".to_owned());
+    validate_stark_circuit_id(&circuit_id)
+        .map_err(|err| format!("invalid STARK AIR circuit_id: {err}"))?;
+    if circuit_id != iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID {
+        return Err("ZK-ACE AIR circuit_id mismatch".to_owned());
     }
     validate_stark_prover_params(&params, &transcript_label)?;
     let expected_public_digest =
@@ -3333,8 +4100,8 @@ fn verify_stark_air_opening(
     if usize::try_from(opening.index).ok() != Some(base_index)
         || opening.row.len() != air.trace_width as usize
         || opening.next_row.len() != air.trace_width as usize
-        || opening.row.len() > limits.max_air_width
-        || opening.next_row.len() > limits.max_air_width
+        || opening.row.len() > effective_max_air_width(limits)
+        || opening.next_row.len() > effective_max_air_width(limits)
     {
         return false;
     }
@@ -3475,7 +4242,7 @@ fn verify_stark_fri_envelope_with_context(
     limits: &StarkVerifierLimits,
     context: StarkAirVerificationContext<'_>,
 ) -> bool {
-    if bytes.len() > limits.max_envelope_bytes {
+    if bytes.len() > effective_max_envelope_bytes(limits) {
         return false;
     }
     // Decode envelope
@@ -3483,7 +4250,12 @@ fn verify_stark_fri_envelope_with_context(
         Ok(e) => e,
         Err(_) => return false,
     };
-    if env.transcript_label.len() > limits.max_transcript_label_len {
+    if validate_stark_transcript_label(
+        &env.transcript_label,
+        effective_max_transcript_label_len(limits),
+    )
+    .is_err()
+    {
         return false;
     }
     if env.proof.version != 1 || env.proof.commits.version != 1 {
@@ -3498,6 +4270,11 @@ fn verify_stark_fri_envelope_with_context(
     if env.proof.commits.comp_root.is_some() != env.proof.comp_values.is_some() {
         return false;
     }
+    if !context.allows_auxiliary_composition()
+        && (env.proof.commits.comp_root.is_some() || env.proof.comp_values.is_some())
+    {
+        return false;
+    }
     if let Some(values) = env.proof.comp_values.as_ref() {
         if values.len() != query_count {
             return false;
@@ -3507,9 +4284,9 @@ fn verify_stark_fri_envelope_with_context(
         return false;
     };
     if air.version != 1
-        || air.circuit_id.is_empty()
+        || validate_stark_circuit_id(&air.circuit_id).is_err()
         || air.trace_width as usize != context.trace_width()
-        || air.trace_width as usize > limits.max_air_width
+        || air.trace_width as usize > effective_max_air_width(limits)
         || air.openings.len() != query_count
         || roots.first().copied() != Some(air.composition_root)
     {
@@ -3685,7 +4462,7 @@ fn verify_stark_fri_envelope_with_context(
                 return false;
             }
             let comp_entry = &cv_all[qi];
-            if comp_entry.aux_terms.len() > limits.max_aux_terms {
+            if comp_entry.aux_terms.len() > effective_max_aux_terms(limits) {
                 return false;
             }
             let depth_comp = match log2_usize(layer_domain) {

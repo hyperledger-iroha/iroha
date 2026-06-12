@@ -688,6 +688,8 @@ python3 scripts/kagemusha_lineage_proof_evidence.py \
 # after its wrapper has written a zero exit marker. The wrapper also captures
 # the lineage key artifacts. With no path flags, the runner and finalizer both
 # use the symlink-free resolution of /tmp, for example /private/tmp on macOS.
+# Explicit staged path flags must already be canonical paths: parent-segment
+# aliases and backslash-bearing strings fail before metadata reads.
 python3 scripts/kagemusha_run_lineage_proof_staged.py \
   --repo-root . \
   --staged-artifact-dir <staged>/artifacts/kagemusha \
@@ -720,7 +722,9 @@ python3 scripts/kagemusha_recursive_compact_key_evidence.py \
 # If the compact keygen must run detached, run it through the staged wrapper
 # first. It captures the generator log and writes the real process exit marker.
 # With no path flags, the runner and finalizer both use the symlink-free
-# resolution of /tmp, for example /private/tmp on macOS.
+# resolution of /tmp, for example /private/tmp on macOS. Explicit staged path
+# flags must already be canonical paths: parent-segment aliases and
+# backslash-bearing strings fail before metadata reads.
 python3 scripts/kagemusha_run_recursive_compact_keygen_staged.py \
   --staged-artifact-dir <staged>/artifacts/kagemusha \
   --exit-file <staged-exit-file>

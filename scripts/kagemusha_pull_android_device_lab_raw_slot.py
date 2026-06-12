@@ -72,6 +72,11 @@ TELEMETRY_FIELDS: frozenset[str] = frozenset(
         "app_package_name",
     }
 )
+TELEMETRY_STRING_FIELDS: tuple[str, ...] = (
+    "device_model",
+    "device_codename",
+    "app_package_name",
+)
 HARNESS_RESULT_ALLOWED_FIELDS: frozenset[str] = frozenset(
     {
         "alias",
@@ -161,7 +166,7 @@ def _single_safe_slot_id(raw_slot_id: str) -> tuple[str | None, list[str]]:
     return normalised[0], []
 
 
-def _validate_non_secret_adb_string(value: str, label: str) -> list[str]:
+def _validate_non_secret_adb_string(value: object, label: str) -> list[str]:
     if not isinstance(value, str) or not value:
         return [f"{label} must be a non-empty string"]
     if value != value.strip():
@@ -303,6 +308,13 @@ def _validate_raw_json_artifacts(slot_path: Path, slot_id: str, errors: list[str
             errors.append("telemetry/telemetry.json suite must not contain control characters")
         elif suite != device_lab.KAGEMUSHA_TELEMETRY_SUITE:
             errors.append("telemetry/telemetry.json suite must identify a Kagemusha device-lab run")
+        for field in TELEMETRY_STRING_FIELDS:
+            errors.extend(
+                _validate_non_secret_adb_string(
+                    telemetry.get(field),
+                    f"telemetry/telemetry.json {field}",
+                )
+            )
 
     d2d = device_lab._load_json(
         slot_path / "handoff" / "d2d-payment.json",

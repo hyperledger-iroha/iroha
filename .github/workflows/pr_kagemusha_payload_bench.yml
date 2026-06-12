@@ -1098,6 +1098,7 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-direct-hash-shape
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-direct-hash-read-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-generator-log-strict-read
+          ci/check_kagemusha_production_readiness.sh --negative-control-staged-path-aliases
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-exit-marker
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-exit-marker
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-readback

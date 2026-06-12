@@ -55,7 +55,7 @@ fn zk_ballot_rejected_on_plain_referendum() {
     let account: Account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
     let world = World::with([domain], [account], []);
     let mut state = State::new_for_testing(world, kura, query_handle);
-    let bundle = zk_testkit::tiny_add_bundle();
+    let bundle = zk_testkit::vote_merkle8_bundle();
     let mut cfg = state.gov.clone();
     cfg.plain_voting_enabled = true;
     cfg.min_bond_amount = 0;
@@ -128,8 +128,8 @@ fn zk_ballot_rejected_on_plain_referendum() {
         .iter()
         .next()
         .map_or_else(|| "rid-plain".to_string(), |(k, _)| k.clone());
-    // Valid proof bundle reused from TinyAdd helper
-    let proof_b64 = bundle.proof_b64.clone();
+    // Valid production-shaped vote proof; the assertion below should fail on mode before verify.
+    let proof_b64 = bundle.proof_b64();
     let mut stx2 = sblock.transaction();
     stx2.world.elections_mut().insert(
         rid.clone(),

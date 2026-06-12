@@ -2205,15 +2205,15 @@ public final class EvmSccpProverTests {
             artifactBinding.hash,
             tinySdkArtifacts,
             sampleEthereumNativeAuditHashes());
-    final byte[] tinyParityFixtureBytes =
+    final byte[] tinyProofArtifactParityFixtureBytes =
         sampleEthereumNativeEvmProverParityFixtureJson(draftTinyBundle)
             .getBytes(StandardCharsets.UTF_8);
-    final byte[] tinySelfTestFixtureBytes =
+    final byte[] tinyProofArtifactSelfTestFixtureBytes =
         sampleEthereumNativeEvmProverSelfTestFixtureJson(draftTinyBundle)
             .getBytes(StandardCharsets.UTF_8);
     final Map<String, String> tinyAuditHashes = sampleEthereumNativeAuditHashes();
-    tinyAuditHashes.put("cross_sdk_fixture_parity", sha256Hex(tinyParityFixtureBytes));
-    tinyAuditHashes.put("native_prover_self_test", sha256Hex(tinySelfTestFixtureBytes));
+    tinyAuditHashes.put("cross_sdk_fixture_parity", sha256Hex(tinyProofArtifactParityFixtureBytes));
+    tinyAuditHashes.put("native_prover_self_test", sha256Hex(tinyProofArtifactSelfTestFixtureBytes));
     final EvmSccpProver.EthereumMainnetNativeEvmProverBundle tinyBundle =
         new EvmSccpProver.EthereumMainnetNativeEvmProverBundle(
             tinyProofArtifactHash,
@@ -2230,12 +2230,137 @@ public final class EvmSccpProverTests {
           verifierKeyBytes,
           "java-android",
           implementationBytes,
-          tinyParityFixtureBytes,
-          tinySelfTestFixtureBytes);
+          tinyProofArtifactParityFixtureBytes,
+          tinyProofArtifactSelfTestFixtureBytes);
     } catch (final IllegalArgumentException ex) {
-      threw = ex.getMessage().contains("proofArtifactBytes must be at least 256 bytes");
+      threw = ex.getMessage().contains("proofArtifactBytes must be at least 65536 bytes");
     }
     assert threw : "Android native prover artifact verifier must reject tiny hash-consistent artifacts";
+    final byte[] tinyProvingKeyBytes = new byte[] {8, 9, 10, 11};
+    final NativeEvmVerifierFixture tinyProvingKeyFixture =
+        nativeEvmVerifierFixture(
+            "java-android",
+            artifactBinding.hash,
+            proofArtifactBytes,
+            tinyProvingKeyBytes,
+            verifierKeyBytes,
+            implementationBytes,
+            null,
+            null);
+    threw = false;
+    try {
+      tinyProvingKeyFixture.bundle.verifiedArtifacts(
+          proofArtifactBytes,
+          tinyProvingKeyBytes,
+          verifierKeyBytes,
+          "java-android",
+          implementationBytes,
+          tinyProvingKeyFixture.parityFixtureBytes,
+          tinyProvingKeyFixture.selfTestFixtureBytes);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("provingKeyBytes must be at least 65536 bytes");
+    }
+    assert threw : "Android native prover artifact verifier must reject tiny proving keys";
+    final byte[] tinyVerifierKeyBytes = new byte[] {12, 13, 14, 15};
+    final NativeEvmVerifierFixture tinyVerifierKeyFixture =
+        nativeEvmVerifierFixture(
+            "java-android",
+            artifactBinding.hash,
+            proofArtifactBytes,
+            provingKeyBytes,
+            tinyVerifierKeyBytes,
+            implementationBytes,
+            null,
+            null);
+    threw = false;
+    try {
+      tinyVerifierKeyFixture.bundle.verifiedArtifacts(
+          proofArtifactBytes,
+          provingKeyBytes,
+          tinyVerifierKeyBytes,
+          "java-android",
+          implementationBytes,
+          tinyVerifierKeyFixture.parityFixtureBytes,
+          tinyVerifierKeyFixture.selfTestFixtureBytes);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("verifierKeyBytes must be at least 128 bytes");
+    }
+    assert threw : "Android native prover artifact verifier must reject tiny verifier keys";
+    final byte[] tinyParityFixtureBytes = "{}".getBytes(StandardCharsets.UTF_8);
+    final NativeEvmVerifierFixture tinyParityFixture =
+        nativeEvmVerifierFixture(
+            "java-android",
+            artifactBinding.hash,
+            proofArtifactBytes,
+            provingKeyBytes,
+            verifierKeyBytes,
+            implementationBytes,
+            tinyParityFixtureBytes,
+            null);
+    threw = false;
+    try {
+      tinyParityFixture.bundle.verifiedArtifacts(
+          proofArtifactBytes,
+          provingKeyBytes,
+          verifierKeyBytes,
+          "java-android",
+          implementationBytes,
+          tinyParityFixtureBytes,
+          tinyParityFixture.selfTestFixtureBytes);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("crossSdkFixtureParityBytes must be at least 128 bytes");
+    }
+    assert threw : "Android native prover artifact verifier must reject tiny parity fixtures";
+    final byte[] tinySelfTestFixtureBytes = "{}".getBytes(StandardCharsets.UTF_8);
+    final NativeEvmVerifierFixture tinySelfTestFixture =
+        nativeEvmVerifierFixture(
+            "java-android",
+            artifactBinding.hash,
+            proofArtifactBytes,
+            provingKeyBytes,
+            verifierKeyBytes,
+            implementationBytes,
+            null,
+            tinySelfTestFixtureBytes);
+    threw = false;
+    try {
+      tinySelfTestFixture.bundle.verifiedArtifacts(
+          proofArtifactBytes,
+          provingKeyBytes,
+          verifierKeyBytes,
+          "java-android",
+          implementationBytes,
+          tinySelfTestFixture.parityFixtureBytes,
+          tinySelfTestFixtureBytes);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("nativeProverSelfTestBytes must be at least 128 bytes");
+    }
+    assert threw : "Android native prover artifact verifier must reject tiny self-test fixtures";
+    final byte[] tinyImplementationBytes = new byte[] {16, 17, 18, 19};
+    final NativeEvmVerifierFixture tinyImplementationFixture =
+        nativeEvmVerifierFixture(
+            "java-android",
+            artifactBinding.hash,
+            proofArtifactBytes,
+            provingKeyBytes,
+            verifierKeyBytes,
+            tinyImplementationBytes,
+            null,
+            null);
+    threw = false;
+    try {
+      tinyImplementationFixture.bundle.verifiedArtifacts(
+          proofArtifactBytes,
+          provingKeyBytes,
+          verifierKeyBytes,
+          "java-android",
+          tinyImplementationBytes,
+          tinyImplementationFixture.parityFixtureBytes,
+          tinyImplementationFixture.selfTestFixtureBytes);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("implementationBytes must be at least 1024 bytes");
+    }
+    assert threw : "Android native prover artifact verifier must reject tiny implementations";
     threw = false;
     try {
       verifiedBundle.verifiedArtifacts(
@@ -7391,13 +7516,94 @@ public final class EvmSccpProverTests {
   }
 
   private static byte[] nativeEvmProverArtifactBytes(final String label) {
+    return nativeEvmProverArtifactBytes(label, 64 * 1024);
+  }
+
+  private static byte[] nativeEvmProverArtifactBytes(final String label, final int size) {
     final byte[] labelBytes = label.getBytes(StandardCharsets.UTF_8);
-    final byte[] bytes = new byte[256];
+    final byte[] bytes = new byte[size];
     for (int index = 0; index < bytes.length; index++) {
       bytes[index] = (byte) ((index * 37 + labelBytes.length * 11) & 0xff);
     }
     System.arraycopy(labelBytes, 0, bytes, 0, Math.min(labelBytes.length, bytes.length));
     return bytes;
+  }
+
+  private static final class NativeEvmVerifierFixture {
+    final EvmSccpProver.EthereumMainnetNativeEvmProverBundle bundle;
+    final byte[] parityFixtureBytes;
+    final byte[] selfTestFixtureBytes;
+
+    NativeEvmVerifierFixture(
+        final EvmSccpProver.EthereumMainnetNativeEvmProverBundle bundle,
+        final byte[] parityFixtureBytes,
+        final byte[] selfTestFixtureBytes) {
+      this.bundle = bundle;
+      this.parityFixtureBytes = parityFixtureBytes;
+      this.selfTestFixtureBytes = selfTestFixtureBytes;
+    }
+  }
+
+  private static NativeEvmVerifierFixture nativeEvmVerifierFixture(
+      final String targetSdk,
+      final String destinationBindingHash,
+      final byte[] proofArtifactBytes,
+      final byte[] provingKeyBytes,
+      final byte[] verifierKeyBytes,
+      final byte[] implementationBytes,
+      final byte[] crossSdkFixtureParityBytesOverride,
+      final byte[] nativeProverSelfTestBytesOverride) {
+    final String proofArtifactHash = sha256Hex(proofArtifactBytes);
+    final String provingKeyHash = sha256Hex(provingKeyBytes);
+    final String verifierKeyHash = sha256Hex(verifierKeyBytes);
+    final String implementationHash = sha256Hex(implementationBytes);
+    final ArrayList<EvmSccpProver.EthereumMainnetNativeEvmProverBundleSdkArtifact> sdkArtifacts =
+        new ArrayList<>();
+    int artifactIndex = 0;
+    for (final Map.Entry<String, String> entry :
+        EvmSccpProver.ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1.entrySet()) {
+      artifactIndex++;
+      sdkArtifacts.add(
+          new EvmSccpProver.EthereumMainnetNativeEvmProverBundleSdkArtifact(
+              entry.getKey(),
+              entry.getValue(),
+              proofArtifactHash,
+              provingKeyHash,
+              targetSdk.equals(entry.getKey())
+                  ? implementationHash
+                  : "0x" + repeat(String.format("%02x", artifactIndex), 32)));
+    }
+    final EvmSccpProver.EthereumMainnetNativeEvmProverBundle draftBundle =
+        new EvmSccpProver.EthereumMainnetNativeEvmProverBundle(
+            proofArtifactHash,
+            provingKeyHash,
+            verifierKeyHash,
+            destinationBindingHash,
+            sdkArtifacts,
+            sampleEthereumNativeAuditHashes());
+    final byte[] parityFixtureBytes =
+        crossSdkFixtureParityBytesOverride != null
+            ? crossSdkFixtureParityBytesOverride
+            : sampleEthereumNativeEvmProverParityFixtureJson(draftBundle)
+                .getBytes(StandardCharsets.UTF_8);
+    final byte[] selfTestFixtureBytes =
+        nativeProverSelfTestBytesOverride != null
+            ? nativeProverSelfTestBytesOverride
+            : sampleEthereumNativeEvmProverSelfTestFixtureJson(draftBundle)
+                .getBytes(StandardCharsets.UTF_8);
+    final Map<String, String> auditHashes = sampleEthereumNativeAuditHashes();
+    auditHashes.put("cross_sdk_fixture_parity", sha256Hex(parityFixtureBytes));
+    auditHashes.put("native_prover_self_test", sha256Hex(selfTestFixtureBytes));
+    return new NativeEvmVerifierFixture(
+        new EvmSccpProver.EthereumMainnetNativeEvmProverBundle(
+            proofArtifactHash,
+            provingKeyHash,
+            verifierKeyHash,
+            destinationBindingHash,
+            sdkArtifacts,
+            auditHashes),
+        parityFixtureBytes,
+        selfTestFixtureBytes);
   }
 
   private static Map<String, Object> sampleEvmReceipt(
