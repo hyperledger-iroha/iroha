@@ -217,7 +217,7 @@ mod ecdsa_secp256k1 {
     #[cfg(feature = "rand")]
     use rand::rngs::OsRng;
     #[cfg(feature = "rand")]
-    use rand_core::TryRngCore;
+    use rand_core::TryCryptoRng;
     use sha2::Digest as _;
     use sha3::Keccak256;
     use zeroize::{Zeroize as _, Zeroizing};
@@ -239,7 +239,7 @@ mod ecdsa_secp256k1 {
                 #[cfg(feature = "rand")]
                 KeyGenOption::Random => Self::random_private_key()?,
                 KeyGenOption::UseSeed(mut seed) => {
-                    if seed.len() == 32 && seed.iter().all(|&byte| byte == 0) {
+                    if !seed.is_empty() && seed.iter().all(|&byte| byte == 0) {
                         seed.zeroize();
                         return Err(Error::KeyGen(
                             "secp256k1 seed material must not be all zero".into(),
@@ -257,12 +257,24 @@ mod ecdsa_secp256k1 {
 
         #[cfg(feature = "rand")]
         fn random_private_key() -> Result<PrivateKey, Error> {
+            Self::random_private_key_from_rng(&mut OsRng)
+        }
+
+        #[cfg(feature = "rand")]
+        pub(super) fn random_private_key_from_rng<R>(rng: &mut R) -> Result<PrivateKey, Error>
+        where
+            R: TryCryptoRng,
+        {
             const RANDOM_KEYGEN_ATTEMPTS: usize = 16;
             for _ in 0..RANDOM_KEYGEN_ATTEMPTS {
                 let mut bytes = Zeroizing::new([0u8; 32]);
-                OsRng
-                    .try_fill_bytes(bytes.as_mut())
+                rng.try_fill_bytes(bytes.as_mut())
                     .map_err(|err| Error::KeyGen(format!("secp256k1 OS RNG failed: {err}")))?;
+                if bytes.iter().all(|&byte| byte == 0) {
+                    return Err(Error::KeyGen(
+                        "secp256k1 OS RNG returned all-zero scalar material".to_owned(),
+                    ));
+                }
                 if let Ok(secret) = PrivateKey::from_slice(bytes.as_ref()) {
                     return Ok(secret);
                 }
@@ -400,6 +412,9 @@ mod test {
     };
     use sha2::Digest;
 
+    #[cfg(feature = "rand")]
+    use rand_core::{TryCryptoRng, TryRngCore};
+
     use super::*;
 
     #[cfg(feature = "crypto-parity-tests")]
@@ -419,6 +434,32 @@ mod test {
         EcdsaSecp256k1Sha256::parse_public_key(&payload).unwrap()
     }
 
+    #[cfg(feature = "rand")]
+    struct FixedTryRng {
+        byte: u8,
+    }
+
+    #[cfg(feature = "rand")]
+    impl TryRngCore for FixedTryRng {
+        type Error = core::convert::Infallible;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok(u32::from_le_bytes([self.byte; 4]))
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok(u64::from_le_bytes([self.byte; 8]))
+        }
+
+        fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Self::Error> {
+            dest.fill(self.byte);
+            Ok(())
+        }
+    }
+
+    #[cfg(feature = "rand")]
+    impl TryCryptoRng for FixedTryRng {}
+
     #[test]
     fn parse_private_key_accepts_valid_scalar_and_signs() {
         let payload = hex::decode(PRIVATE_KEY).unwrap();
@@ -432,12 +473,41 @@ mod test {
 
     #[test]
     fn secp256k1_try_keypair_rejects_all_zero_seed_material() {
-        let err = EcdsaSecp256k1Sha256::try_keypair(KeyGenOption::UseSeed(vec![0u8; 32]))
-            .expect_err("all-zero seed material must fail");
+        for len in [1, 31, 32, 33] {
+            let err = EcdsaSecp256k1Sha256::try_keypair(KeyGenOption::UseSeed(vec![0u8; len]))
+                .expect_err("all-zero seed material must fail");
+            assert!(
+                matches!(err, Error::KeyGen(ref message) if message.contains("all zero")),
+                "unexpected all-zero seed error for length {len}: {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn secp256k1_try_keypair_accepts_empty_seed_material() {
+        EcdsaSecp256k1Sha256::try_keypair(KeyGenOption::UseSeed(Vec::new()))
+            .expect("empty seed material remains supported");
+    }
+
+    #[cfg(feature = "rand")]
+    #[test]
+    fn secp256k1_random_private_key_rejects_all_zero_rng_material() {
+        let mut rng = FixedTryRng { byte: 0 };
+
         assert!(matches!(
-            err,
-            Error::KeyGen(message) if message.contains("all zero")
+            ecdsa_secp256k1::EcdsaSecp256k1Impl::random_private_key_from_rng(&mut rng),
+            Err(Error::KeyGen(message)) if message.contains("all-zero scalar material")
         ));
+    }
+
+    #[cfg(feature = "rand")]
+    #[test]
+    fn secp256k1_random_private_key_accepts_nonzero_rng_material() {
+        let mut rng = FixedTryRng { byte: 0x42 };
+
+        let secret = ecdsa_secp256k1::EcdsaSecp256k1Impl::random_private_key_from_rng(&mut rng)
+            .expect("nonzero secp256k1 random scalar material must produce a key");
+        assert_eq!(secret.to_bytes().as_slice(), &[0x42; 32]);
     }
 
     #[cfg(feature = "crypto-parity-tests")]

@@ -3555,7 +3555,7 @@ def test_release_readiness_report_guards_release_manifest_artifact_set_order_gat
     )
     assert any(
         "SCCP release manifest artifact-set/order source inventory" in error
-        and "missing marker: manifest artifact bytes must be a non-negative integer"
+        and "missing marker: manifest artifact bytes must be a positive integer"
         in error
         for error in errors
     )
@@ -13456,6 +13456,28 @@ def test_release_readiness_report_blocks_malformed_active_route_canary_metadata(
             "route canary evidence is not bound",
         ),
     )
+    route_canary_receipt_finalized_exactness_cases = (
+        (
+            "receipt_block_finalized",
+            False,
+            "route canary receipt block must be finalized",
+        ),
+        (
+            "receipt_block_finalized",
+            "true",
+            "route canary receipt block must be finalized",
+        ),
+        (
+            "receipt_block_finalized",
+            1,
+            "route canary receipt block must be finalized",
+        ),
+        (
+            "receipt_block_finalized",
+            None,
+            "route canary receipt block must be finalized",
+        ),
+    )
     route_canary_status_exactness_cases = (
         (
             "status",
@@ -13481,6 +13503,38 @@ def test_release_readiness_report_blocks_malformed_active_route_canary_metadata(
             "status",
             1,
             "route canary status is not passed",
+        ),
+    )
+    route_canary_evidence_source_exactness_cases = (
+        (
+            "evidence_source",
+            "operator_note",
+            "route canary evidence source must be evm_message_proof_accepted_transaction",
+        ),
+        (
+            "evidence_source",
+            report.ACTIVE_LAUNCH_ROUTE_CANARY_EVIDENCE_SOURCE.upper(),
+            "route canary evidence source must be evm_message_proof_accepted_transaction",
+        ),
+        (
+            "evidence_source",
+            None,
+            "route canary evidence source must be a non-empty canonical string",
+        ),
+        (
+            "evidence_source",
+            "",
+            "route canary evidence source must be a non-empty canonical string",
+        ),
+        (
+            "evidence_source",
+            f" {report.ACTIVE_LAUNCH_ROUTE_CANARY_EVIDENCE_SOURCE} ",
+            "route canary evidence source must be a non-empty canonical string",
+        ),
+        (
+            "evidence_source",
+            123,
+            "route canary evidence source must be a non-empty canonical string",
         ),
     )
     route_canary_hex32_exactness_cases = (
@@ -13522,31 +13576,6 @@ def test_release_readiness_report_blocks_malformed_active_route_canary_metadata(
             "route canary evidence hash must be a canonical non-zero bytes32 hex string",
         ),
         (
-            "evidence_source",
-            "operator_note",
-            "route canary evidence source must be evm_message_proof_accepted_transaction",
-        ),
-        (
-            "evidence_source",
-            None,
-            "route canary evidence source must be a non-empty canonical string",
-        ),
-        (
-            "evidence_source",
-            "",
-            "route canary evidence source must be a non-empty canonical string",
-        ),
-        (
-            "evidence_source",
-            f" {report.ACTIVE_LAUNCH_ROUTE_CANARY_EVIDENCE_SOURCE} ",
-            "route canary evidence source must be a non-empty canonical string",
-        ),
-        (
-            "evidence_source",
-            123,
-            "route canary evidence source must be a non-empty canonical string",
-        ),
-        (
             "transaction_hash",
             None,
             "route canary transaction hash must be a canonical non-zero bytes32 hex string",
@@ -13579,22 +13608,9 @@ def test_release_readiness_report_blocks_malformed_active_route_canary_metadata(
         *receipt_block_number_exactness_cases,
         *route_canary_evidence_bound_exactness_cases,
         *route_canary_status_exactness_cases,
+        *route_canary_evidence_source_exactness_cases,
         *route_canary_hex32_exactness_cases,
-        (
-            "receipt_block_finalized",
-            False,
-            "route canary receipt block must be finalized",
-        ),
-        (
-            "receipt_block_finalized",
-            "true",
-            "route canary receipt block must be finalized",
-        ),
-        (
-            "receipt_block_finalized",
-            1,
-            "route canary receipt block must be finalized",
-        ),
+        *route_canary_receipt_finalized_exactness_cases,
     )
 
     for field, value, expected_blocker in cases:

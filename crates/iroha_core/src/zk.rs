@@ -3998,6 +3998,9 @@ fn halo2_open_verify_circuit_id_matches_backend(backend: &str, circuit_id: &str)
 }
 
 fn halo2_open_verify_circuit_id_is_halo2_family(circuit_id: &str) -> bool {
+    if halo2_open_verify_circuit_id_uses_reserved_proof_family(circuit_id) {
+        return false;
+    }
     if normalize_native_halo2_pasta_backend_label(circuit_id).is_some() {
         return true;
     }
@@ -4006,6 +4009,23 @@ fn halo2_open_verify_circuit_id_is_halo2_family(circuit_id: &str) -> bool {
         && !circuit_id.contains('/')
         && !circuit_id.contains(':')
         && iroha_data_model::zk::open_verify_circuit_id_is_portable(circuit_id)
+}
+
+fn halo2_open_verify_circuit_id_uses_reserved_proof_family(circuit_id: &str) -> bool {
+    let trimmed = circuit_id.trim();
+    let family_part = trimmed
+        .strip_prefix("halo2/pasta/ipa/")
+        .or_else(|| trimmed.strip_prefix("halo2/pasta/"))
+        .or_else(|| trimmed.strip_prefix("halo2/ipa::"))
+        .or_else(|| trimmed.strip_prefix("halo2/ipa:"))
+        .or_else(|| trimmed.strip_prefix("halo2/ipa/"))
+        .unwrap_or(trimmed);
+    let lower = family_part.to_ascii_lowercase();
+    lower == "stark"
+        || lower
+            .strip_prefix("stark")
+            .is_some_and(|suffix| suffix.starts_with('/') || suffix.starts_with(':'))
+        || is_trusted_setup_backend_label(&lower)
 }
 
 fn is_native_halo2_pasta_circuit_id(circuit_id: &str) -> bool {
@@ -15790,18 +15810,13 @@ fn stark_open_verify_circuit_id_matches_backend(backend: &str, circuit_id: &str)
         return false;
     }
     let trimmed = circuit_id.trim();
-    if ["halo2", "groth16", "kzg"].iter().any(|family| {
-        trimmed == *family
-            || trimmed
-                .strip_prefix(family)
-                .is_some_and(|suffix| suffix.starts_with('/') || suffix.starts_with(':'))
-    }) {
+    if stark_open_verify_circuit_id_uses_reserved_proof_family(trimmed) {
         return false;
     }
     if backend == ZK_BACKEND_STARK_FRI_V1 {
         return true;
     }
-    if trimmed.starts_with("stark/fri:") {
+    if trimmed == ZK_BACKEND_STARK_FRI_V1 || trimmed.starts_with("stark/fri:") {
         return false;
     }
     if trimmed.starts_with("stark/fri/") {
@@ -15810,6 +15825,33 @@ fn stark_open_verify_circuit_id_matches_backend(backend: &str, circuit_id: &str)
             .is_some_and(|suffix| suffix.starts_with(':') || suffix.starts_with('/'));
     }
     true
+}
+
+fn stark_open_verify_circuit_id_uses_reserved_proof_family(circuit_id: &str) -> bool {
+    let trimmed = circuit_id.trim();
+    if stark_open_verify_circuit_id_fragment_uses_reserved_proof_family(trimmed) {
+        return true;
+    }
+    let Some(stark_suffix) = trimmed
+        .strip_prefix("stark/fri:")
+        .or_else(|| trimmed.strip_prefix("stark/fri/"))
+    else {
+        return false;
+    };
+    let circuit_fragment = stark_suffix
+        .split_once(':')
+        .or_else(|| stark_suffix.split_once('/'))
+        .map_or(stark_suffix, |(_, fragment)| fragment);
+    stark_open_verify_circuit_id_fragment_uses_reserved_proof_family(circuit_fragment)
+}
+
+fn stark_open_verify_circuit_id_fragment_uses_reserved_proof_family(fragment: &str) -> bool {
+    let lower = fragment.to_ascii_lowercase();
+    lower == "halo2"
+        || lower
+            .strip_prefix("halo2")
+            .is_some_and(|suffix| suffix.starts_with('/') || suffix.starts_with(':'))
+        || is_trusted_setup_backend_label(&lower)
 }
 
 fn normalized_zk_ace_stark_circuit_id_for_backend(backend: &str) -> Option<String> {
@@ -22120,6 +22162,52 @@ mod stark_backend_tag_tests {
     }
 
     #[test]
+    fn stark_open_verify_circuit_id_rejects_trusted_setup_family_aliases() {
+        assert!(stark_open_verify_circuit_id_matches_backend(
+            ZK_BACKEND_STARK_FRI_V1,
+            "generic-binding-air"
+        ));
+        assert!(stark_open_verify_circuit_id_matches_backend(
+            "stark/fri/sha256-goldilocks",
+            "stark/fri/sha256-goldilocks:binding-air"
+        ));
+
+        for (backend, circuit_id) in [
+            (ZK_BACKEND_STARK_FRI_V1, "bn254"),
+            (ZK_BACKEND_STARK_FRI_V1, "BN254"),
+            (ZK_BACKEND_STARK_FRI_V1, "b-n-254"),
+            (ZK_BACKEND_STARK_FRI_V1, "bls12_381"),
+            (ZK_BACKEND_STARK_FRI_V1, "universal-srs"),
+            (ZK_BACKEND_STARK_FRI_V1, "structured-reference-string"),
+            (ZK_BACKEND_STARK_FRI_V1, "stark/fri:bn254"),
+            (ZK_BACKEND_STARK_FRI_V1, "stark/fri/prod-b.l.s.12.381"),
+            (
+                ZK_BACKEND_STARK_FRI_V1,
+                "stark/fri/sha256-goldilocks:universal-srs",
+            ),
+            ("stark/fri/sha256-goldilocks", "bn254"),
+            ("stark/fri/sha256-goldilocks", "stark/fri:bn254"),
+            (
+                "stark/fri/sha256-goldilocks",
+                "stark/fri/sha256-goldilocks:bn254",
+            ),
+            (
+                "stark/fri/sha256-goldilocks",
+                "stark/fri/sha256-goldilocks/srs",
+            ),
+            (
+                "stark/fri/sha256-goldilocks",
+                "stark/fri/sha256-goldilocks:structured-reference-string",
+            ),
+        ] {
+            assert!(
+                !stark_open_verify_circuit_id_matches_backend(backend, circuit_id),
+                "backend {backend} must reject trusted-setup circuit alias {circuit_id}"
+            );
+        }
+    }
+
+    #[test]
     fn developer_only_classifier_is_ascii_case_insensitive() {
         for backend in [
             "debug",
@@ -22459,6 +22547,11 @@ mod stark_prover_tests {
                 "stark/fri:family-spoof",
             ),
             (
+                "profile backend with bare generic STARK family",
+                "stark/fri/sha256-goldilocks",
+                "stark/fri",
+            ),
+            (
                 "generic STARK backend with halo2 circuit",
                 super::ZK_BACKEND_STARK_FRI_V1,
                 "halo2/ipa:family-spoof",
@@ -22472,6 +22565,31 @@ mod stark_prover_tests {
                 "generic STARK backend with colon-form kzg circuit",
                 super::ZK_BACKEND_STARK_FRI_V1,
                 "kzg:trusted-setup-spoof",
+            ),
+            (
+                "generic STARK backend with bare trusted-setup curve circuit",
+                super::ZK_BACKEND_STARK_FRI_V1,
+                "bn254",
+            ),
+            (
+                "generic STARK backend with separated trusted-setup curve circuit",
+                super::ZK_BACKEND_STARK_FRI_V1,
+                "b.l.s.12.381",
+            ),
+            (
+                "generic STARK backend with STARK-prefixed trusted-setup circuit",
+                super::ZK_BACKEND_STARK_FRI_V1,
+                "stark/fri:universal-srs",
+            ),
+            (
+                "profile backend with bare trusted-setup circuit",
+                "stark/fri/sha256-goldilocks",
+                "bn254",
+            ),
+            (
+                "profile backend with profile-prefixed trusted-setup circuit",
+                "stark/fri/sha256-goldilocks",
+                "stark/fri/sha256-goldilocks:structured-reference-string",
             ),
         ] {
             let vk_payload = StarkFriVerifyingKeyV1 {
@@ -22518,6 +22636,11 @@ mod stark_prover_tests {
                 "stark/fri:family-spoof",
             ),
             (
+                "profile backend with bare generic STARK family",
+                "stark/fri/sha256-goldilocks",
+                "stark/fri",
+            ),
+            (
                 "generic STARK backend with halo2 circuit",
                 super::ZK_BACKEND_STARK_FRI_V1,
                 "halo2/ipa:family-spoof",
@@ -22531,6 +22654,31 @@ mod stark_prover_tests {
                 "generic STARK backend with colon-form kzg circuit",
                 super::ZK_BACKEND_STARK_FRI_V1,
                 "kzg:trusted-setup-spoof",
+            ),
+            (
+                "generic STARK backend with bare trusted-setup curve circuit",
+                super::ZK_BACKEND_STARK_FRI_V1,
+                "bn254",
+            ),
+            (
+                "generic STARK backend with separated trusted-setup curve circuit",
+                super::ZK_BACKEND_STARK_FRI_V1,
+                "b.l.s.12.381",
+            ),
+            (
+                "generic STARK backend with STARK-prefixed trusted-setup circuit",
+                super::ZK_BACKEND_STARK_FRI_V1,
+                "stark/fri:universal-srs",
+            ),
+            (
+                "profile backend with bare trusted-setup circuit",
+                "stark/fri/sha256-goldilocks",
+                "bn254",
+            ),
+            (
+                "profile backend with profile-prefixed trusted-setup circuit",
+                "stark/fri/sha256-goldilocks",
+                "stark/fri/sha256-goldilocks:structured-reference-string",
             ),
         ] {
             let vk_payload = StarkFriVerifyingKeyV1 {
@@ -23730,6 +23878,21 @@ mod guardrails_tests {
                 "halo2/ipa",
                 "stark/fri/sha256-goldilocks:spoof",
             ),
+            (
+                "generic halo2 backend with bare trusted-setup circuit",
+                "halo2/ipa",
+                "kzg",
+            ),
+            (
+                "generic halo2 backend with prefixed trusted-setup circuit",
+                "halo2/ipa",
+                "halo2/ipa:kzg",
+            ),
+            (
+                "generic halo2 backend with prefixed STARK circuit",
+                "halo2/ipa",
+                "halo2/ipa:stark/fri",
+            ),
         ] {
             let mut env = halo2_guardrail_envelope();
             env.circuit_id = circuit_id.to_owned();
@@ -24097,6 +24260,21 @@ mod guardrails_tests {
                 "generic STARK backend with colon-form kzg circuit",
                 ZK_BACKEND_STARK_FRI_V1,
                 "kzg:trusted-setup-spoof",
+            ),
+            (
+                "generic STARK backend with bare trusted-setup curve circuit",
+                ZK_BACKEND_STARK_FRI_V1,
+                "bn254",
+            ),
+            (
+                "generic STARK backend with STARK-prefixed trusted-setup circuit",
+                ZK_BACKEND_STARK_FRI_V1,
+                "stark/fri:universal-srs",
+            ),
+            (
+                "profile backend with profile-prefixed trusted-setup circuit",
+                "stark/fri/sha256-goldilocks",
+                "stark/fri/sha256-goldilocks:structured-reference-string",
             ),
         ] {
             let env = OpenVerifyEnvelope {
@@ -37274,6 +37452,31 @@ mod halo2_ipa_alias_tests {
             Some("halo2/pasta/ipa/tiny-add")
         );
         assert!(halo2_ipa_backend_from_circuit_id("").is_none());
+    }
+
+    #[test]
+    fn halo2_open_verify_circuit_id_rejects_reserved_proof_family_aliases() {
+        assert!(halo2_open_verify_circuit_id_is_halo2_family(
+            "halo2/ipa:tiny-add"
+        ));
+        assert!(halo2_open_verify_circuit_id_is_halo2_family("tiny-add"));
+        for circuit_id in [
+            "kzg",
+            "k-z-g",
+            "groth16",
+            "bn254",
+            "halo2/ipa:kzg",
+            "halo2/ipa:groth16",
+            "halo2/ipa:stark/fri",
+            "halo2/pasta/kzg",
+            "stark",
+            "stark/fri/sha256-goldilocks",
+        ] {
+            assert!(
+                !halo2_open_verify_circuit_id_is_halo2_family(circuit_id),
+                "reserved proof-family circuit id {circuit_id} must not be admitted as Halo2"
+            );
+        }
     }
 
     #[test]
@@ -72403,6 +72606,24 @@ mod preverified_key_tests {
                 "halo2/ipa:preverify-test",
                 "stark/fri/sha256-goldilocks:spoof",
             ),
+            (
+                "generic halo2 backend with bare trusted-setup circuit",
+                ZK_BACKEND_HALO2_IPA,
+                "halo2/ipa:preverify-test",
+                "kzg",
+            ),
+            (
+                "generic halo2 backend with prefixed trusted-setup circuit",
+                ZK_BACKEND_HALO2_IPA,
+                "halo2/ipa:preverify-test",
+                "halo2/ipa:kzg",
+            ),
+            (
+                "generic halo2 backend with prefixed STARK circuit",
+                ZK_BACKEND_HALO2_IPA,
+                "halo2/ipa:preverify-test",
+                "halo2/ipa:stark/fri",
+            ),
         ] {
             let vk = VerifyingKeyBox::new(backend.to_owned(), vec![0xA5, 0x5A, 0xC3]);
             let expected = hash_vk(&vk);
@@ -72465,6 +72686,12 @@ mod preverified_key_tests {
                 "stark/fri:preverify-test",
             ),
             (
+                "profile backend with bare generic STARK family",
+                "stark/fri/sha256-goldilocks",
+                "stark/fri/sha256-goldilocks:preverify-test",
+                "stark/fri",
+            ),
+            (
                 "generic STARK backend with halo2 circuit",
                 ZK_BACKEND_STARK_FRI_V1,
                 "stark/fri:preverify-test",
@@ -72481,6 +72708,24 @@ mod preverified_key_tests {
                 ZK_BACKEND_STARK_FRI_V1,
                 "stark/fri:preverify-test",
                 "kzg:trusted-setup-spoof",
+            ),
+            (
+                "generic STARK backend with bare trusted-setup curve circuit",
+                ZK_BACKEND_STARK_FRI_V1,
+                "stark/fri:preverify-test",
+                "bn254",
+            ),
+            (
+                "generic STARK backend with STARK-prefixed trusted-setup circuit",
+                ZK_BACKEND_STARK_FRI_V1,
+                "stark/fri:preverify-test",
+                "stark/fri:universal-srs",
+            ),
+            (
+                "profile backend with profile-prefixed trusted-setup circuit",
+                "stark/fri/sha256-goldilocks",
+                "stark/fri/sha256-goldilocks:preverify-test",
+                "stark/fri/sha256-goldilocks:structured-reference-string",
             ),
         ] {
             let vk = VerifyingKeyBox::new(backend.to_owned(), vec![0xA5, 0x5A, 0xC3]);

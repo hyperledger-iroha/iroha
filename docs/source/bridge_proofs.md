@@ -2766,13 +2766,17 @@ boolean `true`; copied `"true"`, numeric, false, or missing/null flags remain
 all-required-record blockers in both readiness generation and strict bundle
 recomputation. Route-canary status must be exactly `passed`; missing, empty,
 padded, or non-string values keep the live-route-canary checklist item blocked
-before transaction metadata can make the lane ready. Route-canary evidence hash,
+before transaction metadata can make the lane ready. Route-canary evidence
+source must be exactly `evm_message_proof_accepted_transaction`; missing,
+empty, padded, non-string, or canonical-looking wrong labels remain
+live-route-canary blockers. Route-canary evidence hash,
 transaction hash, receipt block hash, block receipts root, and message id must
 all be canonical lowercase non-zero `0x` bytes32 strings; missing, zero,
 uppercase, or non-string values are live-route-canary blockers. Route-canary receipt block numbers
 must be exact positive integers, not numeric-looking strings, hex text,
 plus-signed text, Unicode-confusable text, or booleans, and finalized receipt
-metadata must be exactly boolean `true`. Route-canary evidence binding must
+metadata must be exactly boolean `true`; false, missing/null, copied truthy
+strings, or numeric values remain live-route-canary blockers. Route-canary evidence binding must
 also be exact boolean `true`; truthy strings, numeric values, false, or
 missing/null flags keep the live-route-canary checklist item blocked.
 Release-readiness and
@@ -2958,6 +2962,10 @@ proof-generation helpers. Those
 portal/mobile submission rows
 must also keep canonical JSON field shapes: lane/backend/helper/submission
 labels are non-empty strings and required phases are lists of non-empty strings.
+Their required-phase lists must also match the verifier-owned lane policy
+exactly, including `dotnet-sdk` only for the EVM/BSC native surface and
+`contract-smoke` only for contract-backed EVM-family/TRON rows; extra,
+reordered, or missing known phases fail before public artifacts can pass.
 For a production release bundle, the row-level validation status must be
 `passed` and `validation_blockers` must be empty, so a blocked portal/mobile
 proof path cannot hide behind top-level ready flags.
@@ -3018,7 +3026,7 @@ artifact, generated artifact, extracted bundle, or native prover manifest/payloa
 unknown corridor phase statuses or evidence keys,
 blocked corridor roots,
 non-canonical corridor phase-log paths,
-malformed artifact byte/hash JSON types,
+zero or malformed artifact byte counts and malformed artifact hash JSON types,
 malformed readiness/checklist boolean JSON types,
 report/manifest byte or SHA-256 drift for input and corridor phase artifacts,
 release notes that omit the manifest handoff, standalone-summary drift from the
@@ -3082,9 +3090,9 @@ copied report-artifact rows, release-checklist root/item fields, and corridor
 root fields before Markdown rendering, so hostile local labels become
 category-only blockers instead of raw diagnostics.
 Release-readiness and bundle verification pin the public artifact-row schema as
-required source inventory, so unknown artifact claims, non-integer byte counts,
-and noncanonical SHA-256 text regressions cannot be removed before published
-bundle readiness passes.
+required source inventory, so unknown artifact claims, zero, negative, or
+non-integer byte counts, and noncanonical SHA-256 text regressions cannot be
+removed before published bundle readiness passes.
 Release-readiness and bundle verification pin the copied input-provenance schema
 as required source inventory, so canonical copied input paths, unique
 input/input-artifact provenance, `evidence/NN-*.toml` layout, and recomputation
@@ -3156,7 +3164,22 @@ lane-field binding, strict row-schema enforcement, active-row audit-key
 classification, canonical row recomputation, Markdown row-domain/audit-key
 suppression, zero-hash/domain-policy/type-drift regressions, BSC testnet row
 shape, and active route-canary binding rejection cannot be dropped before
-public bundle readiness passes.
+public bundle readiness passes. Public cryptographic-evidence rows for EVM
+route canaries must also keep `route_canary_evidence_bound` and
+`route_canary_receipt_block_finalized` exactly `true` and keep
+`route_canary_evidence_source` exactly
+`evm_message_proof_accepted_transaction`; their
+`route_canary_receipt_block_number` must also stay a positive u32 integer.
+False, wrong-source, or oversized copied rows fail before release Markdown can
+be rendered or strict bundle verification can pass.
+Public cryptographic-evidence rows for TRON route canaries must keep
+`route_canary_block_number` as a positive u64 integer and
+`route_canary_block_timestamp` as a non-negative u64 integer; oversized copied
+TRON metadata fails at the same pre-render and strict-verification boundary.
+Public cryptographic-evidence source-adapter gate rows also enforce the
+domain-specific audit-key policy before rendering, so Solana, TON, and TRON
+rows cannot carry `source_adapter_gate_required = false`, stale gate hashes, or
+unexpected/missing audit hashes through non-active public evidence paths.
 Release-readiness and bundle verification also pin public submission-surface
 binding as required source inventory, so lane/backend inventory, per-SDK helper
 inventory, verifier-owned surface recomputation, and corridor-phase binding
@@ -3357,6 +3380,12 @@ The on-chain admission verifier uses a narrower production path for this case:
 it may relax only the destination manifest readiness bit needed for
 deployment-governed lanes, while non-SORA source proofs must still verify
 against production-ready source-adapter material and deployment evidence.
+Serialized SCCP transparent artifacts expose the same split through
+deployment-bound recovery helpers: callers can recover typed proof artifacts
+against exact governed source material and source-adapter deployment evidence,
+and the diagnostic variant relaxes only the destination manifest gate. Backend
+label drift, replayed deployment receipts, and source-adapter evidence mismatch
+still fail before the artifact is returned.
 
 Readiness reporting separates this material gate from the external verifier
 engine gate. `source_verifier_material_ready` can become true for exact

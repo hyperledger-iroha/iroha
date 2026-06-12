@@ -46,7 +46,7 @@ pub enum Error {
 }
 
 fn random_nonce<E: AeadCore>() -> Result<aead::Nonce<E>, Error> {
-    random_nonce_from_rng(&mut OsRng)
+    random_nonce_from_rng::<E, _>(&mut OsRng)
 }
 
 fn random_nonce_from_rng<E, R>(rng: &mut R) -> Result<aead::Nonce<E>, Error>
@@ -57,7 +57,7 @@ where
     let mut value = aead::Nonce::<E>::default();
     rng.try_fill_bytes(value.as_mut_slice())
         .map_err(Error::NonceGeneration)?;
-    let value_bytes = value.as_ref();
+    let value_bytes = value.as_slice();
     if !value_bytes.is_empty() && value_bytes.iter().all(|&byte| byte == 0) {
         return Err(Error::InertNonce);
     }
@@ -324,7 +324,7 @@ mod tests {
         let mut rng = FixedTryRng { byte: 0xA5 };
         let nonce = random_nonce_from_rng::<ChaCha20Poly1305, _>(&mut rng).expect("nonzero nonce");
 
-        assert_eq!(nonce.as_ref(), &[0xA5; 12]);
+        assert_eq!(nonce.as_slice(), &[0xA5; 12]);
     }
 
     #[test]
@@ -353,6 +353,23 @@ mod tests {
         let plaintext = encryptor
             .decrypt(nonce.as_ref(), aad.as_ref(), ciphertext.as_slice())
             .expect("decrypt");
+        assert_eq!(plaintext.as_slice(), message);
+    }
+
+    #[test]
+    fn encrypt_with_caller_supplied_all_zero_nonce_roundtrips() {
+        let encryptor = encryptor();
+        let nonce = [0u8; 12];
+        let aad = b"explicit nonce compatibility";
+        let message = b"manual nonce boundary";
+
+        let ciphertext = encryptor
+            .encrypt(nonce.as_ref(), aad.as_ref(), message.as_ref())
+            .expect("encrypt with caller supplied nonce");
+        let plaintext = encryptor
+            .decrypt(nonce.as_ref(), aad.as_ref(), ciphertext.as_slice())
+            .expect("decrypt with caller supplied nonce");
+
         assert_eq!(plaintext.as_slice(), message);
     }
 

@@ -1854,10 +1854,11 @@ redistributable schemas, and official trust/revocation bundles.
   fallible API, and `KeyPair::from_private_key` uses it so length-valid but
   internally inconsistent ML-DSA secrets return `KeyGen` instead of panicking;
   ML-DSA seeded-keygen now rejects non-empty all-zero seed material before HKDF,
-  HKDF expansion propagates `Error::KeyGen` through the existing `Result` path
-  instead of relying on a panic-only assertion, and its S2 nonce offset
-  conversion now uses the same `Error::KeyGen` route instead of a
-  const-conversion `expect`;
+  random ML-DSA keygen draws checked OS seed material through the same
+  constructor instead of the infallible PQ random keypair path, HKDF expansion
+  propagates `Error::KeyGen` through the existing `Result` path instead of
+  relying on a panic-only assertion, and its S2 nonce offset conversion now uses
+  the same `Error::KeyGen` route instead of a const-conversion `expect`;
   GOST deterministic nonce generation now feeds the domain tag, private scalar,
   message scalar, and optional extra entropy into HMAC-Streebog as separate
   components and streams the HMAC inner hash directly while preserving the
@@ -1875,12 +1876,15 @@ redistributable schemas, and official trust/revocation bundles.
   regeneration utility now use `KeyPair::try_from_seed`, returning existing
   bridge/key-derivation errors instead of panic-only seed expansion;
   GOST random scalar sampling and per-signature extra entropy now also use
-  checked OS fills, and GOST deterministic key generation rejects non-empty
-  all-zero seed material before scalar sampling, while both BLS backends derive
+  checked OS fills, random scalar sampling rejects all-zero OS material before
+  retry-budget exhaustion, per-signature entropy rejects all-zero OS material
+  before falling back to deterministic nonce derivation, and GOST deterministic
+  key generation rejects non-empty all-zero seed material before scalar sampling, while both BLS backends derive
   random keys from checked OS
   seed material after rejecting all-zero OS seed output and the default w3f
   backend seeds its key-splitting/signing RNGs only after checked OS fills,
-  leaving the compatibility `os_rng()` adapter
+  with both backend test/clippy lanes pinned in release-readiness validation
+  while leaving the compatibility `os_rng()` adapter
   test-only; P2P SoraNet runtime handshakes now seed their local `StdRng`
   through `SeedableRng::try_from_os_rng` and surface entropy-source failures as
   `HandshakeSoranet` instead of panicking; Taikai ingest-edge drift jitter now
@@ -1949,7 +1953,9 @@ redistributable schemas, and official trust/revocation bundles.
   payload if that invariant is broken, and routes the OpenSSL bridge through
   that fallible exporter before DER parsing, SM2 signature decoding now rejects
   all-zero and zero-scalar encodings before backend parsing, and SM2 verifier
-  boundaries map malformed signature material to `Error::BadSignature`,
+  boundaries map malformed signature material to `Error::BadSignature`, SM2
+  random private-key generation now rejects all-zero RNG seed material
+  immediately before scalar parsing or retry-budget exhaustion,
   generic ML-DSA public/private key import and direct batch verification now
   reject all-zero public-key, private-key, and detached-signature material before
   backend parsing,
@@ -2225,7 +2231,9 @@ redistributable schemas, and official trust/revocation bundles.
 							  SoraNet client and relay
 							  handshake construction now also uses fallible `TryCryptoRng` draws for nonce,
 							  Noise secret, and client ML-KEM seed material, returning labelled
-							  `HarnessError::RandomBytes` failures; SoraNet PoW and Argon2 puzzle
+							  `HarnessError::RandomBytes` failures and rejects all-zero generated
+							  material before nonce, Noise, or ML-KEM seed state can be emitted;
+							  SoraNet PoW and Argon2 puzzle
 							  ticket minting now also uses fallible `TryCryptoRng` draws and preserves
 							  labelled nonce-generation failures through `MintError::RandomBytes` and
 							  the p2p challenge wrapper, with all-zero nonce draws rejected as inert
@@ -2236,7 +2244,10 @@ redistributable schemas, and official trust/revocation bundles.
 							  request blinding nonce generation now
 							  also accepts fallible `TryCryptoRng` inputs and reports entropy failures
 							  through `BlindingError::RandomBytes`, while all-zero generated nonces fail
-							  through the existing weak-input gate; P2P handshake hello
+							  through the existing weak-input gate; AEAD convenience encryption now keeps
+							  caller-supplied nonce compatibility unchanged while generated
+							  `encrypt_easy`/`encrypt_easy_into` nonces reject inert all-zero material
+							  through `Error::InertNonce`; P2P handshake hello
 							  construction now also extracts local peer key metadata through checked accessors and reports
 						  malformed local keys through a dedicated handshake error, while multisig
 						  members expose a fallible checked algorithm accessor for result-returning
@@ -2301,7 +2312,9 @@ redistributable schemas, and official trust/revocation bundles.
   instead of panicking after checked generation; hybrid key-generation,
   encapsulation, and SoraFS hybrid payload envelope paths now consume fallible
   `TryCryptoRng` draws and return labelled RNG errors before key, ciphertext,
-  or AEAD nonce material is emitted; the public direct and seeded
+  or AEAD nonce material is emitted, while hybrid generated X25519 secret and
+  ML-KEM seed draws now reject all-zero material before key generation or
+  encapsulation can derive transport keys; the public direct and seeded
   `generate_mlkem_keypair*` wrappers now
   return `Result` instead of panicking after validation, and deterministic
   ML-KEM keygen/encapsulation reject all-zero `HedgedRngSeed` material before
@@ -2365,7 +2378,9 @@ redistributable schemas, and official trust/revocation bundles.
   keys; hybrid envelope constructors and Norito streaming Kyber key-material,
   fingerprint, session, snapshot, encapsulation, and decapsulation admission now
   also reject all-zero ML-KEM public or secret key material before accepting
-  fingerprints, transport state, or envelope keys;
+  fingerprints, transport state, or envelope keys, and Norito streaming
+  generated X25519 ephemeral secrets plus GCK wrap nonces reject all-zero
+  material before key-update or content-key update state is emitted;
   changing the streaming ML-KEM profile on key material or live sessions now
   clears configured Kyber public keys, fingerprints, and local decapsulation
   secrets before any later HPKE use, and direct local ephemeral-payload

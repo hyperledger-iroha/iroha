@@ -186,6 +186,12 @@ pub enum HandshakeError {
     /// Secure random generation failed while preparing local streaming material.
     #[error("secure random generation failed")]
     Randomness(#[source] OsError),
+    /// Random generation returned inert all-zero local streaming material.
+    #[error("generated {operation} material must not be all zero")]
+    InertRandomMaterial {
+        /// Operation that produced inert all-zero material.
+        operation: &'static str,
+    },
     /// Signing a local `KeyUpdate` frame failed.
     #[error("key update signing failed")]
     Signing(#[source] crate::Error),
@@ -542,12 +548,42 @@ struct X25519Ephemeral {
 type EphemeralSharedSecret = Zeroizing<[u8; 32]>;
 type OutboundEphemeralMaterial = (Vec<u8>, Option<EphemeralSharedSecret>);
 
+fn fill_random_streaming<R>(
+    rng: &mut R,
+    operation: &'static str,
+    dest: &mut [u8],
+) -> Result<(), HandshakeError>
+where
+    R: TryRngCore<Error = OsError>,
+{
+    rng.try_fill_bytes(dest)
+        .map_err(HandshakeError::Randomness)?;
+    if !dest.is_empty() && dest.iter().all(|&byte| byte == 0) {
+        return Err(HandshakeError::InertRandomMaterial { operation });
+    }
+    Ok(())
+}
+
+fn random_gck_nonce_from_rng<R>(rng: &mut R, nonce_len: usize) -> Result<Vec<u8>, HandshakeError>
+where
+    R: TryRngCore<Error = OsError>,
+{
+    let mut nonce = vec![0u8; nonce_len];
+    fill_random_streaming(rng, "GCK wrap nonce", &mut nonce)?;
+    Ok(nonce)
+}
+
 impl X25519Ephemeral {
     fn new_random() -> Result<Self, HandshakeError> {
+        Self::new_random_from_rng(&mut OsRng)
+    }
+
+    fn new_random_from_rng<R>(rng: &mut R) -> Result<Self, HandshakeError>
+    where
+        R: TryRngCore<Error = OsError>,
+    {
         let mut secret_bytes = Zeroizing::new([0u8; 32]);
-        OsRng
-            .try_fill_bytes(secret_bytes.as_mut())
-            .map_err(HandshakeError::Randomness)?;
+        fill_random_streaming(rng, "X25519 ephemeral secret", secret_bytes.as_mut())?;
         let secret = StaticSecret::from(*secret_bytes);
         Ok(Self::from_secret(secret))
     }
@@ -1832,10 +1868,7 @@ impl StreamingSession {
         Self::validate_group_content_key_len(gck_plaintext)?;
         self.validate_content_key_progression_values(content_key_id, valid_from_segment)?;
         let nonce_len = streaming_crypto::nonce_len_for_suite(&suite);
-        let mut nonce = vec![0u8; nonce_len];
-        OsRng
-            .try_fill_bytes(&mut nonce)
-            .map_err(HandshakeError::Randomness)?;
+        let nonce = random_gck_nonce_from_rng(&mut OsRng, nonce_len)?;
         let gck_wrapped = streaming_crypto::wrap_gck(
             &suite,
             &transport.send,
@@ -2127,11 +2160,66 @@ mod key_update_tests {
         mutated
     }
 
+    struct FixedTryRng {
+        byte: u8,
+    }
+
+    impl TryRngCore for FixedTryRng {
+        type Error = OsError;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok(u32::from_le_bytes([self.byte; 4]))
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok(u64::from_le_bytes([self.byte; 8]))
+        }
+
+        fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Self::Error> {
+            dest.fill(self.byte);
+            Ok(())
+        }
+    }
+
     #[test]
     fn x25519_ephemeral_new_random_derives_nonzero_public_key() {
         let ephemeral = X25519Ephemeral::new_random().expect("random x25519 ephemeral");
 
         assert_ne!(ephemeral.public, [0u8; 32]);
+    }
+
+    #[test]
+    fn x25519_ephemeral_new_random_rejects_all_zero_secret_material() {
+        let mut rng = FixedTryRng { byte: 0 };
+
+        let err = match X25519Ephemeral::new_random_from_rng(&mut rng) {
+            Ok(_) => panic!("all-zero X25519 ephemeral secret must fail"),
+            Err(err) => err,
+        };
+
+        match err {
+            HandshakeError::InertRandomMaterial { operation } => {
+                assert_eq!(operation, "X25519 ephemeral secret");
+            }
+            other => panic!("expected inert random material error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn random_gck_nonce_rejects_all_zero_material() {
+        let mut rng = FixedTryRng { byte: 0 };
+
+        let err = match random_gck_nonce_from_rng(&mut rng, 24) {
+            Ok(_) => panic!("all-zero GCK nonce must fail"),
+            Err(err) => err,
+        };
+
+        match err {
+            HandshakeError::InertRandomMaterial { operation } => {
+                assert_eq!(operation, "GCK wrap nonce");
+            }
+            other => panic!("expected inert random material error, got {other:?}"),
+        }
     }
 
     #[test]

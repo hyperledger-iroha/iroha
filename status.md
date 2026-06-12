@@ -2,6 +2,417 @@
 
 Last updated: 2026-06-12
 
+## 2026-06-12 Halo2 OpenVerify reserved proof-family circuit aliases
+
+- Hardened the generic `halo2/ipa` OpenVerify circuit-id gate so bare and
+  Halo2-prefixed circuit ids that advertise reserved proof families or
+  trusted-setup material reject before verifier dispatch, including `kzg`,
+  `k-z-g`, `groth16`, `bn254`, `halo2/ipa:kzg`, `halo2/ipa:groth16`,
+  `halo2/ipa:stark/fri`, and `halo2/pasta/kzg`.
+- Extended the helper, zero-duration guardrail, and preverify/dedup matrices so
+  reserved proof-family circuit aliases fail while normal bare Halo2 circuit ids
+  such as `tiny-add` remain accepted.
+- Trimmed the ML-DSA RNG test helper visibility in `iroha_crypto` from
+  `pub(crate)` to private so strict `iroha_core` clippy can pass through the
+  already-private dependency module.
+- Updated `docs/source/zk_envelopes.md` to document the generic Halo2
+  reserved-family circuit-id rejection alongside the existing backend and
+  circuit binding rules.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/zk.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-stark-air CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core halo2_open_verify_circuit_id_rejects_reserved_proof_family_aliases --lib -- --nocapture`
+    (`1` passed, `4928` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-stark-air CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core guardrails_reject_halo2_open_verify_circuit_mismatch_before_dispatch --lib -- --nocapture`
+    (`1` passed, `4928` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-stark-air CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core preverify_rejects_halo2_open_verify_circuit_mismatch_before_dedup --lib -- --nocapture`
+    (`1` passed, `4928` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-stark-air CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core guardrails_ --lib -- --nocapture`
+    (`18` passed, `4911` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-stark-air CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core preverify_ --lib -- --nocapture`
+    (`29` passed, `1` ignored, `4899` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-stark-air CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --lib -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-stark-air CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --features zk-stark --lib -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-mldsa-seed CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto random_keypair_from_rng --lib -- --nocapture`
+    (`3` passed, `761` filtered out)
+
+## 2026-06-12 SCCP deployment-bound transparent proof recovery
+
+- Added public SCCP transparent-proof recovery helpers that decode typed
+  artifacts against exact governed source verifier material and matching
+  source-adapter deployment evidence.
+- Kept the strict helper fail-closed on the destination manifest gate and added
+  a local-admission variant that relaxes only that manifest gate while still
+  rejecting backend-label drift and replayed deployment receipts.
+- Updated the SCCP bridge-proof docs and roadmap with the deployment-bound
+  recovery behavior; the existing launch-scope no-support note for
+  Sub&#115;trate/Pol&#107;adot remains in the public SCCP docs/status surfaces.
+- Validation:
+  - `cargo fmt --package iroha_sccp`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-recovery CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp source_sdk_facade_requires_deployment_bound_source_adapter --lib -- --nocapture`
+    (`2` passed, `254` filtered out)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'unsupported_scope_note or public_discovery_documentation'`
+    (`3` passed, `361` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'readiness_markdown_invariants_inventory or markdown_invariants_require_public_sections or public_discovery_documentation'`
+    (`5` passed, `609` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py -k 'specific_no_support_note'`
+    (`1` passed, `6` deselected)
+
+## 2026-06-12 ML-DSA random seed inertness regression
+
+- Routed top-level random ML-DSA key generation through a checked
+  OS-seed helper instead of the direct infallible `pqcrypto_mldsa` random
+  keypair path.
+- Added RNG-injected regressions for ML-DSA OS entropy failure, all-zero
+  generated seed rejection, and nonzero generated seed acceptance while
+  preserving top-level random sign/verify and seeded all-zero coverage.
+- Switched the remaining `iroha_crypto` ML-DSA public-key parse fixture away
+  from a direct `pqcrypto_mldsa` random keypair and onto the checked top-level
+  random route.
+- Verified the separate `soranet_pq` hedged seed boundary still rejects
+  all-zero required seed draws for ML-DSA keygen/signing, ML-KEM
+  keygen/encapsulation, and direct hedged RNG construction.
+- Validation:
+  - `cargo fmt --package iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mldsa-rng CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto random_keypair_from_rng --lib -- --nocapture`
+    (`3` passed, `761` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mldsa-rng CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto try_random_with_algorithm_ml_dsa_signs_and_verifies --lib -- --nocapture`
+    (`1` passed, `763` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mldsa-rng CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto seeded_keypair_rejects_all_zero_seed_material --lib -- --nocapture`
+    (`2` passed, `762` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mldsa-rng CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto ml_dsa_public_key_parse_rejects_invalid_length --lib -- --nocapture`
+    (`1` passed, `763` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mldsa-rng CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto mldsa --lib -- --nocapture`
+    (`20` passed, `744` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mldsa-rng CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --lib --tests --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-pq-rng CARGO_INCREMENTAL=0 cargo test -j 1 -p soranet_pq from_rng --lib -- --nocapture`
+    (`11` passed, `137` filtered out)
+
+## 2026-06-12 BLS backend random-seed validation
+
+- Verified the default w3f and alternate blstrs BLS backends still reject
+  all-zero deterministic seed material, accept checked random key generation,
+  and pass aggregate/identity-admission regressions under their feature-gated
+  implementations.
+- Removed an unused `TryRngCore` production import in secp256k1 that the
+  `bls-backend-blstrs` test build exposed as a `-D warnings` hazard; the test
+  module keeps its own fixed-RNG trait import.
+- Validation:
+  - `cargo fmt --package iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-rng CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto --features bls bls --lib -- --nocapture`
+    (`61` passed, `769` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-blstrs-rng CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto --features bls-backend-blstrs bls --lib -- --nocapture`
+    (`67` passed, `770` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-blstrs-rng CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --features bls-backend-blstrs --lib --tests --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-rng CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --features bls --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-12 secp256k1 random scalar inertness regression
+
+- Routed secp256k1 random private-key generation through an RNG-injected helper
+  so successful all-zero OS scalar draws fail immediately instead of burning
+  the generic invalid-scalar retry budget.
+- Added fixed-RNG regressions for all-zero generated scalar rejection and
+  nonzero scalar acceptance while preserving checked random sign/verify and
+  seeded all-zero rejection coverage.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/signature/secp256k1.rs`
+  - `cargo fmt --package iroha_crypto -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-secp256k1-rng CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto secp256k1_random_private_key_rejects_all_zero_rng_material --lib -- --nocapture`
+    (`1` passed, `759` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-secp256k1-rng CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto secp256k1_random_private_key_accepts_nonzero_rng_material --lib -- --nocapture`
+    (`1` passed, `759` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-secp256k1-rng CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto signature::secp256k1::tests::try_keypair_random_signs_and_verifies --lib -- --nocapture`
+    (`1` passed, `759` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-secp256k1-rng CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto secp256k1_try_keypair_rejects_all_zero_seed_material --lib -- --nocapture`
+    (`1` passed, `759` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-secp256k1-rng CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-12 Ed25519 random seed inertness regression
+
+- Routed Ed25519 random private-key generation through an RNG-injected helper
+  so successful all-zero OS seed draws fail before a signing key or verifying
+  key can be emitted.
+- Added fixed-RNG regressions for all-zero generated seed rejection and nonzero
+  seed acceptance while preserving the checked random sign/verify path.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/signature/ed25519.rs`
+  - `cargo fmt --package iroha_crypto -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ed25519-rng CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto signature::ed25519::test::random_private_key_from_rng_rejects_all_zero_seed_material --lib -- --nocapture`
+    (`1` passed, `757` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ed25519-rng CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto signature::ed25519::test::random_private_key_from_rng_accepts_nonzero_seed_material --lib -- --nocapture`
+    (`1` passed, `757` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ed25519-rng CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto signature::ed25519::test::try_keypair_random_signs_and_verifies --lib -- --nocapture`
+    (`1` passed, `757` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ed25519-rng CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-12 SCCP public artifact byte-count exactness
+
+- Hardened public release artifact schemas so manifest artifacts, copied
+  readiness-report artifact rows, and native EVM artifact summary rows require
+  positive byte counts. Zero-length artifact metadata now fails before public
+  readiness Markdown, release-note attachments, or strict bundle verification
+  can pass.
+- Added adversarial coverage for zero byte counts in copied report artifacts and
+  hand-edited manifest/readiness artifacts, while keeping canonical SHA-256 and
+  path checks intact.
+- Updated the SCCP bridge-proof docs and roadmap with the positive artifact
+  byte-count rule.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'manifest_artifact_set_order_inventory or malformed_copied_artifacts_before_render or artifact_field_type_drift or zero_artifact_byte_counts or artifact_digest_text_drift'`
+    (`6` passed, `608` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'release_manifest_artifact_set_order_gate_inventory or release_manifest_artifact_set_order_gate'`
+    (`2` passed, `362` deselected)
+
+## 2026-06-12 SCCP submission-surface phase exactness
+
+- Hardened public `user_prover_submission_surfaces` validation so
+  `required_phases` must match the verifier-owned lane/backend phase list
+  exactly, including EVM/BSC-only `dotnet-sdk` and contract-backed
+  `contract-smoke` requirements.
+- Added adversarial release-bundle coverage for copied rows with an extra known
+  phase before rendering and strict verifier coverage for a hand-edited TON row
+  with reordered phases plus an invalid extra `dotnet-sdk`.
+- Updated the SCCP bridge-proof docs and roadmap with the explicit
+  required-phase exactness rule.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'submission_surface_exact_phase_drift or copied_submission_surface_binding_before_render or release_public_submission_surface_binding_inventory or submission_surface_malformed_required_phases or submission_surface_sdk_core_phases or requires_contract_smoke_for_contract_backends'`
+    (`7` passed, `606` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'release_public_submission_surface_binding_gate_inventory or release_public_submission_surface_binding_gate'`
+    (`2` passed, `362` deselected)
+
+## 2026-06-12 X25519 KEX generated secret inertness regression
+
+- Routed generic X25519 KEX random private-key generation through an
+  RNG-injected helper so successful all-zero local secret draws remain rejected
+  before a public key or shared-secret path can consume inert material.
+- Added fixed-RNG regressions for the all-zero generated-secret boundary while
+  preserving the existing nonzero random key-exchange sanity coverage.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/kex/x25519.rs`
+  - `cargo fmt --package iroha_crypto -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-x25519-kex-rng CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto random_private_key_from_rng_rejects_all_zero_material --lib -- --nocapture`
+    (`1` passed, `755` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-x25519-kex-rng CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto random_private_key_from_rng_accepts_nonzero_material --lib -- --nocapture`
+    (`1` passed, `755` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-x25519-kex-rng CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto try_keypair_random_derives_shared_secret --lib -- --nocapture`
+    (`1` passed, `755` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-x25519-kex-rng CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --lib --tests --no-deps -- -D warnings`
+  - `git diff --check -- crates/iroha_crypto/src/kex/x25519.rs status.md`
+
+## 2026-06-12 GOST random scalar inertness regression
+
+- Hardened feature-gated GOST random scalar sampling and per-signature entropy
+  so successful all-zero OS RNG draws fail immediately as `Error::KeyGen`
+  before scalar parsing, retry budget exhaustion, or deterministic fallback.
+- Added private RNG-injected scalar/signing-entropy helpers and fixed zero RNG
+  regressions, while preserving seeded all-zero rejection and random keypair
+  sign/verify coverage under `--features gost`.
+- Validation:
+  - `cargo fmt --package iroha_crypto`
+  - `cargo fmt --package iroha_crypto -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-gost-rng CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto --features gost random_scalar_rejects_all_zero_rng_material --lib -- --nocapture`
+    (`1` passed, `784` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-gost-rng CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto --features gost signing_entropy_rejects_all_zero_rng_material --lib -- --nocapture`
+    (`1` passed, `784` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-gost-rng CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto --features gost signature::gost::tests::seeded_keypair_rejects_all_zero_seed_material --lib -- --nocapture`
+    (`1` passed, `784` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-gost-rng CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto --features gost random_keypair_signs_and_verifies --lib -- --nocapture`
+    (`1` passed, `784` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-gost-rng CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --features gost --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-12 SM2 random seed inertness regression
+
+- Hardened feature-gated SM2 random private-key generation so successful
+  all-zero RNG draws fail immediately as `ParseError` instead of being retried
+  until the generic invalid-scalar budget is exhausted.
+- Added a fixed zero RNG regression while preserving the existing seeded
+  all-zero, deterministic random roundtrip, and RNG failure coverage under
+  `--features sm`.
+- Validation:
+  - `cargo fmt --package iroha_crypto`
+  - `cargo fmt --package iroha_crypto -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sm-rng CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto --features sm sm2_try_random_rejects_all_zero_rng_material --lib -- --nocapture`
+    (`1` passed, `810` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sm-rng CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto --features sm sm2_from_seed_rejects_all_zero_seed_material --lib -- --nocapture`
+    (`1` passed, `810` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sm-rng CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto --features sm sm2_random_private_key_roundtrip --lib -- --nocapture`
+    (`1` passed, `810` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sm-rng CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto --features sm sm2_try_random_reports_rng_failure --lib -- --nocapture`
+    (`1` passed, `810` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sm-rng CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --features sm --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-12 streaming generated material inertness regressions
+
+- Added a typed `HandshakeError::InertRandomMaterial` path for successful
+  all-zero local streaming RNG draws, separate from OS entropy failures.
+- Hardened generated X25519 ephemeral secrets and GCK wrap nonces so all-zero
+  material is rejected before key-update or content-key update state can be
+  emitted.
+- Validation:
+  - `cargo fmt --package iroha_crypto`
+  - `cargo fmt --package iroha_crypto -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-handshake-rng CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto x25519_ephemeral_new_random_rejects_all_zero_secret_material --lib -- --nocapture`
+    (`1` passed, `753` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-handshake-rng CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto random_gck_nonce_rejects_all_zero_material --lib -- --nocapture`
+    (`1` passed, `753` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-handshake-rng CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto x25519_ephemeral_new_random_derives_nonzero_public_key --lib -- --nocapture`
+    (`1` passed, `753` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-handshake-rng CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto content_key_update --lib -- --nocapture`
+    (`2` passed, `752` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-handshake-rng CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-12 hybrid generated material inertness regressions
+
+- Hardened hybrid X25519/ML-KEM random-fill admission so successful all-zero
+  generated X25519 secret or ML-KEM seed draws fail through labelled
+  `HybridError::RandomBytes` before hybrid key generation or encapsulation can
+  emit key, ciphertext, or derived AEAD material.
+- Added construction-level regressions for all-zero X25519 material at the
+  first draw and all-zero ML-KEM seed material after a valid X25519 draw during
+  both `HybridKeyPair::try_generate` and `encapsulate`.
+- Fixed the secp256k1 all-zero seed regression assertion to borrow the
+  `Error::KeyGen` message while formatting the full error for diagnostics.
+- Validation:
+  - `cargo fmt --package iroha_crypto`
+  - `cargo fmt --package iroha_crypto -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-handshake-rng CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto hybrid::tests::fill_random_rejects_all_zero_material --lib -- --nocapture`
+    (`1` passed, `751` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-handshake-rng CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto try_generate_rejects_all_zero_x25519_random_material --lib -- --nocapture`
+    (`1` passed, `753` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-handshake-rng CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto encapsulate_rejects_all_zero_ephemeral_x25519_random_material --lib -- --nocapture`
+    (`1` passed, `753` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-handshake-rng CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto try_generate_rejects_all_zero_mlkem_seed_material --lib -- --nocapture`
+    (`1` passed, `751` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-handshake-rng CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto encapsulate_rejects_all_zero_mlkem_seed_material --lib -- --nocapture`
+    (`1` passed, `751` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-handshake-rng CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto try_generate_reports_rng_failure --lib -- --nocapture`
+    (`1` passed, `751` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-handshake-rng CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto encapsulate_reports_rng_failure --lib -- --nocapture`
+    (`1` passed, `751` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-handshake-rng CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto secp256k1_try_keypair_rejects_all_zero_seed_material --lib -- --nocapture`
+    (`1` passed, `751` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-handshake-rng CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-12 SoraNet handshake random-material inertness regressions
+
+- Hardened the SoraNet runtime handshake random-fill helper so successful
+  all-zero fills for nonces, Noise secrets, or client ML-KEM seed material fail
+  through the labelled `HarnessError::RandomBytes` path.
+- Pinned construction-level regressions for all-zero generated client and relay
+  nonces during `build_client_hello` and `process_client_hello`, not only the
+  shared helper path.
+- Validation:
+  - `cargo fmt --package iroha_crypto`
+  - `cargo fmt --package iroha_crypto -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-handshake-rng CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto fill_random_rejects_all_zero_material --lib -- --nocapture`
+    (`1` passed, `745` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-handshake-rng CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto reports_rng_failure --lib -- --nocapture`
+    (`9` passed, `737` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-handshake-rng CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto process_client_hello_reports_relay_rng_failure --lib -- --nocapture`
+    (`1` passed, `745` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-handshake-rng CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto build_client_hello_rejects_all_zero_nonce_material --lib -- --nocapture`
+    (`1` passed, `745` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-handshake-rng CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto process_client_hello_rejects_all_zero_relay_nonce_material --lib -- --nocapture`
+    (`1` passed, `745` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-handshake-rng CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-12 AEAD generated nonce inertness validation
+
+- Finished the AEAD convenience nonce hardening so the private RNG-injected
+  helper is explicit over the AEAD algorithm and checks hybrid-array-backed
+  nonce bytes through slice access before `encrypt_easy`/`encrypt_easy_into`
+  emit an envelope.
+- Kept caller-supplied nonce encryption/decryption compatibility unchanged;
+  the inert all-zero rejection applies only at generated nonce boundaries, with
+  a direct regression for explicit all-zero manual nonces.
+- Validation:
+  - `cargo fmt --package iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-encryption-nonce CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto encrypt_with_caller_supplied_all_zero_nonce_roundtrips --lib -- --nocapture`
+    (`1` passed, `742` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-encryption-nonce CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto random_nonce_ --lib -- --nocapture`
+    (`2` passed, `742` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-encryption-nonce CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto encrypt_easy --lib -- --nocapture`
+    (`2` passed, `742` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-encryption-nonce CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-12 SCCP public crypto route-canary binding exactness
+
+- Hardened public cryptographic-evidence row validation so EVM route-canary rows
+  with canary evidence must keep `route_canary_evidence_source` exactly
+  `evm_message_proof_accepted_transaction` and keep both
+  `route_canary_evidence_bound` and `route_canary_receipt_block_finalized`
+  exactly `true`; copied public rows must also keep
+  `route_canary_receipt_block_number` as a positive u32 integer.
+  Wrong-source, false, or oversized copied rows now fail before release Markdown
+  rendering and during strict bundle verification.
+- Hardened TRON public cryptographic-evidence row validation so
+  `route_canary_block_number` must be a positive u64 integer and
+  `route_canary_block_timestamp` must be a non-negative u64 integer before a
+  copied public row can satisfy bundle rendering or strict verification.
+- Hardened public source-adapter gate rows so Solana, TON, and TRON evidence
+  must keep `source_adapter_gate_required = true`, empty gate material for
+  unsupported domains, and exact non-empty domain audit-key sets before copied
+  public rows can satisfy rendering or strict verification.
+- Added adversarial builder and verifier regressions and pinned the new semantic
+  blockers in the release public cryptographic-evidence source inventory,
+  including non-active BSC/testnet public route-canary rows.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'release_public_crypto_evidence_binding_gate_inventory'`
+    (`1` passed, `363` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'release_public_crypto_evidence_binding_inventory or unbound_copied_crypto_evidence_before_render or oversized_copied_crypto_evidence_receipt_before_render or oversized_copied_tron_crypto_evidence_before_render or copied_crypto_source_adapter_gate_drift_before_render or crypto_source_adapter_gate_policy_drift or tron_crypto_profile_block_metadata_drift or false_crypto_evidence_bound_with_canary_hash or malformed_copied_crypto_evidence_before_render or accepts_bsc_testnet_crypto_profile'`
+    (`11` passed, `601` deselected)
+  - `cargo fmt --package iroha_sccp -- --check`
+
+## 2026-06-12 SCCP active route-canary receipt-block-number recomputation
+
+- Added strict release-bundle recomputation coverage for active route-canary
+  `receipt_block_number`, keeping numeric-looking strings, hex text,
+  plus-signed text, Unicode-confusable digits, booleans, zero, and missing/null
+  values as live-route-canary blockers.
+- Pinned the named adversarial tuple in the active checklist source inventory
+  so helper-only coverage cannot satisfy the bundle-verifier gate.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'malformed_active_route_canary_metadata or active_launch_checklist_schema_gate_inventory'`
+    (`2` passed, `362` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'recomputes_active_route_canary_receipt_block_number_exactly or recomputes_active_route_canary_receipt_finalized_exactly or recomputes_active_checklist_rejects_malformed_canary_source or active_launch_checklist_schema_inventory'`
+    (`5` passed, `600` deselected)
+  - `cargo fmt --package iroha_sccp -- --check`
+
+## 2026-06-12 SCCP active route-canary finalized-receipt exactness
+
+- Expanded active route-canary metadata regressions so
+  `receipt_block_finalized` must be exactly boolean `true`; false,
+  missing/null, truthy string, and numeric values remain live-route-canary
+  blockers.
+- Added matching strict release-bundle recomputation coverage and pinned the
+  named adversarial tuple in the active checklist source inventory.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'malformed_active_route_canary_metadata or active_launch_checklist_schema_gate_inventory'`
+    (`2` passed, `362` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'recomputes_active_route_canary_receipt_finalized_exactly or recomputes_active_checklist_rejects_malformed_canary_source or active_launch_checklist_schema_inventory'`
+    (`4` passed, `600` deselected)
+  - `cargo fmt --package iroha_sccp -- --check`
+
+## 2026-06-12 SCCP active route-canary evidence-source exactness
+
+- Expanded active route-canary metadata regressions so `evidence_source` must be
+  canonical text and exactly `evm_message_proof_accepted_transaction`; missing,
+  empty, padded, non-string, wrong-label, and case-drift values remain
+  live-route-canary blockers.
+- Added matching strict release-bundle recomputation coverage and pinned the
+  named adversarial tuple in the active checklist source inventory.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'malformed_active_route_canary_metadata or active_launch_checklist_schema_gate_inventory'`
+    (`2` passed, `362` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'recomputes_active_checklist_rejects_malformed_canary_source or active_launch_checklist_schema_inventory'`
+    (`3` passed, `600` deselected)
+  - `cargo fmt --package iroha_sccp -- --check`
+
 ## 2026-06-12 SCCP active route-canary hash exactness
 
 - Expanded active route-canary metadata regressions so evidence hash,
@@ -135,12 +546,14 @@ Last updated: 2026-06-12
   within the selected STARK backend family before generic STARK proof
   construction, full verification, zero-duration guardrail dispatch, or
   lightweight preverification. The generic `stark/fri` entry point now rejects
-  circuit ids advertising another proof family, while profile-specific STARK
+  circuit ids advertising another proof family, including slash and colon forms
+  such as `halo2/...`, `halo2:...`, and `kzg:...`, while profile-specific STARK
   backends reject decoded circuit ids advertising a sibling STARK profile or the
   generic `stark/fri:` prefix.
 - Added adversarial guardrail and preverify matrices for sibling-profile,
-  generic-prefix, and cross-family `halo2/ipa` circuit spoofing. The preverify
-  regression also proves failed attempts do not poison the dedup cache.
+  generic-prefix, cross-family `halo2/ipa`, colon-form `halo2:...`, and
+  colon-form trusted-setup `kzg:...` circuit spoofing. The preverify regression
+  also proves failed attempts do not poison the dedup cache.
 - Added `zk-stark` prover/full-verifier regressions for the same circuit-family
   mismatches so valid-looking VK payloads cannot construct or verify under
   misleading OpenVerify circuit metadata.
@@ -151,13 +564,13 @@ Last updated: 2026-06-12
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-stark-air CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core guardrails_reject_stark_open_verify_circuit_mismatch_before_dispatch --lib -- --nocapture`
     (`1` passed, `4926` filtered out)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-stark-air CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core preverify_rejects_stark_open_verify_circuit_mismatch_before_dedup --lib -- --nocapture`
-    (`1` passed, `4926` filtered out)
+    (`1` passed, `4927` filtered out)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-stark-air CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark circuit_family_mismatch --lib -- --nocapture`
-    (`2` passed, `5086` filtered out)
+    (`2` passed, `5087` filtered out)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-stark-air CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core guardrails_ --lib -- --nocapture`
-    (`18` passed, `4909` filtered out)
+    (`18` passed, `4910` filtered out)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-stark-air CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core preverify_ --lib -- --nocapture`
-    (`29` passed, `1` ignored, `4897` filtered out)
+    (`29` passed, `1` ignored, `4898` filtered out)
   - `rustfmt --check --edition 2024 crates/iroha_core/src/zk.rs`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-stark-air CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --lib -- -D warnings`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-stark-air CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --features zk-stark --lib -- -D warnings`

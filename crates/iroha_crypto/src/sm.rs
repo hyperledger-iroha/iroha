@@ -472,6 +472,11 @@ impl Sm2PrivateKey {
         for _ in 0..SM2_RANDOM_KEY_ATTEMPTS {
             rng.try_fill_bytes(secret.as_mut())
                 .map_err(|err| ParseError(format!("SM2 RNG failed: {err}")))?;
+            if secret.iter().all(|&byte| byte == 0) {
+                return Err(ParseError(
+                    "SM2 RNG returned all-zero seed material".to_owned(),
+                ));
+            }
             if let Ok(private) = Self::from_bytes(distid.clone(), secret.as_ref()) {
                 return Ok(private);
             }
@@ -3060,6 +3065,29 @@ mod tests {
 
     impl TryCryptoRng for FailingTryRng {}
 
+    struct FixedTryRng {
+        byte: u8,
+    }
+
+    impl TryRngCore for FixedTryRng {
+        type Error = core::convert::Infallible;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok(u32::from_le_bytes([self.byte; 4]))
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok(u64::from_le_bytes([self.byte; 8]))
+        }
+
+        fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Self::Error> {
+            dest.fill(self.byte);
+            Ok(())
+        }
+    }
+
+    impl TryCryptoRng for FixedTryRng {}
+
     struct IntrinsicPolicyGuard {
         previous: SmIntrinsicPolicy,
         _lock: std::sync::MutexGuard<'static, ()>,
@@ -3570,6 +3598,19 @@ mod tests {
                 "unexpected all-zero seed error: {err:?}"
             ),
             Ok(_) => panic!("all-zero SM2 seed material must fail"),
+        }
+    }
+
+    #[test]
+    fn sm2_try_random_rejects_all_zero_rng_material() {
+        let mut rng = FixedTryRng { byte: 0 };
+
+        match Sm2PrivateKey::try_random(Sm2PublicKey::DEFAULT_DISTID, &mut rng) {
+            Err(err) => assert!(
+                err.to_string().contains("all-zero seed material"),
+                "unexpected all-zero RNG error: {err:?}"
+            ),
+            Ok(_) => panic!("all-zero SM2 RNG material must fail"),
         }
     }
 

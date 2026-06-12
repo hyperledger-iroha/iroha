@@ -31814,6 +31814,82 @@ pub fn decode_sccp_source_chain_proof_envelope(
     norito::decode_from_bytes(proof_bytes).ok()
 }
 
+/// Recover a source-chain proof envelope from bytes against governed deployment material.
+pub fn recover_sccp_source_chain_proof_envelope_with_material_and_deployment(
+    source_domain: u32,
+    target_domain: u32,
+    proof_bytes: &[u8],
+    material: &SccpSourceVerifierMaterialV1,
+    deployment: &SccpSourceAdapterEngineDeploymentV1,
+) -> Option<SccpSourceChainProofEnvelopeV1> {
+    let proof = decode_sccp_source_chain_proof_envelope(proof_bytes)?;
+    (proof.source_domain == source_domain
+        && proof.target_domain == target_domain
+        && verify_sccp_source_chain_proof_envelope_structure_with_material_and_deployment(
+            &proof, material, deployment,
+        ))
+    .then_some(proof)
+}
+
+/// Recover a production source-chain proof envelope from governed deployment material.
+pub fn recover_sccp_source_chain_proof_envelope_for_production_with_material_and_deployment(
+    source_domain: u32,
+    target_domain: u32,
+    proof_bytes: &[u8],
+    material: &SccpSourceVerifierMaterialV1,
+    deployment: &SccpSourceAdapterEngineDeploymentV1,
+) -> Option<SccpSourceChainProofEnvelopeV1> {
+    let proof = decode_sccp_source_chain_proof_envelope(proof_bytes)?;
+    (proof.source_domain == source_domain
+        && proof.target_domain == target_domain
+        && verify_sccp_source_chain_proof_envelope_production_with_material_and_deployment(
+            &proof, material, deployment,
+        ))
+    .then_some(proof)
+}
+
+/// Recover an Ethereum mainnet -> SORA source proof envelope from governed deployment material.
+pub fn recover_sccp_eth_mainnet_source_chain_proof_envelope_for_production(
+    proof_bytes: &[u8],
+    material: &SccpSourceVerifierMaterialV1,
+    deployment: &SccpSourceAdapterEngineDeploymentV1,
+) -> Option<SccpSourceChainProofEnvelopeV1> {
+    if material.source_domain != SCCP_DOMAIN_ETH
+        || deployment.source_domain != SCCP_DOMAIN_ETH
+        || deployment.target_domain != SCCP_DOMAIN_SORA
+    {
+        return None;
+    }
+    recover_sccp_source_chain_proof_envelope_for_production_with_material_and_deployment(
+        SCCP_DOMAIN_ETH,
+        SCCP_DOMAIN_SORA,
+        proof_bytes,
+        material,
+        deployment,
+    )
+}
+
+/// Recover a BSC mainnet -> SORA source proof envelope from governed deployment material.
+pub fn recover_sccp_bsc_mainnet_source_chain_proof_envelope_for_production(
+    proof_bytes: &[u8],
+    material: &SccpSourceVerifierMaterialV1,
+    deployment: &SccpSourceAdapterEngineDeploymentV1,
+) -> Option<SccpSourceChainProofEnvelopeV1> {
+    if material.source_domain != SCCP_DOMAIN_BSC
+        || deployment.source_domain != SCCP_DOMAIN_BSC
+        || deployment.target_domain != SCCP_DOMAIN_SORA
+    {
+        return None;
+    }
+    recover_sccp_source_chain_proof_envelope_for_production_with_material_and_deployment(
+        SCCP_DOMAIN_BSC,
+        SCCP_DOMAIN_SORA,
+        proof_bytes,
+        material,
+        deployment,
+    )
+}
+
 pub fn decode_sccp_source_consensus_proof(
     proof_bytes: &[u8],
 ) -> Option<SccpSourceConsensusProofV1> {
@@ -31855,6 +31931,38 @@ pub fn recover_nexus_sccp_message_transparent_proof_allow_unready(
     let proof = decode_nexus_sccp_message_transparent_proof(proof_bytes)?;
     (verify_nexus_sccp_message_transparent_proof_structure_allow_unready(&proof, allow_unready)
         && proof.message_backend == backend)
+        .then_some(proof)
+}
+
+/// Recover a typed transparent proof artifact against governed source-adapter material.
+pub fn recover_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment(
+    backend: &str,
+    proof_bytes: &[u8],
+    material: &SccpSourceVerifierMaterialV1,
+    deployment: &SccpSourceAdapterEngineDeploymentV1,
+) -> Option<NexusSccpMessageTransparentProofV1> {
+    let proof = decode_nexus_sccp_message_transparent_proof(proof_bytes)?;
+    (verify_nexus_sccp_message_transparent_proof_structure_with_source_verifier_material_and_deployment(
+        &proof,
+        material,
+        deployment,
+    ) && proof.message_backend == backend)
+        .then_some(proof)
+}
+
+/// Recover a deployment-bound transparent proof while allowing only the destination manifest gate.
+pub fn recover_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready_manifest(
+    backend: &str,
+    proof_bytes: &[u8],
+    material: &SccpSourceVerifierMaterialV1,
+    deployment: &SccpSourceAdapterEngineDeploymentV1,
+) -> Option<NexusSccpMessageTransparentProofV1> {
+    let proof = decode_nexus_sccp_message_transparent_proof(proof_bytes)?;
+    (verify_nexus_sccp_message_transparent_proof_structure_with_source_verifier_material_and_deployment_allow_unready_manifest(
+        &proof,
+        material,
+        deployment,
+    ) && proof.message_backend == backend)
         .then_some(proof)
 }
 
@@ -67983,6 +68091,36 @@ mod tests {
             )
             .is_some()
         );
+        let recovered_source_proof =
+            recover_sccp_bsc_mainnet_source_chain_proof_envelope_for_production(
+                &bundle.finality_proof,
+                &material,
+                &deployment,
+            )
+            .expect("recover BSC deployment-bound source proof bytes");
+        assert_eq!(recovered_source_proof.message_id, proof.message_id);
+        assert!(
+            recover_sccp_source_chain_proof_envelope_with_material_and_deployment(
+                SCCP_DOMAIN_BSC,
+                SCCP_DOMAIN_SORA,
+                &bundle.finality_proof,
+                &material,
+                &deployment,
+            )
+            .is_some(),
+            "structural source proof byte recovery must accept exact BSC deployment material"
+        );
+        assert!(
+            recover_sccp_source_chain_proof_envelope_for_production_with_material_and_deployment(
+                SCCP_DOMAIN_ETH,
+                SCCP_DOMAIN_SORA,
+                &bundle.finality_proof,
+                &material,
+                &deployment,
+            )
+            .is_none(),
+            "source proof byte recovery must reject copied BSC proof bytes under an ETH source label"
+        );
         let artifact =
             build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready(
                 &bundle,
@@ -68015,6 +68153,35 @@ mod tests {
             ),
             "BSC local admission package must verify without outbound EVM Groth16 calldata"
         );
+        let artifact_bytes = to_bytes(&artifact).expect("encode BSC local admission artifact");
+        assert!(
+            recover_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment(
+                &artifact.message_backend,
+                &artifact_bytes,
+                &material,
+                &deployment,
+            )
+            .is_none(),
+            "normal recovery must keep the disabled destination manifest gate closed"
+        );
+        let recovered = recover_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready_manifest(
+            &artifact.message_backend,
+            &artifact_bytes,
+            &material,
+            &deployment,
+        )
+        .expect("recover BSC deployment-bound local admission artifact");
+        assert_eq!(recovered.public_inputs, artifact.public_inputs);
+        assert!(
+            recover_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready_manifest(
+                "sccp/stark-fri-v1/eth",
+                &artifact_bytes,
+                &material,
+                &deployment,
+            )
+            .is_none(),
+            "deployment-bound recovery must reject backend-label drift"
+        );
 
         let material_only_bundle = sample_transfer_bundle_with_source_material_and_deployment(
             SCCP_DOMAIN_BSC,
@@ -68032,6 +68199,15 @@ mod tests {
             .is_none(),
             "BSC facade must reject source proofs that omit deployment evidence"
         );
+        assert!(
+            recover_sccp_bsc_mainnet_source_chain_proof_envelope_for_production(
+                &material_only_bundle.finality_proof,
+                &material,
+                &deployment,
+            )
+            .is_none(),
+            "BSC source proof byte recovery must reject material-only proofs"
+        );
         let wrong_target_bundle = sample_transfer_bundle(SCCP_DOMAIN_BSC, SCCP_DOMAIN_ETH, 709);
         assert!(
             verified_sccp_bsc_mainnet_source_chain_proof_envelope_for_production(
@@ -68042,6 +68218,15 @@ mod tests {
             .is_none(),
             "BSC facade must reject non-SORA destination bundles"
         );
+        assert!(
+            recover_sccp_bsc_mainnet_source_chain_proof_envelope_for_production(
+                &wrong_target_bundle.finality_proof,
+                &material,
+                &deployment,
+            )
+            .is_none(),
+            "BSC source proof byte recovery must reject non-SORA targets"
+        );
         let wrong_source_bundle = sample_transfer_bundle(SCCP_DOMAIN_ETH, SCCP_DOMAIN_SORA, 710);
         assert!(
             verified_sccp_bsc_mainnet_source_chain_proof_envelope_for_production(
@@ -68051,6 +68236,15 @@ mod tests {
             )
             .is_none(),
             "BSC facade must reject non-BSC source bundles"
+        );
+        assert!(
+            recover_sccp_bsc_mainnet_source_chain_proof_envelope_for_production(
+                &wrong_source_bundle.finality_proof,
+                &material,
+                &deployment,
+            )
+            .is_none(),
+            "BSC source proof byte recovery must reject non-BSC proof bytes"
         );
 
         let mut replayed_receipt = deployment.clone();
@@ -68070,6 +68264,25 @@ mod tests {
                 &replayed_receipt,
             ),
             "BSC local admission artifacts must reject replayed deployment receipts"
+        );
+        assert!(
+            recover_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready_manifest(
+                &artifact.message_backend,
+                &artifact_bytes,
+                &material,
+                &replayed_receipt,
+            )
+            .is_none(),
+            "BSC recovery must reject replayed deployment receipts"
+        );
+        assert!(
+            recover_sccp_bsc_mainnet_source_chain_proof_envelope_for_production(
+                &bundle.finality_proof,
+                &material,
+                &replayed_receipt,
+            )
+            .is_none(),
+            "BSC source proof byte recovery must reject replayed deployment receipts"
         );
 
         #[derive(Clone, Copy)]
@@ -68350,6 +68563,36 @@ mod tests {
             )
             .is_some()
         );
+        let recovered_source_proof =
+            recover_sccp_eth_mainnet_source_chain_proof_envelope_for_production(
+                &bundle.finality_proof,
+                &material,
+                &deployment,
+            )
+            .expect("recover ETH deployment-bound source proof bytes");
+        assert_eq!(recovered_source_proof.message_id, proof.message_id);
+        assert!(
+            recover_sccp_source_chain_proof_envelope_with_material_and_deployment(
+                SCCP_DOMAIN_ETH,
+                SCCP_DOMAIN_SORA,
+                &bundle.finality_proof,
+                &material,
+                &deployment,
+            )
+            .is_some(),
+            "structural source proof byte recovery must accept exact ETH deployment material"
+        );
+        assert!(
+            recover_sccp_source_chain_proof_envelope_for_production_with_material_and_deployment(
+                SCCP_DOMAIN_BSC,
+                SCCP_DOMAIN_SORA,
+                &bundle.finality_proof,
+                &material,
+                &deployment,
+            )
+            .is_none(),
+            "source proof byte recovery must reject copied ETH proof bytes under a BSC source label"
+        );
 
         let artifact =
             build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready(
@@ -68383,6 +68626,35 @@ mod tests {
             ),
             "ETH local admission package must verify without outbound EVM Groth16 calldata"
         );
+        let artifact_bytes = to_bytes(&artifact).expect("encode ETH local admission artifact");
+        assert!(
+            recover_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment(
+                &artifact.message_backend,
+                &artifact_bytes,
+                &material,
+                &deployment,
+            )
+            .is_none(),
+            "normal recovery must keep the disabled destination manifest gate closed"
+        );
+        let recovered = recover_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready_manifest(
+            &artifact.message_backend,
+            &artifact_bytes,
+            &material,
+            &deployment,
+        )
+        .expect("recover ETH deployment-bound local admission artifact");
+        assert_eq!(recovered.public_inputs, artifact.public_inputs);
+        assert!(
+            recover_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready_manifest(
+                "sccp/stark-fri-v1/bsc",
+                &artifact_bytes,
+                &material,
+                &deployment,
+            )
+            .is_none(),
+            "deployment-bound recovery must reject backend-label drift"
+        );
 
         let material_only_bundle = sample_transfer_bundle_with_source_material_and_deployment(
             SCCP_DOMAIN_ETH,
@@ -68400,6 +68672,15 @@ mod tests {
             .is_none(),
             "ETH facade must reject source proofs that omit deployment evidence"
         );
+        assert!(
+            recover_sccp_eth_mainnet_source_chain_proof_envelope_for_production(
+                &material_only_bundle.finality_proof,
+                &material,
+                &deployment,
+            )
+            .is_none(),
+            "ETH source proof byte recovery must reject material-only proofs"
+        );
         let wrong_target_bundle = sample_transfer_bundle(SCCP_DOMAIN_ETH, SCCP_DOMAIN_BSC, 713);
         assert!(
             verified_sccp_eth_mainnet_source_chain_proof_envelope_for_production(
@@ -68410,6 +68691,15 @@ mod tests {
             .is_none(),
             "ETH facade must reject non-SORA destination bundles"
         );
+        assert!(
+            recover_sccp_eth_mainnet_source_chain_proof_envelope_for_production(
+                &wrong_target_bundle.finality_proof,
+                &material,
+                &deployment,
+            )
+            .is_none(),
+            "ETH source proof byte recovery must reject non-SORA targets"
+        );
         let wrong_source_bundle = sample_transfer_bundle(SCCP_DOMAIN_BSC, SCCP_DOMAIN_SORA, 714);
         assert!(
             verified_sccp_eth_mainnet_source_chain_proof_envelope_for_production(
@@ -68419,6 +68709,15 @@ mod tests {
             )
             .is_none(),
             "ETH facade must reject non-ETH source bundles"
+        );
+        assert!(
+            recover_sccp_eth_mainnet_source_chain_proof_envelope_for_production(
+                &wrong_source_bundle.finality_proof,
+                &material,
+                &deployment,
+            )
+            .is_none(),
+            "ETH source proof byte recovery must reject non-ETH proof bytes"
         );
 
         let mut replayed_receipt = deployment.clone();
@@ -68438,6 +68737,25 @@ mod tests {
                 &replayed_receipt,
             ),
             "ETH local admission artifacts must reject replayed deployment receipts"
+        );
+        assert!(
+            recover_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready_manifest(
+                &artifact.message_backend,
+                &artifact_bytes,
+                &material,
+                &replayed_receipt,
+            )
+            .is_none(),
+            "ETH recovery must reject replayed deployment receipts"
+        );
+        assert!(
+            recover_sccp_eth_mainnet_source_chain_proof_envelope_for_production(
+                &bundle.finality_proof,
+                &material,
+                &replayed_receipt,
+            )
+            .is_none(),
+            "ETH source proof byte recovery must reject replayed deployment receipts"
         );
 
         let bsc_material =

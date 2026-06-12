@@ -2,7 +2,7 @@ use hkdf::Hkdf;
 #[cfg(feature = "rand")]
 use rand::rngs::OsRng;
 #[cfg(feature = "rand")]
-use rand_core::TryRngCore;
+use rand_core::TryCryptoRng;
 use sha2::Sha256;
 use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::{Zeroize, Zeroizing};
@@ -120,9 +120,16 @@ impl KeyExchangeScheme for X25519Sha256 {
 impl X25519Sha256 {
     #[cfg(feature = "rand")]
     fn random_private_key() -> Result<StaticSecret, Error> {
+        Self::random_private_key_from_rng(&mut OsRng)
+    }
+
+    #[cfg(feature = "rand")]
+    fn random_private_key_from_rng<R>(rng: &mut R) -> Result<StaticSecret, Error>
+    where
+        R: TryCryptoRng,
+    {
         let mut bytes = Zeroizing::new([0u8; 32]);
-        OsRng
-            .try_fill_bytes(bytes.as_mut())
+        rng.try_fill_bytes(bytes.as_mut())
             .map_err(|err| Error::KeyGen(format!("X25519 OS RNG failed: {err}")))?;
         validate_private_key_material_not_all_zero("X25519 OS RNG private key", &bytes)?;
         Ok(StaticSecret::from(*bytes))
@@ -150,8 +157,36 @@ pub(super) fn is_x25519_low_order_public_key(public_key: &PublicKey) -> bool {
 #[cfg(test)]
 mod tests {
     use curve25519_dalek::constants::EIGHT_TORSION;
+    #[cfg(feature = "rand")]
+    use rand_core::TryRngCore;
 
     use super::*;
+
+    #[cfg(feature = "rand")]
+    struct FixedTryRng {
+        byte: u8,
+    }
+
+    #[cfg(feature = "rand")]
+    impl TryRngCore for FixedTryRng {
+        type Error = core::convert::Infallible;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok(u32::from_le_bytes([self.byte; 4]))
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok(u64::from_le_bytes([self.byte; 8]))
+        }
+
+        fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Self::Error> {
+            dest.fill(self.byte);
+            Ok(())
+        }
+    }
+
+    #[cfg(feature = "rand")]
+    impl TryCryptoRng for FixedTryRng {}
 
     fn low_order_montgomery_encodings() -> Vec<[u8; 32]> {
         let mut encodings = EIGHT_TORSION
@@ -199,6 +234,27 @@ mod tests {
             .compute_shared_secret(&secret_key1, &public_key2)
             .expect("shared secret");
         assert_eq!(shared_secret1.payload(), shared_secret2.payload());
+    }
+
+    #[cfg(feature = "rand")]
+    #[test]
+    fn random_private_key_from_rng_rejects_all_zero_material() {
+        let mut rng = FixedTryRng { byte: 0 };
+
+        assert!(matches!(
+            X25519Sha256::random_private_key_from_rng(&mut rng),
+            Err(Error::KeyGen(message)) if message.contains("all zero")
+        ));
+    }
+
+    #[cfg(feature = "rand")]
+    #[test]
+    fn random_private_key_from_rng_accepts_nonzero_material() {
+        let mut rng = FixedTryRng { byte: 0x42 };
+
+        let secret = X25519Sha256::random_private_key_from_rng(&mut rng)
+            .expect("nonzero X25519 random material must produce a secret");
+        assert_ne!(secret.to_bytes(), [0u8; 32]);
     }
 
     #[test]

@@ -1208,9 +1208,10 @@ and completed history lives in [`status.md`](./status.md).
   and finalized message-proof booleans before bundle output is written.
   TRON copied route canaries must likewise preserve canonical signer addresses,
   recovered-signer ownership, non-zero and distinct transcript/governed hash
-  roles, block/log metadata, TRON target domain, `proof_version = 1`, SORA
-  proof source, and true owner/proof verification booleans before public output
-  is written. Solana copied route canaries must preserve a non-zero canonical
+  roles, positive u64 block numbers, non-negative u64 block timestamps, TRON
+  target domain, `proof_version = 1`, SORA proof source, and true owner/proof
+  verification booleans before public output is written. Solana copied route
+  canaries must preserve a non-zero canonical
   ProgramData address and canonical positive ProgramData slot, while TON copied
   route canaries must preserve non-zero live-account hashes, canonical positive
   transaction LT, and governed hash-role separation before public output is
@@ -1222,8 +1223,9 @@ and completed history lives in [`status.md`](./status.md).
   malformed, or Unicode-confusable keys must be category-only blockers. The
   bundle builder must classify copied report-artifact row field names and reject
   copied report-artifact rows with unknown fields, malformed bundle-relative
-  path text, non-integer byte counts, or noncanonical SHA-256 text before
-  `--allow-not-ready` diagnostics can render or write public artifacts.
+  path text, zero, negative, or non-integer byte counts, or noncanonical
+  SHA-256 text before `--allow-not-ready` diagnostics can render or write
+  public artifacts.
   Release-readiness and strict bundle source inventory must pin those direct
   artifact-row regressions so deleting the unknown-field, byte-count, or
   digest-canonicality guards blocks public readiness.
@@ -1420,7 +1422,16 @@ and completed history lives in [`status.md`](./status.md).
   boolean/null drift, optional bytes32 and block-number drift, duplicate
   domains, row/lane count drift, and copied row-to-embedded-lane
   binding drift before `--allow-not-ready` diagnostics can render or write
-  public artifacts. The inventory self-tests must also sparse-check the copied
+  public artifacts. EVM route-canary public rows must also require exact
+  `evm_message_proof_accepted_transaction` evidence source plus exact `true`
+  evidence-bound and finalized-receipt booleans, and positive u32 receipt block
+  numbers, before public Markdown can be rendered or strict bundle verification
+  can pass. TRON route-canary public rows must also keep block numbers as
+  positive u64 integers and block timestamps as non-negative u64 integers before
+  that same public-output boundary. Public source-adapter gate rows must also
+  enforce domain-specific audit-key policy for Solana, TON, and TRON rows before
+  non-active copied evidence can pass. The inventory self-tests must also
+  sparse-check the copied
   cryptographic-evidence confusable audit-key non-leak marker so adversarial
   audit-key suppression remains part of the release gate.
 - SCCP release-bundle public submission-surface binding must stay pinned as a
@@ -1450,8 +1461,12 @@ and completed history lives in [`status.md`](./status.md).
   non-ASCII/confusable SDK keys cannot leak raw public diagnostics.
   `required_phases` values use the same classification before unknown-phase,
   duplicate, missing-phase, contract-smoke, or Markdown-presence checks, while
-  canonical safe unknown phases remain readable operator diagnostics. The
-  bundle builder must reject unknown or malformed submission-surface row fields,
+  canonical safe unknown phases remain readable operator diagnostics. The strict
+  verifier and bundle builder must also compare required phases to the
+  verifier-owned lane policy exactly, so reordered or extra known phases such as
+  a non-EVM `dotnet-sdk` cannot satisfy public portal/mobile rows through a
+  generic row recomputation check. The bundle builder must reject unknown or
+  malformed submission-surface row fields,
   scalar text, helper-symbol lists, per-SDK helper maps, SDK keys, required
   phase values, validation status, and validation blockers before
   `--allow-not-ready` diagnostics can render or write public artifacts.
@@ -1619,6 +1634,9 @@ and completed history lives in [`status.md`](./status.md).
   The route-canary evidence source must first be a non-empty canonical string:
   missing, non-string, empty, or whitespace-padded values are release blockers
   before the exact `evm_message_proof_accepted_transaction` source match runs.
+  Canonical-looking wrong source labels, including case drift or operator notes,
+  remain live-route-canary blockers in the readiness generator and strict bundle
+  recomputation.
   Route-canary `status` must also be exactly `passed`; missing, empty, padded,
   or non-string status values remain live-route-canary blockers in readiness and
   strict bundle recomputation.
@@ -1629,7 +1647,8 @@ and completed history lives in [`status.md`](./status.md).
   Route-canary receipt block numbers must also stay exact positive integers:
   numeric-looking strings, hex text, plus-signed text, Unicode-confusable text,
   and booleans are release blockers, and `receipt_block_finalized` must be
-  exactly boolean `true`. `evidence_bound` must also be exact boolean `true`;
+  exactly boolean `true`, not false, missing/null, truthy text, or numeric
+  values. `evidence_bound` must also be exact boolean `true`;
   copied truthy strings, numeric values, false, and missing/null flags must
   remain live-route-canary blockers in readiness and strict bundle
   recomputation.
@@ -3395,9 +3414,11 @@ and completed history lives in [`status.md`](./status.md).
   `KeyPair::try_from_seed`, `KeyPair::try_random`, and
   `KeyPair::try_random_with_algorithm` give ML-DSA/GOST/SM2/BLS key generation
   non-panicking routes, with ML-DSA seeded-keygen rejecting non-empty all-zero
-  seed material before HKDF, HKDF expansion now propagated as `Error::KeyGen`
-  instead of relying on a panic-only assertion, and the S2 nonce offset
-  conversion using the same `Error::KeyGen` route, and GOST
+  seed material before HKDF, random ML-DSA keygen drawing checked OS seed
+  material through the same constructor instead of the infallible PQ random
+  keypair path, HKDF expansion now propagated as `Error::KeyGen` instead of
+  relying on a panic-only assertion, and the S2 nonce offset conversion using
+  the same `Error::KeyGen` route, and GOST
   deterministic nonce generation now feeds the domain tag, private scalar,
   message scalar, and optional extra entropy into HMAC-Streebog as separate
   components while preserving the previous contiguous seed transcript, and
@@ -3463,12 +3484,15 @@ and completed history lives in [`status.md`](./status.md).
   signing now use `Signature::try_new` and propagate contextual `eyre` errors
   through the emission `Result` path;
   GOST random scalar sampling and per-signature extra entropy now also use
-  checked OS fills, and GOST deterministic key generation rejects non-empty
-  all-zero seed material before scalar sampling, while both BLS backends derive
+  checked OS fills, random scalar sampling rejects all-zero OS material before
+  retry-budget exhaustion, per-signature entropy rejects all-zero OS material
+  before falling back to deterministic nonce derivation, and GOST deterministic
+  key generation rejects non-empty all-zero seed material before scalar sampling, while both BLS backends derive
   random keys from checked OS
   seed material after rejecting all-zero OS seed output and the default w3f
   backend seeds its key-splitting/signing RNGs only after checked OS fills,
-  leaving the compatibility `os_rng()` adapter
+  with both backend test/clippy lanes pinned in release-readiness validation
+  while leaving the compatibility `os_rng()` adapter
   test-only. SM2 top-level random key generation now routes through
   `Sm2PrivateKey::try_random`, fallible `TryCryptoRng` byte draws, and bounded
   scalar validation before returning key material, while SM2 deterministic seed
@@ -3544,7 +3568,9 @@ and completed history lives in [`status.md`](./status.md).
   payload if that invariant is broken, and routes the OpenSSL bridge through
   that fallible exporter before DER parsing; SM2 signature decoding now rejects
   all-zero and zero-scalar encodings before backend parsing, and SM2 verifier
-  boundaries map malformed signature material to `Error::BadSignature`;
+  boundaries map malformed signature material to `Error::BadSignature`; SM2
+  random private-key generation now rejects all-zero RNG seed material
+  immediately before scalar parsing or retry-budget exhaustion;
   generic ML-DSA public/private key import and direct batch verification now
   reject all-zero public-key, private-key, and detached-signature material before
   backend parsing;
@@ -3766,7 +3792,9 @@ and completed history lives in [`status.md`](./status.md).
 	  rejects all-zero 32-byte spend keys before HKDF expansion.
 	  SoraNet client and relay handshake construction now also use fallible
 	  `TryCryptoRng` draws for nonce, Noise secret, and client ML-KEM seed
-	  material, returning labelled `HarnessError::RandomBytes` failures.
+	  material, returning labelled `HarnessError::RandomBytes` failures and
+	  rejecting all-zero generated material before nonce, Noise, or ML-KEM seed
+	  state can be emitted.
   SoraNet PoW and Argon2 puzzle ticket minting now also use fallible
   `TryCryptoRng` draws and preserve labelled nonce-generation failures
   through `MintError::RandomBytes` and the p2p challenge wrapper, with
@@ -3779,6 +3807,9 @@ and completed history lives in [`status.md`](./status.md).
   `TryCryptoRng` inputs and reports entropy failures through
   `BlindingError::RandomBytes`, while all-zero generated nonces fail through
   the existing weak-input gate.
+  AEAD convenience encryption now keeps caller-supplied nonce compatibility
+  unchanged while generated `encrypt_easy`/`encrypt_easy_into` nonces reject
+  inert all-zero material through `Error::InertNonce`.
   P2P handshake hello construction now also extracts local peer key metadata
   through checked accessors and reports malformed local keys through a
   dedicated handshake error, while multisig members expose a fallible
@@ -3830,7 +3861,9 @@ and completed history lives in [`status.md`](./status.md).
   now returns `Result` instead of panicking after checked generation; the public
   hybrid key-generation, encapsulation, and SoraFS hybrid payload envelope paths
   now consume fallible `TryCryptoRng` draws and return labelled RNG errors
-  before key, ciphertext, or AEAD nonce material is emitted. The public
+  before key, ciphertext, or AEAD nonce material is emitted, while hybrid
+  generated X25519 secret and ML-KEM seed draws now reject all-zero material
+  before key generation or encapsulation can derive transport keys. The public
   direct and seeded
   `generate_mlkem_keypair*` wrappers now return `Result` instead of panicking
   after validation, and deterministic ML-KEM keygen/encapsulation reject
@@ -3901,7 +3934,9 @@ and completed history lives in [`status.md`](./status.md).
   keys. Hybrid envelope constructors and Norito streaming Kyber key-material,
   fingerprint, session, snapshot, encapsulation, and decapsulation admission now
   also reject all-zero ML-KEM public or secret key material before accepting
-  fingerprints, transport state, or envelope keys.
+  fingerprints, transport state, or envelope keys, and Norito streaming
+  generated X25519 ephemeral secrets plus GCK wrap nonces reject all-zero
+  material before key-update or content-key update state is emitted.
   Changing the streaming ML-KEM profile on key material or live sessions now
   clears configured Kyber public keys, fingerprints, and local decapsulation
   secrets before any later HPKE use, and direct local ephemeral-payload
@@ -6115,7 +6150,8 @@ and completed history lives in [`status.md`](./status.md).
   domain/chain or per-field source/destination/source-gate/route/canary drift from
   embedded lane rows, unknown
   manifest
-  or report artifact fields, malformed artifact byte/hash JSON types, malformed
+  or report artifact fields, zero or malformed artifact byte counts, malformed
+  artifact hash JSON types, malformed
   readiness/checklist boolean JSON types, unknown or blocked corridor root fields, unknown
   or malformed release-checklist fields, unknown or malformed portal/mobile
   submission-surface fields, report/summary drift from verifier-owned direct
@@ -9721,6 +9757,11 @@ so an otherwise canonical OpenVerify envelope with opaque backend bytes cannot
 advertise a production verifier key, and the public proof-level helper now
 verifies the adapter FastPQ proof and adapter transcript before returning that
 commitment.
+Deployment-bound transparent proof recovery is now typed for governed
+source-material plus source-adapter deployment evidence. The strict helper keeps
+the destination manifest gate closed until rollout, while the local-admission
+variant relaxes only that manifest gate and remains fail-closed against backend
+label drift or replayed deployment receipts.
 Strict SCCP production package and proof-job builders now require non-SORA
 source bundles to pass the production source-proof gate before destination
 submissions or prover jobs can be constructed, leaving structural source-proof
