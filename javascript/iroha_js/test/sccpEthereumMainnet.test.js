@@ -53,6 +53,7 @@ import {
 const hex32 = (byte) => `0x${byte.repeat(32)}`;
 const sha256Hex = (bytes) =>
   `0x${createHash("sha256").update(Buffer.from(bytes)).digest("hex")}`;
+const fixtureHash = (label) => sha256Hex(Buffer.from(label, "utf8"));
 const indexedHexBytes = (fillByte, length, index) => {
   const bytes = new Uint8Array(length).fill(fillByte);
   bytes[length - 2] = (index >>> 8) & 0xff;
@@ -238,12 +239,16 @@ const sampleNativeEvmProverBundle = (destinationBindingHash, overrides = {}) => 
       implementation_hash: hex32((index + 1).toString(16).padStart(2, "0")),
     })),
     audit_hashes: {
-      circuit_security_audit: hex32("a1"),
-      native_implementation_audit: hex32("a2"),
-      reproducible_build_attestation: hex32("a3"),
-      cross_sdk_fixture_parity: hex32("a4"),
-      native_prover_self_test: hex32("a5"),
-      no_wasm_no_remote_scan: hex32("a6"),
+      circuit_security_audit: fixtureHash("eth circuit security audit"),
+      native_implementation_audit: fixtureHash(
+        "eth native implementation audit",
+      ),
+      reproducible_build_attestation: fixtureHash(
+        "eth reproducible build attestation",
+      ),
+      cross_sdk_fixture_parity: fixtureHash("eth cross-SDK fixture parity"),
+      native_prover_self_test: fixtureHash("eth native prover self-test"),
+      no_wasm_no_remote_scan: fixtureHash("eth no-wasm no-remote scan"),
     },
     ...overrides,
   };
@@ -4871,6 +4876,31 @@ test("EthereumMainnetSccp rejects unsafe native EVM prover bundle manifests", ()
         },
       }),
     /nativeProverBundle hashes must be role-separated: auditHashes\.circuit_security_audit matches proofArtifactHash/u,
+  );
+  assert.throws(
+    () =>
+      validateEthereumMainnetNativeEvmProverBundle({
+        ...bundle,
+        audit_hashes: {
+          ...bundle.audit_hashes,
+          native_implementation_audit: hex32("a2"),
+        },
+      }),
+    /auditHashes\.native_implementation_audit must not look like a placeholder audit hash: repeated 1-byte pattern/u,
+  );
+  assert.throws(
+    () =>
+      validateEthereumMainnetNativeEvmProverBundle({
+        ...bundle,
+        audit_hashes: {
+          ...bundle.audit_hashes,
+          reproducible_build_attestation: `0x${Array.from(
+            { length: 32 },
+            (_, index) => index.toString(16).padStart(2, "0"),
+          ).join("")}`,
+        },
+      }),
+    /auditHashes\.reproducible_build_attestation must not look like a placeholder audit hash: arithmetic byte sequence/u,
   );
   assert.throws(
     () =>

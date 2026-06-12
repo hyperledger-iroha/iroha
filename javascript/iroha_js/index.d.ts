@@ -7460,17 +7460,17 @@ export interface TairaXorFinalizeFromTairaCallDataInput
   public_inputs?: SccpMessageTransparentPublicInputsInput;
   statementHash?: string;
   statement_hash?: string;
-  /** Canonical SORA->TRON TAIRA XOR transfer payload bytes; optional cleartext fields must match. */
+  /** Canonical SORA->TRON or SORA->BSC TAIRA XOR transfer payload bytes; optional cleartext fields must match. */
   canonicalPayloadBytes?: BinaryLike | number[];
-  /** Canonical SORA->TRON TAIRA XOR transfer payload bytes; optional cleartext fields must match. */
+  /** Canonical SORA->TRON or SORA->BSC TAIRA XOR transfer payload bytes; optional cleartext fields must match. */
   canonical_payload_bytes?: BinaryLike | number[];
-  /** Canonical SORA->TRON TAIRA XOR transfer payload hex; optional cleartext fields must match. */
+  /** Canonical SORA->TRON or SORA->BSC TAIRA XOR transfer payload hex; optional cleartext fields must match. */
   canonicalPayloadHex?: string;
-  /** Canonical SORA->TRON TAIRA XOR transfer payload hex; optional cleartext fields must match. */
+  /** Canonical SORA->TRON or SORA->BSC TAIRA XOR transfer payload hex; optional cleartext fields must match. */
   canonical_payload_hex?: string;
-  /** Canonical SORA->TRON TAIRA XOR transfer payload bytes; optional cleartext fields must match. */
+  /** Canonical SORA->TRON or SORA->BSC TAIRA XOR transfer payload bytes; optional cleartext fields must match. */
   payloadBytes?: BinaryLike | number[];
-  /** Canonical SORA->TRON TAIRA XOR transfer payload bytes; optional cleartext fields must match. */
+  /** Canonical SORA->TRON or SORA->BSC TAIRA XOR transfer payload bytes; optional cleartext fields must match. */
   payload_bytes?: BinaryLike | number[];
 }
 

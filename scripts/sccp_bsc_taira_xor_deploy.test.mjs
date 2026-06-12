@@ -17,6 +17,7 @@ import {
   BSC_MAINNET_NETWORK_ID_HEX,
   BSC_TESTNET_NETWORK_ID_HEX,
   CANONICAL_BSC_PRODUCTION_ARTIFACT_ROOT,
+  PRODUCTION_REQUIREMENTS_SCHEMA,
   ROUTE_MANIFEST_SCHEMA,
   SCCP_BSC_DIAGNOSTIC_VERIFIER_KEY_HASHES,
   SCCP_DOMAIN_BSC,
@@ -29,6 +30,7 @@ import {
   buildBscTairaXorRouteConfigToml,
   buildDeploymentEvidence,
   buildMergedBscTairaXorRouteConfigToml,
+  bscProductionRequirements,
   main,
   isKnownDiagnosticBscVerifierKeyHash,
   isCanonicalBscProductionArtifactPath,
@@ -69,52 +71,57 @@ const SMOKE_FIXTURE_IC = Array.from(
   { length: 10 },
   () => SMOKE_FIXTURE_G1,
 ).flat();
-const BN254_FIELD_MODULUS =
-  "21888242871839275222246405745257275088548364400416034343698204186575808495617";
+const BN254_BASE_FIELD_MODULUS =
+  "21888242871839275222246405745257275088696311157297823662689037894645226208583";
 const VALID_G1_POINTS = Object.freeze([
   ["1", "2"],
   [
-    "9576106256429682909732802513550057851239909425182015025367964331626916216831",
-    "3762041743597375428823600987466094155844250131321505902823128844567717085184",
+    "1368015179489954701390400359078579693043519447331113978918064868415326638035",
+    "9918110051302171585080402603319702774565515993150576347155970296011118125764",
   ],
   [
-    "3353031288059533942658390886683067124018257005454921763367312015432060078554",
-    "9219267825703472604525134401207926938879294737679236299959534577481019155125",
+    "3353031288059533942658390886683067124040920775575537747144343083137631628272",
+    "19321533766552368860946552437480515441416830039777911637913418824951667761761",
   ],
   [
-    "630304514517065905805907603459758825509592621551236526167962233161984155096",
-    "3298788481628376164685881594646072674987908183674059693236881428704728023444",
+    "3010198690406615200373504922352659861758983907867017329644089018310584441462",
+    "4027184618003122424972590350825261965929648733675738730716654005365300998076",
   ],
   [
-    "13570409158413168902482548731272473099962820218194106864832849132278468589419",
-    "18252126150865472586447287550516904769515478526140362071553674090249271156456",
+    "10744596414106452074759370245733544594153395043370666422502510773307029471145",
+    "848677436511517736191562425154572367705380862894644942948681172815252343932",
   ],
   [
-    "16871563132712611889207374617876253056600942990440275496096608761584790102682",
-    "3838344180602666607241702771172151008105832187458852540486498644210934342967",
+    "4503322228978077916651710446042370109107355802721800704639343137502100212473",
+    "6132642251294427119375180147349983541569387941788025780665104001559216576968",
   ],
   [
-    "16505412013779483600153006526520018416641925099395101274830277736786454794420",
-    "7682254973974174219605117756131480330501749384673294748404564408855034650314",
+    "10415861484417082502655338383609494480414113902179649885744799961447382638712",
+    "10196215078179488638353184030336251401353352596818396260819493263908881608606",
   ],
   [
-    "6140509816169546666445045371175256741689665787771362214341354520900173219671",
-    "2119358721806734900337760520567816609583030564837318202241638389787068393748",
+    "3932705576657793550893430333273221375907985235130430286685735064194643946083",
+    "18813763293032256545937756946359266117037834559191913266454084342712532869153",
   ],
   [
-    "17223428520732544896768972829232412550600189189749035035315773332431112582976",
-    "18015292390085659179210022586584526370894502947582215993343134976025027799555",
+    "1624070059937464756887933993293429854168590106605707304006200119738501412969",
+    "3269329550605213075043232856820720631601935657990457502777101397807070461336",
   ],
   [
-    "16010416262623650787166522410092685733271695651039545299664263705504024577652",
-    "4158029737862195193537505459971263746202654920841369766306064860524994925923",
+    "4444740815889402603535294170722302758225367627362056425101568584910268024244",
+    "10537263096529483164618820017164668921386457028564663708352735080900270541420",
   ],
   [
-    "10908234943904029183509203005277591045231307288576533611618815554535749028689",
-    "4940726467235499156506156244111951923083992917602717449880869831087842936342",
+    "19033251874843656108471242320417533909414939332036131356573128480367742634479",
+    "20792135454608030201903199625673964159744755218442260092768620403349374102584",
   ],
 ]);
 const VALID_IC = VALID_G1_POINTS.slice(1, 11).flat();
+const SCALAR_FIELD_ONLY_G1_POINT = Object.freeze([
+  "9576106256429682909732802513550057851239909425182015025367964331626916216831",
+  "3762041743597375428823600987466094155844250131321505902823128844567717085184",
+]);
+const SCALAR_FIELD_ONLY_G2_POINT = Object.freeze(["1", "2", "3", "4"]);
 const BURN_RECORD_BYTES = Buffer.from(
   "bsc taira xor burn-record artifact fixture for route-config tests",
   "utf8",
@@ -123,6 +130,7 @@ const BURN_RECORD_B64 = BURN_RECORD_BYTES.toString("base64");
 const BURN_RECORD_SHA256 = `0x${createHash("sha256").update(BURN_RECORD_BYTES).digest("hex")}`;
 const sha256Hex = (bytes) =>
   `0x${createHash("sha256").update(bytes).digest("hex")}`;
+const fixtureHash = (label) => sha256Hex(Buffer.from(label, "utf8"));
 
 const addresses = Object.freeze({
   token: BSC_TOKEN_ADDRESS,
@@ -189,12 +197,16 @@ const nativeProverBundleForRollout = (destinationRollout, overrides = {}) => {
       implementation_hash: hex32((0x81 + index).toString(16)),
     })),
     audit_hashes: {
-      circuit_security_audit: hex32("91"),
-      native_implementation_audit: hex32("92"),
-      reproducible_build_attestation: hex32("93"),
-      cross_sdk_fixture_parity: hex32("94"),
-      native_prover_self_test: hex32("95"),
-      no_wasm_no_remote_scan: hex32("96"),
+      circuit_security_audit: fixtureHash("route circuit security audit"),
+      native_implementation_audit: fixtureHash(
+        "route native implementation audit",
+      ),
+      reproducible_build_attestation: fixtureHash(
+        "route reproducible build attestation",
+      ),
+      cross_sdk_fixture_parity: fixtureHash("route cross-SDK fixture parity"),
+      native_prover_self_test: fixtureHash("route native prover self-test"),
+      no_wasm_no_remote_scan: fixtureHash("route no-wasm no-remote scan"),
     },
     ...overrides,
   };
@@ -235,9 +247,9 @@ const readyReadback = (overrides = {}) => ({
 
 const verifierMaterial = (overrides = {}) => ({
   alpha1: VALID_G1_POINTS[0],
-  beta2: [3, 4, 5, 6],
-  gamma2: [7, 8, 9, 10],
-  delta2: [11, 12, 13, 14],
+  beta2: SMOKE_FIXTURE_G2,
+  gamma2: SMOKE_FIXTURE_G2,
+  delta2: SMOKE_FIXTURE_G2,
   ic: VALID_IC,
   verifierKeyHash: HASH_22,
   proofFamily: "stark-fri-v1",
@@ -687,7 +699,10 @@ test("BSC deployment readback rejects drift and incomplete contracts", () => {
     ],
     [readyReadback({ bridgeVerifierCodeHash: HASH_33 }), /verifier code hash/u],
     [readyReadback({ bridgeVerifierKeyHash: HASH_33 }), /verifier key hash/u],
-    [readyReadback({ verifierKeyHash: HASH_33 }), /deployed verifier key hash/u],
+    [
+      readyReadback({ verifierKeyHash: HASH_33 }),
+      /deployed verifier key hash/u,
+    ],
     [
       readyReadback({ bridgeNetworkId: `0x${"38".padStart(64, "0")}` }),
       /network id/u,
@@ -800,12 +815,44 @@ test("BSC verifier material normalization rejects foreign or malformed inputs", 
   assert.throws(
     () =>
       normalizeVerifierMaterial(
-        verifierMaterial({ alpha1: [BN254_FIELD_MODULUS, 2] }),
+        verifierMaterial({ alpha1: SCALAR_FIELD_ONLY_G1_POINT }),
+      ),
+    /BN254 G1 curve/u,
+  );
+  assert.throws(
+    () =>
+      normalizeVerifierMaterial(
+        verifierMaterial({ alpha1: [BN254_BASE_FIELD_MODULUS, 2] }),
+      ),
+    /BN254 field element/u,
+  );
+  for (const field of ["beta2", "gamma2", "delta2"]) {
+    assert.throws(
+      () =>
+        normalizeVerifierMaterial(
+          verifierMaterial({ [field]: SCALAR_FIELD_ONLY_G2_POINT }),
+        ),
+      new RegExp(`${field} must be on the BN254 G2 twist curve`, "u"),
+    );
+  }
+  assert.throws(
+    () =>
+      normalizeVerifierMaterial(
+        verifierMaterial({
+          beta2: [
+            BN254_BASE_FIELD_MODULUS,
+            SMOKE_FIXTURE_G2[1],
+            ...SMOKE_FIXTURE_G2.slice(2),
+          ],
+        }),
       ),
     /BN254 field element/u,
   );
   assert.throws(
-    () => normalizeVerifierMaterial(verifierMaterial({ ic: [0, 0, ...VALID_IC.slice(2)] })),
+    () =>
+      normalizeVerifierMaterial(
+        verifierMaterial({ ic: [0, 0, ...VALID_IC.slice(2)] }),
+      ),
     /point at infinity/u,
   );
 });
@@ -879,14 +926,38 @@ test("BSC verifier material rejects smoke-test generator-point fixtures", () => 
   });
 
   const normalized = normalizeVerifierMaterial(smokeFixtureMaterial);
-  assert.equal(isSmokeFixtureGroth16VerifierMaterial(smokeFixtureMaterial), true);
+  assert.equal(
+    isSmokeFixtureGroth16VerifierMaterial(smokeFixtureMaterial),
+    true,
+  );
   assert.equal(normalized.fixtureShaped, true);
   assert.match(
     normalized.diagnosticVerifierReasons.join(" "),
     /smoke-test Groth16 fixture/u,
   );
 
-  assert.equal(isSmokeFixtureGroth16VerifierMaterial(verifierMaterial()), false);
+  assert.equal(
+    isSmokeFixtureGroth16VerifierMaterial(verifierMaterial()),
+    false,
+  );
+});
+
+test("BSC local deploy smoke verifier shape is valid but not fixture-shaped", () => {
+  const localSmokeVerifierMaterial = verifierMaterial({
+    alpha1: SMOKE_FIXTURE_G1,
+    beta2: SMOKE_FIXTURE_G2,
+    gamma2: SMOKE_FIXTURE_G2,
+    delta2: SMOKE_FIXTURE_G2,
+    ic: VALID_IC,
+  });
+
+  const normalized = normalizeVerifierMaterial(localSmokeVerifierMaterial);
+  assert.equal(
+    isSmokeFixtureGroth16VerifierMaterial(localSmokeVerifierMaterial),
+    false,
+  );
+  assert.equal(normalized.fixtureShaped, false);
+  assert.deepEqual(normalized.diagnosticVerifierReasons, []);
 });
 
 test("BSC route-config writes backend-compatible TOML with BSC deployment evidence", () => {
@@ -997,7 +1068,10 @@ test("BSC route-config rejects route material supplied only by prototypes", () =
 });
 
 test("BSC route-config requires explicit post-deploy evidence for production-ready manifests", () => {
-  const productionReadyManifest = (postDeployOverrides = {}, overrides = {}) => {
+  const productionReadyManifest = (
+    postDeployOverrides = {},
+    overrides = {},
+  ) => {
     const manifest = routeManifest({
       productionReady: true,
       disabledReason: undefined,
@@ -1248,12 +1322,18 @@ test("BSC route-config requires SDK-valid native prover bundles for production r
   const expectedNativeBundleHash = canonicalBscNativeEvmProverBundleHash(
     validateBscTestnetNativeEvmProverBundle(
       nativeProverBundleForRollout(manifest.destinationRollout),
-      { expectedDestinationBindingHash: manifest.destinationRollout.destinationBindingHash },
+      {
+        expectedDestinationBindingHash:
+          manifest.destinationRollout.destinationBindingHash,
+      },
     ),
   );
   const validToml = buildBscTairaXorRouteConfigToml(manifest);
   assert.match(validToml, /production_ready = true/u);
-  assert.match(validToml, new RegExp(`proof_artifact_hash = "${HASH_44}"`, "u"));
+  assert.match(
+    validToml,
+    new RegExp(`proof_artifact_hash = "${HASH_44}"`, "u"),
+  );
   assert.match(validToml, new RegExp(`proving_key_hash = "${HASH_55}"`, "u"));
   assert.match(
     validToml,
@@ -1356,12 +1436,16 @@ test("BSC route-config requires SDK-valid native prover bundles for production r
     aliasBase.destinationRollout,
     {
       audit_hashes: {
-        circuit_security_audit: hex32("91"),
-        native_implementation_audit: hex32("92"),
-        reproducible_build_attestation: hex32("93"),
-        cross_sdk_fixture_parity: hex32("94"),
-        native_prover_self_test: hex32("95"),
-        no_wasm_no_remote_scan: hex32("97"),
+        circuit_security_audit: fixtureHash("alias circuit security audit"),
+        native_implementation_audit: fixtureHash(
+          "alias native implementation audit",
+        ),
+        reproducible_build_attestation: fixtureHash(
+          "alias reproducible build attestation",
+        ),
+        cross_sdk_fixture_parity: fixtureHash("alias cross-SDK fixture parity"),
+        native_prover_self_test: fixtureHash("alias native prover self-test"),
+        no_wasm_no_remote_scan: fixtureHash("alias no-wasm no-remote scan"),
       },
     },
   );
@@ -1384,7 +1468,10 @@ test("BSC native-prover-bundle builds SDK-valid route-bound bundles from artifac
     fixture.options,
   );
 
-  assert.equal(result.descriptor.bundleId, SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1);
+  assert.equal(
+    result.descriptor.bundleId,
+    SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
+  );
   assert.equal(result.descriptor.proofArtifactHash, fixture.proofArtifactHash);
   assert.equal(result.descriptor.provingKeyHash, fixture.provingKeyHash);
   assert.equal(result.descriptor.verifierKeyHash, fixture.verifierKeyHash);
@@ -1398,11 +1485,19 @@ test("BSC native-prover-bundle builds SDK-valid route-bound bundles from artifac
   );
   assert.equal(
     result.bundle.audit_hashes.cross_sdk_fixture_parity,
-    sha256Hex(await readFile(join(fixture.artifactRoot, "cross-sdk-fixture-parity.json"))),
+    sha256Hex(
+      await readFile(
+        join(fixture.artifactRoot, "cross-sdk-fixture-parity.json"),
+      ),
+    ),
   );
   assert.equal(
     result.bundle.audit_hashes.native_prover_self_test,
-    sha256Hex(await readFile(join(fixture.artifactRoot, "native-prover-self-test.json"))),
+    sha256Hex(
+      await readFile(
+        join(fixture.artifactRoot, "native-prover-self-test.json"),
+      ),
+    ),
   );
   assert.equal(
     result.attachedRouteManifest.destinationRollout.nativeEvmProverBundle
@@ -1432,15 +1527,17 @@ test("BSC native-prover-bundle builds SDK-valid route-bound bundles from artifac
     attachedOut,
   ]);
   assert.equal(cliResult.ok, true);
-  assert.equal(JSON.parse(await readFile(out, "utf8")).proof_artifact_hash, fixture.proofArtifactHash);
+  assert.equal(
+    JSON.parse(await readFile(out, "utf8")).proof_artifact_hash,
+    fixture.proofArtifactHash,
+  );
   assert.equal(
     JSON.parse(await readFile(attachedOut, "utf8")).nativeEvmProverBundle
       .proving_key_hash,
     fixture.provingKeyHash,
   );
   assert.equal(
-    JSON.parse(await readFile(attachedOut, "utf8"))
-      .nativeEvmProverBundleHash,
+    JSON.parse(await readFile(attachedOut, "utf8")).nativeEvmProverBundleHash,
     canonicalBscNativeEvmProverBundleHash(result.descriptor),
   );
 });
@@ -1452,7 +1549,7 @@ test("BSC native-prover-bundle rejects forged or incomplete artifact inputs", as
       buildBscNativeEvmProverBundleFromArtifacts({
         ...fixture.options,
         "proof-artifact": "../proof-artifact.bin",
-    }),
+      }),
     /proof artifact must stay under artifact-root/u,
   );
   for (const encodedPath of [
@@ -1545,19 +1642,45 @@ test("BSC native-prover-bundle rejects forged or incomplete artifact inputs", as
       buildBscNativeEvmProverBundleFromArtifacts(verifierAliasFixture.options),
     /BSC route manifest verifierKeyHash must not use multiple aliases in BSC route manifest/u,
   );
+  await assert.rejects(() => {
+    const { "dotnet-implementation": _drop, ...options } = fixture.options;
+    return buildBscNativeEvmProverBundleFromArtifacts(options);
+  }, /dotnet implementation artifact requires --dotnet-implementation/u);
   await assert.rejects(
-    () => {
-      const { "dotnet-implementation": _drop, ...options } = fixture.options;
-      return buildBscNativeEvmProverBundleFromArtifacts(options);
-    },
-    /dotnet implementation artifact requires --dotnet-implementation/u,
+    () =>
+      buildBscNativeEvmProverBundleFromArtifacts({
+        ...fixture.options,
+        "audit-circuit-security": `0x${"00".repeat(32)}`,
+      }),
+    /auditHashes\.circuit_security_audit must be non-zero/u,
   );
   await assert.rejects(
     () =>
       buildBscNativeEvmProverBundleFromArtifacts({
         ...fixture.options,
-        "audit-cross-sdk-fixture-parity": HASH_11,
-    }),
+        "audit-native-implementation": HASH_11,
+      }),
+    /auditHashes\.native_implementation_audit looks like placeholder audit hash: repeated 1-byte pattern/u,
+  );
+  await assert.rejects(
+    () =>
+      buildBscNativeEvmProverBundleFromArtifacts({
+        ...fixture.options,
+        "audit-reproducible-build": `0x${Array.from(
+          { length: 32 },
+          (_, index) => index.toString(16).padStart(2, "0"),
+        ).join("")}`,
+      }),
+    /auditHashes\.reproducible_build_attestation looks like placeholder audit hash: arithmetic byte sequence with step 1/u,
+  );
+  await assert.rejects(
+    () =>
+      buildBscNativeEvmProverBundleFromArtifacts({
+        ...fixture.options,
+        "audit-cross-sdk-fixture-parity": sha256Hex(
+          Buffer.from("wrong cross-SDK fixture parity audit hash", "utf8"),
+        ),
+      }),
     /auditHashes.cross_sdk_fixture_parity must match the artifact sha256/u,
   );
 
@@ -1818,7 +1941,10 @@ test("BSC route-config refuses production-ready diagnostic verifier manifests", 
 
 test("BSC canonical production output guard rejects diagnostic or draft material", () => {
   const canonicalEvidencePath = `${CANONICAL_BSC_PRODUCTION_ARTIFACT_ROOT}/taira-bsc-xor-deployment.evidence.json`;
-  assert.equal(isCanonicalBscProductionArtifactPath(canonicalEvidencePath), true);
+  assert.equal(
+    isCanonicalBscProductionArtifactPath(canonicalEvidencePath),
+    true,
+  );
 
   const diagnosticEvidence = buildDeploymentEvidence({
     tokenAddress: BSC_TOKEN_ADDRESS,
@@ -1948,9 +2074,18 @@ test("BSC route-config rejects malformed or foreign route manifests", () => {
     [{ chainIdHex: "0x38" }, /chainIdHex/u],
     [{ chainIdHex: "0X61" }, /chainIdHex.*canonical lowercase hex/u],
     [{ networkIdHex: `0x${"38".padStart(64, "0")}` }, /networkIdHex/u],
-    [{ networkIdHex: ` ${BSC_TESTNET_NETWORK_ID_HEX}` }, /networkIdHex.*canonical string/u],
-    [{ networkIdHex: BSC_TESTNET_NETWORK_ID_HEX.toUpperCase() }, /networkIdHex.*canonical lowercase hex/u],
-    [{ destinationBinding: { networkIdHex: HASH_33 } }, /networkIdHex.*aliases disagree/u],
+    [
+      { networkIdHex: ` ${BSC_TESTNET_NETWORK_ID_HEX}` },
+      /networkIdHex.*canonical string/u,
+    ],
+    [
+      { networkIdHex: BSC_TESTNET_NETWORK_ID_HEX.toUpperCase() },
+      /networkIdHex.*canonical lowercase hex/u,
+    ],
+    [
+      { destinationBinding: { networkIdHex: HASH_33 } },
+      /networkIdHex.*aliases disagree/u,
+    ],
     [{ counterpartyDomain: 1 }, /counterpartyDomain/u],
     [{ verifierTarget: "TronContract" }, /verifierTarget/u],
     [
@@ -1995,7 +2130,10 @@ test("BSC route-config rejects malformed or foreign route manifests", () => {
       },
       /verifier address.*canonical lowercase hex/u,
     ],
-    [{ bscBridgeAddress: BSC_TOKEN_ADDRESS }, /bridge address aliases disagree|distinct/u],
+    [
+      { bscBridgeAddress: BSC_TOKEN_ADDRESS },
+      /bridge address aliases disagree|distinct/u,
+    ],
     [
       { tokenAddress: BSC_SOURCE_BRIDGE_ADDRESS },
       /BSC token address must not use multiple aliases in route manifest/u,
@@ -2009,11 +2147,18 @@ test("BSC route-config rejects malformed or foreign route manifests", () => {
       /BSC bridge address must not use multiple aliases in route manifest/u,
     ],
     [
-      { bscBridgeAddress: BSC_BRIDGE_ADDRESS, bridge_address: BSC_BRIDGE_ADDRESS },
+      {
+        bscBridgeAddress: BSC_BRIDGE_ADDRESS,
+        bridge_address: BSC_BRIDGE_ADDRESS,
+      },
       /BSC bridge address must not use multiple aliases in route manifest/u,
     ],
     [
-      { destinationRollout: { destinationBridgeAddress: BSC_SOURCE_BRIDGE_ADDRESS } },
+      {
+        destinationRollout: {
+          destinationBridgeAddress: BSC_SOURCE_BRIDGE_ADDRESS,
+        },
+      },
       /bridge address aliases disagree/u,
     ],
     [
@@ -2036,9 +2181,15 @@ test("BSC route-config rejects malformed or foreign route manifests", () => {
       /verifier backend/u,
     ],
     [{ verifierCodeHash: HASH_77 }, /verifierCodeHash aliases disagree/u],
-    [{ destinationRollout: { verifierCodeHash: HASH_44.toUpperCase() } }, /verifierCodeHash.*canonical lowercase hex/u],
+    [
+      { destinationRollout: { verifierCodeHash: HASH_44.toUpperCase() } },
+      /verifierCodeHash.*canonical lowercase hex/u,
+    ],
     [{ verifierKeyHash: HASH_77 }, /verifierKeyHash aliases disagree/u],
-    [{ destinationRollout: { verifierKeyHash: HASH_55.toUpperCase() } }, /verifierKeyHash.*canonical lowercase hex/u],
+    [
+      { destinationRollout: { verifierKeyHash: HASH_55.toUpperCase() } },
+      /verifierKeyHash.*canonical lowercase hex/u,
+    ],
     [
       { verifierCodeHash: HASH_11, verifier_code_hash: HASH_11 },
       /verifierCodeHash must not use multiple aliases in route manifest/u,
@@ -2052,11 +2203,22 @@ test("BSC route-config rejects malformed or foreign route manifests", () => {
       /binding hash/u,
     ],
     [
-      { destinationRollout: { destinationBindingHash: routeManifest().destinationRollout.destinationBindingHash.toUpperCase() } },
+      {
+        destinationRollout: {
+          destinationBindingHash:
+            routeManifest().destinationRollout.destinationBindingHash.toUpperCase(),
+        },
+      },
       /destination binding hash.*canonical lowercase hex/u,
     ],
-    [{ destinationBindingHash: HASH_77 }, /destination binding hash aliases disagree/u],
-    [{ destinationBindingKey: "stale-binding-key" }, /destination binding key aliases disagree/u],
+    [
+      { destinationBindingHash: HASH_77 },
+      /destination binding hash aliases disagree/u,
+    ],
+    [
+      { destinationBindingKey: "stale-binding-key" },
+      /destination binding key aliases disagree/u,
+    ],
     [
       {
         destinationBinding: {
@@ -2141,7 +2303,11 @@ test("BSC route-config rejects malformed or foreign route manifests", () => {
       /sourceEventTransactionId.*canonical string/u,
     ],
     [
-      { postDeployLiveEvidence: { sourceEventTransactionId: HASH_55.toUpperCase() } },
+      {
+        postDeployLiveEvidence: {
+          sourceEventTransactionId: HASH_55.toUpperCase(),
+        },
+      },
       /sourceEventTransactionId.*canonical lowercase hex/u,
     ],
     [
@@ -2149,11 +2315,19 @@ test("BSC route-config rejects malformed or foreign route manifests", () => {
       /offlineFullTomlSha256.*canonical string/u,
     ],
     [
-      { postDeployLiveEvidence: { offlineFullTomlSha256: HASH_33.toUpperCase() } },
+      {
+        postDeployLiveEvidence: {
+          offlineFullTomlSha256: HASH_33.toUpperCase(),
+        },
+      },
       /offlineFullTomlSha256.*canonical lowercase hex/u,
     ],
     [
-      { postDeployLiveEvidence: { sourceEventTransactionUrl: ROUTE_CANARY_EXPLORER_URL } },
+      {
+        postDeployLiveEvidence: {
+          sourceEventTransactionUrl: ROUTE_CANARY_EXPLORER_URL,
+        },
+      },
       /sourceEventExplorerUrl|transaction hash/u,
     ],
     [
@@ -2334,6 +2508,140 @@ test("BSC deploy command refuses smoke-test verifier material before signer or R
       ]),
     /refuses deterministic smoke-test Groth16 fixture/u,
   );
+});
+
+test("BSC deployment helper help documents production network confirmations", async () => {
+  const result = await main(["--help"]);
+  assert.match(result.help, /--bsc-network testnet\|mainnet/u);
+  assert.match(
+    result.help,
+    /--confirm-network taira_bsc_xor:testnet\|taira_bsc_xor:mainnet/u,
+  );
+  assert.match(result.help, /\[--confirm-mainnet true\]/u);
+  assert.match(result.help, /--route-manifest .* --artifact-root/u);
+  assert.match(result.help, /--audit-no-wasm-no-remote-scan/u);
+  assert.match(result.help, /requirements \[--bsc-network testnet\|mainnet\]/u);
+  assert.match(
+    result.help,
+    /Diagnostic verifier material is refused\s+by deploy/u,
+  );
+  assert.doesNotMatch(result.help, /deploy .*--confirm-testnet/u);
+});
+
+test("BSC production requirements expose network-specific public handoff inputs", async () => {
+  const testnet = await main(["requirements", "--bsc-network", "testnet"]);
+  assert.equal(testnet.schema, PRODUCTION_REQUIREMENTS_SCHEMA);
+  assert.equal(testnet.routeId, "taira_bsc_xor");
+  assert.equal(testnet.assetKey, "xor");
+  assert.equal(testnet.bsc.network, "testnet");
+  assert.equal(testnet.bsc.chainIdHex, "0x61");
+  assert.match(testnet.commands.deploy, /--bsc-network testnet/u);
+  assert.match(
+    testnet.commands.deploy,
+    /--confirm-network taira_bsc_xor:testnet/u,
+  );
+  assert.match(
+    testnet.commands.requirements,
+    /requirements --bsc-network testnet --out artifacts\/sccp-bsc\/taira-bsc-xor-production-requirements\.json/u,
+  );
+  assert.doesNotMatch(testnet.commands.deploy, /--confirm-mainnet true/u);
+  assert.doesNotMatch(testnet.commands.deploy, /--confirm-testnet/u);
+  assert.deepEqual(
+    testnet.inputs
+      .filter((entry) =>
+        [
+          "production-groth16-verifier-key-json",
+          "testnet-funded-bsc-deployer",
+          "burn-record-proof-artifact",
+          "burn-record-proving-key",
+          "cross-sdk-fixture-parity-report",
+          "audit-no-wasm-no-remote-scan",
+        ].includes(entry.id),
+      )
+      .map((entry) => entry.id),
+    [
+      "production-groth16-verifier-key-json",
+      "testnet-funded-bsc-deployer",
+      "burn-record-proof-artifact",
+      "burn-record-proving-key",
+      "cross-sdk-fixture-parity-report",
+      "audit-no-wasm-no-remote-scan",
+    ],
+  );
+  assert.deepEqual(testnet.requiredReports, [
+    "route-preflight",
+    "peer-config-audit",
+    "smoke-readiness",
+    "production-material-inventory",
+    "live-ui-video-proof",
+  ]);
+  assert.deepEqual(testnet.deniedVerifierKeyHashes, [
+    DIAGNOSTIC_BSC_VERIFIER_KEY_HASH,
+  ]);
+  assert.doesNotMatch(
+    JSON.stringify(testnet),
+    /privateKey|private_key|mnemonic|seed phrase|password/u,
+  );
+
+  const mainnet = bscProductionRequirements({ "bsc-network": "mainnet" });
+  assert.equal(mainnet.schema, PRODUCTION_REQUIREMENTS_SCHEMA);
+  assert.equal(mainnet.bsc.network, "mainnet");
+  assert.equal(mainnet.bsc.chainIdHex, "0x38");
+  assert.match(mainnet.commands.deploy, /--bsc-network mainnet/u);
+  assert.match(
+    mainnet.commands.deploy,
+    /--confirm-network taira_bsc_xor:mainnet/u,
+  );
+  assert.match(
+    mainnet.commands.requirements,
+    /requirements --bsc-network mainnet --out artifacts\/sccp-bsc\/taira-bsc-mainnet-xor-production-requirements\.json/u,
+  );
+  assert.match(mainnet.commands.deploy, /--confirm-mainnet true/u);
+  assert.doesNotMatch(JSON.stringify(mainnet), /testnet-funded-bsc-deployer/u);
+  assert.match(JSON.stringify(mainnet), /mainnet-funded-bsc-deployer/u);
+});
+
+test("BSC production requirements command writes public artifact without deployer secrets", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "iroha-bsc-requirements-"));
+  const out = join(dir, "requirements.json");
+  const previousPrivateKey = process.env.SCCP_BSC_DEPLOYER_PRIVATE_KEY;
+  process.env.SCCP_BSC_DEPLOYER_PRIVATE_KEY = `0x${"12".repeat(32)}`;
+  try {
+    const result = await main([
+      "requirements",
+      "--bsc-network",
+      "mainnet",
+      "--out",
+      out,
+    ]);
+    assert.equal(result.ok, true);
+    assert.equal(result.wrote, out);
+    assert.equal(result.schema, PRODUCTION_REQUIREMENTS_SCHEMA);
+    assert.equal(result.bscNetwork, "mainnet");
+    assert.equal(result.inputCount, 19);
+    assert.deepEqual(result.requiredReports, [
+      "route-preflight",
+      "peer-config-audit",
+      "smoke-readiness",
+      "production-material-inventory",
+      "live-ui-video-proof",
+    ]);
+
+    const written = JSON.parse(await readFile(out, "utf8"));
+    assert.equal(written.schema, PRODUCTION_REQUIREMENTS_SCHEMA);
+    assert.equal(written.bsc.network, "mainnet");
+    assert.match(written.commands.deploy, /--confirm-mainnet true/u);
+    assert.doesNotMatch(
+      JSON.stringify(written),
+      /0x1212121212121212121212121212121212121212121212121212121212121212|privateKey|private_key|mnemonic|seed phrase|password/u,
+    );
+  } finally {
+    if (previousPrivateKey === undefined) {
+      delete process.env.SCCP_BSC_DEPLOYER_PRIVATE_KEY;
+    } else {
+      process.env.SCCP_BSC_DEPLOYER_PRIVATE_KEY = previousPrivateKey;
+    }
+  }
 });
 
 test("BSC deployment helper self-test covers public evidence and secret scanning", async () => {

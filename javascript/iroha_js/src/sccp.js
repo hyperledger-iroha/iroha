@@ -1496,6 +1496,59 @@ const normalizeCanonicalNativeEvmProverBundleHex32 = (value, label) => {
   return normalized;
 };
 
+const repeatedNativeEvmProverAuditHashPatternLength = (
+  bytes,
+  maxPatternLength = 16,
+) => {
+  const maxLength = Math.min(maxPatternLength, Math.floor(bytes.length / 2));
+  for (let length = 1; length <= maxLength; length += 1) {
+    let repeated = true;
+    for (let index = length; index < bytes.length; index += 1) {
+      if (bytes[index] !== bytes[index % length]) {
+        repeated = false;
+        break;
+      }
+    }
+    if (repeated) {
+      return length;
+    }
+  }
+  return 0;
+};
+
+const constantNativeEvmProverAuditHashDelta = (bytes) => {
+  if (bytes.length < 16) {
+    return null;
+  }
+  const delta = (bytes[1] - bytes[0] + 256) & 0xff;
+  for (let index = 2; index < bytes.length; index += 1) {
+    if (((bytes[index] - bytes[index - 1] + 256) & 0xff) !== delta) {
+      return null;
+    }
+  }
+  return delta;
+};
+
+const requireNativeEvmProverAuditHashProductionShape = (auditHashes) => {
+  for (const key of nativeEvmProverBundleRequiredAuditHashKeys) {
+    const label = `auditHashes.${key}`;
+    const bytes = hexToBytes(auditHashes[key], label, 32);
+    const repeatedPatternLength =
+      repeatedNativeEvmProverAuditHashPatternLength(bytes);
+    if (repeatedPatternLength > 0) {
+      throw new TypeError(
+        `${label} must not look like a placeholder audit hash: repeated ${repeatedPatternLength}-byte pattern`,
+      );
+    }
+    const arithmeticDelta = constantNativeEvmProverAuditHashDelta(bytes);
+    if (arithmeticDelta !== null) {
+      throw new TypeError(
+        `${label} must not look like a placeholder audit hash: arithmetic byte sequence`,
+      );
+    }
+  }
+};
+
 const bytesToBigInt = (bytes) => BigInt(`0x${bytesToHex(bytes, false)}`);
 
 const bigIntToBytes32 = (value) => {
@@ -1991,8 +2044,10 @@ const parseTairaXorCanonicalTransferPayloadBytes = (value) => {
     offset,
     "canonicalPayloadBytes.dest_domain",
   );
-  if (destDomain !== SCCP_DOMAIN_TRON) {
-    throw new TypeError("canonicalPayloadBytes.dest_domain must be TRON");
+  if (![SCCP_DOMAIN_TRON, SCCP_DOMAIN_BSC].includes(destDomain)) {
+    throw new TypeError(
+      "canonicalPayloadBytes.dest_domain must be TRON or BSC",
+    );
   }
   offset += 4;
 
@@ -2067,9 +2122,15 @@ const parseTairaXorCanonicalTransferPayloadBytes = (value) => {
     offset,
     "canonicalPayloadBytes.recipient_codec",
   );
-  if (recipientCodec !== SCCP_CODEC_TRON_BASE58CHECK) {
+  const expectedRecipientCodec =
+    destDomain === SCCP_DOMAIN_TRON
+      ? SCCP_CODEC_TRON_BASE58CHECK
+      : SCCP_CODEC_EVM_HEX;
+  if (recipientCodec !== expectedRecipientCodec) {
     throw new TypeError(
-      "canonicalPayloadBytes.recipient_codec must be TRON_BASE58CHECK",
+      destDomain === SCCP_DOMAIN_TRON
+        ? "canonicalPayloadBytes.recipient_codec must be TRON_BASE58CHECK"
+        : "canonicalPayloadBytes.recipient_codec must be EVM_HEX",
     );
   }
   offset += 1;
@@ -2083,7 +2144,14 @@ const parseTairaXorCanonicalTransferPayloadBytes = (value) => {
     valueRange.bytes,
     "canonicalPayloadBytes.recipient",
   );
-  decodeTronBase58CheckPayload(recipient, "canonicalPayloadBytes.recipient");
+  if (destDomain === SCCP_DOMAIN_TRON) {
+    decodeTronBase58CheckPayload(recipient, "canonicalPayloadBytes.recipient");
+  } else {
+    validateCanonicalEvmHexAddress(
+      recipient,
+      "canonicalPayloadBytes.recipient",
+    );
+  }
 
   const routeIdCodec = readU8At(
     payload,
@@ -2106,9 +2174,13 @@ const parseTairaXorCanonicalTransferPayloadBytes = (value) => {
     valueRange.bytes,
     "canonicalPayloadBytes.route_id",
   );
-  if (routeId !== SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1) {
+  const expectedRouteId =
+    destDomain === SCCP_DOMAIN_TRON
+      ? SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1
+      : SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1;
+  if (routeId !== expectedRouteId) {
     throw new TypeError(
-      "canonicalPayloadBytes.route_id must be taira_tron_xor",
+      `canonicalPayloadBytes.route_id must be ${expectedRouteId}`,
     );
   }
   if (offset !== payload.length) {
@@ -2144,7 +2216,9 @@ const requireOptionalTairaXorPayloadInputMatches = (input, parsedPayload) => {
   );
   if (
     routeId !== SCCP_OPTIONAL_FIELD_MISSING &&
-    normalizeTairaXorRouteIdInput({ routeId }) !== parsedPayload.route_id
+    (parsedPayload.dest_domain === SCCP_DOMAIN_BSC
+      ? normalizeTairaBscXorRouteIdInput({ routeId })
+      : normalizeTairaXorRouteIdInput({ routeId })) !== parsedPayload.route_id
   ) {
     throw new TypeError("routeId must match canonicalPayloadBytes");
   }
@@ -2186,16 +2260,25 @@ const requireOptionalTairaXorPayloadInputMatches = (input, parsedPayload) => {
     "recipientAddress",
     "recipient_address",
     "recipient",
+    "bscRecipient",
+    "bsc_recipient",
+    "evmRecipient",
+    "evm_recipient",
   );
   if (recipient !== SCCP_OPTIONAL_FIELD_MISSING) {
-    const normalizedRecipient = normalizeNonEmptyString(
-      recipient,
-      "recipientAddress",
-    );
-    if (normalizedRecipient !== recipient) {
+    const normalizedRecipient =
+      parsedPayload.dest_domain === SCCP_DOMAIN_BSC
+        ? canonicalEip55HexAddress(recipient, "recipientAddress")
+        : normalizeNonEmptyString(recipient, "recipientAddress");
+    if (
+      parsedPayload.dest_domain === SCCP_DOMAIN_TRON &&
+      normalizedRecipient !== recipient
+    ) {
       throw new TypeError("recipientAddress must be canonical text");
     }
-    decodeTronBase58CheckPayload(normalizedRecipient, "recipientAddress");
+    if (parsedPayload.dest_domain === SCCP_DOMAIN_TRON) {
+      decodeTronBase58CheckPayload(normalizedRecipient, "recipientAddress");
+    }
     if (normalizedRecipient !== parsedPayload.recipient) {
       throw new TypeError("recipientAddress must match canonicalPayloadBytes");
     }
@@ -3872,7 +3955,9 @@ const normalizeMessageBundleMerkleProof = (proof) => {
   return {
     steps: proof.steps.map((step, index) => {
       if (!step || typeof step !== "object" || Array.isArray(step)) {
-        throw new TypeError(`bundle.merkle_proof.steps[${index}] must be an object`);
+        throw new TypeError(
+          `bundle.merkle_proof.steps[${index}] must be an object`,
+        );
       }
       const siblingIsLeft = step.sibling_is_left ?? step.siblingIsLeft;
       if (typeof siblingIsLeft !== "boolean") {
@@ -4096,7 +4181,9 @@ const decodeCanonicalSccpBundlePayloadSummary = (payloadBytes, label) => {
       const sourceDomain = readDomain("source_domain");
       const targetDomain = readDomain("target_domain");
       if (sourceDomain === targetDomain) {
-        throw new TypeError(`${label}.target_domain must differ from source_domain`);
+        throw new TypeError(
+          `${label}.target_domain must differ from source_domain`,
+        );
       }
       readU64("nonce");
       const assetIdCodec = readCodec("asset_id_codec");
@@ -4116,7 +4203,9 @@ const decodeCanonicalSccpBundlePayloadSummary = (payloadBytes, label) => {
       const sourceDomain = readDomain("source_domain");
       const targetDomain = readDomain("dest_domain");
       if (sourceDomain === targetDomain) {
-        throw new TypeError(`${label}.dest_domain must differ from source_domain`);
+        throw new TypeError(
+          `${label}.dest_domain must differ from source_domain`,
+        );
       }
       readU64("nonce");
       readDomain("asset_home_domain");
@@ -4256,7 +4345,10 @@ const merkleRootFromCanonicalCommitmentBytes = (
     }
     current =
       siblingIsLeft === 1
-        ? prefixedBlake2b(SCCP_HUB_NODE_PREFIX_V1, concatBytes(sibling, current))
+        ? prefixedBlake2b(
+            SCCP_HUB_NODE_PREFIX_V1,
+            concatBytes(sibling, current),
+          )
         : prefixedBlake2b(
             SCCP_HUB_NODE_PREFIX_V1,
             concatBytes(current, sibling),
@@ -4306,8 +4398,10 @@ const decodeCanonicalSccpMessageProofBundleSummary = (bundleBytes, label) => {
   if (!bytesEqual(commitmentBytes, expectedCommitmentBytes)) {
     throw new TypeError(`${label}.commitment must match payload`);
   }
-  const commitment =
-    decodeCanonicalSccpBundleCommitmentSummary(commitmentBytes, label);
+  const commitment = decodeCanonicalSccpBundleCommitmentSummary(
+    commitmentBytes,
+    label,
+  );
   if (commitment.kindCode !== messageKindCode(payload.kind)) {
     throw new TypeError(`${label}.commitment kind must match payload`);
   }
@@ -4349,9 +4443,7 @@ const requireSccpProofRequestBundleMatchesPublicInputs = (
     summary.sourceDomain !== SCCP_DOMAIN_SORA &&
     toBytes(sourceProofBytes, "sourceProofBytes").length === 0
   ) {
-    throw new TypeError(
-      "sourceProofBytes required for non-SORA source bundle",
-    );
+    throw new TypeError("sourceProofBytes required for non-SORA source bundle");
   }
   return summary;
 };
@@ -8342,7 +8434,9 @@ const normalizeNativeEvmProverArtifactPath = (value, label) => {
     }
   }
   if (value.includes(":")) {
-    throw new TypeError(`${label} must not contain URI schemes or drive prefixes`);
+    throw new TypeError(
+      `${label} must not contain URI schemes or drive prefixes`,
+    );
   }
   if (value.startsWith("/") || value.includes("\\")) {
     throw new TypeError(`${label} must be a relative POSIX path`);
@@ -8366,7 +8460,11 @@ const normalizeNativeEvmProverArtifactPath = (value, label) => {
   return value;
 };
 
-const requireNativeEvmProverArtifactPathExtension = (value, label, extension) => {
+const requireNativeEvmProverArtifactPathExtension = (
+  value,
+  label,
+  extension,
+) => {
   if (!value.toLowerCase().endsWith(extension)) {
     throw new TypeError(`${label} must reference a ${extension} artifact`);
   }
@@ -8560,7 +8658,7 @@ const normalizeExpectedNativeEvmProverDestinationBindingHash = (
       : normalizeCanonicalNativeEvmProverBundleHex32(
           direct,
           "expectedDestinationBindingHash",
-  );
+        );
   const bindingHash =
     binding === SCCP_OPTIONAL_FIELD_MISSING
       ? undefined
@@ -8641,10 +8739,7 @@ const requireNativeEvmProverBundleArtifactPathRoleSeparation = ({
   }
 };
 
-const validateNativeEvmProverBundle = (
-  manifest,
-  options = {},
-) => {
+const validateNativeEvmProverBundle = (manifest, options = {}) => {
   const profile =
     options?.profile && typeof options.profile === "object"
       ? options.profile
@@ -8926,6 +9021,7 @@ const validateNativeEvmProverBundle = (
     nativeSdkArtifacts,
     auditHashes,
   });
+  requireNativeEvmProverAuditHashProductionShape(auditHashes);
   return immutableProverCallbackValue({
     schema,
     bundleId,
@@ -8987,7 +9083,10 @@ export function parseEthereumMainnetNativeEvmProverBundleManifest(
     throw new TypeError("nativeProverBundle JSON manifest must be a string");
   }
   rejectDuplicateJsonObjectKeys(json, "nativeProverBundle");
-  return validateEthereumMainnetNativeEvmProverBundle(JSON.parse(json), options);
+  return validateEthereumMainnetNativeEvmProverBundle(
+    JSON.parse(json),
+    options,
+  );
 }
 
 export function parseBscTestnetNativeEvmProverBundleManifest(
@@ -9962,16 +10061,14 @@ const SCCP_NATIVE_EVM_PROVER_MIN_VERIFIER_KEY_BYTES_V1 = 128;
 const SCCP_NATIVE_EVM_PROVER_MIN_SUPPORT_ARTIFACT_BYTES_V1 = 128;
 const SCCP_NATIVE_EVM_PROVER_MIN_IMPLEMENTATION_BYTES_V1 = 1024;
 const SCCP_NATIVE_EVM_SNARKJS_R1CS_MAGIC = Object.freeze([
-  0x72,
-  0x31,
-  0x63,
-  0x73,
+  0x72, 0x31, 0x63, 0x73,
 ]);
 const SCCP_NATIVE_EVM_SNARKJS_ZKEY_MAGIC = Object.freeze([
-  0x7a,
-  0x6b,
-  0x65,
-  0x79,
+  0x7a, 0x6b, 0x65, 0x79,
+]);
+const SCCP_NATIVE_EVM_SNARKJS_R1CS_REQUIRED_SECTIONS = Object.freeze([1, 2, 3]);
+const SCCP_NATIVE_EVM_SNARKJS_ZKEY_REQUIRED_SECTIONS = Object.freeze([
+  1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
 ]);
 
 const nativeEvmProverLowerAsciiByte = (byte) =>
@@ -10021,13 +10118,17 @@ function assertNativeEvmProverArtifactHasProductionSize(
   minBytes,
 ) {
   if (bytes.length < minBytes) {
-    throw new TypeError(
-      `${label} must be at least ${minBytes} bytes`,
-    );
+    throw new TypeError(`${label} must be at least ${minBytes} bytes`);
   }
 }
 
-function assertNativeEvmSnarkjsBinaryFormat(bytes, label, magic, formatLabel) {
+function assertNativeEvmSnarkjsBinaryFormat(
+  bytes,
+  label,
+  magic,
+  formatLabel,
+  requiredSectionIds,
+) {
   if (bytes.length < 12) {
     throw new TypeError(`${label} ${formatLabel} header is truncated`);
   }
@@ -10044,6 +10145,7 @@ function assertNativeEvmSnarkjsBinaryFormat(bytes, label, magic, formatLabel) {
   }
   let offset = 12;
   const sectionIds = new Set();
+  const sectionIdList = [];
   for (let index = 0; index < sectionCount; index += 1) {
     if (offset + 12 > bytes.length) {
       throw new TypeError(`${label} ${formatLabel} section table is truncated`);
@@ -10056,12 +10158,15 @@ function assertNativeEvmSnarkjsBinaryFormat(bytes, label, magic, formatLabel) {
     );
     offset += 12;
     if (sectionId === 0) {
-      throw new TypeError(`${label} ${formatLabel} section id must be non-zero`);
+      throw new TypeError(
+        `${label} ${formatLabel} section id must be non-zero`,
+      );
     }
     if (sectionIds.has(sectionId)) {
       throw new TypeError(`${label} ${formatLabel} section ids must be unique`);
     }
     sectionIds.add(sectionId);
+    sectionIdList.push(sectionId);
     if (sectionSize === 0n) {
       throw new TypeError(`${label} ${formatLabel} section size is invalid`);
     }
@@ -10075,6 +10180,30 @@ function assertNativeEvmSnarkjsBinaryFormat(bytes, label, magic, formatLabel) {
       `${label} ${formatLabel} section table does not consume the full file`,
     );
   }
+  const missingSectionIds = requiredSectionIds.filter(
+    (sectionId) => !sectionIds.has(sectionId),
+  );
+  if (missingSectionIds.length > 0) {
+    throw new TypeError(
+      `${label} ${formatLabel} missing required section ids: ${missingSectionIds.join(", ")}`,
+    );
+  }
+  const unexpectedSectionIds = [...sectionIds].filter(
+    (sectionId) => !requiredSectionIds.includes(sectionId),
+  );
+  if (unexpectedSectionIds.length > 0) {
+    throw new TypeError(
+      `${label} ${formatLabel} contains unsupported section ids: ${unexpectedSectionIds.join(", ")}`,
+    );
+  }
+  const canonicalOrder = requiredSectionIds.every(
+    (sectionId, index) => sectionIdList[index] === sectionId,
+  );
+  if (sectionIdList.length !== requiredSectionIds.length || !canonicalOrder) {
+    throw new TypeError(
+      `${label} ${formatLabel} section ids must be in canonical order: ${requiredSectionIds.join(", ")}`,
+    );
+  }
 }
 
 function assertNativeEvmProofArtifactFormat(bytes, label) {
@@ -10083,6 +10212,7 @@ function assertNativeEvmProofArtifactFormat(bytes, label) {
     label,
     SCCP_NATIVE_EVM_SNARKJS_R1CS_MAGIC,
     ".r1cs",
+    SCCP_NATIVE_EVM_SNARKJS_R1CS_REQUIRED_SECTIONS,
   );
 }
 
@@ -10092,14 +10222,11 @@ function assertNativeEvmProvingKeyFormat(bytes, label) {
     label,
     SCCP_NATIVE_EVM_SNARKJS_ZKEY_MAGIC,
     ".zkey",
+    SCCP_NATIVE_EVM_SNARKJS_ZKEY_REQUIRED_SECTIONS,
   );
 }
 
-const verifyNativeEvmProverArtifacts = (
-  input,
-  options = {},
-  profile,
-) => {
+const verifyNativeEvmProverArtifacts = (input, options = {}, profile) => {
   requireNativeEvmProverBundleObject(
     input,
     `${profile.displayName} native EVM prover artifacts`,
@@ -10120,7 +10247,9 @@ const verifyNativeEvmProverArtifacts = (
     rejectDuplicateJsonObjectKeys(manifestInput, "nativeProverBundle");
   }
   const nativeProverBundle = validateNativeEvmProverBundle(
-    typeof manifestInput === "string" ? JSON.parse(manifestInput) : manifestInput,
+    typeof manifestInput === "string"
+      ? JSON.parse(manifestInput)
+      : manifestInput,
     {
       ...options,
       profile,
@@ -10234,10 +10363,7 @@ const verifyNativeEvmProverArtifacts = (
     "nativeProverSelfTestBytes",
     SCCP_NATIVE_EVM_PROVER_MIN_SUPPORT_ARTIFACT_BYTES_V1,
   );
-  assertNativeEvmProofArtifactFormat(
-    proofArtifactBytes,
-    "proofArtifactBytes",
-  );
+  assertNativeEvmProofArtifactFormat(proofArtifactBytes, "proofArtifactBytes");
   assertNativeEvmProvingKeyFormat(provingKeyBytes, "provingKeyBytes");
   assertNativeEvmProverArtifactHasNoForbiddenDependencyMarkers(
     proofArtifactBytes,
@@ -10346,10 +10472,7 @@ export function verifyEthereumMainnetNativeEvmProverArtifacts(
   );
 }
 
-export function verifyBscTestnetNativeEvmProverArtifacts(
-  input,
-  options = {},
-) {
+export function verifyBscTestnetNativeEvmProverArtifacts(input, options = {}) {
   return verifyNativeEvmProverArtifacts(
     input,
     options,
@@ -10357,10 +10480,7 @@ export function verifyBscTestnetNativeEvmProverArtifacts(
   );
 }
 
-export function verifyBscMainnetNativeEvmProverArtifacts(
-  input,
-  options = {},
-) {
+export function verifyBscMainnetNativeEvmProverArtifacts(input, options = {}) {
   return verifyNativeEvmProverArtifacts(
     input,
     options,
@@ -11155,10 +11275,14 @@ const runNativeProverSelfTestForProfile = async (
   profile = nativeEvmProverBundleProfiles.ethereumMainnet,
 ) => {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
-    throw new TypeError(`${profile.displayName} native prover self-test input must be an object`);
+    throw new TypeError(
+      `${profile.displayName} native prover self-test input must be an object`,
+    );
   }
   if (!options || typeof options !== "object" || Array.isArray(options)) {
-    throw new TypeError(`${profile.displayName} native prover self-test options must be an object`);
+    throw new TypeError(
+      `${profile.displayName} native prover self-test options must be an object`,
+    );
   }
   const destinationBinding = strictOptionalConstructorOption(
     input,
@@ -11216,7 +11340,10 @@ const runNativeProverSelfTestForProfile = async (
   );
 };
 
-export async function runEthereumMainnetNativeProverSelfTest(input = {}, options = {}) {
+export async function runEthereumMainnetNativeProverSelfTest(
+  input = {},
+  options = {},
+) {
   return runNativeProverSelfTestForProfile(
     input,
     options,
@@ -11224,7 +11351,10 @@ export async function runEthereumMainnetNativeProverSelfTest(input = {}, options
   );
 }
 
-export async function runBscTestnetNativeProverSelfTest(input = {}, options = {}) {
+export async function runBscTestnetNativeProverSelfTest(
+  input = {},
+  options = {},
+) {
   return runNativeProverSelfTestForProfile(
     input,
     options,
@@ -11232,7 +11362,10 @@ export async function runBscTestnetNativeProverSelfTest(input = {}, options = {}
   );
 }
 
-export async function runBscMainnetNativeProverSelfTest(input = {}, options = {}) {
+export async function runBscMainnetNativeProverSelfTest(
+  input = {},
+  options = {},
+) {
   return runNativeProverSelfTestForProfile(
     input,
     options,
@@ -16690,7 +16823,9 @@ export class EthereumMainnetSccp {
 
   async runNativeProverSelfTest(options = {}) {
     if (!options || typeof options !== "object" || Array.isArray(options)) {
-      throw new TypeError("EthereumMainnetSccp native prover self-test options must be an object");
+      throw new TypeError(
+        "EthereumMainnetSccp native prover self-test options must be an object",
+      );
     }
     const nativeProverArtifactsInput = strictOptionalConstructorOption(
       options,
@@ -16832,14 +16967,18 @@ export class EthereumMainnetSccp {
       this.executionProvider;
     let providerValidated = false;
     if (provider !== SCCP_OPTIONAL_FIELD_MISSING && provider != null) {
-      await this.validateExecutionProviderMainnet({ executionProvider: provider });
+      await this.validateExecutionProviderMainnet({
+        executionProvider: provider,
+      });
       providerValidated = true;
     }
     if (typeof submit === "function") {
       return submit(submission, options);
     }
     if (!providerValidated) {
-      await this.validateExecutionProviderMainnet({ executionProvider: provider });
+      await this.validateExecutionProviderMainnet({
+        executionProvider: provider,
+      });
     }
     const boundBridgeAddress =
       wrappedEthereumMainnetProofResultBridgeAddress(input);
@@ -17307,9 +17446,7 @@ export class BscMainnetSccp {
       this.nativeProverBundle,
       nativeEvmProverBundleProfiles.bscMainnet,
     );
-    const request = buildBscMainnetSccpDestinationProofRequest(
-      prepared.input,
-    );
+    const request = buildBscMainnetSccpDestinationProofRequest(prepared.input);
     if (
       prepared.nativeProverBundle !== undefined &&
       request.destinationBindingHash !==
@@ -37613,8 +37750,10 @@ export function tairaXorFinalizeFromTairaCallData(input) {
   const publicInputs = normalizeSccpMessageTransparentPublicInputs(
     strictResultField(input, "publicInputs", "publicInputs", "public_inputs"),
   );
-  if (publicInputs.targetDomain !== SCCP_DOMAIN_TRON) {
-    throw new TypeError("publicInputs.targetDomain must be TRON");
+  if (
+    ![SCCP_DOMAIN_TRON, SCCP_DOMAIN_BSC].includes(publicInputs.targetDomain)
+  ) {
+    throw new TypeError("publicInputs.targetDomain must be TRON or BSC");
   }
   const publicInputWords =
     sccpMessageTransparentPublicInputAbiWords(publicInputs);
@@ -37639,7 +37778,9 @@ export function tairaXorFinalizeFromTairaCallData(input) {
   );
   const canonicalPayloadBytes =
     canonicalPayloadInput === SCCP_OPTIONAL_FIELD_MISSING
-      ? tairaXorCanonicalTransferPayloadBytes(input)
+      ? publicInputs.targetDomain === SCCP_DOMAIN_BSC
+        ? tairaXorBscCanonicalTransferPayloadBytes(input)
+        : tairaXorCanonicalTransferPayloadBytes(input)
       : toBytes(canonicalPayloadInput, "canonicalPayloadBytes");
   const parsedPayload = parseTairaXorCanonicalTransferPayloadBytes(
     canonicalPayloadBytes,
@@ -38952,6 +39093,20 @@ export function bindTairaXorBscToTairaSourceProofPackage(input) {
       "messageBundle.commitmentRoot must match the commitment Merkle proof",
     );
   }
+  const normalizedMessageBundle = Object.freeze({
+    version: normalizeV1Version(messageBundle.version, "messageBundle.version"),
+    commitmentRoot: bundleCommitmentRoot,
+    commitment: normalizedCommitment,
+    merkleProof: normalizedMerkleProof,
+    payload: Object.freeze({
+      kind: "Transfer",
+      value: expectedPayload,
+    }),
+    finalityProof:
+      messageBundle.finality_proof ??
+      messageBundle.finalityProof ??
+      new Uint8Array(),
+  });
   const packageMessageId = strictOptionalResultField(
     proofPackage,
     "proofPackage.messageId",
@@ -39014,9 +39169,9 @@ export function bindTairaXorBscToTairaSourceProofPackage(input) {
     }
   }
 
-  canonicalSccpMessageProofBundleBytes(messageBundle);
+  canonicalSccpMessageProofBundleBytes(normalizedMessageBundle);
   return Object.freeze({
-    messageBundle,
+    messageBundle: normalizedMessageBundle,
     settlement: Object.freeze({
       ...settlementDefaults,
       ...settlement,

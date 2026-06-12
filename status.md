@@ -1,6 +1,19 @@
 # Status
 
-Last updated: 2026-06-11
+Last updated: 2026-06-12
+
+## 2026-06-12 SCCP BSC verifier G2 curve validation
+
+- Hardened `scripts/sccp_bsc_taira_xor_deploy.mjs` so BSC Groth16 verifier
+  material validates `beta2`, `gamma2`, and `delta2` as BN254 G2 twist-curve
+  points instead of only checking that their coordinates fit field ranges.
+- Updated the deploy-helper verifier fixtures to use valid G2 material and added
+  adversarial coverage for scalar-field-valid but off-curve G2 vectors and
+  out-of-field G2 coordinates before deployment evidence can be accepted.
+- Validation:
+  - `node --check scripts/sccp_bsc_taira_xor_deploy.mjs`
+  - `node --check scripts/sccp_bsc_taira_xor_deploy.test.mjs`
+  - `node --test scripts/sccp_bsc_taira_xor_deploy.test.mjs` (`32 passed`)
 
 ## 2026-06-11 SCCP BSC explorer binding metadata
 
